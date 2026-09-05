@@ -8,6 +8,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { spawnGatewayProcess, spawnGatewayProcessSync } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const gw = require(CLI);
@@ -76,7 +77,7 @@ test('dispatch model stays routable when omitted from the default model listing'
   await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
   t.after(() => proxy.close());
 
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
@@ -144,7 +145,7 @@ test('dispatch model is listed with the explicit rollback flag and stays routabl
   await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
   t.after(() => proxy.close());
 
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
@@ -173,7 +174,7 @@ test('dispatch model is listed with the explicit rollback flag and stays routabl
 test('dispatch model rejects missing and malformed route markers', async (t) => {
   const shimPort = await freePort();
   const proxyPort = await freePort();
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
@@ -299,7 +300,7 @@ test('dispatch route ignores markers echoed through tool_result blocks end-to-en
   await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
   t.after(() => proxy.close());
 
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
@@ -507,7 +508,7 @@ test('SQ-2208: catalog --refresh --json keeps stdout parseable while it logs a p
 
   // Not spawnSync: this fake shim answers from the test's own event loop, which a synchronous child blocks.
   const result = await new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, 'catalog', '--refresh', '--json'], {
+    const child = spawnGatewayProcess(t, process.execPath, [CLI, 'catalog', '--refresh', '--json'], {
       env: {
         ...process.env,
         HOME: home,
@@ -544,7 +545,7 @@ test('doctor prints the catalog writer version', () => {
       models: [],
     }));
 
-    const result = spawnSync(process.execPath, [CLI, 'doctor'], {
+    const result = spawnGatewayProcessSync(process.execPath, [CLI, 'doctor'], {
       env: { ...process.env, HOME: home, USERPROFILE: home },
       encoding: 'utf8',
     });
@@ -612,7 +613,7 @@ test('the shim keeps Claude ids on the Anthropic path and claims both id forms f
   });
   t.after(() => anthropic.close());
 
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),

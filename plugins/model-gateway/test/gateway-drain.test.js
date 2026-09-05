@@ -7,7 +7,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { startGateway } = require('./support.js');
+const { startGateway, spawnGatewayProcess } = require('./support.js');
 const { createProxyRecovery } = require('../lib/process-supervision.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
@@ -104,7 +104,7 @@ test('restart with drain submits the newest installed CLI path', async (t) => {
   t.after(() => shim.close());
 
   const script = `require(${JSON.stringify(path.join(path.dirname(olderCliPath), '..', 'lib', 'process-supervision.js'))}).restartWorkerWithDrain({ quiet: true }).then((result) => process.exit(result.ok ? 0 : 1))`;
-  const child = spawn(process.execPath, ['-e', script], {
+  const child = spawnGatewayProcess(t, process.execPath, ['-e', script], {
     env: { ...process.env, CODEX_GATEWAY_PORT: String(shimPort) },
     stdio: 'ignore',
   });
@@ -131,8 +131,8 @@ test('drain timeout says that the shim was force-stopped', async (t) => {
   t.after(() => stuckShim.close());
 
   const script = `require(${JSON.stringify(CLI)}).stopShimWithDrain({ timeout: 20, report: console.log }).then((result) => console.log(JSON.stringify(result)))`;
-  const child = spawn(process.execPath, ['-e', script], {
-    env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: String(shimPort) },
+  const child = spawnGatewayProcess(t, process.execPath, ['-e', script], {
+    env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_WORKER_PORT: String(shimPort) },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const output = await new Promise((resolve, reject) => {
@@ -327,7 +327,7 @@ test('a second supervisor exits when the singleton listener is already owned', a
   });
 
   const second = await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+    const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
       env: { ...process.env, HOME: secondHome, USERPROFILE: secondHome, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_REQUEST_LOG: '0' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -427,8 +427,8 @@ test('doctor reports a serving version mismatch and the ensure remedy', async (t
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
 
   const output = await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI, 'doctor'], {
-      env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: String(shimPort) },
+    const child = spawnGatewayProcess(t, process.execPath, [CLI, 'doctor'], {
+      env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_WORKER_PORT: String(shimPort) },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let text = '';

@@ -8,6 +8,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { spawnGatewayProcess } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const { DispatchSessionRouteCache } = require(CLI);
@@ -131,7 +132,7 @@ test('dispatch model reuses a session route after compaction and logs cache hits
   await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
   t.after(() => proxy.close());
 
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
@@ -231,7 +232,7 @@ test('dispatch route survives a shim restart before a compacted continuation', a
     CODEX_GATEWAY_DISPATCH_CACHE_PATH: routeCache,
     CODEX_GATEWAY_SENTRY: '0',
   };
-  let child = spawn(process.execPath, [CLI, 'serve-shim'], { env, stdio: 'ignore' });
+  let child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], { env, stdio: 'ignore' });
   t.after(() => child.kill());
   await waitForHealthz(shimPort);
 
@@ -244,7 +245,7 @@ test('dispatch route survives a shim restart before a compacted continuation', a
   child.kill();
   await new Promise((resolve) => child.once('exit', resolve));
 
-  child = spawn(process.execPath, [CLI, 'serve-shim'], { env, stdio: 'ignore' });
+  child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], { env, stdio: 'ignore' });
   await waitForHealthz(shimPort);
   const compacted = await request(
     shimPort,
@@ -295,7 +296,7 @@ test('native Agent route survives repeated tools and the compaction identity tra
   await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
   t.after(() => proxy.close());
 
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
@@ -420,7 +421,7 @@ test('route log identifies parent-only Agent dispatch cache misses', async (t) =
   await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
   t.after(() => proxy.close());
 
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
@@ -501,7 +502,7 @@ test('markerless child agents inherit only their trusted parent route', async (t
   await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
   t.after(() => proxy.close());
 
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),

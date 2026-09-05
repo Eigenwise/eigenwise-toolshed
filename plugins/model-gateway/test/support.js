@@ -1,6 +1,6 @@
 'use strict';
 
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
@@ -47,22 +47,108 @@ function waitForHealth(port) {
   });
 }
 
-function startGateway(t, command, environment, { cliPath = CLI } = {}) {
-  const home = environment.HOME || fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-test-'));
-  const ownsHome = !environment.HOME;
-  const socketPath = environment.CODEX_GATEWAY_SOCKET_PATH || path.join(home, 'anthropic.sock');
-  if (ownsHome) t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+const ISOLATED_GATEWAY_ENVIRONMENT_KEYS = [
+  'HOME',
+  'USERPROFILE',
+  'CLAUDE_CONFIG_DIR',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_UNIX_SOCKET',
+  'CODEX_HOME',
+  'MODEL_GATEWAY_REQUEST_BODY_DIR',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'all_proxy',
+  'NO_PROXY',
+  'no_proxy',
+];
+
+function isInheritedGatewayOverride(key, value) {
+  return (key.startsWith('CODEX_GATEWAY_') || ISOLATED_GATEWAY_ENVIRONMENT_KEYS.includes(key))
+    && value === process.env[key];
+}
+
+function testSocketPath(home) {
+  if (process.platform === 'win32') return `\\\\.\\pipe\\model-gateway-test-${path.basename(home)}`;
+  return path.join(home, 'gateway.sock');
+}
+
+function createGatewayTestEnvironment(overrides = {}, isolatedOverrides = {}) {
+  const suppliedHome = overrides.HOME || overrides.USERPROFILE;
+  const home = suppliedHome && suppliedHome !== process.env.HOME && suppliedHome !== process.env.USERPROFILE
+    ? suppliedHome
+    : fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-test-'));
+  const ownsHome = home !== suppliedHome;
+  const environment = { ...process.env };
+  for (const key of Object.keys(environment)) {
+    if (key.startsWith('CODEX_GATEWAY_') || ISOLATED_GATEWAY_ENVIRONMENT_KEYS.includes(key)) delete environment[key];
+  }
+  for (const [key, value] of Object.entries(overrides)) {
+    if (!isInheritedGatewayOverride(key, value)) environment[key] = value;
+  }
+  Object.assign(environment, {
+    HOME: home,
+    USERPROFILE: home,
+    CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
+    CODEX_HOME: path.join(home, '.codex'),
+    MODEL_GATEWAY_REQUEST_BODY_DIR: path.join(home, '.claude', 'model-gateway', 'request-body'),
+    HTTP_PROXY: '',
+    HTTPS_PROXY: '',
+    ALL_PROXY: '',
+    http_proxy: '',
+    https_proxy: '',
+    all_proxy: '',
+    NO_PROXY: '*',
+    no_proxy: '*',
+    CODEX_GATEWAY_PORT: '0',
+    CODEX_GATEWAY_WORKER_PORT: '0',
+    CODEX_GATEWAY_PROXY_PORT: '0',
+    CODEX_GATEWAY_COMPAT_PORT: '0',
+    CODEX_GATEWAY_SOCKET_PATH: testSocketPath(home),
+    CODEX_GATEWAY_GROK_HOME: path.join(home, '.grok'),
+    CODEX_GATEWAY_GROK_ENDPOINT: 'http://127.0.0.1:9/v1/responses',
+    CODEX_GATEWAY_ANTHROPIC_UPSTREAM: 'http://127.0.0.1:9',
+    CODEX_GATEWAY_CLAUDE_BIN: path.join(home, 'missing-claude'),
+    CODEX_GATEWAY_HOSTS_FILE: path.join(home, 'hosts'),
+    CODEX_GATEWAY_DISPATCH_CACHE_PATH: path.join(home, 'dispatch-routes.json'),
+    CODEX_GATEWAY_REQUEST_LOG_PATH: path.join(home, 'request-routes.jsonl'),
+    CODEX_GATEWAY_TELEMETRY_ENDPOINT: 'http://127.0.0.1:9',
+  });
+  for (const [key, value] of Object.entries(overrides)) {
+    if (!isInheritedGatewayOverride(key, value)) environment[key] = value;
+  }
+  for (const [key, value] of Object.entries(isolatedOverrides)) environment[key] = value;
+  return { environment, home, ownsHome };
+}
+
+function gatewayTestEnvironment(t, overrides = {}, isolatedOverrides = {}) {
+  const testEnvironment = createGatewayTestEnvironment(overrides, isolatedOverrides);
+  if (testEnvironment.ownsHome && t) t.after(() => fs.rmSync(testEnvironment.home, { recursive: true, force: true }));
+  return testEnvironment.environment;
+}
+
+function spawnGatewayProcess(t, command, args, options = {}) {
+  const { env: overrides, isolatedOverrides, ...spawnOptions } = options;
+  return spawn(command, args, { ...spawnOptions, env: gatewayTestEnvironment(t, overrides, isolatedOverrides) });
+}
+
+function spawnGatewayProcessSync(command, args, options = {}) {
+  const { env: overrides, isolatedOverrides, ...spawnOptions } = options;
+  const testEnvironment = createGatewayTestEnvironment(overrides, isolatedOverrides);
+  try {
+    return spawnSync(command, args, { ...spawnOptions, env: testEnvironment.environment });
+  } finally {
+    if (testEnvironment.ownsHome) fs.rmSync(testEnvironment.home, { recursive: true, force: true });
+  }
+}
+
+function startGateway(t, command, environment, { cliPath = CLI, isolatedOverrides } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cliPath, command], {
-      env: {
-        ...process.env,
-        ...environment,
-        HOME: home,
-        USERPROFILE: home,
-        CODEX_GATEWAY_SOCKET_PATH: socketPath,
-        CODEX_GATEWAY_PORT: environment.CODEX_GATEWAY_PORT || '0',
-        CODEX_GATEWAY_WORKER_PORT: environment.CODEX_GATEWAY_WORKER_PORT || '0',
-      },
+    const child = spawnGatewayProcess(t, process.execPath, [cliPath, command], {
+      env: environment,
+      isolatedOverrides,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -90,8 +176,9 @@ function startGateway(t, command, environment, { cliPath = CLI } = {}) {
     child.once('error', (error) => settle(() => reject(error)));
     child.once('exit', (code, signal) => settle(() => reject(new Error(`${command} exited before listening (${code ?? signal}): ${output}`))));
     t.after(() => new Promise((done) => {
-      if (child.exitCode != null) return done();
+      if (child.exitCode != null || child.killed) return done();
       child.once('exit', done);
+      child.once('error', done);
       child.kill();
     }));
   });
@@ -122,4 +209,4 @@ async function startCountingProxy(t) {
   return { url: `http://127.0.0.1:${port}`, connectionCount: () => connectionCount, targets: () => [...targets] };
 }
 
-module.exports = { startCountingProxy, startGateway };
+module.exports = { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startCountingProxy, startGateway };

@@ -7,6 +7,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { spawnGatewayProcess } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 
@@ -64,7 +65,7 @@ async function unusedPort() {
 
 async function spawnShim(t, proxyPort, extraEnv = {}) {
   const shimPort = await unusedPort();
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),

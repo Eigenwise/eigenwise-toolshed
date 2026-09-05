@@ -7,7 +7,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { startCountingProxy, startGateway } = require('./support.js');
+const { startCountingProxy, startGateway, spawnGatewayProcess, spawnGatewayProcessSync } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const COMMANDS = path.join(__dirname, '..', 'lib', 'commands.js');
@@ -111,7 +111,7 @@ test('Codex discovery advertises context metadata but keeps the local model id u
   const shimPort = await listen(shimProbe);
   await new Promise((resolve) => shimProbe.close(resolve));
 
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
@@ -177,7 +177,7 @@ test('CODEX_GATEWAY_CONTEXT_WINDOW overrides the advertised max_input_tokens', a
   const shimPort = await listen(shimProbe);
   await new Promise((resolve) => shimProbe.close(resolve));
 
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
@@ -222,7 +222,7 @@ test('default request route logging records Fable metadata but never prompt data
   await new Promise((resolve) => shimProbe.close(resolve));
   const testEnv = { ...process.env };
   delete testEnv.CODEX_GATEWAY_REQUEST_LOG;
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...testEnv,
       CODEX_GATEWAY_PORT: String(shimPort),
@@ -264,7 +264,7 @@ test('CODEX_GATEWAY_REQUEST_LOG=0 disables request route logging', async (t) => 
   const shimProbe = http.createServer();
   const shimPort = await listen(shimProbe);
   await new Promise((resolve) => shimProbe.close(resolve));
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
@@ -567,7 +567,7 @@ test('an old-proxy context error is normalized to HTTP 413 request_too_large', a
   const shimProbe = http.createServer();
   const shimPort = await listen(shimProbe);
   await new Promise((resolve) => shimProbe.close(resolve));
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
@@ -609,7 +609,7 @@ test('an upstream 413 with parseable token counts passes through untouched', asy
   const shimProbe = http.createServer();
   const shimPort = await listen(shimProbe);
   await new Promise((resolve) => shimProbe.close(resolve));
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
@@ -679,7 +679,7 @@ test('Codex responses strip hallucinated plan-mode tools from JSON and SSE', asy
   const shimProbe = http.createServer();
   const shimPort = await listen(shimProbe);
   await new Promise((resolve) => shimProbe.close(resolve));
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: { ...process.env, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_PROXY_PORT: String(proxyPort), CODEX_GATEWAY_REQUEST_LOG: '0' },
     stdio: 'ignore',
   });
@@ -726,8 +726,9 @@ test('SessionStart cleanup migrates an already-wired install', () => {
     models: [{ id: 'claude-gpt-5.6-sol[1m]' }],
   }));
 
-  spawnSync(process.execPath, [CLI, 'ensure', '--quiet'], {
-    env: { ...process.env, HOME: home, USERPROFILE: home },
+  spawnGatewayProcessSync(process.execPath, [CLI, 'ensure', '--quiet'], {
+    env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: '18764', CODEX_GATEWAY_PROXY_PORT: '18765' },
+    isolatedOverrides: { CODEX_GATEWAY_PORT: '18764', CODEX_GATEWAY_WORKER_PORT: '18764', CODEX_GATEWAY_PROXY_PORT: '18765' },
     encoding: 'utf8',
   });
 
@@ -751,8 +752,9 @@ test('SessionStart cleanup leaves unrelated gateway caches alone', () => {
   });
   fs.writeFileSync(gatewayCache, original);
 
-  spawnSync(process.execPath, [CLI, 'ensure', '--quiet'], {
-    env: { ...process.env, HOME: home, USERPROFILE: home },
+  spawnGatewayProcessSync(process.execPath, [CLI, 'ensure', '--quiet'], {
+    env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: '18764', CODEX_GATEWAY_PROXY_PORT: '18765' },
+    isolatedOverrides: { CODEX_GATEWAY_PORT: '18764', CODEX_GATEWAY_WORKER_PORT: '18764', CODEX_GATEWAY_PROXY_PORT: '18765' },
     encoding: 'utf8',
   });
 
@@ -765,7 +767,8 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   // ~/.claude, and the assertions below are about the shipped defaults, not
   // whatever a locally installed Claude CLI happens to report.
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-env-home-'));
-  const env = { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_CLAUDE_BIN: missingClaude(home) };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: '18764', CODEX_GATEWAY_PROXY_PORT: '18765', CODEX_GATEWAY_CLAUDE_BIN: missingClaude(home) };
+  const isolatedOverrides = { CODEX_GATEWAY_PORT: '18764', CODEX_GATEWAY_WORKER_PORT: '18764', CODEX_GATEWAY_PROXY_PORT: '18765' };
   fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(cwd, '.claude', 'settings.json'), JSON.stringify({
     env: {
@@ -775,9 +778,10 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
     },
   }));
 
-  const result = spawnSync(process.execPath, [CLI, 'env', '--write-user'], {
+  const result = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--write-user'], {
     cwd,
     env,
+    isolatedOverrides,
     encoding: 'utf8',
   });
   assert.equal(result.status, 0, result.stderr);
@@ -796,7 +800,7 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   assert.equal(legacy.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, undefined);
   assert.equal(legacy.env.USER_SETTING, 'keep-me');
 
-  const removed = spawnSync(process.execPath, [CLI, 'env', '--write-user', '--remove'], { cwd, env, encoding: 'utf8' });
+  const removed = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--write-user', '--remove'], { cwd, env, isolatedOverrides, encoding: 'utf8' });
   assert.equal(removed.status, 0, removed.stderr);
   const after = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
   assert.equal(after.env?.ANTHROPIC_DEFAULT_FABLE_MODEL, undefined);
@@ -870,7 +874,7 @@ function runPinRefreshes(env) {
     '  console.log(JSON.stringify({ cache: JSON.parse(fs.readFileSync(PIN_CACHE_PATH, \'utf8\')), defaults: detectedPinDefaults() }));',
     '})().catch((error) => { console.error(error.stack); process.exitCode = 1; });',
   ].join('\n');
-  const result = spawnSync(process.execPath, ['-e', script], { env, encoding: 'utf8' });
+  const result = spawnGatewayProcessSync(process.execPath, ['-e', script], { env, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim().split('\n').map(JSON.parse);
 }
@@ -914,10 +918,10 @@ test('a failed alias does not carry a stale pin into a new Claude CLI version', 
   }
 });
 
-function probeClaudeAliasWithEnvironment(alias, endpoint, environment) {
+function probeClaudeAliasWithEnvironment(t, alias, endpoint, environment) {
   const script = `const { probeClaudeAlias } = require(${JSON.stringify(PINS)}); probeClaudeAlias(${JSON.stringify(alias)}, ${JSON.stringify(endpoint)}).then((pin) => console.log(JSON.stringify({ pin })));`;
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, ['-e', script], {
+    const child = spawnGatewayProcess(t, process.execPath, ['-e', script], {
       env: environment,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -929,8 +933,8 @@ function probeClaudeAliasWithEnvironment(alias, endpoint, environment) {
   });
 }
 
-function probeRealClaudeFable(endpoint, environment) {
-  return probeClaudeAliasWithEnvironment('fable', endpoint, {
+function probeRealClaudeFable(t, endpoint, environment) {
+  return probeClaudeAliasWithEnvironment(t, 'fable', endpoint, {
     ...environment,
     CODEX_GATEWAY_CLAUDE_BIN: 'claude',
   });
@@ -953,7 +957,7 @@ function fakeProbeEnvironment(home, claude, proxyUrl) {
 }
 
 test('the local Fable probe keeps proxy observation active for the installed Claude CLI', async (t) => {
-  const version = spawnSync('claude', ['--version'], { encoding: 'utf8' });
+  const version = spawnGatewayProcessSync('claude', ['--version'], { encoding: 'utf8' });
   if (version.status !== 0 || !version.stdout.trim()) return t.skip('claude --version is unavailable');
   const proxy = await startCountingProxy(t);
   const localRequests = [];
@@ -972,7 +976,7 @@ test('the local Fable probe keeps proxy observation active for the installed Cla
   delete environment.NO_PROXY;
   delete environment.no_proxy;
   try {
-    const result = await probeRealClaudeFable(`http://127.0.0.1:${port}`, environment);
+    const result = await probeRealClaudeFable(t, `http://127.0.0.1:${port}`, environment);
     const versionText = version.stdout.trim();
     assert.equal(result.status, 0, `Claude ${versionText}; status=${result.status}; proxy connections=${proxy.connectionCount()}; proxy targets=${proxy.targets().join(',') || '(none)'}; local requests=${localRequests.length}; stderr=${result.stderr}`);
     const { pin } = JSON.parse(result.stdout);
@@ -995,7 +999,7 @@ test('the proxy observer sees no egress from a fake Claude probe', async (t) => 
   const environment = fakeProbeEnvironment(home, claude, proxy.url);
   delete environment.FAKE_CLAUDE_EGRESS;
   try {
-    const result = await probeClaudeAliasWithEnvironment('fable', 'http://127.0.0.1:1', environment);
+    const result = await probeClaudeAliasWithEnvironment(t, 'fable', 'http://127.0.0.1:1', environment);
     assert.equal(result.status, 0, result.stderr);
     const { pin } = JSON.parse(result.stdout);
     const observation = `fake init model=${pin}; proxy connections=${proxy.connectionCount()}; proxy targets=${proxy.targets().join(',') || '(none)'}`;
@@ -1020,7 +1024,7 @@ test('the proxy observer catches fake Claude egress', async (t) => {
   const proxy = await startCountingProxy(t);
   const environment = { ...fakeProbeEnvironment(home, claude, proxy.url), FAKE_CLAUDE_EGRESS: '1' };
   try {
-    const result = await probeClaudeAliasWithEnvironment('fable', 'http://127.0.0.1:1', environment);
+    const result = await probeClaudeAliasWithEnvironment(t, 'fable', 'http://127.0.0.1:1', environment);
     assert.equal(result.status, 0, result.stderr);
     const { pin } = JSON.parse(result.stdout);
     const observation = `fake init model=${pin}; proxy connections=${proxy.connectionCount()}; proxy targets=${proxy.targets().join(',') || '(none)'}`;
@@ -1044,30 +1048,30 @@ test('Claude pin overrides persist outside the plugin and are applied by rewirin
     CODEX_GATEWAY_CLAUDE_BIN: claude.command,
   };
   try {
-    const set = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { env, encoding: 'utf8' });
+    const set = spawnGatewayProcessSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { env, encoding: 'utf8' });
     assert.equal(set.status, 0, set.stderr);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'model-gateway', 'pins.json'), 'utf8')), {
       opus: 'claude-opus-4-8[1m]',
     });
 
-    const wired = spawnSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
+    const wired = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
     assert.equal(wired.status, 0, wired.stderr);
     const settingsFile = path.join(home, '.claude', 'settings.json');
     assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
 
-    const pins = spawnSync(process.execPath, [CLI, 'pin'], { env, encoding: 'utf8' });
+    const pins = spawnGatewayProcessSync(process.execPath, [CLI, 'pin'], { env, encoding: 'utf8' });
     assert.equal(pins.status, 0, pins.stderr);
     assert.match(pins.stdout, /opus: claude-opus-4-8\[1m\] \(overridden; shipped default: claude-opus-9\[1m\]\)/);
 
-    const cleared = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'default'], { env, encoding: 'utf8' });
+    const cleared = spawnGatewayProcessSync(process.execPath, [CLI, 'pin', '--opus', 'default'], { env, encoding: 'utf8' });
     assert.equal(cleared.status, 0, cleared.stderr);
-    const rewired = spawnSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
+    const rewired = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
     assert.equal(rewired.status, 0, rewired.stderr);
     const detected = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'model-gateway', 'detected-pins.json'), 'utf8'));
     assert.equal(detected.pins.opus, 'claude-opus-9[1m]');
     assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.ANTHROPIC_DEFAULT_OPUS_MODEL, detected.pins.opus);
 
-    const invalid = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'bad;value'], { env, encoding: 'utf8' });
+    const invalid = spawnGatewayProcessSync(process.execPath, [CLI, 'pin', '--opus', 'bad;value'], { env, encoding: 'utf8' });
     assert.equal(invalid.status, 2);
     assert.match(invalid.stderr, /invalid opus pin/);
   } finally {
@@ -1079,9 +1083,9 @@ test('Claude pin overrides persist outside the plugin and are applied by rewirin
 test('rewiring without a Claude CLI wires the shipped pins and caches no detection', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-nocli-home-'));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-nocli-project-'));
-  const env = { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_CLAUDE_BIN: missingClaude(home) };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: '18764', CODEX_GATEWAY_PROXY_PORT: '18765', CODEX_GATEWAY_CLAUDE_BIN: missingClaude(home) };
   try {
-    const wired = spawnSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
+    const wired = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
     assert.equal(wired.status, 0, wired.stderr);
     const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).env;
     assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]');
@@ -1089,9 +1093,9 @@ test('rewiring without a Claude CLI wires the shipped pins and caches no detecti
     assert.equal(settings.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5-1[1m]');
     assert.equal(fs.existsSync(path.join(home, '.claude', 'model-gateway', 'detected-pins.json')), false);
 
-    const override = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { env, encoding: 'utf8' });
+    const override = spawnGatewayProcessSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { env, encoding: 'utf8' });
     assert.equal(override.status, 0, override.stderr);
-    const rewired = spawnSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
+    const rewired = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
     assert.equal(rewired.status, 0, rewired.stderr);
     const afterOverride = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).env;
     assert.equal(afterOverride.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
@@ -1118,9 +1122,9 @@ test('credential-free alias probes cache valid 1M defaults without replacing ove
     CLAUDE_CODE_OAUTH_TOKEN: 'must-not-reach-probe',
   };
   try {
-    const override = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { cwd, env, encoding: 'utf8' });
+    const override = spawnGatewayProcessSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { cwd, env, encoding: 'utf8' });
     assert.equal(override.status, 0, override.stderr);
-    const wired = spawnSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
+    const wired = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
     assert.equal(wired.status, 0, wired.stderr);
     const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).env;
     assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
@@ -1139,7 +1143,7 @@ test('credential-free alias probes cache valid 1M defaults without replacing ove
       assert.equal(probe.oauth, undefined);
     }
 
-    const mismatched = spawnSync(process.execPath, [CLI, 'env', '--write-user'], {
+    const mismatched = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--write-user'], {
       cwd,
       env: { ...env, FAKE_CLAUDE_FABLE: 'claude-sonnet-99' },
       encoding: 'utf8',
@@ -1158,7 +1162,7 @@ test('doctor describes project-local wiring as the default', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-doctor-project-'));
   const { ANTHROPIC_BASE_URL, ...environment } = process.env;
   try {
-    const result = spawnSync(process.execPath, [CLI, 'doctor'], {
+    const result = spawnGatewayProcessSync(process.execPath, [CLI, 'doctor'], {
       cwd,
       env: { ...environment, HOME: home, USERPROFILE: home },
       encoding: 'utf8',
@@ -1178,9 +1182,9 @@ test('env with no scope flag explains project wiring and writes nothing', () => 
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-wiring-mode-'));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-wiring-project-'));
   try {
-    const shown = spawnSync(process.execPath, [CLI, 'env'], {
+    const shown = spawnGatewayProcessSync(process.execPath, [CLI, 'env'], {
       cwd,
-      env: { ...process.env, HOME: home, USERPROFILE: home },
+      env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: '18764', CODEX_GATEWAY_PROXY_PORT: '18765' },
       encoding: 'utf8',
     });
     assert.equal(shown.status, 0, shown.stderr);
@@ -1188,9 +1192,9 @@ test('env with no scope flag explains project wiring and writes nothing', () => 
     assert.match(shown.stdout, /env --write-project/);
     assert.equal(fs.existsSync(path.join(cwd, '.claude', 'settings.local.json')), false);
 
-    const retired = spawnSync(process.execPath, [CLI, 'env', '--mode', 'global'], {
+    const retired = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--mode', 'global'], {
       cwd,
-      env: { ...process.env, HOME: home, USERPROFILE: home },
+      env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: '18764', CODEX_GATEWAY_PROXY_PORT: '18765' },
       encoding: 'utf8',
     });
     assert.equal(retired.status, 2);
@@ -1230,7 +1234,7 @@ test('claude-* passthrough is byte-identical and never subjected to Codex window
   const shimProbe = http.createServer();
   const shimPort = await listen(shimProbe);
   await new Promise((resolve) => shimProbe.close(resolve));
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
@@ -1278,7 +1282,7 @@ test('count_tokens for a Codex model still routes to the proxy', async (t) => {
   const shimProbe = http.createServer();
   const shimPort = await listen(shimProbe);
   await new Promise((resolve) => shimProbe.close(resolve));
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: { ...process.env, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_PROXY_PORT: String(proxyPort), CODEX_GATEWAY_REQUEST_LOG: '0' },
     stdio: 'ignore',
   });
@@ -1312,7 +1316,7 @@ test('Codex SSE sends heartbeat comments while upstream is silent', async (t) =>
   const shimProbe = http.createServer();
   const shimPort = await listen(shimProbe);
   await new Promise((resolve) => shimProbe.close(resolve));
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
