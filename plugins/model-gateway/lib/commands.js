@@ -991,37 +991,41 @@ function displayName(id, backend = 'codex') {
 const PLAN_TOOLS = ['EnterPlanMode', 'ExitPlanMode'];
 
 const DEFAULT_MODELS = [
-  'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+  'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra',
 ];
 const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 
-// Advertised to Claude Code as max_input_tokens for Codex models.
-//
-// IMPORTANT: as of Claude Code 2.1.207 this value is INERT for compaction. The
-// context-window resolver (eyc/sT in claude.exe) never reads a discovered
-// model's max_input_tokens for a `claude-`prefixed id — it hardwires 200000
-// (PPr). The CLAUDE_CODE_MAX_CONTEXT_TOKENS escape hatch is gated behind
-// `!startsWith("claude-")`, and our ids are `claude-*` (discovery drops
-// non-claude ids, so we can't drop the prefix). Net: Claude Code uses a 200k
-// window for every Codex model no matter what we advertise, proactive
-// auto-compaction is OFF (window source is "auto"), and the only recovery is
-// reactive — triggered when the BACKEND returns a context-overflow error (see
-// the 413 normalize path in forward()). So this number does NOT "make Claude
-// Code compact earlier"; the earlier 272k/245k-headroom rationale was wrong.
-//
-// It is still advertised (a) for honesty in /v1/models and (b) to future-proof
-// a Claude Code version that does consult it. Proxy 0.1.17 measured the real
-// GPT-5.6 input ceiling at 370000 tokens: 370006 was accepted and 371882 was
-// rejected with native 413 request_too_large. Override per-machine with
-// CODEX_GATEWAY_CONTEXT_WINDOW. Never set a global CLAUDE_CODE_AUTO_COMPACT_WINDOW
-// to influence this: that also hits Claude passthrough models.
-const CODEX_COMPACT_CONTEXT_WINDOW = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW) || 370000;
+// Claude Code ignores max_input_tokens for discovered claude-* ids, so the
+// sentry in request-worker.js is what makes it compact. On 2026-09-05,
+// claude-code-proxy 0.1.35 (upstream 55bf0b58) accepted 920,012 input tokens
+// and refused 935,012 for both gpt-5.6-sol and gpt-6-astra. Keep the last
+// accepted value here with the worker's duplicate defaults. CODEX_GATEWAY_CONTEXT_WINDOW
+// overrides every model, and CODEX_GATEWAY_COMPACT_TRIGGER fixes the sentry
+// trigger globally. Never set CLAUDE_CODE_AUTO_COMPACT_WINDOW: it also affects
+// Claude passthrough models.
+const CODEX_CONTEXT_WINDOWS = Object.freeze({
+  default: 920000,
+  'gpt-5.6-sol': 920000,
+  'gpt-5.6-terra': 920000,
+  'gpt-5.6-luna': 920000,
+  'gpt-6-astra': 920000,
+});
+const configuredContextWindow = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW);
 const CODEX_SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
 const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
-const CODEX_COMPACT_TRIGGER = Number.isFinite(configuredCompactTrigger) && configuredCompactTrigger > 0
-  ? configuredCompactTrigger
-  : 330000;
 const CODEX_COMPACT_HEADROOM = 40000;
+
+function codexContextWindowModelId(id) {
+  const baseId = typeof id === 'string'
+    ? id.replace(/\[1m\]$/, '').replace(/^claude-/, '').replace(/-fast$/, '')
+    : '';
+  return baseId || 'default';
+}
+
+function codexContextWindow(id, contextWindows = CODEX_CONTEXT_WINDOWS) {
+  return configuredContextWindow || contextWindows[codexContextWindowModelId(id)]
+    || contextWindows.default;
+}
 const configuredSseHeartbeatSeconds = Number(process.env.CODEX_GATEWAY_SSE_HEARTBEAT_S);
 const SSE_HEARTBEAT_MS = Number.isFinite(configuredSseHeartbeatSeconds) && configuredSseHeartbeatSeconds >= 0
   ? configuredSseHeartbeatSeconds * 1000
@@ -1113,7 +1117,7 @@ function gatewayModel(id, backend = 'codex') {
   const prefix = backend === 'grok' ? GROK_PREFIX : PREFIX;
   const context = backend === 'grok'
     ? (grokBackend.GROK_MODELS.find((model) => model.id === id)?.context || 131072)
-    : CODEX_COMPACT_CONTEXT_WINDOW;
+    : codexContextWindow(id);
   const advertised = backend === 'grok'
     ? `${prefix}${grokBackend.grokPickerId(id)}`
     : id === 'auto' ? DISPATCH_MODEL_ID : `${prefix}${id}`;
