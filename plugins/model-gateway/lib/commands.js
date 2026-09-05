@@ -41,7 +41,7 @@ const { writeFileAtomically } = require('./atomic-file.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
 const {
-  canReplaceInstalledCliPath, CLI_PATH, GATEWAY_MODELS_CACHE,
+  canReplaceInstalledCliPath, CLI_PATH, GATEWAY_MODELS_CACHE, MODEL_WINDOW_POLICY,
   gatewayAdvertisedWindow, gatewayClientModelId, gatewayDiscoveryModels, readGatewayDiscoveryCache,
   resolveGatewayModelPolicy, sameGatewayDiscoveryModels, SOCKET_PATH, resolveNewestInstalledCliPath,
   syncGatewayDiscoveryCache,
@@ -108,7 +108,7 @@ const AUTH_HEADERS = ['authorization', 'proxy-authorization', 'x-api-key', 'cook
 const {
   COMPAT_BASE_URL, COMPAT_HOST, COMPAT_PORT, DEFAULT_BASE_URL, HOSTS_BLOCK_END, HOSTS_BLOCK_LINE,
   HOSTS_BLOCK_START, PIN_ALIASES, PIN_OVERRIDE_PATH, STATIC_ENV_BLOCK, CODEX_UNKNOWN_MODEL_WINDOW,
-  codexClientModelId, codexContextWindow,
+  codexContextWindow,
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
@@ -958,20 +958,115 @@ function configuredAutoCompactWindow() {
   return null;
 }
 
-function reportCodexClientWindows() {
+function windowValue(value) {
+  return Number.isFinite(value) ? String(value) : 'upstream-managed';
+}
+
+function evidenceDate(measurement) {
+  const date = String(measurement || '').match(/\b\d{4}-\d{2}-\d{2}\b/);
+  if (date) return date[0];
+  return String(measurement || '').startsWith('unmeasured') ? 'unmeasured' : 'upstream-managed';
+}
+
+function nativeModelPolicyIds() {
+  return [...new Set([
+    ...Object.values(effectivePins()).map((pin) => pin.value),
+    'claude-haiku-4-5',
+  ])];
+}
+
+function modelWindowPolicyRow(id, pickerId = gatewayClientModelId(id)) {
+  const policy = resolveGatewayModelPolicy(id);
+  if (!policy) return null;
+  const clientWindow = pickerId.endsWith('[1m]') ? 1000000 : CODEX_UNKNOWN_MODEL_WINDOW;
   const autoCompact = configuredAutoCompactWindow();
-  if (autoCompact) {
-    log(`Codex auto-compact cap: ${autoCompact.window} (${autoCompact.source}; wins over the Codex client resolver window)`);
+  const sentryPolicy = effectiveCodexSentryPolicy(policy);
+  return {
+    backend: policy.backend,
+    backendId: policy.backend === 'anthropic' ? id.replace(/\[1m\]$/, '') : policy.backendId,
+    pickerId,
+    backendWindow: policy.backendWindow,
+    advertisedWindow: gatewayAdvertisedWindow(id),
+    clientWindow,
+    clientCompactPoint: Math.min(autoCompact?.window ?? clientWindow, clientWindow) - 33000,
+    sentry: policy.sentry,
+    sentryTrigger: sentryPolicy ? `${sentryPolicy.compactTrigger} (${sentryPolicy.source})` : 'none',
+    evidenceDate: evidenceDate(policy.measurement),
+  };
+}
+
+function policyGatewayModelIds(liveIds = []) {
+  if (liveIds.length) {
+    return [...new Set(liveIds.filter((id) => {
+      const policy = resolveGatewayModelPolicy(id);
+      return policy?.backend === 'codex' || policy?.backend === 'grok';
+    }))];
   }
-  for (const id of DEFAULT_MODELS) {
-    const gatewayWindow = codexContextWindow(id);
-    const clientModelId = codexClientModelId(id);
-    const clientWindow = clientModelId.endsWith('[1m]') ? 1000000 : CODEX_UNKNOWN_MODEL_WINDOW;
-    const warning = clientWindow === CODEX_UNKNOWN_MODEL_WINDOW
-      ? ' WARNING: 200000-token unknown-model default.'
-      : '';
-    log(`Codex client resolver: ${clientModelId} uses ${clientWindow} (gateway advertises ${gatewayWindow})${warning}`);
+  return Object.values(MODEL_WINDOW_POLICY)
+    .filter((policy) => policy.backendId !== 'default' && policy.backend !== 'anthropic')
+    .map((policy) => policy.backendId);
+}
+
+function modelWindowPolicyRows(liveIds = []) {
+  const gatewayRows = policyGatewayModelIds(liveIds).map((id) => modelWindowPolicyRow(id));
+  const nativeRows = nativeModelPolicyIds().map((id) => modelWindowPolicyRow(id, id));
+  return [...gatewayRows, ...nativeRows].filter(Boolean);
+}
+
+function expectedShimModelIds(liveIds = []) {
+  return modelWindowPolicyRows(liveIds)
+    .filter((row) => row.backend !== 'anthropic')
+    .map((row) => row.pickerId);
+}
+
+function modelIdDifference(liveIds) {
+  const live = new Set(liveIds);
+  const expected = new Set(expectedShimModelIds(liveIds));
+  return {
+    missing: [...expected].filter((id) => !live.has(id)),
+    extra: [...live].filter((id) => !expected.has(id)),
+  };
+}
+
+function reportModelWindowPolicy(liveIds = []) {
+  const autoCompact = configuredAutoCompactWindow();
+  log(`model window policy: ${autoCompact
+    ? `auto-compact cap ${autoCompact.window} (${autoCompact.source})`
+    : 'no auto-compact cap configured'}`);
+  log('backend id | picker/client id | backend window | advertised window | client window | client compact point | sentry | effective trigger | evidence date');
+  for (const row of modelWindowPolicyRows(liveIds)) {
+    log([
+      row.backendId,
+      row.pickerId,
+      windowValue(row.backendWindow),
+      windowValue(row.advertisedWindow),
+      row.clientWindow,
+      row.clientCompactPoint,
+      row.sentry,
+      row.sentryTrigger,
+      row.evidenceDate,
+    ].join(' | '));
   }
+}
+
+async function reportLiveShimModelPolicy() {
+  let liveIds;
+  try {
+    liveIds = (await fetchShimModels()).map((model) => model.id);
+  } catch (error) {
+    log(`live shim model ids: unavailable (${error.message})`);
+    reportModelWindowPolicy();
+    return false;
+  }
+  reportModelWindowPolicy(liveIds);
+  const { missing, extra } = modelIdDifference(liveIds);
+  if (!missing.length && !extra.length) {
+    log('live shim model ids: PASS (match the installed policy)');
+    return true;
+  }
+  console.error(`model-gateway: FAIL: live shim model ids differ from policy; missing: ${missing.join(', ') || 'none'}; extra: ${extra.join(', ') || 'none'}. Restart the shim through the normal ensure/setup path, then restart Claude Code sessions so the picker re-discovers.`);
+  process.exitCode = 1;
+  return false;
 }
 
 async function doctor({ readiness: suppliedReadiness = null } = {}) {
@@ -1017,7 +1112,7 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
   for (const [alias, pin] of Object.entries(effectivePins())) {
     log(`Claude ${alias} pin: ${pin.value}${pin.override ? ` (overridden; shipped default: ${pin.default})` : ' (default)'}`);
   }
-  reportCodexClientWindows();
+  await reportLiveShimModelPolicy();
   const activeScope = selectedWiringScope();
   const effective = effectiveBaseUrl();
   const modeFor = (base) => (base === COMPAT_BASE_URL ? 'compat' : base === DEFAULT_BASE_URL ? 'default' : null);
@@ -1797,7 +1892,7 @@ function requestHeader(req, name) {
   return typeof value === 'string' ? value : null;
 }
 
-const { runWorker } = require('./request-worker.js');
+const { effectiveCodexSentryPolicy, runWorker } = require('./request-worker.js');
 function runShim() {
   mkdirs();
   const supervisorStartedAt = new Date().toISOString();
@@ -2258,4 +2353,7 @@ module.exports = {
   DispatchSessionRouteCache,
   dispatchModelFromRawBody,
   dispatchRouteFromMessages,
+  modelWindowPolicyRows,
+  expectedShimModelIds,
+  modelIdDifference,
 };

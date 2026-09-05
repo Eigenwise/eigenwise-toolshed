@@ -151,6 +151,13 @@ reversible workaround:
 ... env --remove   # unwire Claude Code (do this BEFORE uninstalling the plugin)
 ```
 
+`doctor` prints the full model-window table: backend and picker ids, backend and advertised windows,
+Claude Code's resolved client window and compaction point, sentry mode and trigger, and the measurement
+date. It includes Codex, Grok, and native Claude pin rows. It also compares the live shim's `/v1/models`
+ids with the installed policy. A `FAIL` naming missing and extra ids means the shim is stale even when its
+version matches: restart it through the normal `ensure` or `setup` path, then restart Claude Code sessions
+so the picker re-discovers the rows.
+
 Logs live in `~/.claude/model-gateway/logs/`. `guardian.log` has recovery output; `lifecycle.jsonl`
 has bounded process evidence that `doctor` summarizes. Ports: shim 18764, proxy 18765 (override with
 `CODEX_GATEWAY_PORT` / `CODEX_GATEWAY_PROXY_PORT`, but the env block and running processes must
