@@ -11,6 +11,8 @@ const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const START_TIMEOUT_MS = 5000;
 const PROCESS_CLEANUP_TIMEOUT_MS = 5000;
 const PROCESS_CLEANUP_POLL_MS = 25;
+const gatewayFixtureProcesses = new Map();
+const gatewayTestEnvironments = new WeakMap();
 
 function gatewayPidFile(home, name) {
   return path.join(home, '.claude', 'model-gateway', `${name}.pid`);
@@ -29,7 +31,17 @@ function waitForProcessExit(pid) {
   }
 }
 
+function stopGatewayFixtureProcess(home) {
+  const child = gatewayFixtureProcesses.get(home);
+  gatewayFixtureProcesses.delete(home);
+  if (!child?.pid || child.exitCode != null) return;
+  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+  else { try { child.kill('SIGTERM'); } catch {} }
+  waitForProcessExit(child.pid);
+}
+
 function stopTrackedGatewayProcesses(home) {
+  stopGatewayFixtureProcess(home);
   const pids = [];
   for (const name of ['shim', 'guardian', 'proxy']) {
     let pid;
@@ -155,15 +167,27 @@ function createGatewayTestEnvironment(overrides = {}, isolatedOverrides = {}) {
   return { environment, home, ownsHome };
 }
 
+function removeGatewayTestHome(home) {
+  fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+}
+
 function gatewayTestEnvironment(t, overrides = {}, isolatedOverrides = {}) {
   const testEnvironment = createGatewayTestEnvironment(overrides, isolatedOverrides);
-  if (testEnvironment.ownsHome && t) t.after(() => fs.rmSync(testEnvironment.home, { recursive: true, force: true }));
+  gatewayTestEnvironments.set(testEnvironment.environment, testEnvironment);
+  if (testEnvironment.ownsHome && t) t.after(() => {
+    stopTrackedGatewayProcesses(testEnvironment.home);
+    removeGatewayTestHome(testEnvironment.home);
+  });
   return testEnvironment.environment;
 }
 
 function spawnGatewayProcess(t, command, args, options = {}) {
   const { env: overrides, isolatedOverrides, ...spawnOptions } = options;
-  return spawn(command, args, { ...spawnOptions, env: gatewayTestEnvironment(t, overrides, isolatedOverrides) });
+  const environment = gatewayTestEnvironment(t, overrides, isolatedOverrides);
+  const child = spawn(command, args, { ...spawnOptions, env: environment });
+  const testEnvironment = gatewayTestEnvironments.get(environment);
+  if (testEnvironment?.ownsHome) gatewayFixtureProcesses.set(testEnvironment.home, child);
+  return child;
 }
 
 function spawnGatewayProcessSync(command, args, options = {}) {
@@ -173,7 +197,7 @@ function spawnGatewayProcessSync(command, args, options = {}) {
     return spawnSync(command, args, { ...spawnOptions, env: testEnvironment.environment });
   } finally {
     stopTrackedGatewayProcesses(testEnvironment.home);
-    if (testEnvironment.ownsHome) fs.rmSync(testEnvironment.home, { recursive: true, force: true });
+    if (testEnvironment.ownsHome) removeGatewayTestHome(testEnvironment.home);
   }
 }
 

@@ -1,6 +1,6 @@
 'use strict';
 
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -9,6 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway } = require('./support.js');
+const { commandResultAsync, createProxyRecovery, isDescendantOfAsync } = require('../lib/process-supervision.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const BODY_SESSION_ID = 'gateway-fixture-body-sentinel';
@@ -81,6 +82,37 @@ function processIsRunning(pid) {
     process.kill(pid, 0);
     return true;
   } catch { return false; }
+}
+
+function descendantPids(parentPid) {
+  if (process.platform === 'win32') {
+    const result = spawnSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+      `Get-CimInstance Win32_Process -Filter "ParentProcessId = ${parentPid}" | Select-Object ProcessId | ConvertTo-Json -Compress`,
+    ], { encoding: 'utf8', windowsHide: true });
+    try {
+      const entries = JSON.parse(result.stdout || '[]');
+      return (Array.isArray(entries) ? entries : [entries]).map((entry) => Number(entry.ProcessId)).filter(Boolean);
+    } catch { return []; }
+  }
+  const result = spawnSync('ps', ['-eo', 'pid=,ppid='], { encoding: 'utf8' });
+  return String(result.stdout).split(/\r?\n/).map((line) => line.trim().split(/\s+/).map(Number))
+    .filter(([pid, processParentPid]) => pid && processParentPid === parentPid).map(([pid]) => pid);
+}
+
+function processGroupMembers(groupPid) {
+  const result = spawnSync('ps', ['-eo', 'pid=,pgid='], { encoding: 'utf8' });
+  return String(result.stdout).split(/\r?\n/).map((line) => line.trim().split(/\s+/).map(Number))
+    .filter(([pid, processGroupPid]) => pid && processGroupPid === groupPid).map(([pid]) => pid);
+}
+
+async function waitForProcessesToExit(processIds, timeout = 1000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (processIds.every((pid) => !processIsRunning(pid))) return;
+    await pause(20);
+  }
+  assert.deepEqual(processIds.filter(processIsRunning), [], 'probe child survived its supervisor');
 }
 
 function installNodeProxy(home) {
@@ -441,4 +473,104 @@ test('setup restart path refuses a foreign shim before it can restart its worker
   assert.equal(result.status, 1, result.stderr);
   assert.equal(processIsRunning(health.workerPid), true, 'foreign shim worker survives setup restart refusal');
   assert.match(result.stderr, new RegExp(`refusing to stop PID ${foreign.pid} on :${port}; it belongs to a different install root`));
+});
+
+
+test('supervisor health remains responsive while a timed-out ownership probe defers recovery', async (t) => {
+  const supervisor = http.createServer((request, response) => response.end(JSON.stringify({ ok: true })));
+  const supervisorPort = await listen(supervisor);
+  t.after(() => supervisor.close());
+  const lifecycle = [];
+  const recovery = createProxyRecovery({
+    proxyBinary: 'fake-proxy',
+    probe: async () => false,
+    listening: async () => true,
+    owner: async () => {
+      const probe = await commandResultAsync(process.execPath, ['-e', 'setTimeout(() => {}, 3000)'], { timeout: 20 });
+      return probe.timedOut ? undefined : null;
+    },
+    binaryExists: () => true,
+    recordLifecycle: (event, details) => lifecycle.push({ event, details }),
+    now: () => Date.now(),
+    report: () => {},
+  });
+  const recoveryAttempt = recovery.recover();
+  const startedAt = Date.now();
+  const health = await new Promise((resolve, reject) => {
+    http.get(`http://127.0.0.1:${supervisorPort}/healthz`, (response) => {
+      response.resume();
+      response.once('end', () => resolve({ status: response.statusCode, elapsedMs: Date.now() - startedAt }));
+    }).once('error', reject);
+  });
+  const outcome = await recoveryAttempt;
+
+  assert.equal(health.status, 200);
+  assert.ok(health.elapsedMs < 500, `health waited ${health.elapsedMs}ms for the ownership probe`);
+  assert.equal(outcome.state, 'owner-unknown');
+  assert.equal(lifecycle.at(-1)?.details.outcome, 'owner-unknown');
+});
+
+test('supervisor shutdown reaps a timed probe child before fixture cleanup', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-probe-child-'));
+  const supervisionPath = path.join(__dirname, '..', 'lib', 'process-supervision.js');
+  const supervisorScript = `
+    const { commandResultAsync, createProbeChildRegistry, createProxyRecovery } = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'process-supervision.js'))});
+    const probeChildren = createProbeChildRegistry();
+    const recovery = createProxyRecovery({
+      probeChildren,
+      probe: async () => false,
+      listening: async () => true,
+      owner: async () => {
+        await commandResultAsync(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { timeout: 10000, probeChildren });
+        return undefined;
+      },
+      binaryExists: () => true,
+      report: () => {},
+    });
+    async function stop() { await recovery.stop(); process.exit(0); }
+    process.once('SIGTERM', stop);
+    process.once('message', stop);
+    void recovery.recover();
+    process.stdout.write('ready\\n');
+    setInterval(() => {}, 1000);
+  `;
+  const supervisor = spawn(process.execPath, ['-e', supervisorScript], {
+    cwd: home,
+    detached: process.platform !== 'win32',
+    stdio: ['ignore', 'pipe', 'ignore', 'ipc'],
+  });
+  t.after(async () => {
+    if (processIsRunning(supervisor.pid)) supervisor.kill();
+    await waitForExit(supervisor);
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  await waitForReady(supervisor);
+  await pause(50);
+
+  const probePids = process.platform === 'win32'
+    ? descendantPids(supervisor.pid)
+    : processGroupMembers(supervisor.pid).filter((pid) => pid !== supervisor.pid);
+  assert.ok(probePids.length > 0, `no timed probe child found for ${supervisionPath}`);
+  if (process.platform === 'win32') supervisor.send('stop');
+  else supervisor.kill('SIGTERM');
+  await waitForExit(supervisor);
+  await waitForProcessesToExit(probePids);
+  assert.doesNotThrow(() => fs.rmSync(home, { recursive: true, force: true }));
+});
+
+test('async parent ownership walk reads the process table once', async () => {
+  let processQueries = 0;
+  const processes = new Map([
+    [903, { parentPid: 902 }],
+    [902, { parentPid: 901 }],
+    [901, { parentPid: null }],
+  ]);
+
+  assert.equal(await isDescendantOfAsync(903, 901, {
+    processTable: async () => {
+      processQueries += 1;
+      return processes;
+    },
+  }), true);
+  assert.equal(processQueries, 1);
 });
