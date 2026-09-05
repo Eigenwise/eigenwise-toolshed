@@ -91,6 +91,9 @@ function mcpServer(environment: NodeJS.ProcessEnv = process.env) {
   });
   server.once('exit', cleanupPrivateHome);
   server.once('error', cleanupPrivateHome);
+  // Several tests keep writing to stdin while waiting for the server to exit on its own;
+  // a write that lands after the child closed the pipe is EPIPE, not a failure.
+  server.stdin?.on('error', () => {});
   return server;
 }
 
