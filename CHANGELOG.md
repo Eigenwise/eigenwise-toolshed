@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.518.0 (2026-09-05)
+
+### model-gateway 0.48.20 → 0.49.0
+
+#### Features
+
+- Raise Codex context windows to 920k tokens (SQ-2438)
+
 ## v3.517.0 (2026-09-04)
 
 ### sidequest 5.0.26 → 5.0.27
