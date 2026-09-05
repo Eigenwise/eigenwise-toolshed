@@ -29,7 +29,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { dispatchLaunchName, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('./exec-names.js');
+const { dispatchLaunchName, isReadOnlyExecutor, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('./exec-names.js');
 const crypto = require('crypto');
 const { execFileSync, spawnSync } = require('child_process');
 const db = require('./db.js');
@@ -969,11 +969,14 @@ const {
   assetPath,
   assetsDir,
   clearOracleMarker,
+  createComment,
   fs,
   getTicket,
+  isReadOnlyExecutor,
   nullableText,
   path,
   putTicket,
+  queueEventNotification,
   stripControlChars,
   withTicketLock,
 });
@@ -2115,7 +2118,9 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     const activeArtifactDispatch = artifactDispatch && liveClaim && activeDispatch;
     const activeWorkingTreeDelivery = dispatch?.workingTreeDelivery === true && liveClaim && activeDispatch;
     const activeNonRepoOutput = dispatch?.nonRepoOutput === true && liveClaim && activeDispatch;
-    const activeReadOnlyDispatch = dispatch?.readonly === true && liveClaim && activeDispatch;
+    const readonlyDispatch = dispatch?.readonly === true || isReadOnlyExecutor(dispatch?.executor);
+    const activeReadOnlyDispatch = readonlyDispatch && liveClaim && activeDispatch;
+    const terminalReadOnlyOracle = readonlyDispatch && t.release?.kind === 'oracle';
     let sharedTreeCommittedScope = false;
     let completionDelta: any = null;
     // Ahead of the scope check on purpose: a review sitting on another commit reports that tree's files as dirty
@@ -2184,18 +2189,15 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         claimRelease: t.claimRelease,
       };
     }
-    // Whether a run produces a commit is an OUTCOME, and no dispatch-time flag
-    // predicts it: a read-only contract routed through a write-capable category
-    // (testing, review-audit, an investigation that declares files it only reads)
-    // records readonly:false correctly and then has nothing to hand in. The
-    // caller may prove that by inspecting the worktree; a proven no-op closes,
-    // anything uncommitted or committed in scope still owes a submission (SQ-923).
+    // A dispatch executor can be read-only even when the ticket's category is
+    // normally writable. Its recorded identity controls an active closeout and
+    // the terminal oracle closeout that follows an already-released review.
     const provenNoOp = opts.cleanDeclaredScope === true || Boolean(dispatch?.noOpRelease);
-    if (executorDone && dispatch && declaredFiles.length && !provenNoOp && !sharedTreeCommittedScope && !activeReadOnlyDispatch && !activeArtifactDispatch && !activeWorkingTreeDelivery && !activeNonRepoOutput) {
+    if (executorDone && dispatch && declaredFiles.length && !provenNoOp && !sharedTreeCommittedScope && !activeReadOnlyDispatch && !terminalReadOnlyOracle && !activeArtifactDispatch && !activeWorkingTreeDelivery && !activeNonRepoOutput) {
       return {
         ok: false,
         reason: 'submission_required',
-        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path. If the ticket contract forbids commits, set workingTreeDelivery:true before dispatch and run it in the shared checkout; done then records its declared working-tree paths and matching pinned verify-capture. A clean declared scope may close as an external-deliverable completion only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set that flag through update during this claim; then run the pinned command through the dispatched verify-capture wrapper for the current dispatch attempt and revision, and repeat done. Dirty or committed declared paths still require commit and submit.`,
+        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path unless the recorded last executor is read-only. If the ticket contract forbids commits, set workingTreeDelivery:true before dispatch and run it in the shared checkout; done then records its declared working-tree paths and matching pinned verify-capture. A clean declared scope may close as an external-deliverable completion only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set that flag through update during this claim; then run the pinned command through the dispatched verify-capture wrapper for the current dispatch attempt and revision, and repeat done. Dirty or committed declared paths still require commit and submit.`,
         ticket: t,
       };
     }

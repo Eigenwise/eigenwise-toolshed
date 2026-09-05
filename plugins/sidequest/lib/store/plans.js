@@ -5,11 +5,14 @@ function createPlans(dependencies) {
     assetPath,
     assetsDir,
     clearOracleMarker,
+    createComment,
     fs,
     getTicket,
+    isReadOnlyExecutor,
     nullableText,
     path,
     putTicket,
+    queueEventNotification,
     stripControlChars,
     withTicketLock
   } = dependencies;
@@ -290,6 +293,35 @@ ${block}
     putTicket(slug, sourceTicket);
     return { sourceRef: sourceTicket.ref, outcome };
   }
+  function acceptedReadonlyReviewOracle(ticket, outcome) {
+    return outcome === "accepted" && ticket?.release?.kind === "oracle" && Boolean(ticket?.reviewTarget?.ticketId) && (ticket?.dispatch?.readonly === true || isReadOnlyExecutor(ticket?.dispatch?.executor));
+  }
+  function completeAcceptedReadonlyReview(slug, ticket, text) {
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const comment = createComment({
+      by: "oracle",
+      body: `Oracle verdict (accepted): ${text}`,
+      kind: "comment",
+      source: "mcp"
+    }, now);
+    if (!Array.isArray(ticket.comments)) ticket.comments = [];
+    ticket.comments.push(comment);
+    ticket.status = "done";
+    ticket.statusTransition = { from: "awaiting-oracle", to: "done", at: now };
+    ticket.completion = {
+      key: [ticket.id, now, "oracle", "done"].join(":"),
+      by: "oracle",
+      state: "done",
+      claimAt: null,
+      at: now,
+      commentId: comment.id,
+      purpose: "oracle-review-verdict"
+    };
+    ticket.lastEventType = "status";
+    ticket.lastEventSource = "mcp";
+    ticket.updatedAt = now;
+    return comment;
+  }
   function applyExperimentVerdict(slug, idOrRef, input) {
     const text = String(input?.text == null ? "" : input.text);
     if (!text.trim()) throw new Error("Verdict text is required and must preserve the user's words.");
@@ -330,12 +362,19 @@ ${String(log).slice(entry.end).trimStart()}`;
       log = appendStandingConstraint(log, oracle.round, constraint);
       ticket.oracle = Object.assign({}, oracle, { verdict: { text, outcome, why, constraint, at: (/* @__PURE__ */ new Date()).toISOString() } });
       const reviewOutcome = recordBoundReviewOutcome(slug, ticket, reviewOutcomeFromOracleVerdict(outcome));
-      const previousStatus = ticket.status;
-      ticket.status = "todo";
-      if (previousStatus !== ticket.status) ticket.statusTransition = { from: previousStatus, to: ticket.status, at: (/* @__PURE__ */ new Date()).toISOString() };
+      const completionComment = acceptedReadonlyReviewOracle(ticket, outcome) ? completeAcceptedReadonlyReview(slug, ticket, text) : null;
+      if (!completionComment) {
+        const previousStatus = ticket.status;
+        ticket.status = "todo";
+        if (previousStatus !== ticket.status) ticket.statusTransition = { from: previousStatus, to: ticket.status, at: (/* @__PURE__ */ new Date()).toISOString() };
+      }
       const location = writeExperimentLog(slug, ticket, log);
       putTicket(slug, ticket);
-      return Object.assign({ ok: true, round: oracle.round, outcome }, location, reviewOutcome ? { reviewOutcome } : {});
+      if (completionComment) {
+        queueEventNotification(slug, ticket, "status", "mcp");
+        queueEventNotification(slug, ticket, "comment", "mcp", { commentBody: completionComment.body });
+      }
+      return Object.assign({ ok: true, round: oracle.round, outcome }, location, reviewOutcome ? { reviewOutcome } : {}, completionComment ? { completionComment } : {});
     });
   }
   function appendOverturnLine(slug, idOrRef, priorRound, overturningRound, line) {

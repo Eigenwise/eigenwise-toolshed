@@ -407,7 +407,7 @@ const tools = [
   },
   {
     name: "done",
-    description: "Finish; a clean writable scope needs externalDeliverable:true plus a current-attempt pinned verify-capture.",
+    description: "Finish. A readonly last dispatch closes without a submission; a clean writable scope needs externalDeliverable:true plus a current-attempt pinned verify-capture.",
     inputSchema: {
       type: "object",
       properties: {
@@ -564,7 +564,7 @@ const tools = [
   },
   {
     name: "verdict",
-    description: "Record an oracle verdict.",
+    description: "Record an oracle verdict. An accepted verdict for a readonly bound review released with kind oracle closes that review as done and stores the verdict as its completion comment.",
     inputSchema: {
       type: "object",
       properties: {
@@ -585,7 +585,7 @@ const tools = [
         why: args.why,
         constraint: args.constraint
       });
-      if (result.ok) {
+      if (result.ok && !result.completionComment) {
         store.addComment(slug, args.ref, {
           by: "oracle",
           body: `Oracle verdict (${args.outcome}): ${args.text}`,

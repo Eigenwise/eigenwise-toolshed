@@ -121,6 +121,11 @@ export function stableReadOnlyDispatchName(_effort?: Effort): string {
   return READ_ONLY_DISPATCH_NAME;
 }
 
+export function isReadOnlyExecutor(name: unknown): boolean {
+  const kind = classify(name).kind;
+  return kind === 'read_only_codex_dispatch' || kind === 'read_only_claude_builtin';
+}
+
 export function classify(name: unknown): ExecutorClassification {
   if (typeof name !== 'string' || !name) return { kind: 'unknown', effort: null };
 

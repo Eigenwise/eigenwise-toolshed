@@ -623,7 +623,12 @@ test('an accepted oracle review continues to lock candidate supersession', async
   const claimedReview = store.getTicket(slug, review.ref);
   claimedReview.status = 'doing';
   claimedReview.claim = { by: 'reviewer', at: new Date().toISOString() };
-  claimedReview.dispatch = { launchSeq: 1 };
+  claimedReview.dispatch = {
+    launchSeq: 1,
+    readonly: false,
+    executor: 'sidequest-exec-dispatch-readonly',
+    agentId: 'reviewer-agent',
+  };
   persist(slug, claimedReview);
 
   const released = await tool('release').handler({
@@ -643,8 +648,15 @@ test('an accepted oracle review continues to lock candidate supersession', async
     constraint: 'Keep the accepted candidate immutable.',
   });
   assert.equal(verdict.ok, true, verdict.message);
-  assert.equal(store.getTicket(slug, review.ref).reviewTarget.outcome, 'accepted');
+  const completedReview = store.getTicket(slug, review.ref);
+  assert.equal(completedReview.status, 'done');
+  assert.equal(completedReview.completion.purpose, 'oracle-review-verdict');
+  assert.equal(completedReview.comments.find((comment: any) => comment.id === completedReview.completion.commentId)?.body, 'Oracle verdict (accepted): The candidate is accepted.');
+  assert.equal(completedReview.reviewTarget.outcome, 'accepted');
   assert.equal(store.getTicket(slug, source.ref).submission.review.outcome, 'accepted');
+  assert.equal(reviewBinding.reviewProvenance(store.getTicket(slug, source.ref), completedReview).reason, 'ok');
+  const integration = store.validateIntegrationSubmission(slug, source.ref, {});
+  assert.notEqual(integration.reason, 'candidate_review_required');
 
   const superseded = await tool('supersede_submission').handler({
     project: repository,
