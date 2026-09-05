@@ -409,7 +409,7 @@ test('buildCatalog publishes the v4 provider-generic model contract', () => {
     },
     {
       slug: 'grok-4-5',
-      id: 'claude-grok-4.5',
+      id: 'claude-grok-4.5[1m]',
       label: 'Grok 4.5',
       provider: 'grok',
     },
@@ -459,7 +459,7 @@ test('writeCatalogFile preserves provider readiness for subset-retained models',
 
     const written = gw.writeCatalogFile(file, subset);
 
-    assert.deepEqual(written.models.map((model) => model.id), ['claude-gpt-5.6-terra[1m]', 'claude-grok-4.5']);
+    assert.deepEqual(written.models.map((model) => model.id), ['claude-gpt-5.6-terra[1m]', 'claude-grok-4.5[1m]']);
     assert.deepEqual(written.providers, readiness);
     assert.deepEqual(written.codexReadiness, written.providers.codex);
   } finally {
@@ -629,7 +629,7 @@ test('the shim keeps Claude ids on the Anthropic path and claims both id forms f
 
   const models = JSON.parse((await request(shimPort, '/v1/models')).body).data.map(({ id }) => id);
   assert.ok(models.includes('claude-gpt-5.6-terra[1m]'), `advertised: ${models.join(', ')}`);
-  assert.ok(models.includes('claude-grok-4.5'), `advertised: ${models.join(', ')}`);
+  assert.ok(models.includes('claude-grok-4.5[1m]'), `advertised: ${models.join(', ')}`);
   assert.ok(models.every((id) => id.startsWith('claude-')), 'discovery drops ids that do not start with claude');
 
   for (const model of ['claude-gpt-5.6-terra', 'claude-codex-gpt-5.6-terra', 'claude-opus-5[1m]', 'claude-sonnet-4-5', 'claude-haiku-4-5']) {

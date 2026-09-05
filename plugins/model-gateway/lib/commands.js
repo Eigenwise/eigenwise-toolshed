@@ -40,7 +40,12 @@ const zlib = require('node:zlib');
 const { writeFileAtomically } = require('./atomic-file.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
-const { canReplaceInstalledCliPath, CLI_PATH, GATEWAY_MODELS_CACHE, gatewayDiscoveryModels, readGatewayDiscoveryCache, sameGatewayDiscoveryModels, SOCKET_PATH, resolveNewestInstalledCliPath, syncGatewayDiscoveryCache } = require('./runtime.js');
+const {
+  canReplaceInstalledCliPath, CLI_PATH, GATEWAY_MODELS_CACHE,
+  gatewayAdvertisedWindow, gatewayClientModelId, gatewayDiscoveryModels, readGatewayDiscoveryCache,
+  resolveGatewayModelPolicy, sameGatewayDiscoveryModels, SOCKET_PATH, resolveNewestInstalledCliPath,
+  syncGatewayDiscoveryCache,
+} = require('./runtime.js');
 const { latestHookWaitCutShort, latestObservedLifecycleExit, lifecycleLogPath, recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
 
 const WIN = process.platform === 'win32';
@@ -1199,18 +1204,13 @@ function noteCompactEvent(attempt, event) {
 }
 
 function gatewayModel(id, backend = 'codex') {
-  const prefix = backend === 'grok' ? GROK_PREFIX : PREFIX;
-  const context = backend === 'grok'
-    ? (grokBackend.GROK_MODELS.find((model) => model.id === id)?.context || 131072)
-    : codexContextWindow(id);
-  const advertised = backend === 'grok'
-    ? `${prefix}${grokBackend.grokPickerId(id)}`
-    : id === 'auto' ? DISPATCH_MODEL_ID : codexClientModelId(id);
+  const policy = id === 'auto' ? null : resolveGatewayModelPolicy(id);
+  if (id !== 'auto' && policy?.backend !== backend) return null;
   return {
-    id: advertised,
+    id: id === 'auto' ? DISPATCH_MODEL_ID : gatewayClientModelId(id),
     display_name: id === 'auto' ? 'Sidequest Dispatch (Codex)' : displayName(id, backend),
     type: 'model',
-    max_input_tokens: context,
+    max_input_tokens: gatewayAdvertisedWindow(id) || codexContextWindow(id),
   };
 }
 
@@ -1486,7 +1486,7 @@ function buildCatalog(ids, readiness = null) {
     .filter(({ details }) => details)
     .map(({ id, details }) => ({
       slug: slugFor(details.provider, details.base, used),
-      id: details.provider === 'codex' ? codexClientModelId(id) : id,
+      id: gatewayClientModelId(id),
       label: details.label,
       provider: details.provider,
     }));
