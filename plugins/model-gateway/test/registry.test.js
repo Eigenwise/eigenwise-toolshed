@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const test = require('node:test');
+const { spawnGatewayProcessSync } = require('./support.js');
 
 const root = path.resolve(__dirname, '..');
 const writer = require('../hooks/registry-writer.js');
@@ -50,7 +51,7 @@ test('preserves a future Codex Gateway registry schema', (t) => {
 });
 
 test('does not fail SessionStart when registry state cannot be initialized', () => {
-  const result = spawnSync(process.execPath, [path.join(root, 'hooks', 'registry-writer.js')], {
+  const result = spawnGatewayProcessSync(process.execPath, [path.join(root, 'hooks', 'registry-writer.js')], {
     env: { ...process.env, CLAUDE_PLUGIN_ROOT: path.join(root, 'missing-plugin-root') },
     encoding: 'utf8',
   });

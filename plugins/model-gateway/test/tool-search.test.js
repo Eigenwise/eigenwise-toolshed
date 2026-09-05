@@ -6,6 +6,7 @@ const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 const test = require('node:test');
+const { spawnGatewayProcess } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 
@@ -99,7 +100,7 @@ test('Codex tool search resolves references while Anthropic passthrough stays by
   });
   t.after(() => anthropic.close());
 
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),

@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { spawnGatewayProcessSync } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const DEFAULT_BASE_URL = 'http://127.0.0.1:9';
@@ -23,10 +24,15 @@ function fixture(t) {
 
 function run(home, project, args) {
   const { ANTHROPIC_BASE_URL, ...environment } = process.env;
-  const result = spawnSync(process.execPath, [CLI, ...args], {
+  const result = spawnGatewayProcessSync(process.execPath, [CLI, ...args], {
     cwd: project,
     encoding: 'utf8',
     timeout: 20000,
+    isolatedOverrides: {
+      CODEX_GATEWAY_PORT: '9',
+      CODEX_GATEWAY_WORKER_PORT: '9',
+      CODEX_GATEWAY_PROXY_PORT: '9',
+    },
     env: {
       ...environment,
       HOME: home,
@@ -208,10 +214,15 @@ const COMMANDS = path.join(__dirname, '..', 'lib', 'commands.js');
 
 function runNode(home, project, script, extraEnv = {}) {
   const { ANTHROPIC_BASE_URL, ...environment } = process.env;
-  const result = spawnSync(process.execPath, ['-e', script], {
+  const result = spawnGatewayProcessSync(process.execPath, ['-e', script], {
     cwd: project,
     encoding: 'utf8',
     timeout: 20000,
+    isolatedOverrides: {
+      CODEX_GATEWAY_PORT: '9',
+      CODEX_GATEWAY_WORKER_PORT: '9',
+      CODEX_GATEWAY_PROXY_PORT: '9',
+    },
     env: {
       ...environment,
       HOME: home,
@@ -404,10 +415,15 @@ test('doctor fails on a selected-mode contradiction and passes when modes agree'
 // reads it only from a JSON stdout on a zero exit.
 function runHook(home, project, environment = {}) {
   const { ANTHROPIC_BASE_URL, ...inherited } = process.env;
-  const result = spawnSync(process.execPath, [CLI, 'ensure', '--quiet'], {
+  const result = spawnGatewayProcessSync(process.execPath, [CLI, 'ensure', '--quiet'], {
     cwd: project,
     encoding: 'utf8',
     timeout: 30000,
+    isolatedOverrides: {
+      CODEX_GATEWAY_PORT: '9',
+      CODEX_GATEWAY_WORKER_PORT: '9',
+      CODEX_GATEWAY_PROXY_PORT: '9',
+    },
     env: { ...inherited, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: '9', CODEX_GATEWAY_PROXY_PORT: '9', ...environment },
   });
   assert.ifError(result.error);

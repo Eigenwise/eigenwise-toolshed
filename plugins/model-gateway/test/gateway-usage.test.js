@@ -8,6 +8,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { spawnGatewayProcess } = require('./support.js');
 const zlib = require('node:zlib');
 
 const { inputComposition } = require('../lib/usage-observability.js');
@@ -115,7 +116,7 @@ async function spawnShim(t, proxyPort, usageEndpoint, anthropicUpstream = undefi
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-usage-integration-'));
   const hostsFile = path.join(directory, 'hosts');
   fs.writeFileSync(hostsFile, '127.0.0.1 localhost\n');
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     cwd: directory,
     env: {
       ...process.env,

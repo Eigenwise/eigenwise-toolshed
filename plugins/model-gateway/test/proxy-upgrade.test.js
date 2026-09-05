@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
+const { spawnGatewayProcessSync } = require('./support.js');
 
 const commands = require('../lib/commands.js');
 const writer = require('../hooks/registry-writer.js');
@@ -99,7 +100,7 @@ test('stable updater launches the highest installed model-gateway version', (t) 
   }));
   const launcher = writer.writeUpdateLauncher({ home }).file;
 
-  const run = spawnSync(process.execPath, [launcher], {
+  const run = spawnGatewayProcessSync(process.execPath, [launcher], {
     encoding: 'utf8',
     env: { ...process.env, MODEL_GATEWAY_CLAUDE_HOME: path.join(home, '.claude'), MODEL_GATEWAY_TEST_RESULT: result },
   });

@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { spawnGatewayProcess } = require('./support.js');
 const grok = require('../lib/grok-backend.js');
 
 test('translates Anthropic messages, tools, and effort to Responses input', () => {
@@ -302,8 +303,8 @@ test('the shim lists and routes claude-prefixed Grok models', async (t) => {
   t.after(() => { upstream.close(); fs.rmSync(authDirectory, { recursive: true, force: true }); });
   const shimPort = await freePort();
   const proxyPort = await freePort();
-  const child = spawn(process.execPath, [cli, 'serve-worker'], {
-    env: { ...process.env, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_PROXY_PORT: String(proxyPort), CODEX_GATEWAY_GROK_HOME: authDirectory, CODEX_GATEWAY_GROK_ENDPOINT: `http://127.0.0.1:${upstreamPort}/v1/responses`, CODEX_GATEWAY_REQUEST_LOG: '0', CODEX_GATEWAY_SENTRY: '0' },
+  const child = spawnGatewayProcess(t, process.execPath, [cli, 'serve-worker'], {
+    env: { ...process.env, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_WORKER_PORT: String(shimPort), CODEX_GATEWAY_PROXY_PORT: String(proxyPort), CODEX_GATEWAY_GROK_HOME: authDirectory, CODEX_GATEWAY_GROK_ENDPOINT: `http://127.0.0.1:${upstreamPort}/v1/responses`, CODEX_GATEWAY_REQUEST_LOG: '0', CODEX_GATEWAY_SENTRY: '0' },
     stdio: 'ignore',
   });
   t.after(() => child.kill());

@@ -8,7 +8,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { startGateway } = require('./support.js');
+const { startGateway, spawnGatewayProcess } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const gateway = require(CLI);
@@ -70,7 +70,7 @@ async function waitForHealth(port) {
   throw new Error(`shim on ${port} did not become healthy`);
 }
 
-function runReadiness(home, proxyPort, options) {
+function runReadiness(t, home, proxyPort, options) {
   const script = `
     const gateway = require(${JSON.stringify(CLI)});
     const options = JSON.parse(process.argv[1]);
@@ -97,7 +97,7 @@ function runReadiness(home, proxyPort, options) {
     })().catch((error) => { console.error(error); process.exit(1); });
   `;
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['-e', script, JSON.stringify(options)], {
+    const child = spawnGatewayProcess(t, process.execPath, ['-e', script, JSON.stringify(options)], {
       env: {
         ...process.env,
         HOME: home,
@@ -127,21 +127,21 @@ test('readiness reports each local failure state from an isolated home', async (
   t.after(() => proxy.close());
   const downProxyPort = await freePort();
 
-  const missing = await runReadiness(home, proxyPort, { binary: false, auth: false, version: gateway.PLUGIN_VERSION });
+  const missing = await runReadiness(t, home, proxyPort, { binary: false, auth: false, version: gateway.PLUGIN_VERSION });
   assert.equal(missing.before.state, 'binary-missing');
   assert.match(missing.before.message, /claude-code-proxy is missing/);
 
-  const proxyDown = await runReadiness(home, downProxyPort, { binary: true, auth: true, version: gateway.PLUGIN_VERSION });
+  const proxyDown = await runReadiness(t, home, downProxyPort, { binary: true, auth: true, version: gateway.PLUGIN_VERSION });
   assert.equal(proxyDown.before.state, 'proxy-down');
 
-  const authMissing = await runReadiness(home, proxyPort, { binary: true, auth: false, version: gateway.PLUGIN_VERSION });
+  const authMissing = await runReadiness(t, home, proxyPort, { binary: true, auth: false, version: gateway.PLUGIN_VERSION });
   assert.equal(authMissing.before.state, 'auth-missing');
   assert.match(authMissing.before.message, /~\/.config\/claude-code-proxy\//);
 
-  const staleShim = await runReadiness(home, proxyPort, { binary: true, auth: true, version: '0.0.0' });
+  const staleShim = await runReadiness(t, home, proxyPort, { binary: true, auth: true, version: '0.0.0' });
   assert.equal(staleShim.before.state, 'serving-version-mismatch');
 
-  const newerShim = await runReadiness(home, proxyPort, { binary: true, auth: true, version: '99.0.0' });
+  const newerShim = await runReadiness(t, home, proxyPort, { binary: true, auth: true, version: '99.0.0' });
   assert.equal(newerShim.before.state, 'ready');
 });
 
@@ -152,7 +152,7 @@ test('upstream-blocked survives a health check and clears on a successful Codex 
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
 
-  const result = await runReadiness(home, proxyPort, {
+  const result = await runReadiness(t, home, proxyPort, {
     binary: true,
     auth: true,
     version: gateway.PLUGIN_VERSION,
