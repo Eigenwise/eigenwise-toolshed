@@ -209,7 +209,7 @@ test('refreshModels writes the configured gateway discovery cache', async (testC
   const discoveryCache = JSON.parse(fs.readFileSync(cache, 'utf8'));
   assert.equal(discoveryCache.baseUrl, baseUrl);
   assert.deepEqual(discoveryCache.models, [
-    { id: 'claude-gpt-6-astra', display_name: 'GPT-6-astra (Codex)' },
+    { id: 'claude-gpt-6-astra[1m]', display_name: 'GPT-6-astra (Codex)' },
     { id: 'claude-grok-4.5', display_name: 'Grok 4.5' },
   ]);
 });
