@@ -45,24 +45,81 @@ async function shimHealthy() {
 }
 
 function pidFile(name) { return path.join(STATE, name + '.pid'); }
-function removePid(name) { try { fs.rmSync(pidFile(name)); } catch {} }
+function pidRecordFile(name) { return path.join(STATE, name + '.pid.json'); }
+function removePid(name) {
+  try { fs.rmSync(pidFile(name)); } catch {}
+  try { fs.rmSync(pidRecordFile(name)); } catch {}
+}
 function readPid(name) {
   try { return Number(fs.readFileSync(pidFile(name), 'utf8').trim()) || null; } catch { return null; }
 }
-function recordedGatewayPids() {
-  return [...new Set(['guardian', 'shim', 'proxy'].map(readPid).filter(Boolean))];
+function readPidRecord(name) {
+  const pid = readPid(name);
+  if (!pid) return null;
+  try {
+    const record = JSON.parse(fs.readFileSync(pidRecordFile(name), 'utf8'));
+    return record?.pid === pid ? record : null;
+  } catch { return null; }
+}
+function writePidRecord(name, pid) {
+  const process = processInfo(pid);
+  fs.writeFileSync(pidFile(name), String(pid));
+  fs.writeFileSync(pidRecordFile(name), JSON.stringify({
+    pid,
+    command: process?.command || null,
+    startedAt: process?.startedAt || null,
+  }));
+}
+function processDescription(process) {
+  return process?.command || 'not a gateway process';
+}
+function stalePidFile(name, pid, process, report = console.error) {
+  report(`model-gateway: stale pid file ${name}: PID ${pid} is now ${processDescription(process)}`);
+  removePid(name);
+}
+function commandIncludesFile(command, filePath) {
+  return String(command).replace(/[\\/]+/g, '/').toLowerCase().includes(normalizedPath(filePath));
+}
+function processRunsThisProxyBinary(process, proxyBinary = PROXY_BIN) {
+  return Boolean(process && commandIncludesFile(process.command, proxyBinary));
+}
+function processIsOwnedByThisInstall(pid, { record = null, proxyBinary = PROXY_BIN } = {}) {
+  const process = processInfo(pid);
+  if (!process) return false;
+  const installRoot = gatewayInstallRootFromCommand(process.command);
+  const belongsToThisInstall = installRoot && normalizedPath(installRoot) === normalizedPath(gatewayInstallRoot());
+  const runsThisProxy = processRunsThisProxyBinary(process, proxyBinary);
+  const recordMatches = !record || (record.pid === pid && (
+    (record.command && record.command === process.command)
+    || (record.startedAt && record.startedAt === process.startedAt)
+  ));
+  return Boolean((belongsToThisInstall || runsThisProxy) && recordMatches);
+}
+function recordedGatewayPid(name, { report = console.error } = {}) {
+  const pid = readPid(name);
+  if (!pid) return null;
+  const record = readPidRecord(name);
+  const process = processInfo(pid);
+  if (record && processIsOwnedByThisInstall(pid, { record })) return pid;
+  stalePidFile(name, pid, process, report);
+  return null;
+}
+function recordedGatewayPids(options) {
+  return [...new Set(['guardian', 'shim', 'proxy'].map((name) => recordedGatewayPid(name, options)).filter(Boolean))];
 }
 function killPid(pid) {
-  if (!pid) return;
+  if (!pid || !processIsOwnedByThisInstall(pid)) return false;
   if (WIN) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
   else { try { process.kill(pid, 'SIGTERM'); } catch {} }
+  return true;
 }
-function stopProcess(name) {
-  killPid(readPid(name));
+function stopProcess(name, options) {
+  const pid = recordedGatewayPid(name, options);
+  if (pid) killPid(pid);
   removePid(name);
 }
 function recordStopRequest(operation, name) {
-  const pid = readPid(name);
+  const pid = recordedGatewayPid(name);
   if (!pid) return;
   const component = name === 'guardian' ? 'supervisor' : name;
   recordGatewayLifecycle(`${operation}-${component}-stop-requested`, {
@@ -88,18 +145,23 @@ function processOwningPort(port) {
 function processInfo(pid) {
   if (!pid) return null;
   const result = WIN
-    ? commandResult('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress`])
-    : commandResult('ps', ['-p', String(pid), '-o', 'pid=,ppid=,args=']);
+    ? commandResult('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object ProcessId,ParentProcessId,CommandLine,CreationDate | ConvertTo-Json -Compress`])
+    : commandResult('ps', ['-p', String(pid), '-o', 'pid=,ppid=,lstart=,args=']);
   if (result.status !== 0) return null;
   if (WIN) {
     try {
       const entry = JSON.parse(String(result.stdout) || 'null');
       if (!entry?.ProcessId) return null;
-      return { command: entry.CommandLine || '', parentPid: Number(entry.ParentProcessId) || null, pid: Number(entry.ProcessId) };
+      return {
+        command: entry.CommandLine || '',
+        parentPid: Number(entry.ParentProcessId) || null,
+        pid: Number(entry.ProcessId),
+        startedAt: entry.CreationDate || null,
+      };
     } catch { return null; }
   }
-  const match = String(result.stdout).match(/^\s*(\d+)\s+(\d+)\s+(.*)$/m);
-  return match ? { command: match[3], parentPid: Number(match[2]) || null, pid: Number(match[1]) } : null;
+  const match = String(result.stdout).match(/^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d{4})\s+(.*)$/m);
+  return match ? { command: match[4], parentPid: Number(match[2]) || null, pid: Number(match[1]), startedAt: match[3] } : null;
 }
 function gatewayInstallRoot() {
   return path.resolve(path.join(CLI_PATH, '..', '..'));
@@ -202,11 +264,13 @@ async function waitForShimExit(timeout) {
   }
   return !(await portListening(SHIM_PORT, 100));
 }
-async function stopShimWithDrain({ quiet = false, timeout = Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000, report = console.log } = {}) {
+async function stopShimWithDrain({ quiet = false, timeout = Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000, report = console.log, findForeignOwner = foreignPortOwner } = {}) {
   if (!(await portListening(SHIM_PORT))) {
     removePid('shim');
     return { ok: true, drained: true, running: false };
   }
+  const foreignOwner = findForeignOwner(SHIM_PORT);
+  if (foreignOwner) return { ok: false, reason: foreignPortOwnerReason(foreignOwner, SHIM_PORT) };
   if (!quiet) report(`model-gateway: restarting shim. It stopped accepting new requests and is waiting up to ${Math.ceil(timeout / 1000)}s for in-flight requests to finish.`);
   try {
     const response = await postJson(`http://127.0.0.1:${SHIM_PORT}/drain`, { timeout });
@@ -225,8 +289,10 @@ async function stopShimWithDrain({ quiet = false, timeout = Number(process.env.C
   stopProcess('shim');
   return { ok: true, drained: false, forced: true, reason: 'drain timeout' };
 }
-async function restartWorkerWithDrain({ quiet = false, timeout = Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000, report = console.log } = {}) {
+async function restartWorkerWithDrain({ quiet = false, timeout = Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000, report = console.log, findForeignOwner = foreignPortOwner } = {}) {
   if (!(await portListening(PUBLIC_SHIM_PORT))) return { ok: true, running: false };
+  const foreignOwner = findForeignOwner(PUBLIC_SHIM_PORT);
+  if (foreignOwner) return { ok: false, reason: foreignPortOwnerReason(foreignOwner, PUBLIC_SHIM_PORT) };
   if (!quiet) report(`model-gateway: restarting shim without dropping its listener; waiting up to ${Math.ceil(timeout / 1000)}s for in-flight requests.`);
   try {
     const response = await postJson(`http://127.0.0.1:${PUBLIC_SHIM_PORT}/restart`, { script: resolveNewestInstalledCliPath() }, 2000);
@@ -244,12 +310,12 @@ function spawnDetached(name, command, cmdArgs, env) {
     const pid = spawnWindowsDetached(command, cmdArgs, {
       env: { ...process.env, ...env }, logPath: path.join(LOGS, name + '.log'), state: STATE,
     });
-    fs.writeFileSync(pidFile(name), String(pid));
+    writePidRecord(name, pid);
     return pid;
   }
   const out = fs.openSync(path.join(LOGS, name + '.log'), 'a');
   const child = spawn(command, cmdArgs, { detached: true, stdio: ['ignore', out, out], env: { ...process.env, ...env }, windowsHide: true });
-  fs.writeFileSync(pidFile(name), String(child.pid));
+  writePidRecord(name, child.pid);
   child.unref();
   fs.closeSync(out);
   return child.pid;
@@ -277,7 +343,7 @@ function spawnSupervisedProxy({ command = PROXY_BIN, port = PROXY_PORT, logs = L
     stdio: ['ignore', output, output], env: { ...process.env, PORT: String(port) }, windowsHide: true,
   });
   child.once('error', () => {});
-  fs.writeFileSync(pidFile('proxy'), String(child.pid));
+  writePidRecord('proxy', child.pid);
   fs.closeSync(output);
   return child;
 }
@@ -288,6 +354,7 @@ function createProxyRecovery({
   probe = () => proxyModelsAnswering(proxyPort),
   listening = portListening,
   owner = processOwningPort,
+  ownsProxy = (pid) => processRunsThisProxyBinary(processInfo(pid), proxyBinary),
   stop = killPid,
   waitForRelease = waitForPortRelease,
   start = spawnSupervisedProxy,
@@ -300,6 +367,7 @@ function createProxyRecovery({
   maximumBackoffMs = 30000,
 } = {}) {
   let recovery = null;
+  let halted = false;
   let restartAttempt = 0;
   let nextRestartAt = 0;
 
@@ -309,6 +377,7 @@ function createProxyRecovery({
 
   async function recover() {
     if (recovery) return recovery;
+    if (halted) return { ok: false, state: 'foreign-port-owner' };
     recovery = (async () => {
       if (await probe()) {
         restartAttempt = 0;
@@ -337,6 +406,14 @@ function createProxyRecovery({
           log(`proxy restart deferred because an unresponsive listener still owns :${proxyPort}`);
           recordLifecycle('proxy-recovery-finished', { component: 'supervisor', pid: process.pid, outcome: 'port-owned' });
           return { ok: false, state: 'port-owned', retryAt: nextRestartAt };
+        }
+        if (!ownsProxy(pid)) {
+          const ownerProcess = processInfo(pid);
+          const installRoot = ownerProcess && gatewayInstallRootFromCommand(ownerProcess.command);
+          halted = true;
+          log(`proxy restart refused because PID ${pid} owns :${proxyPort} from a different install root (${installRoot || 'unknown'}), not ${gatewayInstallRoot()}`);
+          recordLifecycle('proxy-recovery-finished', { component: 'supervisor', pid: process.pid, outcome: 'foreign-port-owner' });
+          return { ok: false, state: 'foreign-port-owner' };
         }
         recordLifecycle('proxy-stop-requested', {
           component: 'supervisor',
@@ -387,7 +464,7 @@ function createProxyRecovery({
 }
 
 module.exports = {
-  createProxyRecovery, fetchUrl, foreignPortOwner, gatewayInstallRoot, killPid, pidFile, portListening, postJson, processOwningPort,
-  proxyModelsAnswering, readPid, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
-  spawnSupervisedProxy, stopAll, stopProcess, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit,
+  createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, killPid, pidFile, pidRecordFile, portListening, postJson, processOwningPort,
+  processIsOwnedByThisInstall, proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPids, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
+  spawnSupervisedProxy, stopAll, stopProcess, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit, writePidRecord,
 };

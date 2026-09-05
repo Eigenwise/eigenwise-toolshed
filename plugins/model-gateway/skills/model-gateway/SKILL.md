@@ -68,7 +68,10 @@ alone. Recovery output remains in `~/.claude/model-gateway/logs/guardian.log`; b
 `~/.claude/model-gateway/logs/lifecycle.jsonl` identify supervisor, worker, and proxy PIDs, orderly
 stop/restart requests, observed exits, and recovery outcomes. Use `doctor` to print the evidence path and
 the last observed exit. An OS termination or force-killed supervisor may leave no final record, so treat an
-absent exit record as absence of evidence, not a clean shutdown. This matters when an agent is mid-orchestration
+absent exit record as absence of evidence, not a clean shutdown. Process cleanup uses this home's recorded PIDs
+and targeted ownership checks only: the live command must still identify this install, and the recorded command
+or start time must match. A stale record is deleted without stopping its reused PID; `doctor` prints `stale pid
+file guardian: PID <pid> is now <command>`. This matters when an agent is mid-orchestration
 (e.g. dispatching Codex subagents through the gateway): do not tell the user to restart Claude Code just to
 bring auth back, or you kill the session that was about to use it.
 

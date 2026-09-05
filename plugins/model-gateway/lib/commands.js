@@ -194,9 +194,9 @@ function readPluginVersion() {
 function mkdirs() { for (const d of [STATE, LOGS, BIN_DIR]) fs.mkdirSync(d, { recursive: true }); }
 
 const {
-  createProxyRecovery, fetchUrl, foreignPortOwner, killPid, pidFile, portListening, postJson, processOwningPort, readPid, reapGatewayOrphans,
+  createProxyRecovery, fetchUrl, foreignPortOwner, killPid, portListening, postJson, processOwningPort, recordedGatewayPids, reapGatewayOrphans,
   removePid, restartWorkerWithDrain, shimHealthy, spawnDetached, stopAll, stopProcess, stopRunningSupervisor,
-  stopShimWithDrain, waitForShimExit,
+  stopShimWithDrain, waitForShimExit, writePidRecord,
 } = require('./process-supervision.js');
 
 const {
@@ -970,6 +970,7 @@ function reportCodexClientWindows() {
 }
 
 async function doctor({ readiness: suppliedReadiness = null } = {}) {
+  recordedGatewayPids();
   const readiness = suppliedReadiness || await getCodexReadiness();
   log(`binary: ${readiness.checks.proxyBinary ? PROXY_BIN : 'MISSING (run setup)'}`);
   if (readiness.checks.proxyBinary) {
@@ -1882,7 +1883,7 @@ function runShim() {
         clearWorkerPortReportTimeout();
       });
     }
-    fs.writeFileSync(pidFile('shim'), String(child.pid));
+    writePidRecord('shim', child.pid);
     child.unref();
     child.once('exit', (exitCode, signal) => {
       recordGatewayLifecycle('worker-exit', {

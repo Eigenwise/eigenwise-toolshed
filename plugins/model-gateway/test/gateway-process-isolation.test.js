@@ -8,7 +8,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { gatewayTestEnvironment, spawnGatewayProcessSync, startGateway } = require('./support.js');
+const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const BODY_SESSION_ID = 'gateway-fixture-body-sentinel';
@@ -63,11 +63,35 @@ function waitForReady(child) {
   });
 }
 
+function waitForOutput(child, expectedOutput) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`foreign gateway fixture did not write ${expectedOutput}`)), 5000);
+    const onData = (chunk) => {
+      if (!String(chunk).includes(expectedOutput)) return;
+      clearTimeout(timeout);
+      child.stdout.off('data', onData);
+      resolve();
+    };
+    child.stdout.on('data', onData);
+  });
+}
+
 function processIsRunning(pid) {
   try {
     process.kill(pid, 0);
     return true;
   } catch { return false; }
+}
+
+function installNodeProxy(home) {
+  const proxyBinary = path.join(home, '.claude', 'model-gateway', 'bin', process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy');
+  fs.mkdirSync(path.dirname(proxyBinary), { recursive: true });
+  fs.copyFileSync(process.execPath, proxyBinary);
+  if (process.platform !== 'win32') fs.chmodSync(proxyBinary, 0o755);
+}
+
+function pause(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function outerSocketPath(home) {
@@ -300,4 +324,121 @@ test('foreign configured-port supervisor is preserved and reported', async (t) =
   assert.match(diagnosed.stdout, new RegExp(`shim supervisor conflict: PID ${foreign.pid} owns :${port} from a different install root`));
   assert.match(diagnosed.stdout, new RegExp(foreignRoot.replace(/[\\\\/]/g, '[\\\\\\\\/]')));
   assert.equal(processIsRunning(foreign.pid), true, 'foreign configured-port supervisor survived ensure and stop');
+});
+
+test('proxy recovery preserves a foreign configured-port proxy owner', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-foreign-proxy-'));
+  const foreignScript = path.join(home, 'foreign-install', 'model-gateway', 'bin', 'model-gateway.js');
+  const reservation = net.createServer();
+  const port = await listen(reservation);
+  await new Promise((resolve) => reservation.close(resolve));
+  fs.mkdirSync(path.dirname(foreignScript), { recursive: true });
+  fs.writeFileSync(foreignScript, `const http = require('node:http'); const server = http.createServer((request, response) => { process.stdout.write('models\\n'); response.writeHead(503); response.end('unhealthy'); }); server.listen(${port}, '127.0.0.1', () => process.stdout.write('ready\\n'));`);
+  const foreign = spawn(process.execPath, [foreignScript], { stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(() => {
+    if (processIsRunning(foreign.pid)) foreign.kill();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  await waitForReady(foreign);
+  const proxyProbe = waitForOutput(foreign, 'models\n');
+  installNodeProxy(home);
+
+  const supervisor = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      HOME: home,
+      USERPROFILE: home,
+      CODEX_GATEWAY_PORT: '0',
+      CODEX_GATEWAY_WORKER_PORT: '0',
+      CODEX_GATEWAY_PROXY_PORT: String(port),
+      CODEX_GATEWAY_PROXY_RECOVERY_INTERVAL_MS: '20',
+    },
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  t.after(async () => {
+    supervisor.kill();
+    await waitForExit(supervisor);
+  });
+  await waitForReady(supervisor);
+  await proxyProbe;
+  await pause(2000);
+
+  assert.equal(processIsRunning(supervisor.pid), true, 'this install supervisor stays running after the conflict');
+  assert.equal(processIsRunning(foreign.pid), true, 'foreign configured-port proxy survives recovery');
+});
+
+test('ensure and stop discard a stale guardian PID without killing its reused process', async (t) => {
+  const ensureHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-stale-ensure-'));
+  const stopHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-stale-stop-'));
+  const ensureSleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const stopSleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  t.after(async () => {
+    ensureSleeper.kill();
+    stopSleeper.kill();
+    await Promise.all([waitForExit(ensureSleeper), waitForExit(stopSleeper)]);
+    fs.rmSync(ensureHome, { recursive: true, force: true });
+    fs.rmSync(stopHome, { recursive: true, force: true });
+  });
+  installNodeProxy(ensureHome);
+  for (const [home, sleeper] of [[ensureHome, ensureSleeper], [stopHome, stopSleeper]]) {
+    const state = path.join(home, '.claude', 'model-gateway');
+    fs.mkdirSync(state, { recursive: true });
+    fs.writeFileSync(path.join(state, 'guardian.pid'), String(sleeper.pid));
+  }
+
+  const ensured = spawnGatewayProcessSync(process.execPath, [CLI, 'ensure', '--quiet'], {
+    encoding: 'utf8',
+    env: { HOME: ensureHome, USERPROFILE: ensureHome },
+    isolatedOverrides: {
+      CODEX_GATEWAY_PORT: '0',
+      CODEX_GATEWAY_WORKER_PORT: '0',
+      CODEX_GATEWAY_PROXY_PORT: '0',
+    },
+  });
+  const stopped = spawnGatewayProcessSync(process.execPath, [CLI, 'stop'], {
+    encoding: 'utf8',
+    env: { HOME: stopHome, USERPROFILE: stopHome },
+  });
+
+  assert.equal(ensured.status, 0, ensured.stderr);
+  assert.equal(processIsRunning(ensureSleeper.pid), true, 'ensure preserved the reused non-gateway process');
+  assert.match(ensured.stderr, new RegExp(`stale pid file guardian: PID ${ensureSleeper.pid} is now`));
+  assert.notEqual(Number(fs.readFileSync(path.join(ensureHome, '.claude', 'model-gateway', 'guardian.pid'), 'utf8')), ensureSleeper.pid);
+  assert.equal(stopped.status, 0, stopped.stderr);
+  assert.match(stopped.stderr, new RegExp(`stale pid file guardian: PID ${stopSleeper.pid} is now`));
+  assert.equal(fs.existsSync(path.join(stopHome, '.claude', 'model-gateway', 'guardian.pid')), false);
+  assert.equal(processIsRunning(stopSleeper.pid), true, 'stop preserved the reused non-gateway process');
+});
+
+test('setup restart path refuses a foreign shim before it can restart its worker', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-foreign-setup-'));
+  const foreignScript = path.join(home, 'foreign-install', 'model-gateway', 'bin', 'model-gateway.js');
+  const reservation = net.createServer();
+  const port = await listen(reservation);
+  await new Promise((resolve) => reservation.close(resolve));
+  fs.mkdirSync(path.dirname(foreignScript), { recursive: true });
+  fs.writeFileSync(foreignScript, `const { spawn } = require('node:child_process'); const http = require('node:http'); const worker = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }); const server = http.createServer((request, response) => { if (request.url === '/restart') worker.kill(); response.end(JSON.stringify({ workerPid: worker.pid })); }); server.listen(${port}, '127.0.0.1', () => process.stdout.write('ready\\n')); process.on('SIGTERM', () => { worker.kill(); server.close(() => process.exit(0)); });`);
+  const foreign = spawn(process.execPath, [foreignScript], { stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(async () => {
+    foreign.kill();
+    await waitForExit(foreign);
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  await waitForReady(foreign);
+  const health = await new Promise((resolve, reject) => {
+    http.get(`http://127.0.0.1:${port}/healthz`, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => resolve(JSON.parse(Buffer.concat(chunks).toString())));
+    }).once('error', reject);
+  });
+  const script = `const supervision = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'process-supervision.js'))}); supervision.restartWorkerWithDrain({ quiet: true }).then((result) => { if (!result.ok) console.error(result.reason); process.exit(result.ok ? 0 : 1); });`;
+  const result = spawnGatewayProcessSync(process.execPath, ['-e', script], {
+    encoding: 'utf8',
+    env: { HOME: home, USERPROFILE: home },
+    isolatedOverrides: { CODEX_GATEWAY_PORT: String(port) },
+  });
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(processIsRunning(health.workerPid), true, 'foreign shim worker survives setup restart refusal');
+  assert.match(result.stderr, new RegExp(`refusing to stop PID ${foreign.pid} on :${port}; it belongs to a different install root`));
 });

@@ -39,7 +39,7 @@ SessionStart stops waiting after 12 seconds, well inside its 30-second hook budg
 
 When the gateway disappears or restarts, ask Claude to run `doctor`. It names the lifecycle evidence at `~/.claude/model-gateway/logs/lifecycle.jsonl` and distinguishes an observed supervisor, worker, or proxy exit from no exit evidence. The bounded records identify PIDs, orderly setup/stop/restart requests, signals, and recovery outcomes. A force-killed supervisor or OS termination can leave no final record, so a missing exit entry does not prove an orderly shutdown.
 
-Running this plugin's test suite uses its own gateway home and never touches the installed gateway. If Codex sessions dropped while you tested in an earlier version, that was a supervisor cleanup bug fixed in this version.
+Running this plugin's test suite uses its own gateway home and never touches the installed gateway. If Codex sessions dropped while you tested in an earlier version, that was a supervisor cleanup bug fixed in this version. Cleanup uses this home's recorded PIDs and targeted ownership checks only: the live command must still identify this install, and the record must match its command or start time. A stale record is deleted without stopping its reused PID; `doctor` reports `stale pid file guardian: PID <pid> is now <command>` so you can see why.
 
 ## Claude model pins
 
