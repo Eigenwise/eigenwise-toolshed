@@ -197,6 +197,34 @@ const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 const CODEX_SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
 const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
 const CODEX_COMPACT_HEADROOM = 40000;
+
+function effectiveCodexSentryPolicy(policy, compactTrigger = configuredCompactTrigger) {
+  if (policy?.sentry !== 'codex-synthetic-413') return null;
+  if (!Number.isFinite(policy.backendWindow) || policy.backendWindow <= CODEX_COMPACT_HEADROOM) {
+    throw new Error(`model-gateway: invalid Codex sentry backend window for ${policy.backendId}`);
+  }
+  const derivedTrigger = policy.backendWindow - CODEX_COMPACT_HEADROOM;
+  if (Number.isFinite(compactTrigger) && compactTrigger > 0 && compactTrigger <= derivedTrigger) {
+    return { backendWindow: policy.backendWindow, compactTrigger, source: 'env' };
+  }
+  return { backendWindow: policy.backendWindow, compactTrigger: derivedTrigger, source: 'derived' };
+}
+
+function sentryPolicyFor(model) {
+  const policy = resolveGatewayModelPolicy(model);
+  const sentryPolicy = effectiveCodexSentryPolicy(policy);
+  if (sentryPolicy && policy.backend !== 'codex') {
+    throw new Error(`model-gateway: non-Codex model ${policy.backendId} cannot use the Codex sentry`);
+  }
+  return sentryPolicy;
+}
+
+function assertAnthropicPassthroughSentryIsDisabled(model) {
+  const policy = resolveGatewayModelPolicy(model);
+  if (policy?.backend === 'anthropic' && policy.sentry !== 'none') {
+    throw new Error(`model-gateway: Anthropic passthrough model ${policy.backendId} must not use the Codex sentry`);
+  }
+}
 const configuredSseHeartbeatSeconds = Number(process.env.CODEX_GATEWAY_SSE_HEARTBEAT_S);
 const SSE_HEARTBEAT_MS = Number.isFinite(configuredSseHeartbeatSeconds) && configuredSseHeartbeatSeconds >= 0
   ? configuredSseHeartbeatSeconds * 1000
@@ -905,7 +933,6 @@ function runWorker() {
   }
   const sentrySessions = new Map();
   const sentryModels = new Map();
-  const compactTriggerIsFixed = Number.isFinite(configuredCompactTrigger) && configuredCompactTrigger > 0;
   // hostsDetected drives the DNS-bypass decision below regardless of whether
   // this process itself managed to bind the compat port; the OS hosts file is
   // machine-wide and would misdirect the passthrough forward either way.
@@ -985,13 +1012,9 @@ function runWorker() {
     const modelId = codexContextWindowModelId(model);
     let state = sentryModels.get(modelId);
     if (!state) {
-      const window = codexContextWindow(modelId);
-      state = {
-        compactTrigger: compactTriggerIsFixed
-          ? configuredCompactTrigger
-          : Math.max(1, window - CODEX_COMPACT_HEADROOM),
-        observedCeiling: null,
-      };
+      const sentryPolicy = sentryPolicyFor(model);
+      if (!sentryPolicy) throw new Error(`model-gateway: no Codex sentry policy for ${modelId}`);
+      state = { ...sentryPolicy, observedCeiling: null };
       sentryModels.set(modelId, state);
     }
     return state;
@@ -1036,7 +1059,7 @@ function runWorker() {
   }
 
   function fireContextSentry(res, sessionId, model) {
-    if (resolveGatewayModelPolicy(model)?.sentry !== 'codex-synthetic-413') return false;
+    if (!sentryPolicyFor(model)) return false;
     const state = sentrySession(sessionId, model);
     const compactTrigger = sentryModel(model).compactTrigger;
     if (!state || state.fired || state.usage <= compactTrigger) return false;
@@ -1056,7 +1079,7 @@ function runWorker() {
     const usage = state?.usage || 0;
     if (state) state.fired = true;
     const modelState = sentryModel(model);
-    if (!compactTriggerIsFixed && usage > CODEX_COMPACT_HEADROOM) {
+    if (modelState.source === 'derived' && usage > CODEX_COMPACT_HEADROOM) {
       modelState.observedCeiling = modelState.observedCeiling == null
         ? usage
         : Math.min(modelState.observedCeiling, usage);
@@ -1078,7 +1101,18 @@ function runWorker() {
     return Buffer.from(JSON.stringify(parsed));
   }
 
-  async function refreshModels() {
+  function logAdvertisedSentryPolicies(models) {
+    for (const model of models) {
+      const policy = resolveGatewayModelPolicy(model.id);
+      if (!policy) continue;
+      const sentryPolicy = effectiveCodexSentryPolicy(policy);
+      const effectiveTrigger = sentryPolicy?.compactTrigger ?? 'none';
+      const source = sentryPolicy?.source ?? 'none';
+      console.log(`model-gateway: sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} effectiveTrigger=${effectiveTrigger} source=${source}`);
+    }
+  }
+
+  async function refreshModels({ logSentryPolicies = false } = {}) {
     let ids = null;
     try {
       const r = await fetchUrl(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { timeout: 2500 });
@@ -1107,13 +1141,14 @@ function runWorker() {
           .map((model) => gatewayModel(model.id, 'grok')),
       ],
     };
+    if (logSentryPolicies) logAdvertisedSentryPolicies(modelCache.data);
     try {
       syncGatewayDiscoveryCache({ models: modelCache.data, baseUrl: effectiveBaseUrl().value || null });
     } catch (error) {
       console.error(`model-gateway: could not update discovery cache (${error.code || error.message})`);
     }
   }
-  refreshModels();
+  refreshModels({ logSentryPolicies: true });
 
   const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 64 });
   const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64 });
@@ -1992,6 +2027,7 @@ function runWorker() {
           }
         } catch { /* not JSON; fall through to passthrough */ }
       }
+      assertAnthropicPassthroughSentryIsDisabled(requestedModel);
       counters.anthropic++;
       requestRouteLog(req, 'anthropic', requestedModel, pathOnly);
       routeTelemetry.setRoute({
@@ -2074,4 +2110,4 @@ function runWorker() {
   }
 }
 
-module.exports = { createHostsBypassResolver, gatewayModel, runWorker };
+module.exports = { createHostsBypassResolver, effectiveCodexSentryPolicy, gatewayModel, runWorker };

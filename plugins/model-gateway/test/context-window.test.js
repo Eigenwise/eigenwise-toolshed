@@ -163,8 +163,89 @@ test('window policy marks measured rows and advertises unmeasured Codex defaults
     pickerAlias: 'claude-gpt-5.2[1m]',
   });
   assert.equal(gatewayClientModelId('gpt-5.2'), 'claude-gpt-5.2[1m]');
+  assert.equal(resolveGatewayModelPolicy('claude-opus-4-8[1m]').sentry, 'none');
   assert.equal(gatewayModel('gpt-6-astra-fast', 'codex').max_input_tokens, 920000);
 });
+
+test('Codex sentry derives a headroom-preserving trigger for each policy row', () => {
+  const { effectiveCodexSentryPolicy } = require(WORKER);
+  const { resolveGatewayModelPolicy } = require(RUNTIME);
+  const policy = resolveGatewayModelPolicy('gpt-5.2');
+
+  assert.deepEqual(effectiveCodexSentryPolicy(policy, 320000), {
+    backendWindow: 920000,
+    compactTrigger: 320000,
+    source: 'env',
+  });
+  assert.deepEqual(effectiveCodexSentryPolicy(policy, Number.NaN), {
+    backendWindow: 920000,
+    compactTrigger: 880000,
+    source: 'derived',
+  });
+  assert.deepEqual(effectiveCodexSentryPolicy({
+    backend: 'codex',
+    backendId: 'gpt-test-300k',
+    backendWindow: 300000,
+    sentry: 'codex-synthetic-413',
+  }, 320000), {
+    backendWindow: 300000,
+    compactTrigger: 260000,
+    source: 'derived',
+  });
+});
+
+test('Codex sentry logs a startup policy line for every advertised model row', async (t) => {
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.2' }, { id: 'gpt-5.6-sol' }] }));
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const output = { text: '' };
+  const child = spawnGatewayProcess(t, process.execPath, ['-e', `require(${JSON.stringify(WORKER)}).runWorker()`], {
+    env: {
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_REQUEST_LOG: '0',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.after(() => child.kill());
+  const shimPort = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`worker did not listen: ${output.text}`)), 5000);
+    const receiveOutput = (chunk) => {
+      output.text += chunk;
+      const match = output.text.match(/listening on 127\.0\.0\.1:(\d+)/);
+      if (!match) return;
+      clearTimeout(timeout);
+      resolve(Number(match[1]));
+    };
+    child.stdout.on('data', receiveOutput);
+    child.stderr.on('data', receiveOutput);
+    child.once('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once('exit', (code, signal) => {
+      clearTimeout(timeout);
+      reject(new Error(`worker exited before listening (${code ?? signal}): ${output.text}`));
+    });
+  });
+  await waitForShim(shimPort);
+
+  const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body).data;
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const model of models) {
+    const policy = require(RUNTIME).resolveGatewayModelPolicy(model.id);
+    const effectiveTrigger = policy.sentry === 'none' ? 'none' : '\\d+';
+    const source = policy.sentry === 'none' ? 'none' : '(env|derived)';
+    assert.match(output.text, new RegExp(`sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} effectiveTrigger=${effectiveTrigger} source=${source}`));
+  }
+});
+
 
 test('CODEX_GATEWAY_CONTEXT_WINDOW overrides the advertised max_input_tokens', async (t) => {
   const proxy = http.createServer((req, res) => {
@@ -395,12 +476,18 @@ test('CODEX_GATEWAY_SENTRY=0 disables usage gating and genuine-413 rewriting', a
   assert.equal(forwarded, 2);
 });
 
-test('Codex sentry never gates Claude passthrough requests', async (t) => {
+test('Codex sentry never gates or rewrites Claude passthrough requests', async (t) => {
   let forwarded = 0;
+  const forwardedBodies = [];
   const anthropic = http.createServer((req, res) => {
-    forwarded++;
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true }));
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      forwarded++;
+      forwardedBodies.push(Buffer.concat(chunks).toString());
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
   });
   const anthropicPort = await listen(anthropic);
   t.after(() => anthropic.close());
@@ -413,6 +500,7 @@ test('Codex sentry never gates Claude passthrough requests', async (t) => {
   assert.equal((await request(shimPort, 'POST', '/v1/messages', claudeBody, sentrySessionHeaders)).status, 200);
   assert.equal((await request(shimPort, 'POST', '/v1/messages', claudeBody, sentrySessionHeaders)).status, 200);
   assert.equal(forwarded, 2);
+  assert.deepEqual(forwardedBodies, [claudeBody, claudeBody]);
 });
 
 test('genuine no-numbers 413 gets usage numbers appended', async (t) => {
