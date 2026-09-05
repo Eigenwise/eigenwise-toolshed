@@ -71,14 +71,7 @@ back, or you kill the session that was about to use it.
 
 - `/model` picker: rows like "GPT-5.6-sol (Codex)".
 - Typed: `/model claude-gpt-5.6-sol` (any string passes through on a custom base URL).
-- Codex GPT-5.6 through the ChatGPT Codex product (the subscription login this gateway routes to,
-  not the pay-per-token API) has a measured 370k input ceiling. The shim advertises `370000` as
-  `max_input_tokens` by default; override it with `CODEX_GATEWAY_CONTEXT_WINDOW` when tuning a
-  machine-specific setup. That advertised value is inert: Claude Code hardwires its own 200k gateway
-  budget for discovered `claude-gpt-*` rows. The backend's HTTP 413 `request_too_large` response is
-  the recovery signal for context overflow. Legacy typed Codex ids ending in `[1m]` still route, but
-  they retain a 1M client budget for that open session: switch to the unsuffixed picker row and
-  restart Claude Code after upgrading from 0.4.1.
+- Codex GPT-5.6 and GPT-6 Astra through the ChatGPT Codex product (the subscription login this gateway routes to, not the pay-per-token API) accepted 920,012 input tokens and refused 935,012 on 2026-09-05 through claude-code-proxy 0.1.35 (upstream 55bf0b58). The shim advertises `920000` by default for both families and sends a synthetic 413 at each model's window minus 40k tokens (880000 today). `CODEX_GATEWAY_CONTEXT_WINDOW` overrides every advertised window, while `CODEX_GATEWAY_COMPACT_TRIGGER` fixes that sentry trigger globally. Claude Code ignores the advertised value for discovered `claude-gpt-*` rows, so the sentry and backend's HTTP 413 `request_too_large` response trigger recovery. Legacy typed Codex ids ending in `[1m]` still route, but they retain a 1M client budget for that open session: switch to the unsuffixed picker row and restart Claude Code after upgrading from 0.4.1.
 - Claude models (opus/sonnet/fable, with or without `[1m]`) keep their OWN separate native windows
   and compaction limits: the shim forwards their requests byte-identically to Anthropic and never
   applies Codex window advertisement or error rewriting to them. The env block pins the current

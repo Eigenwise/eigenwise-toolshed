@@ -188,37 +188,41 @@ function displayName(id, backend = 'codex') {
 const PLAN_TOOLS = ['EnterPlanMode', 'ExitPlanMode'];
 
 const DEFAULT_MODELS = [
-  'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+  'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra',
 ];
 const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 
-// Advertised to Claude Code as max_input_tokens for Codex models.
-//
-// IMPORTANT: as of Claude Code 2.1.207 this value is INERT for compaction. The
-// context-window resolver (eyc/sT in claude.exe) never reads a discovered
-// model's max_input_tokens for a `claude-`prefixed id — it hardwires 200000
-// (PPr). The CLAUDE_CODE_MAX_CONTEXT_TOKENS escape hatch is gated behind
-// `!startsWith("claude-")`, and our ids are `claude-*` (discovery drops
-// non-claude ids, so we can't drop the prefix). Net: Claude Code uses a 200k
-// window for every Codex model no matter what we advertise, proactive
-// auto-compaction is OFF (window source is "auto"), and the only recovery is
-// reactive — triggered when the BACKEND returns a context-overflow error (see
-// the 413 normalize path in forward()). So this number does NOT "make Claude
-// Code compact earlier"; the earlier 272k/245k-headroom rationale was wrong.
-//
-// It is still advertised (a) for honesty in /v1/models and (b) to future-proof
-// a Claude Code version that does consult it. Proxy 0.1.17 measured the real
-// GPT-5.6 input ceiling at 370000 tokens: 370006 was accepted and 371882 was
-// rejected with native 413 request_too_large. Override per-machine with
-// CODEX_GATEWAY_CONTEXT_WINDOW. Never set a global CLAUDE_CODE_AUTO_COMPACT_WINDOW
-// to influence this: that also hits Claude passthrough models.
-const CODEX_COMPACT_CONTEXT_WINDOW = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW) || 370000;
+// Claude Code ignores max_input_tokens for discovered claude-* ids, so the
+// sentry below is what makes it compact. On 2026-09-05, claude-code-proxy
+// 0.1.35 (upstream 55bf0b58) accepted 920,012 input tokens and refused 935,012
+// for both gpt-5.6-sol and gpt-6-astra. Keep the last accepted value here for
+// honest discovery metadata and the sentry, while allowing a machine-wide
+// CODEX_GATEWAY_CONTEXT_WINDOW override. CODEX_GATEWAY_COMPACT_TRIGGER remains
+// a machine-wide fixed sentry trigger. Never set CLAUDE_CODE_AUTO_COMPACT_WINDOW:
+// it also affects Claude passthrough models.
+const CODEX_CONTEXT_WINDOWS = Object.freeze({
+  default: 920000,
+  'gpt-5.6-sol': 920000,
+  'gpt-5.6-terra': 920000,
+  'gpt-5.6-luna': 920000,
+  'gpt-6-astra': 920000,
+});
+const configuredContextWindow = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW);
 const CODEX_SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
 const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
-const CODEX_COMPACT_TRIGGER = Number.isFinite(configuredCompactTrigger) && configuredCompactTrigger > 0
-  ? configuredCompactTrigger
-  : 330000;
 const CODEX_COMPACT_HEADROOM = 40000;
+
+function codexContextWindowModelId(id) {
+  const baseId = typeof id === 'string'
+    ? id.replace(/\[1m\]$/, '').replace(/^claude-/, '').replace(/-fast$/, '')
+    : '';
+  return baseId || 'default';
+}
+
+function codexContextWindow(id, contextWindows = CODEX_CONTEXT_WINDOWS) {
+  return configuredContextWindow || contextWindows[codexContextWindowModelId(id)]
+    || contextWindows.default;
+}
 const configuredSseHeartbeatSeconds = Number(process.env.CODEX_GATEWAY_SSE_HEARTBEAT_S);
 const SSE_HEARTBEAT_MS = Number.isFinite(configuredSseHeartbeatSeconds) && configuredSseHeartbeatSeconds >= 0
   ? configuredSseHeartbeatSeconds * 1000
@@ -306,11 +310,11 @@ function noteCompactEvent(attempt, event) {
   if (COMPACT_FATAL_ERROR_TYPES.has(event.error?.type)) attempt.fatal = true;
 }
 
-function gatewayModel(id, backend = 'codex', grokModels = DEFAULT_GROK_MODELS) {
+function gatewayModel(id, backend = 'codex', grokModels = DEFAULT_GROK_MODELS, contextWindows = CODEX_CONTEXT_WINDOWS) {
   const prefix = backend === 'grok' ? GROK_PREFIX : PREFIX;
   const context = backend === 'grok'
     ? (grokModels.find((model) => model.id === id)?.context || 131072)
-    : CODEX_COMPACT_CONTEXT_WINDOW;
+    : codexContextWindow(id, contextWindows);
   const advertised = backend === 'grok'
     ? `${prefix}${grokBackend.grokPickerId(id)}`
     : id === 'auto' ? DISPATCH_MODEL_ID : `${prefix}${id}`;
@@ -931,9 +935,8 @@ function runWorker() {
     console.error('model-gateway: ANTHROPIC_BASE_URL is shell-only; wire it through local .claude/settings.local.json or global settings so background sessions stay metered');
   }
   const sentrySessions = new Map();
+  const sentryModels = new Map();
   const compactTriggerIsFixed = Number.isFinite(configuredCompactTrigger) && configuredCompactTrigger > 0;
-  let compactTrigger = CODEX_COMPACT_TRIGGER;
-  let observedCeiling = null;
   // hostsDetected drives the DNS-bypass decision below regardless of whether
   // this process itself managed to bind the compat port; the OS hosts file is
   // machine-wide and would misdirect the passthrough forward either way.
@@ -1009,23 +1012,46 @@ function runWorker() {
     return CODEX_SENTRY_ENABLED ? requestSessionId(req) : null;
   }
 
-  function sentrySession(sessionId) {
-    if (!sessionId) return null;
-    let state = sentrySessions.get(sessionId);
+  function sentryModel(model) {
+    const modelId = codexContextWindowModelId(model);
+    let state = sentryModels.get(modelId);
     if (!state) {
-      state = { usage: 0, fired: false };
-      sentrySessions.set(sessionId, state);
+      const window = codexContextWindow(modelId);
+      state = {
+        compactTrigger: compactTriggerIsFixed
+          ? configuredCompactTrigger
+          : Math.max(1, window - CODEX_COMPACT_HEADROOM),
+        observedCeiling: null,
+      };
+      sentryModels.set(modelId, state);
     }
     return state;
   }
 
-  function recordSentryUsage(sessionId, event) {
+  function sentrySession(sessionId, model) {
+    if (!sessionId) return null;
+    let session = sentrySessions.get(sessionId);
+    if (!session) {
+      session = new Map();
+      sentrySessions.set(sessionId, session);
+    }
+    const modelId = codexContextWindowModelId(model);
+    let state = session.get(modelId);
+    if (!state) {
+      state = { usage: 0, fired: false };
+      session.set(modelId, state);
+    }
+    return state;
+  }
+
+  function recordSentryUsage(sessionId, event, model) {
     if (!sessionId || event.type !== 'message_delta' || !event.usage) return;
     const usage = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']
       .reduce((total, field) => total + (Number.isFinite(event.usage[field]) ? event.usage[field] : 0), 0);
     if (usage <= 0) return;
-    const state = sentrySession(sessionId);
+    const state = sentrySession(sessionId, model);
     state.usage = usage;
+    const compactTrigger = sentryModel(model).compactTrigger;
     const lowWatermark = compactTrigger - Math.min(CODEX_COMPACT_HEADROOM, compactTrigger * 0.25);
     if (usage < lowWatermark) state.fired = false;
   }
@@ -1040,8 +1066,9 @@ function runWorker() {
     });
   }
 
-  function fireContextSentry(res, sessionId) {
-    const state = sentrySession(sessionId);
+  function fireContextSentry(res, sessionId, model) {
+    const state = sentrySession(sessionId, model);
+    const compactTrigger = sentryModel(model).compactTrigger;
     if (!state || state.fired || state.usage <= compactTrigger) return false;
     state.fired = true;
     const body = contextOverflowBody(state.usage, compactTrigger,
@@ -1054,25 +1081,28 @@ function runWorker() {
     return true;
   }
 
-  function noteGenuineOverflow(sessionId) {
-    const state = sentrySession(sessionId);
+  function noteGenuineOverflow(sessionId, model) {
+    const state = sentrySession(sessionId, model);
     const usage = state?.usage || 0;
     if (state) state.fired = true;
+    const modelState = sentryModel(model);
     if (!compactTriggerIsFixed && usage > CODEX_COMPACT_HEADROOM) {
-      observedCeiling = observedCeiling == null ? usage : Math.min(observedCeiling, usage);
-      compactTrigger = Math.max(1, observedCeiling - CODEX_COMPACT_HEADROOM);
+      modelState.observedCeiling = modelState.observedCeiling == null
+        ? usage
+        : Math.min(modelState.observedCeiling, usage);
+      modelState.compactTrigger = Math.max(1, modelState.observedCeiling - CODEX_COMPACT_HEADROOM);
     }
     return usage;
   }
 
-  function normalizeGenuineContextOverflow(body, sessionId) {
+  function normalizeGenuineContextOverflow(body, sessionId, model) {
     const text = body.toString();
     let parsed;
     try { parsed = JSON.parse(text); } catch { return body; }
     if (parsed?.error?.type !== 'request_too_large' || typeof parsed.error.message !== 'string') return body;
-    const usage = noteGenuineOverflow(sessionId);
+    const usage = noteGenuineOverflow(sessionId, model);
     if (/\d+\s+tokens\s*>\s*\d+\s+tokens/i.test(text)) return body;
-    const maxTokens = CODEX_COMPACT_CONTEXT_WINDOW;
+    const maxTokens = codexContextWindow(model);
     const actualTokens = usage || maxTokens + 1;
     parsed.error.message += ` (${actualTokens} tokens > ${maxTokens} tokens)`;
     return Buffer.from(JSON.stringify(parsed));
@@ -1346,7 +1376,7 @@ function runWorker() {
     arm();
   }
 
-  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false, sessionId = null, advertisedModel = null, routeTelemetry = null, usageCapture = null, webSocketUpgradeRetries = 0, compactGuard = null) {
+  function forward(clientReq, clientRes, target, body, extraHeaderDrop = [], normalizeContextErrors = false, filterPlanTools = false, sessionId = null, advertisedModel = null, contextModel = null, routeTelemetry = null, usageCapture = null, webSocketUpgradeRetries = 0, compactGuard = null) {
     const url = new URL(clientReq.url, target);
     let finishUsage = () => usageCapture?.finish();
     if (usageCapture) clientRes.once('finish', () => finishUsage());
@@ -1382,7 +1412,7 @@ function runWorker() {
           reported = true;
           routeTelemetry?.finish(upRes.statusCode);
           // The status line is gone but the sentry's learned ceiling is not.
-          if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) noteGenuineOverflow(sessionId);
+          if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) noteGenuineOverflow(sessionId, contextModel);
           if (normalizeContextErrors) noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, Buffer.concat(chunks));
           clientRes.write(sseErrorFrame('api_error', upstreamErrorMessage(Buffer.concat(chunks), upRes.statusCode)));
           clientRes.end();
@@ -1417,7 +1447,7 @@ function runWorker() {
           }
           if (webSocketUpgradeRetries < WEBSOCKET_UPGRADE_RETRIES) {
             return setTimeout(() => forward(clientReq, clientRes, target, body, extraHeaderDrop,
-              normalizeContextErrors, filterPlanTools, sessionId, advertisedModel, routeTelemetry,
+              normalizeContextErrors, filterPlanTools, sessionId, advertisedModel, contextModel, routeTelemetry,
               usageCapture, webSocketUpgradeRetries + 1, compactGuard), WEBSOCKET_UPGRADE_RETRY_DELAY_MS);
           }
           const transientError = transientWebSocketUpgradeError(webSocketUpgradeRetries + 1);
@@ -1454,7 +1484,7 @@ function runWorker() {
         upRes.on('end', () => {
           if (settled) return;
           settled = true;
-          const normalized = rewriteCodexJson(normalizeGenuineContextOverflow(Buffer.concat(chunks), sessionId), advertisedModel, false);
+          const normalized = rewriteCodexJson(normalizeGenuineContextOverflow(Buffer.concat(chunks), sessionId, contextModel), advertisedModel, false);
           resHeaders['content-length'] = normalized.length;
           clientRes.writeHead(413, resHeaders);
           clientRes.end(normalized);
@@ -1489,8 +1519,8 @@ function runWorker() {
           const text = upstreamBody.toString();
           if (/context window|context length|input exceeds|prompt token count|too many tokens/i.test(text)) {
             const normalized = CODEX_SENTRY_ENABLED
-              ? contextOverflowBody(noteGenuineOverflow(sessionId) || CODEX_COMPACT_CONTEXT_WINDOW + 1,
-                CODEX_COMPACT_CONTEXT_WINDOW, 'Input exceeds the model context window; compact and retry.')
+              ? contextOverflowBody(noteGenuineOverflow(sessionId, contextModel) || codexContextWindow(contextModel) + 1,
+                codexContextWindow(contextModel), 'Input exceeds the model context window; compact and retry.')
               : JSON.stringify({
                 type: 'error',
                 error: { type: 'request_too_large', message: 'Input exceeds the model context window; compact and retry.' },
@@ -1537,7 +1567,7 @@ function runWorker() {
           const observeEvent = (attempt || filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId) || usageCapture)
             ? (event) => {
               if (attempt) noteCompactEvent(attempt, event);
-              if (filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId)) recordSentryUsage(sessionId, event);
+              if (filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId)) recordSentryUsage(sessionId, event, contextModel);
               usageCapture?.observeEvent(event);
             }
             : null;
@@ -1577,7 +1607,7 @@ function runWorker() {
               compactGuard.attempts++;
               upRes.destroy();
               return setTimeout(() => forward(clientReq, clientRes, target, body, extraHeaderDrop,
-                normalizeContextErrors, filterPlanTools, sessionId, advertisedModel, routeTelemetry,
+                normalizeContextErrors, filterPlanTools, sessionId, advertisedModel, contextModel, routeTelemetry,
                 usageCapture, webSocketUpgradeRetries, compactGuard), COMPACT_STREAM_RETRY_DELAY_MS);
             }
             for (const buffered of attempt.chunks) clientRes.write(buffered);
@@ -1616,7 +1646,7 @@ function runWorker() {
         if (observeSentry || usageCapture) {
           const observer = createSseEventObserver(
             (event) => {
-              if (observeSentry) recordSentryUsage(sessionId, event);
+              if (observeSentry) recordSentryUsage(sessionId, event, contextModel);
               usageCapture?.observeEvent(event);
             },
             usageEmitter.maxResponseBytes,
@@ -1921,7 +1951,7 @@ function runWorker() {
             });
             const requestBodySessionId = requestSessionId(req);
             const sessionId = codexSessionId(req);
-            if (pathOnly === '/v1/messages' && fireContextSentry(res, sessionId)) {
+            if (pathOnly === '/v1/messages' && fireContextSentry(res, sessionId, parsed.model)) {
               routeTelemetry.finish(413);
               return;
             }
@@ -1946,7 +1976,7 @@ function runWorker() {
               : null;
             // claude.ai credentials never leave this machine toward the proxy
             return forward(req, res, `http://127.0.0.1:${PROXY_PORT}`,
-              forwardedBody, AUTH_HEADERS, true, !keepPlanTools, sessionId, advertisedModel, routeTelemetry,
+              forwardedBody, AUTH_HEADERS, true, !keepPlanTools, sessionId, advertisedModel, parsed.model, routeTelemetry,
               usageCapture, 0, compactGuard);
           }
         } catch { /* not JSON; fall through to passthrough */ }
@@ -2009,7 +2039,7 @@ function runWorker() {
           },
         })
         : null;
-      forward(req, res, ANTHROPIC_UPSTREAM, raw, [], false, false, null, null, routeTelemetry, usageCapture);
+      forward(req, res, ANTHROPIC_UPSTREAM, raw, [], false, false, null, null, null, routeTelemetry, usageCapture);
     });
   }
 
@@ -2065,4 +2095,4 @@ function runWorker() {
   }
 }
 
-module.exports = { createHostsBypassResolver, runWorker };
+module.exports = { createHostsBypassResolver, gatewayModel, runWorker };

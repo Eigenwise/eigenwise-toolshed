@@ -11,12 +11,14 @@ const { startCountingProxy, startGateway } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const COMMANDS = path.join(__dirname, '..', 'lib', 'commands.js');
+const WORKER = path.join(__dirname, '..', 'lib', 'request-worker.js');
 const PINS = path.join(__dirname, '..', 'lib', 'pins.js');
 const RUNTIME = path.join(__dirname, '..', 'lib', 'runtime.js');
 
 // Neutralize a machine-set override so the default-window assertions are
 // deterministic; the override test sets it explicitly in its own child env.
 delete process.env.CODEX_GATEWAY_CONTEXT_WINDOW;
+delete process.env.CODEX_GATEWAY_COMPACT_TRIGGER;
 
 function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
@@ -91,6 +93,7 @@ test('Codex discovery advertises context metadata but keeps the local model id u
         { id: 'gpt-5.6-sol' },
         { id: 'gpt-5.6-terra' },
         { id: 'gpt-5.6-luna' },
+        { id: 'gpt-6-astra' },
       ] }));
     }
     const chunks = [];
@@ -123,16 +126,13 @@ test('Codex discovery advertises context metadata but keeps the local model id u
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
   const codexModels = models.data.filter(({ id }) => id.startsWith('claude-gpt-'));
   assert.deepEqual(codexModels.map(({ id, max_input_tokens }) => ({ id, max_input_tokens })), [
-    { id: 'claude-gpt-5.6-sol', max_input_tokens: 370000 },
-    { id: 'claude-gpt-5.6-terra', max_input_tokens: 370000 },
-    { id: 'claude-gpt-5.6-luna', max_input_tokens: 370000 },
+    { id: 'claude-gpt-5.6-sol', max_input_tokens: 920000 },
+    { id: 'claude-gpt-5.6-terra', max_input_tokens: 920000 },
+    { id: 'claude-gpt-5.6-luna', max_input_tokens: 920000 },
+    { id: 'claude-gpt-6-astra', max_input_tokens: 920000 },
   ]);
   assert.ok(models.data.some(({ id }) => id === 'claude-grok-4.5'));
-  // 370000 = the measured backend input ceiling. Claude Code 2.1.207 still
-  // hardwires 200k for claude-* ids, so this value is inert for
-  // compaction and advertised only for honesty/future-proofing. See
-  // CODEX_COMPACT_CONTEXT_WINDOW.
-  assert.equal(codexModels.every(({ max_input_tokens }) => max_input_tokens === 370000), true);
+  assert.equal(codexModels.every(({ max_input_tokens }) => max_input_tokens === 920000), true);
   assert.equal(models.data.every(({ id }) => id.includes('[1m]') === false), true);
 
   await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
@@ -141,6 +141,24 @@ test('Codex discovery advertises context metadata but keeps the local model id u
     messages: [{ role: 'user', content: 'legacy session' }],
   }));
   assert.equal(forwarded.model, 'gpt-5.6-sol');
+});
+
+test('Codex model windows use configured base ids and share them with fast siblings', () => {
+  const { gatewayModel } = require(WORKER);
+  const windows = {
+    default: 920000,
+    'gpt-5.6-sol': 810000,
+    'gpt-6-astra': 900000,
+  };
+
+  assert.deepEqual(gatewayModel('gpt-5.6-sol', 'codex', undefined, windows), {
+    id: 'claude-gpt-5.6-sol',
+    display_name: 'GPT-5.6-sol (Codex)',
+    type: 'model',
+    max_input_tokens: 810000,
+  });
+  assert.equal(gatewayModel('gpt-6-astra', 'codex', undefined, windows).max_input_tokens, 900000);
+  assert.equal(gatewayModel('gpt-6-astra-fast', 'codex', undefined, windows).max_input_tokens, 900000);
 });
 
 test('CODEX_GATEWAY_CONTEXT_WINDOW overrides the advertised max_input_tokens', async (t) => {
@@ -174,6 +192,19 @@ test('CODEX_GATEWAY_CONTEXT_WINDOW overrides the advertised max_input_tokens', a
 
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
   assert.equal(models.data.filter(({ id }) => id.startsWith('claude-gpt-')).every(({ max_input_tokens }) => max_input_tokens === 200000), true);
+});
+
+test('Codex fallback includes GPT-6 Astra when the proxy has no model route', async (t) => {
+  const proxy = http.createServer((req, res) => {
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'not found' }));
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const shimPort = await spawnShim(t, proxyPort);
+
+  const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
+  assert.equal(models.data.some(({ id }) => id === 'claude-gpt-6-astra'), true);
 });
 
 test('default request route logging records Fable metadata but never prompt data', async (t) => {
@@ -408,7 +439,53 @@ test('genuine no-numbers 413 gets usage numbers appended', async (t) => {
   const parsed = JSON.parse(response.body);
   assert.equal(parsed.type, 'error');
   assert.equal(parsed.error.type, 'request_too_large');
-  assert.match(parsed.error.message, /366000 tokens > 370000 tokens/);
+  assert.match(parsed.error.message, /366000 tokens > 920000 tokens/);
+});
+
+test('a genuine overflow lowers only the model that received it', async (t) => {
+  const overflowBody = JSON.stringify({
+    type: 'error',
+    error: {
+      type: 'request_too_large',
+      message: 'Your input exceeds the context window of this model. Please adjust your input and try again.',
+    },
+  });
+  let forwarded = 0;
+  let astraRequests = 0;
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }, { id: 'gpt-6-astra' }] }));
+    }
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      forwarded++;
+      const { model } = JSON.parse(Buffer.concat(chunks).toString());
+      if (model === 'gpt-5.6-sol' && forwarded === 2) {
+        res.writeHead(413, { 'content-type': 'application/json' });
+        return res.end(overflowBody);
+      }
+      const inputTokens = model === 'gpt-6-astra' && ++astraRequests === 1 ? 10 : 100000;
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(usageSse({ input_tokens: inputTokens }));
+    });
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const shimPort = await spawnShim(t, proxyPort);
+  const astraBody = JSON.stringify({
+    model: 'claude-gpt-6-astra',
+    max_tokens: 1,
+    messages: [{ role: 'user', content: 'test' }],
+  });
+
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders)).status, 200);
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders)).status, 413);
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', astraBody, sentrySessionHeaders)).status, 200);
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', astraBody, sentrySessionHeaders)).status, 200);
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', astraBody, sentrySessionHeaders)).status, 200);
+  assert.equal(forwarded, 5);
 });
 
 test('retries transient Codex WebSocket upgrade rejections before returning the response', async (t) => {
@@ -516,7 +593,7 @@ test('an old-proxy context error is normalized to HTTP 413 request_too_large', a
 test('an upstream 413 with parseable token counts passes through untouched', async (t) => {
   const upstreamBody = JSON.stringify({
     type: 'error',
-    error: { type: 'request_too_large', message: 'input is too large (371882 tokens > 370000 tokens)' },
+    error: { type: 'request_too_large', message: 'input is too large (935012 tokens > 920000 tokens)' },
   });
   const proxy = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/v1/models') {
