@@ -61,6 +61,10 @@ Tell Claude the symptom:
 
 Claude checks the local plugin connection, ticket state, dependencies, configured route, and delivery status, then gives you the next action. After an install or upgrade, start a new Claude Code session or reload plugins so the session picks up the current Sidequest connection. When the loaded version is older than the installed version but at least 4.48.1, Sidequest permits dispatch and warns you to reload before the next dispatch. Malformed versions and loaded versions before 4.48.1 refuse.
 
+## Worktree storage
+
+Run `sidequest worktrees status` to see the disk use of active worktrees, recovery backups, and quarantine. `sidequest worktrees sweep --dry-run` shows stale worktrees and expired recovery entries before changing anything. Recovery backups keep Git patches and metadata, while quarantined worktrees drop ignored build output and dependency directories. By default, backup and quarantine entries expire after 14 days and only the newest three entries per agent remain. Set `worktreeRecoveryRetentionAgeHours` and `worktreeRecoveryRetentionMaxPerAgent` through board config to change those bounds.
+
 ## License
 
 MIT (c) Eigenwise

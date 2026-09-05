@@ -2021,6 +2021,14 @@
           "type": "integer",
           "minimum": 168
         },
+        "worktreeRecoveryRetentionAgeHours": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "worktreeRecoveryRetentionMaxPerAgent": {
+          "type": "integer",
+          "minimum": 1
+        },
         "autoApproveTestScope": {
           "type": "boolean"
         },

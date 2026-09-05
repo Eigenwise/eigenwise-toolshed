@@ -51,7 +51,8 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised again from 23100 for the invocation contracts a caller cannot get right on the first call
 // (SQ-1955): +432 bytes, about 110 tokens per session, against three tickets in a row refused for the
 // attestation grammar alone. Everything that can wait for the second call went to the skill instead.
-const MCP_TOOLS_LIST_MAX_BYTES = 23600;
+// Raised from 23600 for recovery-retention board configuration (SQ-2453) while preserving the 2.5KB reserve.
+const MCP_TOOLS_LIST_MAX_BYTES = 23800;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -93,7 +94,7 @@ function toolMutates(name?: any, args?: any) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === 'new_board_profile') return args.profile !== undefined;
   if (name === 'global_fallback') return args.model !== undefined || args.effort !== undefined;
-  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.generatedPairs !== undefined || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.worktreeBase !== undefined || args.notIntegratedSalvageAgeHours !== undefined || args.autoApproveTestScope !== undefined || args.autoApproveScope !== undefined || args.worktreeSetup !== undefined || args.worktreeDependencyPaths !== undefined;
+  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.generatedPairs !== undefined || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.worktreeBase !== undefined || args.notIntegratedSalvageAgeHours !== undefined || args.worktreeRecoveryRetentionAgeHours !== undefined || args.worktreeRecoveryRetentionMaxPerAgent !== undefined || args.autoApproveTestScope !== undefined || args.autoApproveScope !== undefined || args.worktreeSetup !== undefined || args.worktreeDependencyPaths !== undefined;
   return false;
 }
 

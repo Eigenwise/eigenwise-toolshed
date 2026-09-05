@@ -22,7 +22,7 @@ interface Store {
   nearestRepoRoot: (start: string) => string;
   findProject: (ref: string) => { ok: boolean; slug?: string; meta?: { path?: string } };
   integrationTarget: (slug: string) => { upstream: string; branch: string } | null;
-  boardConfig: (slug: string) => { notIntegratedSalvageAgeHours?: number } | null;
+  boardConfig: (slug: string) => { notIntegratedSalvageAgeHours?: number; worktreeRecoveryRetentionAgeHours?: number; worktreeRecoveryRetentionMaxPerAgent?: number } | null;
   worktreeGcTickets: () => any[];
   worktreeGcProjects: (currentSlug: string, limit: number) => Project[];
 }
@@ -35,6 +35,8 @@ interface Worktrees {
     integrationTarget: { upstream: string; branch: string };
     maxCandidates: number;
     notIntegratedSalvageAgeMs: number;
+    recoveryRetentionAgeMs: number;
+    recoveryRetentionMaxPerAgent: number;
     onProgress?: (progress: SweepProgress) => void;
   }) => Promise<{
     skipped?: string;
@@ -276,6 +278,8 @@ export async function sweepWorktrees(data: HookInput, includeKnownProjects: bool
         integrationTarget: target,
         maxCandidates: MAX_CANDIDATES_PER_PROJECT,
         notIntegratedSalvageAgeMs: (config?.notIntegratedSalvageAgeHours || DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS) * 60 * 60 * 1e3,
+        recoveryRetentionAgeMs: (config?.worktreeRecoveryRetentionAgeHours || 14 * 24) * 60 * 60 * 1e3,
+        recoveryRetentionMaxPerAgent: config?.worktreeRecoveryRetentionMaxPerAgent || 3,
         onProgress: (progress) => updateProgress(project, progress),
       });
       if (!isCurrentProject) continue;

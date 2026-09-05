@@ -426,8 +426,10 @@ const tools: ToolDefinition[] = [
         delivery: { type: 'string', description: 'Default submission delivery mode. Defaults to merge.' },
         integrationVerifyTimeoutMs: { type: 'integer' },
         worktreeIsolation: { type: 'boolean', description: 'false runs executors in the shared checkout (default true).' },
-        worktreeBase: { type: 'string', enum: ['auto', 'origin-main', 'local-main'], description: 'Base strategy for isolated worktrees on the configured integrationBranch. auto uses local when it is ahead of origin, otherwise origin; origin-main pins the remote ref; local-main pins the local branch.' },
-        notIntegratedSalvageAgeHours: { type: 'integer', minimum: 168, description: 'Age before an unintegrated inactive worktree is salvaged and removed (default 168 hours).' },
+        worktreeBase: { type: 'string', enum: ['auto', 'origin-main', 'local-main'], description: 'Isolated-worktree base.' },
+        notIntegratedSalvageAgeHours: { type: 'integer', minimum: 168, description: 'Default 168 hours.' },
+        worktreeRecoveryRetentionAgeHours: { type: 'integer', minimum: 1, description: 'Hours, default 336.' },
+        worktreeRecoveryRetentionMaxPerAgent: { type: 'integer', minimum: 1, description: 'Per agent, default 3.' },
         autoApproveTestScope: { type: 'boolean', description: 'Auto-approve reachable test directories (default true).' },
         autoApproveScope: { type: 'array', items: { type: 'string' }, description: 'Repo-relative auto-approved globs.' },
         worktreeSetup: { type: ['string', 'null'], description: 'One-line command Sidequest runs after creating an isolated worktree; null clears it.' },
@@ -459,6 +461,8 @@ const tools: ToolDefinition[] = [
       if (args.worktreeIsolation !== undefined) patch.worktreeIsolation = args.worktreeIsolation;
       if (args.worktreeBase !== undefined) patch.worktreeBase = args.worktreeBase;
       if (args.notIntegratedSalvageAgeHours !== undefined) patch.notIntegratedSalvageAgeHours = args.notIntegratedSalvageAgeHours;
+      if (args.worktreeRecoveryRetentionAgeHours !== undefined) patch.worktreeRecoveryRetentionAgeHours = args.worktreeRecoveryRetentionAgeHours;
+      if (args.worktreeRecoveryRetentionMaxPerAgent !== undefined) patch.worktreeRecoveryRetentionMaxPerAgent = args.worktreeRecoveryRetentionMaxPerAgent;
       if (args.autoApproveTestScope !== undefined) patch.autoApproveTestScope = args.autoApproveTestScope;
       if (args.autoApproveScope !== undefined) patch.autoApproveScope = args.autoApproveScope;
       if (args.worktreeSetup !== undefined) patch.worktreeSetup = args.worktreeSetup;

@@ -18,6 +18,8 @@ const worktreeLease = require('./kernel/worktree.js') as {
 
 const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1000;
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_RECOVERY_RETENTION_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+const DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT = 3;
 const QUARANTINE_RETRY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 interface GitResult {
@@ -851,6 +853,8 @@ async function backupDirtyWorktree(repo: string, entry: any, upstream: string, o
     fs.writeFile(path.join(destination, 'working-tree.patch'), diff.stdout ? `${diff.stdout}\n` : '', 'utf8'),
     fs.writeFile(path.join(destination, 'commits.patch'), commits.stdout ? `${commits.stdout}\n` : '', 'utf8'),
     fs.writeFile(path.join(destination, 'metadata.json'), JSON.stringify({
+      agentId,
+      ticket: entry.ticket || null,
       worktree: entry.path,
       branch,
       upstream,
@@ -864,11 +868,14 @@ async function backupDirtyOrphanDirectory(entry: any, options: any): Promise<str
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const destination = path.join(backupRoot(options), `orphan-${path.basename(entry.path)}-${timestamp}`);
   await fs.mkdir(destination, { recursive: true });
-  await fs.cp(entry.path, path.join(destination, 'contents'), { recursive: true, errorOnExist: true });
   await fs.writeFile(path.join(destination, 'metadata.json'), JSON.stringify({
+    agentId: null,
+    ticket: entry.ticket || null,
     worktree: entry.path,
+    branch: null,
+    upstream: null,
     backedUpAt: new Date().toISOString(),
-    reason: 'unregistered worktree directory without .git metadata',
+    reason: 'unregistered worktree directory without .git metadata; contents could not be represented as Git patches',
   }, null, 2) + '\n', 'utf8');
   return destination;
 }
@@ -1168,18 +1175,59 @@ function quarantineRoot(options: any): string {
   return options.quarantineDir || path.join(sidequestHome(), 'worktree-quarantine');
 }
 
-async function quarantineCandidate(entry: any, message: string, options: any): Promise<{ ok: boolean; destination?: string; stderr: string }> {
+function removableQuarantineDirectory(worktree: string, relativePath: string): string | null {
+  const normalized = relativePath.replace(/[\\/]+$/, '');
+  if (!normalized || path.isAbsolute(normalized)) return null;
+  const candidate = path.resolve(worktree, normalized);
+  return pathIsInside(worktree, candidate) ? candidate : null;
+}
+
+async function regenerableQuarantineDirectories(worktree: string): Promise<string[]> {
+  const ignored = await git(worktree, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']);
+  const listed = ignored.ok ? ignored.stdout.split('\0').filter((entry) => /[\\/]$/.test(entry)) : [];
+  const directories = new Set(listed);
+  directories.add('node_modules/');
+  directories.add('.venv/');
+  return [...directories]
+    .map((relativePath) => removableQuarantineDirectory(worktree, relativePath))
+    .filter((pathname): pathname is string => !!pathname)
+    .sort((left, right) => right.length - left.length);
+}
+
+async function stripRegenerableQuarantineDirectories(worktree: string): Promise<string[]> {
+  const removed: string[] = [];
+  for (const directory of await regenerableQuarantineDirectories(worktree)) {
+    try {
+      const status = await fs.lstat(directory);
+      if (!status.isDirectory()) continue;
+      await fs.rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      removed.push(directory);
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+  return removed;
+}
+
+async function quarantineCandidate(entry: any, message: string, options: any): Promise<{ ok: boolean; destination?: string; stderr: string; stripped?: string[]; stripFailure?: string }> {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const destination = path.join(quarantineRoot(options), `${path.basename(entry.path)}-${timestamp}`);
   try {
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.rename(entry.path, destination);
-    recordQuarantine(entry.path, message, destination);
-    return { ok: true, destination, stderr: '' };
   } catch (error: any) {
     const stderr = String((error && error.message) || error);
     recordQuarantineFailure(entry.path, stderr);
     return { ok: false, stderr };
+  }
+  try {
+    const stripped = await stripRegenerableQuarantineDirectories(destination);
+    recordQuarantine(entry.path, message, destination);
+    return { ok: true, destination, stderr: '', stripped };
+  } catch (error: any) {
+    const stripFailure = String((error && error.message) || error);
+    recordQuarantine(entry.path, message, destination);
+    return { ok: true, destination, stderr: '', stripFailure };
   }
 }
 
@@ -1334,6 +1382,230 @@ function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, fac
   return { worktree: entry.worktree, branch, reclaimed: true };
 }
 
+type RecoveryStoreName = 'backups' | 'quarantine';
+type RecoveryStoreEntry = {
+  store: RecoveryStoreName;
+  path: string;
+  name: string;
+  agentId: string;
+  createdAtMs: number;
+  ageMs: number;
+  action: 'keep' | 'remove';
+  reason: 'within_retention' | 'retention_age' | 'retention_count' | 'retention_age_and_count' | 'live_claim';
+  sizeBytes?: number;
+};
+
+type RecoveryStoreReport = {
+  path: string;
+  entries: RecoveryStoreEntry[];
+  bytes: number | null;
+  planned: number;
+  removed: number;
+  reclaimedBytes: number;
+};
+
+function recoveryRetentionAgeMs(options: any): number {
+  const values = [options.recoveryRetentionAgeMs, process.env.SIDEQUEST_TEST_WORKTREE_RECOVERY_RETENTION_AGE_MS];
+  for (const value of values) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
+  }
+  return DEFAULT_RECOVERY_RETENTION_AGE_MS;
+}
+
+function recoveryRetentionMaxPerAgent(options: any): number {
+  const values = [options.recoveryRetentionMaxPerAgent, process.env.SIDEQUEST_TEST_WORKTREE_RECOVERY_RETENTION_MAX_PER_AGENT];
+  for (const value of values) {
+    const parsed = Number(value);
+    if (Number.isInteger(parsed) && parsed >= 1) return parsed;
+  }
+  return DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT;
+}
+
+function recoveryTimestamp(name: string, fallback: number): number {
+  const match = /-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)$/.exec(name);
+  if (!match) return fallback;
+  const parsed = Date.parse(match[1]!.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, 'T$1:$2:$3.$4Z'));
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function recoveryAgentId(store: RecoveryStoreName, name: string): string {
+  const timestamp = /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/.exec(name);
+  const prefix = timestamp ? name.slice(0, timestamp.index) : name;
+  const agentId = store === 'quarantine' ? prefix.replace(/^agent-/, '') : prefix;
+  return agentId || 'unknown';
+}
+
+async function directoryBytes(root: string): Promise<number> {
+  let total = 0;
+  const pending = [root];
+  while (pending.length) {
+    const current = pending.pop()!;
+    let entries: import('node:fs').Dirent[];
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true });
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      const pathname = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(pathname);
+        continue;
+      }
+      try {
+        total += (await fs.lstat(pathname)).size;
+      } catch (error: any) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
+    }
+  }
+  return total;
+}
+
+async function recoveryStoreEntries(store: RecoveryStoreName, root: string, protectedAgentIds: Set<string>, retentionAgeMs: number, retentionMaxPerAgent: number): Promise<RecoveryStoreEntry[]> {
+  let directories: import('node:fs').Dirent[];
+  try {
+    directories = await fs.readdir(root, { withFileTypes: true });
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  const now = Date.now();
+  const entries: RecoveryStoreEntry[] = (await Promise.all(directories.filter((entry) => entry.isDirectory()).map(async (directory) => {
+    const pathname = path.join(root, directory.name);
+    const status = await fs.stat(pathname);
+    const createdAtMs = recoveryTimestamp(directory.name, status.mtimeMs);
+    return {
+      store,
+      path: pathname,
+      name: directory.name,
+      agentId: recoveryAgentId(store, directory.name),
+      createdAtMs,
+      ageMs: Math.max(0, now - createdAtMs),
+      action: 'keep' as const,
+      reason: 'within_retention' as const,
+    };
+  }))).sort((left, right) => left.createdAtMs - right.createdAtMs || left.name.localeCompare(right.name));
+  const indexByPath = new Map(entries.map((entry) => [entry.path, entry]));
+  const grouped = new Map<string, RecoveryStoreEntry[]>();
+  for (const entry of entries) {
+    const group = grouped.get(entry.agentId) || [];
+    group.push(entry);
+    grouped.set(entry.agentId, group);
+  }
+  for (const group of grouped.values()) {
+    const newestFirst = [...group].sort((left, right) => right.createdAtMs - left.createdAtMs || right.name.localeCompare(left.name));
+    newestFirst.forEach((entry, index) => {
+      const current = indexByPath.get(entry.path)!;
+      if (protectedAgentIds.has(current.agentId)) {
+        current.reason = 'live_claim';
+        return;
+      }
+      const oldEnough = current.ageMs >= retentionAgeMs;
+      const beyondCount = index >= retentionMaxPerAgent;
+      if (!oldEnough && !beyondCount) return;
+      current.action = 'remove';
+      current.reason = oldEnough && beyondCount
+        ? 'retention_age_and_count'
+        : oldEnough ? 'retention_age' : 'retention_count';
+    });
+  }
+  return entries;
+}
+
+function clearQuarantineFailureForDestination(destination: string): void {
+  const state = readFailureState();
+  const expected = canonicalPath(destination);
+  let changed = false;
+  for (const [source, failure] of Object.entries(state)) {
+    if (canonicalPath(String(failure.quarantinedPath || '')) !== expected) continue;
+    delete state[source];
+    changed = true;
+  }
+  if (changed) writeFailureState(state);
+}
+
+async function recoveryStoreReport(store: RecoveryStoreName, root: string, protectedAgentIds: Set<string>, retentionAgeMs: number, retentionMaxPerAgent: number, options: any): Promise<RecoveryStoreReport> {
+  const entries = await recoveryStoreEntries(store, root, protectedAgentIds, retentionAgeMs, retentionMaxPerAgent);
+  const planned = entries.filter((entry) => entry.action === 'remove');
+  let removed = 0;
+  let reclaimedBytes = 0;
+  for (const entry of planned) {
+    entry.sizeBytes = await directoryBytes(entry.path);
+    if (!options.execute) continue;
+    await fs.rm(entry.path, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    if (store === 'quarantine') clearQuarantineFailureForDestination(entry.path);
+    removed += 1;
+    reclaimedBytes += entry.sizeBytes;
+  }
+  const bytes = options.includeStoreUsage ? await directoryBytes(root) : null;
+  return { path: root, entries, bytes, planned: planned.length, removed, reclaimedBytes };
+}
+
+function protectedRecoveryAgentIds(tickets: any[]): Set<string> {
+  return new Set(tickets
+    .filter((ticket) => liveClaimTicket(ticket))
+    .map((ticket) => String(ticket?.dispatch?.agentId || '').trim())
+    .filter(Boolean));
+}
+
+async function sweepRecoveryStores(tickets: any[], options: any): Promise<{ retentionAgeMs: number; retentionMaxPerAgent: number; backups: RecoveryStoreReport; quarantine: RecoveryStoreReport; failures: Array<{ path: string | null; message: string }> }> {
+  const retentionAgeMs = recoveryRetentionAgeMs(options);
+  const retentionMaxPerAgent = recoveryRetentionMaxPerAgent(options);
+  const protectedAgentIds = protectedRecoveryAgentIds(tickets);
+  const failures: Array<{ path: string | null; message: string }> = [];
+  const report = async (store: RecoveryStoreName, root: string): Promise<RecoveryStoreReport> => {
+    try {
+      return await recoveryStoreReport(store, root, protectedAgentIds, retentionAgeMs, retentionMaxPerAgent, options);
+    } catch (error: any) {
+      failures.push({ path: root, message: `recovery retention failed: ${(error && error.message) || error}` });
+      return { path: root, entries: [], bytes: null, planned: 0, removed: 0, reclaimedBytes: 0 };
+    }
+  };
+  const [backups, quarantine] = await Promise.all([
+    report('backups', backupRoot(options)),
+    report('quarantine', quarantineRoot(options)),
+  ]);
+  return { retentionAgeMs, retentionMaxPerAgent, backups, quarantine, failures };
+}
+
+async function storageStatus(options: any = {}): Promise<{ worktrees: { path: string; bytes: number }; backups: { path: string; bytes: number }; quarantine: { path: string; bytes: number } }> {
+  const report = async (pathname: string) => ({ path: pathname, bytes: await directoryBytes(pathname) });
+  return {
+    worktrees: await report(path.join(sidequestHome(), 'worktrees')),
+    backups: await report(backupRoot(options)),
+    quarantine: await report(quarantineRoot(options)),
+  };
+}
+
+function recoveryCounts(recovery: Awaited<ReturnType<typeof sweepRecoveryStores>>) {
+  return {
+    plannedBackupEntries: recovery.backups.planned,
+    plannedQuarantineEntries: recovery.quarantine.planned,
+    removedBackupEntries: recovery.backups.removed,
+    removedQuarantineEntries: recovery.quarantine.removed,
+    removedRecoveryEntries: recovery.backups.removed + recovery.quarantine.removed,
+    reclaimedBytes: recovery.backups.reclaimedBytes + recovery.quarantine.reclaimedBytes,
+  };
+}
+
+async function recoveryStoreSizes(recovery: Awaited<ReturnType<typeof sweepRecoveryStores>>, options: any): Promise<{ worktrees: { path: string; bytes: number | null }; backups: { path: string; bytes: number | null }; quarantine: { path: string; bytes: number | null } }> {
+  const worktreePath = path.join(sidequestHome(), 'worktrees');
+  let worktreeBytes: number | null = null;
+  if (options.includeStoreUsage) {
+    try {
+      worktreeBytes = await directoryBytes(worktreePath);
+    } catch (_) {}
+  }
+  return {
+    worktrees: { path: worktreePath, bytes: worktreeBytes },
+    backups: { path: recovery.backups.path, bytes: recovery.backups.bytes },
+    quarantine: { path: recovery.quarantine.path, bytes: recovery.quarantine.bytes },
+  };
+}
+
 type SweepProgressEntry = { action: string; reason?: unknown };
 type SweepProgressOptions = { onProgress?: (progress: { planned: number; removed: number; keptByReason: Record<string, number> }) => void };
 
@@ -1362,6 +1634,16 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   const notIntegratedSalvageAgeMs = Number.isFinite(Number(options.notIntegratedSalvageAgeMs)) && Number(options.notIntegratedSalvageAgeMs) >= 0
     ? Number(options.notIntegratedSalvageAgeMs)
     : DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS;
+  const recovery = options.ticketRef
+    ? {
+      retentionAgeMs: recoveryRetentionAgeMs(options),
+      retentionMaxPerAgent: recoveryRetentionMaxPerAgent(options),
+      backups: { path: backupRoot(options), entries: [], bytes: null, planned: 0, removed: 0, reclaimedBytes: 0 },
+      quarantine: { path: quarantineRoot(options), entries: [], bytes: null, planned: 0, removed: 0, reclaimedBytes: 0 },
+      failures: [],
+    }
+    : await sweepRecoveryStores(tickets, options);
+  const storage = await recoveryStoreSizes(recovery, options);
   const upstream = integrationUpstream(options);
   if (await repositoryBusy(repo)) {
     return {
@@ -1377,8 +1659,18 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       deletedBranches: [],
       prunedOrphanBranches: [],
       quarantined: [],
-      counts: { removedWorktrees: 0, salvagedWorktrees: 0, quarantinedWorktrees: 0, backedUpWorktrees: 0, deletedBranches: 0, prunedOrphanBranches: 0 },
-      failures: [],
+      recovery,
+      storage,
+      counts: {
+        removedWorktrees: 0,
+        salvagedWorktrees: 0,
+        quarantinedWorktrees: 0,
+        backedUpWorktrees: 0,
+        deletedBranches: 0,
+        prunedOrphanBranches: 0,
+        ...recoveryCounts(recovery),
+      },
+      failures: recovery.failures,
       skipped: 'repository_busy',
     };
   }
@@ -1410,7 +1702,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   const deletedBranches: string[] = [];
   const prunedOrphanBranches: string[] = [];
   const quarantined: Array<{ path: string; destination: string; message: string }> = [];
-  const failures: Array<{ path: string | null; message: string; suppressed?: boolean }> = [];
+  const failures: Array<{ path: string | null; message: string; suppressed?: boolean }> = [...recovery.failures];
 
   if (execute) {
     for (const entry of entries.filter((candidate) => candidate.action === 'remove' || candidate.action === 'salvage')) {
@@ -1465,6 +1757,9 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
         entry.reason = 'remove_failed_quarantined';
         entry.quarantine = quarantine.destination;
         quarantined.push({ path: entry.path, destination: quarantine.destination, message });
+        if (quarantine.stripFailure) {
+          failures.push({ path: quarantine.destination, message: `quarantine cleanup failed: ${quarantine.stripFailure}` });
+        }
         reportSweepProgress(options, entries, removed);
         continue;
       }
@@ -1513,6 +1808,8 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
     deletedBranches,
     prunedOrphanBranches,
     quarantined,
+    recovery,
+    storage,
     counts: {
       removedWorktrees: removed.length,
       salvagedWorktrees: salvaged.length,
@@ -1520,9 +1817,10 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       backedUpWorktrees: backups.length,
       deletedBranches: deletedBranches.length,
       prunedOrphanBranches: prunedOrphanBranches.length,
+      ...recoveryCounts(recovery),
     },
     failures,
   };
 }
 
-module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, sweep };
+module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };

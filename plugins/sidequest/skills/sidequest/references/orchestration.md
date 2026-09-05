@@ -175,9 +175,8 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   replacing it. If an isolated worker's recorded worktree is gone, do not `SendMessage` it: redispatch after
   reading the ticket instead, because a resumed agent must never fall back to the shared checkout. Preserve a
   verified commit, or recover the declared-scope diff, then read the ticket and its thread again before deciding
-  whether a replacement is needed. Never overwrite stranded work by blindly redispatching. Use `sidequest worktrees sweep --dry-run` to review old executor worktrees; it only
-  removes worktrees that are clean, at least three hours old, and whose commits are patch-equivalent to
-  `origin/main`. Pass `--yes` only after reviewing the list. When a natural wakeup shows that an executor has no claim and no commit past the
+  whether a replacement is needed. Never overwrite stranded work by blindly redispatching. Use `sidequest worktrees status` to check the disk use of active worktrees, recovery backups, and quarantine. Use `sidequest worktrees sweep --dry-run` to review old executor worktrees and recovery entries; it only removes worktrees that are clean, at least three hours old, and whose commits are patch-equivalent to
+  `origin/main`. The dry run also names expired backups and quarantine entries, which default to 14 days and three per agent. Pass `--yes` only after reviewing the list. When a natural wakeup shows that an executor has no claim and no commit past the
   2–3 minute grace period, stop it, then diagnose before retrying: `pulse <ref>` and read the denial or
   terminal reason verbatim. Make ONE retry only when that diagnosis changes the dispatch; never blindly
   respawn the identical spec. When native Agent reports the exact supported Claude quota-limit signature before claim, the failure hook records that primary attempt
