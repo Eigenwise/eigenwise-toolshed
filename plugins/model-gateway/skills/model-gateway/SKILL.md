@@ -75,8 +75,8 @@ bring auth back, or you kill the session that was about to use it.
 ## Selecting models
 
 - `/model` picker: rows like "GPT-5.6-sol (Codex)".
-- Typed: `/model claude-gpt-5.6-sol` (any string passes through on a custom base URL).
-- Codex GPT-5.6 and GPT-6 Astra through the ChatGPT Codex product (the subscription login this gateway routes to, not the pay-per-token API) accepted 920,012 input tokens and refused 935,012 on 2026-09-05 through claude-code-proxy 0.1.35 (upstream 55bf0b58). The shim advertises `920000` by default for both families and sends a synthetic 413 at each model's window minus 40k tokens (880000 today). `CODEX_GATEWAY_CONTEXT_WINDOW` overrides every advertised window, while `CODEX_GATEWAY_COMPACT_TRIGGER` fixes that sentry trigger globally. Claude Code ignores the advertised value for discovered `claude-gpt-*` rows, so the sentry and backend's HTTP 413 `request_too_large` response trigger recovery. Legacy typed Codex ids ending in `[1m]` still route, but they retain a 1M client budget for that open session: switch to the unsuffixed picker row and restart Claude Code after upgrading from 0.4.1.
+- Typed: `/model claude-gpt-5.6-sol[1m]`. The picker and Sidequest catalog emit that exact id, so use it when selecting a Codex model manually too. A subagent card must carry that exact catalog id, for example `claude-gpt-5.6-terra[1m]`; the suffix is stripped before the request reaches Codex.
+- Codex GPT-5.6 and GPT-6 Astra through the ChatGPT Codex product (the subscription login this gateway routes to, not the pay-per-token API) accepted 920,012 input tokens and refused 935,012 on 2026-09-05 through claude-code-proxy 0.1.35 (upstream 55bf0b58). The shim advertises `920000` by default for both families and, when `CODEX_GATEWAY_COMPACT_TRIGGER` is unset, sends a synthetic 413 at each model's window minus 40k tokens (880000 with the shipped window). `CODEX_GATEWAY_CONTEXT_WINDOW` overrides every advertised window, while `CODEX_GATEWAY_COMPACT_TRIGGER` fixes the sentry trigger globally. Claude Code 2.1.261 ignores a settings-file `CLAUDE_CODE_MAX_CONTEXT_TOKENS` value for its own unrecognized-model resolver, so new Codex rows use the recognized `[1m]` alias selected from the same window table. That alias gives Claude Code a 1M client window, the closest available setting to the verified 920k backend window; the sentry keeps 40k of backend headroom. A lower explicit `autoCompactWindow` still wins, including this machine's intentional `325000` cap, and its fixed `CODEX_GATEWAY_COMPACT_TRIGGER=320000` remains earlier still.
 - Claude models (opus/sonnet/fable, with or without `[1m]`) keep their OWN separate native windows
   and compaction limits: the shim forwards their requests byte-identically to Anthropic and never
   applies Codex window advertisement or error rewriting to them. The env block pins the current
@@ -102,7 +102,7 @@ bring auth back, or you kill the session that was about to use it.
 - **RC-compat and missing Codex rows**: Remote Control and the Codex/Grok rows in `/model` cannot
   both work. RC-compatibility points `ANTHROPIC_BASE_URL` at `api.anthropic.com`, and Claude Code
   disables gateway model discovery for that host. The gateway still routes explicit ids: type
-  `/model claude-gpt-5.6-terra`, and Claude Code accepts and saves it as the default. Disabling
+  `/model claude-gpt-5.6-terra[1m]`, and Claude Code accepts and saves it as the default. Disabling
   compatibility restores the picker rows. Sidequest dispatch is unaffected because it resolves its
   explicit route marker and never uses picker discovery.
 - Claude models keep working normally at the same time (passthrough path); subagents can mix tiers

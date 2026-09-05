@@ -373,37 +373,37 @@ test('buildCatalog publishes the v4 provider-generic model contract', () => {
   assert.deepEqual(catalog.models, [
     {
       slug: 'codex-gpt-5-6-sol',
-      id: 'claude-gpt-5.6-sol',
+      id: 'claude-gpt-5.6-sol[1m]',
       label: 'GPT-5.6 Sol',
       provider: 'codex',
     },
     {
       slug: 'codex-gpt-5-6-terra',
-      id: 'claude-gpt-5.6-terra',
+      id: 'claude-gpt-5.6-terra[1m]',
       label: 'GPT-5.6 Terra',
       provider: 'codex',
     },
     {
       slug: 'codex-gpt-5-6-luna',
-      id: 'claude-gpt-5.6-luna',
+      id: 'claude-gpt-5.6-luna[1m]',
       label: 'GPT-5.6 Luna',
       provider: 'codex',
     },
     {
       slug: 'codex-gpt-5-6-sol-fast',
-      id: 'claude-gpt-5.6-sol-fast',
+      id: 'claude-gpt-5.6-sol-fast[1m]',
       label: 'GPT-5.6 Sol Fast',
       provider: 'codex',
     },
     {
       slug: 'codex-gpt-5-6-terra-fast',
-      id: 'claude-gpt-5.6-terra-fast',
+      id: 'claude-gpt-5.6-terra-fast[1m]',
       label: 'GPT-5.6 Terra Fast',
       provider: 'codex',
     },
     {
       slug: 'codex-gpt-5-6-luna-fast',
-      id: 'claude-gpt-5.6-luna-fast',
+      id: 'claude-gpt-5.6-luna-fast[1m]',
       label: 'GPT-5.6 Luna Fast',
       provider: 'codex',
     },
@@ -436,8 +436,8 @@ test('writeCatalogFile preserves missing models from a same-schema subset write'
     const written = gw.writeCatalogFile(file, subset);
 
     assert.deepEqual(written.models.map((model) => model.id), [
-      'claude-gpt-5.6-terra',
-      'claude-gpt-5.6-sol',
+      'claude-gpt-5.6-terra[1m]',
+      'claude-gpt-5.6-sol[1m]',
     ]);
     assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), written);
   } finally {
@@ -459,7 +459,7 @@ test('writeCatalogFile preserves provider readiness for subset-retained models',
 
     const written = gw.writeCatalogFile(file, subset);
 
-    assert.deepEqual(written.models.map((model) => model.id), ['claude-gpt-5.6-terra', 'claude-grok-4.5']);
+    assert.deepEqual(written.models.map((model) => model.id), ['claude-gpt-5.6-terra[1m]', 'claude-grok-4.5']);
     assert.deepEqual(written.providers, readiness);
     assert.deepEqual(written.codexReadiness, written.providers.codex);
   } finally {
@@ -525,10 +525,10 @@ test('SQ-2208: catalog --refresh --json keeps stdout parseable while it logs a p
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /catalog: preserved claude-gpt-5\.6-sol from a subset write/);
+  assert.match(result.stderr, /catalog: preserved claude-gpt-5\.6-sol\[1m\] from a subset write/);
   assert.deepEqual(
     JSON.parse(result.stdout).models.map((model) => model.id),
-    ['claude-gpt-5.6-terra', 'claude-gpt-5.6-sol'],
+    ['claude-gpt-5.6-terra[1m]', 'claude-gpt-5.6-sol[1m]'],
     'a --json invocation is a machine contract, so a human diagnostic belongs on stderr',
   );
 });
@@ -628,7 +628,7 @@ test('the shim keeps Claude ids on the Anthropic path and claims both id forms f
   await waitForHealthz(shimPort);
 
   const models = JSON.parse((await request(shimPort, '/v1/models')).body).data.map(({ id }) => id);
-  assert.ok(models.includes('claude-gpt-5.6-terra'), `advertised: ${models.join(', ')}`);
+  assert.ok(models.includes('claude-gpt-5.6-terra[1m]'), `advertised: ${models.join(', ')}`);
   assert.ok(models.includes('claude-grok-4.5'), `advertised: ${models.join(', ')}`);
   assert.ok(models.every((id) => id.startsWith('claude-')), 'discovery drops ids that do not start with claude');
 
