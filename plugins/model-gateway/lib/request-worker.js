@@ -22,8 +22,8 @@ const {
   COMPAT_PORT, DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GROK_ENDPOINT, GROK_PREFIX, LIST_DISPATCH_MODEL,
   LOGS, PLUGIN_VERSION, PREFIX, PROXY_BIN, PROXY_PORT, REQUEST_ROUTE_LOG,
   REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT, SOCKET_PATH,
-  STATE, syncGatewayDiscoveryCache, TRACE_HEADERS, codexClientModelId, codexContextWindow,
-  codexContextWindowModelId, gatewayAdvertisedWindow, gatewayClientModelId, mkdirs,
+  MODEL_WINDOW_POLICY, STATE, syncGatewayDiscoveryCache, TRACE_HEADERS, codexClientModelId,
+  codexContextWindow, codexContextWindowModelId, gatewayAdvertisedWindow, gatewayClientModelId, mkdirs,
   resolveGatewayModelPolicy, resolveNewestInstalledCliPath,
 } = require('./runtime.js');
 
@@ -1101,14 +1101,14 @@ function runWorker() {
     return Buffer.from(JSON.stringify(parsed));
   }
 
-  function logAdvertisedSentryPolicies(models) {
-    for (const model of models) {
-      const policy = resolveGatewayModelPolicy(model.id);
-      if (!policy) continue;
+  function logAdvertisedSentryPolicies() {
+    for (const policy of Object.values(MODEL_WINDOW_POLICY)) {
       const sentryPolicy = effectiveCodexSentryPolicy(policy);
-      const effectiveTrigger = sentryPolicy?.compactTrigger ?? 'none';
-      const source = sentryPolicy?.source ?? 'none';
-      console.log(`model-gateway: sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} effectiveTrigger=${effectiveTrigger} source=${source}`);
+      if (!sentryPolicy) {
+        console.log(`model-gateway: sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=none`);
+        continue;
+      }
+      console.log(`model-gateway: sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=${policy.sentry} effectiveTrigger=${sentryPolicy.compactTrigger} source=${sentryPolicy.source}`);
     }
   }
 
@@ -1141,7 +1141,7 @@ function runWorker() {
           .map((model) => gatewayModel(model.id, 'grok')),
       ],
     };
-    if (logSentryPolicies) logAdvertisedSentryPolicies(modelCache.data);
+    if (logSentryPolicies) logAdvertisedSentryPolicies();
     try {
       syncGatewayDiscoveryCache({ models: modelCache.data, baseUrl: effectiveBaseUrl().value || null });
     } catch (error) {

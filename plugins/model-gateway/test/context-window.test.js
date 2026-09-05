@@ -236,13 +236,18 @@ test('Codex sentry logs a startup policy line for every advertised model row', a
   });
   await waitForShim(shimPort);
 
-  const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body).data;
+  await request(shimPort, 'GET', '/v1/models');
   await new Promise((resolve) => setImmediate(resolve));
-  for (const model of models) {
-    const policy = require(RUNTIME).resolveGatewayModelPolicy(model.id);
-    const effectiveTrigger = policy.sentry === 'none' ? 'none' : '\\d+';
-    const source = policy.sentry === 'none' ? 'none' : '(env|derived)';
-    assert.match(output.text, new RegExp(`sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} effectiveTrigger=${effectiveTrigger} source=${source}`));
+  const { MODEL_WINDOW_POLICY } = require(RUNTIME);
+  const startupPolicyLines = output.text.split(/\r?\n/).filter((line) => line.startsWith('model-gateway: sentry policy '));
+  for (const policy of Object.values(MODEL_WINDOW_POLICY)) {
+    const matchingLines = startupPolicyLines.filter((line) => line.includes(`id=${policy.backendId} `));
+    assert.equal(matchingLines.length, 1, `expected one startup sentry policy line for ${policy.backendId}, got ${matchingLines.length}`);
+    if (policy.sentry === 'none') {
+      assert.match(matchingLines[0], new RegExp(`sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=none$`));
+      continue;
+    }
+    assert.match(matchingLines[0], new RegExp(`sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=${policy.sentry} effectiveTrigger=\\d+ source=(env|derived)$`));
   }
 });
 
