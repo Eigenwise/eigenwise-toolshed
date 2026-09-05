@@ -45,6 +45,35 @@ const COMPAT_BASE_URL = `http://${COMPAT_HOST}`;
 const HOSTS_BLOCK_START = '# >>> model-gateway RC compatibility >>>';
 const HOSTS_BLOCK_END = '# <<< model-gateway RC compatibility <<<';
 const HOSTS_BLOCK_LINE = `127.0.0.1 ${COMPAT_HOST}`;
+const CODEX_CONTEXT_WINDOWS = Object.freeze({
+  default: 920000,
+  'gpt-5.6-sol': 920000,
+  'gpt-5.6-terra': 920000,
+  'gpt-5.6-luna': 920000,
+  'gpt-6-astra': 920000,
+});
+const configuredContextWindow = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW);
+
+function codexContextWindowModelId(id) {
+  const baseId = typeof id === 'string'
+    ? id.replace(/\[1m\]$/, '').replace(/^claude-/, '').replace(/-fast$/, '')
+    : '';
+  return baseId || 'default';
+}
+
+function codexContextWindow(id, contextWindows = CODEX_CONTEXT_WINDOWS) {
+  return configuredContextWindow || contextWindows[codexContextWindowModelId(id)]
+    || contextWindows.default;
+}
+
+function codexClientModelId(id, contextWindows = CODEX_CONTEXT_WINDOWS) {
+  const baseId = typeof id === 'string'
+    ? id.replace(/\[1m\]$/, '').replace(/^claude-/, '')
+    : '';
+  const suffix = codexContextWindow(id, contextWindows) >= contextWindows.default ? '[1m]' : '';
+  return `${PREFIX}${baseId}${suffix}`;
+}
+
 const STATIC_ENV_BLOCK = {
   CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
   CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
@@ -126,8 +155,9 @@ function mkdirs() {
 }
 
 module.exports = {
-  ANTHROPIC_UPSTREAM, AUTH_HEADERS, BIN_DIR, CLAUDE_BIN, CLAUDE_BIN_IS_BATCH, CODEX_FAMILY_RE,
-  CODEX_UPSTREAM_BLOCK_PATH, COMPAT_BASE_URL, COMPAT_HOST, COMPAT_PORT, DEFAULT_BASE_URL,
+  ANTHROPIC_UPSTREAM, AUTH_HEADERS, BIN_DIR, CLAUDE_BIN, CLAUDE_BIN_IS_BATCH, CODEX_CONTEXT_WINDOWS,
+  CODEX_FAMILY_RE, CODEX_UPSTREAM_BLOCK_PATH, COMPAT_BASE_URL, COMPAT_HOST, COMPAT_PORT,
+  DEFAULT_BASE_URL,
   DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GATEWAY_MODELS_CACHE, GROK_ENDPOINT, GROK_PREFIX,
   HOSTS_BLOCK_END, HOSTS_BLOCK_LINE, HOSTS_BLOCK_START, KNOWN_GOOD_PINS, LEGACY_CODEX_PREFIX,
   LEGACY_ENV_BLOCK, LIST_DISPATCH_MODEL, LOGS, MIN_PROXY_VERSION, PIN_ALIASES, PIN_CACHE_PATH,
@@ -135,5 +165,5 @@ module.exports = {
   PROXY_PORT, PUBLIC_SHIM_PORT, REPO, REQUEST_ROUTE_LOG, REQUEST_ROUTE_LOG_PATH, LIFECYCLE_LOG_PATH,
   PROJECT_WIRING_REGISTRY_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_FAILURE_PATH, SHIM_PORT, SOCKET_PATH, STATE,
   STATIC_ENV_BLOCK, TRACE_HEADERS, WIRING_CONFIG_PATH, WIN, CLI_PATH, mkdirs,
-  canReplaceInstalledCliPath, resolveNewestInstalledCliPath,
+  canReplaceInstalledCliPath, codexClientModelId, codexContextWindow, codexContextWindowModelId, resolveNewestInstalledCliPath,
 };

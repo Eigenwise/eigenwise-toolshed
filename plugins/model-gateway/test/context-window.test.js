@@ -84,7 +84,7 @@ const codexBody = JSON.stringify({
 
 const sentrySessionHeaders = { 'x-claude-code-session-id': 'sentry-test-session' };
 
-test('Codex discovery advertises context metadata but keeps the local model id unsuffixed', async (t) => {
+test('Codex discovery advertises client 1M aliases and forwards backend base ids', async (t) => {
   let forwarded;
   const proxy = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/v1/models') {
@@ -126,14 +126,14 @@ test('Codex discovery advertises context metadata but keeps the local model id u
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
   const codexModels = models.data.filter(({ id }) => id.startsWith('claude-gpt-'));
   assert.deepEqual(codexModels.map(({ id, max_input_tokens }) => ({ id, max_input_tokens })), [
-    { id: 'claude-gpt-5.6-sol', max_input_tokens: 920000 },
-    { id: 'claude-gpt-5.6-terra', max_input_tokens: 920000 },
-    { id: 'claude-gpt-5.6-luna', max_input_tokens: 920000 },
-    { id: 'claude-gpt-6-astra', max_input_tokens: 920000 },
+    { id: 'claude-gpt-5.6-sol[1m]', max_input_tokens: 920000 },
+    { id: 'claude-gpt-5.6-terra[1m]', max_input_tokens: 920000 },
+    { id: 'claude-gpt-5.6-luna[1m]', max_input_tokens: 920000 },
+    { id: 'claude-gpt-6-astra[1m]', max_input_tokens: 920000 },
   ]);
   assert.ok(models.data.some(({ id }) => id === 'claude-grok-4.5'));
   assert.equal(codexModels.every(({ max_input_tokens }) => max_input_tokens === 920000), true);
-  assert.equal(models.data.every(({ id }) => id.includes('[1m]') === false), true);
+  assert.equal(codexModels.every(({ id }) => id.endsWith('[1m]')), true);
 
   await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
     model: 'claude-gpt-5.6-sol[1m]',
@@ -204,7 +204,7 @@ test('Codex fallback includes GPT-6 Astra when the proxy has no model route', as
   const shimPort = await spawnShim(t, proxyPort);
 
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
-  assert.equal(models.data.some(({ id }) => id === 'claude-gpt-6-astra'), true);
+  assert.equal(models.data.some(({ id }) => id === 'claude-gpt-6-astra[1m]'), true);
 });
 
 test('default request route logging records Fable metadata but never prompt data', async (t) => {
@@ -769,6 +769,8 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-env-home-'));
   const env = { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: '18764', CODEX_GATEWAY_PROXY_PORT: '18765', CODEX_GATEWAY_CLAUDE_BIN: missingClaude(home) };
   const isolatedOverrides = { CODEX_GATEWAY_PORT: '18764', CODEX_GATEWAY_WORKER_PORT: '18764', CODEX_GATEWAY_PROXY_PORT: '18765' };
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: { CLAUDE_CODE_MAX_CONTEXT_TOKENS: '920000' } }));
   fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(cwd, '.claude', 'settings.json'), JSON.stringify({
     env: {
@@ -794,6 +796,7 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   // window instead of Claude Code's 200k gateway default.
   assert.equal(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5-1[1m]');
   assert.equal(settings.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, '64000');
+  assert.equal(settings.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, undefined);
   assert.equal(settings.env.ENABLE_TOOL_SEARCH, 'true');
   assert.equal(settings.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:18764');
   assert.equal(legacy.env.ANTHROPIC_BASE_URL, undefined);
@@ -805,6 +808,7 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   const after = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
   assert.equal(after.env?.ANTHROPIC_DEFAULT_FABLE_MODEL, undefined);
   assert.equal(after.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS, undefined);
+  assert.equal(after.env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS, undefined);
   assert.equal(after.env?.ENABLE_TOOL_SEARCH, undefined);
   assert.equal(legacy.env?.USER_SETTING, 'keep-me');
 });
@@ -1160,7 +1164,7 @@ test('credential-free alias probes cache valid 1M defaults without replacing ove
 test('doctor describes project-local wiring as the default', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-doctor-'));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-doctor-project-'));
-  const { ANTHROPIC_BASE_URL, ...environment } = process.env;
+  const { ANTHROPIC_BASE_URL, CLAUDE_CODE_MAX_CONTEXT_TOKENS, ...environment } = process.env;
   try {
     const result = spawnGatewayProcessSync(process.execPath, [CLI, 'doctor'], {
       cwd,
@@ -1168,10 +1172,54 @@ test('doctor describes project-local wiring as the default', () => {
       encoding: 'utf8',
     });
     assert.match(result.stdout, /wiring: effective none/);
+    assert.match(result.stdout, /Codex client resolver: claude-gpt-6-astra\[1m\] uses 1000000 \(gateway advertises 920000\)/);
+    assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
     assert.match(result.stdout, /default wiring target: this project's \.claude\/settings\.local\.json/);
     assert.match(result.stdout, /Claude opus pin: claude-opus-5\[1m\] \(default\)/);
     assert.match(result.stdout, /project settings\.local\.json: not wired .*\[default write target\]/);
     assert.doesNotMatch(result.stdout, /wiring mode: local/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('doctor reports the 1M Codex resolver aliases and a lower explicit cap', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-client-window-home-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-client-window-project-'));
+  const { ANTHROPIC_BASE_URL, CLAUDE_CODE_MAX_CONTEXT_TOKENS, ...environment } = process.env;
+  const env = { ...environment, HOME: home, USERPROFILE: home, CODEX_GATEWAY_CLAUDE_BIN: missingClaude(home) };
+  const isolatedOverrides = { CODEX_GATEWAY_PORT: '18764', CODEX_GATEWAY_WORKER_PORT: '18764', CODEX_GATEWAY_PROXY_PORT: '18765' };
+  try {
+    const wired = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--write-project'], {
+      cwd,
+      env,
+      isolatedOverrides,
+      encoding: 'utf8',
+    });
+    assert.equal(wired.status, 0, wired.stderr);
+    const settingsFile = path.join(cwd, '.claude', 'settings.local.json');
+    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    settings.autoCompactWindow = 325000;
+    fs.writeFileSync(settingsFile, JSON.stringify(settings));
+    const rewired = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--write-project'], {
+      cwd,
+      env,
+      isolatedOverrides,
+      encoding: 'utf8',
+    });
+    assert.equal(rewired.status, 0, rewired.stderr);
+    assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).autoCompactWindow, 325000);
+    const result = spawnGatewayProcessSync(process.execPath, [CLI, 'doctor'], {
+      cwd,
+      env,
+      isolatedOverrides,
+      encoding: 'utf8',
+    });
+    assert.match(result.stdout, /Codex auto-compact cap: 325000 \(settings project-local; wins over the Codex client resolver window\)/);
+    assert.match(result.stdout, /Codex client resolver: claude-gpt-5\.6-sol\[1m\] uses 1000000 \(gateway advertises 920000\)/);
+    assert.match(result.stdout, /Codex client resolver: claude-gpt-6-astra\[1m\] uses 1000000 \(gateway advertises 920000\)/);
+    assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });

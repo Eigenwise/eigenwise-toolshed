@@ -528,7 +528,7 @@ test('serve-shim binds a second RC-compatibility listener only when the hosts en
 
   const catalog = await request(compatPort, 'GET', '/v1/models');
   assert.equal(catalog.status, 200);
-  assert.ok(JSON.parse(catalog.body).data.some((model) => model.id === 'claude-gpt-5.6-terra'));
+  assert.ok(JSON.parse(catalog.body).data.some((model) => model.id === 'claude-gpt-5.6-terra[1m]'));
 });
 
 test('serve-shim stays default-only when no hosts entry is present', async (t) => {
@@ -567,7 +567,7 @@ test('serve-shim accepts requests through ANTHROPIC_UNIX_SOCKET', async (t) => {
   assert.equal(health.ok, true);
   const catalog = await requestSocket(socketPath, 'GET', '/v1/models');
   assert.equal(catalog.status, 200);
-  assert.ok(JSON.parse(catalog.body).data.some((model) => model.id === 'claude-gpt-5.6-terra'));
+  assert.ok(JSON.parse(catalog.body).data.some((model) => model.id === 'claude-gpt-5.6-terra[1m]'));
 });
 
 test('serve-shim forwards an unexpected bodyless request without crashing on raw.length', async (t) => {

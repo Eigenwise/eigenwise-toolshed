@@ -18,11 +18,11 @@ const { wiredMode } = require('./settings-wiring.js');
 const { detectHostsCompat } = require('./remote-control.js');
 const { codexBaseFromId, ourBaseUrls } = require('./pins.js');
 const {
-  ANTHROPIC_UPSTREAM, AUTH_HEADERS, CODEX_FAMILY_RE, CODEX_UPSTREAM_BLOCK_PATH, COMPAT_HOST,
+  ANTHROPIC_UPSTREAM, AUTH_HEADERS, CODEX_CONTEXT_WINDOWS, CODEX_FAMILY_RE, CODEX_UPSTREAM_BLOCK_PATH, COMPAT_HOST,
   COMPAT_PORT, DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GROK_ENDPOINT, GROK_PREFIX, LIST_DISPATCH_MODEL,
   LOGS, PLUGIN_VERSION, PREFIX, PROXY_BIN, PROXY_PORT, REQUEST_ROUTE_LOG,
   REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT, SOCKET_PATH,
-  STATE, TRACE_HEADERS, mkdirs, resolveNewestInstalledCliPath,
+  STATE, TRACE_HEADERS, codexClientModelId, mkdirs, resolveNewestInstalledCliPath,
 } = require('./runtime.js');
 
 function isAuthed() {
@@ -192,21 +192,12 @@ const DEFAULT_MODELS = [
 ];
 const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 
-// Claude Code ignores max_input_tokens for discovered claude-* ids, so the
-// sentry below is what makes it compact. On 2026-09-05, claude-code-proxy
-// 0.1.35 (upstream 55bf0b58) accepted 920,012 input tokens and refused 935,012
-// for both gpt-5.6-sol and gpt-6-astra. Keep the last accepted value here for
-// honest discovery metadata and the sentry, while allowing a machine-wide
-// CODEX_GATEWAY_CONTEXT_WINDOW override. CODEX_GATEWAY_COMPACT_TRIGGER remains
-// a machine-wide fixed sentry trigger. Never set CLAUDE_CODE_AUTO_COMPACT_WINDOW:
-// it also affects Claude passthrough models.
-const CODEX_CONTEXT_WINDOWS = Object.freeze({
-  default: 920000,
-  'gpt-5.6-sol': 920000,
-  'gpt-5.6-terra': 920000,
-  'gpt-5.6-luna': 920000,
-  'gpt-6-astra': 920000,
-});
+// Claude Code 2.1.261 resolves an unrecognized model to 200k even when its
+// settings file contains CLAUDE_CODE_MAX_CONTEXT_TOKENS. Its recognized [1m]
+// spelling instead uses a 1M client window. codexClientModelId derives that
+// spelling from the same table used for max_input_tokens; the sentry retains
+// backend headroom because Claude Code cannot represent the backend's 920k
+// window exactly.
 const configuredContextWindow = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW);
 const CODEX_SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
 const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
@@ -317,7 +308,7 @@ function gatewayModel(id, backend = 'codex', grokModels = DEFAULT_GROK_MODELS, c
     : codexContextWindow(id, contextWindows);
   const advertised = backend === 'grok'
     ? `${prefix}${grokBackend.grokPickerId(id)}`
-    : id === 'auto' ? DISPATCH_MODEL_ID : `${prefix}${id}`;
+    : id === 'auto' ? DISPATCH_MODEL_ID : codexClientModelId(id, contextWindows);
   return {
     id: advertised,
     display_name: id === 'auto' ? 'Sidequest Dispatch (Codex)' : displayName(id, backend),
@@ -598,7 +589,7 @@ function buildCatalog(ids, readiness = null) {
     .filter(({ details }) => details)
     .map(({ id, details }) => ({
       slug: slugFor(details.provider, details.base, used),
-      id,
+      id: details.provider === 'codex' ? codexClientModelId(id) : id,
       label: details.label,
       provider: details.provider,
     }));

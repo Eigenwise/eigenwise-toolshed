@@ -115,7 +115,7 @@ test('Codex tool search resolves references while Anthropic passthrough stays by
   await waitForHealthz(shimPort);
 
   const models = JSON.parse((await request(shimPort, '/v1/models')).body).data;
-  assert.ok(models.some(({ id }) => id === 'claude-gpt-5.6-sol'));
+  assert.ok(models.some(({ id }) => id === 'claude-gpt-5.6-sol[1m]'));
 
   const tools = [
     tool('ToolSearch'),

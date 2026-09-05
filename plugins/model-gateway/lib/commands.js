@@ -101,17 +101,18 @@ const AUTH_HEADERS = ['authorization', 'proxy-authorization', 'x-api-key', 'cook
 
 const {
   COMPAT_BASE_URL, COMPAT_HOST, COMPAT_PORT, DEFAULT_BASE_URL, HOSTS_BLOCK_END, HOSTS_BLOCK_LINE,
-  HOSTS_BLOCK_START, PIN_ALIASES, PIN_OVERRIDE_PATH, STATIC_ENV_BLOCK,
+  HOSTS_BLOCK_START, PIN_ALIASES, PIN_OVERRIDE_PATH, STATIC_ENV_BLOCK, codexClientModelId, codexContextWindow,
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, readPinOverrides, refreshDetectedPins, writePinOverrides,
+  isValidPin, ourBaseUrls, ownedPinValues, readPinOverrides, refreshDetectedPins, writePinOverrides,
 } = require('./pins.js');
 
 // Versions through 0.4.1 wrote this unsafe global override. Remove it during
 // the next env write/remove, but leave a user-supplied different value alone.
 const LEGACY_ENV_BLOCK = {
   CLAUDE_CODE_AUTO_COMPACT_WINDOW: '950000',
+  CLAUDE_CODE_MAX_CONTEXT_TOKENS: '920000',
 };
 const GATEWAY_MODELS_CACHE = path.join(os.homedir(), '.claude', 'cache', 'gateway-models.json');
 
@@ -786,12 +787,13 @@ function pinCommand() {
   log('Rewire this project with env --write-project, then start a new Claude Code session for the change to apply.');
 }
 
-async function syncEffectivePins() {
+async function syncGatewayWiring() {
   await refreshDetectedPins();
   const current = wiredMode();
   if (!current?.scope) return;
   const env = readSettingsForWrite(settingsPath(current.scope)).env || {};
-  if (Object.entries(pinEnvBlock()).some(([key, value]) => env[key] !== value)) {
+  const expected = envBlockFor(current.mode);
+  if (Object.entries(expected).some(([key, value]) => env[key] !== value)) {
     writeEnv(current.scope, false, { mode: current.mode, quiet: true });
   }
 }
@@ -909,6 +911,35 @@ async function syncCompatMode() {
 
 // ------------------------------------------------------------------ doctor
 
+function configuredAutoCompactWindow() {
+  const candidates = [{ source: 'CLAUDE_CODE_AUTO_COMPACT_WINDOW', value: process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW }];
+  for (const source of ['project-local', 'project-shared', 'user']) {
+    const scope = source === 'project-local' ? 'project' : source;
+    try {
+      const value = JSON.parse(fs.readFileSync(settingsPath(scope), 'utf8')).autoCompactWindow;
+      candidates.push({ source: `settings ${source}`, value });
+    } catch {}
+  }
+  for (const candidate of candidates) {
+    const window = Number(candidate.value);
+    if (Number.isInteger(window) && window > 0) return { source: candidate.source, window };
+  }
+  return null;
+}
+
+function reportCodexClientWindows() {
+  const autoCompact = configuredAutoCompactWindow();
+  if (autoCompact) {
+    log(`Codex auto-compact cap: ${autoCompact.window} (${autoCompact.source}; wins over the Codex client resolver window)`);
+  }
+  for (const id of DEFAULT_MODELS) {
+    const gatewayWindow = codexContextWindow(id);
+    const clientModelId = codexClientModelId(id);
+    const clientWindow = clientModelId.endsWith('[1m]') ? 1000000 : 200000;
+    log(`Codex client resolver: ${clientModelId} uses ${clientWindow} (gateway advertises ${gatewayWindow})`);
+  }
+}
+
 async function doctor({ readiness: suppliedReadiness = null } = {}) {
   const readiness = suppliedReadiness || await getCodexReadiness();
   log(`binary: ${readiness.checks.proxyBinary ? PROXY_BIN : 'MISSING (run setup)'}`);
@@ -946,6 +977,7 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
   for (const [alias, pin] of Object.entries(effectivePins())) {
     log(`Claude ${alias} pin: ${pin.value}${pin.override ? ` (overridden; shipped default: ${pin.default})` : ' (default)'}`);
   }
+  reportCodexClientWindows();
   const activeScope = selectedWiringScope();
   const effective = effectiveBaseUrl();
   const modeFor = (base) => (base === COMPAT_BASE_URL ? 'compat' : base === DEFAULT_BASE_URL ? 'default' : null);
@@ -1036,37 +1068,14 @@ const DEFAULT_MODELS = [
 ];
 const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 
-// Claude Code ignores max_input_tokens for discovered claude-* ids, so the
-// sentry in request-worker.js is what makes it compact. On 2026-09-05,
-// claude-code-proxy 0.1.35 (upstream 55bf0b58) accepted 920,012 input tokens
-// and refused 935,012 for both gpt-5.6-sol and gpt-6-astra. Keep the last
-// accepted value here with the worker's duplicate defaults. CODEX_GATEWAY_CONTEXT_WINDOW
-// overrides every model, and CODEX_GATEWAY_COMPACT_TRIGGER fixes the sentry
-// trigger globally. Never set CLAUDE_CODE_AUTO_COMPACT_WINDOW: it also affects
-// Claude passthrough models.
-const CODEX_CONTEXT_WINDOWS = Object.freeze({
-  default: 920000,
-  'gpt-5.6-sol': 920000,
-  'gpt-5.6-terra': 920000,
-  'gpt-5.6-luna': 920000,
-  'gpt-6-astra': 920000,
-});
-const configuredContextWindow = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW);
+// Claude Code 2.1.261 ignores settings-file CLAUDE_CODE_MAX_CONTEXT_TOKENS for
+// its unrecognized-model resolver. Codex rows therefore use Claude Code's [1m]
+// spelling, chosen from the same context table used for max_input_tokens. The
+// worker sentry retains backend headroom because that spelling is a 1M client
+// window rather than the backend's exact 920k limit.
 const CODEX_SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
 const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
 const CODEX_COMPACT_HEADROOM = 40000;
-
-function codexContextWindowModelId(id) {
-  const baseId = typeof id === 'string'
-    ? id.replace(/\[1m\]$/, '').replace(/^claude-/, '').replace(/-fast$/, '')
-    : '';
-  return baseId || 'default';
-}
-
-function codexContextWindow(id, contextWindows = CODEX_CONTEXT_WINDOWS) {
-  return configuredContextWindow || contextWindows[codexContextWindowModelId(id)]
-    || contextWindows.default;
-}
 const configuredSseHeartbeatSeconds = Number(process.env.CODEX_GATEWAY_SSE_HEARTBEAT_S);
 const SSE_HEARTBEAT_MS = Number.isFinite(configuredSseHeartbeatSeconds) && configuredSseHeartbeatSeconds >= 0
   ? configuredSseHeartbeatSeconds * 1000
@@ -1161,7 +1170,7 @@ function gatewayModel(id, backend = 'codex') {
     : codexContextWindow(id);
   const advertised = backend === 'grok'
     ? `${prefix}${grokBackend.grokPickerId(id)}`
-    : id === 'auto' ? DISPATCH_MODEL_ID : `${prefix}${id}`;
+    : id === 'auto' ? DISPATCH_MODEL_ID : codexClientModelId(id);
   return {
     id: advertised,
     display_name: id === 'auto' ? 'Sidequest Dispatch (Codex)' : displayName(id, backend),
@@ -1442,7 +1451,7 @@ function buildCatalog(ids, readiness = null) {
     .filter(({ details }) => details)
     .map(({ id, details }) => ({
       slug: slugFor(details.provider, details.base, used),
-      id,
+      id: details.provider === 'codex' ? codexClientModelId(id) : id,
       label: details.label,
       provider: details.provider,
     }));
@@ -2079,7 +2088,7 @@ const commands = {
         noticeForUser(`model-gateway wiring is shell-only: ANTHROPIC_BASE_URL comes from this terminal's environment and no settings file sets it, so sessions started anywhere else are not routed through the gateway. Run \`node "${CLI_PATH}" env --write-project\` to persist it in this project's .claude/settings.local.json.`);
       }
       await syncCompatMode();
-      await syncEffectivePins();
+      await syncGatewayWiring();
     }
     if (!quiet) await statusReport({ readiness });
     flushHookOutput();
