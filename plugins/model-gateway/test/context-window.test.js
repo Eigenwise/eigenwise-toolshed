@@ -73,6 +73,42 @@ async function waitForStartupPolicyLines(output, expectedCount) {
   return lines;
 }
 
+function doctorWithStubShim(modelIds) {
+  const script = `
+    const http = require('node:http');
+    const modelIds = ${JSON.stringify(modelIds)};
+    const readiness = {
+      ready: true,
+      checks: {
+        proxyBinary: false,
+        proxyModels: true,
+        codexAuth: true,
+        shimRunning: true,
+        servingVersion: 'test',
+        servingVersionMatches: true,
+      },
+      health: { models: modelIds.length, proxyRecovery: true },
+    };
+    const server = http.createServer((request, response) => {
+      if (request.url === '/v1/models') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ data: modelIds.map((id) => ({ id })) }));
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      process.env.CODEX_GATEWAY_PORT = String(port);
+      process.env.CODEX_GATEWAY_WORKER_PORT = String(port);
+      process.env.ANTHROPIC_BASE_URL = 'http://127.0.0.1:' + port;
+      require(${JSON.stringify(COMMANDS)}).commands.doctor({ readiness }).finally(() => server.close());
+    });
+  `;
+  return spawnGatewayProcessSync(process.execPath, ['-e', script], { encoding: 'utf8' });
+}
+
 async function spawnShim(t, proxyPort, extraEnv = {}) {
   const { port } = await startGateway(t, 'serve-shim', {
     CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
@@ -1285,7 +1321,7 @@ test('doctor describes project-local wiring as the default', () => {
       encoding: 'utf8',
     });
     assert.match(result.stdout, /wiring: effective none/);
-    assert.match(result.stdout, /Codex client resolver: claude-gpt-6-astra\[1m\] uses 1000000 \(gateway advertises 920000\)/);
+    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 920000 \| 1000000 \| 967000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
     assert.match(result.stdout, /default wiring target: this project's \.claude\/settings\.local\.json/);
     assert.match(result.stdout, /Claude opus pin: claude-opus-5\[1m\] \(default\)/);
@@ -1329,9 +1365,9 @@ test('doctor reports the 1M Codex resolver aliases and a lower explicit cap', ()
       isolatedOverrides,
       encoding: 'utf8',
     });
-    assert.match(result.stdout, /Codex auto-compact cap: 325000 \(settings project-local; wins over the Codex client resolver window\)/);
-    assert.match(result.stdout, /Codex client resolver: claude-gpt-5\.6-sol\[1m\] uses 1000000 \(gateway advertises 920000\)/);
-    assert.match(result.stdout, /Codex client resolver: claude-gpt-6-astra\[1m\] uses 1000000 \(gateway advertises 920000\)/);
+    assert.match(result.stdout, /model window policy: auto-compact cap 325000 \(settings project-local\)/);
+    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol\[1m\] \| 920012 \| 920000 \| 1000000 \| 292000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 920000 \| 1000000 \| 292000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
@@ -1358,11 +1394,36 @@ test('doctor warns when the configured Codex window resolves to the unknown-mode
       isolatedOverrides,
       encoding: 'utf8',
     });
-    assert.match(result.stdout, /Codex client resolver: claude-gpt-5\.6-sol uses 200000 \(gateway advertises 200000\) WARNING: 200000-token unknown-model default\./);
+    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol \| 920012 \| 200000 \| 200000 \| 167000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
   }
+});
+
+test('doctor policy table includes gateway and native model rows', () => {
+  const { modelWindowPolicyRows } = require(COMMANDS);
+  const rows = modelWindowPolicyRows();
+
+  assert.equal(rows.some((row) => row.backendId === 'grok-4.5' && row.pickerId === 'claude-grok-4.5[1m]'), true);
+  assert.equal(rows.some((row) => row.backendId === 'claude-opus-5' && row.sentry === 'none'), true);
+  assert.equal(rows.some((row) => row.backendId === 'claude-sonnet-5' && row.sentry === 'none'), true);
+  assert.equal(rows.some((row) => row.backendId === 'claude-fable-5-1' && row.sentry === 'none'), true);
+  assert.equal(rows.some((row) => row.backendId === 'claude-haiku-4-5' && row.sentry === 'none'), true);
+});
+
+test('doctor detects live shim ids that differ from the policy aliases', () => {
+  const { expectedShimModelIds } = require(COMMANDS);
+  const expectedIds = expectedShimModelIds();
+  const matching = doctorWithStubShim(expectedIds);
+  const staleIds = expectedIds.map((id) => id.replace('[1m]', ''));
+  const stale = doctorWithStubShim(staleIds);
+
+  assert.equal(matching.status, 0, matching.stderr);
+  assert.match(matching.stdout, /live shim model ids: PASS \(match the installed policy\)/);
+  assert.equal(stale.status, 1);
+  assert.ok(stale.stderr.includes(`missing: ${expectedIds.join(', ')}; extra: ${staleIds.join(', ')}`), stale.stderr);
+  assert.match(stale.stderr, /Restart the shim through the normal ensure\/setup path, then restart Claude Code sessions so the picker re-discovers\./);
 });
 
 test('env with no scope flag explains project wiring and writes nothing', () => {
