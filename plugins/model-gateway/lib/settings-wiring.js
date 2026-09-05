@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { writeFileAtomically } = require('./atomic-file.js');
 const { COMPAT_BASE_URL, DEFAULT_BASE_URL, GATEWAY_MODELS_CACHE, LEGACY_ENV_BLOCK, PIN_ALIASES, PROJECT_WIRING_REGISTRY_PATH, STATIC_ENV_BLOCK, STATE, WIRING_CONFIG_PATH } = require('./runtime.js');
 const { isGatewayModelId, ourBaseUrls } = require('./pins.js');
 
@@ -244,7 +245,7 @@ function cleanLegacyGatewayModelCache() {
     return { ...m, id: m.id.replace(/\[1m\]$/, '') };
   });
   try {
-    fs.writeFileSync(GATEWAY_MODELS_CACHE, JSON.stringify(cache, null, 2) + '\n');
+    writeFileAtomically(GATEWAY_MODELS_CACHE, JSON.stringify(cache, null, 2) + '\n', { mode: 0o600 });
   } catch { return false; }
   return true;
 }

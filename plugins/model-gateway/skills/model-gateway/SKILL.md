@@ -54,18 +54,18 @@ The confirmed command removes only Model Gateway-owned keys from those other pro
 `.claude/settings.local.json` files: its base URL, the three Claude alias pins, and static gateway
 flags whose values equal plugin defaults. It leaves unrelated settings alone, skips projects already
 agreeing, cannot change `process.env`, and needs a restart to affect a new session.
-Discovery needs Claude Code v2.1.129+ and fails silently if the shim answers slowly; `models` shows
-exactly what's advertised.
+Discovery needs Claude Code v2.1.129+; `models` shows exactly what the shim advertises. Claude Code
+only refetches gateway discovery when it has an API-key credential. OAuth subscriptions do not give it
+one, so Model Gateway writes Claude Code's discovery cache whenever its advertised list changes.
 
-That restart is ONLY to surface new model rows in `/model` — model discovery happens once at
-session start. Restoring or refreshing auth on an already-wired install needs no restart: the
-proxy is a separate process, so once `login` + `setup` re-authenticate it, the next request
-routes through cleanly. The shim supervisor also probes the proxy's `/v1/models` endpoint while
-it runs, restarting an unavailable proxy with single-flight bounded backoff. It leaves a healthy
-proxy alone and writes timestamped recovery evidence to `~/.claude/model-gateway/logs/guardian.log`.
-This matters when an agent is mid-orchestration (e.g. dispatching Codex
-subagents through the gateway) — do not tell the user to restart Claude Code just to bring auth
-back, or you kill the session that was about to use it.
+Restart remains necessary to surface new rows in `/model`: Claude Code reads the picker cache once at
+session start. `/reload-plugins` does not reload it. Restoring or refreshing auth on an already-wired
+install needs no restart: the proxy is a separate process, so once `login` + `setup` re-authenticate it,
+the next request routes through cleanly. The shim supervisor also probes the proxy's `/v1/models` endpoint
+while it runs, restarting an unavailable proxy with single-flight bounded backoff. It leaves a healthy proxy
+alone and writes timestamped recovery evidence to `~/.claude/model-gateway/logs/guardian.log`. This matters
+when an agent is mid-orchestration (e.g. dispatching Codex subagents through the gateway): do not tell the
+user to restart Claude Code just to bring auth back, or you kill the session that was about to use it.
 
 ## Selecting models
 
@@ -161,7 +161,9 @@ agree).
   Codex (a whole sidequest board of Codex-tier tickets, for one) stalls entirely.
 - **No "From gateway" rows in /model**: discovery is off (`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`
   missing), Claude Code < v2.1.129, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set (it
-  disables discovery), or the shim had no model cache yet; check `models`, restart the session.
+  disables discovery), or RC-compatibility is active. Claude Code only refetches discovery with an
+  API-key credential, so OAuth users rely on Model Gateway's cache write. Run `doctor` to check the
+  cache, then restart Claude Code after it updates; `/reload-plugins` does not reload picker rows.
 - **Thinking/reasoning**: the Codex backend doesn't return thinking blocks into Claude Code's
   UI; that's an upstream limitation, not a bug here.
 - **Permission mode flips to "accept edits on" during Codex sessions**: caused by GPT models

@@ -14,7 +14,7 @@ const { writeFileAtomically } = require('./atomic-file.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
 const { fetchUrl } = require('./process-supervision.js');
-const { wiredMode } = require('./settings-wiring.js');
+const { effectiveBaseUrl, wiredMode } = require('./settings-wiring.js');
 const { detectHostsCompat } = require('./remote-control.js');
 const { codexBaseFromId, ourBaseUrls } = require('./pins.js');
 const {
@@ -22,7 +22,7 @@ const {
   COMPAT_PORT, DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GROK_ENDPOINT, GROK_PREFIX, LIST_DISPATCH_MODEL,
   LOGS, PLUGIN_VERSION, PREFIX, PROXY_BIN, PROXY_PORT, REQUEST_ROUTE_LOG,
   REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT, SOCKET_PATH,
-  STATE, TRACE_HEADERS, mkdirs, resolveNewestInstalledCliPath,
+  STATE, syncGatewayDiscoveryCache, TRACE_HEADERS, mkdirs, resolveNewestInstalledCliPath,
 } = require('./runtime.js');
 
 function isAuthed() {
@@ -1133,6 +1133,11 @@ function runWorker() {
         ...advertisedGrokModels.map((model) => gatewayModel(model.id, 'grok', advertisedGrokModels)),
       ],
     };
+    try {
+      syncGatewayDiscoveryCache({ models: modelCache.data, baseUrl: effectiveBaseUrl().value || null });
+    } catch (error) {
+      console.error(`model-gateway: could not update discovery cache (${error.code || error.message})`);
+    }
   }
   refreshModels();
 

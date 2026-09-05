@@ -4,8 +4,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const grokBackend = require('./grok-backend.js');
+const { writeFileAtomically } = require('./atomic-file.js');
 
 const WIN = process.platform === 'win32';
+const CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const STATE = path.join(os.homedir(), '.claude', 'model-gateway');
 const LOGS = path.join(STATE, 'logs');
 const BIN_DIR = path.join(STATE, 'bin');
@@ -36,7 +38,7 @@ const TRACE_HEADERS = ['traceparent', 'tracestate', 'baggage'];
 const AUTH_HEADERS = ['authorization', 'proxy-authorization', 'x-api-key', 'cookie'];
 const COMPAT_HOST = 'api.anthropic.com';
 const COMPAT_PORT = Number(process.env.CODEX_GATEWAY_COMPAT_PORT || 80);
-const DEFAULT_BASE_URL = `http://127.0.0.1:${SHIM_PORT}`;
+const DEFAULT_BASE_URL = `http://127.0.0.1:${PUBLIC_SHIM_PORT}`;
 const SOCKET_PATH = process.env.CODEX_GATEWAY_SOCKET_PATH || (WIN
   ? '\\\\.\\pipe\\model-gateway'
   : path.join(STATE, 'gateway.sock'));
@@ -67,8 +69,46 @@ const PIN_PROBE_TIMEOUT_MS = Number(process.env.CODEX_GATEWAY_PIN_PROBE_TIMEOUT_
 const CLAUDE_BIN = process.env.CODEX_GATEWAY_CLAUDE_BIN || 'claude';
 const CLAUDE_BIN_IS_BATCH = WIN && /\.(?:cmd|bat)$/i.test(CLAUDE_BIN);
 const LEGACY_ENV_BLOCK = { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '950000' };
-const GATEWAY_MODELS_CACHE = path.join(os.homedir(), '.claude', 'cache', 'gateway-models.json');
+const GATEWAY_MODELS_CACHE = path.join(CLAUDE_CONFIG_DIR, 'cache', 'gateway-models.json');
 const CLI_PATH = path.join(__dirname, '..', 'bin', 'model-gateway.js');
+
+function gatewayDiscoveryModels(models) {
+  if (!Array.isArray(models)) return [];
+  return models.flatMap((model) => {
+    if (!model || typeof model.id !== 'string' || !/(claude|anthropic)/i.test(model.id)) return [];
+    const entry = { id: model.id };
+    if (typeof model.display_name === 'string') entry.display_name = model.display_name;
+    return [entry];
+  });
+}
+
+function readGatewayDiscoveryCache(cachePath = GATEWAY_MODELS_CACHE) {
+  try { return JSON.parse(fs.readFileSync(cachePath, 'utf8')); } catch { return null; }
+}
+
+function sameGatewayDiscoveryModels(left, right) {
+  if (!Array.isArray(left) || left.length !== right.length) return false;
+  return left.every((model, index) => (
+    model?.id === right[index].id && model?.display_name === right[index].display_name
+  ));
+}
+
+function syncGatewayDiscoveryCache({ models, baseUrl = DEFAULT_BASE_URL, cachePath = GATEWAY_MODELS_CACHE, now = Date.now } = {}) {
+  if (baseUrl === COMPAT_BASE_URL) return { state: 'skipped', reason: 'rc-compatibility', cachePath, modelCount: 0 };
+  if (baseUrl !== DEFAULT_BASE_URL) return { state: 'skipped', reason: 'gateway-not-wired', cachePath, modelCount: 0 };
+
+  const gatewayModels = gatewayDiscoveryModels(models);
+  const existing = readGatewayDiscoveryCache(cachePath);
+  if (existing && sameGatewayDiscoveryModels(existing.models, gatewayModels)) {
+    return { state: 'unchanged', cachePath, modelCount: gatewayModels.length };
+  }
+
+  const cache = { baseUrl, fetchedAt: now(), models: gatewayModels };
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  writeFileAtomically(cachePath, JSON.stringify(cache, null, 2) + '\n', { mode: 0o600 });
+  try { fs.chmodSync(cachePath, 0o600); } catch {}
+  return { state: 'wrote', cachePath, modelCount: gatewayModels.length };
+}
 
 function parseVersionDirectory(version) {
   const match = String(version).match(/^(\d+)\.(\d+)\.(\d+)$/);
@@ -133,6 +173,7 @@ module.exports = {
   PIN_CACHE_TTL_MS, PIN_OVERRIDE_PATH, PIN_PROBE_TIMEOUT_MS, PLUGIN_VERSION, PREFIX, PROXY_BIN,
   PROXY_PORT, PUBLIC_SHIM_PORT, REPO, REQUEST_ROUTE_LOG, REQUEST_ROUTE_LOG_PATH,
   PROJECT_WIRING_REGISTRY_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_FAILURE_PATH, SHIM_PORT, SOCKET_PATH, STATE,
-  STATIC_ENV_BLOCK, TRACE_HEADERS, WIRING_CONFIG_PATH, WIN, CLI_PATH, mkdirs,
-  canReplaceInstalledCliPath, resolveNewestInstalledCliPath,
+  STATIC_ENV_BLOCK, TRACE_HEADERS, WIRING_CONFIG_PATH, WIN, CLI_PATH, CLAUDE_CONFIG_DIR, mkdirs,
+  canReplaceInstalledCliPath, gatewayDiscoveryModels, readGatewayDiscoveryCache, resolveNewestInstalledCliPath,
+  sameGatewayDiscoveryModels, syncGatewayDiscoveryCache,
 };
