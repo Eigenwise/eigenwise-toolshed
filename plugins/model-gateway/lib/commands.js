@@ -41,7 +41,7 @@ const { writeFileAtomically } = require('./atomic-file.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
 const { canReplaceInstalledCliPath, CLI_PATH, SOCKET_PATH, resolveNewestInstalledCliPath } = require('./runtime.js');
-const { latestObservedLifecycleExit, lifecycleLogPath, recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
+const { latestHookWaitCutShort, latestObservedLifecycleExit, lifecycleLogPath, recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
 
 const WIN = process.platform === 'win32';
 const STATE = path.join(os.homedir(), '.claude', 'model-gateway');
@@ -56,6 +56,7 @@ const PROXY_SERVING_VERSION_PATH = path.join(STATE, 'proxy-serving-version.txt')
 const PUBLIC_SHIM_PORT = Number(process.env.CODEX_GATEWAY_PORT || 18764);
 const SHIM_PORT = Number(process.env.CODEX_GATEWAY_WORKER_PORT || PUBLIC_SHIM_PORT);
 const PROXY_PORT = Number(process.env.CODEX_GATEWAY_PROXY_PORT || 18765);
+const QUIET_STARTUP_WAIT_MS = 12000;
 // Advertised ids are `claude-` + the backend's own id (`claude-gpt-5.6-sol`,
 // `claude-grok-4.5`). The `claude-` part is not decoration: Claude Code's
 // gateway model discovery drops every id that doesn't start with claude/
@@ -614,6 +615,30 @@ function warnIfProxyOutdated() {
   } catch { /* fail-soft: a version check must never break the session */ }
 }
 
+function startupWaitMsFor(quiet) {
+  return quiet
+    ? QUIET_STARTUP_WAIT_MS
+    : Math.max(12000, (Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000) + 12000);
+}
+
+async function waitForStartupReadiness({
+  timeout,
+  proxyAnswers = proxyModelsAnswering,
+  shimReady = shimHealthy,
+  shimFailureExists = () => fs.existsSync(SHIM_FAILURE_PATH),
+  readShimFailure = () => fs.readFileSync(SHIM_FAILURE_PATH, 'utf8').trim(),
+  now = Date.now,
+  pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+} = {}) {
+  const deadline = now() + timeout;
+  while (now() < deadline) {
+    if ((await proxyAnswers()) && (await shimReady())) return { ok: true };
+    if (shimFailureExists()) return { ok: false, reason: readShimFailure(), timedOut: false };
+    await pause(300);
+  }
+  return { ok: false, timedOut: true };
+}
+
 async function startAll({ quiet = false, lifecycleOperation = null } = {}) {
   if (!fs.existsSync(PROXY_BIN)) return { ok: false, reason: 'proxy binary missing (run setup)' };
   let recoveryAttempted = false;
@@ -660,20 +685,20 @@ async function startAll({ quiet = false, lifecycleOperation = null } = {}) {
     spawnDetached('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], {});
     started.push('shim');
   }
-  const deadline = Date.now() + Math.max(12000, (Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000) + 12000);
-  while (Date.now() < deadline) {
-    if ((await proxyModelsAnswering()) && (await shimHealthy())) {
-      if (!quiet && started.length) log(`started: ${started.join(', ')}`);
-      await writeCatalog().catch(() => { /* advisory only; sidequest just won't see fresh models */ });
-      return finishRecovery({ ok: true, started });
-    }
-    if (fs.existsSync(SHIM_FAILURE_PATH)) {
-      const reason = fs.readFileSync(SHIM_FAILURE_PATH, 'utf8').trim();
-      return finishRecovery({ ok: false, reason });
-    }
-    await new Promise((r) => setTimeout(r, 300));
+  const startupWaitMs = startupWaitMsFor(quiet);
+  const readiness = await waitForStartupReadiness({ timeout: startupWaitMs });
+  if (readiness.ok) {
+    if (!quiet && started.length) log(`started: ${started.join(', ')}`);
+    await writeCatalog().catch(() => { /* advisory only; sidequest just won't see fresh models */ });
+    return finishRecovery({ ok: true, started });
   }
-  return finishRecovery({ ok: false, reason: `not healthy after 12s (check logs in ${LOGS})` });
+  if (!readiness.timedOut) return finishRecovery({ ok: false, reason: readiness.reason });
+  return finishRecovery({
+    ok: false,
+    reason: `not healthy after ${Math.ceil(startupWaitMs / 1000)}s (check logs in ${LOGS})`,
+    started,
+    waitCutShort: quiet,
+  });
 }
 
 async function fetchShimHealth() {
@@ -927,6 +952,10 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
     log(`lifecycle exit evidence: observed ${identity.component} PID ${identity.pid}; exit code ${exitCode}; signal ${observedExit.signal || 'none'}`);
   } else {
     log('lifecycle exit evidence: no observed exit record. A force-killed supervisor or OS termination may leave no final record.');
+  }
+  const hookWaitCutShort = latestHookWaitCutShort();
+  if (hookWaitCutShort) {
+    log(`lifecycle startup evidence: SessionStart started the supervisor and stopped waiting after ${QUIET_STARTUP_WAIT_MS / 1000}s; it kept starting in the background (${hookWaitCutShort.at}).`);
   }
   log('model fallback diagnostic: if dispatch and served models appear different, reproduce in a throwaway session with CLAUDE_CODE_NO_MODEL_FALLBACK=true; unset it afterwards. It turns silent fallback into a thrown error identifying the call site, while normal operation should keep graceful fallback for transient 5xx errors.');
   if (readiness.checks.shimRunning && !readiness.checks.servingVersionMatches) {
@@ -2000,13 +2029,20 @@ function sessionStartWiringNotice({ readiness, effectiveWiring, projectWirings }
   return `Claude Code is not wired to model-gateway, so your ChatGPT/Codex models are missing from /model. Run \`node "${CLI_PATH}" env --write-project\` to wire this project's .claude/settings.local.json, then restart Claude Code.`;
 }
 
+function loginSuccessMessage({ wired = isWired(), health = null } = {}) {
+  if (wired && health && !shimNeedsRestart(PLUGIN_VERSION, health)) {
+    return 'signed in; the proxy picks up the new credential on the next request';
+  }
+  return 'signed in; run setup once more to finish wiring Claude Code';
+}
+
 const commands = {
   setup: () => setup(),
-  login: () => {
+  login: async () => {
     if (!fs.existsSync(PROXY_BIN)) die('proxy binary missing, run setup first');
     const mode = flag('--device') ? 'device' : 'login';
     const result = spawnSync(PROXY_BIN, ['codex', 'auth', mode], { stdio: 'inherit', windowsHide: true });
-    if (result.status === 0) log('signed in; run setup once more to finish wiring Claude Code');
+    if (result.status === 0) log(loginSuccessMessage({ health: await fetchShimHealth() }));
     process.exitCode = result.status == null ? 1 : result.status;
   },
   start: async () => {
@@ -2039,6 +2075,17 @@ const commands = {
     await restartProxyIfOutdated({ quiet });
     const result = await startAll({ quiet, lifecycleOperation: 'ensure' });
     if (!result.ok) {
+      if (quiet && result.waitCutShort) {
+        if (result.started?.includes('shim')) {
+          recordGatewayLifecycle('ensure-hook-wait-cut-short', {
+            component: 'SessionStart',
+            pid: process.pid,
+            outcome: 'supervisor-started',
+          });
+        }
+        noticeForUser('model-gateway is still starting; retry the Codex model in a few seconds', { toStderr: true });
+        finish(0);
+      }
       noticeForUser(`model-gateway could not start: ${result.reason}. Run \`node "${CLI_PATH}" doctor\` to see which part is down.`, { toStderr: true });
       finish(1);
     }
@@ -2103,6 +2150,9 @@ module.exports = {
   migrateLegacyProjectSettings,
   effectiveBaseUrl,
   sessionStartWiringNotice,
+  loginSuccessMessage,
+  startupWaitMsFor,
+  waitForStartupReadiness,
   settingsPath,
   COMPAT_HOST,
   COMPAT_PORT,

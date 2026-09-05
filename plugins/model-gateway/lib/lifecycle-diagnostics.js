@@ -54,4 +54,8 @@ function latestObservedLifecycleExit() {
   return readLifecycleRecords().findLast((record) => record.event === 'supervisor-exit' || record.event === 'worker-exit' || record.event === 'proxy-exit') || null;
 }
 
-module.exports = { latestObservedLifecycleExit, lifecycleLogPath, readLifecycleRecords, recordGatewayLifecycle };
+function latestHookWaitCutShort() {
+  return readLifecycleRecords().findLast((record) => record.event === 'ensure-hook-wait-cut-short') || null;
+}
+
+module.exports = { latestHookWaitCutShort, latestObservedLifecycleExit, lifecycleLogPath, readLifecycleRecords, recordGatewayLifecycle };
