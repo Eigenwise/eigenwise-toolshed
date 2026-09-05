@@ -1,14 +1,16 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway } = require('./support.js');
 
 const RUNTIME = path.join(__dirname, '..', 'lib', 'runtime.js');
+const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const runtime = require(RUNTIME);
 
 function cachePath() {
@@ -28,13 +30,14 @@ function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
 }
 
-function health(port) {
+function freePort() {
+  const probe = net.createServer();
   return new Promise((resolve, reject) => {
-    const request = http.get({ host: '127.0.0.1', port, path: '/healthz' }, (response) => {
-      response.resume();
-      response.once('end', () => resolve(response.statusCode === 200));
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close((error) => error ? reject(error) : resolve(port));
     });
-    request.once('error', reject);
   });
 }
 
@@ -47,10 +50,12 @@ async function waitUntil(check, message) {
   throw new Error(message);
 }
 
-function runGatewayCommand(command, environment) {
+function runGatewayCommand(testContext, command, environment, isolatedOverrides) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [path.join(__dirname, '..', 'bin', 'model-gateway.js'), command], {
+    const child = spawnGatewayProcess(testContext, process.execPath, [CLI, command], {
+      cwd: environment.HOME,
       env: environment,
+      isolatedOverrides,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -59,6 +64,36 @@ function runGatewayCommand(command, environment) {
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.once('close', (status) => resolve({ status, stdout, stderr }));
   });
+}
+
+function installProxyStub(home) {
+  const proxyBinary = path.join(home, '.claude', 'model-gateway', 'bin', process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy');
+  fs.mkdirSync(path.dirname(proxyBinary), { recursive: true });
+  try {
+    fs.linkSync(process.execPath, proxyBinary);
+  } catch {
+    fs.copyFileSync(process.execPath, proxyBinary);
+  }
+  return proxyBinary;
+}
+
+function discoveryEnvironment(testContext, baseUrl, shimPort, workerPort, proxyPort) {
+  return gatewayTestEnvironment(testContext, {
+    ANTHROPIC_BASE_URL: baseUrl,
+    CODEX_GATEWAY_REQUEST_LOG: '0',
+  }, {
+    CODEX_GATEWAY_PORT: String(shimPort),
+    CODEX_GATEWAY_WORKER_PORT: String(workerPort),
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+  });
+}
+
+function discoveryProcessOverrides(shimPort, workerPort, proxyPort) {
+  return {
+    CODEX_GATEWAY_PORT: String(shimPort),
+    CODEX_GATEWAY_WORKER_PORT: String(workerPort),
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+  };
 }
 
 test('writes Claude Code discovery cache schema from the shim model list', () => {
@@ -126,20 +161,19 @@ test('does not touch the discovery cache in RC-compatibility mode', () => {
   assert.equal(fs.readFileSync(file, 'utf8'), 'keep-this-cache');
 });
 
-test('uses CLAUDE_CONFIG_DIR for the discovery cache', () => {
+test('uses CLAUDE_CONFIG_DIR for the discovery cache', (testContext) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-discovery-config-home-'));
   const configDirectory = path.join(home, 'custom-claude-config');
-  const result = spawnSync(process.execPath, ['-e', [
+  testContext.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = spawnGatewayProcessSync(process.execPath, ['-e', [
     `const runtime = require(${JSON.stringify(RUNTIME)});`,
     "runtime.syncGatewayDiscoveryCache({ models: [{ id: 'claude-gpt-6-astra', display_name: 'GPT-6 Astra (Codex)' }] });",
   ].join('')], {
     encoding: 'utf8',
-    env: {
-      ...process.env,
+    env: { HOME: home, USERPROFILE: home },
+    isolatedOverrides: {
       CLAUDE_CONFIG_DIR: configDirectory,
       CODEX_GATEWAY_PORT: '27321',
-      HOME: home,
-      USERPROFILE: home,
     },
   });
 
@@ -152,94 +186,73 @@ test('uses CLAUDE_CONFIG_DIR for the discovery cache', () => {
 });
 
 test('refreshModels writes the configured gateway discovery cache', async (testContext) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-discovery-shim-home-'));
   const proxy = http.createServer((request, response) => {
     if (request.url !== '/v1/models') return response.end();
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ data: [{ id: 'gpt-6-astra' }] }));
   });
   const proxyPort = await listen(proxy);
-  const shimProbe = http.createServer();
-  const shimPort = await listen(shimProbe);
-  await new Promise((resolve) => shimProbe.close(resolve));
-  const cache = path.join(home, '.claude', 'cache', 'gateway-models.json');
-  const child = spawn(process.execPath, [path.join(__dirname, '..', 'bin', 'model-gateway.js'), 'serve-shim'], {
-    env: {
-      ...process.env,
-      ANTHROPIC_BASE_URL: `http://127.0.0.1:${shimPort}`,
-      CODEX_GATEWAY_PORT: String(shimPort),
-      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-      CODEX_GATEWAY_REQUEST_LOG: '0',
-      HOME: home,
-      USERPROFILE: home,
-    },
-    stdio: 'ignore',
-  });
-  testContext.after(async () => {
-    if (child.exitCode == null) {
-      child.kill();
-      await new Promise((resolve) => child.once('exit', resolve));
-    }
-    await new Promise((resolve) => proxy.close(resolve));
-    fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  testContext.after(() => new Promise((resolve) => proxy.close(resolve)));
+  const shimPort = await freePort();
+  const workerPort = await freePort();
+  const baseUrl = `http://127.0.0.1:${shimPort}`;
+  const environment = discoveryEnvironment(testContext, baseUrl, shimPort, workerPort, proxyPort);
+  const cache = path.join(environment.CLAUDE_CONFIG_DIR, 'cache', 'gateway-models.json');
+
+  const shim = await startGateway(testContext, 'serve-shim', environment, {
+    isolatedOverrides: discoveryProcessOverrides(shimPort, workerPort, proxyPort),
   });
 
-  await waitUntil(() => health(shimPort), 'shim did not become healthy');
+  assert.equal(shim.port, shimPort);
   await waitUntil(() => fs.existsSync(cache), 'refreshModels did not write the discovery cache');
 
   const discoveryCache = JSON.parse(fs.readFileSync(cache, 'utf8'));
-  assert.equal(discoveryCache.baseUrl, `http://127.0.0.1:${shimPort}`);
+  assert.equal(discoveryCache.baseUrl, baseUrl);
   assert.deepEqual(discoveryCache.models, [
     { id: 'claude-gpt-6-astra', display_name: 'GPT-6-astra (Codex)' },
     { id: 'claude-grok-4.5', display_name: 'Grok 4.5' },
   ]);
 });
 
-test('ensure rewrites the discovery cache from the shim list', async (testContext) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-discovery-ensure-home-'));
+test('ensure writes the discovery cache before reporting missing ChatGPT auth', async (testContext) => {
   const proxy = http.createServer((request, response) => {
     if (request.url !== '/v1/models') return response.end();
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ data: [{ id: 'gpt-6-astra' }] }));
   });
   const proxyPort = await listen(proxy);
-  const shimProbe = http.createServer();
-  const shimPort = await listen(shimProbe);
-  await new Promise((resolve) => shimProbe.close(resolve));
+  testContext.after(() => new Promise((resolve) => proxy.close(resolve)));
+  const shimPort = await freePort();
+  const workerPort = await freePort();
   const baseUrl = `http://127.0.0.1:${shimPort}`;
-  const cache = path.join(home, '.claude', 'cache', 'gateway-models.json');
-  const proxyBinary = path.join(home, '.claude', 'model-gateway', 'bin', process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy');
-  fs.mkdirSync(path.dirname(proxyBinary), { recursive: true });
-  fs.writeFileSync(proxyBinary, 'placeholder');
-  const environment = {
-    ...process.env,
-    ANTHROPIC_BASE_URL: baseUrl,
-    CODEX_GATEWAY_PORT: String(shimPort),
-    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-    CODEX_GATEWAY_REQUEST_LOG: '0',
-    HOME: home,
-    USERPROFILE: home,
-  };
-  const shim = spawn(process.execPath, [path.join(__dirname, '..', 'bin', 'model-gateway.js'), 'serve-shim'], {
-    env: environment,
-    stdio: 'ignore',
-  });
-  testContext.after(async () => {
-    if (shim.exitCode == null) {
-      shim.kill();
-      await new Promise((resolve) => shim.once('exit', resolve));
-    }
-    await new Promise((resolve) => proxy.close(resolve));
-    fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  const environment = discoveryEnvironment(testContext, baseUrl, shimPort, workerPort, proxyPort);
+  const cache = path.join(environment.CLAUDE_CONFIG_DIR, 'cache', 'gateway-models.json');
+  installProxyStub(environment.HOME);
+  const shim = await startGateway(testContext, 'serve-shim', environment, {
+    isolatedOverrides: discoveryProcessOverrides(shimPort, workerPort, proxyPort),
   });
 
-  await waitUntil(() => health(shimPort), 'shim did not become healthy');
+  assert.equal(shim.port, shimPort);
   await waitUntil(() => fs.existsSync(cache), 'initial refresh did not write the discovery cache');
   fs.rmSync(cache);
 
-  const result = await runGatewayCommand('ensure', { ...environment, CODEX_GATEWAY_WORKER_PORT: '' });
+  const result = await runGatewayCommand(
+    testContext,
+    'ensure',
+    environment,
+    discoveryProcessOverrides(shimPort, workerPort, proxyPort),
+  );
 
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /ChatGPT sign-in is required/);
   await waitUntil(() => fs.existsSync(cache), 'ensure did not write the discovery cache');
-  assert.match(result.stdout, /discovery cache: wrote 2 models/);
+  assert.match(result.stdout, /discovery cache: (?:wrote 2 models|unchanged)/);
+
+  const stopped = await runGatewayCommand(
+    testContext,
+    'stop',
+    environment,
+    discoveryProcessOverrides(shimPort, workerPort, proxyPort),
+  );
+  assert.equal(stopped.status, 0, stopped.stderr);
 });
