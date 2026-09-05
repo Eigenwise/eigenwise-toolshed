@@ -155,6 +155,9 @@ agree).
 
 - **Every request fails after wiring**: shim is down and the hook couldn't start it. Run
   `doctor`, check logs. Worst case `env --remove` restores stock behavior instantly.
+- **Codex sessions drop while this plugin's suite runs**: this version scopes fixture cleanup to
+  the test gateway home, so the suite never touches the installed gateway. If it happens after
+  updating, run `doctor` and include its supervisor conflict line and lifecycle evidence.
 - **Codex models error, Claude models fine**: proxy or OpenAI side. Check `login` state
   (`doctor` shows auth), then proxy log. OpenAI gates non-Codex clients by request fingerprint;
   when they tighten it, requests die mid-stream until claude-code-proxy ships a fix, so

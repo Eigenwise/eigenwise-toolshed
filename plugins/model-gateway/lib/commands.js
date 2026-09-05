@@ -192,7 +192,7 @@ function readPluginVersion() {
 function mkdirs() { for (const d of [STATE, LOGS, BIN_DIR]) fs.mkdirSync(d, { recursive: true }); }
 
 const {
-  createProxyRecovery, fetchUrl, killPid, pidFile, portListening, postJson, processOwningPort, readPid, reapGatewayOrphans,
+  createProxyRecovery, fetchUrl, foreignPortOwner, killPid, pidFile, portListening, postJson, processOwningPort, readPid, reapGatewayOrphans,
   removePid, restartWorkerWithDrain, shimHealthy, spawnDetached, stopAll, stopProcess, stopRunningSupervisor,
   stopShimWithDrain, waitForShimExit,
 } = require('./process-supervision.js');
@@ -637,6 +637,11 @@ async function startAll({ quiet = false, lifecycleOperation = null } = {}) {
     });
   };
   mkdirs();
+  const foreignOwner = foreignPortOwner(PUBLIC_SHIM_PORT);
+  if (foreignOwner) {
+    return { ok: false, reason: `PID ${foreignOwner.pid} owns :${PUBLIC_SHIM_PORT} from a different install root (${foreignOwner.installRoot || 'unknown'})` };
+  }
+  const portOwner = processOwningPort(PUBLIC_SHIM_PORT);
   const started = [];
   const health = await fetchShimHealth();
   const staleSessionNotice = staleSessionReloadNotice(PLUGIN_VERSION, health);
@@ -646,7 +651,7 @@ async function startAll({ quiet = false, lifecycleOperation = null } = {}) {
     const stopped = await stopRunningSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
     if (!stopped.ok) return finishRecovery(stopped);
   } else if (health) {
-    reapGatewayOrphans(processOwningPort(PUBLIC_SHIM_PORT));
+    reapGatewayOrphans(portOwner);
   } else if (await portListening(PUBLIC_SHIM_PORT)) {
     beginRecovery();
     const stopped = await stopRunningSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
@@ -737,6 +742,8 @@ async function statusReport({ readiness = null } = {}) {
       : 'proxy recovery: unavailable until the shim supervisor is refreshed');
   }
   log(`shim (model router) on :${SHIM_PORT}: ${checks.shimRunning ? `running${checks.servingVersion ? ` (serving ${checks.servingVersion})` : ' (serving version unavailable)'}` : 'DOWN'}`);
+  const foreignOwner = foreignPortOwner(PUBLIC_SHIM_PORT);
+  if (foreignOwner) log(`shim supervisor conflict: PID ${foreignOwner.pid} owns :${PUBLIC_SHIM_PORT} from a different install root (${foreignOwner.installRoot || 'unknown'}).`);
   const compat = health?.compat;
   if (compat?.hostsDetected) {
     log(`RC-compatibility hosts entry: detected (${compat.hostsLine})`);
@@ -2014,7 +2021,15 @@ const commands = {
     if (!result.ok) die(result.reason);
     await statusReport();
   },
-  stop: () => { stopAll(); log('stopped'); },
+  stop: () => {
+    const result = stopAll();
+    if (!result.ok) {
+      console.error(`model-gateway: ${result.reason}.`);
+      process.exitCode = 1;
+      return;
+    }
+    log('stopped');
+  },
   ensure: async () => {
     const quiet = flag('--quiet');
     if (quiet) bufferedHookLines = [];
