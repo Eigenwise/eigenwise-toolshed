@@ -101,7 +101,8 @@ const AUTH_HEADERS = ['authorization', 'proxy-authorization', 'x-api-key', 'cook
 
 const {
   COMPAT_BASE_URL, COMPAT_HOST, COMPAT_PORT, DEFAULT_BASE_URL, HOSTS_BLOCK_END, HOSTS_BLOCK_LINE,
-  HOSTS_BLOCK_START, PIN_ALIASES, PIN_OVERRIDE_PATH, STATIC_ENV_BLOCK, codexClientModelId, codexContextWindow,
+  HOSTS_BLOCK_START, PIN_ALIASES, PIN_OVERRIDE_PATH, STATIC_ENV_BLOCK, CODEX_UNKNOWN_MODEL_WINDOW,
+  codexClientModelId, codexContextWindow,
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
@@ -935,8 +936,11 @@ function reportCodexClientWindows() {
   for (const id of DEFAULT_MODELS) {
     const gatewayWindow = codexContextWindow(id);
     const clientModelId = codexClientModelId(id);
-    const clientWindow = clientModelId.endsWith('[1m]') ? 1000000 : 200000;
-    log(`Codex client resolver: ${clientModelId} uses ${clientWindow} (gateway advertises ${gatewayWindow})`);
+    const clientWindow = clientModelId.endsWith('[1m]') ? 1000000 : CODEX_UNKNOWN_MODEL_WINDOW;
+    const warning = clientWindow === CODEX_UNKNOWN_MODEL_WINDOW
+      ? ' WARNING: 200000-token unknown-model default.'
+      : '';
+    log(`Codex client resolver: ${clientModelId} uses ${clientWindow} (gateway advertises ${gatewayWindow})${warning}`);
   }
 }
 

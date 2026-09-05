@@ -152,7 +152,7 @@ test('Codex model windows use configured base ids and share them with fast sibli
   };
 
   assert.deepEqual(gatewayModel('gpt-5.6-sol', 'codex', undefined, windows), {
-    id: 'claude-gpt-5.6-sol',
+    id: 'claude-gpt-5.6-sol[1m]',
     display_name: 'GPT-5.6-sol (Codex)',
     type: 'model',
     max_input_tokens: 810000,
@@ -191,7 +191,9 @@ test('CODEX_GATEWAY_CONTEXT_WINDOW overrides the advertised max_input_tokens', a
   await waitForShim(shimPort);
 
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
-  assert.equal(models.data.filter(({ id }) => id.startsWith('claude-gpt-')).every(({ max_input_tokens }) => max_input_tokens === 200000), true);
+  const codexModels = models.data.filter(({ id }) => id.startsWith('claude-gpt-'));
+  assert.equal(codexModels.every(({ max_input_tokens }) => max_input_tokens === 200000), true);
+  assert.equal(codexModels.every(({ id }) => !id.endsWith('[1m]')), true);
 });
 
 test('Codex fallback includes GPT-6 Astra when the proxy has no model route', async (t) => {
@@ -1220,6 +1222,32 @@ test('doctor reports the 1M Codex resolver aliases and a lower explicit cap', ()
     assert.match(result.stdout, /Codex client resolver: claude-gpt-5\.6-sol\[1m\] uses 1000000 \(gateway advertises 920000\)/);
     assert.match(result.stdout, /Codex client resolver: claude-gpt-6-astra\[1m\] uses 1000000 \(gateway advertises 920000\)/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('doctor warns when the configured Codex window resolves to the unknown-model default', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-unknown-window-home-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-unknown-window-project-'));
+  const { ANTHROPIC_BASE_URL, CLAUDE_CODE_MAX_CONTEXT_TOKENS, ...environment } = process.env;
+  const env = {
+    ...environment,
+    HOME: home,
+    USERPROFILE: home,
+    CODEX_GATEWAY_CONTEXT_WINDOW: '200000',
+    CODEX_GATEWAY_CLAUDE_BIN: missingClaude(home),
+  };
+  const isolatedOverrides = { CODEX_GATEWAY_PORT: '18764', CODEX_GATEWAY_WORKER_PORT: '18764', CODEX_GATEWAY_PROXY_PORT: '18765' };
+  try {
+    const result = spawnGatewayProcessSync(process.execPath, [CLI, 'doctor'], {
+      cwd,
+      env,
+      isolatedOverrides,
+      encoding: 'utf8',
+    });
+    assert.match(result.stdout, /Codex client resolver: claude-gpt-5\.6-sol uses 200000 \(gateway advertises 200000\) WARNING: 200000-token unknown-model default\./);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });

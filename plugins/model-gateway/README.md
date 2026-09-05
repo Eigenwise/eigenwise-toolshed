@@ -25,7 +25,7 @@ Claude uses the bundled skill to install and start the local gateway, check your
 
 Open `/model` and choose a row labeled `From gateway`.
 
-- `claude-gpt-*` uses your ChatGPT/Codex subscription. Current built-in rows are `claude-gpt-5.6-sol`, `claude-gpt-5.6-terra`, and `claude-gpt-5.6-luna`.
+- `claude-gpt-*[1m]` uses your ChatGPT/Codex subscription. Current built-in rows are `claude-gpt-5.6-sol[1m]`, `claude-gpt-5.6-terra[1m]`, `claude-gpt-5.6-luna[1m]`, and `claude-gpt-6-astra[1m]`. The suffix gives Claude Code its recognized 1M client window, while Model Gateway still advertises the verified 920k backend limit and removes the suffix before forwarding.
 - `claude-grok-*` uses your Grok subscription when the Grok CLI is installed and signed in. The current built-in Grok row is `claude-grok-4.5`.
 - Claude models keep using Anthropic normally.
 
@@ -57,7 +57,7 @@ Remote Control gives each project two choices.
 
 ### Use RC-compatibility mode
 
-RC-compatibility keeps Model Gateway routed for the project. It maps `api.anthropic.com` to loopback in the hosts file and needs the gateway shim to bind port 80. Gateway rows disappear from `/model`, but only in RC-compatibility mode, explicit gateway ids such as `/model claude-gpt-5.6-terra` still work.
+RC-compatibility keeps Model Gateway routed for the project. It maps `api.anthropic.com` to loopback in the hosts file and needs the gateway shim to bind port 80. Gateway rows disappear from `/model`, but only in RC-compatibility mode, explicit gateway ids such as `/model claude-gpt-5.6-terra[1m]` still work.
 
 Ask Claude to enable, disable, or diagnose RC-compatibility. Its read-only diagnosis checks port 80 before any hosts-file change. If another process already holds the port, RC-compatibility cannot start until that process releases it. Docker Desktop is a common holder and is named in the refusal.
 

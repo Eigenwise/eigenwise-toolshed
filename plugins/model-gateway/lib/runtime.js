@@ -45,6 +45,7 @@ const COMPAT_BASE_URL = `http://${COMPAT_HOST}`;
 const HOSTS_BLOCK_START = '# >>> model-gateway RC compatibility >>>';
 const HOSTS_BLOCK_END = '# <<< model-gateway RC compatibility <<<';
 const HOSTS_BLOCK_LINE = `127.0.0.1 ${COMPAT_HOST}`;
+const CODEX_UNKNOWN_MODEL_WINDOW = 200000;
 const CODEX_CONTEXT_WINDOWS = Object.freeze({
   default: 920000,
   'gpt-5.6-sol': 920000,
@@ -70,7 +71,7 @@ function codexClientModelId(id, contextWindows = CODEX_CONTEXT_WINDOWS) {
   const baseId = typeof id === 'string'
     ? id.replace(/\[1m\]$/, '').replace(/^claude-/, '')
     : '';
-  const suffix = codexContextWindow(id, contextWindows) >= contextWindows.default ? '[1m]' : '';
+  const suffix = codexContextWindow(id, contextWindows) > CODEX_UNKNOWN_MODEL_WINDOW ? '[1m]' : '';
   return `${PREFIX}${baseId}${suffix}`;
 }
 
@@ -156,7 +157,7 @@ function mkdirs() {
 
 module.exports = {
   ANTHROPIC_UPSTREAM, AUTH_HEADERS, BIN_DIR, CLAUDE_BIN, CLAUDE_BIN_IS_BATCH, CODEX_CONTEXT_WINDOWS,
-  CODEX_FAMILY_RE, CODEX_UPSTREAM_BLOCK_PATH, COMPAT_BASE_URL, COMPAT_HOST, COMPAT_PORT,
+  CODEX_FAMILY_RE, CODEX_UNKNOWN_MODEL_WINDOW, CODEX_UPSTREAM_BLOCK_PATH, COMPAT_BASE_URL, COMPAT_HOST, COMPAT_PORT,
   DEFAULT_BASE_URL,
   DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GATEWAY_MODELS_CACHE, GROK_ENDPOINT, GROK_PREFIX,
   HOSTS_BLOCK_END, HOSTS_BLOCK_LINE, HOSTS_BLOCK_START, KNOWN_GOOD_PINS, LEGACY_CODEX_PREFIX,
