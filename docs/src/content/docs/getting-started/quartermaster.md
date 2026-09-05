@@ -40,7 +40,7 @@ Or run the maintenance skills directly:
 
 > /quartermaster:toolshed-doctor
 
-The updater covers the Eigenwise Toolshed marketplace and Model Gateway when it is installed. Third-party plugins are left alone. The health check identifies stale installs and an `enabledPlugins` entry that has no matching install, because its hooks are not running. Claude can install the plugin at the reported project scope or remove the dead entry from the named settings file. Reload plugins or start a new session after an update so Claude sees the new version.
+The updater covers the Eigenwise Toolshed marketplace and Model Gateway when it is installed. Third-party plugins are left alone. The health check identifies stale installs and an `enabledPlugins` entry that has no matching install, because its hooks are not running. Claude can install the plugin at the reported project scope or remove the dead entry from the named settings file. It also names Model Gateway startup check failures precisely: a missing checker, a launch error, a three-second timeout, a nonzero doctor result, or empty output. A nonzero doctor result keeps one short diagnostic line rather than being reported as a missing checker. Reload plugins or start a new session after an update so Claude sees the new version.
 
 ## The in-the-moment loop
 

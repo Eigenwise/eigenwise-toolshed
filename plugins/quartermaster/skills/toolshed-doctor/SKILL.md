@@ -20,6 +20,8 @@ Then run the same read-only session health audit used at startup:
 node -e "const { audit } = require(process.env.CLAUDE_PLUGIN_ROOT + '/hooks/session-start-freshness.js'); const result = audit({ currentProject: process.cwd() }); console.log(JSON.stringify({ problems: result.problems, boards: result.mappings, staleProcesses: result.staleProcesses }, null, 2));"
 ```
 
+For Model Gateway, report the audit finding exactly. It distinguishes a missing checker, a spawn error, a three-second startup timeout, a nonzero doctor result, and empty output. A nonzero doctor result includes one bounded, secret-filtered diagnostic line and is never a missing-checker finding. The SessionStart warning uses the same cause in compact form. These checks only report observed health; do not call the gateway healthy because a later command happened to pass.
+
 An `enabledPlugins` entry only selects an installed plugin. If the audit says a plugin's hooks are not running,
 that settings file enables a plugin with no matching install row. Offer to install it at the reported project or
 user scope, or remove the dead `enabledPlugins` entry from the named file. Do not call that plugin configured or

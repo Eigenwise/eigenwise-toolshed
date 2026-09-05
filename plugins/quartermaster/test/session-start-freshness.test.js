@@ -15,8 +15,15 @@ const {
   emitWarning,
   finding,
   findingText,
+  gatewayFreshness,
   sourceFreshness,
+  userActionNotice,
 } = require('../hooks/session-start-freshness.js');
+const {
+  DOCTOR_TIMEOUT_MS,
+  MAX_DIAGNOSTIC_LENGTH,
+  localGatewayCheck,
+} = require('../lib/gateway-health.js');
 
 const now = Date.parse('2026-07-17T12:00:00Z');
 
@@ -568,17 +575,71 @@ test('a healthy doctor report produces no gateway problems from the audit', () =
   assert.doesNotMatch(findingText(result.problems).join('\n'), /model-gateway/);
 });
 
+test('preserves gateway checker failure causes with bounded diagnostics', () => {
+  const gateway = { installPath: 'C:/gateway' };
+  const healthyDoctor = [
+    'version: claude-code-proxy 0.1.33',
+    'codex auth: authenticated',
+    'proxy (claude-code-proxy) on :18765: answering /v1/models',
+    'shim (model router) on :18764: running (serving 0.48.6)',
+  ].join('\n');
+  const check = (result) => localGatewayCheck(gateway, {
+    existsSync: () => true,
+    runDoctor: () => result,
+  });
+
+  assert.deepEqual(localGatewayCheck(gateway, { existsSync: () => false }), {
+    available: false,
+    state: 'missing-checker',
+    diagnostic: 'checker script is missing',
+  });
+  assert.deepEqual(check({ error: { code: 'ETIMEDOUT' } }), {
+    available: false,
+    state: 'timeout',
+    diagnostic: `timed out after ${DOCTOR_TIMEOUT_MS / 1000}s`,
+  });
+  assert.deepEqual(check({ error: { code: 'ENOENT' } }), {
+    available: false,
+    state: 'spawn-error',
+    diagnostic: 'could not start (ENOENT)',
+  });
+  assert.deepEqual(check({ status: 0, stdout: '', stderr: '' }), {
+    available: false,
+    state: 'empty-output',
+    diagnostic: 'returned no diagnostic output',
+  });
+  assert.deepEqual(check({ status: 0, stdout: healthyDoctor }), {
+    available: true,
+    state: 'healthy',
+    proxyVersion: '0.1.33',
+    auth: true,
+    proxy: true,
+    shim: true,
+  });
+
+  const nonzero = check({ status: 1, stdout: `model-gateway: ERROR: proxy startup failed ${'x'.repeat(MAX_DIAGNOSTIC_LENGTH * 2)}` });
+  assert.equal(nonzero.available, false);
+  assert.equal(nonzero.state, 'doctor-exit');
+  assert.match(nonzero.diagnostic, /^exited with status 1: model-gateway: ERROR: proxy startup failed/);
+  assert.ok(nonzero.diagnostic.length <= `exited with status 1: `.length + MAX_DIAGNOSTIC_LENGTH);
+
+  const problems = gatewayFreshness([{ id: 'model-gateway@eigenwise-toolshed', ...gateway }], () => nonzero);
+  assert.match(findingText(problems).join('\n'), /model-gateway doctor exited with status 1: model-gateway: ERROR: proxy startup failed/);
+  assert.match(userActionNotice(problems), /model-gateway doctor exited with status 1: model-gateway: ERROR: proxy startup failed/);
+  assert.doesNotMatch(findingText(problems).join('\n'), /local health check is unavailable/);
+});
+
 test('the doctor phrasings the audit parses still exist in model-gateway', () => {
   const commandsSource = fs.readFileSync(
     path.join(__dirname, '..', '..', 'model-gateway', 'lib', 'commands.js'),
     'utf8',
   );
   assert.match(commandsSource, /proxy \(claude-code-proxy\)[^\n]*answering \/v1\/models/,
-    'model-gateway reworded the healthy proxy line; update parseGatewayDoctorOutput in session-start-freshness.js');
+    'model-gateway reworded the healthy proxy line; update parseGatewayDoctorOutput in lib/gateway-health.js');
   assert.match(commandsSource, /shim \(model router\)[^\n]*running/,
-    'model-gateway reworded the healthy shim line; update parseGatewayDoctorOutput in session-start-freshness.js');
+    'model-gateway reworded the healthy shim line; update parseGatewayDoctorOutput in lib/gateway-health.js');
   assert.match(commandsSource, /codex auth: \$\{[^}]*'authenticated'/,
-    'model-gateway reworded the codex auth line; update parseGatewayDoctorOutput in session-start-freshness.js');
+    'model-gateway reworded the codex auth line; update parseGatewayDoctorOutput in lib/gateway-health.js');
 });
 
 // A real directory, because the detector reads the filesystem: an injected existsSync would also decide the
