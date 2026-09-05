@@ -94,17 +94,16 @@ function commandIncludesFile(command, filePath) {
 function processRunsThisProxyBinary(process, proxyBinary = PROXY_BIN) {
   return Boolean(process && commandIncludesFile(process.command, proxyBinary));
 }
-function processIsOwnedByThisInstall(pid, { record = null, proxyBinary = PROXY_BIN } = {}) {
+function processIsOwnedByThisInstall(pid, { record = null } = {}) {
   const process = processInfoSync(pid);
   if (!process) return false;
   const installRoot = gatewayInstallRootFromCommand(process.command);
   const belongsToThisInstall = installRoot && normalizedPath(installRoot) === normalizedPath(gatewayInstallRoot());
-  const runsThisProxy = processRunsThisProxyBinary(process, proxyBinary);
   const recordMatches = !record || (record.pid === pid && (
     (record.command && record.command === process.command)
     || (record.startedAt && record.startedAt === process.startedAt)
   ));
-  return Boolean((belongsToThisInstall || runsThisProxy) && recordMatches);
+  return Boolean(belongsToThisInstall && recordMatches);
 }
 function recordedGatewayPid(name, { report = console.error } = {}) {
   const pid = readPid(name);
@@ -391,18 +390,17 @@ async function isDescendantOfAsync(pid, ancestorPid, { processTable = processTab
   const processes = await processTable();
   return processes ? isDescendantInProcessTable(pid, ancestorPid, processes) : undefined;
 }
-async function processIsOwnedByThisInstallAsync(pid, { record = null, proxyBinary = PROXY_BIN, inspectProcess, probeChildren = null } = {}) {
+async function processIsOwnedByThisInstallAsync(pid, { record = null, inspectProcess, probeChildren = null } = {}) {
   const readProcess = inspectProcess || ((processPid) => processInfoAsync(processPid, { probeChildren }));
   const process = await readProcess(pid);
   if (!process) return process === undefined ? undefined : false;
   const installRoot = gatewayInstallRootFromCommand(process.command);
   const belongsToThisInstall = installRoot && normalizedPath(installRoot) === normalizedPath(gatewayInstallRoot());
-  const runsThisProxy = processRunsThisProxyBinary(process, proxyBinary);
   const recordMatches = !record || (record.pid === pid && (
     (record.command && record.command === process.command)
     || (record.startedAt && record.startedAt === process.startedAt)
   ));
-  return Boolean((belongsToThisInstall || runsThisProxy) && recordMatches);
+  return Boolean(belongsToThisInstall && recordMatches);
 }
 async function killPidAsync(pid, { trusted = false, ...ownershipOptions } = {}) {
   const owned = trusted ? true : await processIsOwnedByThisInstallAsync(pid, ownershipOptions);
@@ -576,11 +574,14 @@ function createProxyRecovery({
   probeChildren = createProbeChildRegistry(),
   owner = (port) => processOwningPortAsync(port, { probeChildren }),
   inspectProcess = (pid) => processInfoAsync(pid, { probeChildren }),
+  processTable = () => processTableAsync({ probeChildren }),
   ownsProxy = async (pid) => {
-    const process = await inspectProcess(pid);
-    return process === undefined ? undefined : processRunsThisProxyBinary(process, proxyBinary);
+    const proxyProcess = await inspectProcess(pid);
+    if (!proxyProcess) return proxyProcess === undefined ? undefined : false;
+    if (!processRunsThisProxyBinary(proxyProcess, proxyBinary)) return false;
+    return isDescendantOfAsync(pid, process.pid, { processTable });
   },
-  stop = (pid) => killPidAsync(pid, { probeChildren }),
+  stop = (pid) => killPidAsync(pid, { trusted: true }),
   waitForRelease = waitForPortRelease,
   start = spawnSupervisedProxy,
   onStarted = () => {},

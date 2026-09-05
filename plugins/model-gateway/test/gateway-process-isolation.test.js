@@ -400,6 +400,63 @@ test('proxy recovery preserves a foreign configured-port proxy owner', async (t)
   assert.equal(processIsRunning(foreign.pid), true, 'foreign configured-port proxy survives recovery');
 });
 
+test('proxy recovery replaces a shared proxy binary descended from its supervisor', async () => {
+  const proxyPid = 903;
+  let modelsAvailable = false;
+  const stopped = [];
+  const sharedProxyBinary = path.join(os.tmpdir(), 'model-gateway-shared-proxy');
+  const processes = new Map([
+    [proxyPid, { command: `${sharedProxyBinary} serve --no-monitor`, parentPid: process.pid, pid: proxyPid }],
+  ]);
+  const recovery = createProxyRecovery({
+    proxyBinary: sharedProxyBinary,
+    probe: async () => modelsAvailable,
+    listening: async () => true,
+    owner: async () => proxyPid,
+    inspectProcess: async (pid) => processes.get(pid) || null,
+    processTable: async () => processes,
+    stop: async (pid) => stopped.push(pid),
+    waitForRelease: async () => true,
+    start: async () => { modelsAvailable = true; },
+    binaryExists: () => true,
+    now: () => 0,
+    report: () => {},
+  });
+
+  assert.equal((await recovery.recover()).state, 'recovered');
+  assert.deepEqual(stopped, [proxyPid]);
+});
+
+test('proxy recovery preserves a foreign install proxy using the shared binary', async () => {
+  const proxyPid = 903;
+  const foreignSupervisorPid = 902;
+  const sharedProxyBinary = path.join(os.tmpdir(), 'model-gateway-shared-proxy');
+  const foreignInstallScript = path.join(os.tmpdir(), 'foreign-install', 'model-gateway', 'bin', 'model-gateway.js');
+  const processes = new Map([
+    [proxyPid, { command: `${sharedProxyBinary} serve --no-monitor`, parentPid: foreignSupervisorPid, pid: proxyPid }],
+    [foreignSupervisorPid, { command: `${process.execPath} ${foreignInstallScript} serve-shim`, parentPid: null, pid: foreignSupervisorPid }],
+  ]);
+  let stopped = false;
+  let started = false;
+  const recovery = createProxyRecovery({
+    proxyBinary: sharedProxyBinary,
+    probe: async () => false,
+    listening: async () => true,
+    owner: async () => proxyPid,
+    inspectProcess: async (pid) => processes.get(pid) || null,
+    processTable: async () => processes,
+    stop: async () => { stopped = true; },
+    start: async () => { started = true; },
+    binaryExists: () => true,
+    now: () => 0,
+    report: () => {},
+  });
+
+  assert.equal((await recovery.recover()).state, 'foreign-port-owner');
+  assert.equal(stopped, false, 'recovery leaves a foreign shared-binary proxy running');
+  assert.equal(started, false, 'recovery does not replace a foreign shared-binary proxy');
+});
+
 test('ensure and stop discard a stale guardian PID without killing its reused process', async (t) => {
   const ensureHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-stale-ensure-'));
   const stopHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-stale-stop-'));
