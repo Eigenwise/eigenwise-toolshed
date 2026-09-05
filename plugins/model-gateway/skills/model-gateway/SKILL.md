@@ -62,9 +62,13 @@ session start. Restoring or refreshing auth on an already-wired install needs no
 proxy is a separate process, so once `login` + `setup` re-authenticate it, the next request
 routes through cleanly. The shim supervisor also probes the proxy's `/v1/models` endpoint while
 it runs, restarting an unavailable proxy with single-flight bounded backoff. It leaves a healthy
-proxy alone and writes timestamped recovery evidence to `~/.claude/model-gateway/logs/guardian.log`.
-This matters when an agent is mid-orchestration (e.g. dispatching Codex
-subagents through the gateway) — do not tell the user to restart Claude Code just to bring auth
+proxy alone. Recovery output remains in `~/.claude/model-gateway/logs/guardian.log`; bounded
+lifecycle records in `~/.claude/model-gateway/logs/lifecycle.jsonl` identify supervisor, worker,
+and proxy PIDs, orderly stop/restart requests, observed exits, and recovery outcomes. Use
+`doctor` to print the evidence path and the last observed exit. An OS termination or force-killed
+supervisor may leave no final record, so treat an absent exit record as absence of evidence, not a
+clean shutdown. This matters when an agent is mid-orchestration (e.g. dispatching Codex
+subagents through the gateway). Do not tell the user to restart Claude Code just to bring auth
 back, or you kill the session that was about to use it.
 
 ## Selecting models
@@ -142,7 +146,8 @@ reversible workaround:
 ... env --remove   # unwire Claude Code (do this BEFORE uninstalling the plugin)
 ```
 
-Logs live in `~/.claude/model-gateway/logs/`. Ports: shim 18764, proxy 18765 (override with
+Logs live in `~/.claude/model-gateway/logs/`. `guardian.log` has recovery output; `lifecycle.jsonl`
+has bounded process evidence that `doctor` summarizes. Ports: shim 18764, proxy 18765 (override with
 `CODEX_GATEWAY_PORT` / `CODEX_GATEWAY_PROXY_PORT`, but the env block and running processes must
 agree).
 
