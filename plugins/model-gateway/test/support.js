@@ -10,6 +10,20 @@ const path = require('node:path');
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const START_TIMEOUT_MS = 5000;
 
+function gatewayPidFile(home, name) {
+  return path.join(home, '.claude', 'model-gateway', `${name}.pid`);
+}
+
+function stopTrackedGatewayProcesses(home) {
+  for (const name of ['shim', 'guardian', 'proxy']) {
+    let pid;
+    try { pid = Number(fs.readFileSync(gatewayPidFile(home, name), 'utf8').trim()) || null; } catch { pid = null; }
+    if (!pid) continue;
+    if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    else { try { process.kill(pid, 'SIGTERM'); } catch {} }
+  }
+}
+
 function waitForHealth(port) {
   const deadline = Date.now() + START_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
@@ -140,6 +154,7 @@ function spawnGatewayProcessSync(command, args, options = {}) {
   try {
     return spawnSync(command, args, { ...spawnOptions, env: testEnvironment.environment });
   } finally {
+    stopTrackedGatewayProcesses(testEnvironment.home);
     if (testEnvironment.ownsHome) fs.rmSync(testEnvironment.home, { recursive: true, force: true });
   }
 }

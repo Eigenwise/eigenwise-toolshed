@@ -49,6 +49,9 @@ function removePid(name) { try { fs.rmSync(pidFile(name)); } catch {} }
 function readPid(name) {
   try { return Number(fs.readFileSync(pidFile(name), 'utf8').trim()) || null; } catch { return null; }
 }
+function recordedGatewayPids() {
+  return [...new Set(['guardian', 'shim', 'proxy'].map(readPid).filter(Boolean))];
+}
 function killPid(pid) {
   if (!pid) return;
   if (WIN) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
@@ -69,17 +72,11 @@ function recordStopRequest(operation, name) {
     signal: WIN ? 'TASKKILL' : 'SIGTERM',
   });
 }
-function stopAll() {
-  for (const name of ['shim', 'guardian', 'proxy']) recordStopRequest('stop', name);
-  stopProcess('shim');
-  stopProcess('guardian');
-  stopProcess('proxy');
-  for (const processInfo of gatewayShimProcesses()) killPid(processInfo.pid);
-}
 function commandResult(command, commandArgs) {
   return spawnSync(command, commandArgs, { encoding: 'utf8', windowsHide: true });
 }
 function processOwningPort(port) {
+  if (!port) return null;
   const result = WIN
     ? commandResult('netstat', ['-ano', '-p', 'tcp'])
     : commandResult('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']);
@@ -88,40 +85,83 @@ function processOwningPort(port) {
   const portPattern = new RegExp(`^\\s*TCP\\s+[^\\s]*:${port}\\s+[^\\s]+\\s+LISTENING\\s+(\\d+)\\s*$`, 'im');
   return Number(String(result.stdout).match(portPattern)?.[1]) || null;
 }
-function gatewayShimProcesses() {
+function processInfo(pid) {
+  if (!pid) return null;
   const result = WIN
-    ? commandResult('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress'])
-    : commandResult('ps', ['-eo', 'pid=,ppid=,args=']);
-  if (result.status !== 0) return [];
+    ? commandResult('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress`])
+    : commandResult('ps', ['-p', String(pid), '-o', 'pid=,ppid=,args=']);
+  if (result.status !== 0) return null;
   if (WIN) {
-    let entries;
-    try { entries = JSON.parse(String(result.stdout) || '[]'); } catch { return []; }
-    return (Array.isArray(entries) ? entries : [entries]).map((entry) => ({
-      command: entry.CommandLine || '', parentPid: Number(entry.ParentProcessId) || null, pid: Number(entry.ProcessId) || null,
-    })).filter((entry) => entry.pid && /model-gateway[\\/].*serve-(?:shim|worker)|model-gateway\.js"?\s+serve-(?:shim|worker)/i.test(entry.command));
+    try {
+      const entry = JSON.parse(String(result.stdout) || 'null');
+      if (!entry?.ProcessId) return null;
+      return { command: entry.CommandLine || '', parentPid: Number(entry.ParentProcessId) || null, pid: Number(entry.ProcessId) };
+    } catch { return null; }
   }
-  return String(result.stdout).split(/\r?\n/).map((line) => {
-    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);
-    return match && { pid: Number(match[1]), parentPid: Number(match[2]), command: match[3] };
-  }).filter((entry) => entry && /model-gateway[\\/].*serve-(?:shim|worker)|model-gateway\.js\s+serve-(?:shim|worker)/i.test(entry.command));
+  const match = String(result.stdout).match(/^\s*(\d+)\s+(\d+)\s+(.*)$/m);
+  return match ? { command: match[3], parentPid: Number(match[2]) || null, pid: Number(match[1]) } : null;
 }
-function reapGatewayOrphans(supervisorPid) {
-  const processes = gatewayShimProcesses();
-  const keep = new Set(supervisorPid ? [supervisorPid] : []);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const entry of processes) {
-      if (keep.has(entry.parentPid) && !keep.has(entry.pid)) {
-        keep.add(entry.pid);
-        changed = true;
-      }
-    }
+function gatewayInstallRoot() {
+  return path.resolve(path.join(CLI_PATH, '..', '..'));
+}
+function normalizedPath(filePath) {
+  return path.resolve(filePath).replace(/[\\/]+/g, '/').toLowerCase();
+}
+function gatewayInstallRootFromCommand(command) {
+  const match = String(command).match(/(?:^|\s)(?:"([^"]*model-gateway(?:[\\/]\d+\.\d+\.\d+)?[\\/]bin[\\/]model-gateway\.js)"|'([^']*model-gateway(?:[\\/]\d+\.\d+\.\d+)?[\\/]bin[\\/]model-gateway\.js)'|([^\s]*model-gateway(?:[\\/]\d+\.\d+\.\d+)?[\\/]bin[\\/]model-gateway\.js))/i);
+  const cliPath = match?.slice(1).find(Boolean);
+  return cliPath ? path.resolve(path.join(cliPath, '..', '..')) : null;
+}
+function processBelongsToThisInstall(pid) {
+  const process = processInfo(pid);
+  const installRoot = process && gatewayInstallRootFromCommand(process.command);
+  return Boolean(installRoot && normalizedPath(installRoot) === normalizedPath(gatewayInstallRoot()));
+}
+function foreignPortOwner(port = PUBLIC_SHIM_PORT) {
+  const pid = processOwningPort(port);
+  if (!pid || processBelongsToThisInstall(pid)) return null;
+  const process = processInfo(pid);
+  return { installRoot: process ? gatewayInstallRootFromCommand(process.command) : null, pid };
+}
+function foreignPortOwnerReason(owner, port = PUBLIC_SHIM_PORT) {
+  return `refusing to stop PID ${owner.pid} on :${port}; it belongs to a different install root (${owner.installRoot || 'unknown'}), not ${gatewayInstallRoot()}`;
+}
+function isDescendantOf(pid, ancestorPid) {
+  const visited = new Set();
+  let currentPid = pid;
+  while (currentPid && !visited.has(currentPid)) {
+    if (currentPid === ancestorPid) return true;
+    visited.add(currentPid);
+    currentPid = processInfo(currentPid)?.parentPid || null;
   }
-  for (const entry of processes) if (!keep.has(entry.pid)) killPid(entry.pid);
-  return processes.filter((entry) => !keep.has(entry.pid));
+  return false;
+}
+function reapGatewayOrphans(supervisorPid = null) {
+  const reaped = [];
+  for (const pid of recordedGatewayPids()) {
+    if (supervisorPid && isDescendantOf(pid, supervisorPid)) continue;
+    killPid(pid);
+    reaped.push(pid);
+  }
+  return reaped;
+}
+function stopAll({ report = console.log } = {}) {
+  const foreignOwner = foreignPortOwner();
+  if (foreignOwner) {
+    const reason = foreignPortOwnerReason(foreignOwner);
+    report(`model-gateway: ${reason}.`);
+    return { ok: false, reason };
+  }
+  for (const name of ['shim', 'guardian', 'proxy']) recordStopRequest('stop', name);
+  const portOwner = processOwningPort(PUBLIC_SHIM_PORT);
+  for (const name of ['shim', 'guardian', 'proxy']) stopProcess(name);
+  if (portOwner) killPid(portOwner);
+  reapGatewayOrphans(null);
+  return { ok: true };
 }
 async function stopRunningSupervisor({ quiet = false, operation = 'restart', report = console.log } = {}) {
+  const foreignOwner = foreignPortOwner();
+  if (foreignOwner) return { ok: false, reason: foreignPortOwnerReason(foreignOwner) };
   const pid = processOwningPort(PUBLIC_SHIM_PORT);
   const targetPid = pid || readPid('guardian');
   if (targetPid) {
@@ -347,7 +387,7 @@ function createProxyRecovery({
 }
 
 module.exports = {
-  createProxyRecovery, fetchUrl, gatewayShimProcesses, killPid, pidFile, portListening, postJson, processOwningPort,
+  createProxyRecovery, fetchUrl, foreignPortOwner, gatewayInstallRoot, killPid, pidFile, portListening, postJson, processOwningPort,
   proxyModelsAnswering, readPid, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
   spawnSupervisedProxy, stopAll, stopProcess, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit,
 };

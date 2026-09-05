@@ -156,6 +156,9 @@ agree).
 
 - **Every request fails after wiring**: a SessionStart hook can time out while it starts the shim. Claude Code cancels that hook, and a directly spawned supervisor can die with its process tree before it records an exit. Model Gateway launches the supervisor outside that tree and stops waiting before the hook budget, but if this is an older install or it still repeats, run
   `doctor`, check logs. Worst case `env --remove` restores stock behavior instantly.
+- **Codex sessions drop while this plugin's suite runs**: this version scopes fixture cleanup to
+  the test gateway home, so the suite never touches the installed gateway. If it happens after
+  updating, run `doctor` and include its supervisor conflict line and lifecycle evidence.
 - **Codex models error, Claude models fine**: proxy or OpenAI side. Check `login` state
   (`doctor` shows auth), then proxy log. OpenAI gates non-Codex clients by request fingerprint;
   when they tighten it, requests die mid-stream until claude-code-proxy ships a fix, so

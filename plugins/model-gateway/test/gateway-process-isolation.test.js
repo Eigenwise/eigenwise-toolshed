@@ -1,5 +1,6 @@
 'use strict';
 
+const { spawn } = require('node:child_process');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -42,6 +43,31 @@ function waitForExit(child) {
     if (child.exitCode !== null) return resolve();
     child.once('exit', resolve);
   });
+}
+
+function waitForReady(child) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('foreign gateway fixture did not become ready')), 5000);
+    child.stdout.once('data', () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+    child.once('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once('exit', (code, signal) => {
+      clearTimeout(timeout);
+      reject(new Error(`foreign gateway fixture exited before becoming ready (${code ?? signal})`));
+    });
+  });
+}
+
+function processIsRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch { return false; }
 }
 
 function outerSocketPath(home) {
@@ -204,4 +230,74 @@ test('sync gateway fixture cleanup removes helper-owned homes and preserves supp
   });
   assert.equal(suppliedResult.status, 0, suppliedResult.stderr);
   assert.equal(fs.existsSync(suppliedHome), true);
+});
+
+test('isolated ensure preserves a foreign serve-shim process and cleans its own supervisor', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-ensure-isolation-'));
+  const foreignScript = path.join(home, 'foreign-install', 'model-gateway', 'bin', 'model-gateway.js');
+  const proxyBinary = path.join(home, '.claude', 'model-gateway', 'bin', process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy');
+  fs.mkdirSync(path.dirname(foreignScript), { recursive: true });
+  fs.mkdirSync(path.dirname(proxyBinary), { recursive: true });
+  fs.writeFileSync(foreignScript, "process.stdout.write('ready\\n'); setInterval(() => {}, 1000);\n");
+  fs.copyFileSync(process.execPath, proxyBinary);
+  if (process.platform !== 'win32') fs.chmodSync(proxyBinary, 0o755);
+  const foreign = spawn(process.execPath, [foreignScript, 'serve-shim'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(async () => {
+    foreign.kill();
+    await waitForExit(foreign);
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  await waitForReady(foreign);
+
+  const result = spawnGatewayProcessSync(process.execPath, [CLI, 'ensure', '--quiet'], {
+    encoding: 'utf8',
+    env: { HOME: home, USERPROFILE: home },
+    isolatedOverrides: {
+      CODEX_GATEWAY_PORT: '0',
+      CODEX_GATEWAY_WORKER_PORT: '0',
+      CODEX_GATEWAY_PROXY_PORT: '0',
+    },
+  });
+
+  const guardianPid = Number(fs.readFileSync(path.join(home, '.claude', 'model-gateway', 'guardian.pid'), 'utf8'));
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(processIsRunning(foreign.pid), true, 'foreign serve-shim process survived isolated ensure');
+  assert.equal(processIsRunning(guardianPid), false, 'sync fixture cleanup stopped its supervisor');
+});
+
+test('foreign configured-port supervisor is preserved and reported', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-foreign-port-'));
+  const foreignScript = path.join(home, 'foreign-install', 'model-gateway', 'bin', 'model-gateway.js');
+  const reservation = net.createServer();
+  const port = await listen(reservation);
+  await new Promise((resolve) => reservation.close(resolve));
+  fs.mkdirSync(path.dirname(foreignScript), { recursive: true });
+  fs.writeFileSync(foreignScript, `const http = require('node:http'); const server = http.createServer((request, response) => response.end(JSON.stringify({ proxyRecovery: true }))); server.listen(${port}, '127.0.0.1', () => process.stdout.write('ready\\n'));\n`);
+  const foreign = spawn(process.execPath, [foreignScript, 'serve-shim'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(async () => {
+    foreign.kill();
+    await waitForExit(foreign);
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  await waitForReady(foreign);
+
+  const testOptions = {
+    encoding: 'utf8',
+    env: { HOME: home, USERPROFILE: home },
+    isolatedOverrides: {
+      CODEX_GATEWAY_PORT: String(port),
+      CODEX_GATEWAY_WORKER_PORT: String(port),
+      CODEX_GATEWAY_PROXY_PORT: '0',
+    },
+  };
+  const ensured = spawnGatewayProcessSync(process.execPath, [CLI, 'ensure', '--quiet'], testOptions);
+  const stopped = spawnGatewayProcessSync(process.execPath, [CLI, 'stop'], testOptions);
+  const diagnosed = spawnGatewayProcessSync(process.execPath, [CLI, 'doctor'], testOptions);
+  const foreignRoot = path.dirname(path.dirname(foreignScript));
+
+  assert.equal(ensured.status, 0, ensured.stderr);
+  assert.equal(stopped.status, 1, stopped.stderr);
+  assert.match(diagnosed.stdout, new RegExp(`shim supervisor conflict: PID ${foreign.pid} owns :${port} from a different install root`));
+  assert.match(diagnosed.stdout, new RegExp(foreignRoot.replace(/[\\\\/]/g, '[\\\\\\\\/]')));
+  assert.equal(processIsRunning(foreign.pid), true, 'foreign configured-port supervisor survived ensure and stop');
 });
