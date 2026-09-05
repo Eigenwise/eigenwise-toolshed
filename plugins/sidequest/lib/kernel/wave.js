@@ -86,7 +86,7 @@ function assembleWave(wave, candidates) {
       invalidated.push(invalidation(participant.ref, "participant_missing", `${participant.ref} is not ready for the opened wave.`));
       continue;
     }
-    if (!sameBaseline(wave.baseline, candidate.baseline)) {
+    if (!sameBaseline(wave.baseline, candidate.baseline) && !candidate.baselineCompatible) {
       invalidated.push(invalidation(candidate.ref, "baseline_moved", `${candidate.ref} was verified against ${candidate.baseline.revision.source}:${candidate.baseline.revision.value}, but this wave is pinned to ${wave.baseline.revision.source}:${wave.baseline.revision.value}.`));
       continue;
     }

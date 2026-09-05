@@ -1183,6 +1183,7 @@ const {
   fs,
   getTicket,
   integrationTarget,
+  integrationTargetCommit,
   listTickets,
   manualVerify,
   VERIFY_ORACLE_KINDS,
