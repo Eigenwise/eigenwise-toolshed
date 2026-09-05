@@ -7,6 +7,7 @@ const https = require('node:https');
 const net = require('node:net');
 const path = require('node:path');
 const { CLI_PATH, LOGS, PROXY_BIN, PROXY_PORT, PUBLIC_SHIM_PORT, resolveNewestInstalledCliPath, SHIM_PORT, STATE, WIN } = require('./runtime.js');
+const { recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
 
 function fetchUrl(url, { timeout = 15000, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
@@ -57,7 +58,19 @@ function stopProcess(name) {
   killPid(readPid(name));
   removePid(name);
 }
+function recordStopRequest(operation, name) {
+  const pid = readPid(name);
+  if (!pid) return;
+  const component = name === 'guardian' ? 'supervisor' : name;
+  recordGatewayLifecycle(`${operation}-${component}-stop-requested`, {
+    component: 'controller',
+    pid: process.pid,
+    child: { component, pid },
+    signal: WIN ? 'TASKKILL' : 'SIGTERM',
+  });
+}
 function stopAll() {
+  for (const name of ['shim', 'guardian', 'proxy']) recordStopRequest('stop', name);
   stopProcess('shim');
   stopProcess('guardian');
   stopProcess('proxy');
@@ -108,8 +121,17 @@ function reapGatewayOrphans(supervisorPid) {
   for (const entry of processes) if (!keep.has(entry.pid)) killPid(entry.pid);
   return processes.filter((entry) => !keep.has(entry.pid));
 }
-async function stopRunningSupervisor({ quiet = false, report = console.log } = {}) {
+async function stopRunningSupervisor({ quiet = false, operation = 'restart', report = console.log } = {}) {
   const pid = processOwningPort(PUBLIC_SHIM_PORT);
+  const targetPid = pid || readPid('guardian');
+  if (targetPid) {
+    recordGatewayLifecycle(`${operation}-supervisor-stop-requested`, {
+      component: 'controller',
+      pid: process.pid,
+      child: { component: 'supervisor', pid: targetPid },
+      signal: WIN ? 'TASKKILL' : 'SIGTERM',
+    });
+  }
   if (pid) killPid(pid);
   else stopProcess('guardian');
   if (!(await waitForShimExit(3000))) {
@@ -225,6 +247,7 @@ function createProxyRecovery({
   binaryExists = fs.existsSync,
   now = Date.now,
   report = console.error,
+  recordLifecycle = () => {},
   initialBackoffMs = 1000,
   maximumBackoffMs = 30000,
 } = {}) {
@@ -249,32 +272,64 @@ function createProxyRecovery({
       restartAttempt += 1;
       const backoffMs = Math.min(maximumBackoffMs, initialBackoffMs * (2 ** (restartAttempt - 1)));
       nextRestartAt = now() + backoffMs;
+      recordLifecycle('proxy-recovery-started', {
+        component: 'supervisor',
+        pid: process.pid,
+        outcome: `attempt-${restartAttempt}`,
+      });
       log(`proxy /v1/models unavailable; restart attempt ${restartAttempt}`);
       if (!binaryExists(proxyBinary)) {
         log(`proxy restart skipped because ${proxyBinary} is missing`);
+        recordLifecycle('proxy-recovery-finished', { component: 'supervisor', pid: process.pid, outcome: 'binary-missing' });
         return { ok: false, state: 'binary-missing', retryAt: nextRestartAt };
       }
       if (await listening(proxyPort)) {
         const pid = owner(proxyPort);
         if (!pid) {
           log(`proxy restart deferred because an unresponsive listener still owns :${proxyPort}`);
+          recordLifecycle('proxy-recovery-finished', { component: 'supervisor', pid: process.pid, outcome: 'port-owned' });
           return { ok: false, state: 'port-owned', retryAt: nextRestartAt };
         }
+        recordLifecycle('proxy-stop-requested', {
+          component: 'supervisor',
+          pid: process.pid,
+          child: { component: 'proxy', pid },
+          signal: WIN ? 'TASKKILL' : 'SIGTERM',
+        });
         stop(pid);
         if (!(await waitForRelease(proxyPort, { listening }))) {
           log(`proxy restart deferred because PID ${pid} did not release :${proxyPort}`);
+          recordLifecycle('proxy-recovery-finished', { component: 'supervisor', pid: process.pid, outcome: 'port-stuck' });
           return { ok: false, state: 'port-stuck', retryAt: nextRestartAt };
         }
       }
-      start({ command: proxyBinary, port: proxyPort });
-      onStarted();
+      const proxy = start({ command: proxyBinary, port: proxyPort });
+      onStarted(proxy?.pid);
+      if (proxy?.pid) {
+        recordLifecycle('proxy-started', {
+          component: 'supervisor',
+          pid: process.pid,
+          child: { component: 'proxy', pid: proxy.pid },
+        });
+        if (typeof proxy.once === 'function') {
+          proxy.once('exit', (exitCode, signal) => recordLifecycle('proxy-exit', {
+            component: 'supervisor',
+            pid: process.pid,
+            child: { component: 'proxy', pid: proxy.pid },
+            exitCode,
+            signal,
+          }));
+        }
+      }
       if (await probe()) {
         restartAttempt = 0;
         nextRestartAt = 0;
         log('proxy recovered and /v1/models is ready');
+        recordLifecycle('proxy-recovery-finished', { component: 'supervisor', pid: process.pid, outcome: 'recovered' });
         return { ok: true, state: 'recovered' };
       }
       log('proxy restart started; /v1/models is not ready yet');
+      recordLifecycle('proxy-recovery-finished', { component: 'supervisor', pid: process.pid, outcome: 'starting' });
       return { ok: false, state: 'starting', retryAt: nextRestartAt };
     })();
     try { return await recovery; } finally { recovery = null; }

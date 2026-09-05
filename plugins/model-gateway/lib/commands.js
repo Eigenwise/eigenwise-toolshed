@@ -41,6 +41,7 @@ const { writeFileAtomically } = require('./atomic-file.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
 const { canReplaceInstalledCliPath, CLI_PATH, SOCKET_PATH, resolveNewestInstalledCliPath } = require('./runtime.js');
+const { latestObservedLifecycleExit, lifecycleLogPath, recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
 
 const WIN = process.platform === 'win32';
 const STATE = path.join(os.homedir(), '.claude', 'model-gateway');
@@ -518,7 +519,7 @@ async function setup() {
   } else {
     log('model-gateway: proxy unchanged; keeping its authenticated process running.');
   }
-  const supervisorRestart = await restartShimIfOutdated();
+  const supervisorRestart = await restartShimIfOutdated({ operation: 'setup' });
   if (supervisorRestart && !supervisorRestart.ok) die(`could not restart shim supervisor: ${supervisorRestart.reason}`);
   if (!supervisorRestart) {
     const restarting = await restartWorkerWithDrain();
@@ -530,7 +531,7 @@ async function setup() {
   log(`installed: ${(v.stdout || v.stderr || '').trim() || PROXY_BIN}`);
 
   // one-shot: start everything, and finish the wiring when auth already works
-  const r = await startAll();
+  const r = await startAll({ lifecycleOperation: 'setup' });
   if (!r.ok) die(r.reason);
   clearUpstreamBlocked();
   if (!isAuthed()) {
@@ -613,25 +614,48 @@ function warnIfProxyOutdated() {
   } catch { /* fail-soft: a version check must never break the session */ }
 }
 
-async function startAll({ quiet = false } = {}) {
+async function startAll({ quiet = false, lifecycleOperation = null } = {}) {
   if (!fs.existsSync(PROXY_BIN)) return { ok: false, reason: 'proxy binary missing (run setup)' };
+  let recoveryAttempted = false;
+  const finishRecovery = (result) => {
+    if (recoveryAttempted && lifecycleOperation) {
+      recordGatewayLifecycle(`${lifecycleOperation}-recovery-finished`, {
+        component: lifecycleOperation,
+        pid: process.pid,
+        outcome: result.ok ? 'ready' : 'failed',
+      });
+    }
+    return { ...result, recoveryAttempted };
+  };
+  const beginRecovery = () => {
+    if (recoveryAttempted || !lifecycleOperation) return;
+    recoveryAttempted = true;
+    recordGatewayLifecycle(`${lifecycleOperation}-recovery-started`, {
+      component: lifecycleOperation,
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+    });
+  };
   mkdirs();
   const started = [];
   const health = await fetchShimHealth();
   const staleSessionNotice = staleSessionReloadNotice(PLUGIN_VERSION, health);
   if (staleSessionNotice) noticeForUser(staleSessionNotice, { toStderr: true });
   if (health && shimNeedsRestart(PLUGIN_VERSION, health)) {
-    const stopped = await stopRunningSupervisor({ quiet });
-    if (!stopped.ok) return stopped;
+    beginRecovery();
+    const stopped = await stopRunningSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
+    if (!stopped.ok) return finishRecovery(stopped);
   } else if (health) {
     reapGatewayOrphans(processOwningPort(PUBLIC_SHIM_PORT));
   } else if (await portListening(PUBLIC_SHIM_PORT)) {
-    const stopped = await stopRunningSupervisor({ quiet });
-    if (!stopped.ok) return stopped;
+    beginRecovery();
+    const stopped = await stopRunningSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
+    if (!stopped.ok) return finishRecovery(stopped);
   } else {
     reapGatewayOrphans(null);
   }
   if (!(await shimHealthy())) {
+    beginRecovery();
     try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
     spawnDetached('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], {});
     started.push('shim');
@@ -641,15 +665,15 @@ async function startAll({ quiet = false } = {}) {
     if ((await proxyModelsAnswering()) && (await shimHealthy())) {
       if (!quiet && started.length) log(`started: ${started.join(', ')}`);
       await writeCatalog().catch(() => { /* advisory only; sidequest just won't see fresh models */ });
-      return { ok: true, started };
+      return finishRecovery({ ok: true, started });
     }
     if (fs.existsSync(SHIM_FAILURE_PATH)) {
       const reason = fs.readFileSync(SHIM_FAILURE_PATH, 'utf8').trim();
-      return { ok: false, reason };
+      return finishRecovery({ ok: false, reason });
     }
     await new Promise((r) => setTimeout(r, 300));
   }
-  return { ok: false, reason: `not healthy after 12s (check logs in ${LOGS})` };
+  return finishRecovery({ ok: false, reason: `not healthy after 12s (check logs in ${LOGS})` });
 }
 
 async function fetchShimHealth() {
@@ -670,16 +694,17 @@ function shimNeedsRestart(installedVersion, health) {
   return !running || !installed || semverLt(running, installed);
 }
 
-async function restartSupervisorForVersionMismatch({ quiet = false, health = null, fetchHealth = fetchShimHealth, start = startAll } = {}) {
+async function restartSupervisorForVersionMismatch({ quiet = false, operation = 'restart', health = null, fetchHealth = fetchShimHealth, start = startAll } = {}) {
   const currentHealth = health || await fetchHealth().catch(() => null);
   if (currentHealth && !shimNeedsRestart(PLUGIN_VERSION, currentHealth)) return null;
-  const stopped = await stopRunningSupervisor({ quiet });
+  const stopped = await stopRunningSupervisor({ quiet, operation });
   if (!stopped.ok) return stopped;
-  return start({ quiet });
+  return start({ quiet, lifecycleOperation: operation });
 }
 
 async function restartShimIfOutdated({
   quiet = false,
+  operation = 'restart',
   fetchHealth = fetchShimHealth,
   restartWorker = restartWorkerWithDrain,
   restartSupervisor = restartSupervisorForVersionMismatch,
@@ -688,7 +713,7 @@ async function restartShimIfOutdated({
   let health;
   try { health = await fetchHealth(); } catch { return null; }
   if (!shimNeedsRestart(PLUGIN_VERSION, health)) return null;
-  return restartSupervisor({ quiet, health, restartWorker, start });
+  return restartSupervisor({ quiet, operation, health, restartWorker, start });
 }
 
 // What mode the running shim actually achieved this session: compat only if
@@ -894,6 +919,15 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
   const status = await statusReport({ readiness });
   const servingVersion = readiness.checks.servingVersion;
   log(`serving shim version: ${servingVersion || 'unavailable'}`);
+  log(`lifecycle evidence: ${lifecycleLogPath()}`);
+  const observedExit = latestObservedLifecycleExit();
+  if (observedExit) {
+    const identity = observedExit.child || { component: observedExit.component, pid: observedExit.pid };
+    const exitCode = Object.hasOwn(observedExit, 'exitCode') ? observedExit.exitCode : 'unavailable';
+    log(`lifecycle exit evidence: observed ${identity.component} PID ${identity.pid}; exit code ${exitCode}; signal ${observedExit.signal || 'none'}`);
+  } else {
+    log('lifecycle exit evidence: no observed exit record. A force-killed supervisor or OS termination may leave no final record.');
+  }
   log('model fallback diagnostic: if dispatch and served models appear different, reproduce in a throwaway session with CLAUDE_CODE_NO_MODEL_FALLBACK=true; unset it afterwards. It turns silent fallback into a thrown error identifying the call site, while normal operation should keep graceful fallback for transient 5xx errors.');
   if (readiness.checks.shimRunning && !readiness.checks.servingVersionMatches) {
     log(`model-gateway: VERSION MISMATCH: CLI ${PLUGIN_VERSION}, serving shim ${servingVersion}. Run node "${resolveNewestInstalledCliPath()}" ensure to replace the stale supervisor.`);
@@ -1680,6 +1714,29 @@ function requestHeader(req, name) {
 const { runWorker } = require('./request-worker.js');
 function runShim() {
   mkdirs();
+  const supervisorStartedAt = new Date().toISOString();
+  recordGatewayLifecycle('supervisor-started', {
+    component: 'supervisor',
+    pid: process.pid,
+    startedAt: supervisorStartedAt,
+  });
+  process.once('exit', (exitCode) => recordGatewayLifecycle('supervisor-exit', {
+    component: 'supervisor',
+    pid: process.pid,
+    startedAt: supervisorStartedAt,
+    exitCode,
+  }));
+  process.once('uncaughtExceptionMonitor', (error, origin) => {
+    const errorType = typeof error?.name === 'string' ? error.name : 'Error';
+    recordGatewayLifecycle('supervisor-uncaught-failure', {
+      component: 'supervisor',
+      pid: process.pid,
+      startedAt: supervisorStartedAt,
+      outcome: origin,
+      errorType,
+    });
+    try { fs.writeFileSync(SHIM_FAILURE_PATH, `model-gateway: shim supervisor stopped after an uncaught ${errorType}`); } catch {}
+  });
   const configuredWorkerPort = Number(process.env.CODEX_GATEWAY_WORKER_PORT || 0);
   const workerPortReportTimeoutMs = 5000;
   let workerPort = configuredWorkerPort;
@@ -1692,7 +1749,10 @@ function runShim() {
   let restarting = false;
   let stopped = false;
   const recoveryIntervalMs = Math.max(1000, Number(process.env.CODEX_GATEWAY_PROXY_RECOVERY_INTERVAL_MS) || 5000);
-  const proxyRecovery = createProxyRecovery({ onStarted: () => writeProxyServingVersion(currentProxyVersion()) });
+  const proxyRecovery = createProxyRecovery({
+    onStarted: () => writeProxyServingVersion(currentProxyVersion()),
+    recordLifecycle: recordGatewayLifecycle,
+  });
   let proxyRecoveryTimer = null;
 
   function clearWorkerPortReportTimeout() {
@@ -1723,6 +1783,12 @@ function runShim() {
     });
     fs.closeSync(out);
     worker = child;
+    recordGatewayLifecycle('worker-started', {
+      component: 'supervisor',
+      pid: process.pid,
+      startedAt: supervisorStartedAt,
+      child: { component: 'worker', pid: child.pid },
+    });
     if (!configuredWorkerPort) {
       child.once('message', (message) => {
         const reportedPort = message?.type === 'listening' ? message.port : null;
@@ -1733,7 +1799,15 @@ function runShim() {
     }
     fs.writeFileSync(pidFile('shim'), String(child.pid));
     child.unref();
-    child.once('exit', () => {
+    child.once('exit', (exitCode, signal) => {
+      recordGatewayLifecycle('worker-exit', {
+        component: 'supervisor',
+        pid: process.pid,
+        startedAt: supervisorStartedAt,
+        child: { component: 'worker', pid: child.pid },
+        exitCode,
+        signal,
+      });
       if (worker === child) worker = null;
       removePid('shim');
       if (!stopped) setTimeout(startWorker, 50);
@@ -1790,8 +1864,14 @@ function runShim() {
 
   async function restartWorker(script) {
     if (script && path.isAbsolute(script) && canReplaceInstalledCliPath(workerScript, script)) workerScript = script;
-    restarting = true;
     const current = worker;
+    recordGatewayLifecycle('restart-worker-requested', {
+      component: 'supervisor',
+      pid: process.pid,
+      ...(current?.pid ? { child: { component: 'worker', pid: current.pid } } : {}),
+      outcome: current ? 'drain' : 'start',
+    });
+    restarting = true;
     if (!current) {
       restarting = false;
       startWorker();
@@ -1801,6 +1881,13 @@ function runShim() {
     setTimeout(() => {
       if (worker === current && current.exitCode == null) {
         console.error(`model-gateway: shim drain timed out after ${Math.ceil(timeout / 1000)}s; force-stopping it.`);
+        recordGatewayLifecycle('restart-worker-stop-requested', {
+          component: 'supervisor',
+          pid: process.pid,
+          child: { component: 'worker', pid: current.pid },
+          signal: WIN ? 'TASKKILL' : 'SIGTERM',
+          outcome: 'drain-timeout',
+        });
         killPid(current.pid);
       }
     }, timeout);
@@ -1875,6 +1962,20 @@ function runShim() {
   }
   process.once('SIGTERM', () => {
     stopped = true;
+    recordGatewayLifecycle('supervisor-stop-requested', {
+      component: 'supervisor',
+      pid: process.pid,
+      startedAt: supervisorStartedAt,
+      signal: 'SIGTERM',
+    });
+    if (worker?.pid) {
+      recordGatewayLifecycle('worker-stop-requested', {
+        component: 'supervisor',
+        pid: process.pid,
+        child: { component: 'worker', pid: worker.pid },
+        signal: WIN ? 'TASKKILL' : 'SIGTERM',
+      });
+    }
     clearInterval(proxyRecoveryTimer);
     killPid(worker?.pid);
     compatServer?.close();
@@ -1909,7 +2010,7 @@ const commands = {
     process.exitCode = result.status == null ? 1 : result.status;
   },
   start: async () => {
-    const result = await startAll();
+    const result = await startAll({ lifecycleOperation: 'start' });
     if (!result.ok) die(result.reason);
     await statusReport();
   },
@@ -1936,7 +2037,7 @@ const commands = {
       finish(0);
     }
     await restartProxyIfOutdated({ quiet });
-    const result = await startAll({ quiet });
+    const result = await startAll({ quiet, lifecycleOperation: 'ensure' });
     if (!result.ok) {
       noticeForUser(`model-gateway could not start: ${result.reason}. Run \`node "${CLI_PATH}" doctor\` to see which part is down.`, { toStderr: true });
       finish(1);

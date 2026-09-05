@@ -84,6 +84,30 @@ async function waitForWorkerVersion(port, version) {
   throw new Error(`worker did not report version ${version}`);
 }
 
+function lifecycleRecords(home) {
+  const recordPath = path.join(home, '.claude', 'model-gateway', 'logs', 'lifecycle.jsonl');
+  try {
+    return fs.readFileSync(recordPath, 'utf8').split(/\r?\n/).flatMap((line) => line ? [JSON.parse(line)] : []);
+  } catch { return []; }
+}
+
+async function waitForLifecycleRecord(home, predicate) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const record = lifecycleRecords(home).find(predicate);
+    if (record) return record;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('lifecycle record was not written');
+}
+
+function waitForChildExit(child) {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null) return resolve(child.exitCode);
+    child.once('exit', resolve);
+  });
+}
+
 test('restart with drain submits the newest installed CLI path', async (t) => {
   const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-worker-cache-'));
   t.after(() => fs.rmSync(cacheRoot, { recursive: true, force: true }));
@@ -202,12 +226,16 @@ test('supervisor keeps its listener available while a hard-killed worker restart
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
 
-  const { port: shimPort } = await startGateway(t, 'serve-shim', {
+  const { child: supervisor, port: shimPort } = await startGateway(t, 'serve-shim', {
     HOME: home,
     USERPROFILE: home,
     CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
     CODEX_GATEWAY_REQUEST_LOG: '0',
   });
+  const supervisorStarted = await waitForLifecycleRecord(home, (record) => record.event === 'supervisor-started');
+  assert.equal(supervisorStarted.component, 'supervisor');
+  assert.equal(supervisorStarted.pid, supervisor.pid);
+  assert.match(supervisorStarted.startedAt, /^\d{4}-\d{2}-\d{2}T/);
 
   const requestPromise = request(shimPort, 'POST', '/v1/messages', {
     model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1,
@@ -216,6 +244,11 @@ test('supervisor keeps its listener available while a hard-killed worker restart
   const pidFile = path.join(home, '.claude', 'model-gateway', 'shim.pid');
   const oldPid = Number(fs.readFileSync(pidFile, 'utf8'));
   process.kill(oldPid, 'SIGKILL');
+  const workerExit = await waitForLifecycleRecord(home, (record) => record.event === 'worker-exit' && record.child?.pid === oldPid);
+  assert.equal(workerExit.component, 'supervisor');
+  assert.equal(workerExit.child.component, 'worker');
+  assert.equal(Object.hasOwn(workerExit, 'exitCode'), true);
+  assert.equal(workerExit.exitCode !== null || workerExit.signal != null, true);
 
   const refused = [];
   const deadline = Date.now() + 5000;
@@ -228,6 +261,39 @@ test('supervisor keeps its listener available while a hard-killed worker restart
   const completed = await requestPromise;
   assert.equal(completed.status, 200);
   assert.notEqual(Number(fs.readFileSync(pidFile, 'utf8')), oldPid);
+  assert.equal(lifecycleRecords(home).length <= 200, true);
+  assert.equal(lifecycleRecords(home).some((record) => record.event.includes('request')), false);
+});
+
+test('supervisor records an orderly signal before it exits', async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Windows process signals terminate child processes before JavaScript can record a final supervisor event');
+    return;
+  }
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-supervisor-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const proxy = http.createServer((req, res) => {
+    if (req.url === '/v1/models') return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-terra' }] }));
+    res.end(JSON.stringify({ type: 'message', model: 'gpt-5.6-terra', content: [] }));
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const { child: supervisor } = await startGateway(t, 'serve-shim', {
+    HOME: home,
+    USERPROFILE: home,
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    CODEX_GATEWAY_REQUEST_LOG: '0',
+  });
+
+  supervisor.kill('SIGTERM');
+  await waitForChildExit(supervisor);
+  const orderlyStop = await waitForLifecycleRecord(home, (record) => record.event === 'supervisor-stop-requested');
+  const supervisorExit = await waitForLifecycleRecord(home, (record) => record.event === 'supervisor-exit');
+  assert.equal(orderlyStop.component, 'supervisor');
+  assert.equal(orderlyStop.pid, supervisor.pid);
+  assert.equal(orderlyStop.signal, 'SIGTERM');
+  assert.equal(supervisorExit.pid, supervisor.pid);
+  assert.equal(supervisorExit.exitCode, 0);
 });
 
 test('supervisor drains a planned worker restart without refusing connections', async (t) => {
@@ -250,6 +316,9 @@ test('supervisor drains a planned worker restart without refusing connections', 
   const inFlight = request(shimPort, 'POST', '/v1/messages', { model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1 });
   while (!release) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal((await request(shimPort, 'POST', '/restart', {})).status, 202);
+  const restartRequested = await waitForLifecycleRecord(home, (record) => record.event === 'restart-worker-requested');
+  assert.equal(restartRequested.component, 'supervisor');
+  assert.equal(restartRequested.outcome, 'drain');
   const health = request(shimPort, 'GET', '/healthz');
   release();
   assert.equal((await inFlight).status, 200);
@@ -440,8 +509,41 @@ test('doctor reports a serving version mismatch and the ensure remedy', async (t
 
   assert.equal(output.code, 1);
   assert.match(output.text, /serving shim version: 0\.0\.0/);
+  assert.match(output.text, /lifecycle evidence: .*model-gateway[\\/]logs[\\/]lifecycle\.jsonl/);
+  assert.match(output.text, /lifecycle exit evidence: no observed exit record/);
   assert.match(output.text, new RegExp(`VERSION MISMATCH: CLI ${gateway.PLUGIN_VERSION.replaceAll('.', '\\.')}, serving shim 0\\.0\\.0`));
   assert.match(output.text, new RegExp(`Run node "${CLI.replace(/[\\/]/g, '[\\\\/]')}" ensure`));
+});
+
+test('doctor describes an observed lifecycle exit', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-doctor-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const recordPath = path.join(home, '.claude', 'model-gateway', 'logs', 'lifecycle.jsonl');
+  fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+  fs.writeFileSync(recordPath, JSON.stringify({
+    at: new Date().toISOString(),
+    event: 'worker-exit',
+    component: 'supervisor',
+    pid: 4320,
+    child: { component: 'worker', pid: 4321 },
+    exitCode: null,
+    signal: 'SIGKILL',
+  }) + '\n');
+
+  const output = await new Promise((resolve, reject) => {
+    const child = spawnGatewayProcess(t, process.execPath, [CLI, 'doctor'], {
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let text = '';
+    child.stdout.on('data', (chunk) => { text += chunk; });
+    child.stderr.on('data', (chunk) => { text += chunk; });
+    child.once('error', reject);
+    child.once('exit', (code) => resolve({ code, text }));
+  });
+
+  assert.equal(output.code, 1);
+  assert.match(output.text, /lifecycle exit evidence: observed worker PID 4321; exit code null; signal SIGKILL/);
 });
 
 test('supervisor restores a proxy that dies after startup without another session', async () => {
