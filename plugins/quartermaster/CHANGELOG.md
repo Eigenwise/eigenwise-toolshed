@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.2 (2026-09-05)
+
+Released in v3.519.0, up from 0.7.1.
+
+### Fixes
+
+- Preserve gateway startup health-check failures (SQ-2445)
+- Ignore archived Sidequest boards in health audit (SQ-2449)
+  Quartermaster now ignores archived Sidequest boards when reporting project and local install health.
+
 ## 0.7.1 (2026-08-27)
 
 Released in v3.506.0, up from 0.7.0.

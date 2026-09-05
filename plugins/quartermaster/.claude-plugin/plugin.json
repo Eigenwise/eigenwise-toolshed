@@ -1,6 +1,6 @@
 {
   "name": "quartermaster",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Works out what your workspace is short of and gets it. Reads what your recent Claude Code sessions were actually working toward, then asks what is missing against that: a measurement nobody can run yet, work you keep doing by hand, knowledge you keep re-deriving, and the setup pushing back at you. It improves existing skills that misfire, under-trigger, or need manual correction before proposing parallel new ones. A SessionStart line keeps Claude watching for the task done three times that should become a skill, map entry, rule, or measurement, offering to capture it in the moment. A SessionEnd hook tallies each session locally (no LLM, no network); once enough piles up, a SessionStart nudge and one Stop-time block make Claude offer a focused optimization round at a real pause. The resupply skill mines that history and proposes one change at a time, each needing your approval; the next pass reports whether what you applied actually helped. Its setup skill outfits a new project from what your history shows you keep needing. It also keeps Eigenwise Toolshed plugins current, checks workspace health, and warns when an open session has loaded stale plugin code.",
   "author": { "name": "Eigenwise", "email": "kenny@eigenwise.io" },
   "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/quartermaster",

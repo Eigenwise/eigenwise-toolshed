@@ -8,6 +8,23 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.519.0 (2026-09-05)
+
+### quartermaster 0.7.1 → 0.7.2
+
+#### Fixes
+
+- Preserve gateway startup health-check failures (SQ-2445)
+- Ignore archived Sidequest boards in health audit (SQ-2449)
+  Quartermaster now ignores archived Sidequest boards when reporting project and local install health.
+
+### sidequest 5.0.27 → 5.0.28
+
+#### Fixes
+
+- Close abandoned MCP connections (SQ-2443)
+  Sidequest now closes MCP connections that finish initialization without sending the initialized notification.
+
 ## v3.518.0 (2026-09-05)
 
 ### model-gateway 0.48.20 → 0.49.0
