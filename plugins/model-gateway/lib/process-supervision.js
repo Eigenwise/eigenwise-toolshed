@@ -62,8 +62,19 @@ function readPidRecord(name) {
   } catch { return null; }
 }
 function writePidRecord(name, pid) {
-  const process = processInfo(pid);
+  const process = processInfoSync(pid);
   fs.writeFileSync(pidFile(name), String(pid));
+  fs.writeFileSync(pidRecordFile(name), JSON.stringify({
+    pid,
+    command: process?.command || null,
+    startedAt: process?.startedAt || null,
+  }));
+}
+async function writePidRecordAsync(name, pid, { inspectProcess, probeChildren = null, stillActive = () => true } = {}) {
+  fs.writeFileSync(pidFile(name), String(pid));
+  const readProcess = inspectProcess || ((processPid) => processInfoAsync(processPid, { probeChildren }));
+  const process = await readProcess(pid);
+  if (!stillActive() || readPid(name) !== pid) return;
   fs.writeFileSync(pidRecordFile(name), JSON.stringify({
     pid,
     command: process?.command || null,
@@ -84,7 +95,7 @@ function processRunsThisProxyBinary(process, proxyBinary = PROXY_BIN) {
   return Boolean(process && commandIncludesFile(process.command, proxyBinary));
 }
 function processIsOwnedByThisInstall(pid, { record = null, proxyBinary = PROXY_BIN } = {}) {
-  const process = processInfo(pid);
+  const process = processInfoSync(pid);
   if (!process) return false;
   const installRoot = gatewayInstallRootFromCommand(process.command);
   const belongsToThisInstall = installRoot && normalizedPath(installRoot) === normalizedPath(gatewayInstallRoot());
@@ -99,7 +110,7 @@ function recordedGatewayPid(name, { report = console.error } = {}) {
   const pid = readPid(name);
   if (!pid) return null;
   const record = readPidRecord(name);
-  const process = processInfo(pid);
+  const process = processInfoSync(pid);
   if (record && processIsOwnedByThisInstall(pid, { record })) return pid;
   stalePidFile(name, pid, process, report);
   return null;
@@ -129,28 +140,23 @@ function recordStopRequest(operation, name) {
     signal: WIN ? 'TASKKILL' : 'SIGTERM',
   });
 }
-function commandResult(command, commandArgs) {
+function commandResultSync(command, commandArgs) {
   return spawnSync(command, commandArgs, { encoding: 'utf8', windowsHide: true });
 }
-function processOwningPort(port) {
+function processOwningPortSync(port) {
   if (!port) return null;
   const result = WIN
-    ? commandResult('netstat', ['-ano', '-p', 'tcp'])
-    : commandResult('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']);
+    ? commandResultSync('netstat', ['-ano', '-p', 'tcp'])
+    : commandResultSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']);
   if (result.status !== 0) return null;
   if (!WIN) return Number(String(result.stdout).trim().split(/\s+/)[0]) || null;
   const portPattern = new RegExp(`^\\s*TCP\\s+[^\\s]*:${port}\\s+[^\\s]+\\s+LISTENING\\s+(\\d+)\\s*$`, 'im');
   return Number(String(result.stdout).match(portPattern)?.[1]) || null;
 }
-function processInfo(pid) {
-  if (!pid) return null;
-  const result = WIN
-    ? commandResult('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object ProcessId,ParentProcessId,CommandLine,CreationDate | ConvertTo-Json -Compress`])
-    : commandResult('ps', ['-p', String(pid), '-o', 'pid=,ppid=,lstart=,args=']);
-  if (result.status !== 0) return null;
+function processInfoFromOutput(output) {
   if (WIN) {
     try {
-      const entry = JSON.parse(String(result.stdout) || 'null');
+      const entry = JSON.parse(String(output) || 'null');
       if (!entry?.ProcessId) return null;
       return {
         command: entry.CommandLine || '',
@@ -160,8 +166,187 @@ function processInfo(pid) {
       };
     } catch { return null; }
   }
-  const match = String(result.stdout).match(/^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d{4})\s+(.*)$/m);
+  const match = String(output).match(/^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d{4})\s+(.*)$/m);
   return match ? { command: match[4], parentPid: Number(match[2]) || null, pid: Number(match[1]), startedAt: match[3] } : null;
+}
+function processInfoSync(pid) {
+  if (!pid) return null;
+  const result = WIN
+    ? commandResultSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object ProcessId,ParentProcessId,CommandLine,CreationDate | ConvertTo-Json -Compress`])
+    : commandResultSync('ps', ['-p', String(pid), '-o', 'pid=,ppid=,lstart=,args=']);
+  return result.status === 0 ? processInfoFromOutput(result.stdout) : null;
+}
+function processTableFromOutput(output) {
+  if (WIN) {
+    try {
+      const entries = JSON.parse(String(output) || '[]');
+      return new Map((Array.isArray(entries) ? entries : [entries])
+        .filter((entry) => entry?.ProcessId)
+        .map((entry) => [Number(entry.ProcessId), {
+          command: entry.CommandLine || '',
+          parentPid: Number(entry.ParentProcessId) || null,
+          pid: Number(entry.ProcessId),
+          startedAt: entry.CreationDate || null,
+        }]));
+    } catch { return null; }
+  }
+  return new Map(String(output).trim().split(/\r?\n/).map((line) => {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d{4})\s+(.*)$/);
+    return match ? [Number(match[1]), { command: match[4], parentPid: Number(match[2]) || null, pid: Number(match[1]), startedAt: match[3] }] : null;
+  }).filter(Boolean));
+}
+function processTableSync() {
+  const result = WIN
+    ? commandResultSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,CreationDate | ConvertTo-Json -Compress'])
+    : commandResultSync('ps', ['-eo', 'pid=,ppid=,lstart=,args=']);
+  return result.status === 0 ? processTableFromOutput(result.stdout) : null;
+}
+function probeTimeoutMs() {
+  return Math.max(1, Number(process.env.CODEX_GATEWAY_PROBE_TIMEOUT_MS) || 2000);
+}
+function waitForProbeChildClose(child) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    child.once('close', finish);
+    child.once('error', finish);
+    if (child.exitCode != null || child.signalCode != null) finish();
+  });
+}
+function waitForTaskkill(pid) {
+  return new Promise((resolve) => {
+    let taskkill;
+    try {
+      taskkill = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    } catch {
+      resolve();
+      return;
+    }
+    taskkill.once('close', resolve);
+    taskkill.once('error', resolve);
+  });
+}
+function probeChildClosedWithin(closed, timeout = 250) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeout);
+    timer.unref?.();
+    void closed.then(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+async function stopProbeChild(child, closed) {
+  if (child?.pid) {
+    if (WIN) await waitForTaskkill(child.pid);
+    else {
+      try { process.kill(-child.pid, 'SIGTERM'); } catch { try { child.kill('SIGTERM'); } catch {} }
+      if (!(await probeChildClosedWithin(closed))) {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} }
+      }
+    }
+  }
+  await closed;
+}
+function stopProbeChildSync(child) {
+  if (!child?.pid) return;
+  if (WIN) spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+  else { try { process.kill(-child.pid, 'SIGTERM'); } catch { try { child.kill('SIGTERM'); } catch {} } }
+}
+function createProbeChildRegistry() {
+  const children = new Map();
+  let queue = Promise.resolve();
+  let stopping = false;
+  function run(runProbe) {
+    const queued = queue.then(() => stopping
+      ? { status: null, stdout: '', stderr: '', timedOut: true }
+      : runProbe());
+    queue = queued.catch(() => {});
+    return queued;
+  }
+  function track(child) {
+    const closed = waitForProbeChildClose(child);
+    children.set(child, closed);
+    void closed.then(() => children.delete(child));
+    return closed;
+  }
+  async function stop() {
+    stopping = true;
+    await Promise.all([...children].map(([child, closed]) => stopProbeChild(child, closed)));
+    await queue;
+  }
+  function stopSync() {
+    stopping = true;
+    for (const child of children.keys()) stopProbeChildSync(child);
+  }
+  return { run, stop, stopSync, track };
+}
+function commandResultAsync(command, commandArgs, { timeout = probeTimeoutMs(), spawnProcess = spawn, probeChildren = null, queued = false } = {}) {
+  if (probeChildren && !queued) {
+    return probeChildren.run(() => commandResultAsync(command, commandArgs, { timeout, spawnProcess, probeChildren, queued: true }));
+  }
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timedOut = false;
+    let timer = null;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(result);
+    };
+    let child;
+    let closed;
+    try {
+      child = spawnProcess(command, commandArgs, { detached: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      closed = probeChildren ? probeChildren.track(child) : waitForProbeChildClose(child);
+    } catch (error) {
+      finish({ status: null, stdout, stderr: String(error), timedOut: false });
+      return;
+    }
+    child.stdout?.on('data', (chunk) => { stdout += chunk; });
+    child.stderr?.on('data', (chunk) => { stderr += chunk; });
+    child.once('error', (error) => finish({ status: null, stdout, stderr: `${stderr}${error}`, timedOut: false }));
+    child.once('close', (status) => finish({ status, stdout, stderr, timedOut }));
+    timer = setTimeout(() => {
+      timedOut = true;
+      void stopProbeChild(child, closed).then(
+        () => finish({ status: null, stdout, stderr, timedOut: true }),
+        () => finish({ status: null, stdout, stderr, timedOut: true }),
+      );
+    }, timeout);
+    timer.unref?.();
+  });
+}
+async function processOwningPortAsync(port, { commandResult = commandResultAsync, probeChildren = null } = {}) {
+  if (!port) return null;
+  const result = await commandResult(WIN ? 'netstat' : 'lsof', WIN ? ['-ano', '-p', 'tcp'] : ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { probeChildren });
+  if (result.timedOut) return undefined;
+  if (result.status !== 0) return null;
+  if (!WIN) return Number(String(result.stdout).trim().split(/\s+/)[0]) || null;
+  const portPattern = new RegExp(`^\\s*TCP\\s+[^\\s]*:${port}\\s+[^\\s]+\\s+LISTENING\\s+(\\d+)\\s*$`, 'im');
+  return Number(String(result.stdout).match(portPattern)?.[1]) || null;
+}
+async function processInfoAsync(pid, { commandResult = commandResultAsync, probeChildren = null } = {}) {
+  if (!pid) return null;
+  const result = await commandResult(WIN ? 'powershell.exe' : 'ps', WIN
+    ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object ProcessId,ParentProcessId,CommandLine,CreationDate | ConvertTo-Json -Compress`]
+    : ['-p', String(pid), '-o', 'pid=,ppid=,lstart=,args='], { probeChildren });
+  if (result.timedOut) return undefined;
+  return result.status === 0 ? processInfoFromOutput(result.stdout) : null;
+}
+async function processTableAsync({ commandResult = commandResultAsync, probeChildren = null } = {}) {
+  const result = await commandResult(WIN ? 'powershell.exe' : 'ps', WIN
+    ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,CreationDate | ConvertTo-Json -Compress']
+    : ['-eo', 'pid=,ppid=,lstart=,args='], { probeChildren });
+  if (result.timedOut) return undefined;
+  return result.status === 0 ? processTableFromOutput(result.stdout) : null;
 }
 function gatewayInstallRoot() {
   return path.resolve(path.join(CLI_PATH, '..', '..'));
@@ -175,33 +360,69 @@ function gatewayInstallRootFromCommand(command) {
   return cliPath ? path.resolve(path.join(cliPath, '..', '..')) : null;
 }
 function processBelongsToThisInstall(pid) {
-  const process = processInfo(pid);
+  const process = processInfoSync(pid);
   const installRoot = process && gatewayInstallRootFromCommand(process.command);
   return Boolean(installRoot && normalizedPath(installRoot) === normalizedPath(gatewayInstallRoot()));
 }
 function foreignPortOwner(port = PUBLIC_SHIM_PORT) {
-  const pid = processOwningPort(port);
+  const pid = processOwningPortSync(port);
   if (!pid || processBelongsToThisInstall(pid)) return null;
-  const process = processInfo(pid);
+  const process = processInfoSync(pid);
   return { installRoot: process ? gatewayInstallRootFromCommand(process.command) : null, pid };
 }
 function foreignPortOwnerReason(owner, port = PUBLIC_SHIM_PORT) {
   return `refusing to stop PID ${owner.pid} on :${port}; it belongs to a different install root (${owner.installRoot || 'unknown'}), not ${gatewayInstallRoot()}`;
 }
-function isDescendantOf(pid, ancestorPid) {
+function isDescendantInProcessTable(pid, ancestorPid, processes) {
   const visited = new Set();
   let currentPid = pid;
   while (currentPid && !visited.has(currentPid)) {
     if (currentPid === ancestorPid) return true;
     visited.add(currentPid);
-    currentPid = processInfo(currentPid)?.parentPid || null;
+    currentPid = processes.get(currentPid)?.parentPid || null;
   }
   return false;
 }
+function isDescendantOf(pid, ancestorPid) {
+  const processes = processTableSync();
+  return Boolean(processes && isDescendantInProcessTable(pid, ancestorPid, processes));
+}
+async function isDescendantOfAsync(pid, ancestorPid, { processTable = processTableAsync } = {}) {
+  const processes = await processTable();
+  return processes ? isDescendantInProcessTable(pid, ancestorPid, processes) : undefined;
+}
+async function processIsOwnedByThisInstallAsync(pid, { record = null, proxyBinary = PROXY_BIN, inspectProcess, probeChildren = null } = {}) {
+  const readProcess = inspectProcess || ((processPid) => processInfoAsync(processPid, { probeChildren }));
+  const process = await readProcess(pid);
+  if (!process) return process === undefined ? undefined : false;
+  const installRoot = gatewayInstallRootFromCommand(process.command);
+  const belongsToThisInstall = installRoot && normalizedPath(installRoot) === normalizedPath(gatewayInstallRoot());
+  const runsThisProxy = processRunsThisProxyBinary(process, proxyBinary);
+  const recordMatches = !record || (record.pid === pid && (
+    (record.command && record.command === process.command)
+    || (record.startedAt && record.startedAt === process.startedAt)
+  ));
+  return Boolean((belongsToThisInstall || runsThisProxy) && recordMatches);
+}
+async function killPidAsync(pid, { trusted = false, ...ownershipOptions } = {}) {
+  const owned = trusted ? true : await processIsOwnedByThisInstallAsync(pid, ownershipOptions);
+  if (owned !== true) return owned;
+  if (WIN) {
+    if (trusted) await waitForTaskkill(pid);
+    else {
+      const child = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      child.once('error', () => {});
+    }
+  } else {
+    try { process.kill(pid, 'SIGTERM'); } catch {}
+  }
+  return true;
+}
 function reapGatewayOrphans(supervisorPid = null) {
   const reaped = [];
+  const processes = supervisorPid ? processTableSync() : null;
   for (const pid of recordedGatewayPids()) {
-    if (supervisorPid && isDescendantOf(pid, supervisorPid)) continue;
+    if (processes && isDescendantInProcessTable(pid, supervisorPid, processes)) continue;
     killPid(pid);
     reaped.push(pid);
   }
@@ -215,7 +436,7 @@ function stopAll({ report = console.log } = {}) {
     return { ok: false, reason };
   }
   for (const name of ['shim', 'guardian', 'proxy']) recordStopRequest('stop', name);
-  const portOwner = processOwningPort(PUBLIC_SHIM_PORT);
+  const portOwner = processOwningPortSync(PUBLIC_SHIM_PORT);
   for (const name of ['shim', 'guardian', 'proxy']) stopProcess(name);
   if (portOwner) killPid(portOwner);
   reapGatewayOrphans(null);
@@ -224,7 +445,7 @@ function stopAll({ report = console.log } = {}) {
 async function stopRunningSupervisor({ quiet = false, operation = 'restart', report = console.log } = {}) {
   const foreignOwner = foreignPortOwner();
   if (foreignOwner) return { ok: false, reason: foreignPortOwnerReason(foreignOwner) };
-  const pid = processOwningPort(PUBLIC_SHIM_PORT);
+  const pid = processOwningPortSync(PUBLIC_SHIM_PORT);
   const targetPid = pid || readPid('guardian');
   if (targetPid) {
     recordGatewayLifecycle(`${operation}-supervisor-stop-requested`, {
@@ -343,7 +564,6 @@ function spawnSupervisedProxy({ command = PROXY_BIN, port = PROXY_PORT, logs = L
     stdio: ['ignore', output, output], env: { ...process.env, PORT: String(port) }, windowsHide: true,
   });
   child.once('error', () => {});
-  writePidRecord('proxy', child.pid);
   fs.closeSync(output);
   return child;
 }
@@ -353,9 +573,14 @@ function createProxyRecovery({
   proxyPort = PROXY_PORT,
   probe = () => proxyModelsAnswering(proxyPort),
   listening = portListening,
-  owner = processOwningPort,
-  ownsProxy = (pid) => processRunsThisProxyBinary(processInfo(pid), proxyBinary),
-  stop = killPid,
+  probeChildren = createProbeChildRegistry(),
+  owner = (port) => processOwningPortAsync(port, { probeChildren }),
+  inspectProcess = (pid) => processInfoAsync(pid, { probeChildren }),
+  ownsProxy = async (pid) => {
+    const process = await inspectProcess(pid);
+    return process === undefined ? undefined : processRunsThisProxyBinary(process, proxyBinary);
+  },
+  stop = (pid) => killPidAsync(pid, { probeChildren }),
   waitForRelease = waitForPortRelease,
   start = spawnSupervisedProxy,
   onStarted = () => {},
@@ -384,6 +609,7 @@ function createProxyRecovery({
         nextRestartAt = 0;
         return { ok: true, state: 'healthy' };
       }
+      if (halted) return { ok: false, state: 'stopped' };
       if (now() < nextRestartAt) return { ok: false, state: 'backing-off', nextRestartAt };
 
       restartAttempt += 1;
@@ -401,14 +627,25 @@ function createProxyRecovery({
         return { ok: false, state: 'binary-missing', retryAt: nextRestartAt };
       }
       if (await listening(proxyPort)) {
-        const pid = owner(proxyPort);
+        const pid = await owner(proxyPort);
+        if (pid === undefined) {
+          log(`proxy restart deferred because the ownership probe for :${proxyPort} timed out; refusing to stop an unknown owner`);
+          recordLifecycle('proxy-recovery-finished', { component: 'supervisor', pid: process.pid, outcome: 'owner-unknown' });
+          return { ok: false, state: 'owner-unknown', retryAt: nextRestartAt };
+        }
         if (!pid) {
           log(`proxy restart deferred because an unresponsive listener still owns :${proxyPort}`);
           recordLifecycle('proxy-recovery-finished', { component: 'supervisor', pid: process.pid, outcome: 'port-owned' });
           return { ok: false, state: 'port-owned', retryAt: nextRestartAt };
         }
-        if (!ownsProxy(pid)) {
-          const ownerProcess = processInfo(pid);
+        const ownedByProxy = await ownsProxy(pid);
+        if (ownedByProxy === undefined) {
+          log(`proxy restart deferred because the ownership probe for PID ${pid} timed out; refusing to stop an unknown owner`);
+          recordLifecycle('proxy-recovery-finished', { component: 'supervisor', pid: process.pid, outcome: 'owner-unknown' });
+          return { ok: false, state: 'owner-unknown', retryAt: nextRestartAt };
+        }
+        if (!ownedByProxy) {
+          const ownerProcess = await inspectProcess(pid);
           const installRoot = ownerProcess && gatewayInstallRootFromCommand(ownerProcess.command);
           halted = true;
           log(`proxy restart refused because PID ${pid} owns :${proxyPort} from a different install root (${installRoot || 'unknown'}), not ${gatewayInstallRoot()}`);
@@ -421,14 +658,15 @@ function createProxyRecovery({
           child: { component: 'proxy', pid },
           signal: WIN ? 'TASKKILL' : 'SIGTERM',
         });
-        stop(pid);
+        await stop(pid);
         if (!(await waitForRelease(proxyPort, { listening }))) {
           log(`proxy restart deferred because PID ${pid} did not release :${proxyPort}`);
           recordLifecycle('proxy-recovery-finished', { component: 'supervisor', pid: process.pid, outcome: 'port-stuck' });
           return { ok: false, state: 'port-stuck', retryAt: nextRestartAt };
         }
       }
-      const proxy = start({ command: proxyBinary, port: proxyPort });
+      if (halted) return { ok: false, state: 'stopped' };
+      const proxy = await start({ command: proxyBinary, port: proxyPort });
       onStarted(proxy?.pid);
       if (proxy?.pid) {
         recordLifecycle('proxy-started', {
@@ -460,11 +698,18 @@ function createProxyRecovery({
     try { return await recovery; } finally { recovery = null; }
   }
 
-  return { recover };
+  async function stopRecovery() {
+    halted = true;
+    await probeChildren.stop();
+    if (recovery) await recovery;
+  }
+
+  return { recover, stop: stopRecovery, stopSync: () => probeChildren.stopSync() };
 }
 
 module.exports = {
-  createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, killPid, pidFile, pidRecordFile, portListening, postJson, processOwningPort,
-  processIsOwnedByThisInstall, proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPids, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
-  spawnSupervisedProxy, stopAll, stopProcess, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit, writePidRecord,
+  commandResultAsync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, isDescendantOfAsync, killPid, killPidAsync, pidFile, pidRecordFile, portListening, postJson,
+  processInfoAsync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync,
+  proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPids, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
+  spawnSupervisedProxy, stopAll, stopProcess, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit, writePidRecord, writePidRecordAsync,
 };

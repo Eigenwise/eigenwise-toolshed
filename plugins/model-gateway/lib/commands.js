@@ -199,9 +199,9 @@ function readPluginVersion() {
 function mkdirs() { for (const d of [STATE, LOGS, BIN_DIR]) fs.mkdirSync(d, { recursive: true }); }
 
 const {
-  createProxyRecovery, fetchUrl, foreignPortOwner, killPid, portListening, postJson, processOwningPort, recordedGatewayPids, reapGatewayOrphans,
+  createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, killPidAsync, portListening, postJson, processOwningPort, processOwningPortAsync, recordedGatewayPids, reapGatewayOrphans,
   removePid, restartWorkerWithDrain, shimHealthy, spawnDetached, stopAll, stopProcess, stopRunningSupervisor,
-  stopShimWithDrain, waitForShimExit, writePidRecord,
+  stopShimWithDrain, waitForShimExit, writePidRecordAsync,
 } = require('./process-supervision.js');
 
 const {
@@ -1896,17 +1896,22 @@ const { effectiveCodexSentryPolicy, runWorker } = require('./request-worker.js')
 function runShim() {
   mkdirs();
   const supervisorStartedAt = new Date().toISOString();
+  const probeChildren = createProbeChildRegistry();
+  let proxyRecovery = null;
   recordGatewayLifecycle('supervisor-started', {
     component: 'supervisor',
     pid: process.pid,
     startedAt: supervisorStartedAt,
   });
-  process.once('exit', (exitCode) => recordGatewayLifecycle('supervisor-exit', {
-    component: 'supervisor',
-    pid: process.pid,
-    startedAt: supervisorStartedAt,
-    exitCode,
-  }));
+  process.once('exit', (exitCode) => {
+    proxyRecovery?.stopSync();
+    recordGatewayLifecycle('supervisor-exit', {
+      component: 'supervisor',
+      pid: process.pid,
+      startedAt: supervisorStartedAt,
+      exitCode,
+    });
+  });
   process.once('uncaughtExceptionMonitor', (error, origin) => {
     const errorType = typeof error?.name === 'string' ? error.name : 'Error';
     recordGatewayLifecycle('supervisor-uncaught-failure', {
@@ -1930,11 +1935,65 @@ function runShim() {
   let restarting = false;
   let stopped = false;
   const recoveryIntervalMs = Math.max(1000, Number(process.env.CODEX_GATEWAY_PROXY_RECOVERY_INTERVAL_MS) || 5000);
-  const proxyRecovery = createProxyRecovery({
-    onStarted: () => writeProxyServingVersion(currentProxyVersion()),
+  proxyRecovery = createProxyRecovery({
+    probeChildren,
+    onStarted: (pid) => {
+      writeProxyServingVersion(currentProxyVersion());
+      if (pid) void writePidRecordAsync('proxy', pid, { probeChildren, stillActive: () => !stopped });
+    },
     recordLifecycle: recordGatewayLifecycle,
   });
   let proxyRecoveryTimer = null;
+  let main = null;
+  let compatServer = null;
+  let shutdownPromise = null;
+
+  function closeServer(server) {
+    return new Promise((resolve) => {
+      if (!server) return resolve();
+      try { server.close(() => resolve()); } catch { resolve(); }
+    });
+  }
+
+  function waitForWorkerExit(child) {
+    return new Promise((resolve) => {
+      if (!child || child.exitCode != null) return resolve();
+      child.once('exit', resolve);
+      child.once('error', resolve);
+    });
+  }
+
+  function stopSupervisor(exitCode, signal = null) {
+    if (shutdownPromise) return shutdownPromise;
+    stopped = true;
+    shutdownPromise = (async () => {
+      if (signal) {
+        recordGatewayLifecycle('supervisor-stop-requested', {
+          component: 'supervisor',
+          pid: process.pid,
+          startedAt: supervisorStartedAt,
+          signal,
+        });
+        if (worker?.pid) {
+          recordGatewayLifecycle('worker-stop-requested', {
+            component: 'supervisor',
+            pid: process.pid,
+            child: { component: 'worker', pid: worker.pid },
+            signal: WIN ? 'TASKKILL' : signal,
+          });
+        }
+      }
+      clearWorkerPortReportTimeout();
+      clearInterval(proxyRecoveryTimer);
+      const stoppingWorker = worker;
+      await proxyRecovery.stop();
+      await killPidAsync(stoppingWorker?.pid, { trusted: true });
+      await waitForWorkerExit(stoppingWorker);
+      await Promise.all([closeServer(compatServer), closeServer(main)]);
+      process.exit(exitCode);
+    })();
+    return shutdownPromise;
+  }
 
   function clearWorkerPortReportTimeout() {
     if (!workerPortReportTimeout) return;
@@ -1944,10 +2003,8 @@ function runShim() {
 
   function stopForMissingWorkerPort() {
     if (stopped || configuredWorkerPort || workerPort) return;
-    stopped = true;
     console.error(`model-gateway: shim worker did not report its listener port within ${workerPortReportTimeoutMs}ms`);
-    killPid(worker?.pid);
-    main.close(() => process.exit(1));
+    void stopSupervisor(1);
   }
 
   function startWorker() {
@@ -1978,7 +2035,7 @@ function runShim() {
         clearWorkerPortReportTimeout();
       });
     }
-    writePidRecord('shim', child.pid);
+    void writePidRecordAsync('shim', child.pid, { probeChildren, stillActive: () => !stopped });
     child.unref();
     child.once('exit', (exitCode, signal) => {
       recordGatewayLifecycle('worker-exit', {
@@ -2069,7 +2126,7 @@ function runShim() {
           signal: WIN ? 'TASKKILL' : 'SIGTERM',
           outcome: 'drain-timeout',
         });
-        killPid(current.pid);
+        void killPidAsync(current.pid, { probeChildren });
       }
     }, timeout);
     current.once('exit', () => {
@@ -2110,7 +2167,7 @@ function runShim() {
     return server;
   }
 
-  const main = listen(PUBLIC_SHIM_PORT, '127.0.0.1', () => {
+  main = listen(PUBLIC_SHIM_PORT, '127.0.0.1', () => {
     const publicShimPort = main.address().port;
     try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
     console.log(`model-gateway shim supervisor listening on 127.0.0.1:${publicShimPort}`);
@@ -2120,17 +2177,17 @@ function runShim() {
     proxyRecoveryTimer.unref();
   });
   main.once('error', (error) => {
-    stopped = true;
-    const owner = error.code === 'EADDRINUSE' ? processOwningPort(PUBLIC_SHIM_PORT) : null;
-    const remedy = owner
-      ? `PID ${owner} owns 127.0.0.1:${PUBLIC_SHIM_PORT}; run node "${CLI_PATH}" stop, then node "${CLI_PATH}" ensure.`
-      : `run node "${CLI_PATH}" stop, then node "${CLI_PATH}" ensure.`;
-    const message = `model-gateway: shim supervisor cannot bind 127.0.0.1:${PUBLIC_SHIM_PORT}: ${error.code || error.message}; ${remedy}`;
-    try { fs.writeFileSync(SHIM_FAILURE_PATH, message); } catch {}
-    console.error(message);
-    setImmediate(() => process.exit(1));
+    void (async () => {
+      const owner = error.code === 'EADDRINUSE' ? await processOwningPortAsync(PUBLIC_SHIM_PORT, { probeChildren }) : null;
+      const remedy = owner
+        ? `PID ${owner} owns 127.0.0.1:${PUBLIC_SHIM_PORT}; run node "${CLI_PATH}" stop, then node "${CLI_PATH}" ensure.`
+        : `run node "${CLI_PATH}" stop, then node "${CLI_PATH}" ensure.`;
+      const message = `model-gateway: shim supervisor cannot bind 127.0.0.1:${PUBLIC_SHIM_PORT}: ${error.code || error.message}; ${remedy}`;
+      try { fs.writeFileSync(SHIM_FAILURE_PATH, message); } catch {}
+      console.error(message);
+      await stopSupervisor(1);
+    })();
   });
-  let compatServer = null;
   if (hostsEntry) {
     compatServer = listen(COMPAT_PORT, hostsEntry.ip, () => {
       compatState.port80Bound = true;
@@ -2141,27 +2198,8 @@ function runShim() {
       console.error(`model-gateway: RC-compatibility supervisor unavailable: ${compatState.reason}`);
     });
   }
-  process.once('SIGTERM', () => {
-    stopped = true;
-    recordGatewayLifecycle('supervisor-stop-requested', {
-      component: 'supervisor',
-      pid: process.pid,
-      startedAt: supervisorStartedAt,
-      signal: 'SIGTERM',
-    });
-    if (worker?.pid) {
-      recordGatewayLifecycle('worker-stop-requested', {
-        component: 'supervisor',
-        pid: process.pid,
-        child: { component: 'worker', pid: worker.pid },
-        signal: WIN ? 'TASKKILL' : 'SIGTERM',
-      });
-    }
-    clearInterval(proxyRecoveryTimer);
-    killPid(worker?.pid);
-    compatServer?.close();
-    main.close(() => process.exit(0));
-  });
+  process.once('SIGTERM', () => { void stopSupervisor(0, 'SIGTERM'); });
+  process.once('SIGINT', () => { void stopSupervisor(0, 'SIGINT'); });
 }
 
 
