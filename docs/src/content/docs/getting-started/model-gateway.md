@@ -26,7 +26,9 @@ You may need to complete a browser sign-in or restart Claude Code. Claude will a
 
 ## Pick a model
 
-Open `/model` and choose a row labeled `From gateway`.
+Open `/model` and choose a row labeled `From gateway`. Claude Code only refetches gateway discovery
+with an API-key credential. Model Gateway writes its discovery cache for OAuth subscriptions, and
+new rows appear after restarting Claude Code. `/reload-plugins` does not reload the picker cache.
 
 - `claude-gpt-*` uses your ChatGPT/Codex subscription. Current built-in rows are `claude-gpt-5.6-sol`, `claude-gpt-5.6-terra`, and `claude-gpt-5.6-luna`.
 - `claude-grok-*` uses your Grok subscription when the Grok CLI is installed and signed in. The current built-in Grok row is `claude-grok-4.5`.

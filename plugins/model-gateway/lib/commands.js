@@ -40,7 +40,7 @@ const zlib = require('node:zlib');
 const { writeFileAtomically } = require('./atomic-file.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
-const { canReplaceInstalledCliPath, CLI_PATH, SOCKET_PATH, resolveNewestInstalledCliPath } = require('./runtime.js');
+const { canReplaceInstalledCliPath, CLI_PATH, GATEWAY_MODELS_CACHE, gatewayDiscoveryModels, readGatewayDiscoveryCache, sameGatewayDiscoveryModels, SOCKET_PATH, resolveNewestInstalledCliPath, syncGatewayDiscoveryCache } = require('./runtime.js');
 const { latestObservedLifecycleExit, lifecycleLogPath, recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
 
 const WIN = process.platform === 'win32';
@@ -113,7 +113,6 @@ const {
 const LEGACY_ENV_BLOCK = {
   CLAUDE_CODE_AUTO_COMPACT_WINDOW: '950000',
 };
-const GATEWAY_MODELS_CACHE = path.join(os.homedir(), '.claude', 'cache', 'gateway-models.json');
 
 const USAGE = `usage: model-gateway.js <command>
 
@@ -559,6 +558,7 @@ async function setup() {
     return;
   }
   writeEnv(selectedWiringScope(), false, { mode });
+  await writeCatalog().catch(() => { /* advisory only; Claude Code can retry on the next ensure */ });
   await statusReport();
 }
 
@@ -943,6 +943,7 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
   log(catalog && Array.isArray(catalog.models)
     ? `catalog: ${catalog.models.length} models at ${CATALOG_PATH} (writtenBy: ${catalog.writtenBy || 'unknown'})`
     : 'catalog: not written yet');
+  await reportGatewayDiscoveryCache();
   for (const [alias, pin] of Object.entries(effectivePins())) {
     log(`Claude ${alias} pin: ${pin.value}${pin.override ? ` (overridden; shipped default: ${pin.default})` : ' (default)'}`);
   }
@@ -1515,21 +1516,56 @@ function writeCatalogFile(catalogPath, catalog) {
   return nextCatalog;
 }
 
-async function fetchShimModelIds() {
+async function fetchShimModels() {
   // the shim's own refreshModels() can still be mid-flight right after
   // /healthz starts answering; retry once, short, before giving up
   for (let attempt = 0; attempt < 2; attempt++) {
-    const r = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/v1/models`, { timeout: 3000 });
-    if (r.status !== 200) throw new Error(`shim /v1/models returned ${r.status}`);
-    const ids = (JSON.parse(r.body.toString()).data || []).map((m) => m.id).filter((id) => modelCatalogDetails(id) != null);
-    if (ids.length || attempt === 1) return ids;
-    await new Promise((res) => setTimeout(res, 300));
+    const response = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/v1/models`, { timeout: 3000 });
+    if (response.status !== 200) throw new Error(`shim /v1/models returned ${response.status}`);
+    const models = (JSON.parse(response.body.toString()).data || []).filter((model) => model && typeof model.id === 'string');
+    if (models.length || attempt === 1) return models;
+    await new Promise((resolve) => setTimeout(resolve, 300));
   }
   return [];
 }
 
+function discoveryCacheBaseUrl() {
+  const baseUrl = effectiveBaseUrl().value;
+  if (baseUrl === COMPAT_BASE_URL) return COMPAT_BASE_URL;
+  return baseUrl === DEFAULT_BASE_URL ? DEFAULT_BASE_URL : null;
+}
+
+function writeGatewayDiscoveryCache(models) {
+  const result = syncGatewayDiscoveryCache({ models, baseUrl: discoveryCacheBaseUrl() });
+  if (result.state === 'wrote') log(`discovery cache: wrote ${result.modelCount} models`);
+  else if (result.state === 'unchanged') log('discovery cache: unchanged');
+  return result;
+}
+
+function cacheAgeLabel(fetchedAt) {
+  if (!Number.isFinite(fetchedAt)) return 'unknown age';
+  return `${Math.max(0, Math.floor((Date.now() - fetchedAt) / 1000))}s old`;
+}
+
+async function reportGatewayDiscoveryCache() {
+  const cache = readGatewayDiscoveryCache();
+  const cachedModels = gatewayDiscoveryModels(cache?.models);
+  let liveModels = null;
+  try { liveModels = gatewayDiscoveryModels(await fetchShimModels()); } catch {}
+  const expectedBaseUrl = discoveryCacheBaseUrl();
+  const matchesLiveList = liveModels && cache?.baseUrl === expectedBaseUrl
+    && sameGatewayDiscoveryModels(cache.models, liveModels);
+  const state = liveModels ? (matchesLiveList ? 'matches live list' : 'stale') : 'live list unavailable';
+  log(`discovery cache: ${GATEWAY_MODELS_CACHE}; ${cache ? `${cacheAgeLabel(cache.fetchedAt)}, ${cachedModels.length} models` : 'not written, 0 models'}; ${state}`);
+  if (state === 'stale' && expectedBaseUrl !== COMPAT_BASE_URL) {
+    log('discovery cache: Claude Code cannot refresh this cache under OAuth login; run ensure or restart after the gateway updates it.');
+  }
+}
+
 async function writeCatalog() {
-  const ids = await fetchShimModelIds();
+  const shimModels = await fetchShimModels();
+  writeGatewayDiscoveryCache(shimModels);
+  const ids = shimModels.map((model) => model.id).filter((id) => modelCatalogDetails(id) != null);
   if (!ids.length) return null;
   const readiness = await getCodexReadiness();
   const catalog = buildCatalog(ids, readiness);
