@@ -100,10 +100,12 @@ function descendantPids(parentPid) {
     .filter(([pid, processParentPid]) => pid && processParentPid === parentPid).map(([pid]) => pid);
 }
 
-function processGroupMembers(groupPid) {
-  const result = spawnSync('ps', ['-eo', 'pid=,pgid='], { encoding: 'utf8' });
+// Probe children are spawned detached, so on POSIX they lead their own process
+// group and only the parent pid links them to the supervisor.
+function childPidsOf(parentPid) {
+  const result = spawnSync('ps', ['-eo', 'pid=,ppid='], { encoding: 'utf8' });
   return String(result.stdout).split(/\r?\n/).map((line) => line.trim().split(/\s+/).map(Number))
-    .filter(([pid, processGroupPid]) => pid && processGroupPid === groupPid).map(([pid]) => pid);
+    .filter(([pid, processParentPid]) => pid && processParentPid === parentPid).map(([pid]) => pid);
 }
 
 async function waitForProcessesToExit(processIds, timeout = 1000) {
@@ -549,7 +551,7 @@ test('supervisor shutdown reaps a timed probe child before fixture cleanup', asy
 
   const probePids = process.platform === 'win32'
     ? descendantPids(supervisor.pid)
-    : processGroupMembers(supervisor.pid).filter((pid) => pid !== supervisor.pid);
+    : childPidsOf(supervisor.pid);
   assert.ok(probePids.length > 0, `no timed probe child found for ${supervisionPath}`);
   if (process.platform === 'win32') supervisor.send('stop');
   else supervisor.kill('SIGTERM');
