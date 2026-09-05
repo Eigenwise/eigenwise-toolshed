@@ -62,6 +62,17 @@ async function waitForShim(port) {
   throw new Error('shim did not start');
 }
 
+async function waitForStartupPolicyLines(output, expectedCount) {
+  const deadline = Date.now() + 5000;
+  let lines = [];
+  while (Date.now() < deadline) {
+    lines = output.text.split(/\r?\n/).filter((line) => line.startsWith('model-gateway: sentry policy '));
+    if (lines.length >= expectedCount) return lines;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return lines;
+}
+
 async function spawnShim(t, proxyPort, extraEnv = {}) {
   const { port } = await startGateway(t, 'serve-shim', {
     CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
@@ -236,10 +247,8 @@ test('Codex sentry logs a startup policy line for every advertised model row', a
   });
   await waitForShim(shimPort);
 
-  await request(shimPort, 'GET', '/v1/models');
-  await new Promise((resolve) => setImmediate(resolve));
   const { MODEL_WINDOW_POLICY } = require(RUNTIME);
-  const startupPolicyLines = output.text.split(/\r?\n/).filter((line) => line.startsWith('model-gateway: sentry policy '));
+  const startupPolicyLines = await waitForStartupPolicyLines(output, Object.values(MODEL_WINDOW_POLICY).length);
   for (const policy of Object.values(MODEL_WINDOW_POLICY)) {
     const matchingLines = startupPolicyLines.filter((line) => line.includes(`id=${policy.backendId} `));
     assert.equal(matchingLines.length, 1, `expected one startup sentry policy line for ${policy.backendId}, got ${matchingLines.length}`);
