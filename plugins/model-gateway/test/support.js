@@ -9,19 +9,37 @@ const path = require('node:path');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const START_TIMEOUT_MS = 5000;
+const PROCESS_CLEANUP_TIMEOUT_MS = 5000;
+const PROCESS_CLEANUP_POLL_MS = 25;
 
 function gatewayPidFile(home, name) {
   return path.join(home, '.claude', 'model-gateway', `${name}.pid`);
 }
 
+function waitForProcessExit(pid) {
+  const deadline = Date.now() + PROCESS_CLEANUP_TIMEOUT_MS;
+  const delay = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error.code === 'ESRCH') return;
+    }
+    Atomics.wait(delay, 0, 0, PROCESS_CLEANUP_POLL_MS);
+  }
+}
+
 function stopTrackedGatewayProcesses(home) {
+  const pids = [];
   for (const name of ['shim', 'guardian', 'proxy']) {
     let pid;
     try { pid = Number(fs.readFileSync(gatewayPidFile(home, name), 'utf8').trim()) || null; } catch { pid = null; }
-    if (!pid) continue;
+    if (!pid || pids.includes(pid)) continue;
+    pids.push(pid);
     if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     else { try { process.kill(pid, 'SIGTERM'); } catch {} }
   }
+  for (const pid of pids) waitForProcessExit(pid);
 }
 
 function waitForHealth(port) {
