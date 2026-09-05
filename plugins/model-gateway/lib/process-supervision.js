@@ -198,13 +198,41 @@ async function restartWorkerWithDrain({ quiet = false, timeout = Number(process.
     throw new Error(`restart endpoint returned ${response.status}`);
   } catch (error) { return { ok: false, reason: error.message }; }
 }
+// A timed-out Claude Code hook can terminate its whole child tree, including a directly detached child.
+const DETACHED_LAUNCHER = `
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const payload = JSON.parse(Buffer.from(process.argv[1], 'base64url').toString());
+const output = fs.openSync(payload.logPath, 'a');
+const child = spawn(payload.command, payload.args, {
+  detached: true,
+  stdio: ['ignore', output, output],
+  env: payload.environment,
+  windowsHide: true,
+});
+child.once('error', () => {});
+fs.writeFileSync(payload.pidPath, String(child.pid));
+child.unref();
+fs.closeSync(output);
+`;
+
 function spawnDetached(name, command, cmdArgs, env) {
-  const out = fs.openSync(path.join(LOGS, name + '.log'), 'a');
-  const child = spawn(command, cmdArgs, { detached: true, stdio: ['ignore', out, out], env: { ...process.env, ...env }, windowsHide: true });
-  fs.writeFileSync(pidFile(name), String(child.pid));
-  child.unref();
-  fs.closeSync(out);
-  return child.pid;
+  fs.mkdirSync(LOGS, { recursive: true });
+  const payload = Buffer.from(JSON.stringify({
+    command,
+    args: cmdArgs,
+    environment: { ...process.env, ...env },
+    logPath: path.join(LOGS, name + '.log'),
+    pidPath: pidFile(name),
+  })).toString('base64url');
+  const launcher = spawn(process.execPath, ['-e', DETACHED_LAUNCHER, payload], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  launcher.once('error', () => {});
+  launcher.unref();
+  return launcher.pid;
 }
 
 async function proxyModelsAnswering(port = PROXY_PORT, fetch = fetchUrl) {
