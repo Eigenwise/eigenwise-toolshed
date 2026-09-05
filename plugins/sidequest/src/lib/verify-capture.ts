@@ -9,8 +9,12 @@ const { createHash, randomUUID } = require('node:crypto') as typeof import('node
 const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
 const { runProcessVerification, shellCommand } = require('./ports/process.js') as typeof import('./ports/process.js');
 
+type CaptureSlotFileSystem = Pick<typeof fs, 'existsSync' | 'mkdirSync' | 'readdirSync' | 'renameSync' | 'rmSync' | 'writeFileSync'>;
+
 const captureSlotTimeoutMilliseconds = 30 * 60 * 1_000;
 const captureSlotRetryMilliseconds = 50;
+const captureSlotOperationRetryLimit = 20;
+const captureSlotContentionErrorCodes = new Set(['EEXIST', 'EPERM', 'EBUSY', 'ENOTEMPTY']);
 
 type VerifyCapture = VerificationResult & Readonly<{
   exitCode: number | null;
@@ -34,12 +38,16 @@ type CaptureProject = Readonly<{ slug: string; path: string }>;
 type CaptureSlotLease = Readonly<{
   waitedForSlotMs: number;
   queuePosition: number;
-  release(): void;
+  release(): Promise<CaptureSlotFailure | null>;
 }>;
 type CaptureSlotTimeout = Readonly<{
   waitedForSlotMs: number;
   queuePosition: number;
   reason: string;
+}>;
+type CaptureSlotFailure = Readonly<{
+  reason: string;
+  errorCode: string;
 }>;
 
 function captureRequirement(command: string) {
@@ -69,15 +77,15 @@ function captureSlotDirectory(project: string): string {
   return path.join(os.tmpdir(), 'sidequest-verify-capture-slots', projectHash);
 }
 
-function captureSlotWaiterPath(slotDirectory: string): string {
+function captureSlotWaiterPath(slotDirectory: string, fileSystem: CaptureSlotFileSystem = fs): string {
   const waitingDirectory = path.join(slotDirectory, 'waiting');
-  fs.mkdirSync(waitingDirectory, { recursive: true });
+  fileSystem.mkdirSync(waitingDirectory, { recursive: true });
   return path.join(waitingDirectory, `${Date.now().toString().padStart(15, '0')}-${process.pid}-${randomUUID()}.json`);
 }
 
-function queuedWaiters(slotDirectory: string): readonly string[] {
+function queuedWaiters(slotDirectory: string, fileSystem: CaptureSlotFileSystem = fs): readonly string[] {
   try {
-    return fs.readdirSync(path.join(slotDirectory, 'waiting')).sort();
+    return fileSystem.readdirSync(path.join(slotDirectory, 'waiting')).sort();
   } catch {
     return [];
   }
@@ -87,31 +95,84 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function acquireCaptureSlot(project: string, timeoutMilliseconds = captureSlotTimeoutMilliseconds): Promise<CaptureSlotLease | CaptureSlotTimeout> {
+function captureSlotErrorCode(error: unknown): string {
+  if (error instanceof Error && 'code' in error && typeof error.code === 'string') return error.code;
+  return error instanceof Error ? error.name : String(error);
+}
+
+function captureSlotOperationFailure(operation: string, slotPath: string, attempts: number, error: unknown): CaptureSlotFailure {
+  const errorCode = captureSlotErrorCode(error);
+  return Object.freeze({
+    reason: `Verification capture could not ${operation} slot path ${JSON.stringify(slotPath)} after ${attempts} retries; last errno ${errorCode}.`,
+    errorCode,
+  });
+}
+
+async function retryCaptureSlotOperation(operation: string, slotPath: string, execute: () => void): Promise<CaptureSlotFailure | null> {
+  for (let attempts = 1; attempts <= captureSlotOperationRetryLimit; attempts += 1) {
+    try {
+      execute();
+      return null;
+    } catch (error: unknown) {
+      const errorCode = captureSlotErrorCode(error);
+      if (!captureSlotContentionErrorCodes.has(errorCode) || attempts === captureSlotOperationRetryLimit) {
+        return captureSlotOperationFailure(operation, slotPath, attempts, error);
+      }
+      await wait(captureSlotRetryMilliseconds);
+    }
+  }
+  throw new Error('Capture slot operation retry loop completed unexpectedly.');
+}
+
+async function releaseCaptureSlot(activeDirectory: string, fileSystem: CaptureSlotFileSystem): Promise<CaptureSlotFailure | null> {
+  const tombstoneDirectory = `${activeDirectory}.released-${process.pid}-${randomUUID()}`;
+  const renameFailure = await retryCaptureSlotOperation('rename', activeDirectory, () => fileSystem.renameSync(activeDirectory, tombstoneDirectory));
+  if (renameFailure) {
+    if (renameFailure.errorCode === 'ENOENT') return null;
+    return renameFailure;
+  }
+  return retryCaptureSlotOperation('remove', tombstoneDirectory, () => fileSystem.rmSync(tombstoneDirectory, { recursive: true, force: true }));
+}
+
+async function acquireCaptureSlot(project: string, timeoutMilliseconds = captureSlotTimeoutMilliseconds, fileSystem: CaptureSlotFileSystem = fs): Promise<CaptureSlotLease | CaptureSlotTimeout | CaptureSlotFailure> {
   const slotDirectory = captureSlotDirectory(project);
   const activeDirectory = path.join(slotDirectory, 'active');
   const startedAt = Date.now();
-  const waiterPath = captureSlotWaiterPath(slotDirectory);
+  const waiterPath = captureSlotWaiterPath(slotDirectory, fileSystem);
   const waiterName = path.basename(waiterPath);
-  fs.writeFileSync(waiterPath, '', { encoding: 'utf8', flag: 'wx' });
+  fileSystem.writeFileSync(waiterPath, '', { encoding: 'utf8', flag: 'wx' });
   let waitingAnnounced = false;
   let queuePosition = 1;
+  let acquireContentionAttempts = 0;
 
   for (;;) {
-    const waiterIndex = queuedWaiters(slotDirectory).indexOf(waiterName);
-    const active = fs.existsSync(activeDirectory);
+    const waiterIndex = queuedWaiters(slotDirectory, fileSystem).indexOf(waiterName);
+    const active = fileSystem.existsSync(activeDirectory);
     queuePosition = Math.max(queuePosition, waiterIndex + (active ? 2 : 1));
     if (!active && waiterIndex === 0) {
+      let acquired = false;
       try {
-        fs.mkdirSync(activeDirectory);
-        fs.rmSync(waiterPath, { force: true });
+        fileSystem.mkdirSync(activeDirectory);
+        acquired = true;
+      } catch (error: unknown) {
+        const errorCode = captureSlotErrorCode(error);
+        if (!captureSlotContentionErrorCodes.has(errorCode)) {
+          fileSystem.rmSync(waiterPath, { force: true });
+          return captureSlotOperationFailure('create', activeDirectory, 1, error);
+        }
+        acquireContentionAttempts += 1;
+        if (acquireContentionAttempts === captureSlotOperationRetryLimit) {
+          fileSystem.rmSync(waiterPath, { force: true });
+          return captureSlotOperationFailure('create', activeDirectory, acquireContentionAttempts, error);
+        }
+      }
+      if (acquired) {
+        fileSystem.rmSync(waiterPath, { force: true });
         return Object.freeze({
           waitedForSlotMs: Date.now() - startedAt,
           queuePosition,
-          release: () => fs.rmSync(activeDirectory, { recursive: true, force: true }),
+          release: () => releaseCaptureSlot(activeDirectory, fileSystem),
         });
-      } catch (error: unknown) {
-        if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') throw error;
       }
     }
     if (!waitingAnnounced) {
@@ -121,7 +182,7 @@ async function acquireCaptureSlot(project: string, timeoutMilliseconds = capture
     }
     const waitedForSlotMs = Date.now() - startedAt;
     if (waitedForSlotMs >= timeoutMilliseconds) {
-      fs.rmSync(waiterPath, { force: true });
+      fileSystem.rmSync(waiterPath, { force: true });
       return Object.freeze({
         waitedForSlotMs,
         queuePosition,
@@ -148,38 +209,50 @@ function captureSlotTimeout(command: string, slot: CaptureSlotTimeout): VerifyCa
   });
 }
 
-async function runFullSuiteCapture(command: string, project: string, cwd: string): Promise<VerifyCapture> {
-  let slot: CaptureSlotLease | CaptureSlotTimeout;
+function captureSlotCouldNotRun(command: string, slot: CaptureSlotFailure): VerifyCapture {
+  return Object.freeze({
+    kind: 'command',
+    status: 'could_not_run',
+    evidence: slot.reason,
+    command,
+    logPath: null,
+    exitCode: 2,
+    outputTail: null,
+    failureIdentities: Object.freeze(['could_not_run:capture-slot']),
+    reason: slot.reason,
+  });
+}
+
+async function runFullSuiteCapture(command: string, project: string, cwd: string, fileSystem: CaptureSlotFileSystem = fs): Promise<VerifyCapture> {
+  let slot: CaptureSlotLease | CaptureSlotTimeout | CaptureSlotFailure;
   try {
-    slot = await acquireCaptureSlot(project);
+    slot = await acquireCaptureSlot(project, captureSlotTimeoutMilliseconds, fileSystem);
   } catch (error: unknown) {
     const reason = error instanceof Error ? error.message : String(error);
-    return Object.freeze({
-      kind: 'command',
-      status: 'could_not_run',
-      evidence: `Verification capture could not acquire its per-host full-suite slot: ${reason}`,
-      command,
-      logPath: null,
-      exitCode: 2,
-      outputTail: null,
-      failureIdentities: Object.freeze(['could_not_run:capture-slot']),
-      reason,
-    });
+    return captureSlotCouldNotRun(command, Object.freeze({
+      reason: `Verification capture could not acquire its per-host full-suite slot: ${reason}`,
+      errorCode: captureSlotErrorCode(error),
+    }));
   }
-  if ('reason' in slot) return captureSlotTimeout(command, slot);
+  if ('reason' in slot) {
+    return 'waitedForSlotMs' in slot ? captureSlotTimeout(command, slot) : captureSlotCouldNotRun(command, slot);
+  }
+  let capture: VerifyCapture;
+  let releaseFailure: CaptureSlotFailure | null = null;
   try {
-    const capture = await runVerifyCapture(command, cwd, undefined, {
+    capture = await runVerifyCapture(command, cwd, undefined, {
       ...process.env,
       SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT: String(slot.queuePosition - 1),
     });
-    return Object.freeze({
-      ...capture,
-      waitedForSlotMs: slot.waitedForSlotMs,
-      queuePosition: slot.queuePosition,
-    });
   } finally {
-    slot.release();
+    releaseFailure = await slot.release();
   }
+  if (releaseFailure) return captureSlotCouldNotRun(command, releaseFailure);
+  return Object.freeze({
+    ...capture,
+    waitedForSlotMs: slot.waitedForSlotMs,
+    queuePosition: slot.queuePosition,
+  });
 }
 
 function captureTarget(args: readonly string[]): CaptureTarget | null {
@@ -205,10 +278,10 @@ function captureWorkingDirectory(target: CaptureTarget, cwd: string): string {
   return store.workingTreeDeliveryCandidate(project.slug, ticket) ? project.path : cwd;
 }
 
-async function runCapturedVerification(command: string, target: CaptureTarget | null, cwd = process.cwd()) {
+async function runCapturedVerification(command: string, target: CaptureTarget | null, cwd = process.cwd(), fileSystem: CaptureSlotFileSystem = fs) {
   const captureCwd = target ? captureWorkingDirectory(target, cwd) : cwd;
   const capture = target && isFullSuiteCommand(command)
-    ? await runFullSuiteCapture(command, target.project, captureCwd)
+    ? await runFullSuiteCapture(command, target.project, captureCwd, fileSystem)
     : await runVerifyCapture(command, captureCwd);
   const recorded = target ? recordCapture(target, capture, captureCwd) : null;
   return Object.freeze({ capture, recorded });
