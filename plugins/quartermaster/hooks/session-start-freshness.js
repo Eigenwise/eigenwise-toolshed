@@ -15,6 +15,7 @@ const {
   readJson: readJsonFrom,
   reportLoadedPluginVersion,
 } = require('./freshness-helpers.js');
+const { localGatewayCheck, parseGatewayDoctorOutput } = require('../lib/gateway-health.js');
 
 const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const MIN_CLAUDE_CODE_VERSION = '2.1.0';
@@ -31,8 +32,8 @@ const BLOCKS_THE_USER = 'blocking';
 const DRIFTING_ON_THE_USER = 'degraded';
 const USER_ACTION_SEVERITY = [BLOCKS_THE_USER, DRIFTING_ON_THE_USER];
 
-function finding(text, userAction = null) {
-  return { text, userAction };
+function finding(text, userAction = null, notice = '') {
+  return { text, userAction, ...(notice ? { notice } : {}) };
 }
 
 function findingText(findings) {
@@ -78,31 +79,6 @@ function runVersion(command, args, timeout = 1000) {
   } catch (_) {
     return '';
   }
-}
-
-// Parses the model-gateway doctor's human output. Its version line carries the
-// binary name before the number ("version: claude-code-proxy 0.1.33"), and the
-// healthy proxy state reads "answering /v1/models", not "running" — matching
-// only "running" reported a healthy gateway as down. The phrasings are pinned
-// against plugins/model-gateway/lib/commands.js by a drift test.
-function parseGatewayDoctorOutput(output) {
-  const auth = output.match(/^codex auth:\s*(.+)$/m)?.[1];
-  return {
-    available: true,
-    proxyVersion: output.match(/^version:.*?(\d+\.\d+\.\d+\S*)\s*$/m)?.[1],
-    auth: /authenticated/i.test(auth || '') && !/not authenticated/i.test(auth || ''),
-    proxy: /^proxy \(claude-code-proxy\).*(answering \/v1\/models|running)/im.test(output),
-    shim: /^shim \(model router\).*running/im.test(output),
-  };
-}
-
-function localGatewayCheck(gateway) {
-  if (!gateway?.installPath) return { available: false };
-  const gatewayScript = path.join(gateway.installPath, 'bin', 'model-gateway.js');
-  if (!fs.existsSync(gatewayScript)) return { available: false };
-  const output = runVersion(process.execPath, [gatewayScript, 'doctor'], 3000);
-  if (!output) return { available: false };
-  return parseGatewayDoctorOutput(output);
 }
 
 function sidequestBoards(home) {
@@ -271,11 +247,29 @@ function installedFreshness(instances, marketplaces, now, manifestFor, gitFreshn
   return problems;
 }
 
+function gatewayCheckFailure(check) {
+  const diagnostic = typeof check?.diagnostic === 'string' ? check.diagnostic : '';
+  const guidance = 'Run /quartermaster:toolshed-doctor for the full health report.';
+  const details = {
+    'missing-checker': `model-gateway health checker is missing${diagnostic ? ` (${diagnostic})` : ''}; run /update-toolshed, then /reload-plugins.`,
+    'spawn-error': `model-gateway health checker could not start${diagnostic ? ` (${diagnostic})` : ''}. ${guidance}`,
+    timeout: `model-gateway health check ${diagnostic || 'timed out'}. ${guidance}`,
+    'doctor-exit': `model-gateway doctor ${diagnostic || 'exited with a nonzero status'}. ${guidance}`,
+    'empty-output': `model-gateway health checker ${diagnostic || 'returned no output'}. ${guidance}`,
+  };
+  const text = details[check?.state] || 'model-gateway local health check is unavailable';
+  const compactDiagnostic = diagnostic.slice(0, 120);
+  const notice = check?.state === 'doctor-exit' && compactDiagnostic
+    ? `model-gateway doctor ${compactDiagnostic}. ${guidance}`
+    : text;
+  return finding(text, DRIFTING_ON_THE_USER, notice);
+}
+
 function gatewayFreshness(instances, checkGateway) {
   const gateway = instances.find((instance) => instance.id === 'model-gateway@eigenwise-toolshed');
   if (!gateway) return [];
   const check = checkGateway(gateway);
-  if (!check?.available) return [finding('model-gateway local health check is unavailable', DRIFTING_ON_THE_USER)];
+  if (!check?.available) return [gatewayCheckFailure(check)];
 
   const problems = [];
   const floor = check.minProxyVersion || proxyVersionFloor(gateway);
@@ -527,7 +521,7 @@ function userActionNotice(problems) {
     .slice()
     .sort((left, right) => USER_ACTION_SEVERITY.indexOf(left.userAction) - USER_ACTION_SEVERITY.indexOf(right.userAction))[0];
   const rest = actionable.length - 1;
-  return `Toolshed needs you: ${worst.text}${rest ? `, +${rest} more` : ''} — ask me for the Toolshed health report.`;
+  return `Toolshed needs you: ${worst.notice || worst.text}${rest ? `, +${rest} more` : ''} — ask me for the Toolshed health report.`;
 }
 
 function sessionInput() {
