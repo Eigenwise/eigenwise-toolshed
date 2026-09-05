@@ -949,7 +949,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'integrate',
-    description: 'Deliver one ref or a comma-separated ref group. wave assembles and gates only as an options object; call again without wave to deliver. Terminal isolated worktrees are reclaimed best-effort after durable delivery.',
+    description: 'Deliver one ref or a comma-separated ref group. wave assembles and gates only as an options object at the current integration-target head; a refusal keeps submitted candidates parked. Call again without wave to deliver. Terminal isolated worktrees are reclaimed best-effort after durable delivery.',
     inputSchema: {
       type: 'object',
       properties: {

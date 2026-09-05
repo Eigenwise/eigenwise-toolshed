@@ -45,6 +45,12 @@ wave delivers its exact Git participant set and the resulting revision passes it
 participant only after the record exists. It validates each submitted range and admitted scope again,
 names stray paths, and never deletes a pinned ref.
 
+`integrate` with `wave: {}` opens a fresh wave at the configured integration target's current head.
+A recorded wave for the same participants whose baseline is behind that head is superseded rather than
+reused. A candidate verified against an ancestor of the current target can join that wave; the merged-tree
+gate covers the newer target content. An assembly refusal leaves every submitted participant parked in
+`doing` with its candidate intact, including a refusal that reports an invalidated candidate.
+
 - `merge` is the default for release-pipeline repos such as Toolshed. It merges the submitted tip into
   the configured integration branch.
 - `replay` cherry-picks the submitted commits in order, keeping atomic history. A conflict aborts the
@@ -105,13 +111,13 @@ board (submissions stay parked — fail closed).
    against the immutable submit-time snapshot. Leave rejected submissions parked.
 6. **Assemble and deliver exact waves**, oldest compatible waves first. For every group, call
    `sidequest assemble-wave` with every intended participant and its project-defined gate evidence.
-   It invalidates candidates with a moved baseline, missing verifier, out-of-scope surfaces, or an
-   overlapping participant surface. Pass only the exact participant set from the passing assembly to
-   `sidequest integrate`; a partial set, a mixed wave, or a failed/missing gate refuses before a
-   delivery record exists. `integrate` delivers all Git participants as one unit, verifies the
-   resulting revision, then records delivery for every participant. A conflict or failed delivery
-   verification rolls back the delivery, leaves the wave parked, and requires a repair or refreshed
-   assembly.
+   A moved baseline, missing verifier, out-of-scope surface, or overlapping participant surface refuses
+   assembly and reports the affected candidates without changing their submissions. Pass only the exact
+   participant set from the passing assembly to `sidequest integrate`; a partial set, a mixed wave, or a
+   failed/missing gate refuses before a delivery record exists. `integrate` delivers all Git participants as
+   one unit, verifies the resulting revision, then records delivery for every participant. A conflict or
+   failed delivery verification rolls back the delivery, leaves the wave parked, and requires a repair or
+   refreshed assembly.
 7. **Assign versions centrally**: for each plugin touched by the integrated set, take origin's next
    free version ONCE for the batch and bump BOTH `plugins/<name>/.claude-plugin/plugin.json` and the
    root `.claude-plugin/marketplace.json` (they must match) in one commit. Executors no longer bump

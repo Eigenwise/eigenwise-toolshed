@@ -4035,6 +4035,9 @@ test('SQ-2337: a failed delivery gate cannot redirect already-landed abandonment
 
 test('SQ-2429: pending candidates block a singleton without invalidation while an explicit clean same-file wave assembles', () => {
   cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
   try {
     const docsPath = path.join(PROJECT_DIR, 'docs', 'guide.md');
     fs.mkdirSync(path.dirname(docsPath), { recursive: true });
@@ -4098,6 +4101,142 @@ test('SQ-2429: pending candidates block a singleton without invalidation while a
     assert.strictEqual(assembled.ok, true, assembled.message);
     assert.deepStrictEqual(assembled.wave.participants, [primary.ref, sibling.ref]);
   } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+test('SQ-2463: wave assembly replaces a stale wave baseline with the current target and gates ancestor candidates once', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  try {
+    const docsPath = path.join(PROJECT_DIR, 'docs', 'wave-baseline.md');
+    fs.mkdirSync(path.dirname(docsPath), { recursive: true });
+    fs.writeFileSync(docsPath, 'base\n');
+    git(['add', 'docs/wave-baseline.md']);
+    git(['commit', '-m', 'wave baseline fixture']);
+    const candidateBaseline = git(['rev-parse', 'HEAD']);
+    const observedAt = new Date().toISOString();
+    const staleWave = {
+      id: 'stale-wave',
+      baseline: { revision: { source: 'git', value: candidateBaseline, observedAt }, purpose: 'wave' },
+      participants: [],
+      state: 'gate_failed',
+    };
+
+    const primary = addTicket('primary stale-wave candidate', { files: ['docs'] });
+    assert.strictEqual(store.claimTicket(slug, primary.ref, 'primary-wave-worker', { direct: true, reason: 'The stale wave fixture requires a local direct claim.' }).ok, true);
+    fs.writeFileSync(docsPath, 'base\nprimary\n');
+    git(['add', 'docs/wave-baseline.md']);
+    git(['commit', '-m', 'primary stale-wave candidate']);
+    const primaryCandidate = git(['rev-parse', 'HEAD']);
+    pin(primary, primaryCandidate);
+    assert.strictEqual(store.submitTicket(slug, primary.ref, 'primary-wave-worker', { commit: primaryCandidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const primarySubmission = store.getTicket(slug, primary.ref);
+    Object.assign(primarySubmission.submission, {
+      baseline: { revision: { source: 'git', value: candidateBaseline, observedAt }, purpose: 'dispatch' },
+      changedPaths: ['docs/wave-baseline.md'],
+      wave: staleWave,
+    });
+    persist(primarySubmission);
+
+    git(['reset', '--hard', candidateBaseline]);
+    const sibling = addTicket('sibling stale-wave candidate', { files: ['docs'] });
+    assert.strictEqual(store.claimTicket(slug, sibling.ref, 'sibling-wave-worker', { direct: true, reason: 'The stale wave fixture requires a local direct claim.' }).ok, true);
+    fs.writeFileSync(docsPath, 'base\nsibling\n');
+    git(['add', 'docs/wave-baseline.md']);
+    git(['commit', '-m', 'sibling stale-wave candidate']);
+    const siblingCandidate = git(['rev-parse', 'HEAD']);
+    pin(sibling, siblingCandidate);
+    assert.strictEqual(store.submitTicket(slug, sibling.ref, 'sibling-wave-worker', { commit: siblingCandidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const siblingSubmission = store.getTicket(slug, sibling.ref);
+    Object.assign(siblingSubmission.submission, {
+      baseline: { revision: { source: 'git', value: candidateBaseline, observedAt }, purpose: 'dispatch' },
+      changedPaths: ['docs/wave-baseline.md'],
+      wave: staleWave,
+    });
+    persist(siblingSubmission);
+
+    git(['reset', '--hard', candidateBaseline]);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'wave-target-advance.js'), 'current target\n');
+    git(['add', 'lib/wave-target-advance.js']);
+    git(['commit', '-m', 'advance integration target after candidate baselines']);
+    const currentTarget = git(['rev-parse', 'HEAD']);
+    const gateScriptPath = path.join(PROJECT_DIR, 'count-wave-gates.cjs');
+    const gateLogPath = path.join(PROJECT_DIR, 'wave-gates.log');
+    fs.writeFileSync(gateScriptPath, `require('node:fs').appendFileSync(${JSON.stringify(gateLogPath)}, 'gate\\n');\n`);
+    const gateCommand = `node ${JSON.stringify(gateScriptPath)}`;
+    for (const ref of [primary.ref, sibling.ref]) {
+      const ticket = store.getTicket(slug, ref);
+      ticket.executorVerify = gateCommand;
+      persist(ticket);
+    }
+
+    const assembled = store.assembleSubmissionWave(slug, [primary.ref, sibling.ref], { waveId: 'fresh-wave' });
+    assert.strictEqual(assembled.ok, true, assembled.message);
+    assert.strictEqual(assembled.wave.id, 'fresh-wave');
+    assert.strictEqual(assembled.wave.baseline.revision.value, currentTarget);
+    assert.deepStrictEqual(assembled.wave.participants, [primary.ref, sibling.ref]);
+    assert.strictEqual(fs.readFileSync(gateLogPath, 'utf8'), 'gate\n');
+    for (const ref of [primary.ref, sibling.ref]) {
+      const ticket = store.getTicket(slug, ref);
+      assert.strictEqual(ticket.status, 'doing');
+      assert.strictEqual(store.pendingSubmission(ticket), true);
+    }
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+test('SQ-2463: a wave invalidation preserves submitted candidate status', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  try {
+    const primary = addTicket('valid current-target wave candidate', { files: ['docs'] });
+    const primaryCandidate = createCandidateCommit('wave-status.js', 'primary\n');
+    pin(primary, primaryCandidate);
+    assert.strictEqual(store.claimTicket(slug, primary.ref, 'current-target-worker', { direct: true, reason: 'The invalidation fixture requires a local direct claim.' }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, primary.ref, 'current-target-worker', { commit: primaryCandidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const currentTarget = git(['rev-parse', 'HEAD']);
+    const observedAt = new Date().toISOString();
+    const currentSubmission = store.getTicket(slug, primary.ref);
+    Object.assign(currentSubmission.submission, {
+      baseline: { revision: { source: 'git', value: currentTarget, observedAt }, purpose: 'dispatch' },
+      changedPaths: ['docs/wave-status.js'],
+    });
+    persist(currentSubmission);
+
+    const invalid = addTicket('invalid wave candidate', { files: ['docs'] });
+    const invalidPath = path.join(PROJECT_DIR, 'docs', 'invalid-wave-status.js');
+    fs.mkdirSync(path.dirname(invalidPath), { recursive: true });
+    fs.writeFileSync(invalidPath, 'invalid\n');
+    git(['add', 'docs/invalid-wave-status.js']);
+    git(['commit', '-m', 'invalid wave candidate']);
+    const invalidCandidate = git(['rev-parse', 'HEAD']);
+    pin(invalid, invalidCandidate);
+    assert.strictEqual(store.claimTicket(slug, invalid.ref, 'invalid-wave-worker', { direct: true, reason: 'The invalidation fixture requires a local direct claim.' }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, invalid.ref, 'invalid-wave-worker', { commit: invalidCandidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const invalidSubmission = store.getTicket(slug, invalid.ref);
+    Object.assign(invalidSubmission.submission, {
+      baseline: { revision: { source: 'git', value: '0'.repeat(40), observedAt }, purpose: 'dispatch' },
+      changedPaths: ['docs/invalid-wave-status.js'],
+    });
+    persist(invalidSubmission);
+
+    const refused = store.assembleSubmissionWave(slug, [primary.ref, invalid.ref], { waveId: 'invalid-wave' });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'wave_invalidated');
+    assert.strictEqual(store.getTicket(slug, primary.ref).status, 'doing');
+    assert.strictEqual(store.getTicket(slug, invalid.ref).status, 'doing');
+    assert.strictEqual(store.pendingSubmission(store.getTicket(slug, invalid.ref)), true);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
     cleanBranch();
   }
 });

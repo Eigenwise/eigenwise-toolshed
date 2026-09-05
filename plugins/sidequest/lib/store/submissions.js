@@ -7,7 +7,7 @@ const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, rev
 const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require("../kernel/wave");
 const { isInScope, scopedPaths } = require("../scope-match");
 function createSubmissions(dependencies) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
   const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
   const SUBMISSION_GITREF_MAX = 200;
@@ -2511,18 +2511,39 @@ ${verify.outputTail}` : null
       verification: submission.verificationResult
     };
   }
-  function invalidateWaveCandidates(slug, invalidated, waveId, baseline) {
-    for (const invalidation of invalidated) {
-      const ticket = getTicket(slug, invalidation.ref);
-      if (!ticket?.submission) continue;
-      ticket.submission.wave = { id: waveId, baseline, state: "invalidated", invalidation };
-      const invalidatedAttempt = transitionAttempt(ticket.lifecycleAttempt, "invalidate");
-      if (!attemptDiagnostic(invalidatedAttempt)) recordLifecycleAttempt(ticket, invalidatedAttempt);
-      ticket.status = "todo";
-      ticket.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-      putTicket(slug, ticket);
-      queueEventNotification(slug, ticket, "status", "wave");
+  function currentIntegrationWaveBaseline(slug, fallback) {
+    if (fallback?.revision?.source !== "git") return fallback;
+    const projectPath = String(readMeta(slug)?.path || "").trim();
+    const target = integrationTarget(slug);
+    const commit = integrationTargetCommit(projectPath, target);
+    return Object.freeze({
+      revision: Object.freeze({ source: "git", value: commit, observedAt: (/* @__PURE__ */ new Date()).toISOString() }),
+      purpose: "wave"
+    });
+  }
+  function candidateBaselineIsCurrentOrAncestor(slug, candidate, waveBaseline) {
+    const candidateRevision = candidate?.baseline?.revision;
+    const waveRevision = waveBaseline?.revision;
+    if (!candidateRevision || !waveRevision || candidateRevision.source !== waveRevision.source) return false;
+    if (candidateRevision.value === waveRevision.value) return true;
+    if (candidateRevision.source !== "git") return false;
+    try {
+      execFileSync("git", ["merge-base", "--is-ancestor", candidateRevision.value, waveRevision.value], {
+        cwd: String(readMeta(slug)?.path || "").trim(),
+        encoding: "utf8",
+        windowsHide: true,
+        stdio: "pipe"
+      });
+      return true;
+    } catch (_) {
+      return false;
     }
+  }
+  function waveCandidatesForBaseline(slug, candidates, waveBaseline) {
+    return candidates.map((candidate) => Object.freeze({
+      ...candidate,
+      baselineCompatible: candidateBaselineIsCurrentOrAncestor(slug, candidate, waveBaseline)
+    }));
   }
   function assembleSubmissionWave(slug, refs, opts) {
     const participantRefs = Array.from(new Set((Array.isArray(refs) ? refs : [refs]).map((ref) => String(ref || "").trim()).filter(Boolean)));
@@ -2552,7 +2573,7 @@ ${verify.outputTail}` : null
     if (!firstCandidate) return { ok: false, reason: "wave_baseline_required", message: "Wave assembly requires a candidate baseline." };
     const omittedPendingOverlaps = omittedPendingSubmissionOverlaps(slug, tickets);
     const opened = openWave({
-      baseline: firstCandidate.baseline,
+      baseline: currentIntegrationWaveBaseline(slug, firstCandidate.baseline),
       participants: tickets.map((ticket) => ({
         ref: ticket.ref,
         dependencies: Array.isArray(dependencies2[ticket.ref]) ? dependencies2[ticket.ref] : [],
@@ -2560,10 +2581,15 @@ ${verify.outputTail}` : null
       }))
     });
     if ("code" in opened) return { ok: false, reason: opened.code, message: opened.message };
-    const decision = assembleWave(opened, waveCandidates);
+    const decision = assembleWave(opened, waveCandidatesForBaseline(slug, waveCandidates, opened.baseline));
     if (!decision.ok) {
-      transaction(() => invalidateWaveCandidates(slug, decision.invalidated, waveId, opened.baseline));
-      return { ok: false, reason: "wave_invalidated", invalidated: decision.invalidated, wave: { id: waveId, baseline: opened.baseline } };
+      return {
+        ok: false,
+        reason: "wave_invalidated",
+        message: `Wave ${waveId} could not assemble at the current integration target. Submitted candidates remain parked with their existing verification evidence.`,
+        invalidated: decision.invalidated,
+        wave: { id: waveId, baseline: opened.baseline }
+      };
     }
     const verification = authoritativeWaveVerification(slug, tickets, waveId, opts?.verification, opts);
     if (!verification.ok || !("verification" in verification)) return verification;
