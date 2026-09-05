@@ -89,7 +89,7 @@ function sidequestBoards(home) {
     const database = new DatabaseSync(databaseFile, { readOnly: true });
     const rows = database.prepare('SELECT data FROM projects').all();
     database.close();
-    return rows.map((row) => JSON.parse(row.data)).filter((board) => board?.path);
+    return rows.map((row) => JSON.parse(row.data)).filter((board) => board?.path && !board.archivedAt);
   } catch (_) {
     return [];
   }

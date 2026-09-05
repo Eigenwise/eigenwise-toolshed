@@ -780,6 +780,27 @@ test('SQ-2237: settings-only Sidequest enablement reports a board dead flag', (t
   assert.deepEqual(findingText(userEnabledAndInstalled.problems), ['Sidequest board other has no project/local Sidequest install']);
 });
 
+test('SQ-2449: archived Sidequest boards are excluded from audit findings', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-archived-board-home-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const liveBoard = { name: 'live', path: path.join(home, 'live-board') };
+  const archivedBoard = {
+    name: 'archived',
+    path: path.join(home, 'archived-board'),
+    archivedAt: '2026-08-31T00:00:00.000Z',
+  };
+  seedSidequestBoards(home, [liveBoard, archivedBoard]);
+
+  const options = fixture({ home });
+  delete options.boards;
+  const result = audit(options);
+  const problems = findingText(result.problems).join('\n');
+
+  assert.deepEqual(result.mappings, [{ name: liveBoard.name, path: liveBoard.path, status: 'missing' }]);
+  assert.match(problems, /Sidequest board live has no Sidequest install/);
+  assert.doesNotMatch(problems, /archived/);
+});
+
 test('SQ-2209: a project without a codebase map is not asked to install a mapper', (t) => {
   const project = mappedProject(t, { withMap: false });
 
