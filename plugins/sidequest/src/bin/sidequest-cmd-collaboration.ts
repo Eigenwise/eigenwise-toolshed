@@ -48,14 +48,55 @@ function worktreeSweepEntryLine(entry: WorktreeSweepOutputEntry): string {
   return `  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}; ${cleanliness}; ahead ${ahead}; patch-equivalent ${patchEquivalent}; age ${age}]`;
 }
 
+function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null) return 'unavailable';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
+function printStorage(storage: any): void {
+  console.log(`  worktrees: ${formatBytes(storage.worktrees.bytes)} (${storage.worktrees.path})`);
+  console.log(`  backups: ${formatBytes(storage.backups.bytes)} (${storage.backups.path})`);
+  console.log(`  quarantine: ${formatBytes(storage.quarantine.bytes)} (${storage.quarantine.path})`);
+}
+
 async function cmdWorktrees(opts: any, positional: any) {
   const action = String(positional[0] || '').toLowerCase();
-  if ((action && action !== 'sweep') || (!action && !opts.sweep)) {
-    fail('worktrees: use `sidequest worktrees sweep` to inspect stale agent worktrees.');
+  if ((action && !['status', 'sweep'].includes(action)) || (!action && !opts.sweep)) {
+    fail('worktrees: use `sidequest worktrees status` or `sidequest worktrees sweep` to inspect worktree storage.');
+  }
+  const { slug, meta } = await resolveProject(opts);
+  if (action === 'status') {
+    const storage = await worktrees.storageStatus();
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ project: slug, storage }, null, 2) + '\n');
+      return;
+    }
+    console.log(`worktree storage for ${meta.name}`);
+    printStorage(storage);
+    return;
   }
   const minAgeHours = opts['min-age-hours'] == null ? 3 : Number(opts['min-age-hours']);
   if (!Number.isFinite(minAgeHours) || minAgeHours < 0) fail('worktrees sweep: --min-age-hours must be a non-negative number.');
-  const { slug, meta } = await resolveProject(opts);
+  const config = store.boardConfig(slug) || {};
+  const recoveryRetentionAgeHours = opts['recovery-retention-age-hours'] == null
+    ? Number(config.worktreeRecoveryRetentionAgeHours || 14 * 24)
+    : Number(opts['recovery-retention-age-hours']);
+  const recoveryRetentionMaxPerAgent = opts['recovery-retention-max-per-agent'] == null
+    ? Number(config.worktreeRecoveryRetentionMaxPerAgent || 3)
+    : Number(opts['recovery-retention-max-per-agent']);
+  if (!Number.isFinite(recoveryRetentionAgeHours) || recoveryRetentionAgeHours < 0) {
+    fail('worktrees sweep: --recovery-retention-age-hours must be a non-negative number.');
+  }
+  if (!Number.isInteger(recoveryRetentionMaxPerAgent) || recoveryRetentionMaxPerAgent < 1) {
+    fail('worktrees sweep: --recovery-retention-max-per-agent must be a whole number of at least 1.');
+  }
   let result;
   try {
     result = await worktrees.sweep(meta.path, store.worktreeGcTickets(), {
@@ -63,6 +104,9 @@ async function cmdWorktrees(opts: any, positional: any) {
       currentPath: store.nearestRepoRoot(process.cwd()),
       integrationTarget: store.integrationTarget(slug),
       minAgeMs: minAgeHours * 60 * 60 * 1000,
+      recoveryRetentionAgeMs: recoveryRetentionAgeHours * 60 * 60 * 1000,
+      recoveryRetentionMaxPerAgent,
+      includeStoreUsage: true,
     });
   } catch (error: any) {
     fail(`worktrees: ${(error && error.message) || error}`);
@@ -72,10 +116,15 @@ async function cmdWorktrees(opts: any, positional: any) {
     if (result.failures.length) process.exitCode = 1;
     return;
   }
-  console.log(`worktrees sweep: ${result.dryRun ? 'dry run' : 'executed'} for ${meta.name} (minimum age ${minAgeHours}h)`);
+  console.log(`worktrees sweep: ${result.dryRun ? 'dry run' : 'executed'} for ${meta.name} (minimum age ${minAgeHours}h; recovery retention ${recoveryRetentionAgeHours}h, ${recoveryRetentionMaxPerAgent} per agent)`);
+  printStorage(result.storage);
   for (const entry of result.entries) console.log(worktreeSweepEntryLine(entry));
-  if (result.dryRun) console.log('  pass --yes to remove the planned worktrees.');
+  for (const entry of [...result.recovery.backups.entries, ...result.recovery.quarantine.entries].filter((entry: any) => entry.action === 'remove')) {
+    console.log(`  REMOVE ${entry.store.toUpperCase()} ${entry.path} [${entry.reason}; ${formatBytes(entry.sizeBytes)}]`);
+  }
+  if (result.dryRun) console.log('  pass --yes to remove the planned worktree and recovery entries.');
   if (result.removed.length) console.log(`  removed ${result.counts.removedWorktrees} worktree(s) and deleted ${result.counts.deletedBranches} branch(es).`);
+  if (result.counts.removedRecoveryEntries) console.log(`  removed ${result.counts.removedRecoveryEntries} recovery entry(s), reclaimed ${formatBytes(result.counts.reclaimedBytes)}.`);
   for (const entry of result.salvaged || []) console.log(`  SALVAGED ${entry.path} at ${entry.ref}; recover with ${entry.recovery}`);
   if (result.prunedOrphanBranches.length) console.log(`  pruned ${result.counts.prunedOrphanBranches} orphan worktree branch(es).`);
   for (const failure of result.failures) console.log(`  ERROR ${failure.path || 'prune'}: ${failure.message}`);

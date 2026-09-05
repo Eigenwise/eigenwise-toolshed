@@ -266,6 +266,8 @@ async function sweepWorktrees(data, includeKnownProjects) {
         integrationTarget: target,
         maxCandidates: MAX_CANDIDATES_PER_PROJECT,
         notIntegratedSalvageAgeMs: (config?.notIntegratedSalvageAgeHours || DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS) * 60 * 60 * 1e3,
+        recoveryRetentionAgeMs: (config?.worktreeRecoveryRetentionAgeHours || 14 * 24) * 60 * 60 * 1e3,
+        recoveryRetentionMaxPerAgent: config?.worktreeRecoveryRetentionMaxPerAgent || 3,
         onProgress: (progress) => updateProgress(project, progress)
       });
       if (!isCurrentProject) continue;

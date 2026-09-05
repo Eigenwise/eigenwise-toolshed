@@ -30,7 +30,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   claim: ['by', 'token-file', 'effort', 'executor', 'force', 'direct', 'reason', 'session'],
   checkpoint: ['by', 'commit', 'worktree', 'verify', 'ttl-minutes'],
   claims: ['sweep'],
-  worktrees: ['dry-run', 'yes', 'min-age-hours'],
+  worktrees: ['dry-run', 'yes', 'min-age-hours', 'recovery-retention-age-hours', 'recovery-retention-max-per-agent'],
   'recover-shared': ['project', 'stash', 'yes'],
   next: ['by', 'priority', 'model', 'category', 'direct', 'reason'],
   reconcile: ['session', 'reason', 'ref'],
@@ -65,7 +65,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   'native-agent': ['prompt', 'shared-tree', 'unverified-transport', 'session', 'dir', 'name'],
   models: ['full'],
   route: ['ticket'],
-  'board-config': ['name', 'always-in-scope', 'read-only-denied-tool', 'generated-pairs', 'integration-mode', 'integration-branch', 'delivery', 'integration-verify-timeout-ms', 'worktree-isolation', 'worktree-base', 'not-integrated-salvage-age-hours', 'auto-approve-test-scope', 'auto-approve-scope', 'worktree-setup', 'worktree-dependency-paths'],
+  'board-config': ['name', 'always-in-scope', 'read-only-denied-tool', 'generated-pairs', 'integration-mode', 'integration-branch', 'delivery', 'integration-verify-timeout-ms', 'worktree-isolation', 'worktree-base', 'not-integrated-salvage-age-hours', 'worktree-recovery-retention-age-hours', 'worktree-recovery-retention-max-per-agent', 'auto-approve-test-scope', 'auto-approve-scope', 'worktree-setup', 'worktree-dependency-paths'],
   projects: ['archived'],
   routing: ['enabled', 'disabled'],
   'archive-board': [],
@@ -97,7 +97,7 @@ function commandMutates(command: string, opts: any, positional: any[]): boolean 
   }
   if (command === 'story') return ['add', 'update', 'edit', 'log', 'rotate'].includes(String(positional[0] || '').toLowerCase());
   if (command === 'board-config' || command === 'board_config') {
-    return ['name', 'always-in-scope', 'read-only-denied-tool', 'generated-pairs', 'integration-mode', 'integration-branch', 'worktree-isolation', 'worktree-base', 'not-integrated-salvage-age-hours', 'auto-approve-test-scope', 'auto-approve-scope', 'worktree-setup', 'worktree-dependency-paths'].some((key) => Object.hasOwn(opts, key));
+    return ['name', 'always-in-scope', 'read-only-denied-tool', 'generated-pairs', 'integration-mode', 'integration-branch', 'worktree-isolation', 'worktree-base', 'not-integrated-salvage-age-hours', 'worktree-recovery-retention-age-hours', 'worktree-recovery-retention-max-per-agent', 'auto-approve-test-scope', 'auto-approve-scope', 'worktree-setup', 'worktree-dependency-paths'].some((key) => Object.hasOwn(opts, key));
   }
   return false;
 }
@@ -214,7 +214,7 @@ const HELP_COMMANDS: any = {
   claim: 'sidequest claim <id|SQ-n> [--by who] [--token-file path] [--effort level] [--force] [--direct --reason "why"]',
   checkpoint: 'sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "command: result" [--ttl-minutes N] [--json]',
   claims: 'sidequest claims sweep [--project <path-or-slug>]',
-  worktrees: 'sidequest worktrees sweep [--dry-run] [--yes] [--min-age-hours N] [--project <path-or-slug>]  inspect stale agent worktrees; --yes reclaims clean, settled legacy checkouts without a lease after the minimum age',
+  worktrees: 'sidequest worktrees <status|sweep> [--dry-run] [--yes] [--min-age-hours N] [--recovery-retention-age-hours N] [--recovery-retention-max-per-agent N] [--project <path-or-slug>]  report worktree, backup, and quarantine storage; sweep plans stale worktree and recovery-entry cleanup',
   next: 'sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why"]',
   reconcile: 'sidequest reconcile [--session <id>] [--reason "..."]',
   work: 'sidequest work|drain',
@@ -247,7 +247,7 @@ const HELP_COMMANDS: any = {
   'cleanup-temp': 'sidequest cleanup-temp [--root <path>] [--json]',
   models: 'sidequest models [--project <path-or-slug>] [--full] [--json]',
   route: 'sidequest route <category> [--ticket SQ-n] [--project <path-or-slug>] --json',
-  'board-config': 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base origin-main|local-main] [--not-integrated-salvage-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--worktree-dependency-paths <json>] [--json]',
+  'board-config': 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base origin-main|local-main] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--worktree-recovery-retention-max-per-agent <count>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--worktree-dependency-paths <json>] [--json]',
   projects: 'sidequest projects [--archived] [--json]',
   routing: 'sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]',
   'archive-board': 'sidequest archive-board <board-ref> [--json]',
@@ -367,7 +367,7 @@ Native Agent dispatch (routed work stays in this conversation):
     then two activity-based backstops: no board activity for SIDEQUEST_CLAIM_IDLE_MIN (default 60m) with no live executor
     associated, or SIDEQUEST_CLAIM_ABANDON_MIN (default 1440m) for a death nothing observed. A running executor's claim is
     never swept on age, and closeout (commit/submit/done) never consults these windows.
-  sidequest worktrees sweep [--dry-run] [--yes] [--min-age-hours N] [--project <path-or-slug>]  list stale agent worktrees; --yes reclaims clean, settled legacy checkouts without a lease after the minimum age and backs up dirty cleanup before removal
+  sidequest worktrees <status|sweep> [--dry-run] [--yes] [--min-age-hours N] [--recovery-retention-age-hours N] [--recovery-retention-max-per-agent N] [--project <path-or-slug>]  report worktree storage; --yes removes planned stale worktrees and expired recovery entries
   sidequest recover-shared --project <path-or-slug> --stash <stash@{n}> --yes  reset a dirty shared checkout only after verifying its named stash
 
 Assigning (persistent owner, e.g. handing a ticket to the human — separate from a claim):
@@ -417,7 +417,7 @@ Project selection:
     A slug or display name must already be registered. An absolute path to a real
     directory is created on first use, so you can file into another repo's board
     (even one that doesn't exist yet) from anywhere by passing its full path.
-  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--auto-approve-scope <glob>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base <origin-main|local-main>] [--not-integrated-salvage-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>] [--worktree-dependency-paths <json>]
+  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--auto-approve-scope <glob>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base <origin-main|local-main>] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--worktree-recovery-retention-max-per-agent <count>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>] [--worktree-dependency-paths <json>]
     View or update board settings. --name changes only the display name; the slug, path, tickets, claims, and refs stay put.
     --worktree-base picks which side of --integration-branch isolated dispatches fork: origin-main uses its
     remote ref and refuses the dispatch when that ref does not exist, local-main uses the local branch.

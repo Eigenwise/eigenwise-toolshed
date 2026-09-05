@@ -1281,6 +1281,28 @@ test('board_config stores and clears worktree provisioning', async () => {
   assert.deepStrictEqual(cleared.worktreeDependencyPaths, []);
 });
 
+test('board_config sets worktree recovery retention', async () => {
+  const root = path.join(os.tmpdir(), 'sq-mcp-recovery-retention');
+  const project = store.ensureProject(root, 'SQ recovery retention').slug;
+  const configured = await callTool('board_config', {
+    project,
+    worktreeRecoveryRetentionAgeHours: 336,
+    worktreeRecoveryRetentionMaxPerAgent: 5,
+  });
+  assert.equal(configured.worktreeRecoveryRetentionAgeHours, 336);
+  assert.equal(configured.worktreeRecoveryRetentionMaxPerAgent, 5);
+  const cli = runCli([
+    'board-config', '--project', root,
+    '--worktree-recovery-retention-age-hours', '504',
+    '--worktree-recovery-retention-max-per-agent', '6',
+    '--json',
+  ]);
+  assert.equal(cli.worktreeRecoveryRetentionAgeHours, 504);
+  assert.equal(cli.worktreeRecoveryRetentionMaxPerAgent, 6);
+  await assert.rejects(() => callTool('board_config', { project, worktreeRecoveryRetentionAgeHours: 0 }), /at least 1 hour/);
+  await assert.rejects(() => callTool('board_config', { project, worktreeRecoveryRetentionMaxPerAgent: 0 }), /at least 1/);
+});
+
 test('board_config sets the unintegrated worktree salvage age', async () => {
   const root = path.join(os.tmpdir(), 'sq-mcp-salvage-age');
   const project = store.ensureProject(root, 'SQ salvage age').slug;
