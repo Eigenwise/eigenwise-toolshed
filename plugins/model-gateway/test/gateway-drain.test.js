@@ -127,7 +127,7 @@ test('restart with drain submits the newest installed CLI path', async (t) => {
   const shimPort = await listen(shim);
   t.after(() => shim.close());
 
-  const script = `require(${JSON.stringify(path.join(path.dirname(olderCliPath), '..', 'lib', 'process-supervision.js'))}).restartWorkerWithDrain({ quiet: true }).then((result) => process.exit(result.ok ? 0 : 1))`;
+  const script = `require(${JSON.stringify(path.join(path.dirname(olderCliPath), '..', 'lib', 'process-supervision.js'))}).restartWorkerWithDrain({ quiet: true, findForeignOwner: () => null }).then((result) => process.exit(result.ok ? 0 : 1))`;
   const child = spawnGatewayProcess(t, process.execPath, ['-e', script], {
     env: { ...process.env, CODEX_GATEWAY_PORT: String(shimPort) },
     stdio: 'ignore',
@@ -154,7 +154,7 @@ test('drain timeout says that the shim was force-stopped', async (t) => {
   const shimPort = await listen(stuckShim);
   t.after(() => stuckShim.close());
 
-  const script = `require(${JSON.stringify(CLI)}).stopShimWithDrain({ timeout: 20, report: console.log }).then((result) => console.log(JSON.stringify(result)))`;
+  const script = `require(${JSON.stringify(CLI)}).stopShimWithDrain({ timeout: 20, report: console.log, findForeignOwner: () => null }).then((result) => console.log(JSON.stringify(result)))`;
   const child = spawnGatewayProcess(t, process.execPath, ['-e', script], {
     env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_WORKER_PORT: String(shimPort) },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -577,6 +577,7 @@ test('supervisor replaces an unresponsive bound proxy only after its owner relea
     probe: async () => modelsAvailable,
     listening: async () => true,
     owner: () => 4242,
+    ownsProxy: () => true,
     stop: (pid) => stopped.push(pid),
     waitForRelease: async () => { releaseChecks += 1; return true; },
     binaryExists: () => true,
