@@ -30,8 +30,8 @@ Open `/model` and choose a row labeled `From gateway`. Claude Code only refetche
 with an API-key credential. Model Gateway writes its discovery cache for OAuth subscriptions, and
 new rows appear after restarting Claude Code. `/reload-plugins` does not reload the picker cache.
 
-- `claude-gpt-*` uses your ChatGPT/Codex subscription. Current built-in rows are `claude-gpt-5.6-sol`, `claude-gpt-5.6-terra`, and `claude-gpt-5.6-luna`.
-- `claude-grok-*` uses your Grok subscription when the Grok CLI is installed and signed in. The current built-in Grok row is `claude-grok-4.5`.
+- `claude-gpt-*[1m]` uses your ChatGPT/Codex subscription. `MODEL_WINDOW_POLICY` in Model Gateway's runtime is the authority for every gateway picker row. GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured rows; other Codex proxy rows use its explicit unmeasured 920k default until measured.
+- `claude-grok-4.5[1m]` uses your Grok subscription when the Grok CLI is installed and signed in. Its measured backend window is 500k. The `[1m]` aliases give Claude Code its 1M client window and are removed before requests reach their backend.
 - Claude models keep using Anthropic.
 
 Sidequest can select these models automatically when both plugins are installed.

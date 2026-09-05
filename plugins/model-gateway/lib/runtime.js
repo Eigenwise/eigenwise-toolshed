@@ -48,33 +48,109 @@ const HOSTS_BLOCK_START = '# >>> model-gateway RC compatibility >>>';
 const HOSTS_BLOCK_END = '# <<< model-gateway RC compatibility <<<';
 const HOSTS_BLOCK_LINE = `127.0.0.1 ${COMPAT_HOST}`;
 const CODEX_UNKNOWN_MODEL_WINDOW = 200000;
-const CODEX_CONTEXT_WINDOWS = Object.freeze({
-  default: 920000,
-  'gpt-5.6-sol': 920000,
-  'gpt-5.6-terra': 920000,
-  'gpt-5.6-luna': 920000,
-  'gpt-6-astra': 920000,
+const MODEL_WINDOW_POLICY = Object.freeze({
+  default: Object.freeze({
+    backend: 'codex',
+    backendId: 'default',
+    backendWindow: 920000,
+    measurement: 'unmeasured default for Codex proxy rows absent from this table',
+    pickerAliasTemplate: 'claude-{backendId}[1m]',
+    advertisedWindow: 920000,
+    sentry: 'codex-synthetic-413',
+  }),
+  'gpt-5.6-sol': Object.freeze({
+    backend: 'codex',
+    backendId: 'gpt-5.6-sol',
+    backendWindow: 920012,
+    measurement: 'measured 2026-09-05: 920012 accepted; 935012 refused',
+    pickerAlias: 'claude-gpt-5.6-sol[1m]',
+    advertisedWindow: 920000,
+    sentry: 'codex-synthetic-413',
+  }),
+  'gpt-5.6-terra': Object.freeze({
+    backend: 'codex',
+    backendId: 'gpt-5.6-terra',
+    backendWindow: 920012,
+    measurement: 'measured 2026-09-05: 920012 accepted; 935012 refused',
+    pickerAlias: 'claude-gpt-5.6-terra[1m]',
+    advertisedWindow: 920000,
+    sentry: 'codex-synthetic-413',
+  }),
+  'gpt-5.6-luna': Object.freeze({
+    backend: 'codex',
+    backendId: 'gpt-5.6-luna',
+    backendWindow: 920012,
+    measurement: 'measured 2026-09-05: 920012 accepted; 935012 refused',
+    pickerAlias: 'claude-gpt-5.6-luna[1m]',
+    advertisedWindow: 920000,
+    sentry: 'codex-synthetic-413',
+  }),
+  'gpt-6-astra': Object.freeze({
+    backend: 'codex',
+    backendId: 'gpt-6-astra',
+    backendWindow: 920012,
+    measurement: 'measured 2026-09-05: 920012 accepted; 935012 refused',
+    pickerAlias: 'claude-gpt-6-astra[1m]',
+    advertisedWindow: 920000,
+    sentry: 'codex-synthetic-413',
+  }),
+  'grok-4.5': Object.freeze({
+    backend: 'grok',
+    backendId: 'grok-4.5',
+    backendWindow: 500000,
+    measurement: 'measured 2026-09-05 from grok-backend.js GROK_MODELS',
+    pickerAlias: 'claude-grok-4.5[1m]',
+    advertisedWindow: 500000,
+    sentry: 'none',
+  }),
 });
+const CODEX_CONTEXT_WINDOWS = MODEL_WINDOW_POLICY;
 const configuredContextWindow = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW);
 
+function gatewayBackendModelId(id) {
+  return typeof id === 'string' ? id.replace(/\[1m\]$/, '').replace(/^claude-/, '') : '';
+}
+
 function codexContextWindowModelId(id) {
-  const baseId = typeof id === 'string'
-    ? id.replace(/\[1m\]$/, '').replace(/^claude-/, '').replace(/-fast$/, '')
-    : '';
+  const baseId = gatewayBackendModelId(id).replace(/-fast$/, '');
   return baseId || 'default';
 }
 
-function codexContextWindow(id, contextWindows = CODEX_CONTEXT_WINDOWS) {
-  return configuredContextWindow || contextWindows[codexContextWindowModelId(id)]
-    || contextWindows.default;
+function resolveGatewayModelPolicy(id) {
+  const backendId = gatewayBackendModelId(id);
+  const policyId = backendId.startsWith('gpt-') ? backendId.replace(/-fast$/, '') : backendId;
+  const policy = MODEL_WINDOW_POLICY[policyId] || (backendId.startsWith('gpt-') ? MODEL_WINDOW_POLICY.default : null);
+  if (!policy) return null;
+  const pickerAlias = policy.backendId === backendId && policy.pickerAlias
+    ? policy.pickerAlias
+    : policy.pickerAliasTemplate
+      ? policy.pickerAliasTemplate.replace('{backendId}', backendId)
+      : `${PREFIX}${backendId}[1m]`;
+  return { ...policy, backendId, pickerAlias };
 }
 
-function codexClientModelId(id, contextWindows = CODEX_CONTEXT_WINDOWS) {
-  const baseId = typeof id === 'string'
-    ? id.replace(/\[1m\]$/, '').replace(/^claude-/, '')
-    : '';
-  const suffix = codexContextWindow(id, contextWindows) > CODEX_UNKNOWN_MODEL_WINDOW ? '[1m]' : '';
-  return `${PREFIX}${baseId}${suffix}`;
+function gatewayAdvertisedWindow(id) {
+  const policy = resolveGatewayModelPolicy(id);
+  if (!policy) return null;
+  return policy.backend === 'codex' && configuredContextWindow
+    ? configuredContextWindow
+    : policy.advertisedWindow;
+}
+
+function gatewayClientModelId(id) {
+  const policy = resolveGatewayModelPolicy(id);
+  if (!policy) return id;
+  return gatewayAdvertisedWindow(id) > CODEX_UNKNOWN_MODEL_WINDOW
+    ? policy.pickerAlias
+    : `${PREFIX}${policy.backendId}`;
+}
+
+function codexContextWindow(id) {
+  return gatewayAdvertisedWindow(id) || MODEL_WINDOW_POLICY.default.advertisedWindow;
+}
+
+function codexClientModelId(id) {
+  return gatewayClientModelId(id);
 }
 
 const STATIC_ENV_BLOCK = {
@@ -107,7 +183,7 @@ function gatewayDiscoveryModels(models) {
   if (!Array.isArray(models)) return [];
   return models.flatMap((model) => {
     if (!model || typeof model.id !== 'string' || !/(claude|anthropic)/i.test(model.id)) return [];
-    const entry = { id: model.id };
+    const entry = { id: gatewayClientModelId(model.id) };
     if (typeof model.display_name === 'string') entry.display_name = model.display_name;
     return [entry];
   });
@@ -198,7 +274,7 @@ function mkdirs() {
 module.exports = {
   ANTHROPIC_UPSTREAM, AUTH_HEADERS, BIN_DIR, CLAUDE_BIN, CLAUDE_BIN_IS_BATCH, CODEX_CONTEXT_WINDOWS,
   CODEX_FAMILY_RE, CODEX_UNKNOWN_MODEL_WINDOW, CODEX_UPSTREAM_BLOCK_PATH, COMPAT_BASE_URL, COMPAT_HOST, COMPAT_PORT,
-  DEFAULT_BASE_URL,
+  DEFAULT_BASE_URL, MODEL_WINDOW_POLICY,
   DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GATEWAY_MODELS_CACHE, GROK_ENDPOINT, GROK_PREFIX,
   HOSTS_BLOCK_END, HOSTS_BLOCK_LINE, HOSTS_BLOCK_START, KNOWN_GOOD_PINS, LEGACY_CODEX_PREFIX,
   LEGACY_ENV_BLOCK, LIST_DISPATCH_MODEL, LOGS, MIN_PROXY_VERSION, PIN_ALIASES, PIN_CACHE_PATH,
@@ -207,6 +283,7 @@ module.exports = {
   PROJECT_WIRING_REGISTRY_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_FAILURE_PATH, SHIM_PORT, SOCKET_PATH, STATE,
   STATIC_ENV_BLOCK, TRACE_HEADERS, WIRING_CONFIG_PATH, WIN, CLI_PATH, CLAUDE_CONFIG_DIR, mkdirs,
   canReplaceInstalledCliPath, codexClientModelId, codexContextWindow, codexContextWindowModelId,
-  gatewayDiscoveryModels, readGatewayDiscoveryCache, resolveNewestInstalledCliPath,
+  gatewayAdvertisedWindow, gatewayBackendModelId, gatewayClientModelId, gatewayDiscoveryModels,
+  readGatewayDiscoveryCache, resolveGatewayModelPolicy, resolveNewestInstalledCliPath,
   sameGatewayDiscoveryModels, syncGatewayDiscoveryCache,
 };

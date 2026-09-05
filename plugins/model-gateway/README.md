@@ -27,8 +27,8 @@ Open `/model` and choose a row labeled `From gateway`. Claude Code only refetche
 with an API-key credential. Model Gateway writes its discovery cache for OAuth subscriptions, and
 new rows appear after restarting Claude Code. `/reload-plugins` does not reload the picker cache.
 
-- `claude-gpt-*[1m]` uses your ChatGPT/Codex subscription. Current built-in rows are `claude-gpt-5.6-sol[1m]`, `claude-gpt-5.6-terra[1m]`, `claude-gpt-5.6-luna[1m]`, and `claude-gpt-6-astra[1m]`. The suffix gives Claude Code its recognized 1M client window, while Model Gateway still advertises the verified 920k backend limit and removes the suffix before forwarding.
-- `claude-grok-*` uses your Grok subscription when the Grok CLI is installed and signed in. The current built-in Grok row is `claude-grok-4.5`.
+- `lib/runtime.js`'s `MODEL_WINDOW_POLICY` is the authority for every gateway picker row. GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured at 920,012 accepted and 935,012 refused on 2026-09-05, so the gateway advertises 920k. Other Codex proxy rows use the table's explicit unmeasured 920k default until measured.
+- Any gateway row above Claude Code's 200k unknown-model window gets a `[1m]` picker alias. Codex rows remove it before forwarding. Grok 4.5 is now `claude-grok-4.5[1m]`, advertises its measured 500k window, and routes to the Grok subscription.
 - Claude models keep using Anthropic normally.
 
 That’s it for daily use. The plugin keeps the gateway running: its shim supervisor checks the proxy's `/v1/models` endpoint, recovers an unavailable proxy with bounded backoff, and leaves a healthy proxy alone. An older session left open through an update leaves a newer shim running and tells you to reload plugins or restart Claude Code. Sidequest can select gateway models automatically when both plugins are installed.

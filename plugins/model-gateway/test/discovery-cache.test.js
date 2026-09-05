@@ -109,7 +109,7 @@ test('writes Claude Code discovery cache schema from the shim model list', () =>
     baseUrl: runtime.DEFAULT_BASE_URL,
     fetchedAt: 1786455666039,
     models: [
-      { id: 'claude-gpt-6-astra', display_name: 'GPT-6 Astra (Codex)' },
+      { id: 'claude-gpt-6-astra[1m]', display_name: 'GPT-6 Astra (Codex)' },
       { id: 'anthropic-custom', display_name: 'Anthropic Custom' },
     ],
   });
@@ -134,7 +134,7 @@ test('leaves a foreign discovery cache alone when its model list is current', ()
     baseUrl: 'http://other-gateway.example',
     fetchedAt: 1,
     models: [
-      { id: 'claude-gpt-6-astra', display_name: 'GPT-6 Astra (Codex)' },
+      { id: 'claude-gpt-6-astra[1m]', display_name: 'GPT-6 Astra (Codex)' },
       { id: 'anthropic-custom', display_name: 'Anthropic Custom' },
     ],
   });
@@ -181,7 +181,7 @@ test('uses CLAUDE_CONFIG_DIR for the discovery cache', (testContext) => {
   const cache = JSON.parse(fs.readFileSync(path.join(configDirectory, 'cache', 'gateway-models.json'), 'utf8'));
   assert.equal(cache.baseUrl, 'http://127.0.0.1:27321');
   assert.equal(typeof cache.fetchedAt, 'number');
-  assert.deepEqual(cache.models, [{ id: 'claude-gpt-6-astra', display_name: 'GPT-6 Astra (Codex)' }]);
+  assert.deepEqual(cache.models, [{ id: 'claude-gpt-6-astra[1m]', display_name: 'GPT-6 Astra (Codex)' }]);
   assert.equal(fs.existsSync(path.join(home, '.claude', 'cache', 'gateway-models.json')), false);
 });
 
@@ -210,7 +210,7 @@ test('refreshModels writes the configured gateway discovery cache', async (testC
   assert.equal(discoveryCache.baseUrl, baseUrl);
   assert.deepEqual(discoveryCache.models, [
     { id: 'claude-gpt-6-astra[1m]', display_name: 'GPT-6-astra (Codex)' },
-    { id: 'claude-grok-4.5', display_name: 'Grok 4.5' },
+    { id: 'claude-grok-4.5[1m]', display_name: 'Grok 4.5' },
   ]);
 });
 

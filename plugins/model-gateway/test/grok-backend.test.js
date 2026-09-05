@@ -259,7 +259,7 @@ test('streams text and tool blocks in either order', () => {
   }
 });
 
-test('the shim lists and routes claude-prefixed Grok models', async (t) => {
+test('the shim lists and routes Grok 1M picker aliases', async (t) => {
   const http = require('node:http');
   const { spawn } = require('node:child_process');
   const net = require('node:net');
@@ -320,8 +320,8 @@ test('the shim lists and routes claude-prefixed Grok models', async (t) => {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  assert.deepEqual(models.data.filter((model) => model.id.startsWith('claude-grok-')).map((model) => model.id), ['claude-grok-4.5']);
-  const response = await request(shimPort, JSON.stringify({ model: 'claude-grok-4.5', max_tokens: 10, output_config: { effort: 'high' }, messages: [{ role: 'user', content: 'hello' }] }));
+  assert.deepEqual(models.data.filter((model) => model.id.startsWith('claude-grok-')).map((model) => model.id), ['claude-grok-4.5[1m]']);
+  const response = await request(shimPort, JSON.stringify({ model: 'claude-grok-4.5[1m]', max_tokens: 10, output_config: { effort: 'high' }, messages: [{ role: 'user', content: 'hello' }] }));
   assert.equal(response.status, 200);
   assert.equal(JSON.parse(response.body).content[0].text, 'hello');
   assert.equal(observed[0].headers['x-grok-model-override'], 'grok-4.5');

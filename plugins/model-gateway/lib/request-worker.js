@@ -18,11 +18,13 @@ const { effectiveBaseUrl, wiredMode } = require('./settings-wiring.js');
 const { detectHostsCompat } = require('./remote-control.js');
 const { codexBaseFromId, ourBaseUrls } = require('./pins.js');
 const {
-  ANTHROPIC_UPSTREAM, AUTH_HEADERS, CODEX_CONTEXT_WINDOWS, CODEX_FAMILY_RE, CODEX_UPSTREAM_BLOCK_PATH, COMPAT_HOST,
+  ANTHROPIC_UPSTREAM, AUTH_HEADERS, CODEX_FAMILY_RE, CODEX_UPSTREAM_BLOCK_PATH, COMPAT_HOST,
   COMPAT_PORT, DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GROK_ENDPOINT, GROK_PREFIX, LIST_DISPATCH_MODEL,
   LOGS, PLUGIN_VERSION, PREFIX, PROXY_BIN, PROXY_PORT, REQUEST_ROUTE_LOG,
   REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT, SOCKET_PATH,
-  STATE, syncGatewayDiscoveryCache, TRACE_HEADERS, codexClientModelId, mkdirs, resolveNewestInstalledCliPath,
+  STATE, syncGatewayDiscoveryCache, TRACE_HEADERS, codexClientModelId, codexContextWindow,
+  codexContextWindowModelId, gatewayAdvertisedWindow, gatewayClientModelId, mkdirs,
+  resolveGatewayModelPolicy, resolveNewestInstalledCliPath,
 } = require('./runtime.js');
 
 function isAuthed() {
@@ -192,28 +194,9 @@ const DEFAULT_MODELS = [
 ];
 const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 
-// Claude Code 2.1.261 resolves an unrecognized model to 200k even when its
-// settings file contains CLAUDE_CODE_MAX_CONTEXT_TOKENS. Its recognized [1m]
-// spelling instead uses a 1M client window. codexClientModelId derives that
-// spelling from the same table used for max_input_tokens; the sentry retains
-// backend headroom because Claude Code cannot represent the backend's 920k
-// window exactly.
-const configuredContextWindow = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW);
 const CODEX_SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
 const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
 const CODEX_COMPACT_HEADROOM = 40000;
-
-function codexContextWindowModelId(id) {
-  const baseId = typeof id === 'string'
-    ? id.replace(/\[1m\]$/, '').replace(/^claude-/, '').replace(/-fast$/, '')
-    : '';
-  return baseId || 'default';
-}
-
-function codexContextWindow(id, contextWindows = CODEX_CONTEXT_WINDOWS) {
-  return configuredContextWindow || contextWindows[codexContextWindowModelId(id)]
-    || contextWindows.default;
-}
 const configuredSseHeartbeatSeconds = Number(process.env.CODEX_GATEWAY_SSE_HEARTBEAT_S);
 const SSE_HEARTBEAT_MS = Number.isFinite(configuredSseHeartbeatSeconds) && configuredSseHeartbeatSeconds >= 0
   ? configuredSseHeartbeatSeconds * 1000
@@ -301,19 +284,14 @@ function noteCompactEvent(attempt, event) {
   if (COMPACT_FATAL_ERROR_TYPES.has(event.error?.type)) attempt.fatal = true;
 }
 
-function gatewayModel(id, backend = 'codex', grokModels = DEFAULT_GROK_MODELS, contextWindows = CODEX_CONTEXT_WINDOWS) {
-  const prefix = backend === 'grok' ? GROK_PREFIX : PREFIX;
-  const context = backend === 'grok'
-    ? (grokModels.find((model) => model.id === id)?.context || 131072)
-    : codexContextWindow(id, contextWindows);
-  const advertised = backend === 'grok'
-    ? `${prefix}${grokBackend.grokPickerId(id)}`
-    : id === 'auto' ? DISPATCH_MODEL_ID : codexClientModelId(id, contextWindows);
+function gatewayModel(id, backend = 'codex') {
+  const policy = id === 'auto' ? null : resolveGatewayModelPolicy(id);
+  if (id !== 'auto' && policy?.backend !== backend) return null;
   return {
-    id: advertised,
+    id: id === 'auto' ? DISPATCH_MODEL_ID : gatewayClientModelId(id),
     display_name: id === 'auto' ? 'Sidequest Dispatch (Codex)' : displayName(id, backend),
     type: 'model',
-    max_input_tokens: context,
+    max_input_tokens: gatewayAdvertisedWindow(id) || codexContextWindow(id),
   };
 }
 
@@ -1058,6 +1036,7 @@ function runWorker() {
   }
 
   function fireContextSentry(res, sessionId, model) {
+    if (resolveGatewayModelPolicy(model)?.sentry !== 'codex-synthetic-413') return false;
     const state = sentrySession(sessionId, model);
     const compactTrigger = sentryModel(model).compactTrigger;
     if (!state || state.fired || state.usage <= compactTrigger) return false;
@@ -1120,8 +1099,12 @@ function runWorker() {
     modelCache = {
       at: Date.now(),
       data: [
-        ...[...ids.filter((id) => id !== 'auto'), ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map((id) => gatewayModel(id)),
-        ...advertisedGrokModels.map((model) => gatewayModel(model.id, 'grok', advertisedGrokModels)),
+        ...[...ids.filter((id) => id !== 'auto'), ...(LIST_DISPATCH_MODEL ? ['auto'] : [])]
+          .map((id) => gatewayModel(id))
+          .filter(Boolean),
+        ...advertisedGrokModels
+          .filter((model) => resolveGatewayModelPolicy(model.id)?.backend === 'grok')
+          .map((model) => gatewayModel(model.id, 'grok')),
       ],
     };
     try {

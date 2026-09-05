@@ -90,6 +90,7 @@ test('Codex discovery advertises client 1M aliases and forwards backend base ids
     if (req.method === 'GET' && req.url === '/v1/models') {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ data: [
+        { id: 'gpt-5.2' },
         { id: 'gpt-5.6-sol' },
         { id: 'gpt-5.6-terra' },
         { id: 'gpt-5.6-luna' },
@@ -126,14 +127,17 @@ test('Codex discovery advertises client 1M aliases and forwards backend base ids
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
   const codexModels = models.data.filter(({ id }) => id.startsWith('claude-gpt-'));
   assert.deepEqual(codexModels.map(({ id, max_input_tokens }) => ({ id, max_input_tokens })), [
+    { id: 'claude-gpt-5.2[1m]', max_input_tokens: 920000 },
     { id: 'claude-gpt-5.6-sol[1m]', max_input_tokens: 920000 },
     { id: 'claude-gpt-5.6-terra[1m]', max_input_tokens: 920000 },
     { id: 'claude-gpt-5.6-luna[1m]', max_input_tokens: 920000 },
     { id: 'claude-gpt-6-astra[1m]', max_input_tokens: 920000 },
   ]);
-  assert.ok(models.data.some(({ id }) => id === 'claude-grok-4.5'));
-  assert.equal(codexModels.every(({ max_input_tokens }) => max_input_tokens === 920000), true);
-  assert.equal(codexModels.every(({ id }) => id.endsWith('[1m]')), true);
+  assert.ok(models.data.some(({ id }) => id === 'claude-grok-4.5[1m]'));
+  const { resolveGatewayModelPolicy } = require(RUNTIME);
+  assert.equal(models.data.every(({ id }) => (
+    id.endsWith('[1m]') === (resolveGatewayModelPolicy(id).backendWindow > 200000)
+  )), true);
 
   await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
     model: 'claude-gpt-5.6-sol[1m]',
@@ -143,22 +147,23 @@ test('Codex discovery advertises client 1M aliases and forwards backend base ids
   assert.equal(forwarded.model, 'gpt-5.6-sol');
 });
 
-test('Codex model windows use configured base ids and share them with fast siblings', () => {
+test('window policy marks measured rows and advertises unmeasured Codex defaults', () => {
   const { gatewayModel } = require(WORKER);
-  const windows = {
-    default: 920000,
-    'gpt-5.6-sol': 810000,
-    'gpt-6-astra': 900000,
-  };
+  const { MODEL_WINDOW_POLICY, gatewayClientModelId, resolveGatewayModelPolicy } = require(RUNTIME);
 
-  assert.deepEqual(gatewayModel('gpt-5.6-sol', 'codex', undefined, windows), {
-    id: 'claude-gpt-5.6-sol[1m]',
-    display_name: 'GPT-5.6-sol (Codex)',
-    type: 'model',
-    max_input_tokens: 810000,
+  for (const policy of Object.values(MODEL_WINDOW_POLICY)) {
+    if (policy.backendId === 'default') continue;
+    assert.equal(policy.pickerAlias.endsWith('[1m]'), policy.backendWindow > 200000);
+  }
+  assert.equal(MODEL_WINDOW_POLICY['grok-4.5'].pickerAlias, 'claude-grok-4.5[1m]');
+  assert.match(MODEL_WINDOW_POLICY.default.measurement, /^unmeasured/);
+  assert.deepEqual(resolveGatewayModelPolicy('gpt-5.2'), {
+    ...MODEL_WINDOW_POLICY.default,
+    backendId: 'gpt-5.2',
+    pickerAlias: 'claude-gpt-5.2[1m]',
   });
-  assert.equal(gatewayModel('gpt-6-astra', 'codex', undefined, windows).max_input_tokens, 900000);
-  assert.equal(gatewayModel('gpt-6-astra-fast', 'codex', undefined, windows).max_input_tokens, 900000);
+  assert.equal(gatewayClientModelId('gpt-5.2'), 'claude-gpt-5.2[1m]');
+  assert.equal(gatewayModel('gpt-6-astra-fast', 'codex').max_input_tokens, 920000);
 });
 
 test('CODEX_GATEWAY_CONTEXT_WINDOW overrides the advertised max_input_tokens', async (t) => {
