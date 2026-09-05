@@ -866,6 +866,9 @@ function createDispatch(dependencies) {
       return null;
     }
   }
+  function boundIsolatedWorktree(state) {
+    return Boolean(state?.worktree && ["worktree-create", "live-claim-recovery"].includes(state.worktreeBindingSource));
+  }
   function completedWorktreeCreationFacts(state) {
     if (!state?.worktreeCreationCompletedAt || !state.worktree || !state.worktreeGitDirectory || !state.worktreeCommonGitDirectory || !state.worktreeCheckoutInstance || !state.worktreeObservedRevision) return null;
     return {
@@ -1334,6 +1337,62 @@ function createDispatch(dependencies) {
       return { ok: false, reason: "token" };
     }
     return { ok: true, ticket, token: receivedToken };
+  }
+  function recoverLiveClaimDispatch(slug, idOrRef, opts) {
+    const by = String(opts?.by || "").trim();
+    const executor = String(opts?.executor || "").trim();
+    const worktree = String(opts?.worktree || "").trim();
+    const evidence = String(opts?.recoveryEvidence || "").trim();
+    const sessionId = String(opts?.sessionId || "").trim();
+    const found = getTicket(slug, idOrRef);
+    if (!found) return { ok: false, reason: "not_found" };
+    if (!by || !executor || !worktree || !evidence || !sessionId) {
+      return { ok: false, reason: "missing_recovery_facts", message: "Live-claim recovery requires claimHolder, executor, worktree, recoveryEvidence, and a connected session." };
+    }
+    return withTicketLock(slug, found.id, () => {
+      const ticket = getTicket(slug, found.id);
+      const state = dispatchState(ticket);
+      if (!ticket?.claim?.by || ticket.claim.by !== by) {
+        return { ok: false, reason: "not_claim_holder", ticket, message: `${ticket?.ref || idOrRef} is not live-claimed by ${by}.` };
+      }
+      if (!state || state.terminalAt || state.sharedTree !== false || state.outcome !== "claimed") {
+        return { ok: false, reason: "dispatch_unavailable", ticket, message: `${ticket.ref} does not have a live isolated claimed dispatch to recover.` };
+      }
+      if (state.executor !== executor || ticket.claim.runtime?.executor && ticket.claim.runtime.executor !== executor) {
+        return { ok: false, reason: "executor_mismatch", ticket, message: `${ticket.ref} requires executor ${state.executor || "(unavailable)"}, not ${executor}.` };
+      }
+      const facts = immutableWorktreeFacts(slug, worktree);
+      if (!facts) {
+        return { ok: false, reason: "invalid_worktree", ticket, message: `${ticket.ref} recovery requires a linked worktree from this board project.` };
+      }
+      if (state.worktree && canonicalPath(state.worktree) !== facts.worktree) {
+        return { ok: false, reason: "worktree_mismatch", ticket, message: `${ticket.ref} is bound to a different worktree and cannot be rebound.` };
+      }
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      state.sessionId = sessionId;
+      state.agentId = null;
+      state.worktree = facts.worktree;
+      state.worktreeGitDirectory = facts.gitDirectory;
+      state.worktreeCommonGitDirectory = facts.commonGitDirectory;
+      state.worktreeCheckoutInstance = facts.checkoutInstance;
+      state.worktreeObservedRevision = facts.revision;
+      state.worktreeBindingSource = "live-claim-recovery";
+      state.worktreeBoundAt = now;
+      state.resumedAt = now;
+      state.liveClaimRecovery = { at: now, by, executor, evidence };
+      ticket.dispatchNonce = mintDispatchToken();
+      state.tokenPrefix = dispatchTokenPrefix(ticket.dispatchNonce);
+      writeDispatchTokenFile(ticket);
+      syncClaimRuntimeIdentity(ticket, state);
+      stampDispatchEvent(ticket, "live-claim-recovery", now);
+      putTicket(slug, ticket);
+      return {
+        ok: true,
+        ticket,
+        token: ticket.dispatchNonce,
+        recovery: { kind: "live_claim_resume", at: now, worktree: facts.worktree }
+      };
+    });
   }
   function recordDispatchLaunch(slug, idOrRef, opts) {
     opts = opts || {};
@@ -1890,7 +1949,7 @@ function createDispatch(dependencies) {
     };
   }
   function recordDispatchRuntimeIdentity(slug, state, agentId, agentName, now, worktreeFacts) {
-    if (state.sharedTree === false && !state.continuation?.sourceWorktree && worktreeFacts && (state.worktreeBindingSource !== "worktree-create" || !state.worktree || canonicalPath(state.worktree) !== worktreeFacts.worktree)) return false;
+    if (state.sharedTree === false && !state.continuation?.sourceWorktree && worktreeFacts && (!boundIsolatedWorktree(state) || canonicalPath(state.worktree) !== worktreeFacts.worktree)) return false;
     if (state.sharedTree === false && !state.continuation?.sourceWorktree && worktreeFacts && state.worktreeCreationCompletedAt && (canonicalPath(String(state.worktreeGitDirectory || "")) !== worktreeFacts.gitDirectory || canonicalPath(String(state.worktreeCommonGitDirectory || "")) !== worktreeFacts.commonGitDirectory || String(state.worktreeCheckoutInstance || "") !== worktreeFacts.checkoutInstance || String(state.worktreeObservedRevision || "") !== worktreeFacts.revision)) return false;
     if (agentId) state.agentId = agentId;
     if (agentName) state.agentName = agentName;
@@ -1993,7 +2052,7 @@ function createDispatch(dependencies) {
     if (normalizedWorktree) {
       const completedWorktreeMatches = matches.filter((match) => {
         const completed = completedWorktreeCreationFacts(match.state);
-        return match.state.sharedTree === false && !match.state.continuation?.sourceWorktree && match.state.worktreeBindingSource === "worktree-create" && completed && canonicalPath(completed.worktree) === canonicalPath(normalizedWorktree);
+        return match.state.sharedTree === false && !match.state.continuation?.sourceWorktree && boundIsolatedWorktree(match.state) && completed && canonicalPath(completed.worktree) === canonicalPath(normalizedWorktree);
       });
       if (completedWorktreeMatches.length) matches = completedWorktreeMatches;
     }
@@ -2021,7 +2080,7 @@ function createDispatch(dependencies) {
         if (!checkoutIdentityOverride && !dispatchCanBindRuntimeIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) {
           return { ok: false };
         }
-        if (state.sharedTree === false && normalizedWorktree && !state.continuation?.sourceWorktree && (state.worktreeBindingSource !== "worktree-create" || !state.worktree)) {
+        if (state.sharedTree === false && normalizedWorktree && !state.continuation?.sourceWorktree && !boundIsolatedWorktree(state)) {
           return { ok: false, reason: "worktree_binding_unavailable" };
         }
         const completedTargetFacts = reportsParentCheckout ? completedWorktreeCreationFacts(state) : null;
@@ -2194,6 +2253,7 @@ function createDispatch(dependencies) {
     prepareDispatch,
     syncLiveDispatchVerification,
     readDispatchBriefing,
+    recoverLiveClaimDispatch,
     recordDispatchLaunch,
     recordDispatchAgentFailure,
     recoverDispatchQuotaFailure,

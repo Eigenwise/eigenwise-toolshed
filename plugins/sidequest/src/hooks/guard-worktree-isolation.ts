@@ -172,7 +172,7 @@ function unknownRefusal(target: string, repo: CheckoutLocation, diagnosis: Ident
       : 'This executor has no active dispatch record for a shared-checkout write.';
   const recovery = unboundRef
     ? 'Claim through the Sidequest MCP hook so it can attach this runtime agent id. Redispatch alone does not bind this claim; stop and report this refusal.'
-    : 'Do not work around this. Stop any owned background tasks and end the executor. Report these dispatch-record counts to the orchestrator so it can tell an unbound identity from a wrong one, and redispatch before making more changes.';
+    : 'Do not work around this. If this is the same live claim after an API resume, call mcp__plugin_sidequest_board__dispatch({ ref: "<ref>", recoveryEvidence: "<observed refusal>", claimHolder: "<your by>", worktree: "<linked checkout>" }) before writing. It verifies the stored executor, re-mints the token, and re-binds this worktree without releasing. Otherwise stop owned background tasks, report these dispatch-record counts, and redispatch before making more changes.';
   return boundedRefusal(
     unboundSummary,
     [['writing to', target], [repo.linked ? 'isolated worktree' : 'shared checkout', repo.root], ['dispatch records', matches]],

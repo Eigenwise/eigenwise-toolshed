@@ -265,7 +265,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'dispatch',
-    description: 'Prepare a token-gated dispatch. It returns a stable executor spawn spec and token. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets; record the follow-up and let the orchestration session dispatch it.',
+    description: 'Prepare a token-gated dispatch. It returns a stable executor spawn spec and token. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -275,7 +275,9 @@ const tools: ToolDefinition[] = [
         allowRepeatFailure: { type: 'boolean' },
         allowUnscoped: { type: 'boolean', description: 'Explicitly allow a write ticket with no declared file scope.' },
         integrationBranch: { type: 'string' },
-        recoveryEvidence: { type: 'string', description: 'Retire an attempt no runtime will finish: never bound or claimed, or bound and unclaimed past the idle backstop. Prepares one fresh attempt. Pass the observed evidence.' },
+        recoveryEvidence: { type: 'string', description: 'Observed failure evidence. With claimHolder, executor, and worktree, recover that live isolated claim without releasing it.' },
+        claimHolder: { type: 'string', description: 'The exact by identity holding the live claim being recovered.' },
+        worktree: { type: 'string', description: 'The resumed executor\'s linked worktree path for live-claim recovery.' },
         full: { type: 'boolean', description: 'Include token, executor, warnings, and recovery details.' },
       },
       required: ['ref'],
@@ -287,20 +289,30 @@ const tools: ToolDefinition[] = [
       const descriptionError = store.dispatchDescriptionError(store.getTicket(slug, args.ref));
       if (descriptionError) throw new Error(descriptionError);
       const sessionId = requireDispatchSession();
-      const prepared = store.prepareDispatch(slug, args.ref, {
-        sessionId,
-        runtimeCwd: process.cwd(),
-        ...(Object.hasOwn(args, 'sharedTree') ? { sharedTree: args.sharedTree === true } : {}),
-        allowRepeatFailure: args.allowRepeatFailure === true,
-        allowUnscoped: args.allowUnscoped === true,
-        integrationBranch: args.integrationBranch,
-        recoveryEvidence: args.recoveryEvidence,
-        ...(freshness.skew ? { dispatchSkew: freshness.skew } : {}),
-        // Reaching this handler is itself proof the board MCP is connected
-        // in this session (SQ-1017); CLI transport carries no such proof.
-        source: 'mcp',
-        transport: 'mcp',
-      });
+      const liveClaimExecutor = store.getTicket(slug, args.ref)?.dispatch?.executor;
+      const prepared = args.claimHolder != null
+        ? store.recoverLiveClaimDispatch(slug, args.ref, {
+          by: args.claimHolder,
+          executor: liveClaimExecutor,
+          worktree: args.worktree,
+          recoveryEvidence: args.recoveryEvidence,
+          sessionId,
+        })
+        : store.prepareDispatch(slug, args.ref, {
+          sessionId,
+          runtimeCwd: process.cwd(),
+          ...(Object.hasOwn(args, 'sharedTree') ? { sharedTree: args.sharedTree === true } : {}),
+          allowRepeatFailure: args.allowRepeatFailure === true,
+          allowUnscoped: args.allowUnscoped === true,
+          integrationBranch: args.integrationBranch,
+          recoveryEvidence: args.recoveryEvidence,
+          ...(freshness.skew ? { dispatchSkew: freshness.skew } : {}),
+          // Reaching this handler is itself proof the board MCP is connected
+          // in this session (SQ-1017); CLI transport carries no such proof.
+          source: 'mcp',
+          transport: 'mcp',
+        });
+      if (!prepared.ok) throw new Error(`dispatch: ${prepared.message || prepared.reason || 'live-claim recovery failed'}`);
       const isolation = agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch && prepared.ticket.dispatch.sharedTree);
       const prompt = agentsync.renderDispatchStub(prepared.ticket, meta.path);
       const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
@@ -337,9 +349,11 @@ const tools: ToolDefinition[] = [
         ...(dispatchState.fallbackReason ? { fallbackReason: dispatchState.fallbackReason } : {}),
         warnings,
         spawn,
-        guidance: prepared.recovery
-          ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
-          : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token.`,
+        guidance: prepared.recovery?.kind === 'live_claim_resume'
+          ? `Live claim recovered for ${prepared.ticket.ref}. Pass spawn unchanged; it carries a fresh token for the rebound linked worktree.`
+          : prepared.recovery
+            ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
+            : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token.`,
         // The agent list's own model label always reads claude-codex-auto for gateway
         // routes and cannot be changed (SQ-1350), so a paraphrased description is the
         // only thing standing between the reader and an unidentifiable running agent.

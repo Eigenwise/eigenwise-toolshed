@@ -710,6 +710,73 @@ test('shared-tree agents bind by name before SubagentStop supplies their id', ()
   assert.equal(dispatch.terminalSource, terminalSource);
 });
 
+test('a resumed live claim re-mints its token and re-binds the linked worktree', () => {
+  const ticket = createFixture('resumed live claim fixture');
+  const originalSession = `resumed-live-claim-${Date.now()}`;
+  const resumedSession = `${originalSession}-resumed`;
+  const agentName = `resumed-live-agent-${ticket.id}`;
+  const resumedAgentId = `${agentName}-resumed`;
+  const claimHolder = `resumed-live-worker-${ticket.id}`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, agentName);
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: originalSession, sharedTree: false });
+  const executor = prepared.ticket.dispatchExecutor;
+  try {
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId: originalSession,
+      token: prepared.token,
+      executor,
+      agentName,
+    }).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, claimHolder, {
+      sessionId: originalSession,
+      token: prepared.token,
+      executor,
+      requireBoundAgent: true,
+    }).ok, true);
+    assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, prepared.ticket.dispatch.tokenFile).ok, true);
+    assert.equal(store.pulsePayload(slug, ticket.ref).dispatch.worktreeBound, false);
+
+    fs.mkdirSync(path.dirname(worktree), { recursive: true });
+    execFileSync('git', ['worktree', 'add', '--detach', worktree, 'HEAD'], { cwd: PROJECT });
+    markCheckoutInstance(worktree);
+    fs.rmSync(prepared.ticket.dispatch.tokenFile);
+    assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, prepared.ticket.dispatch.tokenFile).reason, 'token');
+
+    const recovered = store.recoverLiveClaimDispatch(slug, ticket.ref, {
+      by: claimHolder,
+      executor,
+      worktree,
+      recoveryEvidence: 'The resumed executor lost its token file and worktree binding after an API failure.',
+      sessionId: resumedSession,
+    });
+    assert.equal(recovered.ok, true);
+    assert.notEqual(recovered.token, prepared.token);
+    assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, prepared.ticket.dispatch.tokenFile).token, recovered.token);
+    assert.equal(store.pulsePayload(slug, ticket.ref).dispatch.worktreeBound, true);
+    assert.equal(store.bindDispatchAgent(resumedSession, executor, resumedAgentId, agentName, worktree).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, claimHolder, {
+      sessionId: resumedSession,
+      token: recovered.token,
+      executor,
+      requireBoundAgent: true,
+    }).ok, true);
+
+    fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 3;\n');
+    execFileSync('git', ['add', 'tracked.js'], { cwd: worktree });
+    execFileSync('git', ['commit', '--quiet', '-m', 'resumed live claim fixture'], { cwd: worktree });
+    const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8' }).trim();
+    assert.equal(store.submitTicket(slug, ticket.ref, claimHolder, {
+      commit,
+      worktree,
+      sessionId: resumedSession,
+      source: 'test',
+    }).ok, true);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, claimHolder, { status: 'todo', source: 'test', force: true });
+    if (fs.existsSync(worktree)) execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+  }
+});
+
 test('SubagentStop backfills identity but never invents a worktree binding', () => {
   const ticket = createFixture('isolated stop fallback fixture');
   const sessionId = `isolated-stop-${Date.now()}`;

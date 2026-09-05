@@ -216,6 +216,12 @@ function createPulse(dependencies) {
       lastRuling: resolution ? { state: resolution.state, at: resolution.at, granted: resolution.granted || [], refused: resolution.refused || [] } : null
     };
   }
+  function dispatchWorktreeBound(dispatch) {
+    if (!dispatch || dispatch.sharedTree !== false) return true;
+    return Boolean(
+      dispatch.worktree && dispatch.worktreeGitDirectory && dispatch.worktreeCommonGitDirectory && dispatch.worktreeCheckoutInstance && dispatch.worktreeObservedRevision
+    );
+  }
   function pulsePayload(slug, idOrRef) {
     const ticket = getTicket(slug, idOrRef);
     if (!ticket) return null;
@@ -243,6 +249,7 @@ function createPulse(dependencies) {
       dispatchExecutor: canonicalPreparedDispatchExecutor(ticket),
       dispatch: dispatch ? {
         state: pulseDispatchState(dispatch),
+        worktreeBound: dispatchWorktreeBound(dispatch),
         sessionId: dispatch.sessionId || null,
         tokenPrefix: dispatch.tokenPrefix || null,
         executor: dispatch.executor || null,

@@ -153,17 +153,8 @@ optionally `--status todo`).
   fresh one for the same ticket.
 - **Read the thread before working a ticket** (`sidequest comments <ref>`). Default reads retain all
   metadata; pass `--full` only for needed elided bodies.
-- **Claims release on observed death, not age**: use `pulse`, never a clock. For useful work
-  needing a decision, `SendMessage` the same agent and keep its claim and worktree. On death,
-  salvage its worktree, release, then replace it.
-- Agents report automatically. **Never use `TaskOutput`** for a Sidequest task ID
-  or launch name. THE polling read: `changes --since`; `pulse <ref>` for liveness.
-  `TaskStop` only after terminal evidence. After consuming the terminal board result and preserving its
-  report or recovery handoff, retire that exact native teammate once with `TaskStop({ task_id: "<agent name>" })`.
-  This is a Claude Code host action, not a Sidequest tool. Never stop a live claim, retained continuation, or
-  candidate awaiting integration.
-  **Never proxy-wait** either: no shell/`Monitor`/cron task whose only job is waiting for an
-  executor or polling for its artifact (a one-shot local readiness watch is fine).
+- **Claims release on observed death, not age**: use `pulse`, never a clock. For useful work needing a decision, `SendMessage` the same agent and keep its claim and worktree. A resume retains claim, token-file path, and worktree binding. On `matches no dispatch record`, its holder calls MCP `dispatch` with `recoveryEvidence`, `claimHolder`, and `worktree`; it re-mints and re-binds. On confirmed death, salvage, release, replace.
+- Agents report automatically. **Never use `TaskOutput`** for a Sidequest task ID or launch name. Poll with `changes --since` and `pulse <ref>`. After terminal evidence, use `TaskStop({ task_id: "<agent name>" })` once for that teammate. It is a Claude Code host action, not a Sidequest tool. Never stop a live claim, retained continuation, or candidate awaiting integration. **Never proxy-wait** with a shell/`Monitor`/cron task only waiting for an executor or artifact (a one-shot local readiness watch is fine).
 
 **Repository publishing is the orchestrator's, alone.** Executors stop at verified local commits and
 `submit` (claim released, parked in `doing`); `submit.body` holds the canonical full report, so do not post a separate pre-submit report comment. The
