@@ -77,11 +77,21 @@ function waitForExit(server: import('node:child_process').ChildProcess, timeoutM
 }
 
 function mcpServer(environment: NodeJS.ProcessEnv = process.env) {
-  return spawn(process.execPath, [path.resolve(__dirname, '../bin/sidequest-mcp.js')], {
-    env: environment,
+  const privateHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sidequest-mcp-home-'));
+  const cleanupPrivateHome = () => fs.rmSync(privateHome, { recursive: true, force: true });
+  const server = spawn(process.execPath, [path.resolve(__dirname, '../bin/sidequest-mcp.js')], {
+    env: {
+      ...environment,
+      HOME: privateHome,
+      USERPROFILE: privateHome,
+      SIDEQUEST_HOME: path.join(privateHome, 'sidequest'),
+    },
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
   });
+  server.once('exit', cleanupPrivateHome);
+  server.once('error', cleanupPrivateHome);
+  return server;
 }
 
 function initialize(server: import('node:child_process').ChildProcess) {
@@ -105,6 +115,7 @@ function heartbeatTestEnvironment(): NodeJS.ProcessEnv {
     NODE_ENV: 'test',
     SIDEQUEST_TEST_MCP_HEARTBEAT_INTERVAL_MILLISECONDS: '20',
     SIDEQUEST_TEST_MCP_HEARTBEAT_TIMEOUT_MILLISECONDS: '40',
+    SIDEQUEST_TEST_MCP_INITIALIZATION_DEADLINE_MILLISECONDS: '50',
   };
 }
 
@@ -144,6 +155,39 @@ test('MCP server exits after its client closes stdin', async () => {
   }
 });
 
+test('MCP server exits when a client never sends initialized', async () => {
+  const server = mcpServer(heartbeatTestEnvironment());
+
+  try {
+    server.stdout?.setEncoding('utf8');
+    await initialize(server);
+    server.stdout?.pause();
+    assert.deepEqual(await waitForExit(server, 500), { code: 0, signal: null });
+  } finally {
+    if (server.exitCode === null) server.kill();
+  }
+});
+
+test('MCP server does not let pre-initialization messages extend its deadline', async () => {
+  const server = mcpServer(heartbeatTestEnvironment());
+
+  try {
+    server.stdout?.setEncoding('utf8');
+    await initialize(server);
+    server.stdout?.pause();
+    const messages = setInterval(() => {
+      server.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress' })}\n`);
+    }, 10);
+    try {
+      assert.deepEqual(await waitForExit(server, 500), { code: 0, signal: null });
+    } finally {
+      clearInterval(messages);
+    }
+  } finally {
+    if (server.exitCode === null) server.kill();
+  }
+});
+
 test('MCP server exits when an initialized client keeps stdin open but abandons the session', async () => {
   const server = mcpServer(heartbeatTestEnvironment());
 
@@ -158,7 +202,7 @@ test('MCP server exits when an initialized client keeps stdin open but abandons 
   }
 });
 
-test('MCP server keeps an idle initialized client alive when it answers heartbeats', async () => {
+test('MCP server keeps an initialized client alive beyond its initialization deadline when it answers heartbeats', async () => {
   const server = mcpServer(heartbeatTestEnvironment());
 
   try {
@@ -168,7 +212,7 @@ test('MCP server keeps an idle initialized client alive when it answers heartbea
       let buffer = '';
       const timeout = setTimeout(() => {
         cleanup();
-        reject(new Error('MCP server did not send two heartbeats to its idle client'));
+        reject(new Error('MCP server did not send four heartbeats to its idle client'));
       }, 500);
       const output = server.stdout;
       const onData = (chunk: Buffer | string) => {
@@ -183,7 +227,7 @@ test('MCP server keeps an idle initialized client alive when it answers heartbea
             if (jsonRpcRecord(message) && message.method === 'ping') {
               heartbeatCount += 1;
               server.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {} })}\n`);
-              if (heartbeatCount === 2) {
+              if (heartbeatCount === 4) {
                 cleanup();
                 resolve();
                 return;
