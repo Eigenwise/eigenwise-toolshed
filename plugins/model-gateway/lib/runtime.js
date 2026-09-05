@@ -103,6 +103,15 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     advertisedWindow: 500000,
     sentry: 'none',
   }),
+  anthropic: Object.freeze({
+    backend: 'anthropic',
+    backendId: 'anthropic',
+    backendWindow: null,
+    measurement: 'upstream-managed native Anthropic passthrough',
+    pickerAlias: 'claude-anthropic',
+    advertisedWindow: null,
+    sentry: 'none',
+  }),
 });
 const CODEX_CONTEXT_WINDOWS = MODEL_WINDOW_POLICY;
 const configuredContextWindow = Number(process.env.CODEX_GATEWAY_CONTEXT_WINDOW);
@@ -119,7 +128,11 @@ function codexContextWindowModelId(id) {
 function resolveGatewayModelPolicy(id) {
   const backendId = gatewayBackendModelId(id);
   const policyId = backendId.startsWith('gpt-') ? backendId.replace(/-fast$/, '') : backendId;
-  const policy = MODEL_WINDOW_POLICY[policyId] || (backendId.startsWith('gpt-') ? MODEL_WINDOW_POLICY.default : null);
+  const policy = MODEL_WINDOW_POLICY[policyId]
+    || (backendId.startsWith('gpt-') ? MODEL_WINDOW_POLICY.default : null)
+    || (typeof id === 'string' && id.startsWith(PREFIX) && !id.startsWith(LEGACY_CODEX_PREFIX)
+      ? MODEL_WINDOW_POLICY.anthropic
+      : null);
   if (!policy) return null;
   const pickerAlias = policy.backendId === backendId && policy.pickerAlias
     ? policy.pickerAlias
