@@ -8,6 +8,73 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.520.0 (2026-09-06)
+
+### model-gateway 0.49.0 → 0.50.0
+
+#### Features
+
+- Refresh OAuth model discovery cache (SQ-2439)
+- Give Codex models a full client context window (SQ-2440)
+  Codex picker and Sidequest catalog models now use Claude Code's `[1m]` alias so sessions avoid the 200k unknown-model compaction window while Model Gateway keeps the verified backend limit and headroom.
+
+#### Fixes
+
+- Record gateway lifecycle evidence (SQ-2446)
+- Isolate gateway test fixtures (SQ-2448)
+  Gateway test processes now use isolated user state, sockets, ports, caches, logs, and proxy settings.
+- Keep SessionStart gateway startup outside hook cleanup (SQ-2452)
+  Launcher source: Kenny's inline fix (`0c1133432b801e0ca6666d8fa4565c44d5f6f614`).
+- Stabilize stale-pin fixture (SQ-2454)
+  The stale-pin regression fixture now isolates fake Claude attempt counters per alias, preventing parallel probes from overwriting each other's state.
+- Scope gateway supervisor cleanup (SQ-2455)
+  Gateway cleanup now only acts on the configured install's recorded processes, so isolated test runs leave the installed gateway alone.
+- Wait for isolated gateway fixture cleanup (SQ-2458)
+  Fixes isolated model-gateway test cleanup by waiting for tracked supervisor processes to exit after signaling them. The Linux failure was a cleanup race, not a production stop-path or zombie-detection issue.
+- Protect foreign gateway processes (SQ-2460)
+  Model Gateway now verifies process ownership before stopping a proxy, reaping recorded PIDs, or asking a shim to restart. Stale PID files are removed and reported without stopping a reused process.
+- Centralize gateway model window policy (SQ-2467)
+  Model Gateway now uses one policy table for advertised windows, `[1m]` aliases, and routing. Grok 4.5 gets its 500k picker alias, while unmeasured Codex rows use an explicit documented default.
+- Show model window policy in doctor (SQ-2469)
+  Show every active model's context-window policy in doctor and flag a shim whose picker ids are stale.
+- Keep gateway recovery probes tied to the supervisor (SQ-2476)
+  Model Gateway now bounds ownership probes during proxy recovery, kills their child trees with the supervisor, and waits for them to close so a timed probe cannot hold a fixture home open.
+- Derive and log Codex sentry policies (SQ-2477)
+  Model Gateway now caps each Codex sentry trigger against that model's verified backend window, preserving compaction headroom for smaller-window rows. It logs one startup policy line for every model policy row, including unmeasured defaults and rows where the sentry is disabled.
+- Find detached probe children by parent pid in the reap test (SQ-2478)
+  The probe-child reap test now locates the supervisor's detached probe child by parent pid on Linux and macOS, where a detached child leads its own process group, so the test passes on the ubuntu CI job.
+
+### observability 0.7.23 → 0.7.24
+
+#### Fixes
+
+- Give local prompt hooks room under load (SQ-2466)
+  Raise the local observability lifecycle hooks, request-body preflight, and Quartermaster prompt freshness hook from 2-3 seconds to 10 seconds. Session-start hooks that spawn processes or make network calls keep their existing budgets.
+
+### quartermaster 0.7.2 → 0.7.3
+
+#### Fixes
+
+- Give local prompt hooks room under load (SQ-2466)
+  Raise the local observability lifecycle hooks, request-body preflight, and Quartermaster prompt freshness hook from 2-3 seconds to 10 seconds. Session-start hooks that spawn processes or make network calls keep their existing budgets.
+
+### sidequest 5.0.28 → 5.0.29
+
+#### Fixes
+
+- Retain worktree recovery storage (SQ-2453)
+  Sidequest now reports worktree, backup, and quarantine disk use, expires old recovery entries, and keeps only the newest entries per agent. Quarantine removes ignored build output and dependency directories after moving the checkout so recovery evidence stays readable without retaining regenerable trees.
+- Recover dispatch identity for resumed live claims (SQ-2459)
+  Resumed live Sidequest claims can re-mint their dispatch token and re-bind their linked isolated worktree without releasing the claim.
+- Close accepted readonly oracle reviews (SQ-2462)
+  Accepted oracle verdicts now close readonly reviews, preserve their completion evidence, and let their verified review identity pass integration.
+- Refresh wave baselines at assembly (SQ-2463)
+  Sidequest now opens each assembled wave at the current integration target, accepts ancestor-baseline candidates through the merged-tree gate, and preserves submitted candidates when assembly refuses.
+- Stop the MCP exit test racing its own stdin writer (SQ-2465)
+  The MCP server exit tests ignore EPIPE on the child's stdin, so a write that lands after the server's deliberate exit no longer fails the suite.
+- Retry verify capture slot races (SQ-2475)
+  Full-suite verification capture now waits through transient Windows slot filesystem races instead of failing while another capture releases its slot.
+
 ## v3.519.0 (2026-09-05)
 
 ### quartermaster 0.7.1 → 0.7.2

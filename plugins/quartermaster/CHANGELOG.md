@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.3 (2026-09-06)
+
+Released in v3.520.0, up from 0.7.2.
+
+### Fixes
+
+- Give local prompt hooks room under load (SQ-2466)
+  Raise the local observability lifecycle hooks, request-body preflight, and Quartermaster prompt freshness hook from 2-3 seconds to 10 seconds. Session-start hooks that spawn processes or make network calls keep their existing budgets.
+
 ## 0.7.2 (2026-09-05)
 
 Released in v3.519.0, up from 0.7.1.
