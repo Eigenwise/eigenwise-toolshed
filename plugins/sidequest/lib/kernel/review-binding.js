@@ -107,7 +107,8 @@ function submittedCandidateAttempt(sourceTicket) {
   return latestAttempt(terminalAttempts(sourceTicket).filter((attempt) => String(attempt.outcome) === "submitted" && String(attempt.commit || "").trim().toLowerCase() === commit));
 }
 function completedReviewAttempt(reviewTicket) {
-  return latestAttempt(terminalAttempts(reviewTicket).filter((attempt) => String(attempt.outcome) === "done"));
+  const acceptedOracleCompletion = reviewTicket?.completion?.purpose === "oracle-review-verdict";
+  return latestAttempt(terminalAttempts(reviewTicket).filter((attempt) => String(attempt.outcome) === "done" || acceptedOracleCompletion && String(attempt.outcome) === "released"));
 }
 function reviewProvenance(sourceTicket, reviewTicket) {
   const sourceAttempt = submittedCandidateAttempt(sourceTicket);

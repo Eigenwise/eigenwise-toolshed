@@ -279,18 +279,12 @@ are both refused. A review also ENDS on its candidate: a terminal `done` reads t
 revision and is refused as `review_tree_mismatch` when it sits on anything else, naming the observed
 revision, the candidate, and the `git -C <worktree> checkout --detach <candidate>` repair, and as
 `review_tree_unobservable` when the checkout cannot be read at all, which releases as a technical blocker
-and dispatches again. Integration waits for the bound review to reach
-a terminal `done`, and reads both identities from the immutable terminal dispatch attempts rather than the
-live dispatch record: the source's `submitted` attempt for that exact commit and the review's `done` attempt.
-A missing identity on either side, the same agent id on both, or a later prepared dispatch leaves integration
-blocked with `candidate_review_required`.
+and dispatches again. Integration waits for the bound review to reach a terminal `done`, including an accepted oracle closeout for a readonly review. Close that case with exactly `verdict({ ref, outcome: "accepted", text, why })`; it stores `text` as the completion comment and changes the review to `done`. Integration reads both identities from immutable terminal dispatch attempts rather than the live dispatch record: the source's `submitted` attempt for that exact commit and the review's `done` attempt, or the terminal `released` attempt accepted by that oracle closeout. A missing identity on either side, the same agent id on both, or a later prepared dispatch leaves integration blocked with `candidate_review_required`.
 
 No caller-controlled route rejects a bound candidate. `rework`, `recordSubmissionRejection`, raw MCP `rework`, CLI `rework`, and
 reconciliation of a matching pending rejection all return one pre-write `candidate_review_locked` refusal,
 whatever `by` or `reviewRef` claims, because MCP hands a handler nothing but caller-supplied JSON and no
-argument can prove an external release principal. A review that finds a defect records its evidence on the
-review ticket and releases that review with `kind=oracle`. When the oracle accepts the defect conclusion,
-Sidequest records `rejected` on both binding halves; if it rejects that conclusion, it records `accepted`.
+argument can prove an external release principal. A review that finds a defect records its evidence on the review ticket and releases that review with `kind=oracle`. When the oracle accepts the defect conclusion, Sidequest records `rejected` on both binding halves; if it rejects that conclusion, it records `accepted` and closes a readonly review through `verdict({ ref, outcome: "accepted", text, why })`.
 The source stays pending until a fresh repair is dispatched, reviewed, and integrated, then
 `supersede_submission` closes the oracle-rejected source against that repair. `rework` still bounces an
 UNBOUND candidate back to `todo` for its owner.

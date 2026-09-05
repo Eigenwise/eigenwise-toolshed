@@ -30,3 +30,7 @@ Experiments have two valid terminal shapes:
 ## Oracle rules
 
 The executor writes the oracle ask because it built the deliverable. Make it a blind ranked comparison, such as “Rank rows 3, 4, 5 best to worst,” rather than “does this sound better.” Keep the user's verdict verbatim in `--text`. Put the orchestrator's interpretation in `--why`, and any earned rule in `--constraint`; never paraphrase the quoted words.
+
+### Readonly review closeout
+
+After a readonly review releases with `kind: "oracle"`, close an accepted review with exactly `verdict({ ref, outcome: "accepted", text, why })`. It writes `text` as the completion comment and changes the review to `done`. Do not dispatch that review again or call `done` afterward.

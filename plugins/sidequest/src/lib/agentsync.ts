@@ -846,7 +846,7 @@ function boundReviewGuidance(ticket?: any) {
   return [
     'Bound review closeout:',
     `This ticket is bound to ${source} at candidate ${candidate}. You cannot reject that candidate, and no by, reviewRef, session, or publish-lock value changes that: rework, submit --clear, reclaim, and amendment all refuse with candidate_review_locked and write nothing on either half of the binding.`,
-    `A pass closes normally with done. A confirmed defect records its exact evidence in a comment on this review ticket and then releases THIS ticket with kind oracle, naming what a human must decide. If the oracle accepts the defect conclusion, the binding records ${source}'s candidate as rejected; if it rejects the conclusion, the binding records it as accepted. Leave ${source} untouched until a fresh repair is integrated, then the control plane may supersede the rejected submission through that repair.`,
+    `A pass closes normally with done. A confirmed defect records its exact evidence in a comment on this review ticket and then releases THIS ticket with kind oracle, naming what a human must decide. If the oracle accepts the defect conclusion, the binding records ${source}'s candidate as rejected; if it rejects the conclusion, the binding records it as accepted and closes this readonly review with verdict({ ref, outcome: "accepted", text, why }). Leave ${source} untouched until a fresh repair is integrated, then the control plane may supersede the rejected submission through that repair.`,
   ].join('\n');
 }
 

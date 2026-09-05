@@ -13,6 +13,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-artifact-lifecy
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
+const db = require('../lib/db.js');
 const { runCapturedVerification } = require('../lib/verify-capture.js');
 const sourceRevisionCapability = require('../lib/source-revision-capability.js');
 const agentsync = require('../lib/agentsync.js');
@@ -22,6 +23,20 @@ const PROJECT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-artifact-lifecycle-pro
 execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: PROJECT, windowsHide: true });
 execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'fixture'], { cwd: PROJECT, windowsHide: true });
 const { slug } = store.ensureProject(PROJECT);
+
+function persistTicket(ticket: any) {
+  db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: ticket.id,
+    project: slug,
+    ref: ticket.ref,
+    status: ticket.status,
+    archived: ticket.archived ? 1 : 0,
+    ord: ticket.order,
+    claim_by: ticket.claim ? ticket.claim.by : null,
+    data: ticket,
+  });
+}
+
 const exploration = store.getCategory('codebase-exploration');
 store.setCategory(Object.assign({}, exploration, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));
 store.setCategory({
@@ -194,6 +209,34 @@ test('read-only dispatches with in-repo declared files may close with done', () 
   const done = store.completeTicket(slug, created.ref, 'readonly-worker', { source: 'mcp' });
 
   assert.strictEqual(done.ok, true);
+  assert.strictEqual(done.ticket.status, 'done');
+  assert.strictEqual(done.ticket.submission == null, true);
+});
+
+test('last readonly executor overrides a writable category during done closeout', () => {
+  const created = store.createTicket(slug, {
+    title: 'terminal readonly review',
+    description: 'Inspect the declared repository files.',
+    category: 'repository-write',
+    files: ['.claude/.codebase-info'],
+    source: 'mcp',
+  });
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+  assert.strictEqual(prepared.ticket.dispatch.readonly, false);
+  assert.strictEqual(claim(prepared, 'terminal-readonly-worker').ok, true);
+
+  const dispatched = store.getTicket(slug, created.ref);
+  dispatched.dispatch.executor = 'sidequest-exec-dispatch-readonly';
+  persistTicket(dispatched);
+  assert.strictEqual(store.releaseTicket(slug, created.ref, 'terminal-readonly-worker', {
+    source: 'mcp',
+    releaseKind: 'oracle',
+    oracle: 'Does the review close cleanly?',
+  }).ok, true);
+
+  const done = store.completeTicket(slug, created.ref, 'terminal-readonly-worker', { source: 'mcp' });
+
+  assert.strictEqual(done.ok, true, done.message);
   assert.strictEqual(done.ticket.status, 'done');
   assert.strictEqual(done.ticket.submission == null, true);
 });

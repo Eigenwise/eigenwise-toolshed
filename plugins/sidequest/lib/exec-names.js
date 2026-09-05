@@ -32,6 +32,7 @@ __export(exec_names_exports, {
   classify: () => classify,
   dispatchLaunchName: () => dispatchLaunchName,
   isEffort: () => isEffort,
+  isReadOnlyExecutor: () => isReadOnlyExecutor,
   refSlug: () => refSlug,
   stableClaudeName: () => stableClaudeName,
   stableDispatchName: () => stableDispatchName,
@@ -144,6 +145,10 @@ function stableReadOnlyClaudeName(effort) {
 function stableReadOnlyDispatchName(_effort) {
   return READ_ONLY_DISPATCH_NAME;
 }
+function isReadOnlyExecutor(name) {
+  const kind = classify(name).kind;
+  return kind === "read_only_codex_dispatch" || kind === "read_only_claude_builtin";
+}
 function classify(name) {
   if (typeof name !== "string" || !name) return { kind: "unknown", effort: null };
   if (name === READ_ONLY_DISPATCH_NAME) return { kind: "read_only_codex_dispatch", effort: null };
@@ -189,6 +194,7 @@ function classify(name) {
   classify,
   dispatchLaunchName,
   isEffort,
+  isReadOnlyExecutor,
   refSlug,
   stableClaudeName,
   stableDispatchName,

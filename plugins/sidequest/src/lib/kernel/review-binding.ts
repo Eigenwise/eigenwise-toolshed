@@ -149,7 +149,9 @@ export function submittedCandidateAttempt(sourceTicket?: any): any {
 }
 
 export function completedReviewAttempt(reviewTicket?: any): any {
-  return latestAttempt(terminalAttempts(reviewTicket).filter((attempt: any) => String(attempt.outcome) === 'done'));
+  const acceptedOracleCompletion = reviewTicket?.completion?.purpose === 'oracle-review-verdict';
+  return latestAttempt(terminalAttempts(reviewTicket).filter((attempt: any) => String(attempt.outcome) === 'done'
+    || (acceptedOracleCompletion && String(attempt.outcome) === 'released')));
 }
 
 export function reviewProvenance(sourceTicket?: any, reviewTicket?: any): ReviewProvenance {
