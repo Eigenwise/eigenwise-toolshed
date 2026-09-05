@@ -1029,6 +1029,10 @@ function immutableWorktreeFacts(slug?: any, candidate?: any) {
   }
 }
 
+function boundIsolatedWorktree(state?: any) {
+  return Boolean(state?.worktree && ['worktree-create', 'live-claim-recovery'].includes(state.worktreeBindingSource));
+}
+
 function completedWorktreeCreationFacts(state?: any) {
   if (!state?.worktreeCreationCompletedAt || !state.worktree || !state.worktreeGitDirectory
     || !state.worktreeCommonGitDirectory || !state.worktreeCheckoutInstance || !state.worktreeObservedRevision) return null;
@@ -1545,6 +1549,63 @@ function readDispatchBriefing(slug?: any, idOrRef?: any, token?: any, tokenFile?
   // The renderer still validates the resolved credential. Returning only the
   // ticket made every token-file briefing fail after authentication (SQ-1866).
   return { ok: true, ticket, token: receivedToken };
+}
+
+function recoverLiveClaimDispatch(slug?: any, idOrRef?: any, opts?: any) {
+  const by = String(opts?.by || '').trim();
+  const executor = String(opts?.executor || '').trim();
+  const worktree = String(opts?.worktree || '').trim();
+  const evidence = String(opts?.recoveryEvidence || '').trim();
+  const sessionId = String(opts?.sessionId || '').trim();
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  if (!by || !executor || !worktree || !evidence || !sessionId) {
+    return { ok: false, reason: 'missing_recovery_facts', message: 'Live-claim recovery requires claimHolder, executor, worktree, recoveryEvidence, and a connected session.' };
+  }
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    const state = dispatchState(ticket);
+    if (!ticket?.claim?.by || ticket.claim.by !== by) {
+      return { ok: false, reason: 'not_claim_holder', ticket, message: `${ticket?.ref || idOrRef} is not live-claimed by ${by}.` };
+    }
+    if (!state || state.terminalAt || state.sharedTree !== false || state.outcome !== 'claimed') {
+      return { ok: false, reason: 'dispatch_unavailable', ticket, message: `${ticket.ref} does not have a live isolated claimed dispatch to recover.` };
+    }
+    if (state.executor !== executor || ticket.claim.runtime?.executor && ticket.claim.runtime.executor !== executor) {
+      return { ok: false, reason: 'executor_mismatch', ticket, message: `${ticket.ref} requires executor ${state.executor || '(unavailable)'}, not ${executor}.` };
+    }
+    const facts = immutableWorktreeFacts(slug, worktree);
+    if (!facts) {
+      return { ok: false, reason: 'invalid_worktree', ticket, message: `${ticket.ref} recovery requires a linked worktree from this board project.` };
+    }
+    if (state.worktree && canonicalPath(state.worktree) !== facts.worktree) {
+      return { ok: false, reason: 'worktree_mismatch', ticket, message: `${ticket.ref} is bound to a different worktree and cannot be rebound.` };
+    }
+    const now = new Date().toISOString();
+    state.sessionId = sessionId;
+    state.agentId = null;
+    state.worktree = facts.worktree;
+    state.worktreeGitDirectory = facts.gitDirectory;
+    state.worktreeCommonGitDirectory = facts.commonGitDirectory;
+    state.worktreeCheckoutInstance = facts.checkoutInstance;
+    state.worktreeObservedRevision = facts.revision;
+    state.worktreeBindingSource = 'live-claim-recovery';
+    state.worktreeBoundAt = now;
+    state.resumedAt = now;
+    state.liveClaimRecovery = { at: now, by, executor, evidence };
+    ticket.dispatchNonce = mintDispatchToken();
+    state.tokenPrefix = dispatchTokenPrefix(ticket.dispatchNonce);
+    writeDispatchTokenFile(ticket);
+    syncClaimRuntimeIdentity(ticket, state);
+    stampDispatchEvent(ticket, 'live-claim-recovery', now);
+    putTicket(slug, ticket);
+    return {
+      ok: true,
+      ticket,
+      token: ticket.dispatchNonce,
+      recovery: { kind: 'live_claim_resume', at: now, worktree: facts.worktree },
+    };
+  });
 }
 
 function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {
@@ -2181,7 +2242,7 @@ function syncClaimRuntimeIdentity(ticket?: any, state?: any) {
 
 function recordDispatchRuntimeIdentity(slug?: any, state?: any, agentId?: any, agentName?: any, now?: any, worktreeFacts?: any) {
   if (state.sharedTree === false && !state.continuation?.sourceWorktree && worktreeFacts
-    && (state.worktreeBindingSource !== 'worktree-create' || !state.worktree
+    && (!boundIsolatedWorktree(state)
       || canonicalPath(state.worktree) !== worktreeFacts.worktree)) return false;
   if (state.sharedTree === false && !state.continuation?.sourceWorktree && worktreeFacts
     && state.worktreeCreationCompletedAt
@@ -2313,7 +2374,7 @@ function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agent
     const completedWorktreeMatches = matches.filter((match) => {
       const completed = completedWorktreeCreationFacts(match.state);
       return match.state.sharedTree === false && !match.state.continuation?.sourceWorktree
-        && match.state.worktreeBindingSource === 'worktree-create'
+        && boundIsolatedWorktree(match.state)
         && completed && canonicalPath(completed.worktree) === canonicalPath(normalizedWorktree);
     });
     if (completedWorktreeMatches.length) matches = completedWorktreeMatches;
@@ -2351,7 +2412,7 @@ function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agent
         return { ok: false };
       }
       if (state.sharedTree === false && normalizedWorktree && !state.continuation?.sourceWorktree
-        && (state.worktreeBindingSource !== 'worktree-create' || !state.worktree)) {
+        && !boundIsolatedWorktree(state)) {
         return { ok: false, reason: 'worktree_binding_unavailable' };
       }
       const completedTargetFacts = reportsParentCheckout ? completedWorktreeCreationFacts(state) : null;
@@ -2536,6 +2597,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     prepareDispatch,
     syncLiveDispatchVerification,
     readDispatchBriefing,
+    recoverLiveClaimDispatch,
     recordDispatchLaunch,
     recordDispatchAgentFailure,
     recoverDispatchQuotaFailure,

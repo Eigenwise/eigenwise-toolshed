@@ -129,8 +129,9 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(byName.get('release')?.inputSchema.properties?.candidate?.type, 'string');
   assert.equal(byName.get('release')?.inputSchema.properties?.deliverable?.type, 'string');
   assert.match(byName.get('release')?.description ?? '', /oracle handoff/);
-  assert.match(byName.get('dispatch')?.inputSchema.properties?.sharedTree?.description ?? '', /Omit for an isolated checkout/);
-  assert.match(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /Recovery evidence/);
+  assert.equal(byName.get('dispatch')?.inputSchema.properties?.sharedTree?.description, 'Tree.');
+  assert.equal(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description, 'Proof.');
+  assert.equal(byName.get('dispatch')?.inputSchema.properties?.worktree?.description, 'Checkout.');
   const addVerify = byName.get('add')?.inputSchema.properties?.verify?.description ?? '';
   assert.ok(addVerify.includes('`attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`'), addVerify);
   assert.equal(byName.get('update')?.inputSchema.properties?.verify?.description, addVerify);

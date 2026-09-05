@@ -1164,7 +1164,7 @@ test('tools/list preserves MCP contracts within the payload budget', async (cont
   assert.ok(headroom >= mcp.MCP_TOOLS_LIST_HEADROOM_BYTES, `tools/list headroom is ${headroom} bytes, below ${mcp.MCP_TOOLS_LIST_HEADROOM_BYTES}`);
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /token and spawn spec/);
-  assert.match(tools.find((tool: any) => tool.name === 'dispatch').inputSchema.properties.recoveryEvidence.description, /Recovery evidence/);
+  assert.match(tools.find((tool: any) => tool.name === 'dispatch').inputSchema.properties.recoveryEvidence.description, /Proof/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /declared external needs current capture/);
   assert.match(tools.find((tool: any) => tool.name === 'list').description, /changes\/pulse/);
   const list = tools.find((tool: any) => tool.name === 'list');
@@ -3792,7 +3792,7 @@ test('MCP board archive tools match the CLI archive-board lifecycle', async () =
 test('dispatch returns a stable executor, one spawn prompt, and a token', async () => {
   const d = mcp.toolDescriptors().find((t: any) => t.name === 'dispatch');
   assert.ok(d);
-  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['allowRepeatFailure', 'allowUnscoped', 'full', 'integrationBranch', 'project', 'recoveryEvidence', 'ref', 'sharedTree']);
+  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['allowRepeatFailure', 'allowUnscoped', 'claimHolder', 'full', 'integrationBranch', 'project', 'recoveryEvidence', 'ref', 'sharedTree', 'worktree']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
 
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' }]);
@@ -4796,6 +4796,62 @@ test('MCP claim binds an unlaunched isolated dispatch with its prepared token', 
   assert.equal(dispatch.sessionId, MCP_SESSION_ID);
   assert.ok(dispatch.boundAt);
   assert.equal(store.releaseTicket(slug, added.ref, 'mcp-token-bound-agent', { status: 'todo', source: 'test' }).ok, true);
+});
+
+test('MCP dispatch recovers a live claim without releasing it', async () => {
+  const project = committedRepo('sq-mcp-live-claim-recovery-');
+  const slug = store.ensureProject(project).slug;
+  const originalSession = `mcp-live-claim-${Date.now()}`;
+  const resumedSession = `${originalSession}-resumed`;
+  const claimHolder = `mcp-live-claim-worker-${Date.now()}`;
+  const agentName = `mcp-live-claim-agent-${Date.now()}`;
+  const worktree = path.join(FIXTURE_ROOT, agentName);
+  store.setCategory({ id: 'mcp-live-claim-recovery', name: 'MCP live claim recovery', route: { model: 'sonnet', effort: 'high' } });
+  const ticket = store.createTicket(slug, {
+    title: 'MCP live claim recovery',
+    description: DISPATCH_DESCRIPTION,
+    category: 'mcp-live-claim-recovery',
+    files: ['recovered.js'],
+    executorVerify: 'node --test test/mcp.test.ts',
+    source: 'test',
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: originalSession, sharedTree: false });
+  const executor = prepared.ticket.dispatchExecutor;
+  try {
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId: originalSession,
+      token: prepared.token,
+      executor,
+      agentName,
+    }).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, claimHolder, {
+      sessionId: originalSession,
+      token: prepared.token,
+      executor,
+      requireBoundAgent: true,
+    }).ok, true);
+    fs.mkdirSync(path.dirname(worktree), { recursive: true });
+    execFileSync('git', ['worktree', 'add', '--detach', worktree, 'HEAD'], { cwd: project, windowsHide: true });
+    const gitDirectory = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
+    createCheckoutInstanceMarker(path.isAbsolute(gitDirectory) ? gitDirectory : path.resolve(worktree, gitDirectory));
+    fs.rmSync(prepared.ticket.dispatch.tokenFile);
+
+    const recovered = await callToolAsSession(resumedSession, 'dispatch', {
+      project: slug,
+      ref: ticket.ref,
+      recoveryEvidence: 'The resumed executor lost its token file and worktree binding after an API failure.',
+      claimHolder,
+      worktree,
+      full: true,
+    });
+    assert.equal(recovered.ref, ticket.ref);
+    assert.equal(recovered.recovery.kind, 'live_claim_resume');
+    assert.equal(store.getTicket(slug, ticket.ref).claim.by, claimHolder);
+    assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, prepared.ticket.dispatch.tokenFile).ok, true);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, claimHolder, { status: 'todo', source: 'test', force: true });
+    if (fs.existsSync(worktree)) execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: project, windowsHide: true });
+  }
 });
 
 test('MCP blocks no-dispatch routed claims and records an explicit direct research bypass', async () => {

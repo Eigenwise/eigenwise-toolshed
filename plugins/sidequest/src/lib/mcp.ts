@@ -267,7 +267,11 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   },
   story_log: { entry: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes.' },
   category_edit: { fallbackModel: 'null clears fallback.' },
-  dispatch: { sharedTree: 'Only declared shared checkout. Omit for an isolated checkout. Live claims cannot dispatch.', recoveryEvidence: 'Recovery evidence.' },
+  dispatch: {
+    sharedTree: 'Tree.',
+    recoveryEvidence: 'Proof.',
+    worktree: 'Checkout.',
+  },
   integrate: { deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.' },
   groomClose: { deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.' },
 };

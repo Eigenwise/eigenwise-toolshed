@@ -1487,7 +1487,7 @@
         },
         "sharedTree": {
           "type": "boolean",
-          "description": "Only declared shared checkout. Omit for an isolated checkout. Live claims cannot dispatch."
+          "description": "Tree."
         },
         "allowRepeatFailure": {
           "type": "boolean"
@@ -1500,7 +1500,14 @@
         },
         "recoveryEvidence": {
           "type": "string",
-          "description": "Recovery evidence."
+          "description": "Proof."
+        },
+        "claimHolder": {
+          "type": "string"
+        },
+        "worktree": {
+          "type": "string",
+          "description": "Checkout."
         },
         "full": {
           "type": "boolean"

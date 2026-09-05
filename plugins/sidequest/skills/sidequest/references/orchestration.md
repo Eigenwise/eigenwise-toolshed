@@ -169,7 +169,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   `SendMessage` report. Read a submission's canonical report body or a done completion comment for what changed, verification evidence, commit hash or
   close confirmation, and anything deliberately skipped. `SendMessage` remains for blockers,
   `kind=question` needs, scope conflicts, and failures the board cannot express.
-- **Recover a dormant completion.** A task-completed notification with no submission or terminal board state while its claim is live means the executor is dormant, not finished. `pulse`; if dispatch is still claimed and fresh, `SendMessage` the same named agent to continue, keeping its claim and token. A silent worker is dead only when the board and task evidence confirm terminal death: salvage, release, fresh-dispatch, then spawn one replacement. Never respawn beside a live claim or `TaskStop` without terminal board evidence.
+- **Recover a dormant completion.** A task-completed notification with no submission or terminal board state while its claim is live means the executor is dormant, not finished. `pulse`; if dispatch is still claimed and fresh, `SendMessage` the same named agent to continue, keeping its claim, token-file path, and recorded worktree binding. If that resumed executor gets `matches no dispatch record` from the write hook, it keeps the claim and calls MCP `dispatch` once with `ref`, `recoveryEvidence`, `claimHolder` (the exact claim `by`), and the linked `worktree` path. The board verifies the stored executor, re-mints the token, and re-binds the worktree without a release. A silent worker is dead only when the board and task evidence confirm terminal death: salvage, release, fresh-dispatch, then spawn one replacement. Never respawn beside a live claim or `TaskStop` without terminal board evidence.
 - **Correct the live worker before replacing it.** When a claimed executor has useful edits, a scoped commit, or meaningful verification and its concern is interpretive or correctness-related, read the evidence it recorded and send the corrected evidence or decision to its board-derived name with `SendMessage`. Keep the claim and its worktree alive so that executor can correct and reverify. A fresh dispatch is only for confirmed terminal death, an intentional Continuation checkpoint, or a genuine blocker with no salvageable work.
 - **Salvage before redispatch.** When a worker is dead or stopped, inspect its worktree before releasing or
   replacing it. If an isolated worker's recorded worktree is gone, do not `SendMessage` it: redispatch after
@@ -198,10 +198,11 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   refusal retires its own stale attempt, so the executor stops without claiming and the orchestrator dispatches
   a fresh token. That records the evidence on the failed attempt, keeps it in `dispatch.attempts` as
   history, and prepares exactly one fresh identity. It refuses while a bound attempt is still inside the
-  backstop, and once the attempt is claimed, checkpointed, or terminal; the refusal names which of those it
+  backstop, and once the attempt is checkpointed or terminal; the refusal names which of those it
   found and, for a bound one, how long is left. A claimed executor that is provably dead goes through claim
-  release or `groomClose --recoveryEvidence` instead; do not reach for recovery evidence to shortcut a live
-  attempt.
+  release or `groomClose --recoveryEvidence`. The exception is a live claimed executor that resumed into its
+  original linked checkout but lost only the board binding: it uses `dispatch` with `recoveryEvidence`,
+  `claimHolder`, and `worktree`; the board verifies the stored executor and restores that same identity without releasing.
 - **A submitted ticket is not dispatchable.** While a submission is pending, the ticket is parked for the
   publish transaction, and a claim on it is refused as `submitted`, so dispatching would mint a token nobody
   can claim. Preparation refuses there and names the three exits: integrate it, `rework` it (which clears the
