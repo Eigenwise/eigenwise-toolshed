@@ -479,4 +479,12 @@ test('hooks.json launches the observer and registers observability across lifecy
   for (const event of ['SessionStart', 'SessionEnd', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStart', 'SubagentStop']) {
     assert.ok(commandsFor(event).includes('observability.js'), `observability missing on ${event}`);
   }
+  for (const [eventName, hookGroups] of Object.entries(hooks)) {
+    for (const hookGroup of hookGroups) {
+      for (const configuredHook of hookGroup.hooks) {
+        if (!configuredHook.command.includes('/hooks/observability.js') && !configuredHook.command.includes('request-body-preflight.js')) continue;
+        assert.equal(configuredHook.timeout, 10, `${eventName} local hook budget`);
+      }
+    }
+  }
 });

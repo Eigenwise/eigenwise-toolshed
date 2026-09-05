@@ -72,7 +72,7 @@ test('keeps startup-only and startup-or-resume hooks separate with their existin
           {
             type: 'command',
             command: 'node --no-warnings "${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-freshness.js"',
-            timeout: 2,
+            timeout: 10,
           },
         ],
       },

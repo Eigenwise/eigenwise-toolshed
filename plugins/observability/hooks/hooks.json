@@ -17,7 +17,7 @@
           {
             "type": "command",
             "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
+            "timeout": 10
           }
         ]
       }
@@ -28,7 +28,7 @@
           {
             "type": "command",
             "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
+            "timeout": 10
           }
         ]
       }
@@ -39,7 +39,7 @@
           {
             "type": "command",
             "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
+            "timeout": 10
           }
         ]
       }
@@ -51,7 +51,7 @@
           {
             "type": "command",
             "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
+            "timeout": 10
           }
         ]
       },
@@ -61,7 +61,7 @@
           {
             "type": "command",
             "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/request-body-preflight.js\"",
-            "timeout": 3
+            "timeout": 10
           }
         ]
       }
@@ -73,7 +73,7 @@
           {
             "type": "command",
             "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
+            "timeout": 10
           }
         ]
       }
@@ -84,7 +84,7 @@
           {
             "type": "command",
             "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
+            "timeout": 10
           }
         ]
       }
@@ -95,7 +95,7 @@
           {
             "type": "command",
             "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
+            "timeout": 10
           }
         ]
       }
@@ -106,7 +106,7 @@
           {
             "type": "command",
             "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
+            "timeout": 10
           }
         ]
       }
