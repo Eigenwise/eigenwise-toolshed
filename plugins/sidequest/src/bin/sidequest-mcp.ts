@@ -10,10 +10,12 @@ const mcp = require('../lib/mcp.js');
 
 const CLIENT_HEARTBEAT_INTERVAL_MILLISECONDS = 60_000;
 const CLIENT_HEARTBEAT_TIMEOUT_MILLISECONDS = 10_000;
+const CLIENT_INITIALIZATION_DEADLINE_MILLISECONDS = 70_000;
 
-type HeartbeatTiming = {
+type ClientConnectionTiming = {
   intervalMilliseconds: number;
   timeoutMilliseconds: number;
+  initializationDeadlineMilliseconds: number;
 };
 
 type JsonRpcRecord = Record<string, unknown>;
@@ -23,11 +25,12 @@ function positiveMilliseconds(value: string | undefined, fallback: number) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function heartbeatTiming(): HeartbeatTiming {
+function clientConnectionTiming(): ClientConnectionTiming {
   if (process.env.NODE_ENV !== 'test') {
     return {
       intervalMilliseconds: CLIENT_HEARTBEAT_INTERVAL_MILLISECONDS,
       timeoutMilliseconds: CLIENT_HEARTBEAT_TIMEOUT_MILLISECONDS,
+      initializationDeadlineMilliseconds: CLIENT_INITIALIZATION_DEADLINE_MILLISECONDS,
     };
   }
   return {
@@ -38,6 +41,10 @@ function heartbeatTiming(): HeartbeatTiming {
     timeoutMilliseconds: positiveMilliseconds(
       process.env.SIDEQUEST_TEST_MCP_HEARTBEAT_TIMEOUT_MILLISECONDS,
       CLIENT_HEARTBEAT_TIMEOUT_MILLISECONDS,
+    ),
+    initializationDeadlineMilliseconds: positiveMilliseconds(
+      process.env.SIDEQUEST_TEST_MCP_INITIALIZATION_DEADLINE_MILLISECONDS,
+      CLIENT_INITIALIZATION_DEADLINE_MILLISECONDS,
     ),
   };
 }
@@ -66,12 +73,13 @@ function parseLine(line: unknown): unknown[] {
 
 function main() {
   const pending = new Set<Promise<void>>();
-  const timing = heartbeatTiming();
+  const timing = clientConnectionTiming();
   let buffer = '';
   let shuttingDown = false;
   let clientInitialized = false;
   let heartbeatIdentifier = 0;
   let pendingHeartbeatIdentifier: string | null = null;
+  let initializationDeadline: NodeJS.Timeout | undefined;
   let heartbeatTimer: NodeJS.Timeout | undefined;
   let heartbeatTimeout: NodeJS.Timeout | undefined;
 
@@ -83,13 +91,27 @@ function main() {
     pendingHeartbeatIdentifier = null;
   };
 
+  const stopClientInitializationDeadline = () => {
+    if (initializationDeadline) clearTimeout(initializationDeadline);
+    initializationDeadline = undefined;
+  };
+
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    stopClientInitializationDeadline();
     stopClientHeartbeat();
     if (buffer.trim()) handleLine(buffer);
     await Promise.allSettled(Array.from(pending));
     process.exit(0);
+  };
+
+  const startClientInitializationDeadline = () => {
+    initializationDeadline = setTimeout(() => {
+      initializationDeadline = undefined;
+      void shutdown();
+    }, timing.initializationDeadlineMilliseconds);
+    initializationDeadline.unref();
   };
 
   const scheduleClientHeartbeat = () => {
@@ -123,6 +145,7 @@ function main() {
       scheduleClientHeartbeat();
     }
     if (message.method === 'notifications/initialized') {
+      stopClientInitializationDeadline();
       clientInitialized = true;
       scheduleClientHeartbeat();
     }
@@ -157,6 +180,7 @@ function main() {
   process.stdin.once('end', shutdown);
   process.stdin.once('close', shutdown);
   process.stdin.resume();
+  startClientInitializationDeadline();
 }
 
 main();

@@ -3,15 +3,17 @@
 const mcp = require("../lib/mcp.js");
 const CLIENT_HEARTBEAT_INTERVAL_MILLISECONDS = 6e4;
 const CLIENT_HEARTBEAT_TIMEOUT_MILLISECONDS = 1e4;
+const CLIENT_INITIALIZATION_DEADLINE_MILLISECONDS = 7e4;
 function positiveMilliseconds(value, fallback) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
-function heartbeatTiming() {
+function clientConnectionTiming() {
   if (process.env.NODE_ENV !== "test") {
     return {
       intervalMilliseconds: CLIENT_HEARTBEAT_INTERVAL_MILLISECONDS,
-      timeoutMilliseconds: CLIENT_HEARTBEAT_TIMEOUT_MILLISECONDS
+      timeoutMilliseconds: CLIENT_HEARTBEAT_TIMEOUT_MILLISECONDS,
+      initializationDeadlineMilliseconds: CLIENT_INITIALIZATION_DEADLINE_MILLISECONDS
     };
   }
   return {
@@ -22,6 +24,10 @@ function heartbeatTiming() {
     timeoutMilliseconds: positiveMilliseconds(
       process.env.SIDEQUEST_TEST_MCP_HEARTBEAT_TIMEOUT_MILLISECONDS,
       CLIENT_HEARTBEAT_TIMEOUT_MILLISECONDS
+    ),
+    initializationDeadlineMilliseconds: positiveMilliseconds(
+      process.env.SIDEQUEST_TEST_MCP_INITIALIZATION_DEADLINE_MILLISECONDS,
+      CLIENT_INITIALIZATION_DEADLINE_MILLISECONDS
     )
   };
 }
@@ -47,12 +53,13 @@ function parseLine(line) {
 }
 function main() {
   const pending = /* @__PURE__ */ new Set();
-  const timing = heartbeatTiming();
+  const timing = clientConnectionTiming();
   let buffer = "";
   let shuttingDown = false;
   let clientInitialized = false;
   let heartbeatIdentifier = 0;
   let pendingHeartbeatIdentifier = null;
+  let initializationDeadline;
   let heartbeatTimer;
   let heartbeatTimeout;
   const stopClientHeartbeat = () => {
@@ -62,13 +69,25 @@ function main() {
     heartbeatTimeout = void 0;
     pendingHeartbeatIdentifier = null;
   };
+  const stopClientInitializationDeadline = () => {
+    if (initializationDeadline) clearTimeout(initializationDeadline);
+    initializationDeadline = void 0;
+  };
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    stopClientInitializationDeadline();
     stopClientHeartbeat();
     if (buffer.trim()) handleLine(buffer);
     await Promise.allSettled(Array.from(pending));
     process.exit(0);
+  };
+  const startClientInitializationDeadline = () => {
+    initializationDeadline = setTimeout(() => {
+      initializationDeadline = void 0;
+      void shutdown();
+    }, timing.initializationDeadlineMilliseconds);
+    initializationDeadline.unref();
   };
   const scheduleClientHeartbeat = () => {
     if (shuttingDown || !clientInitialized || pendingHeartbeatIdentifier !== null) return;
@@ -100,6 +119,7 @@ function main() {
       scheduleClientHeartbeat();
     }
     if (message.method === "notifications/initialized") {
+      stopClientInitializationDeadline();
       clientInitialized = true;
       scheduleClientHeartbeat();
     }
@@ -133,5 +153,6 @@ function main() {
   process.stdin.once("end", shutdown);
   process.stdin.once("close", shutdown);
   process.stdin.resume();
+  startClientInitializationDeadline();
 }
 main();
