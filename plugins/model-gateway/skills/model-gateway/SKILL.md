@@ -27,7 +27,8 @@ Project-local wiring is the standard setup. `env --write-project` writes the cur
 The SessionStart hook injects a one-line nudge while the gateway is in any half-configured
 state; act on it. The user sees that same line in the transcript, because a state only they can fix used to
 reach the model alone. Anything routine stays out of it, and the hook always exits 0 so the line survives:
-run `ensure` yourself when you need an exit code. `setup` is one-shot and idempotent: it downloads the claude-code-proxy binary
+run `ensure` yourself when you need an exit code. SessionStart waits at most 12 seconds for a newly started
+gateway, then leaves its supervisor to finish in the background so it stays inside Claude Code's hook budget. `setup` is one-shot and idempotent: it downloads the claude-code-proxy binary
 (sha256-verified) and starts everything. Re-running it later is also the upgrade path.
 
 ```bash
@@ -153,7 +154,7 @@ agree).
 
 ## Failure modes worth knowing
 
-- **Every request fails after wiring**: shim is down and the hook couldn't start it. Run
+- **Every request fails after wiring**: a SessionStart hook can time out while it starts the shim. Claude Code cancels that hook, and a directly spawned supervisor can die with its process tree before it records an exit. Model Gateway launches the supervisor outside that tree and stops waiting before the hook budget, but if this is an older install or it still repeats, run
   `doctor`, check logs. Worst case `env --remove` restores stock behavior instantly.
 - **Codex sessions drop while this plugin's suite runs**: this version scopes fixture cleanup to
   the test gateway home, so the suite never touches the installed gateway. If it happens after

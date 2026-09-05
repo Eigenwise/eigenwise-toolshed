@@ -33,6 +33,10 @@ new rows appear after restarting Claude Code. `/reload-plugins` does not reload 
 
 That’s it for daily use. The plugin keeps the gateway running: its shim supervisor checks the proxy's `/v1/models` endpoint, recovers an unavailable proxy with bounded backoff, and leaves a healthy proxy alone. An older session left open through an update leaves a newer shim running and tells you to reload plugins or restart Claude Code. Sidequest can select gateway models automatically when both plugins are installed.
 
+On Windows, startup uses WMI to launch the supervisor outside the calling terminal or hook's process tree and Job Object. Closing or timing out that caller therefore leaves the shared gateway running. Startup preserves the caller's environment, hides the launcher window, and reports a launch failure instead of falling back to a process that can be killed with the hook.
+
+SessionStart stops waiting after 12 seconds, well inside its 30-second hook budget. The supervisor keeps starting in the background, and Claude tells you to retry a Codex model in a few seconds if it is not ready yet.
+
 When the gateway disappears or restarts, ask Claude to run `doctor`. It names the lifecycle evidence at `~/.claude/model-gateway/logs/lifecycle.jsonl` and distinguishes an observed supervisor, worker, or proxy exit from no exit evidence. The bounded records identify PIDs, orderly setup/stop/restart requests, signals, and recovery outcomes. A force-killed supervisor or OS termination can leave no final record, so a missing exit entry does not prove an orderly shutdown.
 
 Running this plugin's test suite uses its own gateway home and never touches the installed gateway. If Codex sessions dropped while you tested in an earlier version, that was a supervisor cleanup bug fixed in this version.

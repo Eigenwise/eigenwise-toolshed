@@ -239,6 +239,14 @@ async function restartWorkerWithDrain({ quiet = false, timeout = Number(process.
   } catch (error) { return { ok: false, reason: error.message }; }
 }
 function spawnDetached(name, command, cmdArgs, env) {
+  if (WIN) {
+    const { spawnWindowsDetached } = require('./windows-detached.js');
+    const pid = spawnWindowsDetached(command, cmdArgs, {
+      env: { ...process.env, ...env }, logPath: path.join(LOGS, name + '.log'), state: STATE,
+    });
+    fs.writeFileSync(pidFile(name), String(pid));
+    return pid;
+  }
   const out = fs.openSync(path.join(LOGS, name + '.log'), 'a');
   const child = spawn(command, cmdArgs, { detached: true, stdio: ['ignore', out, out], env: { ...process.env, ...env }, windowsHide: true });
   fs.writeFileSync(pidFile(name), String(child.pid));

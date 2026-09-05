@@ -40,6 +40,8 @@ Sidequest can select these models automatically when both plugins are installed.
 
 There are no routine Model Gateway commands to remember. The shim supervisor checks the proxy's `/v1/models` endpoint while it runs and recovers an unavailable proxy with bounded backoff. It leaves a healthy proxy alone. If a session survives a plugin update, its older plugin copy leaves the newer shim running and asks you to reload plugins or restart Claude Code. Claude handles setup, updates, authentication checks, model discovery, and settings repair through the skill.
 
+SessionStart launches a missing supervisor outside the hook's process tree, then waits no more than 12 seconds inside its 30-second hook budget. A slow proxy keeps starting in the background. Claude asks you to retry the Codex model in a few seconds instead of holding the session-start hook open.
+
 When the gateway disappears or restarts, ask Claude to run `doctor`. It names `~/.claude/model-gateway/logs/lifecycle.jsonl` and says whether it found an observed supervisor, worker, or proxy exit. The bounded records include PIDs, orderly setup/stop/restart requests, signals, and recovery outcomes. A force-killed supervisor or OS termination can leave no final record, so a missing exit entry does not prove an orderly shutdown.
 
 Running Model Gateway's own suite uses a separate test home and never touches the installed gateway. Codex sessions dropping while tests ran was a supervisor cleanup bug, fixed in this version.
