@@ -18,40 +18,132 @@ function gatewayPidFile(home, name) {
   return path.join(home, '.claude', 'model-gateway', `${name}.pid`);
 }
 
+function processIsRunning(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code !== 'ESRCH';
+  }
+}
+
 function waitForProcessExit(pid) {
   const deadline = Date.now() + PROCESS_CLEANUP_TIMEOUT_MS;
   const delay = new Int32Array(new SharedArrayBuffer(4));
   while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if (error.code === 'ESRCH') return;
-    }
+    if (!processIsRunning(pid)) return true;
     Atomics.wait(delay, 0, 0, PROCESS_CLEANUP_POLL_MS);
   }
+  return !processIsRunning(pid);
 }
 
-function stopGatewayFixtureProcess(home) {
+function waitForChildExit(child) {
+  return new Promise((resolve) => {
+    if (!child?.pid || child.exitCode != null) return resolve(true);
+    const timer = setTimeout(() => finish(false), PROCESS_CLEANUP_TIMEOUT_MS);
+    const finish = (exited) => {
+      clearTimeout(timer);
+      child.off('exit', onExit);
+      child.off('error', onExit);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    child.once('exit', onExit);
+    child.once('error', onExit);
+  });
+}
+
+function requestFixtureSupervisorStop(child) {
+  return new Promise((resolve) => {
+    if (!child?.connected || typeof child.send !== 'function') return resolve(false);
+    let settled = false;
+    const finish = (accepted) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(accepted);
+    };
+    const timer = setTimeout(() => finish(false), PROCESS_CLEANUP_TIMEOUT_MS);
+    try {
+      child.send({ type: 'fixture-shutdown' }, (error) => finish(!error));
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+function forceStopGatewayProcess(pid) {
+  if (!processIsRunning(pid)) return;
+  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+  else { try { process.kill(pid, 'SIGTERM'); } catch {} }
+}
+
+async function stopGatewayFixtureProcess(home) {
   const child = gatewayFixtureProcesses.get(home);
   gatewayFixtureProcesses.delete(home);
-  if (!child?.pid || child.exitCode != null) return;
-  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-  else { try { child.kill('SIGTERM'); } catch {} }
+  if (!child?.pid || child.exitCode != null) return child?.pid ? [child.pid] : [];
+  if (child.fixtureShutdown) {
+    await requestFixtureSupervisorStop(child);
+    if (await waitForChildExit(child)) return [child.pid];
+  }
+  forceStopGatewayProcess(child.pid);
   waitForProcessExit(child.pid);
+  return [child.pid];
 }
 
-function stopTrackedGatewayProcesses(home) {
-  stopGatewayFixtureProcess(home);
-  const pids = [];
+function stopRecordedGatewayProcesses(home, pids = []) {
   for (const name of ['shim', 'guardian', 'proxy']) {
     let pid;
     try { pid = Number(fs.readFileSync(gatewayPidFile(home, name), 'utf8').trim()) || null; } catch { pid = null; }
     if (!pid || pids.includes(pid)) continue;
     pids.push(pid);
-    if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    else { try { process.kill(pid, 'SIGTERM'); } catch {} }
+    forceStopGatewayProcess(pid);
   }
   for (const pid of pids) waitForProcessExit(pid);
+  return pids;
+}
+
+async function stopTrackedGatewayProcesses(home) {
+  return stopRecordedGatewayProcesses(home, await stopGatewayFixtureProcess(home));
+}
+
+function stopTrackedGatewayProcessesSynchronously(home) {
+  return stopRecordedGatewayProcesses(home);
+}
+
+function firstFixturePath(home) {
+  const pendingDirectories = [home];
+  while (pendingDirectories.length) {
+    const directory = pendingDirectories.pop();
+    let entries;
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) pendingDirectories.push(entryPath);
+      else return entryPath;
+    }
+  }
+  return home;
+}
+
+function fixtureRemovalError(home, pids, error) {
+  const survivingPid = pids.find(processIsRunning);
+  const retainedPath = firstFixturePath(home);
+  const survivor = survivingPid
+    ? `surviving fixture PID ${survivingPid}; file it still holds or recreated: ${retainedPath}`
+    : `no tracked fixture PID survived; retained file: ${retainedPath}`;
+  const cleanupError = new Error(`could not remove gateway test home ${home}: ${survivor}; ${error.message}`);
+  cleanupError.cause = error;
+  return cleanupError;
+}
+
+function removeGatewayTestHome(home, pids = []) {
+  try {
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch (error) {
+    throw fixtureRemovalError(home, pids, error);
+  }
 }
 
 function waitForHealth(port) {
@@ -167,26 +259,28 @@ function createGatewayTestEnvironment(overrides = {}, isolatedOverrides = {}) {
   return { environment, home, ownsHome };
 }
 
-function removeGatewayTestHome(home) {
-  fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-}
-
 function gatewayTestEnvironment(t, overrides = {}, isolatedOverrides = {}) {
   const testEnvironment = createGatewayTestEnvironment(overrides, isolatedOverrides);
   gatewayTestEnvironments.set(testEnvironment.environment, testEnvironment);
-  if (testEnvironment.ownsHome && t) t.after(() => {
-    stopTrackedGatewayProcesses(testEnvironment.home);
-    removeGatewayTestHome(testEnvironment.home);
+  if (testEnvironment.ownsHome && t) t.after(async () => {
+    const pids = await stopTrackedGatewayProcesses(testEnvironment.home);
+    removeGatewayTestHome(testEnvironment.home, pids);
   });
   return testEnvironment.environment;
 }
 
 function spawnGatewayProcess(t, command, args, options = {}) {
   const { env: overrides, isolatedOverrides, ...spawnOptions } = options;
-  const environment = gatewayTestEnvironment(t, overrides, isolatedOverrides);
+  const existingTestEnvironment = gatewayTestEnvironments.get(overrides);
+  const environment = existingTestEnvironment
+    ? { ...overrides, ...isolatedOverrides }
+    : gatewayTestEnvironment(t, overrides, isolatedOverrides);
   const child = spawn(command, args, { ...spawnOptions, env: environment });
-  const testEnvironment = gatewayTestEnvironments.get(environment);
-  if (testEnvironment?.ownsHome) gatewayFixtureProcesses.set(testEnvironment.home, child);
+  if (existingTestEnvironment?.ownsHome) gatewayFixtureProcesses.set(existingTestEnvironment.home, child);
+  else {
+    const testEnvironment = gatewayTestEnvironments.get(environment);
+    if (testEnvironment?.ownsHome) gatewayFixtureProcesses.set(testEnvironment.home, child);
+  }
   return child;
 }
 
@@ -196,7 +290,7 @@ function spawnGatewayProcessSync(command, args, options = {}) {
   try {
     return spawnSync(command, args, { ...spawnOptions, env: testEnvironment.environment });
   } finally {
-    stopTrackedGatewayProcesses(testEnvironment.home);
+    stopTrackedGatewayProcessesSynchronously(testEnvironment.home);
     if (testEnvironment.ownsHome) removeGatewayTestHome(testEnvironment.home);
   }
 }
@@ -206,8 +300,9 @@ function startGateway(t, command, environment, { cliPath = CLI, isolatedOverride
     const child = spawnGatewayProcess(t, process.execPath, [cliPath, command], {
       env: environment,
       isolatedOverrides,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
+    child.fixtureShutdown = command === 'serve-shim';
     let output = '';
     let listening = false;
     const timeout = setTimeout(() => {

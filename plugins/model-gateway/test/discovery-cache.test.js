@@ -202,6 +202,11 @@ test('refreshModels writes the configured gateway discovery cache', async (testC
   const shim = await startGateway(testContext, 'serve-shim', environment, {
     isolatedOverrides: discoveryProcessOverrides(shimPort, workerPort, proxyPort),
   });
+  testContext.after(() => assert.equal(
+    fs.existsSync(environment.HOME),
+    false,
+    'fixture teardown removes the home after the supervisor and worker exit',
+  ));
 
   assert.equal(shim.port, shimPort);
   await waitUntil(() => fs.existsSync(cache), 'refreshModels did not write the discovery cache');
