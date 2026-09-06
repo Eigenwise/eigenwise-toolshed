@@ -46,9 +46,11 @@ async function shimHealthy() {
 
 function pidFile(name) { return path.join(STATE, name + '.pid'); }
 function pidRecordFile(name) { return path.join(STATE, name + '.pid.json'); }
-function removePid(name) {
+function removePid(name, expectedPid = null) {
+  if (expectedPid !== null && readPid(name) !== expectedPid) return false;
   try { fs.rmSync(pidFile(name)); } catch {}
   try { fs.rmSync(pidRecordFile(name)); } catch {}
+  return true;
 }
 function readPid(name) {
   try { return Number(fs.readFileSync(pidFile(name), 'utf8').trim()) || null; } catch { return null; }
@@ -84,9 +86,22 @@ async function writePidRecordAsync(name, pid, { inspectProcess, probeChildren = 
 function processDescription(process) {
   return process?.command || 'not a gateway process';
 }
-function stalePidFile(name, pid, process, report = console.error) {
-  report(`model-gateway: stale pid file ${name}: PID ${pid} is now ${processDescription(process)}`);
+function recordMatchesProcess(record, pid, process) {
+  return Boolean(record && record.pid === pid && (
+    (record.command && record.command === process.command)
+    || (record.startedAt && record.startedAt === process.startedAt)
+  ));
+}
+function retirePidRecord(name, pid, process, report = console.error) {
+  const reason = process
+    ? `PID ${pid} no longer belongs to this gateway: ${processDescription(process)}`
+    : `PID ${pid} is gone`;
+  report(`model-gateway: pid record ${name} retired because ${reason}`);
   removePid(name);
+}
+function rewritePidRecord(name, pid, process, report = console.error) {
+  report(`model-gateway: pid record ${name} rewritten for replaced PID ${pid}: ${processDescription(process)}`);
+  writePidRecord(name, pid);
 }
 function commandIncludesFile(command, filePath) {
   return String(command).replace(/[\\/]+/g, '/').toLowerCase().includes(normalizedPath(filePath));
@@ -94,38 +109,55 @@ function commandIncludesFile(command, filePath) {
 function processRunsThisProxyBinary(process, proxyBinary = PROXY_BIN) {
   return Boolean(process && commandIncludesFile(process.command, proxyBinary));
 }
-function processIsOwnedByThisInstall(pid, { record = null } = {}) {
+function processBelongsToThisInstall(process) {
+  return Boolean(process && installBelongsToThisPlugin(gatewayInstallRootFromCommand(process.command)));
+}
+function proxyRunsUnderRecordedGuardian(process) {
+  const guardianPid = readPid('guardian');
+  if (!guardianPid || guardianPid === process?.pid) return false;
+  return processIsOwnedByThisInstall(guardianPid, { record: readPidRecord('guardian'), name: 'guardian' })
+    && isDescendantOf(process.pid, guardianPid);
+}
+function processIsOwnedByThisInstall(pid, { record = null, name = null } = {}) {
   const process = processInfoSync(pid);
   if (!process) return false;
-  const installRoot = gatewayInstallRootFromCommand(process.command);
-  const belongsToThisInstall = installBelongsToThisPlugin(installRoot);
-  const recordMatches = !record || (record.pid === pid && (
-    (record.command && record.command === process.command)
-    || (record.startedAt && record.startedAt === process.startedAt)
-  ));
-  return Boolean(belongsToThisInstall && recordMatches);
+  if (processBelongsToThisInstall(process)) return !record || recordMatchesProcess(record, pid, process);
+  return name === 'proxy' && processRunsThisProxyBinary(process) && (
+    recordMatchesProcess(record, pid, process) || proxyRunsUnderRecordedGuardian(process)
+  );
 }
 function recordedGatewayPid(name, { report = console.error } = {}) {
   const pid = readPid(name);
   if (!pid) return null;
   const record = readPidRecord(name);
   const process = processInfoSync(pid);
-  if (record && processIsOwnedByThisInstall(pid, { record })) return pid;
-  stalePidFile(name, pid, process, report);
+  if (!process) {
+    retirePidRecord(name, pid, null, report);
+    return null;
+  }
+  if (processIsOwnedByThisInstall(pid, { record, name })) {
+    if (!record) rewritePidRecord(name, pid, process, report);
+    return pid;
+  }
+  if (processBelongsToThisInstall(process)) {
+    rewritePidRecord(name, pid, process, report);
+    return pid;
+  }
+  retirePidRecord(name, pid, process, report);
   return null;
 }
 function recordedGatewayPids(options) {
   return [...new Set(['guardian', 'shim', 'proxy'].map((name) => recordedGatewayPid(name, options)).filter(Boolean))];
 }
-function killPid(pid) {
-  if (!pid || !processIsOwnedByThisInstall(pid)) return false;
+function killPid(pid, options = {}) {
+  if (!pid || !processIsOwnedByThisInstall(pid, options)) return false;
   if (WIN) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
   else { try { process.kill(pid, 'SIGTERM'); } catch {} }
   return true;
 }
 function stopProcess(name, options) {
   const pid = recordedGatewayPid(name, options);
-  if (pid) killPid(pid);
+  if (pid) killPid(pid, { name, record: readPidRecord(name) });
   removePid(name);
 }
 function recordStopRequest(operation, name) {
@@ -418,17 +450,12 @@ async function isDescendantOfAsync(pid, ancestorPid, { processTable = processTab
   const processes = await processTable();
   return processes ? isDescendantInProcessTable(pid, ancestorPid, processes) : undefined;
 }
-async function processIsOwnedByThisInstallAsync(pid, { record = null, inspectProcess, probeChildren = null } = {}) {
+async function processIsOwnedByThisInstallAsync(pid, { record = null, name = null, inspectProcess, probeChildren = null } = {}) {
   const readProcess = inspectProcess || ((processPid) => processInfoAsync(processPid, { probeChildren }));
   const process = await readProcess(pid);
   if (!process) return process === undefined ? undefined : false;
-  const installRoot = gatewayInstallRootFromCommand(process.command);
-  const belongsToThisInstall = installBelongsToThisPlugin(installRoot);
-  const recordMatches = !record || (record.pid === pid && (
-    (record.command && record.command === process.command)
-    || (record.startedAt && record.startedAt === process.startedAt)
-  ));
-  return Boolean(belongsToThisInstall && recordMatches);
+  if (processBelongsToThisInstall(process)) return !record || recordMatchesProcess(record, pid, process);
+  return name === 'proxy' && processRunsThisProxyBinary(process) && recordMatchesProcess(record, pid, process);
 }
 async function killPidAsync(pid, { trusted = false, ...ownershipOptions } = {}) {
   const owned = trusted ? true : await processIsOwnedByThisInstallAsync(pid, ownershipOptions);
@@ -447,9 +474,10 @@ async function killPidAsync(pid, { trusted = false, ...ownershipOptions } = {}) 
 function reapGatewayOrphans(supervisorPid = null) {
   const reaped = [];
   const processes = supervisorPid ? processTableSync() : null;
-  for (const pid of recordedGatewayPids()) {
-    if (processes && isDescendantInProcessTable(pid, supervisorPid, processes)) continue;
-    killPid(pid);
+  for (const name of ['guardian', 'shim', 'proxy']) {
+    const pid = recordedGatewayPid(name);
+    if (!pid || (processes && isDescendantInProcessTable(pid, supervisorPid, processes))) continue;
+    killPid(pid, { name, record: readPidRecord(name) });
     reaped.push(pid);
   }
   return reaped;

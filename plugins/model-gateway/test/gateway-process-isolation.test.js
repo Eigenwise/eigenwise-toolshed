@@ -85,6 +85,24 @@ function processIsRunning(pid) {
   } catch { return false; }
 }
 
+async function waitForPidRecord(filePath) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try { return Number(fs.readFileSync(filePath, 'utf8')); } catch { await pause(25); }
+  }
+  throw new Error(`pid record was not written: ${filePath}`);
+}
+
+async function waitForReplacementPidRecord(filePath, retiredPid) {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    const pid = await waitForPidRecord(filePath).catch(() => null);
+    if (pid && pid !== retiredPid && processIsRunning(pid)) return pid;
+    await pause(25);
+  }
+  throw new Error(`replacement pid record was not written: ${filePath}`);
+}
+
 function descendantPids(parentPid) {
   if (process.platform === 'win32') {
     const result = spawnSync('powershell.exe', [
@@ -125,9 +143,9 @@ function installNodeProxy(home) {
   if (process.platform !== 'win32') fs.chmodSync(proxyBinary, 0o755);
 }
 
-function runGatewayCli(cliPath, command, environment) {
+function runGatewayCli(cliPath, command, environment, { arguments: commandArguments = [], cwd } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cliPath, command], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [cliPath, command, ...commandArguments], { cwd, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += chunk; });
@@ -378,39 +396,84 @@ test('isolated ensure preserves a foreign serve-shim process and cleans its own 
   assert.equal(processIsRunning(guardianPid), false, 'sync fixture cleanup stopped its supervisor');
 });
 
-test('newer cache version replaces a recorded older sibling shim', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-sibling-upgrade-'));
+test('sibling ensure retires dead records without deleting replacement worker and proxy records', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-sibling-record-replacement-'));
   const { olderCli, newerCli } = installCachedGatewayCliVersions(home);
   const shimReservation = net.createServer();
   const shimPort = await listen(shimReservation);
   await new Promise((resolve) => shimReservation.close(resolve));
+  const proxyReservation = net.createServer();
+  const proxyPort = await listen(proxyReservation);
+  await new Promise((resolve) => proxyReservation.close(resolve));
+  const proxyBinary = path.join(home, '.claude', 'model-gateway', 'bin', process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy');
+  installNodeProxy(home);
+  fs.writeFileSync(path.join(home, 'serve'), "require('node:http').createServer((request, response) => request.url === '/v1/models' ? response.end(JSON.stringify({ data: [] })) : response.end('{}')).listen(process.env.PORT, '127.0.0.1'); setInterval(() => {}, 1000);\n");
   const environment = gatewayTestEnvironment(null, { HOME: home, USERPROFILE: home }, {
     CODEX_GATEWAY_PORT: String(shimPort),
     CODEX_GATEWAY_WORKER_PORT: '0',
-    CODEX_GATEWAY_PROXY_PORT: '0',
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
   });
-  const olderShim = spawn(process.execPath, [olderCli, 'serve-shim'], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
-  let newerShim = null;
+  const olderShim = spawn(process.execPath, [olderCli, 'serve-shim'], { cwd: home, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+  let ensuring = null;
+  let replacementGuardianPid = null;
   t.after(async () => {
-    await runGatewayCli(newerCli, 'stop', environment);
+    if (ensuring?.exitCode == null) ensuring.kill();
+    await runGatewayCli(newerCli, 'stop', environment, { cwd: home });
     if (processIsRunning(olderShim.pid)) olderShim.kill();
-    if (newerShim && processIsRunning(newerShim.pid)) newerShim.kill();
+    if (replacementGuardianPid && processIsRunning(replacementGuardianPid)) spawnSync('taskkill', ['/pid', String(replacementGuardianPid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     await waitForExit(olderShim);
-    if (newerShim) await waitForExit(newerShim);
     fs.rmSync(home, { recursive: true, force: true });
   });
   await waitForReady(olderShim);
-  fs.mkdirSync(path.join(home, '.claude', 'model-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(home, '.claude', 'model-gateway', 'guardian.pid'), String(olderShim.pid));
-  fs.writeFileSync(path.join(home, '.claude', 'model-gateway', 'guardian.pid.json'), JSON.stringify({ pid: olderShim.pid }));
-  const stopped = await runGatewayCli(newerCli, 'stop', environment);
-  assert.equal(stopped.status, 0, `newer CLI stops an older sibling shim: ${stopped.stderr}\n${stopped.stdout}`);
-  await waitForProcessesToExit([olderShim.pid], 5000);
-  newerShim = spawn(process.execPath, [newerCli, 'serve-shim'], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
-  await waitForReady(newerShim);
 
-  assert.equal(processIsRunning(olderShim.pid), false, 'newer CLI stopped the older sibling shim');
-  assert.equal(processIsRunning(newerShim.pid), true, 'newer CLI replaced the recorded supervisor');
+  const state = path.join(home, '.claude', 'model-gateway');
+  const retiredGuardianPid = 987654321;
+  const retiredWorkerPid = await waitForPidRecord(path.join(state, 'shim.pid'));
+  const retiredProxyPid = await waitForPidRecord(path.join(state, 'proxy.pid'));
+  fs.writeFileSync(path.join(state, 'guardian.pid'), String(retiredGuardianPid));
+  ensuring = spawn(process.execPath, [newerCli, 'ensure', '--quiet'], { cwd: home, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+  let ensureStdout = '';
+  let ensureStderr = '';
+  ensuring.stdout.on('data', (chunk) => { ensureStdout += chunk; });
+  ensuring.stderr.on('data', (chunk) => { ensureStderr += chunk; });
+  const ensuredResult = new Promise((resolve, reject) => {
+    ensuring.once('error', reject);
+    ensuring.once('exit', (status) => resolve({ status, stderr: ensureStderr, stdout: ensureStdout }));
+  });
+  replacementGuardianPid = await waitForReplacementPidRecord(path.join(state, 'guardian.pid'), retiredGuardianPid);
+  const replacementWorkerPid = await waitForReplacementPidRecord(path.join(state, 'shim.pid'), retiredWorkerPid);
+  const replacementProxyPid = await waitForReplacementPidRecord(path.join(state, 'proxy.pid'), retiredProxyPid);
+  if (ensuring.exitCode == null) ensuring.kill();
+  const ensured = await ensuredResult;
+  assert.equal(processIsRunning(olderShim.pid), false, 'ensure stopped the previous sibling supervisor');
+  assert.equal(processIsRunning(replacementWorkerPid), true, 'ensure launched the replacement worker');
+  assert.equal(processIsRunning(replacementProxyPid), true, 'ensure launched the replacement proxy');
+
+  const doctor = await runGatewayCli(newerCli, 'doctor', environment, { cwd: home });
+  const updaterOutput = `${ensured.stderr}${doctor.stderr}`;
+  const legacyUpdaterLogLines = [
+    `model-gateway: stale pid file guardian: PID ${retiredGuardianPid} is now not a gateway process`,
+    `model-gateway: stale pid file shim: PID ${retiredWorkerPid} is now not a gateway process`,
+    `model-gateway: stale pid file proxy: PID ${retiredProxyPid} is now not a gateway process`,
+    `model-gateway: stale pid file shim: PID ${replacementWorkerPid} is now ${process.execPath} ${newerCli} serve-worker`,
+    `model-gateway: stale pid file proxy: PID ${replacementProxyPid} is now ${proxyBinary} serve --no-monitor`,
+  ];
+  const expectedPidRecordLines = [
+    `model-gateway: pid record guardian retired because PID ${retiredGuardianPid} is gone`,
+    `model-gateway: pid record shim retired because PID ${retiredWorkerPid} is gone`,
+    `model-gateway: pid record proxy retired because PID ${retiredProxyPid} is gone`,
+    `model-gateway: pid record shim rewritten for replaced PID ${replacementWorkerPid}: ${process.execPath} ${newerCli} serve-worker`,
+  ];
+  const pidRecordLines = updaterOutput.split(/\r?\n/).filter((line) => line.startsWith('model-gateway: pid record'));
+  const stalePidFileLines = updaterOutput.split(/\r?\n/).filter((line) => line.startsWith('model-gateway: stale pid file'));
+
+  assert.deepEqual(pidRecordLines, expectedPidRecordLines);
+  assert.deepEqual(stalePidFileLines, [], `live replacement records must not produce:\n${legacyUpdaterLogLines.slice(3).join('\n')}`);
+  assert.equal(Number(fs.readFileSync(path.join(state, 'shim.pid'), 'utf8')), replacementWorkerPid, 'doctor retained the replacement worker record');
+  assert.equal(Number(fs.readFileSync(path.join(state, 'proxy.pid'), 'utf8')), replacementProxyPid, 'doctor retained the replacement proxy record');
+  const stopped = await runGatewayCli(newerCli, 'stop', environment, { cwd: home });
+  assert.equal(stopped.status, 0, stopped.stderr);
+  await waitForProcessesToExit([replacementGuardianPid, replacementWorkerPid, replacementProxyPid], 5000);
 });
 
 test('older cache version leaves a newer sibling shim running', async (t) => {
@@ -639,10 +702,10 @@ test('ensure and stop discard a stale guardian PID without killing its reused pr
 
   assert.equal(ensured.status, 0, ensured.stderr);
   assert.equal(processIsRunning(ensureSleeper.pid), true, 'ensure preserved the reused non-gateway process');
-  assert.match(ensured.stderr, new RegExp(`stale pid file guardian: PID ${ensureSleeper.pid} is now`));
+  assert.match(ensured.stderr, new RegExp(`pid record guardian retired because PID ${ensureSleeper.pid} no longer belongs to this gateway`));
   assert.notEqual(Number(fs.readFileSync(path.join(ensureHome, '.claude', 'model-gateway', 'guardian.pid'), 'utf8')), ensureSleeper.pid);
   assert.equal(stopped.status, 0, stopped.stderr);
-  assert.match(stopped.stderr, new RegExp(`stale pid file guardian: PID ${stopSleeper.pid} is now`));
+  assert.match(stopped.stderr, new RegExp(`pid record guardian retired because PID ${stopSleeper.pid} no longer belongs to this gateway`));
   assert.equal(fs.existsSync(path.join(stopHome, '.claude', 'model-gateway', 'guardian.pid')), false);
   assert.equal(processIsRunning(stopSleeper.pid), true, 'stop preserved the reused non-gateway process');
 });

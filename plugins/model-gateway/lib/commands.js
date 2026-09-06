@@ -2062,7 +2062,7 @@ function runShim() {
         signal,
       });
       if (worker === child) worker = null;
-      removePid('shim');
+      removePid('shim', child.pid);
       if (!stopped) setTimeout(startWorker, 50);
     });
   }
