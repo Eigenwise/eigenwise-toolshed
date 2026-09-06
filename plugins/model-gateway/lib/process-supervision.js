@@ -92,6 +92,9 @@ function recordMatchesProcess(record, pid, process) {
     || (record.startedAt && record.startedAt === process.startedAt)
   ));
 }
+function proxyRecordNeedsBinaryIdentity(record, pid) {
+  return !record || (record.pid === pid && !record.command && !record.startedAt);
+}
 function retirePidRecord(name, pid, process, report = console.error) {
   const reason = process
     ? `PID ${pid} no longer belongs to this gateway: ${processDescription(process)}`
@@ -103,8 +106,14 @@ function rewritePidRecord(name, pid, process, report = console.error) {
   report(`model-gateway: pid record ${name} rewritten for replaced PID ${pid}: ${processDescription(process)}`);
   writePidRecord(name, pid);
 }
+function commandExecutable(command) {
+  return String(command).match(/^\s*(?:"([^"]+)"|(\S+))/)?.slice(1).find(Boolean) || null;
+}
 function commandIncludesFile(command, filePath) {
-  return String(command).replace(/[\\/]+/g, '/').toLowerCase().includes(normalizedPath(filePath));
+  const normalizedFilePath = normalizedPath(filePath);
+  if (String(command).replace(/[\\/]+/g, '/').toLowerCase().includes(normalizedFilePath)) return true;
+  const executable = commandExecutable(command);
+  return Boolean(executable && normalizedPath(executable) === normalizedFilePath);
 }
 function processRunsThisProxyBinary(process, proxyBinary = PROXY_BIN) {
   return Boolean(process && commandIncludesFile(process.command, proxyBinary));
@@ -123,7 +132,9 @@ function processIsOwnedByThisInstall(pid, { record = null, name = null } = {}) {
   if (!process) return false;
   if (processBelongsToThisInstall(process)) return !record || recordMatchesProcess(record, pid, process);
   return name === 'proxy' && processRunsThisProxyBinary(process) && (
-    recordMatchesProcess(record, pid, process) || proxyRunsUnderRecordedGuardian(process)
+    recordMatchesProcess(record, pid, process)
+    || proxyRecordNeedsBinaryIdentity(record, pid)
+    || proxyRunsUnderRecordedGuardian(process)
   );
 }
 function recordedGatewayPid(name, { report = console.error } = {}) {
@@ -455,7 +466,9 @@ async function processIsOwnedByThisInstallAsync(pid, { record = null, name = nul
   const process = await readProcess(pid);
   if (!process) return process === undefined ? undefined : false;
   if (processBelongsToThisInstall(process)) return !record || recordMatchesProcess(record, pid, process);
-  return name === 'proxy' && processRunsThisProxyBinary(process) && recordMatchesProcess(record, pid, process);
+  return name === 'proxy' && processRunsThisProxyBinary(process) && (
+    recordMatchesProcess(record, pid, process) || proxyRecordNeedsBinaryIdentity(record, pid)
+  );
 }
 async function killPidAsync(pid, { trusted = false, ...ownershipOptions } = {}) {
   const owned = trusted ? true : await processIsOwnedByThisInstallAsync(pid, ownershipOptions);
@@ -766,7 +779,7 @@ function createProxyRecovery({
 }
 
 module.exports = {
-  commandResultAsync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, killPidAsync, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
+  commandIncludesFile, commandResultAsync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, killPidAsync, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
   processInfoAsync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync,
   proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPids, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
   spawnSupervisedProxy, stopAll, stopProcess, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit, writePidRecord, writePidRecordAsync,

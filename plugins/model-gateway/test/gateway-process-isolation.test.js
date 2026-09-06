@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway } = require('./support.js');
-const { commandResultAsync, createProxyRecovery, installBelongsToThisPlugin, isDescendantOfAsync } = require('../lib/process-supervision.js');
+const { commandIncludesFile, commandResultAsync, createProxyRecovery, installBelongsToThisPlugin, isDescendantOfAsync } = require('../lib/process-supervision.js');
 const { canReplaceInstalledCliPath } = require('../lib/runtime.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
@@ -91,6 +91,18 @@ async function waitForPidRecord(filePath) {
     try { return Number(fs.readFileSync(filePath, 'utf8')); } catch { await pause(25); }
   }
   throw new Error(`pid record was not written: ${filePath}`);
+}
+
+async function waitForPidRecordDetails(filePath, pid) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      const record = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      if (record.pid === pid) return;
+    } catch {}
+    await pause(25);
+  }
+  throw new Error(`pid record details were not written: ${filePath}`);
 }
 
 async function waitForReplacementPidRecord(filePath, retiredPid) {
@@ -291,6 +303,17 @@ test('cache ownership resolves physical install roots before accepting sibling v
   assert.equal(installBelongsToThisPlugin(foreignMarketplace, currentSibling), false);
 });
 
+test('proxy command identity resolves the physical executable path', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-proxy-command-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const proxyBinary = path.join(home, 'bin', 'claude-code-proxy');
+  fs.mkdirSync(path.dirname(proxyBinary), { recursive: true });
+  fs.writeFileSync(proxyBinary, 'proxy fixture');
+  const alternateProxyPath = `${path.dirname(proxyBinary)}${path.sep}..${path.sep}bin${path.sep}${path.basename(proxyBinary)}`;
+
+  assert.equal(commandIncludesFile(`"${alternateProxyPath}" serve --no-monitor`, proxyBinary), true);
+});
+
 test('gateway fixture processes isolate outer body, socket, and Codex state', async (t) => {
   const outerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-outer-user-'));
   t.after(() => fs.rmSync(outerHome, { recursive: true, force: true }));
@@ -412,6 +435,7 @@ test('sibling ensure retires dead records without deleting replacement worker an
     CODEX_GATEWAY_PORT: String(shimPort),
     CODEX_GATEWAY_WORKER_PORT: '0',
     CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    CODEX_GATEWAY_PROBE_TIMEOUT_MS: '100',
   });
   const olderShim = spawn(process.execPath, [olderCli, 'serve-shim'], { cwd: home, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
   let ensuring = null;
@@ -427,10 +451,15 @@ test('sibling ensure retires dead records without deleting replacement worker an
   await waitForReady(olderShim);
 
   const state = path.join(home, '.claude', 'model-gateway');
+  await waitForPidRecord(path.join(state, 'shim.pid'));
+  await waitForPidRecord(path.join(state, 'proxy.pid'));
   const retiredGuardianPid = 987654321;
-  const retiredWorkerPid = await waitForPidRecord(path.join(state, 'shim.pid'));
-  const retiredProxyPid = await waitForPidRecord(path.join(state, 'proxy.pid'));
+  const retiredWorkerPid = 987654320;
+  const retiredProxyPid = 987654319;
+  for (const pid of [retiredGuardianPid, retiredWorkerPid, retiredProxyPid]) assert.equal(processIsRunning(pid), false, `fixture pid ${pid} is unavailable`);
   fs.writeFileSync(path.join(state, 'guardian.pid'), String(retiredGuardianPid));
+  fs.writeFileSync(path.join(state, 'shim.pid'), String(retiredWorkerPid));
+  fs.writeFileSync(path.join(state, 'proxy.pid'), String(retiredProxyPid));
   ensuring = spawn(process.execPath, [newerCli, 'ensure', '--quiet'], { cwd: home, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
   let ensureStdout = '';
   let ensureStderr = '';
@@ -443,6 +472,9 @@ test('sibling ensure retires dead records without deleting replacement worker an
   replacementGuardianPid = await waitForReplacementPidRecord(path.join(state, 'guardian.pid'), retiredGuardianPid);
   const replacementWorkerPid = await waitForReplacementPidRecord(path.join(state, 'shim.pid'), retiredWorkerPid);
   const replacementProxyPid = await waitForReplacementPidRecord(path.join(state, 'proxy.pid'), retiredProxyPid);
+  await waitForPidRecordDetails(path.join(state, 'shim.pid.json'), replacementWorkerPid);
+  await waitForPidRecordDetails(path.join(state, 'proxy.pid.json'), replacementProxyPid);
+  fs.writeFileSync(path.join(state, 'shim.pid.json'), JSON.stringify({ pid: replacementWorkerPid, command: 'replaced worker' }));
   if (ensuring.exitCode == null) ensuring.kill();
   const ensured = await ensuredResult;
   assert.equal(processIsRunning(olderShim.pid), false, 'ensure stopped the previous sibling supervisor');
