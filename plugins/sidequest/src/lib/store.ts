@@ -759,15 +759,23 @@ function changedTestNames(delta?: any, changedPaths?: any[]) {
   return Array.from(names);
 }
 
-function negativeControlTestReport(body?: any, expectedTestNames: string[] = []) {
-  const details = String(body || '').split(/\r?\n/)
-    .map((line) => line.trim().match(/^\[sidequest:negative-control-test\]\s+(.*)$/i)?.[1] || '')
+function normalizedNegativeControlTestName(name: unknown) {
+  return String(name || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function negativeControlTestReport(comments: Array<{ body?: unknown }>, expectedTestNames: string[] = []) {
+  const markerLines = comments.flatMap((comment) => String(comment?.body || '').split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^\[sidequest:negative-control-test\]\s+/i.test(line)));
+  const reportedNames = markerLines
+    .map((line) => line.match(/^\[sidequest:negative-control-test\]\s+(?:failed|unaffected)\s+(.+)$/i)?.[1] || '')
+    .map(normalizedNegativeControlTestName)
     .filter(Boolean);
-  const unreported = expectedTestNames.filter((name) => !details.some((detail) => {
-    const reportedName = detail.match(/^(failed|unaffected)\s+(.+)$/i)?.[2];
-    return reportedName?.includes(name) === true;
-  }));
-  return unreported;
+  const unreported = expectedTestNames.filter((expectedName) => {
+    const normalizedExpectedName = normalizedNegativeControlTestName(expectedName);
+    return !reportedNames.some((reportedName) => reportedName.includes(normalizedExpectedName) || normalizedExpectedName.includes(reportedName));
+  });
+  return { markerLines, unreported };
 }
 
 function negativeControlResult(ticket?: any, expectedTestNames: string[] = []) {
@@ -793,8 +801,8 @@ function negativeControlResult(ticket?: any, expectedTestNames: string[] = []) {
       if (Number(failed[4]) === 0) return { kind: 'zero_failures' };
       const failureKind = negativeControlFailureKind(body);
       if (failureKind) return { kind: failureKind };
-      const unreportedTests = negativeControlTestReport(body, expectedTestNames);
-      return unreportedTests.length ? { kind: 'unreported_tests', tests: unreportedTests } : { kind: 'failed' };
+      const testReport = negativeControlTestReport(comments.filter((comment: { by?: unknown, body?: unknown }) => comment.by === claimHolder), expectedTestNames);
+      return testReport.unreported.length ? { kind: 'unreported_tests', tests: testReport.unreported, markerLines: testReport.markerLines } : { kind: 'failed' };
     }
     if (/^\[sidequest:negative-control\]\s+.+?\s+failed=\d+/.test(markerLine)) return { kind: 'missing_target_or_assertion' };
     if (!malformedMarkerLine) malformedMarkerLine = markerLine;
@@ -831,7 +839,7 @@ function negativeControlRefusal(ticket?: any, result?: any) {
     return {
       ok: false,
       reason: 'negative_control_test_required',
-      message: `${ticket.ref} completion refused: the negative control did not report these added or modified tests: ${result.tests.join(', ')}. ${recipe}`,
+      message: `${ticket.ref} completion refused: the negative control did not report these added or modified tests: ${result.tests.join(', ')}. Claim-holder test markers found: ${(result.markerLines || []).map((line: string) => `"${line}"`).join(', ') || 'none'}. ${recipe}`,
     };
   }
   if (result.kind === 'short_waiver') {
