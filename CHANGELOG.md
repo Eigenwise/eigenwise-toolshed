@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.521.0 (2026-09-06)
+
+### model-gateway 0.50.0 → 0.50.1
+
+#### Fixes
+
+- Keep shared proxy ownership tied to its supervisor (SQ-2474)
+  Model Gateway now refuses to stop a shared proxy binary unless the live process tree proves it was launched by the recovering supervisor.
+- Replace older Model Gateway shims on upgrade (SQ-2479)
+  Model Gateway upgrades now replace an older cached sibling shim while leaving genuinely foreign installs alone.
+- Refuse foreign Model Gateway cache junctions (SQ-2481)
+  Model Gateway now leaves foreign installs alone when their process path passes through a cache junction or symlink.
+
 ## v3.520.0 (2026-09-06)
 
 ### model-gateway 0.49.0 → 0.50.0
