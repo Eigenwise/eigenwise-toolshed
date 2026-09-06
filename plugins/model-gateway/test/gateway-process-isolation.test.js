@@ -9,7 +9,8 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway } = require('./support.js');
-const { commandResultAsync, createProxyRecovery, isDescendantOfAsync } = require('../lib/process-supervision.js');
+const { commandResultAsync, createProxyRecovery, installBelongsToThisPlugin, isDescendantOfAsync } = require('../lib/process-supervision.js');
+const { canReplaceInstalledCliPath } = require('../lib/runtime.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const BODY_SESSION_ID = 'gateway-fixture-body-sentinel';
@@ -124,6 +125,33 @@ function installNodeProxy(home) {
   if (process.platform !== 'win32') fs.chmodSync(proxyBinary, 0o755);
 }
 
+function runGatewayCli(cliPath, command, environment) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cliPath, command], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.once('error', reject);
+    child.once('exit', (status) => resolve({ status, stderr, stdout }));
+  });
+}
+
+function installCachedGatewayCliVersions(home) {
+  const cacheRoot = path.join(home, '.claude', 'plugins', 'cache', 'eigenwise-toolshed', 'model-gateway');
+  const cliPaths = {};
+  for (const version of ['0.49.0', '0.50.0']) {
+    const pluginRoot = path.join(cacheRoot, version);
+    fs.cpSync(path.join(__dirname, '..'), pluginRoot, { recursive: true });
+    const manifestPath = path.join(pluginRoot, '.claude-plugin', 'plugin.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.version = version;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    cliPaths[version] = path.join(pluginRoot, 'bin', 'model-gateway.js');
+  }
+  return { olderCli: cliPaths['0.49.0'], newerCli: cliPaths['0.50.0'] };
+}
+
 function pause(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -217,6 +245,19 @@ function codexMessage() {
     messages: [{ role: 'user', content: 'fixture isolation' }],
   });
 }
+
+test('cache ownership accepts sibling versions but refuses foreign plugin roots', () => {
+  const cacheRoot = path.join(os.tmpdir(), 'plugins', 'cache');
+  const olderSibling = path.join(cacheRoot, 'eigenwise-toolshed', 'model-gateway', '0.49.0');
+  const newerSibling = path.join(cacheRoot, 'eigenwise-toolshed', 'model-gateway', '0.50.0');
+  const foreignMarketplace = path.join(cacheRoot, 'other-marketplace', 'model-gateway', '0.49.0');
+  const arbitraryRoot = path.join(os.tmpdir(), 'foreign-install', 'model-gateway');
+
+  assert.equal(installBelongsToThisPlugin(olderSibling, newerSibling), true);
+  assert.equal(installBelongsToThisPlugin(newerSibling, olderSibling), true);
+  assert.equal(installBelongsToThisPlugin(foreignMarketplace, newerSibling), false);
+  assert.equal(installBelongsToThisPlugin(arbitraryRoot, newerSibling), false);
+});
 
 test('gateway fixture processes isolate outer body, socket, and Codex state', async (t) => {
   const outerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-outer-user-'));
@@ -321,6 +362,65 @@ test('isolated ensure preserves a foreign serve-shim process and cleans its own 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(processIsRunning(foreign.pid), true, 'foreign serve-shim process survived isolated ensure');
   assert.equal(processIsRunning(guardianPid), false, 'sync fixture cleanup stopped its supervisor');
+});
+
+test('newer cache version replaces a recorded older sibling shim', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-sibling-upgrade-'));
+  const { olderCli, newerCli } = installCachedGatewayCliVersions(home);
+  const shimReservation = net.createServer();
+  const shimPort = await listen(shimReservation);
+  await new Promise((resolve) => shimReservation.close(resolve));
+  const environment = gatewayTestEnvironment(null, { HOME: home, USERPROFILE: home }, {
+    CODEX_GATEWAY_PORT: String(shimPort),
+    CODEX_GATEWAY_WORKER_PORT: '0',
+    CODEX_GATEWAY_PROXY_PORT: '0',
+  });
+  const olderShim = spawn(process.execPath, [olderCli, 'serve-shim'], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+  let newerShim = null;
+  t.after(async () => {
+    await runGatewayCli(newerCli, 'stop', environment);
+    if (processIsRunning(olderShim.pid)) olderShim.kill();
+    if (newerShim && processIsRunning(newerShim.pid)) newerShim.kill();
+    await waitForExit(olderShim);
+    if (newerShim) await waitForExit(newerShim);
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  await waitForReady(olderShim);
+  fs.mkdirSync(path.join(home, '.claude', 'model-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'model-gateway', 'guardian.pid'), String(olderShim.pid));
+  fs.writeFileSync(path.join(home, '.claude', 'model-gateway', 'guardian.pid.json'), JSON.stringify({ pid: olderShim.pid }));
+  const stopped = await runGatewayCli(newerCli, 'stop', environment);
+  assert.equal(stopped.status, 0, `newer CLI stops an older sibling shim: ${stopped.stderr}\n${stopped.stdout}`);
+  await waitForProcessesToExit([olderShim.pid], 5000);
+  newerShim = spawn(process.execPath, [newerCli, 'serve-shim'], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+  await waitForReady(newerShim);
+
+  assert.equal(processIsRunning(olderShim.pid), false, 'newer CLI stopped the older sibling shim');
+  assert.equal(processIsRunning(newerShim.pid), true, 'newer CLI replaced the recorded supervisor');
+});
+
+test('older cache version leaves a newer sibling shim running', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-sibling-downgrade-'));
+  const { olderCli, newerCli } = installCachedGatewayCliVersions(home);
+  const shimReservation = net.createServer();
+  const shimPort = await listen(shimReservation);
+  await new Promise((resolve) => shimReservation.close(resolve));
+  const environment = gatewayTestEnvironment(null, { HOME: home, USERPROFILE: home }, {
+    CODEX_GATEWAY_PORT: String(shimPort),
+    CODEX_GATEWAY_WORKER_PORT: '0',
+    CODEX_GATEWAY_PROXY_PORT: '0',
+  });
+  const newerShim = spawn(process.execPath, [newerCli, 'serve-shim'], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => {
+    await runGatewayCli(newerCli, 'stop', environment);
+    if (processIsRunning(newerShim.pid)) newerShim.kill();
+    await waitForExit(newerShim);
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  await waitForReady(newerShim);
+
+  assert.equal(canReplaceInstalledCliPath(newerCli, olderCli), false);
+  assert.equal(processIsRunning(newerShim.pid), true, 'older CLI leaves the newer sibling shim running');
 });
 
 test('foreign configured-port supervisor is preserved and reported', async (t) => {

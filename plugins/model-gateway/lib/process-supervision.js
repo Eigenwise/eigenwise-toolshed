@@ -98,7 +98,7 @@ function processIsOwnedByThisInstall(pid, { record = null } = {}) {
   const process = processInfoSync(pid);
   if (!process) return false;
   const installRoot = gatewayInstallRootFromCommand(process.command);
-  const belongsToThisInstall = installRoot && normalizedPath(installRoot) === normalizedPath(gatewayInstallRoot());
+  const belongsToThisInstall = installBelongsToThisPlugin(installRoot);
   const recordMatches = !record || (record.pid === pid && (
     (record.command && record.command === process.command)
     || (record.startedAt && record.startedAt === process.startedAt)
@@ -358,16 +358,38 @@ function gatewayInstallRootFromCommand(command) {
   const cliPath = match?.slice(1).find(Boolean);
   return cliPath ? path.resolve(path.join(cliPath, '..', '..')) : null;
 }
-function processBelongsToThisInstall(pid) {
-  const process = processInfoSync(pid);
-  const installRoot = process && gatewayInstallRootFromCommand(process.command);
-  return Boolean(installRoot && normalizedPath(installRoot) === normalizedPath(gatewayInstallRoot()));
+function pluginCacheIdentity(installRoot) {
+  if (!installRoot || !/^\d+\.\d+\.\d+$/.test(path.basename(installRoot))) return null;
+  const pluginRoot = path.dirname(installRoot);
+  const marketplaceRoot = path.dirname(pluginRoot);
+  const cacheRoot = path.dirname(marketplaceRoot);
+  if (path.basename(pluginRoot).toLowerCase() !== 'model-gateway'
+    || path.basename(cacheRoot).toLowerCase() !== 'cache'
+    || path.basename(path.dirname(cacheRoot)).toLowerCase() !== 'plugins') return null;
+  return normalizedPath(pluginRoot);
 }
-function foreignPortOwner(port = PUBLIC_SHIM_PORT) {
+function installBelongsToThisPlugin(installRoot, currentInstallRoot = gatewayInstallRoot()) {
+  if (!installRoot) return false;
+  if (normalizedPath(installRoot) === normalizedPath(currentInstallRoot)) return true;
+  const installIdentity = pluginCacheIdentity(installRoot);
+  const currentIdentity = pluginCacheIdentity(currentInstallRoot);
+  return Boolean(installIdentity && currentIdentity && installIdentity === currentIdentity);
+}
+function portOwner(port = PUBLIC_SHIM_PORT) {
   const pid = processOwningPortSync(port);
-  if (!pid || processBelongsToThisInstall(pid)) return null;
+  if (!pid) return null;
   const process = processInfoSync(pid);
   return { installRoot: process ? gatewayInstallRootFromCommand(process.command) : null, pid };
+}
+function siblingPortOwner(port = PUBLIC_SHIM_PORT) {
+  const owner = portOwner(port);
+  if (!owner?.installRoot || normalizedPath(owner.installRoot) === normalizedPath(gatewayInstallRoot())) return null;
+  return installBelongsToThisPlugin(owner.installRoot) ? owner : null;
+}
+function foreignPortOwner(port = PUBLIC_SHIM_PORT) {
+  const owner = portOwner(port);
+  if (!owner || installBelongsToThisPlugin(owner.installRoot)) return null;
+  return owner;
 }
 function foreignPortOwnerReason(owner, port = PUBLIC_SHIM_PORT) {
   return `refusing to stop PID ${owner.pid} on :${port}; it belongs to a different install root (${owner.installRoot || 'unknown'}), not ${gatewayInstallRoot()}`;
@@ -395,7 +417,7 @@ async function processIsOwnedByThisInstallAsync(pid, { record = null, inspectPro
   const process = await readProcess(pid);
   if (!process) return process === undefined ? undefined : false;
   const installRoot = gatewayInstallRootFromCommand(process.command);
-  const belongsToThisInstall = installRoot && normalizedPath(installRoot) === normalizedPath(gatewayInstallRoot());
+  const belongsToThisInstall = installBelongsToThisPlugin(installRoot);
   const recordMatches = !record || (record.pid === pid && (
     (record.command && record.command === process.command)
     || (record.startedAt && record.startedAt === process.startedAt)
@@ -443,6 +465,7 @@ function stopAll({ report = console.log } = {}) {
 async function stopRunningSupervisor({ quiet = false, operation = 'restart', report = console.log } = {}) {
   const foreignOwner = foreignPortOwner();
   if (foreignOwner) return { ok: false, reason: foreignPortOwnerReason(foreignOwner) };
+  const siblingOwner = siblingPortOwner();
   const pid = processOwningPortSync(PUBLIC_SHIM_PORT);
   const targetPid = pid || readPid('guardian');
   if (targetPid) {
@@ -460,7 +483,7 @@ async function stopRunningSupervisor({ quiet = false, operation = 'restart', rep
   }
   reapGatewayOrphans(null);
   if (!quiet) report(`model-gateway: stopped stale shim supervisor${pid ? ` (PID ${pid})` : ''}.`);
-  return { ok: true, pid };
+  return { ok: true, pid, siblingInstallRoot: siblingOwner?.installRoot || null };
 }
 function postJson(url, body, timeout = 2000) {
   return new Promise((resolve, reject) => {
@@ -709,7 +732,7 @@ function createProxyRecovery({
 }
 
 module.exports = {
-  commandResultAsync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, isDescendantOfAsync, killPid, killPidAsync, pidFile, pidRecordFile, portListening, postJson,
+  commandResultAsync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, killPidAsync, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
   processInfoAsync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync,
   proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPids, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
   spawnSupervisedProxy, stopAll, stopProcess, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit, writePidRecord, writePidRecordAsync,
