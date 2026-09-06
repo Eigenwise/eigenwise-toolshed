@@ -8,6 +8,28 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.522.0 (2026-09-06)
+
+### model-gateway 0.50.1 → 0.50.2
+
+#### Fixes
+
+- Wait for fixture gateway shutdown (SQ-2482)
+  Model Gateway test fixtures now wait for the supervisor, worker, and pid-record writes before removing their temporary home.
+- ensure keeps live sibling-version gateway records instead of logging them as stale pid files (SQ-2483)
+  After an upgrade, `ensure` reported the live worker and proxy as stale pid files even though it had just started them. The ownership probe now recognizes a live gateway process from a sibling install version, so the records survive and the stale-pid line only appears for processes that are gone.
+- preserve live proxy records when Windows reports a physical path spelling (SQ-2486)
+  `ensure` now resolves the proxy executable path before deciding whether a live pid record belongs to this gateway. This keeps a shared proxy record when Windows reports the command with an equivalent physical path spelling.
+- restart sibling gateway processes on Linux without lsof (SQ-2487)
+  `ensure` now finds listening Linux processes through `/proc` when `lsof` is unavailable, so it can replace an older sibling gateway before launching its replacement.
+
+### sidequest 5.0.29 → 5.0.30
+
+#### Fixes
+
+- Accept threaded negative-control test markers (SQ-2484)
+  Sidequest now accepts claim-holder negative-control test markers posted anywhere on the ticket thread and names the markers it found when evidence is incomplete.
+
 ## v3.521.0 (2026-09-06)
 
 ### model-gateway 0.50.0 → 0.50.1
