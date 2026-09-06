@@ -697,6 +697,7 @@ function createProxyRecovery({
 } = {}) {
   let recovery = null;
   let halted = false;
+  let supervisedProxy = null;
   let restartAttempt = 0;
   let nextRestartAt = 0;
 
@@ -771,6 +772,7 @@ function createProxyRecovery({
       }
       if (halted) return { ok: false, state: 'stopped' };
       const proxy = await start({ command: proxyBinary, port: proxyPort });
+      if (proxy?.pid) supervisedProxy = proxy;
       onStarted(proxy?.pid);
       if (proxy?.pid) {
         recordLifecycle('proxy-started', {
@@ -779,13 +781,16 @@ function createProxyRecovery({
           child: { component: 'proxy', pid: proxy.pid },
         });
         if (typeof proxy.once === 'function') {
-          proxy.once('exit', (exitCode, signal) => recordLifecycle('proxy-exit', {
-            component: 'supervisor',
-            pid: process.pid,
-            child: { component: 'proxy', pid: proxy.pid },
-            exitCode,
-            signal,
-          }));
+          proxy.once('exit', (exitCode, signal) => {
+            if (supervisedProxy === proxy) supervisedProxy = null;
+            recordLifecycle('proxy-exit', {
+              component: 'supervisor',
+              pid: process.pid,
+              child: { component: 'proxy', pid: proxy.pid },
+              exitCode,
+              signal,
+            });
+          });
         }
       }
       if (await probe()) {
@@ -806,6 +811,11 @@ function createProxyRecovery({
     halted = true;
     await probeChildren.stop();
     if (recovery) await recovery;
+    const proxy = supervisedProxy;
+    if (proxy?.pid) {
+      await stop(proxy.pid);
+      await waitForRelease(proxyPort, { listening });
+    }
   }
 
   return { recover, stop: stopRecovery, stopSync: () => probeChildren.stopSync() };
