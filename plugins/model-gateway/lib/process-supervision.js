@@ -185,13 +185,46 @@ function recordStopRequest(operation, name) {
 function commandResultSync(command, commandArgs) {
   return spawnSync(command, commandArgs, { encoding: 'utf8', windowsHide: true });
 }
+function listeningSocketInodesInProc(port) {
+  if (process.platform !== 'linux') return new Set();
+  const portSuffix = `:${Number(port).toString(16).padStart(4, '0').toUpperCase()}`;
+  const inodes = new Set();
+  for (const tablePath of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    try {
+      for (const line of fs.readFileSync(tablePath, 'utf8').trim().split(/\r?\n/).slice(1)) {
+        const fields = line.trim().split(/\s+/);
+        if (fields[1]?.endsWith(portSuffix) && fields[3] === '0A' && fields[9]) inodes.add(fields[9]);
+      }
+    } catch {}
+  }
+  return inodes;
+}
+function processOwningPortInProc(port) {
+  const inodes = listeningSocketInodesInProc(port);
+  if (!inodes.size) return null;
+  try {
+    for (const entry of fs.readdirSync('/proc')) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        for (const descriptor of fs.readdirSync(path.join('/proc', entry, 'fd'))) {
+          const target = fs.readlinkSync(path.join('/proc', entry, 'fd', descriptor));
+          if (inodes.has(target.match(/^socket:\[(\d+)\]$/)?.[1])) return Number(entry);
+        }
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
 function processOwningPortSync(port) {
   if (!port) return null;
   const result = WIN
     ? commandResultSync('netstat', ['-ano', '-p', 'tcp'])
     : commandResultSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']);
+  if (!WIN) {
+    const ownerPid = result.status === 0 ? Number(String(result.stdout).trim().split(/\s+/)[0]) || null : null;
+    return ownerPid || processOwningPortInProc(port);
+  }
   if (result.status !== 0) return null;
-  if (!WIN) return Number(String(result.stdout).trim().split(/\s+/)[0]) || null;
   const portPattern = new RegExp(`^\\s*TCP\\s+[^\\s]*:${port}\\s+[^\\s]+\\s+LISTENING\\s+(\\d+)\\s*$`, 'im');
   return Number(String(result.stdout).match(portPattern)?.[1]) || null;
 }
