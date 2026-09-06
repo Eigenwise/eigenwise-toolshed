@@ -8,7 +8,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { startGateway, spawnGatewayProcess } = require('./support.js');
+const { gatewayTestEnvironment, startGateway, spawnGatewayProcess } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const gateway = require(CLI);
@@ -70,7 +70,7 @@ async function waitForHealth(port) {
   throw new Error(`shim on ${port} did not become healthy`);
 }
 
-function runReadiness(t, home, proxyPort, options) {
+function runReadiness(t, environment, proxyPort, options) {
   const script = `
     const gateway = require(${JSON.stringify(CLI)});
     const options = JSON.parse(process.argv[1]);
@@ -98,10 +98,8 @@ function runReadiness(t, home, proxyPort, options) {
   `;
   return new Promise((resolve, reject) => {
     const child = spawnGatewayProcess(t, process.execPath, ['-e', script, JSON.stringify(options)], {
-      env: {
-        ...process.env,
-        HOME: home,
-        USERPROFILE: home,
+      env: environment,
+      isolatedOverrides: {
         CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -116,8 +114,8 @@ function runReadiness(t, home, proxyPort, options) {
 }
 
 test('readiness reports each local failure state from an isolated home', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-readiness-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const environment = gatewayTestEnvironment(t);
+  const home = environment.HOME;
   const proxy = http.createServer((req, res) => {
     if (req.url === '/v1/models') return res.end(JSON.stringify({ data: [] }));
     res.statusCode = 404;
@@ -127,38 +125,48 @@ test('readiness reports each local failure state from an isolated home', async (
   t.after(() => proxy.close());
   const downProxyPort = await freePort();
 
-  const missing = await runReadiness(t, home, proxyPort, { binary: false, auth: false, version: gateway.PLUGIN_VERSION });
+  const missing = await runReadiness(t, environment, proxyPort, { binary: false, auth: false, version: gateway.PLUGIN_VERSION });
   assert.equal(missing.before.state, 'binary-missing');
   assert.match(missing.before.message, /claude-code-proxy is missing/);
 
-  const proxyDown = await runReadiness(t, home, downProxyPort, { binary: true, auth: true, version: gateway.PLUGIN_VERSION });
+  const proxyDown = await runReadiness(t, environment, downProxyPort, { binary: true, auth: true, version: gateway.PLUGIN_VERSION });
   assert.equal(proxyDown.before.state, 'proxy-down');
 
-  const authMissing = await runReadiness(t, home, proxyPort, { binary: true, auth: false, version: gateway.PLUGIN_VERSION });
+  const authMissing = await runReadiness(t, environment, proxyPort, { binary: true, auth: false, version: gateway.PLUGIN_VERSION });
   assert.equal(authMissing.before.state, 'auth-missing');
   assert.match(authMissing.before.message, /~\/.config\/claude-code-proxy\//);
 
-  const staleShim = await runReadiness(t, home, proxyPort, { binary: true, auth: true, version: '0.0.0' });
+  const staleShim = await runReadiness(t, environment, proxyPort, { binary: true, auth: true, version: '0.0.0' });
   assert.equal(staleShim.before.state, 'serving-version-mismatch');
 
-  const newerShim = await runReadiness(t, home, proxyPort, { binary: true, auth: true, version: '99.0.0' });
+  const newerShim = await runReadiness(t, environment, proxyPort, { binary: true, auth: true, version: '99.0.0' });
   assert.equal(newerShim.before.state, 'ready');
+  t.after(() => assert.equal(
+    fs.existsSync(home),
+    false,
+    'fixture teardown removes the home after the supervisor and worker exit',
+  ));
 });
 
 test('upstream-blocked survives a health check and clears on a successful Codex request', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-readiness-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const environment = gatewayTestEnvironment(t);
+  const home = environment.HOME;
   const proxy = http.createServer((req, res) => res.end(JSON.stringify({ data: [] })));
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
 
-  const result = await runReadiness(t, home, proxyPort, {
+  const result = await runReadiness(t, environment, proxyPort, {
     binary: true,
     auth: true,
     version: gateway.PLUGIN_VERSION,
     block: true,
     success: true,
   });
+  t.after(() => assert.equal(
+    fs.existsSync(home),
+    false,
+    'fixture teardown removes the home after the supervisor and worker exit',
+  ));
 
   assert.equal(result.before.state, 'upstream-blocked');
   assert.equal(result.afterHealthCheck.state, 'upstream-blocked');
@@ -166,8 +174,7 @@ test('upstream-blocked survives a health check and clears on a successful Codex 
 });
 
 test('shim health retains an OpenAI rejection until a successful proxied request', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-readiness-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const supervisorPort = await freePortInRange(30000, 39999);
   let messages = 0;
   const proxy = http.createServer((req, res) => {
     if (req.url === '/v1/models') return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-terra' }] }));
@@ -180,14 +187,17 @@ test('shim health retains an OpenAI rejection until a successful proxied request
   });
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
-  const supervisorPort = await freePortInRange(30000, 39999);
-  const { port: shimPort } = await startGateway(t, 'serve-shim', {
-    HOME: home,
-    USERPROFILE: home,
+  const environment = gatewayTestEnvironment(t, { CODEX_GATEWAY_REQUEST_LOG: '0' }, {
     CODEX_GATEWAY_PORT: String(supervisorPort),
     CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-    CODEX_GATEWAY_REQUEST_LOG: '0',
   });
+  const home = environment.HOME;
+  const { port: shimPort } = await startGateway(t, 'serve-shim', environment);
+  t.after(() => assert.equal(
+    fs.existsSync(home),
+    false,
+    'fixture teardown removes the home after the supervisor and worker exit',
+  ));
 
   assert.equal(shimPort, supervisorPort);
   const workerLog = fs.readFileSync(path.join(home, '.claude', 'model-gateway', 'logs', 'shim.log'), 'utf8');

@@ -7,7 +7,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { startGateway, spawnGatewayProcess } = require('./support.js');
+const { gatewayTestEnvironment, startGateway, spawnGatewayProcess } = require('./support.js');
 const { createProxyRecovery } = require('../lib/process-supervision.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
@@ -142,8 +142,8 @@ test('restart with drain submits the newest installed CLI path', async (t) => {
 });
 
 test('drain timeout says that the shim was force-stopped', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-drain-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const environment = gatewayTestEnvironment(t);
+  const home = environment.HOME;
   const stuckShim = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/drain') {
       res.writeHead(202);
@@ -156,9 +156,18 @@ test('drain timeout says that the shim was force-stopped', async (t) => {
 
   const script = `require(${JSON.stringify(CLI)}).stopShimWithDrain({ timeout: 20, report: console.log, findForeignOwner: () => null }).then((result) => console.log(JSON.stringify(result)))`;
   const child = spawnGatewayProcess(t, process.execPath, ['-e', script], {
-    env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_WORKER_PORT: String(shimPort) },
+    env: environment,
+    isolatedOverrides: {
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_WORKER_PORT: String(shimPort),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  t.after(() => assert.equal(
+    fs.existsSync(home),
+    false,
+    'fixture teardown removes the home after the supervisor and worker exit',
+  ));
   const output = await new Promise((resolve, reject) => {
     let text = '';
     child.stdout.on('data', (chunk) => { text += chunk; });
@@ -171,8 +180,8 @@ test('drain timeout says that the shim was force-stopped', async (t) => {
   assert.match(output, /"forced":true/);
 });
 test('draining shim finishes an in-flight request before it exits', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-drain-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const environment = gatewayTestEnvironment(t);
+  const home = environment.HOME;
   let release;
   let proxyReceived;
   const received = new Promise((resolve) => { proxyReceived = resolve; });
@@ -184,12 +193,17 @@ test('draining shim finishes an in-flight request before it exits', async (t) =>
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
 
-  const { child, port: shimPort } = await startGateway(t, 'serve-worker', {
-    HOME: home,
-    USERPROFILE: home,
-    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-    CODEX_GATEWAY_REQUEST_LOG: '0',
+  const { child, port: shimPort } = await startGateway(t, 'serve-worker', environment, {
+    isolatedOverrides: {
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_REQUEST_LOG: '0',
+    },
   });
+  t.after(() => assert.equal(
+    fs.existsSync(home),
+    false,
+    'fixture teardown removes the home after the supervisor and worker exit',
+  ));
 
   const inFlight = request(shimPort, 'POST', '/v1/messages', {
     model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1,
@@ -210,8 +224,8 @@ test('draining shim finishes an in-flight request before it exits', async (t) =>
 });
 
 test('supervisor keeps its listener available while a hard-killed worker restarts', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-supervisor-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const environment = gatewayTestEnvironment(t);
+  const home = environment.HOME;
   let requests = 0;
   let release;
   const proxy = http.createServer((req, res) => {
@@ -226,12 +240,17 @@ test('supervisor keeps its listener available while a hard-killed worker restart
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
 
-  const { child: supervisor, port: shimPort } = await startGateway(t, 'serve-shim', {
-    HOME: home,
-    USERPROFILE: home,
-    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-    CODEX_GATEWAY_REQUEST_LOG: '0',
+  const { child: supervisor, port: shimPort } = await startGateway(t, 'serve-shim', environment, {
+    isolatedOverrides: {
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_REQUEST_LOG: '0',
+    },
   });
+  t.after(() => assert.equal(
+    fs.existsSync(home),
+    false,
+    'fixture teardown removes the home after the supervisor and worker exit',
+  ));
   const supervisorStarted = await waitForLifecycleRecord(home, (record) => record.event === 'supervisor-started');
   assert.equal(supervisorStarted.component, 'supervisor');
   assert.equal(supervisorStarted.pid, supervisor.pid);
@@ -270,20 +289,25 @@ test('supervisor records an orderly signal before it exits', async (t) => {
     t.skip('Windows process signals terminate child processes before JavaScript can record a final supervisor event');
     return;
   }
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-supervisor-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const environment = gatewayTestEnvironment(t);
+  const home = environment.HOME;
   const proxy = http.createServer((req, res) => {
     if (req.url === '/v1/models') return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-terra' }] }));
     res.end(JSON.stringify({ type: 'message', model: 'gpt-5.6-terra', content: [] }));
   });
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
-  const { child: supervisor } = await startGateway(t, 'serve-shim', {
-    HOME: home,
-    USERPROFILE: home,
-    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-    CODEX_GATEWAY_REQUEST_LOG: '0',
+  const { child: supervisor } = await startGateway(t, 'serve-shim', environment, {
+    isolatedOverrides: {
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_REQUEST_LOG: '0',
+    },
   });
+  t.after(() => assert.equal(
+    fs.existsSync(home),
+    false,
+    'fixture teardown removes the home after the supervisor and worker exit',
+  ));
 
   supervisor.kill('SIGTERM');
   await waitForChildExit(supervisor);
@@ -297,8 +321,8 @@ test('supervisor records an orderly signal before it exits', async (t) => {
 });
 
 test('supervisor drains a planned worker restart without refusing connections', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-supervisor-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const environment = gatewayTestEnvironment(t);
+  const home = environment.HOME;
   let release;
   const proxy = http.createServer((req, res) => {
     if (req.url === '/v1/models') return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-terra' }] }));
@@ -306,12 +330,17 @@ test('supervisor drains a planned worker restart without refusing connections', 
   });
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
-  const { port: shimPort } = await startGateway(t, 'serve-shim', {
-    HOME: home,
-    USERPROFILE: home,
-    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-    CODEX_GATEWAY_REQUEST_LOG: '0',
+  const { port: shimPort } = await startGateway(t, 'serve-shim', environment, {
+    isolatedOverrides: {
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_REQUEST_LOG: '0',
+    },
   });
+  t.after(() => assert.equal(
+    fs.existsSync(home),
+    false,
+    'fixture teardown removes the home after the supervisor and worker exit',
+  ));
 
   const inFlight = request(shimPort, 'POST', '/v1/messages', { model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1 });
   while (!release) await new Promise((resolve) => setTimeout(resolve, 10));
@@ -327,16 +356,17 @@ test('supervisor drains a planned worker restart without refusing connections', 
 
 test('restart keeps a newer installed worker script when supplied an older one', async (t) => {
   const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-worker-cache-'));
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-supervisor-'));
+  const environment = gatewayTestEnvironment(t);
+  const home = environment.HOME;
   t.after(() => fs.rmSync(cacheRoot, { recursive: true, force: true }));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const currentCliPath = createCachedCli(cacheRoot, '0.48.12');
   const olderCliPath = createCachedCli(cacheRoot, '0.48.11');
-  const { port: shimPort } = await startGateway(t, 'serve-shim', {
-    HOME: home,
-    USERPROFILE: home,
-    CODEX_GATEWAY_REQUEST_LOG: '0',
-  }, { cliPath: currentCliPath });
+  const { port: shimPort } = await startGateway(t, 'serve-shim', environment, { cliPath: currentCliPath });
+  t.after(() => assert.equal(
+    fs.existsSync(home),
+    false,
+    'fixture teardown removes the home after the supervisor and worker exit',
+  ));
   const pidFile = path.join(home, '.claude', 'model-gateway', 'shim.pid');
   const previousPid = Number(fs.readFileSync(pidFile, 'utf8'));
 
@@ -347,16 +377,17 @@ test('restart keeps a newer installed worker script when supplied an older one',
 
 test('restart adopts a newer installed worker script', async (t) => {
   const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-worker-cache-'));
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-supervisor-'));
+  const environment = gatewayTestEnvironment(t);
+  const home = environment.HOME;
   t.after(() => fs.rmSync(cacheRoot, { recursive: true, force: true }));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const currentCliPath = createCachedCli(cacheRoot, '0.48.12');
   const newerCliPath = createCachedCli(cacheRoot, '0.48.13');
-  const { port: shimPort } = await startGateway(t, 'serve-shim', {
-    HOME: home,
-    USERPROFILE: home,
-    CODEX_GATEWAY_REQUEST_LOG: '0',
-  }, { cliPath: currentCliPath });
+  const { port: shimPort } = await startGateway(t, 'serve-shim', environment, { cliPath: currentCliPath });
+  t.after(() => assert.equal(
+    fs.existsSync(home),
+    false,
+    'fixture teardown removes the home after the supervisor and worker exit',
+  ));
   const pidFile = path.join(home, '.claude', 'model-gateway', 'shim.pid');
   const previousPid = Number(fs.readFileSync(pidFile, 'utf8'));
 
@@ -367,15 +398,16 @@ test('restart adopts a newer installed worker script', async (t) => {
 
 test('restart does not treat a dev-checkout worker script as newer than an installed script', async (t) => {
   const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-worker-cache-'));
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-supervisor-'));
+  const environment = gatewayTestEnvironment(t);
+  const home = environment.HOME;
   t.after(() => fs.rmSync(cacheRoot, { recursive: true, force: true }));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const installedCliPath = createCachedCli(cacheRoot, '0.48.12');
-  const { port: shimPort } = await startGateway(t, 'serve-shim', {
-    HOME: home,
-    USERPROFILE: home,
-    CODEX_GATEWAY_REQUEST_LOG: '0',
-  });
+  const { port: shimPort } = await startGateway(t, 'serve-shim', environment);
+  t.after(() => assert.equal(
+    fs.existsSync(home),
+    false,
+    'fixture teardown removes the home after the supervisor and worker exit',
+  ));
   const pidFile = path.join(home, '.claude', 'model-gateway', 'shim.pid');
   const previousPid = Number(fs.readFileSync(pidFile, 'utf8'));
 
@@ -385,19 +417,18 @@ test('restart does not treat a dev-checkout worker script as newer than an insta
 });
 
 test('a second supervisor exits when the singleton listener is already owned', async (t) => {
-  const firstHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-singleton-'));
-  const secondHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-singleton-'));
-  t.after(() => fs.rmSync(firstHome, { recursive: true, force: true }));
-  t.after(() => fs.rmSync(secondHome, { recursive: true, force: true }));
-  const { port: shimPort } = await startGateway(t, 'serve-shim', {
-    HOME: firstHome,
-    USERPROFILE: firstHome,
-    CODEX_GATEWAY_REQUEST_LOG: '0',
-  });
+  const firstEnvironment = gatewayTestEnvironment(t);
+  const firstHome = firstEnvironment.HOME;
+  const secondEnvironment = gatewayTestEnvironment(t);
+  const secondHome = secondEnvironment.HOME;
+  const { port: shimPort } = await startGateway(t, 'serve-shim', firstEnvironment);
 
   const second = await new Promise((resolve, reject) => {
     const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
-      env: { ...process.env, HOME: secondHome, USERPROFILE: secondHome, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_REQUEST_LOG: '0' },
+      env: secondEnvironment,
+      isolatedOverrides: {
+        CODEX_GATEWAY_PORT: String(shimPort),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let text = '';
@@ -410,6 +441,16 @@ test('a second supervisor exits when the singleton listener is already owned', a
   assert.equal(second.code, 1);
   assert.match(second.text, /shim supervisor cannot bind/);
   assert.equal((await request(shimPort, 'GET', '/healthz')).status, 200);
+  t.after(() => assert.equal(
+    fs.existsSync(firstHome),
+    false,
+    'fixture teardown removes the home after the supervisor and worker exit',
+  ));
+  t.after(() => assert.equal(
+    fs.existsSync(secondHome),
+    false,
+    'fixture teardown removes the home after the supervisor and worker exit',
+  ));
 });
 
 test('older serving supervisor is replaced instead of draining its worker', async () => {
@@ -492,14 +533,23 @@ test('doctor reports a serving version mismatch and the ensure remedy', async (t
   });
   const shimPort = await listen(shim);
   t.after(() => shim.close());
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-doctor-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const environment = gatewayTestEnvironment(t);
+  const home = environment.HOME;
 
   const output = await new Promise((resolve, reject) => {
     const child = spawnGatewayProcess(t, process.execPath, [CLI, 'doctor'], {
-      env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_WORKER_PORT: String(shimPort) },
+      env: environment,
+      isolatedOverrides: {
+        CODEX_GATEWAY_PORT: String(shimPort),
+        CODEX_GATEWAY_WORKER_PORT: String(shimPort),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    t.after(() => assert.equal(
+      fs.existsSync(home),
+      false,
+      'fixture teardown removes the home after the supervisor and worker exit',
+    ));
     let text = '';
     child.stdout.on('data', (chunk) => { text += chunk; });
     child.stderr.on('data', (chunk) => { text += chunk; });
@@ -516,8 +566,8 @@ test('doctor reports a serving version mismatch and the ensure remedy', async (t
 });
 
 test('doctor describes an observed lifecycle exit', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-doctor-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const environment = gatewayTestEnvironment(t);
+  const home = environment.HOME;
   const recordPath = path.join(home, '.claude', 'model-gateway', 'logs', 'lifecycle.jsonl');
   fs.mkdirSync(path.dirname(recordPath), { recursive: true });
   fs.writeFileSync(recordPath, JSON.stringify({
@@ -532,9 +582,14 @@ test('doctor describes an observed lifecycle exit', async (t) => {
 
   const output = await new Promise((resolve, reject) => {
     const child = spawnGatewayProcess(t, process.execPath, [CLI, 'doctor'], {
-      env: { ...process.env, HOME: home, USERPROFILE: home },
+      env: environment,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    t.after(() => assert.equal(
+      fs.existsSync(home),
+      false,
+      'fixture teardown removes the home after the supervisor and worker exit',
+    ));
     let text = '';
     child.stdout.on('data', (chunk) => { text += chunk; });
     child.stderr.on('data', (chunk) => { text += chunk; });
