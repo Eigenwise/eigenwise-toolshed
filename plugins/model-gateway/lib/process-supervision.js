@@ -558,7 +558,7 @@ async function stopRunningSupervisor({ quiet = false, operation = 'restart', rep
   }
   if (pid) killPid(pid);
   else stopProcess('guardian');
-  if (!(await waitForShimExit(3000))) {
+  if (!((await waitForProcessExit(targetPid, 3000)) && (await waitForShimExit(3000)))) {
     return { ok: false, reason: `could not stop the shim supervisor on :${PUBLIC_SHIM_PORT}${pid ? ` (PID ${pid})` : ''}; run node "${CLI_PATH}" stop, then ensure` };
   }
   reapGatewayOrphans(null);
@@ -577,6 +577,14 @@ function postJson(url, body, timeout = 2000) {
     req.setTimeout(timeout, () => req.destroy(new Error('timeout: ' + url)));
     req.end(payload);
   });
+}
+async function waitForProcessExit(pid, timeout) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (!processInfoSync(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return !processInfoSync(pid);
 }
 async function waitForShimExit(timeout) {
   const deadline = Date.now() + timeout;
