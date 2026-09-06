@@ -1946,7 +1946,7 @@ function runShim() {
     probeChildren,
     onStarted: (pid) => {
       writeProxyServingVersion(currentProxyVersion());
-      if (pid) void writePidRecordAsync('proxy', pid, { probeChildren, stillActive: () => !stopped });
+      if (pid) trackSupervisorWrite(writePidRecordAsync('proxy', pid, { probeChildren, stillActive: () => !stopped }));
     },
     recordLifecycle: recordGatewayLifecycle,
   });
@@ -1954,6 +1954,13 @@ function runShim() {
   let main = null;
   let compatServer = null;
   let shutdownPromise = null;
+  const pendingSupervisorWrites = new Set();
+
+  function trackSupervisorWrite(write) {
+    const completedWrite = write.catch(() => {});
+    pendingSupervisorWrites.add(completedWrite);
+    void completedWrite.finally(() => pendingSupervisorWrites.delete(completedWrite));
+  }
 
   function closeServer(server) {
     return new Promise((resolve) => {
@@ -1994,6 +2001,7 @@ function runShim() {
       clearInterval(proxyRecoveryTimer);
       const stoppingWorker = worker;
       await proxyRecovery.stop();
+      await Promise.all([...pendingSupervisorWrites]);
       await killPidAsync(stoppingWorker?.pid, { trusted: true });
       await waitForWorkerExit(stoppingWorker);
       await Promise.all([closeServer(compatServer), closeServer(main)]);
@@ -2042,7 +2050,7 @@ function runShim() {
         clearWorkerPortReportTimeout();
       });
     }
-    void writePidRecordAsync('shim', child.pid, { probeChildren, stillActive: () => !stopped });
+    trackSupervisorWrite(writePidRecordAsync('shim', child.pid, { probeChildren, stillActive: () => !stopped }));
     child.unref();
     child.once('exit', (exitCode, signal) => {
       recordGatewayLifecycle('worker-exit', {
@@ -2207,6 +2215,11 @@ function runShim() {
   }
   process.once('SIGTERM', () => { void stopSupervisor(0, 'SIGTERM'); });
   process.once('SIGINT', () => { void stopSupervisor(0, 'SIGINT'); });
+  if (process.connected) {
+    process.once('message', (message) => {
+      if (message?.type === 'fixture-shutdown') void stopSupervisor(0, 'fixture-shutdown');
+    });
+  }
 }
 
 
