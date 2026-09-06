@@ -350,8 +350,12 @@ async function processTableAsync({ commandResult = commandResultAsync, probeChil
 function gatewayInstallRoot() {
   return path.resolve(path.join(CLI_PATH, '..', '..'));
 }
+function resolvedPhysicalPath(filePath) {
+  const absolutePath = path.resolve(filePath);
+  try { return fs.realpathSync.native(absolutePath); } catch { return absolutePath; }
+}
 function normalizedPath(filePath) {
-  return path.resolve(filePath).replace(/[\\/]+/g, '/').toLowerCase();
+  return resolvedPhysicalPath(filePath).replace(/[\\/]+/g, '/').toLowerCase();
 }
 function gatewayInstallRootFromCommand(command) {
   const match = String(command).match(/(?:^|\s)(?:"([^"]*model-gateway(?:[\\/]\d+\.\d+\.\d+)?[\\/]bin[\\/]model-gateway\.js)"|'([^']*model-gateway(?:[\\/]\d+\.\d+\.\d+)?[\\/]bin[\\/]model-gateway\.js)'|([^\s]*model-gateway(?:[\\/]\d+\.\d+\.\d+)?[\\/]bin[\\/]model-gateway\.js))/i);
@@ -359,8 +363,10 @@ function gatewayInstallRootFromCommand(command) {
   return cliPath ? path.resolve(path.join(cliPath, '..', '..')) : null;
 }
 function pluginCacheIdentity(installRoot) {
-  if (!installRoot || !/^\d+\.\d+\.\d+$/.test(path.basename(installRoot))) return null;
-  const pluginRoot = path.dirname(installRoot);
+  if (!installRoot) return null;
+  const physicalInstallRoot = resolvedPhysicalPath(installRoot);
+  if (!/^\d+\.\d+\.\d+$/.test(path.basename(physicalInstallRoot))) return null;
+  const pluginRoot = path.dirname(physicalInstallRoot);
   const marketplaceRoot = path.dirname(pluginRoot);
   const cacheRoot = path.dirname(marketplaceRoot);
   if (path.basename(pluginRoot).toLowerCase() !== 'model-gateway'

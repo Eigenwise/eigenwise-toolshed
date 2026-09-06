@@ -152,6 +152,10 @@ function installCachedGatewayCliVersions(home) {
   return { olderCli: cliPaths['0.49.0'], newerCli: cliPaths['0.50.0'] };
 }
 
+function linkDirectory(targetDirectory, linkPath) {
+  fs.symlinkSync(targetDirectory, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+}
+
 function pause(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -246,17 +250,27 @@ function codexMessage() {
   });
 }
 
-test('cache ownership accepts sibling versions but refuses foreign plugin roots', () => {
-  const cacheRoot = path.join(os.tmpdir(), 'plugins', 'cache');
-  const olderSibling = path.join(cacheRoot, 'eigenwise-toolshed', 'model-gateway', '0.49.0');
-  const newerSibling = path.join(cacheRoot, 'eigenwise-toolshed', 'model-gateway', '0.50.0');
+test('cache ownership resolves physical install roots before accepting sibling versions', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-cache-identity-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const cacheRoot = path.join(home, '.claude', 'plugins', 'cache');
+  const olderSibling = path.join(cacheRoot, 'eigenwise-toolshed', 'model-gateway', '0.48.0');
+  const currentSibling = path.join(cacheRoot, 'eigenwise-toolshed', 'model-gateway', '0.50.0');
+  const foreignLinkedSibling = path.join(cacheRoot, 'eigenwise-toolshed', 'model-gateway', '0.49.0');
+  const foreignRoot = path.join(home, 'dev', 'foreign-model-gateway');
   const foreignMarketplace = path.join(cacheRoot, 'other-marketplace', 'model-gateway', '0.49.0');
-  const arbitraryRoot = path.join(os.tmpdir(), 'foreign-install', 'model-gateway');
 
-  assert.equal(installBelongsToThisPlugin(olderSibling, newerSibling), true);
-  assert.equal(installBelongsToThisPlugin(newerSibling, olderSibling), true);
-  assert.equal(installBelongsToThisPlugin(foreignMarketplace, newerSibling), false);
-  assert.equal(installBelongsToThisPlugin(arbitraryRoot, newerSibling), false);
+  fs.mkdirSync(olderSibling, { recursive: true });
+  fs.mkdirSync(currentSibling, { recursive: true });
+  fs.mkdirSync(foreignRoot, { recursive: true });
+  linkDirectory(foreignRoot, foreignLinkedSibling);
+
+  assert.equal(installBelongsToThisPlugin(olderSibling, currentSibling), true);
+  assert.equal(installBelongsToThisPlugin(olderSibling.replace('eigenwise-toolshed', 'EIGENWISE-TOOLSHED'), currentSibling), true);
+  assert.equal(installBelongsToThisPlugin(`${olderSibling}${path.sep}`, currentSibling), true);
+  if (process.platform === 'win32') assert.equal(installBelongsToThisPlugin(olderSibling.replaceAll('\\', '/'), currentSibling), true);
+  assert.equal(installBelongsToThisPlugin(foreignLinkedSibling, currentSibling), false);
+  assert.equal(installBelongsToThisPlugin(foreignMarketplace, currentSibling), false);
 });
 
 test('gateway fixture processes isolate outer body, socket, and Codex state', async (t) => {
@@ -458,6 +472,39 @@ test('foreign configured-port supervisor is preserved and reported', async (t) =
   assert.match(diagnosed.stdout, new RegExp(`shim supervisor conflict: PID ${foreign.pid} owns :${port} from a different install root`));
   assert.match(diagnosed.stdout, new RegExp(foreignRoot.replace(/[\\\\/]/g, '[\\\\\\\\/]')));
   assert.equal(processIsRunning(foreign.pid), true, 'foreign configured-port supervisor survived ensure and stop');
+});
+
+test('cache-junction gateway process is preserved as a foreign port owner', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-cache-junction-port-'));
+  const { olderCli, newerCli } = installCachedGatewayCliVersions(home);
+  const foreignRoot = path.join(home, 'dev', 'foreign-model-gateway');
+  const junctionRoot = path.dirname(path.dirname(olderCli));
+  const foreignScript = path.join(foreignRoot, 'bin', 'model-gateway.js');
+  const reservation = net.createServer();
+  const port = await listen(reservation);
+  await new Promise((resolve) => reservation.close(resolve));
+  fs.rmSync(junctionRoot, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(foreignScript), { recursive: true });
+  fs.writeFileSync(foreignScript, `const http = require('node:http'); const server = http.createServer((request, response) => response.end('foreign')); server.listen(${port}, '127.0.0.1', () => process.stdout.write('ready\\n'));\n`);
+  linkDirectory(foreignRoot, junctionRoot);
+  const foreign = spawn(process.execPath, [path.join(junctionRoot, 'bin', 'model-gateway.js'), 'serve-shim'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(async () => {
+    if (processIsRunning(foreign.pid)) foreign.kill();
+    await waitForExit(foreign);
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  await waitForReady(foreign);
+
+  const environment = gatewayTestEnvironment(null, { HOME: home, USERPROFILE: home }, {
+    CODEX_GATEWAY_PORT: String(port),
+    CODEX_GATEWAY_WORKER_PORT: String(port),
+    CODEX_GATEWAY_PROXY_PORT: '0',
+  });
+  const stopped = await runGatewayCli(newerCli, 'stop', environment);
+
+  assert.equal(stopped.status, 1, stopped.stderr);
+  assert.match(stopped.stdout, /belongs to a different install root/);
+  assert.equal(processIsRunning(foreign.pid), true, 'cache-junction foreign supervisor survived stop');
 });
 
 test('proxy recovery preserves a foreign configured-port proxy owner', async (t) => {
