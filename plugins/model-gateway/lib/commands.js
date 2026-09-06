@@ -646,6 +646,10 @@ async function waitForStartupReadiness({
   return { ok: false, timedOut: true };
 }
 
+function reportSiblingSupervisorReplacement(stopped, quiet) {
+  if (!quiet && stopped.siblingInstallRoot) log(`model-gateway: replaced older sibling shim version at ${stopped.siblingInstallRoot}.`);
+}
+
 async function startAll({ quiet = false, lifecycleOperation = null } = {}) {
   if (!fs.existsSync(PROXY_BIN)) return { ok: false, reason: 'proxy binary missing (run setup)' };
   let recoveryAttempted = false;
@@ -682,12 +686,14 @@ async function startAll({ quiet = false, lifecycleOperation = null } = {}) {
     beginRecovery();
     const stopped = await stopRunningSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
     if (!stopped.ok) return finishRecovery(stopped);
+    reportSiblingSupervisorReplacement(stopped, quiet);
   } else if (health) {
     reapGatewayOrphans(portOwner);
   } else if (await portListening(PUBLIC_SHIM_PORT)) {
     beginRecovery();
     const stopped = await stopRunningSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
     if (!stopped.ok) return finishRecovery(stopped);
+    reportSiblingSupervisorReplacement(stopped, quiet);
   } else {
     reapGatewayOrphans(null);
   }
@@ -736,6 +742,7 @@ async function restartSupervisorForVersionMismatch({ quiet = false, operation = 
   if (currentHealth && !shimNeedsRestart(PLUGIN_VERSION, currentHealth)) return null;
   const stopped = await stopRunningSupervisor({ quiet, operation });
   if (!stopped.ok) return stopped;
+  reportSiblingSupervisorReplacement(stopped, quiet);
   return start({ quiet, lifecycleOperation: operation });
 }
 
