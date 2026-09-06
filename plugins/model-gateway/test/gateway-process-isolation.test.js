@@ -611,9 +611,9 @@ test('proxy recovery preserves a foreign configured-port proxy owner', async (t)
   fs.mkdirSync(path.dirname(foreignScript), { recursive: true });
   fs.writeFileSync(foreignScript, `const http = require('node:http'); const server = http.createServer((request, response) => { process.stdout.write('models\\n'); response.writeHead(503); response.end('unhealthy'); }); server.listen(${port}, '127.0.0.1', () => process.stdout.write('ready\\n'));`);
   const foreign = spawn(process.execPath, [foreignScript], { stdio: ['ignore', 'pipe', 'ignore'] });
-  t.after(() => {
+  t.after(async () => {
     if (processIsRunning(foreign.pid)) foreign.kill();
-    fs.rmSync(home, { recursive: true, force: true });
+    await waitForExit(foreign);
   });
   await waitForReady(foreign);
   const proxyProbe = waitForOutput(foreign, 'models\n');
@@ -634,6 +634,12 @@ test('proxy recovery preserves a foreign configured-port proxy owner', async (t)
     supervisor.kill();
     await waitForExit(supervisor);
   });
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  t.after(() => assert.equal(
+    fs.existsSync(home),
+    false,
+    'fixture teardown removes the home after the supervisor and worker exit',
+  ));
   await waitForReady(supervisor);
   await proxyProbe;
   await pause(2000);
