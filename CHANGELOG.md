@@ -8,6 +8,20 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.525.0 (2026-09-07)
+
+### quartermaster 0.7.4 → 0.7.5
+
+#### Fixes
+
+- Recommend a consistent Codex compaction window (SQ-2493) [`2994017`](https://github.com/Eigenwise/eigenwise-toolshed/commit/2994017d5dc91ffc86c309589dbfbc8b7cf0cacb)
+
+### sidequest 5.0.31 → 5.0.32
+
+#### Fixes
+
+- Working-tree dispatch preserves unrecordable dirty baselines (SQ-2492)
+
 ## v3.524.0 (2026-09-07)
 
 ### sidequest 5.0.30 → 5.0.31

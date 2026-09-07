@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.5 (2026-09-07)
+
+Released in v3.525.0, up from 0.7.4.
+
+### Fixes
+
+- Recommend a consistent Codex compaction window (SQ-2493) [`2994017`](https://github.com/Eigenwise/eigenwise-toolshed/commit/2994017d5dc91ffc86c309589dbfbc8b7cf0cacb)
+
 ## 0.7.4 (2026-09-07)
 
 Released in v3.523.0, up from 0.7.3.
