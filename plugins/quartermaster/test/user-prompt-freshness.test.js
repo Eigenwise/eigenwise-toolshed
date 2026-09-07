@@ -145,13 +145,14 @@ test('only exact maintenance prompts bypass the guard', () => {
   for (const prompt of ['please run /update-toolshed', '/update-toolshed; work on this', '/quartermaster:update-toolshed; work on this', '/quartermaster:toolshed-doctor now', '/quartermaster-doctor', '/quartermaster:quartermaster-doctor', '/workbench:update-toolshed', '/workbench:toolshed-doctor', '/reload-plugins and fix it', 'claude plugin update sidequest@eigenwise-toolshed --scope user && rm -rf x', 'I said /plugin update']) assert.equal(isMaintenancePrompt(prompt), false, prompt);
 });
 
-test('all prompts pass through and warn only once for the session', () => {
+test('all prompts pass through and report a newer installed version in the same session', () => {
   const { project, registryFile, options } = reloadPending(tempDirectory());
   const first = JSON.parse(decide({ prompt: 'keep working', cwd: project, session_id: 'session-warning' }, options));
   assert.equal(first.decision, undefined);
   assert.match(first.hookSpecificOutput.additionalContext, /This prompt is proceeding\./);
   fs.writeFileSync(registryFile, JSON.stringify({ plugins: { 'quartermaster@eigenwise-toolshed': [{ scope: 'user', version: '3.0.0' }] } }));
-  assert.equal(decide({ prompt: 'continue', cwd: project, session_id: 'session-warning' }, options), '');
+  const newer = JSON.parse(decide({ prompt: 'continue', cwd: project, session_id: 'session-warning' }, options));
+  assert.match(newer.hookSpecificOutput.additionalContext, /Quartermaster 3\.0\.0 is installed/);
 
   const nextSession = JSON.parse(decide({ prompt: 'continue', cwd: project, session_id: 'another-session' }, options));
   assert.match(nextSession.hookSpecificOutput.additionalContext, /Quartermaster 3\.0\.0 is installed/);
@@ -245,4 +246,33 @@ test('compares SemVer 2 including prereleases', () => {
   assert.equal(compareSemver('1.0.0-alpha', '1.0.0'), -1);
   assert.equal(compareSemver('2.0.0', '1.9.9'), 1);
   assert.equal(compareSemver('broken', '1.0.0'), null);
+});
+
+test('reports a new remote version after earlier unknown freshness and version warnings', () => {
+  const directory = tempDirectory();
+  const registryFile = path.join(directory, 'installed_plugins.json');
+  const input = { prompt: 'continue', cwd: path.join(directory, 'project'), session_id: 'remote-version-change' };
+  const options = {
+    registryFile,
+    warningStateDirectory: path.join(directory, 'warnings'),
+    warnedStates: new Set(),
+  };
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: {
+    'sidequest@eigenwise-toolshed': [{ scope: 'user', version: '4.34.0' }],
+  } }));
+
+  const unknown = JSON.parse(decide(input, { ...options, cache: { checkedAt: new Date().toISOString(), unavailable: true } }));
+  assert.match(unknown.hookSpecificOutput.additionalContext, /freshness could not be determined/);
+
+  const first = JSON.parse(decide(input, { ...options, cache: {
+    checkedAt: new Date().toISOString(),
+    manifest: { plugins: [{ name: 'sidequest', version: '4.35.0' }] },
+  } }));
+  assert.match(first.hookSpecificOutput.additionalContext, /sidequest 4\.34\.0 → 4\.35\.0/);
+
+  const newer = JSON.parse(decide(input, { ...options, cache: {
+    checkedAt: new Date().toISOString(),
+    manifest: { plugins: [{ name: 'sidequest', version: '4.36.0' }] },
+  } }));
+  assert.match(newer.hookSpecificOutput.additionalContext, /sidequest 4\.34\.0 → 4\.36\.0/);
 });

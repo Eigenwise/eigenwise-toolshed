@@ -42,6 +42,8 @@ Or run the maintenance skills directly:
 
 The updater covers the Eigenwise Toolshed marketplace and Model Gateway when it is installed. Third-party plugins are left alone. The health check identifies stale installs and an `enabledPlugins` entry that has no matching install, because its hooks are not running. Claude can install the plugin at the reported project scope or remove the dead entry from the named settings file. It also names Model Gateway startup check failures precisely: a missing checker, a launch error, a three-second timeout, a nonzero doctor result, or empty output. A nonzero doctor result keeps one short diagnostic line rather than being reported as a missing checker. Reload plugins or start a new session after an update so Claude sees the new version.
 
+Quartermaster refreshes stale marketplace freshness at Stop time, so a long-running session can report newly available Toolshed updates without installing or restarting anything. It also nudges a reload when the active install is newer than the plugin code the session loaded. Each available or installed version set is reported once per session.
+
 ## The in-the-moment loop
 
 Quartermaster's SessionStart hook can flag a repeated task that may belong in a skill, codebase-map entry, rule, or measurement. It offers to capture the improvement when it notices one; otherwise it stays silent. Setup also re-grounds unchanged rules and surfaces changed matching rules on the next prompt or edit.

@@ -27,7 +27,7 @@ function cacheIsCurrent(cache, now = Date.now()) {
   return Number.isFinite(checkedAt) && now - checkedAt >= 0 && now - checkedAt < CACHE_MAX_AGE_MS;
 }
 
-function requestManifest(request = https.get) {
+function requestManifest(request = https.get, timeoutMs = REQUEST_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const response = request(MARKETPLACE_URL, { headers: { accept: 'application/json' } }, (incoming) => {
       let body = '';
@@ -47,7 +47,7 @@ function requestManifest(request = https.get) {
         }
       });
     });
-    response.setTimeout(REQUEST_TIMEOUT_MS, () => response.destroy(new Error('request timed out')));
+    response.setTimeout(timeoutMs, () => response.destroy(new Error('request timed out')));
     response.on('error', reject);
   });
 }

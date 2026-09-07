@@ -32,8 +32,10 @@ function isMaintenancePrompt(prompt) {
 
 function newerInstalledVersion(instances, loadedVersion) {
   return instances
-    .filter((instance) => instance.name === 'quartermaster')
-    .find((instance) => compareSemver(loadedVersion, instance.version) === -1)?.version || null;
+    .filter((instance) => instance.name === 'quartermaster' && compareSemver(loadedVersion, instance.version) === -1)
+    .map((instance) => instance.version)
+    .sort((left, right) => compareSemver(left, right) || 0)
+    .at(-1) || null;
 }
 
 function warningOutput(message) {
@@ -45,7 +47,7 @@ function reloadWarning(installedVersion, loadedVersion) {
 }
 
 function reportedReloads(instances, input, options) {
-  const updates = [];
+  const updates = new Map();
   for (const instance of instances) {
     const parts = pluginIdParts(instance.id);
     const loadedVersion = parts && reportedLoadedPluginVersion(input, instance.id, {
@@ -53,31 +55,35 @@ function reportedReloads(instances, input, options) {
       fileSystem: options.fileSystem,
     });
     if (!parts || !loadedVersion || compareSemver(loadedVersion, instance.version) !== -1) continue;
-    updates.push({ name: parts.name, loadedVersion, installedVersion: instance.version });
+    const existing = updates.get(parts.name);
+    if (!existing || compareSemver(existing.installedVersion, instance.version) === -1) {
+      updates.set(parts.name, { name: parts.name, loadedVersion, installedVersion: instance.version });
+    }
   }
-  return updates;
+  return [...updates.values()].sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function reportedReloadWarning(updates) {
   return `Toolshed plugins need reload: ${updates.map((update) => `${update.name}: loaded ${update.loadedVersion}, installed ${update.installedVersion}`).join('; ')}. This prompt is proceeding. Reload with /reload-plugins or restart Claude Code before relying on the updated plugin code.`;
 }
 
-function warningKey(input, kind) {
-  return `${input?.session_id || ''}\0${kind}`;
+function warningKey(input, kind, versionSet = '') {
+  const base = `${input?.session_id || ''}\0${kind}`;
+  return versionSet ? `${base}\0${versionSet}` : base;
 }
 
-function warningStateFile(input, kind, directory) {
+function warningStateFile(input, kind, directory, versionSet) {
   if (!input?.session_id) return null;
-  const digest = crypto.createHash('sha256').update(warningKey(input, kind)).digest('hex');
+  const digest = crypto.createHash('sha256').update(warningKey(input, kind, versionSet)).digest('hex');
   return path.join(directory, digest);
 }
 
-function warnOnce(input, kind, options = {}) {
-  const key = warningKey(input, kind);
+function warnOnce(input, kind, options = {}, versionSet = '') {
+  const key = warningKey(input, kind, versionSet);
   const warned = options.warnedStates || warnedStates;
   if (warned.has(key)) return false;
   warned.add(key);
-  const stateFile = warningStateFile(input, kind, options.warningStateDirectory || path.join(os.tmpdir(), 'eigenwise-toolshed', 'freshness-warnings'));
+  const stateFile = warningStateFile(input, kind, options.warningStateDirectory || path.join(os.tmpdir(), 'eigenwise-toolshed', 'freshness-warnings'), versionSet);
   if (!stateFile) return true;
   try {
     (options.fileSystem || fs).mkdirSync(path.dirname(stateFile), { recursive: true });
@@ -107,6 +113,14 @@ function remoteUpdates(instances, manifest) {
   return [...updates.values()].sort((left, right) => left.name.localeCompare(right.name));
 }
 
+function availableVersionsKey(updates) {
+  return updates.map((update) => `${update.name}@${update.available}`).join(',');
+}
+
+function installedVersionsKey(updates) {
+  return updates.map((update) => `${update.name}@${update.installedVersion ?? update.installed}`).join(',');
+}
+
 function remoteWarning(instances, cache, now) {
   if (!instances.length) return '';
   if (!cacheIsCurrent(cache, now) || !cache?.manifest) return 'Toolshed release freshness could not be determined. This prompt is proceeding. Run /update-toolshed to refresh the marketplace.';
@@ -123,13 +137,14 @@ function decide(input, options = {}) {
   const instances = activeInstances(readJson(fileSystem, registryFile) || {}, input?.cwd, MARKETPLACE, options.platform);
   const cache = options.cache === undefined ? readCache(fileSystem, home) : options.cache;
   const remoteMessage = remoteWarning(instances, cache, options.now ?? Date.now());
-  if (remoteMessage && warnOnce(input, 'remote', options)) return warningOutput(remoteMessage);
+  const updates = remoteUpdates(instances, cache?.manifest);
+  if (remoteMessage && warnOnce(input, 'remote', options, availableVersionsKey(updates))) return warningOutput(remoteMessage);
   const loadedVersion = loadedPluginVersion(fileSystem, options.pluginRoot || process.env.CLAUDE_PLUGIN_ROOT);
   const installedVersion = newerInstalledVersion(instances, loadedVersion);
-  if (installedVersion) return warnOnce(input, 'reload', options) ? warningOutput(reloadWarning(installedVersion, loadedVersion)) : '';
+  if (installedVersion) return warnOnce(input, 'reload', options, `quartermaster@${installedVersion}`) ? warningOutput(reloadWarning(installedVersion, loadedVersion)) : '';
   const reportedUpdates = reportedReloads(instances, input, options);
   if (!reportedUpdates.length) return '';
-  return warnOnce(input, 'reload', options) ? warningOutput(reportedReloadWarning(reportedUpdates)) : '';
+  return warnOnce(input, 'reload', options, installedVersionsKey(reportedUpdates)) ? warningOutput(reportedReloadWarning(reportedUpdates)) : '';
 }
 
 function main() {
@@ -147,9 +162,11 @@ if (require.main === module) main();
 module.exports = {
   MARKETPLACE,
   activeInstances,
+  availableVersionsKey,
   compareSemver,
   decide,
   isMaintenancePrompt,
+  installedVersionsKey,
   loadedPluginVersion,
   newerInstalledVersion,
   parseSemver,
