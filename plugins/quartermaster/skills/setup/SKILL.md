@@ -95,6 +95,24 @@ One visible plan, then per-item approval. Draw from three sources, in this order
     Claude Code's `/model` picker through a local gateway, no API keys. It is what makes
     sidequest's non-Claude routes possible. Project-scoped with the rest of the workspace plugins.
 
+  When the plan wires Model Gateway or Sidequest routing, check the effective setting first:
+
+  ```sh
+  node -e "const { compactionWindowFinding } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); console.log(compactionWindowFinding(process.cwd()));"
+  ```
+
+  If `autoCompactWindow` is unset, separately offer to set
+  `"autoCompactWindow": 325000` through `configureSidequestCompaction`; get approval before running:
+
+  ```sh
+  node -e "const { configureSidequestCompaction } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); console.log(JSON.stringify(configureSidequestCompaction(process.cwd(), { autoCompactWindow: 325000, policy: 'pin' }), null, 2));"
+  ```
+
+  The tradeoff is a consistent Codex compaction point; Claude models keep their larger windows because
+  the cap only bounds the auto-compact trigger. Recommend 325000 because it matches Kenny's established
+  setting and yields the 292000-token trigger. If either user or project settings already has a value,
+  say which one wins and leave it alone unless the user asks to change it.
+
 - **Stack plugins**, from [references/stack-plugins.md](references/stack-plugins.md) plus the
   catalog (`node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" catalog --query "<stack terms>"`).
   For LSP plugins, check the required binary is on PATH first; report a missing binary with its

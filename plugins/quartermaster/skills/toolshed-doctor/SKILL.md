@@ -83,6 +83,20 @@ node -e "const { agentTeamsWarning } = require(process.env.CLAUDE_PLUGIN_ROOT + 
 
 If it prints a warning, report it with the one-line remedy verbatim. Do not fix it from the doctor.
 
+## Codex auto-compact window
+
+Check the effective `autoCompactWindow` from user and project settings. This is read-only; the project
+setting wins when both files set the key:
+
+```sh
+node -e "const { compactionWindowFinding } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); console.log(compactionWindowFinding(process.cwd()));"
+```
+
+Report the one-line finding verbatim. When the key is unset, it advises setting `"autoCompactWindow": 325000`
+in the named user settings file: that matches Kenny's established setting and gives Codex gateway sessions a
+consistent 292000-token trigger instead of a model-dependent compaction point. Do not write or offer to fix it
+from the doctor.
+
 Report all results together. Explain each concrete problem and give the smallest next step. This skill does
 not update, install, uninstall, reload, or edit anything. If freshness is proven stale, tell the user to run
 `/update-toolshed`, then `/reload-plugins` or restart before retrying the blocked work.
