@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.524.0 (2026-09-07)
+
+### sidequest 5.0.30 → 5.0.31
+
+#### Fixes
+
+- Fan out unpinnable contract investigations (SQ-2490) [`351ca52`](https://github.com/Eigenwise/eigenwise-toolshed/commit/351ca52ee3bf611e51741c38f94c6315deb7b1ee)
+
 ## v3.523.0 (2026-09-07)
 
 ### model-gateway 0.50.2 → 0.50.3
