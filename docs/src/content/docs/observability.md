@@ -23,6 +23,17 @@ The skill handles the observer, dashboard setup, project wiring, and verificatio
 
 Open the configured loopback dashboard, usually `http://127.0.0.1:3000`, to compare usage across opted-in repositories or focus on one project. Use it to spot model and token use, API list-price-equivalent costs, tool activity, MCP activity, Sidequest costs, and failures. Estimated API-equivalent costs are not subscription charges. A model without a published API price appears in **Unpriced model token usage** with its resolved model name and token volume, while cost totals exclude it. See the [dashboard guide](./dashboard/) for the main views.
 
+### GPT-6 Astra pricing
+
+Grafana prices resolved GPT-6 Astra usage from OpenAI's [published API rates](https://developers.openai.com/api/docs/models/gpt-6-astra). Per million tokens, the normal rates are:
+
+| Mode | Uncached input | Cache read | Cache write | Output |
+| --- | ---: | ---: | ---: | ---: |
+| Standard | $10 | $1 | $12.50 | $50 |
+| Fast | $20 | $2 | $25 | $100 |
+
+For a request with more than 272,000 input tokens, the full request uses the long-context rates: Standard is $20, $2, $25, and $75; Fast is $40, $4, $50, and $150 in the same order. The dashboard picks that tier per gateway request, using uncached input, cache-read input, and cache-write input exactly once. These estimates track the API billing rules, including cache writes at 1.25 times uncached input, and remain separate from subscription charges.
+
 To check setup or disable telemetry, run the same skill and describe what you want. Claude reports whether a project is sending data and tells you when a restart or more activity is needed.
 
 ## Health and statusline signals
