@@ -2883,17 +2883,33 @@ test('session-start force-loads the Sidequest skill only for orchestrator mid-wa
 });
 
 test('session-start: tells orchestrators when to fan out independent work', () => {
-  const skill = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'SKILL.md'), 'utf8');
+  const pluginRoot = path.join(__dirname, '..');
+  const skill = fs.readFileSync(path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
+  const orchestration = fs.readFileSync(path.join(pluginRoot, 'skills', 'sidequest', 'references', 'orchestration.md'), 'utf8');
+  const userStory = fs.readFileSync(path.join(pluginRoot, 'skills', 'user-story', 'SKILL.md'), 'utf8');
   assert.match(skill, /independent audits, migrations, and reviews/i);
   assert.match(skill, /Dispatch concurrently despite isolated-worktree overlap/i);
   assert.match(skill, /sequential\/shared-design work together/i);
   assert.match(skill, /size shards by items and verify cost/i);
 
+  for (const surface of [skill, orchestration, userStory]) {
+    assert.match(surface, /one\s+investigation\s+ticket\s+per\s+independent\s+item/i);
+  }
+  for (const surface of [skill, orchestration]) {
+    assert.match(surface, /SOLO-FIT picks\s+one-executor vs wave; it NEVER means you implement\s+inline/);
+  }
+  assert.match(userStory, /This never means the orchestrator implements it/);
+
   for (const source of ['', 'compact', 'resume']) {
     const context = runHookForBudget(SESSION, { session_id: `fanout-${source || 'startup'}`, source });
-    assert.match(context, /independent per-item work, shard tickets and dispatch concurrently/i);
+    assert.match(context, /shard implementation and read-only investigation tickets, then dispatch each wave concurrently/i);
     assert.match(context, /isolated-worktree overlap is an integration concern/i);
     assert.match(context, /sequential dependencies or a shared design decision stay together/i);
+    const budget = source ? BUDGET.compact : BUDGET.session;
+    assert.ok(
+      Buffer.byteLength(context, 'utf8') <= budget,
+      `fanout briefing is ${Buffer.byteLength(context, 'utf8')} bytes — budget is ${budget}`,
+    );
   }
 });
 

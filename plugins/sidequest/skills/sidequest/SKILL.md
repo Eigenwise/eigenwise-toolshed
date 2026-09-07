@@ -26,11 +26,10 @@ Before dispatching substantial or ambiguous work, pin a contract; see `user-stor
 For substantial work:
 
 0. **solo-fit gate.** **SOLO-FIT picks one-executor vs wave; it NEVER means you implement
-   inline.** Small coherent work gets **one ticket** and one executor; use it too when the contract
-   cannot be pinned without doing the work. With a written spec and executable done-oracle,
-   contract-first wave is the default. Claiming the contract is unpinnable needs either a completed
-   exploration/planning ticket that tried and names the interface that resisted a written contract, or no written
-   contract surface in the request. “Feels coupled” is not evidence: when unsure, file planning first.
+   inline.** Small coherent work gets **one ticket** and one executor. A multi-item unpinnable contract
+   needs concurrent read-only investigation tickets, **one investigation ticket per independent item**;
+   findings pin a separate fix wave. One combined ticket is only for exactly one item or a provably single
+   defect. “Feels coupled” is not evidence: file planning first.
 1. **Ticket shape.** If a written spec pins shared types/interfaces, file boundaries, and
    per-piece verification, 3+ independently checkable pieces use contract-first fan-out: pin the
    contract in ticket descriptions or a short planning ticket, then one parallel wave on
