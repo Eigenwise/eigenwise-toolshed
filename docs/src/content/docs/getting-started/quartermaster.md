@@ -24,6 +24,10 @@ From the project directory, run:
 
 It reads the project, mines recent session history across your projects, asks a few setup questions, and proposes a plan covering Toolshed plugins, stack plugins, starter rules, and permission entries. You approve each item before it installs or writes anything. After you reload plugins, it verifies the selected plugins and project configuration.
 
+When setup wires Model Gateway or Sidequest routing, Quartermaster recommends, never mandates, a 325000
+`autoCompactWindow` for a consistent Codex compaction point. Setup offers the approved change, while doctor
+shows the effective setting and which settings file wins.
+
 If you choose telemetry, Claude handles the Observability setup and tells you when a restart is needed. You can also decline and continue without it.
 
 ## Keep a workspace current

@@ -8,6 +8,7 @@ const test = require('node:test');
 const {
   agentTeamsWarning,
   clampAutoCompactWindow,
+  compactionWindowFinding,
   configureSidequestCompaction,
   enableAgentTeams,
 } = require('../lib/project-settings.js');
@@ -53,6 +54,31 @@ test('warns only when a project environment masks agent teams', (t) => {
 
   enableAgentTeams(projectDir);
   assert.equal(agentTeamsWarning(projectDir), null);
+});
+
+test('reports the effective compaction window and its winning settings file', (t) => {
+  const { directory, projectDir } = temporaryProject(t);
+  const globalSettingsPath = path.join(directory, 'user-settings', '.claude', 'settings.json');
+  const projectSettingsPath = path.join(projectDir, '.claude', 'settings.local.json');
+
+  const unsetFinding = compactionWindowFinding(projectDir, { globalSettingsPath });
+  assert.match(unsetFinding, /"autoCompactWindow"/);
+  assert.match(unsetFinding, new RegExp(globalSettingsPath.replace(/\\/g, '\\\\')));
+  assert.match(unsetFinding, new RegExp(projectSettingsPath.replace(/\\/g, '\\\\')));
+  assert.match(unsetFinding, /325000/);
+
+  fs.mkdirSync(path.dirname(globalSettingsPath), { recursive: true });
+  fs.writeFileSync(globalSettingsPath, JSON.stringify({ autoCompactWindow: 250_000 }));
+  const userFinding = compactionWindowFinding(projectDir, { globalSettingsPath });
+  assert.match(userFinding, /250000/);
+  assert.match(userFinding, /user setting wins/);
+
+  fs.mkdirSync(path.dirname(projectSettingsPath), { recursive: true });
+  fs.writeFileSync(projectSettingsPath, JSON.stringify({ autoCompactWindow: 325_000 }));
+  const projectFinding = compactionWindowFinding(projectDir, { globalSettingsPath });
+  assert.match(projectFinding, /325000/);
+  assert.match(projectFinding, new RegExp(projectSettingsPath.replace(/\\/g, '\\\\')));
+  assert.match(projectFinding, /project setting wins/);
 });
 
 test('configures a global compaction window without replacing either settings file', (t) => {

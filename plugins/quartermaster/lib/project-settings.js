@@ -98,6 +98,20 @@ function configureSidequestCompaction(projectDir, {
   };
 }
 
+function compactionWindowFinding(projectDir, { globalSettingsPath = userSettingsPath() } = {}) {
+  const projectPath = projectSettingsPath(projectDir);
+  const projectSettings = readSettings(projectPath);
+  const globalSettings = readSettings(globalSettingsPath);
+
+  if (Object.hasOwn(projectSettings, 'autoCompactWindow')) {
+    return `Effective "autoCompactWindow" is ${projectSettings.autoCompactWindow} from ${projectPath}; the project setting wins.`;
+  }
+  if (Object.hasOwn(globalSettings, 'autoCompactWindow')) {
+    return `Effective "autoCompactWindow" is ${globalSettings.autoCompactWindow} from ${globalSettingsPath}; the user setting wins.`;
+  }
+  return `No "autoCompactWindow" is configured in ${globalSettingsPath} or ${projectPath}. Codex gateway sessions compact at the model default, which differs across models; set "autoCompactWindow": 325000 in ${globalSettingsPath} for a consistent 292000-token trigger.`;
+}
+
 function agentTeamsWarning(projectDir) {
   const settings = readProjectSettings(projectDir);
   if (!settings.env || Object.hasOwn(settings.env, AGENT_TEAMS_ENV)) return null;
@@ -111,6 +125,7 @@ module.exports = {
   SIDEQUEST_COMPACTION_POLICY_ENV,
   agentTeamsWarning,
   clampAutoCompactWindow,
+  compactionWindowFinding,
   configureSidequestCompaction,
   enableAgentTeams,
   mergeProjectEnvironment,

@@ -13,7 +13,9 @@ capabilities leave no friction trace at all.
 
 It also outfits workspaces: the setup skill mines your history across all projects, interviews
 you briefly, and installs and verifies the Toolshed core plus stack plugins for a new or existing
-project, with every item approved individually.
+project, with every item approved individually. When it wires Model Gateway or Sidequest routing,
+Quartermaster recommends, never mandates, a 325000 `autoCompactWindow` for consistent Codex
+compaction; setup offers it and doctor surfaces the effective setting.
 
 ## Install
 
