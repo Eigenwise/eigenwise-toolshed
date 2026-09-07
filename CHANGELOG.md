@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.526.0 (2026-09-07)
+
+### observability 0.7.24 → 0.7.25
+
+#### Fixes
+
+- Show unpriced model usage (SQ-2496)
+  Show token volumes for models without published API pricing in the Grafana dashboard, while keeping cost totals clearly scoped to priced models.
+
 ## v3.525.0 (2026-09-07)
 
 ### quartermaster 0.7.4 → 0.7.5
