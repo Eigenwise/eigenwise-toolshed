@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.4 (2026-09-07)
+
+Released in v3.523.0, up from 0.7.3.
+
+### Fixes
+
+- Refresh marketplace freshness at Stop time (SQ-2489)
+
 ## 0.7.3 (2026-09-06)
 
 Released in v3.520.0, up from 0.7.2.

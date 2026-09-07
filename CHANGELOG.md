@@ -8,6 +8,20 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.523.0 (2026-09-07)
+
+### model-gateway 0.50.2 → 0.50.3
+
+#### Fixes
+
+- Wait for gateway test fixture teardown (SQ-2488) [`ab71e12`](https://github.com/Eigenwise/eigenwise-toolshed/commit/ab71e12eb186363e04780df8a3e4a7696dff7974)
+
+### quartermaster 0.7.3 → 0.7.4
+
+#### Fixes
+
+- Refresh marketplace freshness at Stop time (SQ-2489)
+
 ## v3.522.0 (2026-09-06)
 
 ### model-gateway 0.50.1 → 0.50.2
