@@ -192,15 +192,17 @@ Present the chosen approach and its main trade-off in a few lines. Ask for appro
 choice is expensive to reverse: a schema or migration, a public API, a user-visible default, a new
 dependency. Otherwise state what you picked and proceed.
 
-Cannot pin the contract at all? That is a real answer, and it means one ticket and one executor, not
-inline work. Claiming it needs either a completed planning ticket that names the interface that
-resisted, or no written contract surface in the request. "Feels coupled" is a reason to file planning
-first.
+Cannot pin a multi-item contract at all? File concurrent read-only investigation tickets, **one
+investigation ticket per independent item**, then pin a separate fix wave from their compressed findings.
+A shared runtime serializes writes and live reproduction, never read-only investigation; one combined
+ticket is only for exactly one item or a provably single defect. Claiming a one-item contract is
+unpinnable needs either a completed planning ticket that names the interface that resisted, or no
+written contract surface in the request. "Feels coupled" is a reason to file planning first.
 
 ## 5. Story plus the whole backlog
 
-One ticket and one executor covers small coherent work, and work whose contract only becomes knowable
-by doing it. No story needed. This never means the orchestrator implements it.
+One ticket and one executor covers small coherent work, exactly one item, or items provably one defect.
+This never means the orchestrator implements it.
 
 Everything larger gets a story, the contract pinned on it, and **every ticket for every planned wave
 filed under it before the first dispatch**: category from the live taxonomy, file scope, anchors,

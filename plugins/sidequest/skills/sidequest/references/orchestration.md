@@ -13,24 +13,25 @@ Apply the inline-safe gate before solo-fit or ticket filing. A user-directed mec
 
 Before filing several tickets, use solo-fit only to choose the dispatch shape. **SOLO-FIT picks
 one-executor vs wave; it NEVER means you implement inline.** File **one ticket and dispatch one
-executor** when the work is small and coherent enough for one executor to finish comfortably in one
-context, or its contract cannot be pinned without doing the work. Keep that ticket whole when the work
-must land and verify together.
+executor** for small coherent work. A combined ticket is only for exactly one request item or items
+provably one defect.
 
-When a written spec can pin shared types/interfaces, file boundaries, and per-piece verification, and
-there are 3+ independently checkable pieces, prefer a contract-first fan-out: put the contract directly
-in the ticket descriptions or create one short planning ticket, then dispatch one parallel wave to
-category-appropriate cheaper models and integrate once per wave. With a written spec and executable
-done-oracle, this is the presumptive default. Claiming the contract cannot be pinned requires either a
-completed exploration/planning ticket that tried and names the specific interface resisting a written
-contract, or a request with no written contract surface. “Feels coupled” is not evidence: when unsure,
-file the short planning ticket first, then decide from its report. One ticket still equals one bounded,
-independently checkable piece: a code change with a verify command, or an investigation, spike, or
-review whose "done" is a concrete answer or artifact. Cut along real independent surfaces, not merely a
-list of deliverables. Several named pieces can still be one feature with a shared contract; split them
-only when they can progress and verify independently.
+When a multi-item contract cannot be pinned, file a concurrent read-only investigation wave: **one
+investigation ticket per independent item**, categorized as `codebase-exploration`, `debugging`, or
+`spike-investigation` with `readonly: true`. Each returns a compressed root cause with file:line, proposed fix, verify command,
+and defect status. The orchestrator then pins separate fix contracts from the findings. In isolated
+worktrees, dispatch those fixes in parallel. In a shared-tree project (including Docker mounts of the
+checkout), different-file fixes still get separate tickets but dispatch serially or batched into one
+executor; shared-tree writes are the only reason a fix wave serializes. A one-item unpinnable claim
+still needs a completed exploration/planning ticket naming the interface that resisted a written
+contract, or no written contract surface in the request. “Feels coupled” is not evidence: when unsure,
+file the short planning ticket first.
 
-**Maximize the ready set.** Decompose to maximize the ready set: prefer cuts along disjoint surfaces so more tickets can dispatch together. A cut that forces a serial chain needs a stated reason. In isolated worktrees, same-file overlap alone is not a conflict. Serialize only when tickets change the same functions, constants, or regions; share a runtime resource; or semantically couple because one defines what another consumes. Otherwise dispatch them in parallel and resolve the rare merge conflict at integration.
+**Maximize the ready set.** Decompose to maximize the ready set: prefer cuts along disjoint surfaces so more tickets can dispatch together. A cut that forces a serial chain needs a stated reason. In isolated worktrees, same-file overlap alone is not a conflict. A shared runtime resource serializes writes and live reproduction, never read-only investigation; otherwise dispatch in parallel and resolve the rare merge conflict at integration.
+
+Example: three PR review comments in three files → three read-only investigation tickets in one wave →
+the orchestrator pins per-comment fix contracts from the findings → fix wave (parallel in worktrees,
+batched in a shared tree) → one merged-tree gate.
 
 After solo-fit chooses wave mode, file the complete planned backlog before dispatching: every planned
 ticket for every wave, each with declared files, dependency links, and per-ticket verify. Then dispatch
