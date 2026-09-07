@@ -7,6 +7,7 @@ const {
   gatewayProjectCostTargets,
   gatewayResolvedCodexCostExpression,
   gatewayTotalCostExpression,
+  gatewayUnpricedModelUsageTargets,
 } = require('./model-prices');
 
 const TEMPLATE_FILE = path.join(__dirname, 'dashboards', 'claude-code-usage.json');
@@ -61,11 +62,12 @@ const PROJECT_UNSCOPED_PANELS = new Set([
   'Gateway records, 5m',
 ]);
 
-const GLOBAL_COST_PANELS = new Set([
+const GLOBAL_UNSCOPED_USAGE_PANELS = new Set([
   'Total spend',
   'Work routed to Codex',
   'Cost by model',
   'Cost by project',
+  'Unpriced model token usage',
 ]);
 
 // The project selector is baked into every query, so its variable is dropped.
@@ -156,7 +158,7 @@ function filterDashboard(dashboard, projects, dropped = new Set(), globallyUnsco
 }
 
 function globalDashboard(template, projects) {
-  return filterDashboard(template, projects, new Set(), GLOBAL_COST_PANELS);
+  return filterDashboard(template, projects, new Set(), GLOBAL_UNSCOPED_USAGE_PANELS);
 }
 
 // A by-project breakdown can only show the selected project on a per-project dashboard.
@@ -226,6 +228,8 @@ function applyModelPricing(dashboard, projects) {
   }
   const costByModelPanel = dashboard.panels.find(({ title }) => title === 'Cost by model');
   if (costByModelPanel) costByModelPanel.targets = gatewayModelCostTargets();
+  const unpricedModelUsagePanel = dashboard.panels.find(({ title }) => title === 'Unpriced model token usage');
+  if (unpricedModelUsagePanel) unpricedModelUsagePanel.targets = gatewayUnpricedModelUsageTargets();
   const costByProjectPanel = dashboard.panels.find(({ title }) => title === 'Cost by project');
   if (costByProjectPanel) costByProjectPanel.targets = gatewayProjectCostTargets(projects);
   const offloadPanel = dashboard.panels.find(({ title }) => title === 'Work routed to Codex');

@@ -27,10 +27,12 @@ Gateway wiring is per-scope. If the gateway is unwired for the current project, 
 
 1. Confirm the user wants local, metadata-only usage telemetry for the current repository. Say it writes only
    this repository's own `.claude/settings.local.json` files, then sends metadata through the local loopback
-   observer and Collector to local Grafana: API-equivalent cost; input, output, and cache token totals;
-   tool-call names, counts, and result-token estimates; and model, session, agent, and activity information. It
-   does not capture prompt or response text, code or file contents, tool inputs or results, raw request bodies,
-   credentials, or environment values.
+   observer and Collector to local Grafana: API-equivalent cost estimates for models with published API prices;
+   input, output, and cache token totals; token volumes for unpriced models; tool-call names, counts, and
+   result-token estimates; and model, session, agent, and activity information. Explain that API-equivalent
+   estimates are not subscription charges, and models without a published API price remain visible without an
+   invented USD total. It does not capture prompt or response text, code or file contents, tool inputs or results,
+   raw request bodies, credentials, or environment values.
 2. Run it from anywhere inside the repository; it resolves the repository root itself:
 
    ```sh

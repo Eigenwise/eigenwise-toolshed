@@ -112,6 +112,20 @@ function gatewayUsageExpression(entries, type, bucket = '$bucket', extraFilter =
   return `sum by (workbench_attribute_model) (sum_over_time(${GATEWAY_USAGE_SELECTOR}${extraFilter} | label_format workbench_price=\`${priceTemplate}\` | workbench_price != "0" | label_format workbench_measurement_priced_value=\`{{ mul .workbench_measurement_${measurement}_value .workbench_price }}\` | unwrap workbench_measurement_priced_value [${bucket}])) / 100000000`;
 }
 
+// The gateway writes one resolved model per request. Requested aliases would count the
+// same request again, so this view groups only that resolved label and sums each exact
+// provider bucket once.
+function gatewayUnpricedModelUsageExpression(bucket = '$bucket', extraFilter = '') {
+  const pricedModels = gatewayModelPriceEntries()
+    .map(([model]) => escapeLogqlRegex(model))
+    .join('|');
+  const unpricedFilter = ` | workbench_attribute_model !~ ${JSON.stringify(pricedModels)}`;
+  const tokenMeasurements = Object.values(GATEWAY_MEASUREMENT_BY_PRICE_TYPE)
+    .map((measurement) => `(default "0" .workbench_measurement_${measurement}_value)`)
+    .join(' ');
+  return `sum by (workbench_attribute_model) (sum_over_time(${GATEWAY_USAGE_SELECTOR}${extraFilter}${unpricedFilter} | label_format workbench_measurement_total_tokens=\`{{ add ${tokenMeasurements} }}\` | unwrap workbench_measurement_total_tokens [${bucket}]))`;
+}
+
 function gatewayModelCostExpression(entries, bucket = '$bucket', extraFilter = '') {
   return Object.keys(GATEWAY_MEASUREMENT_BY_PRICE_TYPE).map((type) =>
     gatewayUsageExpression(entries, type, bucket, extraFilter),
@@ -123,6 +137,15 @@ function gatewayModelCostTargets() {
     refId: 'G1',
     datasource: { type: 'loki', uid: 'loki' },
     expr: gatewayModelCostExpression(gatewayModelPriceEntries()),
+    legendFormat: '{{workbench_attribute_model}}',
+  }];
+}
+
+function gatewayUnpricedModelUsageTargets() {
+  return [{
+    refId: 'U1',
+    datasource: { type: 'loki', uid: 'loki' },
+    expr: gatewayUnpricedModelUsageExpression(),
     legendFormat: '{{workbench_attribute_model}}',
   }];
 }
@@ -180,6 +203,8 @@ module.exports = {
   gatewayProjectCostTargets,
   gatewayResolvedCodexCostExpression,
   gatewayTotalCostExpression,
+  gatewayUnpricedModelUsageExpression,
+  gatewayUnpricedModelUsageTargets,
   modelCostExpression,
   modelCostTargets,
   unpricedModelsExpression,

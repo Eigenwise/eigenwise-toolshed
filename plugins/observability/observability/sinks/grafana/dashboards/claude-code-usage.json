@@ -116,12 +116,12 @@
         }
       ],
       "interval": "$bucket",
-      "description": "List-price-equivalent cost across every backend in the selected range. Subscription billing can differ."
+      "description": "API list-price-equivalent cost across priced backends in the selected range. Totals exclude models without published API pricing; see Unpriced model token usage. This is not a subscription charge."
     },
     {
       "id": 33,
       "title": "Work routed to Codex",
-      "description": "Share of total list-price-equivalent spend routed to Codex in the selected range.",
+      "description": "Share of API list-price-equivalent spend routed to Codex in the selected range, calculated only from models with published API pricing. This is not a subscription charge.",
       "type": "stat",
       "datasource": {
         "type": "loki",
@@ -246,7 +246,7 @@
     {
       "id": 32,
       "title": "Cost by model",
-      "description": "List-price-equivalent cost trend by resolved backend model. Model aliases are normalized before pricing.",
+      "description": "API list-price-equivalent cost trend by resolved backend model. Totals exclude models without published API pricing; see Unpriced model token usage. This is not a subscription charge.",
       "type": "timeseries",
       "datasource": {
         "type": "loki",
@@ -300,6 +300,62 @@
       ]
     },
     {
+      "id": 34,
+      "title": "Unpriced model token usage",
+      "description": "Token volume by resolved backend model when no published API price is available. Each exact provider input, cache-read, cache-creation, and output bucket is counted once. This is usage, not USD.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 14,
+        "w": 8,
+        "h": 8
+      },
+      "interval": "$bucket",
+      "maxDataPoints": 120,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 100,
+            "lineWidth": 0,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "U1",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "legendFormat": "{{workbench_attribute_model}}",
+          "expr": "__GATEWAY_UNPRICED_MODEL_USAGE_TARGETS__"
+        }
+      ]
+    },
+    {
       "id": 7,
       "title": "Cost by project",
       "type": "timeseries",
@@ -310,7 +366,7 @@
       "gridPos": {
         "x": 0,
         "y": 14,
-        "w": 12,
+        "w": 8,
         "h": 8
       },
       "fieldConfig": {
@@ -353,7 +409,7 @@
       ],
       "interval": "$bucket",
       "maxDataPoints": 120,
-      "description": "List-price-equivalent cost trend across every backend. Usage without a currently active project is grouped as Other / unattributed."
+      "description": "API list-price-equivalent cost trend across priced backends. Totals exclude models without published API pricing; see Unpriced model token usage. Usage without a currently active project is grouped as Other / unattributed. This is not a subscription charge."
     },
     {
       "id": 20,
@@ -365,9 +421,9 @@
         "uid": "loki"
       },
       "gridPos": {
-        "x": 12,
+        "x": 16,
         "y": 14,
-        "w": 12,
+        "w": 8,
         "h": 8
       },
       "fieldConfig": {

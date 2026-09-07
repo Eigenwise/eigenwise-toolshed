@@ -25,7 +25,7 @@ The **At a glance** row gives a quick read on model usage, roles, spend, and fai
 
 ![Where the spend goes row showing cost by model, cost by project, and context by agent role](../../../assets/screenshots/observability-where-the-spend-goes.png)
 
-The **Where the spend goes** row breaks down model totals and estimated cost before you change routing or prompts.
+The **Where the spend goes** row breaks down model totals and API list-price-equivalent cost before you change routing or prompts. Those dollar figures are estimates, not subscription charges. **Unpriced model token usage** keeps models without a published API price visible by resolved model name and provider-reported token volume, while the cost panels leave them out.
 
 ![Failures and source activity row showing hook failures, gateway errors, and telemetry source activity](../../../assets/screenshots/observability-failures-and-source-activity.png)
 

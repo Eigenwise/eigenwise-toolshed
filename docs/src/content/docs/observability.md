@@ -21,7 +21,7 @@ The skill handles the observer, dashboard setup, project wiring, and verificatio
 
 ## Daily use
 
-Open the configured loopback dashboard, usually `http://127.0.0.1:3000`, to compare usage across opted-in repositories or focus on one project. Use it to spot model and token use, tool activity, MCP activity, Sidequest costs, and failures. See the [dashboard guide](./dashboard/) for the main views.
+Open the configured loopback dashboard, usually `http://127.0.0.1:3000`, to compare usage across opted-in repositories or focus on one project. Use it to spot model and token use, API list-price-equivalent costs, tool activity, MCP activity, Sidequest costs, and failures. Estimated API-equivalent costs are not subscription charges. A model without a published API price appears in **Unpriced model token usage** with its resolved model name and token volume, while cost totals exclude it. See the [dashboard guide](./dashboard/) for the main views.
 
 To check setup or disable telemetry, run the same skill and describe what you want. Claude reports whether a project is sending data and tells you when a restart or more activity is needed.
 
