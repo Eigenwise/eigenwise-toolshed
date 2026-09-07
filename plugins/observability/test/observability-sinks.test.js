@@ -25,6 +25,8 @@ const {
   gatewayUnpricedModelUsageExpression,
   gatewayUnpricedModelUsageTargets,
   modelCostTargets,
+  modelRequestCost,
+  requestInputTokens,
   unpricedModelsExpression,
 } = require('../observability/sinks/grafana/model-prices.js');
 const posthog = require('../observability/sinks/posthog/index.js');
@@ -99,6 +101,12 @@ test('prices every active model label and token type from one table', () => {
     'gpt-5.6-luna',
     'gpt-5.6-sol',
     'gpt-5.6-terra',
+    'claude-gpt-6-astra',
+    'claude-gpt-6-astra[1m]',
+    'claude-gpt-6-astra-fast',
+    'claude-gpt-6-astra-fast[1m]',
+    'gpt-6-astra',
+    'gpt-6-astra-fast',
   ]) {
     assert.ok(MODEL_PRICES_PER_MILLION[model], `missing price for ${model}`);
   }
@@ -143,6 +151,38 @@ test('prices every active model label and token type from one table', () => {
   assert.match(gatewayTotalCostExpression('$__range'), /gateway\.token\.usage/);
 });
 
+test('prices Astra requests from their individual input totals and resolved backend labels', () => {
+  const atThreshold = { input: 100_000, cacheRead: 100_000, cacheCreation: 72_000, output: 100_000 };
+  const beyondThreshold = { input: 100_001, cacheRead: 100_000, cacheCreation: 72_000, output: 100_000 };
+
+  assert.equal(requestInputTokens(atThreshold), 272_000);
+  assert.equal(requestInputTokens(beyondThreshold), 272_001);
+  for (const model of ['claude-gpt-6-astra', 'claude-gpt-6-astra[1m]', 'gpt-6-astra']) {
+    assert.equal(modelRequestCost(model, atThreshold), 7, model);
+    assert.equal(modelRequestCost(model, beyondThreshold), 11.50002, model);
+  }
+  for (const model of ['claude-gpt-6-astra-fast', 'claude-gpt-6-astra-fast[1m]', 'gpt-6-astra-fast']) {
+    assert.equal(modelRequestCost(model, atThreshold), 14, model);
+    assert.equal(modelRequestCost(model, beyondThreshold), 23.00004, model);
+  }
+
+  const gatewayExpression = gatewayModelCostTargets()[0].expr;
+  assert.match(gatewayExpression, /workbench_attribute_model "gpt-6-astra"/);
+  assert.match(gatewayExpression, /workbench_attribute_model "gpt-6-astra-fast"/);
+  assert.match(gatewayExpression, /if gt \(add \(add \(default "0" \.workbench_measurement_input_tokens_value\) \(default "0" \.workbench_measurement_cache_read_tokens_value\)\) \(default "0" \.workbench_measurement_cache_creation_tokens_value\)\) 272000/);
+  assert.match(gatewayExpression, /}}2000{{ else }}1000{{ end }}/);
+  assert.match(gatewayExpression, /}}4000{{ else }}2000{{ end }}/);
+  assert.match(gatewayExpression, /}}15000{{ else }}10000{{ end }}/);
+
+  const modelTarget = gatewayModelCostTargets()[0].expr;
+  const projectTarget = gatewayProjectCostTargets([{ project_name: 'atlas' }])[0].expr;
+  const totalTarget = gatewayTotalCostExpression('$bucket');
+  for (const expression of [modelTarget, projectTarget, totalTarget]) {
+    assert.match(expression, /workbench_attribute_model "gpt-6-astra"/);
+    assert.match(expression, /workbench_attribute_model "gpt-6-astra-fast"/);
+  }
+});
+
 test('keeps unpriced resolved models visible without assigning them a cost', () => {
   const expression = gatewayUnpricedModelUsageExpression();
   const [, quotedPricePattern] = expression.match(/workbench_attribute_model !~ ("(?:[^"\\]|\\.)*")/);
@@ -151,8 +191,8 @@ test('keeps unpriced resolved models visible without assigning them a cost', () 
   assert.match(expression, /gateway\.token\.usage/);
   assert.doesNotMatch(expression, /workbench_attribute_requested_model/);
   assert.ok(priced.test('gpt-5.6-terra'));
-  assert.ok(!priced.test('gpt-6-astra'));
-  assert.ok(!priced.test('gpt-6-astra-fast'));
+  assert.ok(priced.test('gpt-6-astra'));
+  assert.ok(priced.test('gpt-6-astra-fast'));
   assert.ok(!priced.test('arbitrary-new-model'));
   for (const measurement of ['input_tokens', 'cache_read_tokens', 'cache_creation_tokens', 'output_tokens']) {
     assert.equal(
@@ -181,6 +221,12 @@ test('keeps only unknown exact model labels in the unpriced query', () => {
   assert.ok(priced.test('claude-gpt-5.6-luna'));
   assert.ok(priced.test('claude-codex-gpt-5.6-luna'));
   assert.ok(priced.test('claude-codex-auto'));
+  assert.ok(priced.test('claude-gpt-6-astra'));
+  assert.ok(priced.test('claude-gpt-6-astra[1m]'));
+  assert.ok(priced.test('claude-gpt-6-astra-fast'));
+  assert.ok(priced.test('claude-gpt-6-astra-fast[1m]'));
+  assert.ok(priced.test('gpt-6-astra'));
+  assert.ok(priced.test('gpt-6-astra-fast'));
   assert.ok(!priced.test('claude-opus-51'));
   assert.ok(!priced.test('claude-gpt-5.6-unknown'));
 });
@@ -471,7 +517,7 @@ test('provisions global and active per-project Grafana dashboards', (t) => {
   assert.equal(unpricedModelUsage.targets[0].legendFormat, '{{workbench_attribute_model}}');
   assert.match(unpricedModelUsage.targets[0].expr, /gateway\.token\.usage/);
   assert.doesNotMatch(unpricedModelUsage.targets[0].expr, /workbench_attribute_requested_model/);
-  assert.doesNotMatch(unpricedModelUsage.targets[0].expr, /gpt-6-astra/);
+  assert.match(unpricedModelUsage.targets[0].expr, /gpt-6-astra/);
   assert.equal((unpricedModelUsage.targets[0].expr.match(/sum_over_time/g) || []).length, 1);
 
   const totalSpend = global.panels.find(({ title }) => title === 'Total spend');

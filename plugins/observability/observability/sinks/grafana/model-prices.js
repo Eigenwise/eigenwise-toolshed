@@ -2,6 +2,8 @@
 
 // List-price equivalents: Anthropic pricing is from https://platform.claude.com/docs/en/pricing;
 // GPT-5.6 pricing is from https://openai.com/api/pricing/ (accessed 2026-07-25).
+// GPT-6 Astra pricing is from https://developers.openai.com/api/docs/models/gpt-6-astra
+// (accessed 2026-09-07). OpenAI applies its long-context rate to the full request.
 const ANTHROPIC_PRICES_PER_MILLION = {
   'claude-opus-4-6': { input: 5, cacheRead: 0.5, cacheCreation: 6.25, output: 25 },
   'claude-opus-4-7': { input: 5, cacheRead: 0.5, cacheCreation: 6.25, output: 25 },
@@ -23,6 +25,27 @@ const CODEX_PRICES_PER_MILLION = {
   'claude-gpt-5.6-luna': { input: 1, cacheRead: 0.1, cacheCreation: 1, output: 6 },
 };
 
+const ASTRA_INPUT_TOKEN_THRESHOLD = 272_000;
+const ASTRA_STANDARD_PRICES_PER_MILLION = {
+  short: { input: 10, cacheRead: 1, cacheCreation: 12.5, output: 50 },
+  long: { input: 20, cacheRead: 2, cacheCreation: 25, output: 75 },
+};
+const ASTRA_FAST_PRICES_PER_MILLION = {
+  short: { input: 20, cacheRead: 2, cacheCreation: 25, output: 100 },
+  long: { input: 40, cacheRead: 4, cacheCreation: 50, output: 150 },
+};
+
+function astraPrices(short, long) {
+  return { inputTokenThreshold: ASTRA_INPUT_TOKEN_THRESHOLD, short, long };
+}
+
+const CODEX_ASTRA_PRICES_PER_MILLION = {
+  'claude-gpt-6-astra': astraPrices(ASTRA_STANDARD_PRICES_PER_MILLION.short, ASTRA_STANDARD_PRICES_PER_MILLION.long),
+  'claude-gpt-6-astra[1m]': astraPrices(ASTRA_STANDARD_PRICES_PER_MILLION.short, ASTRA_STANDARD_PRICES_PER_MILLION.long),
+  'claude-gpt-6-astra-fast': astraPrices(ASTRA_FAST_PRICES_PER_MILLION.short, ASTRA_FAST_PRICES_PER_MILLION.long),
+  'claude-gpt-6-astra-fast[1m]': astraPrices(ASTRA_FAST_PRICES_PER_MILLION.short, ASTRA_FAST_PRICES_PER_MILLION.long),
+};
+
 // SQ-1004 renamed the advertised ids. Roughly half a million telemetry rows
 // carry the old labels, so they stay priced instead of falling into the
 // unpriced-models panel.
@@ -36,6 +59,8 @@ const GATEWAY_RESOLVED_MODEL_ALIASES = {
   'gpt-5.6-sol': CODEX_PRICES_PER_MILLION['claude-gpt-5.6-sol'],
   'gpt-5.6-terra': CODEX_PRICES_PER_MILLION['claude-gpt-5.6-terra'],
   'gpt-5.6-luna': CODEX_PRICES_PER_MILLION['claude-gpt-5.6-luna'],
+  'gpt-6-astra': CODEX_ASTRA_PRICES_PER_MILLION['claude-gpt-6-astra'],
+  'gpt-6-astra-fast': CODEX_ASTRA_PRICES_PER_MILLION['claude-gpt-6-astra-fast'],
 };
 
 const MODEL_PRICES_PER_MILLION = {
@@ -46,6 +71,7 @@ const MODEL_PRICES_PER_MILLION = {
   'claude-fable-5[1m]': ANTHROPIC_PRICES_PER_MILLION['claude-fable-5'],
   'claude-fable-5-1[1m]': ANTHROPIC_PRICES_PER_MILLION['claude-fable-5-1'],
   ...CODEX_PRICES_PER_MILLION,
+  ...CODEX_ASTRA_PRICES_PER_MILLION,
   ...LEGACY_CODEX_PRICES_PER_MILLION,
   ...GATEWAY_RESOLVED_MODEL_ALIASES,
 };
@@ -61,25 +87,59 @@ const GATEWAY_MEASUREMENT_BY_PRICE_TYPE = {
   output: 'output_tokens',
 };
 
+function isInputTieredPrice(prices) {
+  return Object.hasOwn(prices, 'inputTokenThreshold');
+}
+
+function requestInputTokens(tokenUsage) {
+  return ['input', 'cacheRead', 'cacheCreation'].reduce(
+    (total, type) => total + (Number.isFinite(tokenUsage[type]) ? tokenUsage[type] : 0),
+    0,
+  );
+}
+
+function pricesForRequest(prices, tokenUsage) {
+  if (!isInputTieredPrice(prices)) return prices;
+  return requestInputTokens(tokenUsage) > prices.inputTokenThreshold ? prices.long : prices.short;
+}
+
+function modelRequestCost(model, tokenUsage) {
+  const prices = MODEL_PRICES_PER_MILLION[model];
+  if (!prices) return null;
+  const requestPrices = pricesForRequest(prices, tokenUsage);
+  return Object.entries(GATEWAY_MEASUREMENT_BY_PRICE_TYPE).reduce(
+    (total, [type]) => total + ((Number.isFinite(tokenUsage[type]) ? tokenUsage[type] : 0) * requestPrices[type] / 1_000_000),
+    0,
+  );
+}
+
 function escapePromqlRegex(value) {
   return value.replace(/[\\^$.*+?()[\]{}|]/g, '\\\\$&');
 }
 
 function modelCostExpression(model, prices, bucket = '$bucket') {
+  if (isInputTieredPrice(prices)) {
+    throw new Error(`${model} requires per-request pricing from gateway.token.usage`);
+  }
   return Object.entries(prices).map(([type, price]) =>
     `sum(increase(claude_code_token_usage_tokens_total{model="${model}",type="${type}",project_id=~"$project"}[${bucket}])) * ${price / 1_000_000}`,
   ).join(' + ');
 }
 
 function clientModelPriceEntries() {
-  return Object.entries(MODEL_PRICES_PER_MILLION).filter(([model]) => !Object.hasOwn(GATEWAY_RESOLVED_MODEL_ALIASES, model));
+  return Object.entries(MODEL_PRICES_PER_MILLION).filter(([model, prices]) =>
+    !Object.hasOwn(GATEWAY_RESOLVED_MODEL_ALIASES, model) && !isInputTieredPrice(prices));
 }
 
 // Gateway records carry the model the backend actually ran, so the client-side
 // advertised ids are excluded by name. A prefix test can't do that any more:
 // the advertised ids now start with plain `claude-`, same as the Anthropic ones.
 function gatewayModelPriceEntries() {
-  const clientOnly = new Set([...Object.keys(CODEX_PRICES_PER_MILLION), ...Object.keys(LEGACY_CODEX_PRICES_PER_MILLION)]);
+  const clientOnly = new Set([
+    ...Object.keys(CODEX_PRICES_PER_MILLION),
+    ...Object.keys(CODEX_ASTRA_PRICES_PER_MILLION),
+    ...Object.keys(LEGACY_CODEX_PRICES_PER_MILLION),
+  ]);
   return Object.entries(MODEL_PRICES_PER_MILLION).filter(([model]) => !model.includes('[1m]') && !clientOnly.has(model));
 }
 
@@ -96,14 +156,20 @@ function escapeLogqlRegex(value) {
   return value.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
 }
 
+const GATEWAY_REQUEST_INPUT_TOKENS_TEMPLATE = '(add (add (default "0" .workbench_measurement_input_tokens_value) (default "0" .workbench_measurement_cache_read_tokens_value)) (default "0" .workbench_measurement_cache_creation_tokens_value))';
+
 // One leg per token type instead of one per (model, token type). The price moves into a
 // label so a single scan covers every model: 48 legs sharing one unnarrowed selector made
 // Loki reread the whole stream 48 times, measured at 229MB to return one number, against
 // a window holding ~5,500 entries (SQ-1521). Collapsed, the same window reads 18MB.
 function gatewayPriceTemplate(entries, type) {
+  const priceInCents = (price) => price * 100;
+  const requestPriceTemplate = ([, prices]) => {
+    if (!isInputTieredPrice(prices)) return priceInCents(prices[type]);
+    return `{{ if gt ${GATEWAY_REQUEST_INPUT_TOKENS_TEMPLATE} ${prices.inputTokenThreshold} }}${priceInCents(prices.long[type])}{{ else }}${priceInCents(prices.short[type])}{{ end }}`;
+  };
   const [first, ...rest] = entries;
-  const priceInCents = ([, prices]) => prices[type] * 100;
-  return `{{ if eq .workbench_attribute_model ${JSON.stringify(first[0])} }}${priceInCents(first)}${rest.map((entry) => `{{ else if eq .workbench_attribute_model ${JSON.stringify(entry[0])} }}${priceInCents(entry)}`).join('')}{{ else }}0{{ end }}`;
+  return `{{ if eq .workbench_attribute_model ${JSON.stringify(first[0])} }}${requestPriceTemplate(first)}${rest.map((entry) => `{{ else if eq .workbench_attribute_model ${JSON.stringify(entry[0])} }}${requestPriceTemplate(entry)}`).join('')}{{ else }}0{{ end }}`;
 }
 
 function gatewayUsageExpression(entries, type, bucket = '$bucket', extraFilter = '') {
@@ -207,5 +273,7 @@ module.exports = {
   gatewayUnpricedModelUsageTargets,
   modelCostExpression,
   modelCostTargets,
+  modelRequestCost,
+  requestInputTokens,
   unpricedModelsExpression,
 };
