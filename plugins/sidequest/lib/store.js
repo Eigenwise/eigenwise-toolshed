@@ -2349,18 +2349,20 @@ function makeWorkedBy(input) {
 function workingTreeDeliveryCandidate(slug, ticket) {
   const dispatch2 = dispatchState(ticket);
   const declaredFiles = Array.isArray(dispatch2?.declaredFiles) ? dispatch2.declaredFiles : [];
-  if (dispatch2?.workingTreeDelivery !== true || !Array.isArray(dispatch2.workingTreeDirtyBaseline) || !declaredFiles.length) return null;
-  const baseline = new Map(dispatch2.workingTreeDirtyBaseline.map((entry) => [dirtyPathKey(entry.path), entry]));
-  const current = artifactWorkingState(slug);
+  const baselineRecorded = Array.isArray(dispatch2?.workingTreeDirtyBaseline);
+  if (dispatch2?.workingTreeDelivery !== true || !declaredFiles.length) return null;
+  const baselineEntries = baselineRecorded ? dispatch2.workingTreeDirtyBaseline : [];
+  const baseline = new Map(baselineEntries.map((entry) => [dirtyPathKey(entry.path), entry]));
+  const current = artifactWorkingState(slug, { allowLarge: !baselineRecorded });
   const currentByPath = new Map(current.map((entry) => [dirtyPathKey(entry.path), entry]));
   const changed = /* @__PURE__ */ new Map();
-  for (const entry of dispatch2.workingTreeDirtyBaseline) {
+  for (const entry of baselineEntries) {
     if (!commitScope.isInScope(entry.path, declaredFiles)) continue;
     const currentEntry = currentByPath.get(dirtyPathKey(entry.path));
     if (!currentEntry || currentEntry.identity !== entry.identity) changed.set(entry.path, currentEntry?.identity || "missing");
   }
   for (const entry of current) {
-    if (commitScope.isInScope(entry.path, declaredFiles) && !baseline.has(dirtyPathKey(entry.path))) changed.set(entry.path, entry.identity);
+    if (commitScope.isInScope(entry.path, declaredFiles) && (!baselineRecorded || !baseline.has(dirtyPathKey(entry.path)))) changed.set(entry.path, entry.identity);
   }
   const paths = Array.from(changed.keys()).sort();
   return {
@@ -2376,17 +2378,19 @@ function workingTreeDeliveryCloseout(slug, ticket, completionDelta) {
   const candidate = workingTreeDeliveryCandidate(slug, ticket);
   if (!candidate) return { ok: false, reason: "working_tree_delivery_unavailable", message: `${ticket.ref} cannot inspect its pinned working-tree deliverable. Release it and dispatch again.` };
   const declaredFiles = dispatch2.declaredFiles;
-  const baseline = new Map(dispatch2.workingTreeDirtyBaseline.map((entry) => [dirtyPathKey(entry.path), entry]));
-  const current = artifactWorkingState(slug);
+  const baselineRecorded = Array.isArray(dispatch2.workingTreeDirtyBaseline);
+  const baselineEntries = baselineRecorded ? dispatch2.workingTreeDirtyBaseline : [];
+  const baseline = new Map(baselineEntries.map((entry) => [dirtyPathKey(entry.path), entry]));
+  const current = artifactWorkingState(slug, { allowLarge: !baselineRecorded });
   const currentByPath = new Map(current.map((entry) => [dirtyPathKey(entry.path), entry]));
   const outside = /* @__PURE__ */ new Set();
-  for (const entry of dispatch2.workingTreeDirtyBaseline) {
+  for (const entry of baselineEntries) {
     if (commitScope.isInScope(entry.path, declaredFiles)) continue;
     const currentEntry = currentByPath.get(dirtyPathKey(entry.path));
     if (!currentEntry || currentEntry.identity !== entry.identity) outside.add(entry.path);
   }
   for (const entry of current) {
-    if (!baseline.has(dirtyPathKey(entry.path)) && !commitScope.isInScope(entry.path, declaredFiles)) outside.add(entry.path);
+    if ((!baselineRecorded || !baseline.has(dirtyPathKey(entry.path))) && !commitScope.isInScope(entry.path, declaredFiles)) outside.add(entry.path);
   }
   if (outside.size) return { ok: false, reason: "working_tree_scope_violation", message: `${ticket.ref} changed paths outside its working-tree deliverable: ${Array.from(outside).sort().join(", ")}. Revert them or release the ticket.`, unscopedPaths: Array.from(outside).sort() };
   const committed = Array.isArray(completionDelta?.committed) ? completionDelta.committed.filter((file) => commitScope.isInScope(file, declaredFiles)) : [];
