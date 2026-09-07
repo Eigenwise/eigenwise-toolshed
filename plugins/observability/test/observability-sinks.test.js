@@ -22,6 +22,8 @@ const {
   gatewayModelCostTargets,
   gatewayProjectCostTargets,
   gatewayTotalCostExpression,
+  gatewayUnpricedModelUsageExpression,
+  gatewayUnpricedModelUsageTargets,
   modelCostTargets,
   unpricedModelsExpression,
 } = require('../observability/sinks/grafana/model-prices.js');
@@ -127,16 +129,43 @@ test('prices every active model label and token type from one table', () => {
   assert.match(gatewayTarget.expr, /workbench_measurement_cache_read_tokens_value/);
   assert.match(gatewayTarget.expr, /workbench_measurement_cache_creation_tokens_value/);
   assert.match(gatewayTarget.expr, /workbench_measurement_output_tokens_value/);
+  assert.match(gatewayTarget.expr, /if eq \.workbench_attribute_model "gpt-5\.6-terra" }}250/);
   assert.equal((gatewayTarget.expr.match(/sum_over_time/g) || []).length, 4);
   const projectTargets = gatewayProjectCostTargets([{ project_name: 'atlas' }]);
   assert.equal(projectTargets[0].legendFormat, 'atlas');
   assert.match(projectTargets[0].expr, /workbench_attribute_project_name = "atlas"/);
+  assert.match(projectTargets[0].expr, /if eq \.workbench_attribute_model "gpt-5\.6-terra" }}250/);
   assert.equal(projectTargets[1].legendFormat, 'Other / unattributed');
   assert.match(projectTargets[1].expr, /workbench_attribute_project_name !~ "atlas"/);
   for (const target of projectTargets) {
     assert.doesNotMatch(target.expr, /vector\(0\)/, `${target.legendFormat} would render as a permanent $0.00 row`);
   }
   assert.match(gatewayTotalCostExpression('$__range'), /gateway\.token\.usage/);
+});
+
+test('keeps unpriced resolved models visible without assigning them a cost', () => {
+  const expression = gatewayUnpricedModelUsageExpression();
+  const [, quotedPricePattern] = expression.match(/workbench_attribute_model !~ ("(?:[^"\\]|\\.)*")/);
+  const priced = new RegExp(`^(?:${JSON.parse(quotedPricePattern)})$`);
+
+  assert.match(expression, /gateway\.token\.usage/);
+  assert.doesNotMatch(expression, /workbench_attribute_requested_model/);
+  assert.ok(priced.test('gpt-5.6-terra'));
+  assert.ok(!priced.test('gpt-6-astra'));
+  assert.ok(!priced.test('gpt-6-astra-fast'));
+  assert.ok(!priced.test('arbitrary-new-model'));
+  for (const measurement of ['input_tokens', 'cache_read_tokens', 'cache_creation_tokens', 'output_tokens']) {
+    assert.equal(
+      (expression.match(new RegExp(`default "0" \\.workbench_measurement_${measurement}_value`, 'g')) || []).length,
+      1,
+      `${measurement} must be counted once`,
+    );
+  }
+  assert.match(expression, /unwrap workbench_measurement_total_tokens/);
+
+  const [target] = gatewayUnpricedModelUsageTargets();
+  assert.equal(target.legendFormat, '{{workbench_attribute_model}}');
+  assert.equal(target.expr, expression);
 });
 
 test('keeps only unknown exact model labels in the unpriced query', () => {
@@ -432,6 +461,18 @@ test('provisions global and active per-project Grafana dashboards', (t) => {
   assert.equal(costByModel.targets[0].legendFormat, '{{workbench_attribute_model}}');
   assert.match(costByModel.targets[0].expr, /gateway\.token\.usage/);
   assert.equal((costByModel.targets[0].expr.match(/sum_over_time/g) || []).length, 4);
+  assert.match(costByModel.description, /exclude models without published API pricing/);
+
+  const unpricedModelUsage = global.panels.find(({ title }) => title === 'Unpriced model token usage');
+  assert.equal(unpricedModelUsage.datasource.uid, 'loki');
+  assert.equal(unpricedModelUsage.interval, '$bucket');
+  assert.equal(unpricedModelUsage.fieldConfig.defaults.unit, 'short');
+  assert.equal(unpricedModelUsage.targets.length, 1);
+  assert.equal(unpricedModelUsage.targets[0].legendFormat, '{{workbench_attribute_model}}');
+  assert.match(unpricedModelUsage.targets[0].expr, /gateway\.token\.usage/);
+  assert.doesNotMatch(unpricedModelUsage.targets[0].expr, /workbench_attribute_requested_model/);
+  assert.doesNotMatch(unpricedModelUsage.targets[0].expr, /gpt-6-astra/);
+  assert.equal((unpricedModelUsage.targets[0].expr.match(/sum_over_time/g) || []).length, 1);
 
   const totalSpend = global.panels.find(({ title }) => title === 'Total spend');
   assert.equal(totalSpend.datasource.uid, 'loki');
@@ -468,6 +509,7 @@ test('provisions global and active per-project Grafana dashboards', (t) => {
   ]) assert.equal(atlasTitles.has(globalOnlyTitle), false, globalOnlyTitle);
   assert.equal(atlasTitles.has('Work routed to Codex'), true);
   assert.equal(atlasTitles.has('Cost by model'), true);
+  assert.equal(atlasTitles.has('Unpriced model token usage'), true);
   const atlasExpressions = atlas.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
   for (const expression of atlasExpressions.filter((expression) => expression.includes('claude_code_'))) {
     assert.match(expression, /project_id="atlas"/);
@@ -606,7 +648,7 @@ test('Grafana dashboard answers cost, attribution, role, and reliability questio
   const dashboard = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'observability', 'sinks', 'grafana', 'dashboards', 'claude-code-usage.json'), 'utf8'));
   const byTitle = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
 
-  assert.equal(dashboard.panels.length, 18);
+  assert.equal(dashboard.panels.length, 19);
   assert.deepEqual(
     dashboard.panels.filter(({ type }) => type === 'row').map(({ title }) => title),
     ['At a glance', 'Where the spend goes', 'Failures and source activity', 'Context recharge'],
@@ -614,7 +656,7 @@ test('Grafana dashboard answers cost, attribution, role, and reliability questio
   assert.equal(dashboard.panels.some(({ type }) => type === 'table'), false);
 
   for (const title of [
-    'Cost by model', 'Cost by project',
+    'Cost by model', 'Cost by project', 'Unpriced model token usage',
     'Context by orchestrator vs executor', 'Hook failures over time', 'Gateway errors and throttles',
     'Assistant turns by project', 'Tool-result bytes by tool', 'Recharge-weighted result bytes by tool',
   ]) {
@@ -633,12 +675,16 @@ test('Grafana dashboard answers cost, attribution, role, and reliability questio
     assert.match(health.fieldConfig.defaults.noValue, /No samples/);
   }
 
-  for (const title of ['Cost by model', 'Cost by project', 'Context by orchestrator vs executor']) {
+  for (const title of ['Cost by model', 'Cost by project', 'Unpriced model token usage', 'Context by orchestrator vs executor']) {
     assert.equal(byTitle.get(title).maxDataPoints, 120, `${title} must cap browser rendering work`);
   }
   assert.equal(byTitle.get('Total spend').datasource.uid, 'loki');
   assert.equal(byTitle.get('Cost by model').datasource.uid, 'loki');
   assert.equal(byTitle.get('Cost by model').fieldConfig.defaults.decimals, 2);
+  assert.match(byTitle.get('Cost by model').description, /exclude models without published API pricing/);
+  assert.equal(byTitle.get('Unpriced model token usage').datasource.uid, 'loki');
+  assert.equal(byTitle.get('Unpriced model token usage').fieldConfig.defaults.unit, 'short');
+  assert.match(byTitle.get('Unpriced model token usage').description, /usage, not USD/);
   assert.equal(byTitle.get('Cost by project').datasource.uid, 'loki');
   assert.equal(byTitle.get('Cost by project').fieldConfig.defaults.decimals, 2);
   assert.equal(byTitle.get('Work routed to Codex').options.textMode, 'value');
@@ -696,12 +742,22 @@ test('every generated dashboard lays out in full-width bands with no overlaps or
     const ordered = dashboard.panels.map(({ gridPos }) => gridPos.y * 24 + gridPos.x);
     assert.deepEqual(ordered, [...ordered].sort((left, right) => left - right), `${fileName} panels are out of layout order`);
   }
-  const [, perProject] = dashboards;
+  const [global, perProject] = dashboards;
+  const globalByTitle = new Map(global.dashboard.panels.map((panel) => [panel.title, panel]));
+  assert.deepEqual(
+    ['Cost by project', 'Unpriced model token usage', 'Context by orchestrator vs executor']
+      .map((title) => globalByTitle.get(title).gridPos.w),
+    [8, 8, 8],
+  );
   const byTitle = new Map(perProject.dashboard.panels.map((panel) => [panel.title, panel]));
   assert.equal(byTitle.get('Total spend').gridPos.w, 8);
   assert.equal(byTitle.get('Work routed to Codex').gridPos.w, 8);
   assert.equal(byTitle.get('Tool failure rate').gridPos.x, 16);
   assert.equal(byTitle.get('Cost by model').gridPos.w, 24);
+  assert.deepEqual(
+    ['Unpriced model token usage', 'Context by orchestrator vs executor'].map((title) => byTitle.get(title).gridPos.w),
+    [12, 12],
+  );
   assert.equal(byTitle.get('Hook failures over time').gridPos.w, 24);
   assert.deepEqual(
     ['Claude metric samples, 5m', 'Observer records, 5m'].map((title) => byTitle.get(title).gridPos.w),

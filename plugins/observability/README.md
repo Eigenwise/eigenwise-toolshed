@@ -27,7 +27,7 @@ Claude asks for consent, handles the local observer and optional dashboard, and 
 
 ## Use the dashboard
 
-Open the configured loopback dashboard, usually `http://127.0.0.1:3000`, to compare opted-in projects and inspect one project at a time. It shows token and model use, tool and MCP activity, Sidequest costs, failures, and context recharge.
+Open the configured loopback dashboard, usually `http://127.0.0.1:3000`, to compare opted-in projects and inspect one project at a time. It shows token and model use, API list-price-equivalent costs, tool and MCP activity, Sidequest costs, failures, and context recharge. Those cost panels are estimates, not subscription charges. Models without a published API price stay visible in **Unpriced model token usage** with token volumes instead of a made-up dollar total.
 
 There are no routine observer commands to remember. Claude keeps the managed local services running and handles setup, verification, repair, and disable flows through the bundled skill.
 
