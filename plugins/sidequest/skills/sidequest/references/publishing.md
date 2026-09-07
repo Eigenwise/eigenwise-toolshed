@@ -63,6 +63,7 @@ gate covers the newer target content. An assembly refusal leaves every submitted
   `--delivery-method reset|working-tree|manual` and evidence naming the mechanism. Sidequest compares
   every submitted path against the integration working tree, reruns the delivery gate, then records
   the pinned candidate with the observed integration revision. A missing or different path refuses.
+- When a working-tree delivery cannot record its initial dirty baseline, it still dispatches without an inherited-path exemption, so every dirty path is attributed to the executor at closeout.
 
 Set the board default with `sidequest board-config --delivery merge|replay|apply`. Consumer boards
 usually want `apply` or `replay`; use `merge` where the repository's release flow owns integration.

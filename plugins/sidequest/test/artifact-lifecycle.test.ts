@@ -322,6 +322,60 @@ test('a shared-tree working-tree deliverable closes with its scoped paths and pi
   assert.strictEqual(done.ticket.completion.workingTree.verification.status, 'passed');
 });
 
+test('working-tree dispatch records a warning and attributes every path when the dirty baseline exceeds its cap', () => {
+  const paths = Array.from({ length: 501 }, (_, index) => `caller-dirt/path-${String(index).padStart(3, '0')}.txt`);
+  for (const relativePath of paths) writeProjectFile(relativePath, `${relativePath}\n`);
+  execFileSync('git', ['add', '--', ...paths], { cwd: PROJECT, windowsHide: true });
+  const created = store.createTicket(slug, {
+    title: 'deliver a large staged working tree',
+    description: 'Leave the declared staged paths in the shared checkout.',
+    category: 'repository-write',
+    files: ['caller-dirt'],
+    workingTreeDelivery: true,
+    source: 'mcp',
+  });
+
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+
+  assert.strictEqual(prepared.ticket.dispatch.workingTreeDirtyBaseline, null);
+  assert.ok(prepared.warnings?.includes('dirty baseline has 501 paths, over the 500-path cap; no inherited-path exemption for this dispatch'));
+  const candidate = store.workingTreeDeliveryCandidate(slug, store.getTicket(slug, created.ref));
+  assert.ok(candidate);
+  assert.deepStrictEqual(candidate.changedPaths, paths);
+});
+
+test('working-tree dispatch warns with the Git status failure and still prepares', () => {
+  const created = store.createTicket(slug, {
+    title: 'deliver despite a failing Git status',
+    description: 'Leave the declared paths in the shared checkout.',
+    category: 'repository-write',
+    files: ['caller-dirt'],
+    workingTreeDelivery: true,
+    source: 'mcp',
+  });
+  const indexPath = path.join(PROJECT, '.git', 'index');
+  const backupPath = `${indexPath}.backup`;
+  fs.renameSync(indexPath, backupPath);
+  fs.writeFileSync(indexPath, 'broken index');
+  try {
+    const gitStatus = spawnSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], {
+      cwd: PROJECT,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    assert.notStrictEqual(gitStatus.status, 0);
+    const gitMessage = String(gitStatus.stderr || gitStatus.stdout).trim();
+
+    const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+
+    assert.strictEqual(prepared.ticket.dispatch.workingTreeDirtyBaseline, null);
+    assert.ok(prepared.warnings?.includes(`dirty baseline could not be recorded: ${gitMessage}; no inherited-path exemption for this dispatch`));
+  } finally {
+    fs.rmSync(indexPath, { force: true });
+    fs.renameSync(backupPath, indexPath);
+  }
+});
+
 test('read-only done ignores dirty paths outside its declared scope', () => {
   const relativePath = 'readonly-undisclosed.txt';
   const created = ticket('read clean repository', 'Inspect without modifying the repository.', ['.claude/.codebase-info']);

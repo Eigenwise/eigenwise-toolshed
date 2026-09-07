@@ -293,7 +293,39 @@ function artifactPathIdentity(root?: any, file?: any) {
   return [kind, stat.mode, stat.size, stat.dev, stat.ino, content].map((value) => String(value == null ? '' : value)).join(':');
 }
 
-function artifactWorkingState(slug?: any) {
+class DirtyBaselinePathCapError extends Error {
+  pathCount: number;
+
+  constructor(pathCount: number) {
+    super(`artifact dirty baseline has ${pathCount} paths, over the ${ARTIFACT_BASELINE_MAX_PATHS}-path cap`);
+    this.name = 'DirtyBaselinePathCapError';
+    this.pathCount = pathCount;
+  }
+}
+
+function artifactIndexStates(root: string, files: string[]) {
+  const indexStates = new Map<string, string>();
+  const uniqueFiles = Array.from(new Set(files));
+  const batchSize = 250;
+  for (let offset = 0; offset < uniqueFiles.length; offset += batchSize) {
+    const output = execFileSync('git', ['ls-files', '--stage', '-z', '--', ...uniqueFiles.slice(offset, offset + batchSize)], {
+      cwd: root,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    for (const entry of output.split('\0')) {
+      if (!entry) continue;
+      const separator = entry.indexOf('\t');
+      if (separator < 0) continue;
+      const file = entry.slice(separator + 1).replace(/\\/g, '/');
+      const key = dirtyPathKey(file);
+      indexStates.set(key, `${indexStates.get(key) || ''}${entry}\0`);
+    }
+  }
+  return indexStates;
+}
+
+function artifactWorkingState(slug?: any, options?: any) {
   const meta = readMeta(slug);
   if (!meta || !meta.path) throw new Error('the board project path is unavailable');
   const output = execFileSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], {
@@ -314,20 +346,16 @@ function artifactWorkingState(slug?: any) {
       if (previous) states.push({ file: previous.replace(/\\/g, '/'), status: `${status}:source` });
     }
   }
-  if (states.length > ARTIFACT_BASELINE_MAX_PATHS) {
-    throw new Error(`artifact dirty baseline exceeds ${ARTIFACT_BASELINE_MAX_PATHS} paths`);
+  if (options?.allowLarge !== true && states.length > ARTIFACT_BASELINE_MAX_PATHS) {
+    throw new DirtyBaselinePathCapError(states.length);
   }
+  const indexStates = artifactIndexStates(meta.path, states.map((entry) => entry.file));
   return states
     .map((entry) => {
-      const indexState = execFileSync('git', ['ls-files', '--stage', '-z', '--', entry.file], {
-        cwd: meta.path,
-        encoding: 'utf8',
-        windowsHide: true,
-      });
       const identity = crypto.createHash('sha256')
         .update(JSON.stringify({
           status: entry.status,
-          index: indexState,
+          index: indexStates.get(dirtyPathKey(entry.file)) || '',
           worktree: artifactPathIdentity(meta.path, entry.file),
         }))
         .digest('hex');
@@ -344,9 +372,19 @@ function artifactWorkingState(slug?: any) {
 // dispatch.
 function captureDirtyBaseline(slug?: any) {
   try {
-    return artifactWorkingState(slug);
-  } catch (_) {
-    return null;
+    return { baseline: artifactWorkingState(slug), warning: null };
+  } catch (error: any) {
+    if (error instanceof DirtyBaselinePathCapError) {
+      return {
+        baseline: null,
+        warning: `dirty baseline has ${error.pathCount} paths, over the ${ARTIFACT_BASELINE_MAX_PATHS}-path cap; no inherited-path exemption for this dispatch`,
+      };
+    }
+    const detail = String(error?.stderr || error?.message || error).trim();
+    return {
+      baseline: null,
+      warning: `dirty baseline could not be recorded: ${detail}; no inherited-path exemption for this dispatch`,
+    };
   }
 }
 
@@ -1377,10 +1415,8 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const declaredFiles = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(effectiveFiles, t.files, t.ref);
     const artifactScope = artifactMode ? effectiveFiles[0] : null;
     const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
-    const workingTreeDirtyBaseline = workingTreeDelivery ? captureDirtyBaseline(slug) : null;
-    if (workingTreeDelivery && !workingTreeDirtyBaseline) {
-      throw new Error(`prepare dispatch: ${t.ref} working-tree deliverable requires a readable Git working tree.`);
-    }
+    const dirtyBaselineCapture = sharedTree && !artifactMode ? captureDirtyBaseline(slug) : null;
+    const workingTreeDirtyBaseline = workingTreeDelivery ? dirtyBaselineCapture?.baseline || null : null;
     t.dispatchExecutor = stableExecutorName(t, artifactMode || workingTreeDelivery);
     const launchSeq = nextDispatchLaunchSeq(current);
     const story = t.storyId ? getStory(slug, t.storyId) : null;
@@ -1497,8 +1533,9 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       artifactRoot,
       artifactScope,
       ...(artifactMode ? { artifactDirtyBaseline } : {}),
+      ...(dirtyBaselineCapture?.warning ? { dirtyBaselineWarning: dirtyBaselineCapture.warning } : {}),
       ...(workingTreeDelivery ? { workingTreeDelivery: true, workingTreeDirtyBaseline } : {}),
-      ...(sharedTree ? { dirtyBaseline: artifactDirtyBaseline || workingTreeDirtyBaseline || captureDirtyBaseline(slug) } : {}),
+      ...(sharedTree ? { dirtyBaseline: artifactDirtyBaseline || dirtyBaselineCapture?.baseline || null } : {}),
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       tokenFile: newDispatchTokenFile(),
       executor: t.dispatchExecutor,
@@ -1532,7 +1569,8 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     writeDispatchTokenFile(t);
     stampDispatchEvent(t, 'dispatch', now);
     putTicket(slug, t);
-    return { ok: true, ticket: t, token: t.dispatchNonce, recovery, ...(localAheadWarning ? { warnings: [localAheadWarning.message] } : {}) };
+    const warnings = [localAheadWarning?.message, dirtyBaselineCapture?.warning].filter(Boolean);
+    return { ok: true, ticket: t, token: t.dispatchNonce, recovery, ...(warnings.length ? { warnings } : {}) };
   });
 }
 
