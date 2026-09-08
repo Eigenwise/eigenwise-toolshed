@@ -648,7 +648,7 @@ test('instant dispatch returns a stable executor, fetch stub, and token', () => 
   assert.equal(dispatched.ref, ref);
   assert.equal(dispatched.mode, 'instant');
   assert.equal(dispatched.agent, 'sidequest-exec-dispatch');
-  assert.equal(dispatched.spawn.subagent_type, dispatched.agent);
+  assert.equal(dispatched.spawn.subagent_type, `sidequest:${dispatched.agent}`);
   assert.equal(dispatched.tokenPrefix, dispatched.token.slice(0, 12));
   assert.equal(Object.hasOwn(dispatched, 'briefing'), false);
   assert.ok(Buffer.byteLength(dispatched.spawn.prompt) < 1200);
@@ -678,7 +678,7 @@ test('instant dispatch sends Haiku through its stable executor with a Haiku spaw
   const dispatched = cliJson(['dispatch', ref, '--unverified-transport', '--allow-unscoped']);
   assert.equal(dispatched.mode, 'instant');
   assert.equal(dispatched.agent, 'sidequest-exec-medium');
-  assert.equal(dispatched.spawn.subagent_type, 'sidequest-exec-medium');
+  assert.equal(dispatched.spawn.subagent_type, 'sidequest:sidequest-exec-medium');
   assert.equal(dispatched.spawn.model, 'haiku');
   assert.equal(ticket(ref).dispatchExecutor, 'sidequest-exec-medium');
 });

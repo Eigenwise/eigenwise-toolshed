@@ -1,3 +1,4 @@
+import { canonicalExecutorName } from '../lib/exec-names.js';
 import { isRecord, readStdin, stringField } from './shared/input.js';
 import { writeSystemMessage } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
@@ -30,7 +31,7 @@ function main(): void {
   const toolInput = input.tool_input;
   const launches = dispatchLaunches(toolInput.prompt);
   const projectArg = projectFromPrompt(toolInput.prompt) || stringField(input, 'cwd') || process.env.CLAUDE_PROJECT_DIR;
-  const executor = typeof toolInput.subagent_type === 'string' ? toolInput.subagent_type : '';
+  const executor = canonicalExecutorName(typeof toolInput.subagent_type === 'string' ? toolInput.subagent_type : '');
   if (!launches.length || !projectArg || !executor) return;
 
   const store = require(runtimeModule('store')) as {

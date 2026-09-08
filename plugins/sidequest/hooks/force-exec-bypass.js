@@ -30,6 +30,117 @@ var import_node_path3 = __toESM(require("node:path"));
 
 // src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
+
+// src/lib/exec-names.ts
+var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
+var CLAUDE_PREFIX = "sidequest-exec-";
+var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
+var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
+function isEffort(value) {
+  return typeof value === "string" && EFFORTS.includes(value);
+}
+var AGENT_NAME_MAX_LENGTH = 64;
+var LAUNCH_SLUG_MAX_WORDS = 3;
+var LAUNCH_SLUG_MAX_LENGTH = 24;
+var ROUTE_MODEL_TOKEN_MAX_LENGTH = 24;
+var LAUNCH_SLUG_FILLER = /* @__PURE__ */ new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "but",
+  "by",
+  "for",
+  "from",
+  "in",
+  "into",
+  "is",
+  "it",
+  "its",
+  "of",
+  "on",
+  "or",
+  "over",
+  "per",
+  "that",
+  "the",
+  "their",
+  "then",
+  "this",
+  "to",
+  "under",
+  "via",
+  "when",
+  "while",
+  "with",
+  "without"
+]);
+function slugTokens(value) {
+  return String(value == null ? "" : value).normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+}
+function refSlug(ref) {
+  return slugTokens(ref).join("-");
+}
+function titleSlug(title) {
+  const tokens = slugTokens(title);
+  const meaningful = tokens.filter((token) => !LAUNCH_SLUG_FILLER.has(token));
+  const chosen = (meaningful.length ? meaningful : tokens).slice(0, LAUNCH_SLUG_MAX_WORDS);
+  let slug = "";
+  for (const token of chosen) {
+    const next = slug ? `${slug}-${token}` : token;
+    if (next.length > LAUNCH_SLUG_MAX_LENGTH) break;
+    slug = next;
+  }
+  if (!slug && chosen.length) slug = String(chosen[0]).slice(0, LAUNCH_SLUG_MAX_LENGTH);
+  return slug;
+}
+function routeModelToken(resolvedExec) {
+  if (!resolvedExec || typeof resolvedExec !== "object") return "";
+  const exec = resolvedExec;
+  const isClaude = exec.backend === "claude";
+  const value = isClaude ? String(exec.runsModel || exec.dispatchModel || "") : String(exec.runsLabel || exec.dispatchModel || exec.runsModel || "");
+  const tokens = slugTokens(value).filter((token2) => !isClaude || token2 !== "claude");
+  const token = isClaude ? tokens.join("-") : tokens.at(-1) || "";
+  return token.slice(0, ROUTE_MODEL_TOKEN_MAX_LENGTH);
+}
+function dispatchLaunchName(ref, title, resolvedExec, effort, sequence) {
+  const base = refSlug(ref) || "sidequest";
+  const model = routeModelToken(resolvedExec);
+  const routeEffort = isEffort(effort) ? effort : "";
+  const route = [model, routeEffort].filter(Boolean);
+  const seq = Number(sequence);
+  const suffix = Number.isInteger(seq) && seq > 1 ? `-${seq}` : "";
+  const fixedName = [base, ...route].join("-") + suffix;
+  const availableTitleLength = AGENT_NAME_MAX_LENGTH - fixedName.length - 1;
+  const slug = titleSlug(title).slice(0, Math.max(availableTitleLength, 0)).replace(/-+$/, "");
+  return slug ? [base, slug, ...route].join("-") + suffix : fixedName;
+}
+var DISPATCH_NAME = "sidequest-exec-dispatch";
+var READ_ONLY_DISPATCH_NAME = "sidequest-exec-dispatch-readonly";
+function stableClaudeName(effort) {
+  return `${CLAUDE_PREFIX}${effort}`;
+}
+function stableReadOnlyClaudeName(effort) {
+  return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
+}
+var BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
+  DISPATCH_NAME,
+  READ_ONLY_DISPATCH_NAME,
+  DIAGNOSTIC_PROBE_NAME,
+  ...EFFORTS.map(stableClaudeName),
+  ...EFFORTS.map(stableReadOnlyClaudeName)
+]);
+var PLUGIN_NAMESPACE = "sidequest:";
+function canonicalExecutorName(name) {
+  if (!name.startsWith(PLUGIN_NAMESPACE)) return name;
+  const unqualifiedName = name.slice(PLUGIN_NAMESPACE.length);
+  return BUNDLED_AGENT_NAMES.has(unqualifiedName) ? unqualifiedName : name;
+}
+
+// src/hooks/shared/input.ts
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -38,7 +149,12 @@ function readStdin() {
     const raw = import_node_fs.default.readFileSync(0, "utf8");
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    return isRecord(parsed) ? parsed : null;
+    if (!isRecord(parsed)) return null;
+    for (const field of ["agent_type", "agentType", "subagent_type"]) {
+      const executor = parsed[field];
+      if (typeof executor === "string") parsed[field] = canonicalExecutorName(executor);
+    }
+    return parsed;
   } catch (_) {
     return null;
   }
@@ -155,92 +271,6 @@ function readSessionState(file) {
 function writeSessionState(file, state) {
   import_node_fs2.default.mkdirSync(import_node_path2.default.dirname(file), { recursive: true });
   import_node_fs2.default.writeFileSync(file, JSON.stringify(state));
-}
-
-// src/lib/exec-names.ts
-var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
-var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
-function isEffort(value) {
-  return typeof value === "string" && EFFORTS.includes(value);
-}
-var AGENT_NAME_MAX_LENGTH = 64;
-var LAUNCH_SLUG_MAX_WORDS = 3;
-var LAUNCH_SLUG_MAX_LENGTH = 24;
-var ROUTE_MODEL_TOKEN_MAX_LENGTH = 24;
-var LAUNCH_SLUG_FILLER = /* @__PURE__ */ new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "as",
-  "at",
-  "be",
-  "but",
-  "by",
-  "for",
-  "from",
-  "in",
-  "into",
-  "is",
-  "it",
-  "its",
-  "of",
-  "on",
-  "or",
-  "over",
-  "per",
-  "that",
-  "the",
-  "their",
-  "then",
-  "this",
-  "to",
-  "under",
-  "via",
-  "when",
-  "while",
-  "with",
-  "without"
-]);
-function slugTokens(value) {
-  return String(value == null ? "" : value).normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
-}
-function refSlug(ref) {
-  return slugTokens(ref).join("-");
-}
-function titleSlug(title) {
-  const tokens = slugTokens(title);
-  const meaningful = tokens.filter((token) => !LAUNCH_SLUG_FILLER.has(token));
-  const chosen = (meaningful.length ? meaningful : tokens).slice(0, LAUNCH_SLUG_MAX_WORDS);
-  let slug = "";
-  for (const token of chosen) {
-    const next = slug ? `${slug}-${token}` : token;
-    if (next.length > LAUNCH_SLUG_MAX_LENGTH) break;
-    slug = next;
-  }
-  if (!slug && chosen.length) slug = String(chosen[0]).slice(0, LAUNCH_SLUG_MAX_LENGTH);
-  return slug;
-}
-function routeModelToken(resolvedExec) {
-  if (!resolvedExec || typeof resolvedExec !== "object") return "";
-  const exec = resolvedExec;
-  const isClaude = exec.backend === "claude";
-  const value = isClaude ? String(exec.runsModel || exec.dispatchModel || "") : String(exec.runsLabel || exec.dispatchModel || exec.runsModel || "");
-  const tokens = slugTokens(value).filter((token2) => !isClaude || token2 !== "claude");
-  const token = isClaude ? tokens.join("-") : tokens.at(-1) || "";
-  return token.slice(0, ROUTE_MODEL_TOKEN_MAX_LENGTH);
-}
-function dispatchLaunchName(ref, title, resolvedExec, effort, sequence) {
-  const base = refSlug(ref) || "sidequest";
-  const model = routeModelToken(resolvedExec);
-  const routeEffort = isEffort(effort) ? effort : "";
-  const route = [model, routeEffort].filter(Boolean);
-  const seq = Number(sequence);
-  const suffix = Number.isInteger(seq) && seq > 1 ? `-${seq}` : "";
-  const fixedName = [base, ...route].join("-") + suffix;
-  const availableTitleLength = AGENT_NAME_MAX_LENGTH - fixedName.length - 1;
-  const slug = titleSlug(title).slice(0, Math.max(availableTitleLength, 0)).replace(/-+$/, "");
-  return slug ? [base, slug, ...route].join("-") + suffix : fixedName;
 }
 
 // src/hooks/force-exec-bypass.ts
@@ -899,7 +929,7 @@ function main() {
   if (toolName !== "Agent") return;
   const toolInput = toolInputOf(input);
   if (!toolInput) return;
-  const type = String(toolInput.subagent_type || "");
+  const type = canonicalExecutorName(String(toolInput.subagent_type || ""));
   const classification = classifyExecutor(type);
   if (isSubagentCaller(input) && !isCurrentExecutor(classification)) {
     rewriteExecutorHelper(input, toolInput, type);

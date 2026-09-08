@@ -119,7 +119,7 @@ test('native-agent applies explicit route override refusals before spawning', ()
   assert.equal(sameProviderResult.status, 0, sameProviderResult.stderr);
   const spawned = JSON.parse(sameProviderResult.stdout);
   assert.equal(spawned.effort, 'high');
-  assert.equal(spawned.spawn.subagent_type, 'sidequest-exec-dispatch');
+  assert.equal(spawned.spawn.subagent_type, 'sidequest:sidequest-exec-dispatch');
 });
 
 export {};

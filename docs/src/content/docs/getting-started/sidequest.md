@@ -120,6 +120,8 @@ Claude's persistent Sidequest Monitor runs `sidequest watch --project <path>`. T
 
 **Claude reports an older loaded Sidequest after an upgrade.** Reload plugins or start a new session to pick up the current connection and packaged executor roster. Sidequest 4.48.1 and newer can finish compatible dispatches across that version skew, and Claude reports it instead of stopping the current release session. Unknown versions, schema changes, and older loaded versions still refuse dispatch until reload.
 
+**Claude says an executor is missing, but lists a `sidequest:` version of it.** Update Sidequest, then reload plugins in the affected session and ask Claude to dispatch again. Bundled executors use plugin-qualified types such as `sidequest:sidequest-exec-dispatch-readonly`; dispatch supplies that exact type. Older releases returned the bare name and rejected the qualified one, so reloading an unchanged release cannot repair it. Do not create replacement agents or disable the dispatch guard.
+
 **A prior Sidequest release left executor files in your Claude agents folder.** Start a new Sidequest session after the upgrade. Maintenance removes only files bearing a recognized Sidequest generation marker, including retired Codex route combinations. It leaves custom agents, even files with a Sidequest executor name, untouched.
 
 **A ticket will not dispatch.** Ask Claude to diagnose the ticket. Common causes are an incomplete work description, a blocked dependency, or an unavailable configured route. Claude reports the specific recovery instead of silently changing the work's route.

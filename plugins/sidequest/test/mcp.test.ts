@@ -3891,7 +3891,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.equal(instant.spawn.description, 'Terra, high · instant dispatch');
   assert.equal(instant.spawn.name, `${addedInstant.ref.toLowerCase()}-instant-dispatch-terra-high`);
   assert.equal(instant.spawn.model, undefined);
-  assert.equal(instant.spawn.subagent_type, instant.agent);
+  assert.equal(instant.spawn.subagent_type, `sidequest:${instant.agent}`);
   assert.equal(instant.tokenPrefix, instant.token.slice(0, 12));
   assert.equal(Object.hasOwn(instant, 'briefing'), false);
   assert.ok(Buffer.byteLength(instant.spawn.prompt) < 1200, `dispatch stub is ${Buffer.byteLength(instant.spawn.prompt)} bytes`);
@@ -3940,7 +3940,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   store.setCategory({ id: 'dispatch-readonly-codex', name: 'Dispatch Readonly Codex', readonly: true, route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
   const readonlyTicket = await callTool('add', { title: 'friendly readonly dispatch', description: DISPATCH_DESCRIPTION, category: 'dispatch-readonly-codex' });
   const readonlyDispatch = await callTool('dispatch', { allowUnscoped: true, ref: readonlyTicket.ref, full: true });
-  assert.equal(readonlyDispatch.spawn.subagent_type, 'sidequest-exec-dispatch-readonly');
+  assert.equal(readonlyDispatch.spawn.subagent_type, 'sidequest:sidequest-exec-dispatch-readonly');
   assert.equal(readonlyDispatch.spawn.description, 'Terra, high · friendly readonly dispatch');
   assert.doesNotMatch(readonlyDispatch.spawn.description, /\[sidequest-route/);
 });
@@ -4004,7 +4004,7 @@ test('dispatch returns a complete Claude worktree spawn spec', async () => {
 
   const { prompt, ...spawn } = dispatched.spawn;
   assert.deepStrictEqual(spawn, {
-    subagent_type: 'sidequest-exec-xhigh',
+    subagent_type: 'sidequest:sidequest-exec-xhigh',
     name: `${added.ref.toLowerCase()}-complete-instant-spawn-fable-xhigh`,
     mode: 'bypassPermissions',
     description: 'Claude Fable, xhigh · complete instant spawn',
@@ -4102,7 +4102,7 @@ test('native_agent carries ticket anchors and verify command through its stable 
     const native = await callHandler('native_agent', { ref: added.ref, prompt: 'Implement exactly this ticket.' });
     assert.strictEqual(native.fallback, true);
     assert.strictEqual(native.file, null);
-    assert.strictEqual(native.spawn.subagent_type, 'sidequest-exec-dispatch');
+    assert.strictEqual(native.spawn.subagent_type, 'sidequest:sidequest-exec-dispatch');
     assert.strictEqual(native.spawn.description, 'Terra, high · prompt context');
     assert.strictEqual(native.spawn.name, `${added.ref.toLowerCase()}-prompt-context-terra-high`);
     assert.strictEqual(native.spawn.model, undefined);
@@ -4142,7 +4142,7 @@ test('native_agent applies explicit ticket route override refusals before spawni
 
     const native = await callHandler('native_agent', { ref: sameProvider.ref, prompt: 'Implement the ticket.' });
     assert.equal(native.effort, 'high');
-    assert.equal(native.spawn.subagent_type, 'sidequest-exec-dispatch');
+    assert.equal(native.spawn.subagent_type, 'sidequest:sidequest-exec-dispatch');
   } finally {
     clearCatalog();
   }
@@ -4154,7 +4154,7 @@ test('native_agent returns a complete Claude worktree spawn spec', async () => {
   const native = await callHandler('native_agent', { ref: added.ref, prompt: 'Implement the ticket.' });
 
   assert.deepStrictEqual(native.spawn, {
-    subagent_type: 'sidequest-exec-xhigh',
+    subagent_type: 'sidequest:sidequest-exec-xhigh',
     name: added.ref.toLowerCase() + '-complete-native-spawn-fable-xhigh',
     mode: 'bypassPermissions',
     description: 'Claude Fable, xhigh · complete native spawn',

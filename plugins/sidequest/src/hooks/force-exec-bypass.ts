@@ -8,7 +8,7 @@ import { runtimeModule } from './shared/paths.js';
 import { readSessionState, sessionStateFile, writeSessionState } from './shared/session-state.js';
 // Dependency-free, so bundling it keeps launch naming identical in the hook and
 // in the store even when the installed lib is mid-upgrade.
-import { dispatchLaunchName, DIAGNOSTIC_PROBE_NAME } from '../lib/exec-names.js';
+import { canonicalExecutorName, dispatchLaunchName, DIAGNOSTIC_PROBE_NAME } from '../lib/exec-names.js';
 
 const { canonicalPath } = require(path.join(__dirname, '..', 'lib', 'worktrees.js')) as { canonicalPath: (value: unknown) => string };
 const { isInScope: scopeMatch } = require(path.join(__dirname, '..', 'lib', 'scope-match.js')) as { isInScope: (file: unknown, files: unknown) => boolean };
@@ -883,7 +883,7 @@ function main(): void {
   if (toolName !== 'Agent') return;
   const toolInput = toolInputOf(input);
   if (!toolInput) return;
-  const type = String(toolInput.subagent_type || '');
+  const type = canonicalExecutorName(String(toolInput.subagent_type || ''));
   const classification = classifyExecutor(type);
   if (isSubagentCaller(input) && !isCurrentExecutor(classification)) {
     rewriteExecutorHelper(input, toolInput, type);

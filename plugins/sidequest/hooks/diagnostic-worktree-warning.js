@@ -38,6 +38,29 @@ var import_node_path2 = __toESM(require("node:path"));
 
 // src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
+
+// src/lib/exec-names.ts
+var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
+var CLAUDE_PREFIX = "sidequest-exec-";
+var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
+var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
+var DISPATCH_NAME = "sidequest-exec-dispatch";
+var READ_ONLY_DISPATCH_NAME = "sidequest-exec-dispatch-readonly";
+function stableClaudeName(effort) {
+  return `${CLAUDE_PREFIX}${effort}`;
+}
+function stableReadOnlyClaudeName(effort) {
+  return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
+}
+var BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
+  DISPATCH_NAME,
+  READ_ONLY_DISPATCH_NAME,
+  DIAGNOSTIC_PROBE_NAME,
+  ...EFFORTS.map(stableClaudeName),
+  ...EFFORTS.map(stableReadOnlyClaudeName)
+]);
+
+// src/hooks/shared/input.ts
 function stringField(input, ...names) {
   for (const name of names) {
     const value = input[name];

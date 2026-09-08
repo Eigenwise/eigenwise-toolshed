@@ -29,6 +29,8 @@ __export(exec_names_exports, {
   READ_ONLY_DISPATCH_NAME: () => READ_ONLY_DISPATCH_NAME,
   READ_ONLY_DISPATCH_PREFIX: () => READ_ONLY_DISPATCH_PREFIX,
   TICKET_PREFIX: () => TICKET_PREFIX,
+  bundledAgentType: () => bundledAgentType,
+  canonicalExecutorName: () => canonicalExecutorName,
   classify: () => classify,
   dispatchLaunchName: () => dispatchLaunchName,
   isEffort: () => isEffort,
@@ -145,12 +147,30 @@ function stableReadOnlyClaudeName(effort) {
 function stableReadOnlyDispatchName(_effort) {
   return READ_ONLY_DISPATCH_NAME;
 }
+const BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
+  DISPATCH_NAME,
+  READ_ONLY_DISPATCH_NAME,
+  DIAGNOSTIC_PROBE_NAME,
+  ...EFFORTS.map(stableClaudeName),
+  ...EFFORTS.map(stableReadOnlyClaudeName)
+]);
+const PLUGIN_NAMESPACE = "sidequest:";
+function canonicalExecutorName(name) {
+  if (!name.startsWith(PLUGIN_NAMESPACE)) return name;
+  const unqualifiedName = name.slice(PLUGIN_NAMESPACE.length);
+  return BUNDLED_AGENT_NAMES.has(unqualifiedName) ? unqualifiedName : name;
+}
+function bundledAgentType(name) {
+  const canonicalName = canonicalExecutorName(name);
+  return BUNDLED_AGENT_NAMES.has(canonicalName) ? `${PLUGIN_NAMESPACE}${canonicalName}` : name;
+}
 function isReadOnlyExecutor(name) {
   const kind = classify(name).kind;
   return kind === "read_only_codex_dispatch" || kind === "read_only_claude_builtin";
 }
-function classify(name) {
-  if (typeof name !== "string" || !name) return { kind: "unknown", effort: null };
+function classify(value) {
+  if (typeof value !== "string" || !value) return { kind: "unknown", effort: null };
+  const name = canonicalExecutorName(value);
   if (name === READ_ONLY_DISPATCH_NAME) return { kind: "read_only_codex_dispatch", effort: null };
   if (name === DISPATCH_NAME) return { kind: "codex_dispatch", effort: null };
   if (name === DIAGNOSTIC_PROBE_NAME) return { kind: "unknown", effort: null };
@@ -191,6 +211,8 @@ function classify(name) {
   READ_ONLY_DISPATCH_NAME,
   READ_ONLY_DISPATCH_PREFIX,
   TICKET_PREFIX,
+  bundledAgentType,
+  canonicalExecutorName,
   classify,
   dispatchLaunchName,
   isEffort,

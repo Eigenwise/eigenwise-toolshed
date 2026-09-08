@@ -22,6 +22,33 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// src/lib/exec-names.ts
+var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
+var CLAUDE_PREFIX = "sidequest-exec-";
+var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
+var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
+var DISPATCH_NAME = "sidequest-exec-dispatch";
+var READ_ONLY_DISPATCH_NAME = "sidequest-exec-dispatch-readonly";
+function stableClaudeName(effort) {
+  return `${CLAUDE_PREFIX}${effort}`;
+}
+function stableReadOnlyClaudeName(effort) {
+  return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
+}
+var BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
+  DISPATCH_NAME,
+  READ_ONLY_DISPATCH_NAME,
+  DIAGNOSTIC_PROBE_NAME,
+  ...EFFORTS.map(stableClaudeName),
+  ...EFFORTS.map(stableReadOnlyClaudeName)
+]);
+var PLUGIN_NAMESPACE = "sidequest:";
+function canonicalExecutorName(name) {
+  if (!name.startsWith(PLUGIN_NAMESPACE)) return name;
+  const unqualifiedName = name.slice(PLUGIN_NAMESPACE.length);
+  return BUNDLED_AGENT_NAMES.has(unqualifiedName) ? unqualifiedName : name;
+}
+
 // src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
 function isRecord(value) {
@@ -32,7 +59,12 @@ function readStdin() {
     const raw = import_node_fs.default.readFileSync(0, "utf8");
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    return isRecord(parsed) ? parsed : null;
+    if (!isRecord(parsed)) return null;
+    for (const field of ["agent_type", "agentType", "subagent_type"]) {
+      const executor = parsed[field];
+      if (typeof executor === "string") parsed[field] = canonicalExecutorName(executor);
+    }
+    return parsed;
   } catch (_) {
     return null;
   }
@@ -127,7 +159,7 @@ function main() {
   const toolInput = input.tool_input;
   const launches = dispatchLaunches(toolInput.prompt);
   const projectArg = projectFromPrompt(toolInput.prompt) || stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR;
-  const executor = typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : "";
+  const executor = canonicalExecutorName(typeof toolInput.subagent_type === "string" ? toolInput.subagent_type : "");
   if (!launches.length || !projectArg || !executor) return;
   const store = require(runtimeModule("store"));
   const error = stringField(input, "error");

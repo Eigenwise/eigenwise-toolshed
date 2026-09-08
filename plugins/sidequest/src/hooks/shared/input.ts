@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { canonicalExecutorName } from '../../lib/exec-names.js';
 
 export type HookInput = Record<string, unknown>;
 
@@ -11,7 +12,13 @@ export function readStdin(): HookInput | null {
     const raw = fs.readFileSync(0, 'utf8');
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
-    return isRecord(parsed) ? parsed : null;
+    if (!isRecord(parsed)) return null;
+    // Host namespaces identify plugin types; board ownership retains the stable executor name.
+    for (const field of ['agent_type', 'agentType', 'subagent_type']) {
+      const executor = parsed[field];
+      if (typeof executor === 'string') parsed[field] = canonicalExecutorName(executor);
+    }
+    return parsed;
   } catch (_) {
     return null;
   }

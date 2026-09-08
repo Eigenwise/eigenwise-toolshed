@@ -114,7 +114,7 @@ test('prepared executor identity is projected unchanged for writing and readonly
   assert.equal(preparedReadonly.ticket.dispatchExecutor, 'sidequest-exec-dispatch-readonly');
   for (const prepared of [preparedWriting, preparedReadonly]) {
     assert.equal(prepared.ticket.dispatch.executor, prepared.ticket.dispatchExecutor);
-    assert.equal(agentsync.agentSpawn('binding-worker', undefined, null, prepared.ticket.dispatchExecutor, 'claim first').subagent_type, prepared.ticket.dispatchExecutor);
+    assert.equal(agentsync.agentSpawn('binding-worker', undefined, null, prepared.ticket.dispatchExecutor, 'claim first').subagent_type, `sidequest:${prepared.ticket.dispatchExecutor}`);
     assert.match(agentsync.renderTicketBriefing(prepared.ticket, prepared.token, slug, PROJECT), new RegExp(`executor: "${prepared.ticket.dispatchExecutor}"`));
   }
 
@@ -127,6 +127,63 @@ test('prepared executor identity is projected unchanged for writing and readonly
     token: preparedReadonly.token,
     executor: preparedReadonly.ticket.dispatchExecutor,
   }).ok, true);
+});
+
+test('bundled plugin types survive launch, runtime binding and claim without changing board identity', () => {
+  const pluginRoot = path.resolve(__dirname, '..');
+  function runHook(filename: string, input: Record<string, unknown>): string {
+    return execFileSync(process.execPath, [path.join(pluginRoot, 'hooks', filename)], {
+      cwd: PROJECT,
+      input: JSON.stringify(input),
+      encoding: 'utf8',
+      windowsHide: true,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: pluginRoot, CLAUDE_CODE_SUBAGENT_MODEL: '' },
+    });
+  }
+  for (const category of ['binding.write', 'binding.readonly']) {
+    const ticket = createFixture(`namespaced ${category}`, category);
+    const sessionId = `namespaced-${ticket.ref}`;
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+    const executor = prepared.ticket.dispatchExecutor;
+    const prompt = agentsync.renderDispatchStub(prepared.ticket, PROJECT);
+    const spawn = agentsync.agentSpawn(prepared.ticket.dispatch.launchName, null, null, executor, prompt, prepared.ticket.dispatch.description);
+    assert.equal(spawn.subagent_type, `sidequest:${executor}`);
+    for (const rejectedType of [`other:${executor}`, `${spawn.subagent_type}-extra`, 'sidequest:general-purpose']) {
+      const rejected: { hookSpecificOutput: { permissionDecision: string } } = JSON.parse(runHook('force-exec-bypass.js', {
+        tool_name: 'Agent', cwd: PROJECT, session_id: sessionId, tool_input: { ...spawn, subagent_type: rejectedType },
+      }));
+      assert.equal(rejected.hookSpecificOutput.permissionDecision, 'deny', rejectedType);
+    }
+    const admitted: { hookSpecificOutput: { permissionDecision?: string; updatedInput?: { subagent_type: string } } } = JSON.parse(runHook('force-exec-bypass.js', {
+      tool_name: 'Agent', cwd: PROJECT, session_id: sessionId, tool_input: spawn,
+    }));
+    assert.notEqual(admitted.hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal(admitted.hookSpecificOutput.updatedInput?.subagent_type, spawn.subagent_type);
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.executor, executor);
+    const agentId = `agent-${ticket.ref}`;
+    runHook('subagent-start.js', { cwd: PROJECT, session_id: sessionId, agent_id: agentId, agent_type: spawn.subagent_type, agent_name: spawn.name });
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.agentId, agentId);
+    const claimed = store.claimTicket(slug, ticket.ref, `worker-${ticket.ref}`, { token: prepared.token, executor, effort: 'high' });
+    assert.equal(claimed.ok, true, JSON.stringify(claimed));
+    runHook('subagent-stop.js', { cwd: PROJECT, session_id: sessionId, agent_id: agentId, agent_type: spawn.subagent_type, agent_name: spawn.name });
+    const stopped = store.getTicket(slug, ticket.ref);
+    assert.ok(stopped.dispatch.turnEndedAt);
+    assert.equal(stopped.claim.by, `worker-${ticket.ref}`);
+  }
+});
+
+test('plugin namespace normalization recognizes only the shipped definitions', () => {
+  const names = require('../lib/exec-names.js');
+  for (const filename of agentsync.bundledExecutorSources().keys()) {
+    const name = filename.replace(/\.md$/, '');
+    assert.equal(names.bundledAgentType(name), `sidequest:${name}`);
+    assert.equal(names.canonicalExecutorName(`sidequest:${name}`), name);
+    assert.deepEqual(names.classify(`sidequest:${name}`), names.classify(name));
+  }
+  for (const name of ['other:sidequest-exec-high', 'sidequest:sidequest-exec-high-extra', 'sidequest:sidequest-sq-1', 'sidequest:sidequest-exec-dispatch-high', 'sidequest:sidequest:sidequest-exec-high', 'sidequest:general-purpose']) {
+    assert.equal(names.canonicalExecutorName(name), name);
+    assert.equal(names.classify(name).kind, 'unknown');
+  }
 });
 
 test('legacy scalar-only prepared executor identity hydrates into current dispatch state', () => {

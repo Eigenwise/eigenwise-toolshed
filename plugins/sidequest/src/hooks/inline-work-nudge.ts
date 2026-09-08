@@ -1,3 +1,4 @@
+import { canonicalExecutorName } from '../lib/exec-names.js';
 import { isRecord, isSubagent, readStdin, stringField, type HookInput } from './shared/input.js';
 import { writeSystemMessage } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
@@ -89,7 +90,7 @@ function main(): void {
     state.boardInteraction = true;
   } else if (toolName === 'Agent') {
     const subagentType = isRecord(input.tool_input) && typeof input.tool_input.subagent_type === 'string'
-      ? input.tool_input.subagent_type
+      ? canonicalExecutorName(input.tool_input.subagent_type)
       : '';
     if (/^sidequest-exec/.test(subagentType)) {
       state.boardInteraction = true;

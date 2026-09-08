@@ -40,7 +40,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('node:child_process');
-const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME } = require('./exec-names.js');
+const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME, bundledAgentType } = require('./exec-names.js');
 const { createWorktreeLease, worktreeResumeDecision } = require('./kernel/worktree.js');
 const crypto = require('crypto');
 const store = require('./store.js');
@@ -1178,7 +1178,7 @@ function agentSpawn(name?: any, isolation?: any, model?: any, agentType?: any, p
     ? description.replace(EMBEDDED_ROUTE_MARKER_RE, '').replace(/\s+/g, ' ').trim()
     : '';
   const taskLabel = suppliedLabel || 'Sidequest ticket executor.';
-  return Object.assign({ subagent_type: agentType || name, name, mode: 'bypassPermissions', description: taskLabel },
+  return Object.assign({ subagent_type: bundledAgentType(agentType || name), name, mode: 'bypassPermissions', description: taskLabel },
     isolation ? { isolation } : {}, model ? { model } : {}, prompt ? { prompt } : {});
 }
 
