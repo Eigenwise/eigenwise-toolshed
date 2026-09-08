@@ -98,4 +98,4 @@ instead of a model-dependent compaction point. Do not write or offer to fix it f
 
 Report all results together. Explain each concrete problem and give the smallest next step. This skill does
 not update, install, uninstall, reload, or edit anything. If freshness is proven stale, tell the user to run
-`/update-toolshed`, then `/reload-plugins` or restart before retrying the blocked work.
+`/quartermaster:update-toolshed`, then `/reload-plugins` or restart before retrying the blocked work.
