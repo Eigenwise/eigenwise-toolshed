@@ -1,19 +1,22 @@
 # Patterns
 
-Last Updated: 2026-08-20
+Last Updated: 2026-09-08
 
-- Build from source, run committed output: Sidequest TypeScript under `src/` compiles to `lib/`, `bin/`, and bundled hook files. Runtime manifests point at generated files; release suite discovery is shared through `plugins/sidequest/lib/suite-resolver.js` and re-exported by `scripts/release/lib/suites.mjs`.
+- Build from source, run committed output: Sidequest TypeScript under `src/` compiles to `lib/`, `bin/`, and bundled hook files, while `scripts/generate-bundled-agents.mjs` renders the committed `agents/` roster from `lib/agentsync.js`. Runtime manifests point at generated files; release suite discovery is shared through `plugins/sidequest/lib/suite-resolver.js` and re-exported by `scripts/release/lib/suites.mjs`.
+- Stable executor packaging and migration: the Sidequest plugin owns its generated diagnostic, dispatch, and read-only agent definitions in `agents/`; session-start maintenance and normal CLI sync remove only marked legacy generated files from user agent directories, preserving custom content.
 - Bounded context projections: Sidequest freezes dispatch contracts and pages large MCP reads with opaque revision-bound handles; callers continue through `context_page` and rerun mutable reads when a revision is stale.
 - One store, multiple transports: Sidequest CLI and MCP handlers call the same store functions. Keep lifecycle behavior in typed kernel reducers and store transitions rather than duplicating it in transports.
 - Immutable candidate lifecycle: preparation pins baseline and executor identity; submit atomically records the candidate, terminates the executor, and releases its claim. A confirmed review defect preserves and permanently rejects that candidate. A repair has a fresh identity and supersedes the rejection only after integration.
 - Adapter-owned facts: Git repositories and non-Git projects resolve immutable candidate existence and baseline membership through registered capabilities. Callers cannot assert those facts, and an unavailable adapter fails closed while preserving the retry candidate.
 - Lease every checkout: worktree operations require repository, dispatch baseline, bound path, checkout-instance digest, phase, and liveness facts. Paths, branches, sessions, and process presence are hints rather than cleanup authority.
 - Provider routes come from one capability decision: Sidequest accepts only fresh, valid, ready schema-4 Model Gateway catalogs for routing and model advertisement. Provider metadata may survive for precise refusal messages; stale or unready entries never materialize GPT defaults.
+- Per-request pricing stays close to usage: Observability selects Astra's short or long input tier from each request's input/cache totals, while unpriced resolved models are grouped as token volume and excluded from USD totals.
 - Verify produced behavior: ticket oracles observe the required property on output. Implementation-name greps are diagnostics, and overlapping terminal waves rerun the property oracle after assembly.
 - Serialize board mutations: MCP mutation handlers enqueue per-board work before touching state.
 - Preserve exact ownership: Sidequest reclaims claims and pre-claim dispatch bindings only after confirmed terminal process evidence, keeps unknown owners protected, and checks ownership before forced submission, release, or rejection-history mutation.
 - Owned process phases: `plugins/sidequest/scripts/owned-process-tree.js` starts each gate under a detached supervisor, classifies terminal process and group states, bounds retained output, and delays settlement until cleanup evidence is drained. Unknown or still-live ownership remains blocking.
 - Batch-local Stop responsibility: each plugin deduplicates only its own Stop work using stable inputs; mutable transcript metadata and prompt identifiers do not define responsibility, and stale lock cleanup is generation-bound.
+- Freshness checks are advisory and version-keyed: Quartermaster refreshes marketplace data at Stop and reports updates or reloads without installing, blocking, or repeating the same version warning.
 - Atomic gateway updates and request recovery: Model Gateway stages proxy replacements, renames atomically with rollback, compares serving versions, and defers restart when the listener cannot exit immediately. An active request can start or recover the shared proxy without waiting for another Claude SessionStart.
 - Shared-tree artifacts are marker-gated and confined to an approved artifact root; dirty baselines and closeout deltas are checked.
 - Hook registration is declarative: events and matchers live in `hooks/hooks.json`; source or generated hook code implements behavior. Codebase-mapper blocks an announced map update until the matching Skill invocation is recorded.
