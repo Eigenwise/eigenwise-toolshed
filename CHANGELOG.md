@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.530.0 (2026-09-08)
+
+### sidequest 5.0.34 → 5.0.35
+
+#### Fixes
+
+- Preserve ticket delivery branch targets (SQ-2504)
+  Ticket delivery and abandonment now keep the integration target recorded at dispatch when the board target or checkout later changes.
+
 ## v3.529.0 (2026-09-08)
 
 ### observability 0.7.26 → 0.7.27
