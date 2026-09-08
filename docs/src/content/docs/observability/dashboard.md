@@ -41,6 +41,7 @@ The **Context recharge** row shows context-related activity alongside the rest o
 - **A project is missing:** restart sessions in that repository, create activity, then ask Claude to verify project telemetry.
 - **The project says `not-found`:** run the same skill with an audit request. Claude checks which session directories are wired and tells you what needs a restart or repair.
 - **The dashboard has no recent data:** check the selected time range and whether the source cards have received records in the last few minutes.
+- **A model disappears after an Observability update:** ask Claude to compare the live panel query with the newest installed dashboard template before repairing it. The newest running observer owns the managed version record, so an older open session leaves newer dashboard files alone even when a downstream health check is failing.
 
 Resetting a generated dashboard does not disable telemetry or delete local history. Ask Claude to repair or reset it when the dashboard definition is stale.
 
