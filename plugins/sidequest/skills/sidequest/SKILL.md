@@ -54,7 +54,7 @@ Write the verify in POSIX shell; on Windows the capture runs it through Git Bash
 A passing executable done-oracle needs no review-audit + fix wave unless it lacks determinism or is high-stakes. **Blocked-step invariant:** when a review,
 investigation, or verification awaits a ticket, every dependent action stays blocked until it closes;
 direct PRs, skill flows, manual apply, or any alternate route are the same violation as inline work.
-The board keeps plans. Before solo-fit or filing, do a stated one-line `.gitignore` entry or other mechanical edit to 1–2 named files inline; don't ticket or spawn it. Bounded recon (`Read`, `Glob`, `Grep` on named anchors, one narrow sweep) stays inline; deeper or multi-angle investigation goes through the live taxonomy.
+The board keeps plans. Before solo-fit or filing, do a stated one-line `.gitignore` entry or other mechanical edit to 1–2 named files inline; don't ticket or spawn it. Bounded recon (`Read`, `Glob`, `Grep` on named anchors, one narrow sweep) stays inline; unfamiliar paths or deep investigation go through the live taxonomy.
 
 ### INLINE-SAFE direct work
 
