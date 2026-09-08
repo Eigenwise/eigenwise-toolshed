@@ -8,6 +8,37 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.534.0 (2026-09-09)
+
+### model-gateway 0.50.4 → 0.50.5
+
+#### Fixes
+
+- Correct Model Gateway documentation (SQ-2532)
+  Align Model Gateway documentation with the Claude Code picker version gate, Astra proxy support, and the 325000 context cap's 292000 compaction point.
+
+### observability 0.7.28 → 0.7.29
+
+#### Fixes
+
+- Correct observability documentation claims (SQ-2533)
+  Correct observability documentation for disable behavior, automatic retention pruning, and separate verifier metric and observer-health results.
+
+### quartermaster 0.7.6 → 0.7.7
+
+#### Fixes
+
+- Correct Quartermaster maintenance guidance (SQ-2534)
+  Use the namespaced Quartermaster commands and document Live Rules reinjection cadence accurately.
+
+### sidequest 5.0.38 → 5.0.39
+
+#### Fixes
+
+- Shared-tree writers no longer release over staged paths that pre-dated their dispatch (SQ-2530)
+- Align Sidequest publish guidance with shipped behavior (SQ-2531) [`6e6a4f5`](https://github.com/Eigenwise/eigenwise-toolshed/commit/6e6a4f5d0faf0b78454a3e968b3c7a242507a7cb)
+- Ignore pre-existing shared-tree dirt during executor delivery (SQ-2538)
+
 ## v3.533.0 (2026-09-08)
 
 ### codebase-mapper 2.15.7 → 2.15.8

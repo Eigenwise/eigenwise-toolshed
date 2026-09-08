@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.7 (2026-09-09)
+
+Released in v3.534.0, up from 0.7.6.
+
+### Fixes
+
+- Correct Quartermaster maintenance guidance (SQ-2534)
+  Use the namespaced Quartermaster commands and document Live Rules reinjection cadence accurately.
+
 ## 0.7.6 (2026-09-08)
 
 Released in v3.533.0, up from 0.7.5.
