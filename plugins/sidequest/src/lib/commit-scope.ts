@@ -427,7 +427,7 @@ function isEmptyTreeBase(value: unknown): boolean {
 }
 
 export function headCommit(cwd: string): string | null {
-  const head = resolvedCommit(cwd, 'HEAD');
+  const head = gitResult(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
   return head.ok ? head.value : null;
 }
 

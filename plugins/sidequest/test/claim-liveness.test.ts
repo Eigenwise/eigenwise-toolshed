@@ -892,7 +892,14 @@ test('the sweep refuses to release a shared-tree claim while the checkout is dir
   assert.equal(blockedSweep.released.some((entry?: any) => entry.ref === ticket.ref), false);
   assert.deepStrictEqual(
     blockedSweep.blocked.find((entry?: any) => entry.ref === ticket.ref),
-    { project: slug, ref: ticket.ref, kind: 'dirty_shared_tree', paths: ['lib/fixture.js'] },
+    {
+      project: slug,
+      ref: ticket.ref,
+      kind: 'dirty_shared_tree',
+      paths: ['lib/fixture.js'],
+      preExistingPaths: [],
+      newlyChangedPaths: ['lib/fixture.js'],
+    },
   );
   assert.equal(store.getTicket(slug, ticket.ref).claim.by, 'dirty-shared-tree-executor');
 

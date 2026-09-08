@@ -216,7 +216,10 @@ ${evidence.outputTail}`;
     return {
       kind: "dirty_shared_tree",
       paths: delta.working,
-      reason: "the shared checkout has uncommitted changes"
+      newlyChangedPaths: delta.working,
+      preExistingPaths: delta.preExisting || [],
+      baselineRecorded: delta.baselineRecorded === true,
+      reason: "the shared checkout has paths changed after this dispatch baseline"
     };
   }
   function claimReleaseVerdict(ticket, now) {

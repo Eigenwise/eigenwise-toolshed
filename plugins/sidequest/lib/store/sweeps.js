@@ -66,7 +66,14 @@ function createSweeps({ addComment, claimAbandonMs, claimIdleMs, claimReleaseNot
           });
           if (!res.ok) {
             if (["dirty_shared_tree", "shared_tree_state_unavailable"].includes(res.reason)) {
-              blocked.push({ project: project.slug, ref: ticket.ref, kind: res.reason, paths: res.paths || [] });
+              blocked.push({
+                project: project.slug,
+                ref: ticket.ref,
+                kind: res.reason,
+                paths: res.paths || [],
+                ...res.preExistingPaths ? { preExistingPaths: res.preExistingPaths } : {},
+                ...res.newlyChangedPaths ? { newlyChangedPaths: res.newlyChangedPaths } : {}
+              });
             }
             continue;
           }
