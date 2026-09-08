@@ -3,9 +3,9 @@
 Executors never publish. A repo-changing executor ends at a verified LOCAL commit in its isolated
 worktree, pins it to a durable ref (`refs/sidequest/<SQ-n>`), and parks the ticket
 ready-for-integration with `sidequest submit` (claim released, status stays `doing` and out of
-`ready`, no push, no version bumps). Publishing — integrating those commits, assigning versions, reverifying, reviewing,
-pushing main, marking done — is ONE serialized transaction owned by the orchestrator. This file is that
-transaction.
+`ready`, no push, no version bumps). Publishing — integrating those commits, running local delivery
+verification, completing tickets in the control plane, then gating, assigning versions, and pushing
+main — is ONE serialized transaction owned by the orchestrator. This file is that transaction.
 
 `submit` derives the admitted range from the base recorded on the ticket's dispatch. Pass `--base <commit>`
 (or MCP `base`) only when automatic selection cannot identify the boundary. An explicit base must always lie on the
@@ -82,25 +82,31 @@ transaction below unchanged; an existing but broken upstream still rejects the s
 
 ## The publish transaction
 
-Run every step in order; any failure before the push aborts the transaction without touching the
-board (submissions stay parked — fail closed).
+Run every step in order. Local delivery through `sidequest integrate` records the delivery and
+completes each ticket in the control plane after its local delivery verification. That closure happens
+before the merged-tree gate, version assignment, or push. A later failure can therefore leave a done
+ticket with an unpushed commit: finish the push when safe, or record the failure and unpushed state on
+the ticket.
 
-1. **Acquire the publish lock**: `sidequest publish lock --by <session-worker-id>`. The lock lives
-   in the repo's common git dir, so every session, process, and worktree serializes on it. If held,
-   do NOT wait or poll: note the holder from the failure output and retry at the next natural
-   wakeup. `--steal` only when `publish status` shows the holder stale (TTL expired or dead pid).
-   Re-acquiring from the same session refreshes the lock — that is the crash-recovery path for your
-   own interrupted transaction.
+1. **Acquire the publish lock**: `sidequest publish lock`. The lock identity is derived internally
+   from the current session and worker, and the lock lives in the repo's common git dir, so every
+   session, process, and worktree serializes on it. If held, do NOT wait or poll: note the holder from
+   the failure output and retry at the next natural wakeup. `--steal` only when `publish status` shows
+   the holder stale (TTL expired or dead pid). Re-acquiring from the same session refreshes the lock —
+   that is the crash-recovery path for your own interrupted transaction.
 2. **Read the queue**: `sidequest publish queue --json`. Queue admission mechanically revalidates each durable range and its submit-time admitted scope snapshot. Rejected entries name their offending paths and stay parked. A legacy entry without a scope snapshot stays parked until its executor resubmits it.
 3. **Read each submitted handoff**: before integrating or closing a ticket, run
    `sidequest comments <ref> --json` for it. The queue is intentionally compact and does not replace the
    full thread. Act on unresolved risks or questions: resolve them, skip and file a scoped integration
    ticket, or leave the submission parked. Do not cherry-pick until the thread is understood.
-4. **Create a clean integration worktree** from the current remote main, never from any working
-   tree: `git fetch origin` then `git worktree add <scratch>/sq-integrate origin/main --detach`.
-   Install the touched plugin's dependencies before reverifying, for this repo:
-   `cd <worktree>/plugins/<name> && npm ci`. Never integrate in the shared session tree — pre-staged
-   or dirty files there are exactly the contamination this flow exists to prevent.
+4. **Create a clean integration worktree** from the configured integration target, never from any
+   working tree: `git fetch origin`, then create the worktree with the configured target branch
+   checked out, for example `git worktree add <scratch>/sq-integrate <configured-target-branch>`.
+   Do not pass `--detach`. Before running `sidequest integrate`, confirm that
+   `git branch --show-current` reports the configured target branch; `integrate` refuses a detached
+   HEAD or any other branch. Install the touched plugin's dependencies before reverifying, for this
+   repo: `cd <worktree>/plugins/<name> && npm ci`. Never integrate in the shared session tree —
+   pre-staged or dirty files there are exactly the contamination this flow exists to prevent.
 5. **Reconstruct each admitted submission before assembly**. Resolve its durable ref and require it
    still points to the submitted tip. Require the recorded upstream commit to remain reachable from
    the current recorded integration target, then require the stored dispatch base to lie on the tip's
@@ -114,58 +120,65 @@ board (submissions stay parked — fail closed).
    `sidequest assemble-wave` with every intended participant and its project-defined gate evidence.
    A moved baseline, missing verifier, out-of-scope surface, or overlapping participant surface refuses
    assembly and reports the affected candidates without changing their submissions. Pass only the exact
-   participant set from the passing assembly to `sidequest integrate`; a partial set, a mixed wave, or a
-   failed/missing gate refuses before a delivery record exists. `integrate` delivers all Git participants as
-   one unit, verifies the resulting revision, then records delivery for every participant. A conflict or
-   failed delivery verification rolls back the delivery, leaves the wave parked, and requires a repair or
-   refreshed assembly.
-7. **Assign versions centrally**: for each plugin touched by the integrated set, take origin's next
+   participant set from the passing assembly to `sidequest integrate` while the configured target branch
+   is checked out; a partial set, a mixed wave, or a failed/missing gate refuses before a delivery record
+   exists. `integrate` delivers all Git participants as one unit. It runs the pinned project verifier
+   against the resulting revision before it records delivery for an assembled wave. A red result rolls
+   back the delivery and leaves every participant parked. Do not record or close a participant through
+   an administrative closure to bypass this gate. After verification passes, it records delivery for
+   every participant and completes them as control-plane tickets. A conflict or failed delivery
+   verification rolls back the delivery, leaves the wave parked, and requires a repair or refreshed
+   assembly. This local completion does not wait for remote reachability.
+7. **Seam check the batch**: with 2+ integrated commits, run the shared suite the tickets sit in
+   (for this repo: `node --test plugins/sidequest/test/*.test.js`, or the suites of the touched
+   plugins) so per-ticket-green but jointly-red seams are caught before versioning or the push.
+8. **Apply review at the sized depth**: consume each submission report and the delivery and
+   merged-tree gate evidence. Do not inspect executor source or diffs as an orchestrator review.
+   A deterministic singleton needs no bound review. Bind a `review-audit` ticket to the exact
+   candidate when the oracle is weak, consumers remain materially unchecked, or the work is
+   high-stakes; use distinct review lenses for high-stakes or multi-wave work. A bound candidate
+   cannot be reclaimed, amended, cleared, superseded, or integrated until its review finishes, and
+   no caller-controlled route can reject it: `rework` and every other direct route return
+   `candidate_review_locked` without writing. A review that finds a defect records its evidence on
+   the review ticket and releases that review with `kind=oracle`. When that oracle accepts the
+   defect conclusion, Sidequest marks both binding halves `rejected`; after a fresh repair is
+   reviewed and integrated, `supersede_submission` closes the rejected source against the repair.
+   Integration also needs the immutable terminal dispatch identities for the submitted source and
+   completed review, and refuses when either is missing or both are the same agent. Resolve or
+   explicitly accept every finding before versioning or pushing. A finding that needs repair leaves
+   its submission parked and goes through the applicable rejection flow below.
+9. **Assign versions centrally**: for each plugin touched by the integrated set, take origin's next
    free version ONCE for the batch and bump BOTH `plugins/<name>/.claude-plugin/plugin.json` and the
    root `.claude-plugin/marketplace.json` (they must match) in one commit. Executors no longer bump
-   anything, so versioning has exactly one writer: this step.
-8. **Require delivery verification**: `integrate` runs the pinned project verifier against the
-   resulting revision before it records delivery for an assembled wave. A red result rolls back the
-   delivery and leaves every participant parked. Do not record or close a participant through an
-   administrative closure to bypass this gate.
-9. **Seam check the batch**: with 2+ integrated commits, run the shared suite the tickets sit in
-   (for this repo: `node --test plugins/sidequest/test/*.test.js`, or the suites of the touched
-   plugins) so per-ticket-green but jointly-red seams are caught before the push.
-10. **Apply review at the sized depth**: consume each submission report and the delivery and
-    merged-tree gate evidence. Do not inspect executor source or diffs as an orchestrator review.
-    A deterministic singleton needs no bound review. Bind a `review-audit` ticket to the exact
-    candidate when the oracle is weak, consumers remain materially unchecked, or the work is
-    high-stakes; use distinct review lenses for high-stakes or multi-wave work. A bound candidate
-    cannot be reclaimed, amended, cleared, superseded, or integrated until its review finishes, and
-    no caller-controlled route can reject it: `rework` and every other direct route return
-    `candidate_review_locked` without writing. A review that finds a defect records its evidence on
-    the review ticket and releases that review with `kind=oracle`. When that oracle accepts the
-    defect conclusion, Sidequest marks both binding halves `rejected`; after a fresh repair is
-    reviewed and integrated, `supersede_submission` closes the rejected source against the repair.
-    Integration also needs the immutable terminal dispatch identities for the submitted source and
-    completed review, and refuses when either is missing or both are the same agent. Resolve or
-    explicitly accept every finding before pushing. A finding that needs repair leaves its
-    submission parked and goes through the applicable rejection flow below.
-11. **Push and confirm**: `git push origin HEAD:main` from the integration worktree — never a new
-   branch. A non-fast-forward → `git pull --rebase origin main`, rerun steps 8-10, push again. Then
-   fetch fresh and confirm the integrated commits (the cherry-picked equivalents, not the submitted
-   range hashes) are covered by `git log origin/main`; the assembled-wave record identifies the exact
-   participant set whose delivered content passed verification.
-12. **Confirm delivery, then clean up**: `integrate` records delivery and closes every exact wave
-    participant only after the full participant set landed and its delivery verification passed. Do
-    not use `groom-close --integration` as a publish step or to close a wave participant individually.
-    After every delivered commit is reachable, remove its durable ref (`git update-ref -d
-    refs/sidequest/<SQ-n>`), remove the integration worktree (`git worktree remove
-    <scratch>/sq-integrate`), and `sidequest publish unlock --by <session-worker-id>`. Unlock happens
-    LAST, in a step that runs even when earlier cleanup partially fails.
+   anything, so versioning has exactly one writer: this step. If this or the seam/review gate fails,
+   the locally delivered ticket is already done; record the failure and do not claim that it was pushed.
+10. **Push and confirm**: `git push origin HEAD:main` from the integration worktree — never a new
+    branch. A non-fast-forward → `git pull --rebase origin main`, rerun steps 7-9, push again. Then
+    fetch fresh and confirm the integrated commits (the cherry-picked equivalents, not the submitted
+    range hashes) are covered by `git log origin/main`; the assembled-wave record identifies the exact
+    participant set whose delivered content passed verification. If push or confirmation fails, the
+    ticket remains done from local delivery but unpushed; finish the push or record the failure on the
+    ticket instead of claiming remote reachability.
+11. **Clean up after confirmation**: do not use `groom-close --integration` as a publish step or to
+    close a wave participant individually. After every delivered commit is reachable, remove its
+    durable ref (`git update-ref -d refs/sidequest/<SQ-n>`), remove the integration worktree (`git
+    worktree remove <scratch>/sq-integrate`), and run `sidequest publish unlock`. Unlock happens LAST,
+    in a step that runs even when earlier cleanup partially fails. If a later step failed, retain the
+    refs or worktree needed for recovery, record the failure on the done ticket, and still release the
+    publish lock.
 
 ## Integration failures fail closed
 
-A submission that conflicts, fails post-integration reverify, or breaks the seam check is never
-force-merged and never silently dropped:
+A submission that conflicts or fails post-integration reverify before local delivery closure is never
+force-merged and never silently dropped. A seam, review, version, or push failure after local delivery
+is recorded against the already-done ticket; it must not be described as remotely reachable:
 
-- Leave its submission parked (do NOT `done`, do NOT clear it reflexively).
-- File a narrowly scoped integration ticket: the conflicting ref, the exact failure output, the
-  submitted commit + durable ref, and what the integrator may touch. Link it `blocks` the original.
+- Before local delivery closure, leave its submission parked (do NOT `done`, do NOT clear it reflexively).
+- File a narrowly scoped integration ticket for a local delivery conflict or verification failure: the
+  conflicting ref, the exact failure output, the submitted commit + durable ref, and what the integrator
+  may touch. Link it `blocks` the original.
+- For a later gate or push failure, keep the done ticket's failure evidence and either finish the push
+  or file the narrowly scoped recovery ticket needed to complete or repair it.
 - For an **unbound** candidate that a review rejects or otherwise needs its original work redone,
   use `sidequest rework <ref> --by <candidate-owner> --review "<evidence>" --reason "<repair>"`.
   It preserves the candidate and rejection evidence while returning the ticket to `todo` for a
@@ -186,10 +199,11 @@ just to run `submit` or `done`.
 
 ## Crash recovery
 
-The lock records owner pid + session metadata + timestamp. A publisher that dies mid-transaction
-leaves: a held lock (reclaimable — same session refreshes on re-acquire; anyone else waits for the
-TTL or `--steal`s a provably stale holder), an orphan integration worktree (`git worktree list` →
-`git worktree remove --force`), and parked submissions (still queued; the durable refs still pin
-the commits). Nothing is lost: rerun the transaction from step 1. Tickets are only marked done
-after their commits are reachable from `origin/main`, so a crash can never strand a done-but-
-unpushed ticket.
+The lock records owner pid + session metadata + timestamp. A publisher that dies mid-transaction leaves: a
+held lock (reclaimable — same session refreshes on re-acquire; anyone else waits for the TTL or
+`--steal`s a provably stale holder), an orphan integration worktree (`git worktree list` →
+`git worktree remove --force`), and either parked submissions from a pre-delivery failure or done
+tickets whose local delivery has not reached the remote yet. Nothing is lost: rerun the transaction
+from step 1, inspect each ticket's completion and delivery record, recover any durable refs or worktree
+needed for the push, then finish the push or record the failure on the ticket. A done ticket alone never
+proves that its commit is reachable from `origin/main`.
