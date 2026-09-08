@@ -1,149 +1,75 @@
 # Release engine
 
-Four scripts, no dependencies, deterministic from the tree. They turn the queue in
-`.release/unreleased/` into one release commit, one set of tags, and generated changelogs.
-Node 22, `.mjs`, standard library only, so a CI runner needs nothing installed.
+These scripts build the release from the repository tree. They use Node 22 and the standard library, so a release runner needs no install beyond the repository checkout.
 
 | Script | Writes | What it does |
 | --- | --- | --- |
-| `note.mjs` | one fragment | Records what a ticket releases, at integration time |
-| `plan.mjs` | nothing | Prints exactly what a cut would do |
-| `cut.mjs` | the release | Builds the window locally, publishes it in one atomic push |
-| `guard.mjs` | nothing | Fails CI when the tree breaks a release invariant |
+| `note.mjs` | one fragment | Records what an integrated ticket releases |
+| `plan.mjs` | nothing | Shows the release window the cut would build |
+| `cut.mjs` | the release | Bumps versions, writes changelogs, consumes fragments, creates tags, runs suites, and optionally publishes |
+| `guard.mjs` | nothing | Checks release invariants in CI |
 
-See `.release/README.md` for the fragment schema.
+See [`.release/README.md`](../../.release/README.md) for the fragment schema.
 
-## Delivery and notification
+## Release authority
 
-The marketplace manifests on `main` are delivery. Bump the affected marketplace and plugin versions
-with every ticket that changes a plugin, and never hold a bump for a GitHub Release. Claude Code
-caches plugins by version, so that manifest change is what users install.
+The orchestrator owns the release cut from `main` at `HEAD`. Each integrated ticket gets one fragment in `.release/unreleased/`. Ticket work records the fragment and does not hand-edit plugin or marketplace versions. `cut.mjs` reads the queued fragments, applies the version bumps, writes the changelogs, removes the consumed fragments, creates the release commit and tags, and runs the suites for changed plugins.
 
-A GitHub Release is notification-only. `.github/workflows/release.yml` is the sole GitHub Release
-publisher: it handles `v*` tag pushes, daily catch-up, and manual dispatch, while creating at most
-one Release per UTC day. A tag push after the cap exits successfully as deferred; the daily catch-up
-publishes the newest unreleased `v*` tag with generated notes. `cut.mjs --push` atomically pushes
-`main` and its tag, so the workflow never runs `cut.mjs`, changes a version, or pushes `main`.
+A normal cut defaults to the current `main` checkout. Use `--sha <rev>` only when the release window must be pinned to a specific descendant of `main`. The cut checks the branch and fast-forward relationship before it writes anything.
 
-Preview the window with `--dry-run`. To publish it, use `--push`: it acquires the Sidequest publish
-lock before changing the local release window and releases it after the final push or any failure.
-If another publisher holds the lock, the cut stops before it changes the window.
+## Delivery and GitHub Releases
 
-```bash
-node scripts/release/cut.mjs --sha origin/dev --dry-run
-node scripts/release/cut.mjs --sha origin/dev --push
-```
+The marketplace is delivered through `main` and its marketplace tag, `v<marketplace-version>`. When `--push` is used, the cut publishes those two refs together in one atomic push. Plugin version tags, `<plugin>-v<plugin-version>`, are published in a second atomic push. These pushes are separate, so the release process never promises one atomic update across `main`, the marketplace tag, and every plugin tag.
 
-The pre-push guard on `main` still enforces the lock for manual pushes. Do not bypass a held lock;
-wait for its holder to release it, or reclaim it with `sidequest publish lock --steal` only after
-confirming the holder is dead.
+The GitHub Release workflow is notification-only. It runs for marketplace `v*` tag pushes, on its daily schedule, and on manual dispatch. The daily cap can defer the GitHub Release, but it does not delay the already-published marketplace `main` branch or marketplace tag. Plugin tags do not create GitHub Releases.
 
-## The shape of a window
+`--push` acquires the Sidequest publish lock before changing the local release window. It also checks the current remote `main` Test workflow before publishing. A failed or missing run stops the cut unless `--ci-override "<reason>"` records why it may proceed. The lock is released after the pushes or any failure.
 
-Integration puts verified work on `dev` and writes a fragment. Nothing is published: no version
-moves, no tag, no docs deploy, and the marketplace clone only follows `main`, so an installed copy
-physically cannot see it.
+## Workflow
 
-A cut merges `dev` into `main`, bumps only the plugins named by fragments, generates the
-changelogs, deletes the consumed fragments, commits once, tags, runs the changed plugins' suites,
-and pushes everything with a single `git push --atomic`.
-
-## Determinism
-
-Every input comes from one commit: the fragments, the manifests, the versions, the changelog
-ledger, and the release date (the pinned commit's own date). `git show <pin>:<path>`, never the
-checkout. A cut run from `main` with `--sha origin/dev` reads dev's tree, so `--dry-run` describes
-the cut that follows it rather than a mixture of the two. `plan.mjs` and `cut.mjs` call the same
-`buildPlan`, so a plan cannot disagree with the cut it describes.
-
-A normal window also has to be reachable: the cut refuses unless the publish branch is already an
-ancestor of the pin, since a window that could not fast-forward is not a window.
-
-`plan.mjs` reads the working tree by default and says so in its output. Pass `--sha` when you want
-the pinned answer.
-
-Two runs against the same tree produce the same answer. A rerun after a successful cut finds its
-fragments consumed and its refs already in `CHANGELOG.md`, so it releases nothing rather than
-publishing the same window twice.
-
-## Atomicity
-
-`cut.mjs` builds the entire release before it touches a remote: merge, versions, changelogs,
-commit, tags, suites. All of that is local and disposable. The only command that changes a remote
-is the final
-
-```
-git push --atomic origin <release-sha>:refs/heads/main refs/tags/v3.208.0:refs/tags/v3.208.0 ...
-```
-
-Every ref moves or none do, which rules out both bad half-states: `main` published without its
-tag (a release commit that never creates a Release) and tags pushed without `main` (a tag pointing
-at a commit that is not on the branch).
-
-The branch refspec names the verified commit, never `HEAD`. Suites run arbitrary repository code,
-so between "the suites passed" and "publish", the engine re-checks that HEAD is still the release
-commit, the index is empty, and every tag still points at it. Anything else aborts before the push.
-Suites also run with credentials stripped from their environment (`GITHUB_TOKEN`, `NPM_TOKEN`,
-`SSH_AUTH_SOCK` and friends) and with git's global and system config neutralised. That is a
-reduction in reach, not a proof, which is why the ref check is the actual guarantee.
-
-Any failure before that push leaves the remote untouched, the fragments still queued, and the
-next window free to retry. `cut.mjs` prints the push command by default and only runs it with
-`--push`. Before it prints that command, a GitHub remote must have a passing `Test` workflow for
-the current remote publish-branch head. The local release parent has no CI run yet, so it is never
-the check target. A failed or missing run stops the cut unless `--ci-override "<reason>"` records
-why it may continue, such as a release that repairs CI. A missing run also prints an optional
-Docker command for reproducing the Sidequest suite locally; Docker is not required.
-
-## What the engine refuses
-
-- A marketplace `source` that is not exactly `plugins/<name>`, and any read or write whose path
-  reaches through a symlink. Manifest data decides which files get rewritten, so it is treated as
-  untrusted input.
-- A staged index, always, `--allow-dirty` included. A pre-staged file would ride into the release
-  commit no matter which paths the engine adds, which breaks the "this commit is what was
-  verified" boundary. `--allow-dirty` tolerates unstaged and untracked files only.
-- A version on disk that is not the one the plan was built from.
-- A fragment title containing a newline or a control character, and any generated changelog line
-  that does not read back as its own ref.
-- `--tickets` naming the same ref twice.
-
-## Usage
+At integration time, record one fragment for the ticket:
 
 ```bash
-# At integration time, in the same push as the ticket's code
-node scripts/release/note.mjs SQ-843 --title "..." --plugins sidequest --bump minor --commit "$(git rev-parse HEAD)"
+node scripts/release/note.mjs SQ-843 --title "Build the release engine" --plugins sidequest --bump minor --commit "$(git rev-parse HEAD)"
+```
 
-# Any time, from anywhere: what would ship?
+Inspect the queued window, then preview it from `main` at `HEAD`:
+
+```bash
 node scripts/release/plan.mjs
-node scripts/release/plan.mjs --json
-
-# Build a window without publishing it
-node scripts/release/cut.mjs --sha origin/dev --dry-run
-node scripts/release/cut.mjs --sha origin/dev              # builds locally, prints the push
-node scripts/release/cut.mjs --sha origin/dev --push       # builds and publishes
-
-# Urgent fix, only these tickets, cut from main
-node scripts/release/cut.mjs --mode hotfix --tickets SQ-843,SQ-845 --push
-
-# CI
-node scripts/release/guard.mjs --mode dev --publish-ref origin/main --changed-file changed.txt
-node scripts/release/guard.mjs --mode main --publish-ref origin/main@{1} --changed-file changed.txt
+node scripts/release/cut.mjs --dry-run
 ```
 
-`--help` on any of them prints the full option list.
+Build the release locally, or build and publish it:
 
-## Two rules worth knowing before you wire anything to this
+```bash
+node scripts/release/cut.mjs
+node scripts/release/cut.mjs --push
+```
 
-A hotfix patches the **marketplace counter**, not the plugin. Each plugin still moves by whatever
-level its own fragment declared, because the fragment is the only thing that knows whether the fix
-was a one-line patch or a new failure mode. Forcing every hotfixed plugin to a patch would publish
-a version number that lies about what changed.
+`--dry-run` writes nothing. Without `--push`, the cut creates the local commit and tags and prints the exact publish commands. Other useful options include `--sha <rev>`, `--skip-tests`, `--allow-dirty` for unstaged or untracked files, and `--force` for an intentional held-window or tag repair. A hotfix selects tickets explicitly:
 
-Nothing releases twice. A cut deletes the fragments it consumed, and `CHANGELOG.md` is the ledger:
-`plan.mjs`, `cut.mjs`, and `guard.mjs` all skip a ref that already has an entry. That is what keeps
-a hotfix, whose fragment lives on `dev` where the cut cannot delete it, from shipping again in the
-next normal window.
+```bash
+node scripts/release/cut.mjs --mode hotfix --tickets SQ-843,SQ-845 --push
+```
+
+Run `--help` for the complete option list.
+
+## Recovery
+
+Everything before the first remote push is local. If a suite or invariant fails, the cut leaves the remote untouched and prints a reset to the previous `HEAD` plus a `git tag -d` command for every tag it created. Run both commands before retrying. A reset alone leaves local tags behind.
+
+If the first atomic push succeeds and the separate plugin-tag push fails, `main` and the marketplace tag remain published. Inspect the remote, then publish the missing plugin tags with the plugin-tag push command printed by the cut. Do not rerun the whole cut or move an already-published marketplace tag.
+
+If the pushes succeed and the GitHub Release is deferred by the daily cap, leave the marketplace refs in place. The scheduled workflow publishes the newest unreleased marketplace tag.
+
+## Safeguards
+
+- A staged index always stops the cut. `--allow-dirty` only tolerates unstaged and untracked files.
+- Manifest versions must match the plan when the cut writes the release.
+- Existing remote tags are refused unless `--force` is deliberate repair work.
+- The cut rechecks the release commit, index, and tags after suites run, before it publishes.
+- Suites run with release credentials and Sidequest runtime identity removed from their environment.
 
 ## Tests
 
@@ -151,9 +77,4 @@ next normal window.
 node --test scripts/release/test/*.test.mjs
 ```
 
-`atomic.test.mjs`, `cut.test.mjs`, and `real-git.test.mjs` run against throwaway repositories with
-a real local bare `origin` on disk, so the refspec and atomicity claims are settled by git rather
-than by a mock. Nothing in the suite contacts a network. Among other things they prove that a
-rejected tag rejects the whole push and leaves every remote ref where it was, that a suite which
-moves HEAD, retargets a tag, or stages a file stops the release before it is published, and that
-the three real 2026-07-23/24/25 windows come out as 3 cuts and 10 plugin bumps.
+The release tests use throwaway repositories and local bare remotes. They do not contact a network. They cover planning, version bumps, changelogs, the separate push stages, recovery, tag checks, and suite safeguards.

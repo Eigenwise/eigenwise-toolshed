@@ -5,10 +5,19 @@ description: Maintainer workflow for changing plugin source and site documentati
 
 ## Maintainer overview
 
-The site has two documentation surfaces:
+Keep each change in the documentation surface that owns it. There are three classes.
 
-- **Generated reference:** Pages under `docs/src/content/docs/reference/` come from plugin manifests, skill frontmatter, hook registries, binaries, and marketplace metadata. Change the source input or generator, then regenerate. Never hand-edit these pages.
-- **Prose guides:** The setup, observability, architecture, contributing, and release pages are maintained by hand. Update them when a user workflow or maintainer workflow changes.
+### Agent-facing contract
+
+MCP tool schemas and descriptions, refusal and guidance strings, agent and skill definitions, CLI help, and live rules tell agents what the system does. Update these surfaces with the code change in the same story. When a value is enumerated in code, treat that enum as the source of truth and update every surface that repeats it.
+
+### Generated reference
+
+Pages under `docs/src/content/docs/reference/` are generated from plugin metadata, skill frontmatter, hook registries, bin file inventories, and marketplace metadata. Change the source input or `docs/scripts/generate-reference.mjs`, then regenerate with `npm run generate`. Never hand-edit a generated page.
+
+### Human prose
+
+Setup, observability, architecture, contributing, and release pages are maintained by hand. Update the affected page in the same story when a user or maintainer workflow changes. If the prose needs a larger follow-up, file a linked `docs-writing` ticket before the story ships.
 
 Keep user actions in the [getting started guide](../getting-started/) or the relevant plugin guide. Keep implementation boundaries and release mechanics on the maintainer pages.
 

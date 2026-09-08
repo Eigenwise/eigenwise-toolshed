@@ -1,12 +1,10 @@
 # Release fragments
 
-`.release/unreleased/` is the queue of changes that have landed but are not published yet. One
-file per ticket, written when the ticket integrates, consumed by the next release cut. It exists
-because the board lives in `~/.claude/sidequest/sidequest.db`, which CI, forks, and a fresh clone
-cannot read. The fragment is the part of that record the repository has to own.
+`.release/unreleased/` is the queue of changes that have landed but are not published yet. The orchestrator keeps one fragment per integrated ticket and cuts the release from `main` at `HEAD`. The fragment is the repository-owned record of what the board integrated.
 
-Write one with `node scripts/release/note.mjs`, never by hand if you can avoid it, because the
-script validates what it writes:
+`cut.mjs` owns marketplace and plugin version bumps, changelogs, release tags, and fragment consumption. Ticket work records the fragment and does not hand-edit plugin or marketplace versions. See [`scripts/release/README.md`](../scripts/release/README.md) for the release lifecycle and recovery steps.
+
+Write one with `node scripts/release/note.mjs`, never by hand if you can avoid it, because the script validates what it writes:
 
 ```bash
 node scripts/release/note.mjs SQ-843 --title "Build the release engine" --plugins sidequest --bump minor --commit "$(git rev-parse HEAD)"
@@ -22,7 +20,7 @@ node scripts/release/note.mjs SQ-843 --title "Build the release engine" --plugin
 ref: SQ-843
 title: Build deterministic release planning and cut engine
 bump: minor
-plugins: [sidequest, workbench]
+plugins: [sidequest, model-gateway]
 commit: c7b2702b2e2f041dff7fe513710de83d89198c55
 ---
 Optional body. It shows up indented under the changelog entry, so use it for the one detail a
@@ -56,7 +54,7 @@ When one ticket means different things to different plugins, use the map form:
 ```yaml
 plugins:
   sidequest: minor
-  workbench: patch
+  model-gateway: patch
 ```
 
 A `bump` value is still allowed alongside it and acts as the default for any entry left empty.

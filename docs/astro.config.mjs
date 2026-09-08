@@ -81,6 +81,10 @@ export default defineConfig({
             { label: 'Marketplace versions', slug: 'reference/marketplace' },
           ],
         },
+        {
+          label: 'Support',
+          items: [{ label: 'Support the Toolshed', slug: 'support' }],
+        },
       ],
     }),
   ],
