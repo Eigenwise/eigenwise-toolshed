@@ -1026,6 +1026,93 @@ test('pre-tool hook: helper writes use the bound agent scope in linked worktrees
   assert.equal(read, null);
 });
 
+test('pre-tool hook: helpers write only canonically contained owned verification evidence', () => {
+  const ownerTicket = addStopTicket('owned helper evidence', { files: ['lib/allowed.js'] });
+  const sessionId = `helper-evidence-${++sqSeq}`;
+  const owner = claimStopTicket(ownerTicket, sessionId, 'helper-evidence-owner');
+  const siblingTicket = addStopTicket('sibling helper evidence', { files: ['lib/sibling.js'] });
+  claimStopTicket(siblingTicket, sessionId, 'helper-evidence-sibling');
+  const evidenceDirectory = store.getTicket(slug, ownerTicket.ref).dispatch.evidenceDirectory;
+  const siblingEvidenceDirectory = store.getTicket(slug, siblingTicket.ref).dispatch.evidenceDirectory;
+  const helper = {
+    ...owner,
+    agent_id: `${owner.agent_name}-researcher`,
+    agent_type: 'general-purpose',
+    cwd: BOARD_PATH,
+  };
+  assert.notEqual(helper.agent_id, owner.agent_id, 'the helper must be a distinct identity admitted by the recorded owner name');
+
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    ...helper,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(evidenceDirectory, 'owned-probe.log') },
+  }), null, 'an admitted helper may write its resolved owner’s evidence child');
+
+  const foreignEvidence = runHookOutput(FORCE_BYPASS, {
+    ...helper,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(siblingEvidenceDirectory, 'sibling-probe.log') },
+  });
+  assert.equal(foreignEvidence.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(foreignEvidence.hookSpecificOutput.permissionDecisionReason, /Board-owned verification evidence/);
+  assert.match(foreignEvidence.hookSpecificOutput.permissionDecisionReason, /Do not request scope/);
+
+  const siblingPrefix = runHookOutput(FORCE_BYPASS, {
+    ...helper,
+    tool_name: 'Write',
+    tool_input: { file_path: `${evidenceDirectory}-sibling${path.sep}probe.log` },
+  });
+  assert.equal(siblingPrefix.hookSpecificOutput.permissionDecision, 'deny');
+
+  const parentTraversal = runHookOutput(FORCE_BYPASS, {
+    ...helper,
+    tool_name: 'Write',
+    tool_input: { file_path: `${evidenceDirectory}${path.sep}..${path.sep}escaped-probe.log` },
+  });
+  assert.equal(parentTraversal.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(parentTraversal.hookSpecificOutput.permissionDecisionReason, /Board-owned verification evidence/);
+  assert.doesNotMatch(parentTraversal.hookSpecificOutput.permissionDecisionReason, /Ask the parent executor to request scope/);
+
+  const escapedDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-helper-evidence-escape-'));
+  const escapeLink = path.join(evidenceDirectory, 'escape');
+  try {
+    fs.symlinkSync(escapedDirectory, escapeLink, process.platform === 'win32' ? 'junction' : 'dir');
+    const symlinkEscape = runHookOutput(FORCE_BYPASS, {
+      ...helper,
+      tool_name: 'Write',
+      tool_input: { file_path: path.join(escapeLink, 'escaped-probe.log') },
+    });
+    assert.equal(symlinkEscape.hookSpecificOutput.permissionDecision, 'deny');
+  } finally {
+    fs.rmSync(escapeLink, { recursive: true, force: true });
+    fs.rmSync(escapedDirectory, { recursive: true, force: true });
+  }
+
+  const ambiguousHelper = runHookOutput(FORCE_BYPASS, {
+    ...helper,
+    agent_id: `unbound-helper-${sqSeq}`,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(evidenceDirectory, 'ambiguous-probe.log') },
+  });
+  assert.equal(ambiguousHelper.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(ambiguousHelper.hookSpecificOutput.permissionDecisionReason, /No active ticket is bound/);
+
+  const terminalTicket = addStopTicket('terminal helper evidence', { files: ['lib/terminal.js'] });
+  const terminalSessionId = `terminal-helper-evidence-${++sqSeq}`;
+  const terminalOwner = claimStopTicket(terminalTicket, terminalSessionId, 'terminal-helper-evidence-owner');
+  const terminalEvidenceDirectory = store.getTicket(slug, terminalTicket.ref).dispatch.evidenceDirectory;
+  assert.equal(store.releaseTicket(slug, terminalTicket.ref, 'terminal-helper-evidence-owner', { status: 'todo' }).ok, true);
+  const terminalHelper = runHookOutput(FORCE_BYPASS, {
+    ...terminalOwner,
+    agent_id: `${terminalOwner.agent_name}-researcher`,
+    agent_type: 'general-purpose',
+    cwd: BOARD_PATH,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(terminalEvidenceDirectory, 'terminal-probe.log') },
+  });
+  assert.equal(terminalHelper.hookSpecificOutput.permissionDecision, 'deny');
+});
+
 test('pre-tool hook: helper writes honor granted scope rulings and descendant globs', () => {
   const grantedTicket = addStopTicket('granted helper scope', { files: ['lib/declared.js'] });
   const grantedSession = `granted-helper-${++sqSeq}`;

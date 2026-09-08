@@ -343,7 +343,7 @@ function isVerificationEvidencePath(file: any, evidenceDirectory: any, ticketRef
 function verificationEvidenceGuidance(evidenceDirectory: any, evidencePaths: any[]) {
   if (!evidencePaths.length) return '';
   const subject = evidencePaths.length === 1 ? 'The refused path is' : 'The refused paths are';
-  return ` ${subject} board-owned verification evidence: ${evidencePaths.join(', ')}. Verification evidence belongs in ${evidenceDirectory}; do not request or commit it inside the repository.`;
+  return ` ${subject} board-owned verification evidence: ${evidencePaths.join(', ')}. The active owner and its admitted helpers can write verification evidence in ${evidenceDirectory} without requesting scope or committing it inside the repository.`;
 }
 
 function declaredScopeGuidance(ticket: any, refusedPaths: any[]) {

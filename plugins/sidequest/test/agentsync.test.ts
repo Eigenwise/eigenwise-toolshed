@@ -123,6 +123,7 @@ test('executor briefings name the board-owned verification evidence directory', 
 
   assert.ok(briefing.includes(directory));
   assert.match(briefing, /excluded from ticket scope and delivery/);
+  assert.match(briefing, /admitted helpers can write it without a scope request/);
   assert.match(briefing, /Do not write verification evidence anywhere in the repository worktree or integration target/);
 });
 

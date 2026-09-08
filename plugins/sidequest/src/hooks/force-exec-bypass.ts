@@ -62,6 +62,7 @@ interface Ticket {
     sessionId?: string;
     terminalAt?: string | null;
     route?: { model?: string; effort?: string; marker?: string };
+    evidenceDirectory?: string;
   };
 }
 interface PreparedDispatchSpawn {
@@ -105,11 +106,18 @@ interface HelperScope {
   ref: string;
   projectPath: string;
   files: string[];
+  evidenceDirectory: string;
+}
+
+interface EvidenceScope {
+  ref: string;
+  evidenceDirectory: string;
 }
 
 interface HelperScopeResolution {
   status: 'no-active-ticket' | 'no-owner' | 'recovery-owner' | 'ok';
   scopes: HelperScope[];
+  evidenceScopes: EvidenceScope[];
 }
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -672,22 +680,43 @@ function guardOwnTicketDispatch(input: HookInput): boolean {
 }
 
 function helperScope(store: Store, project: string, projectPath: string, ticket: Ticket): HelperScope {
-  return { ref: ticket.ref!, projectPath, files: store.executionScope(project, ticket) };
+  return {
+    ref: ticket.ref!,
+    projectPath,
+    files: store.executionScope(project, ticket),
+    evidenceDirectory: String(ticket.dispatch?.evidenceDirectory || '').trim(),
+  };
+}
+
+function evidenceScope(ticket: Ticket): EvidenceScope | null {
+  const evidenceDirectory = String(ticket.dispatch?.evidenceDirectory || '').trim();
+  return ticket.ref && evidenceDirectory ? { ref: ticket.ref, evidenceDirectory } : null;
+}
+
+function helperScopeResolution(
+  status: HelperScopeResolution['status'],
+  scopes: HelperScope[],
+  evidenceScopes: EvidenceScope[],
+): HelperScopeResolution {
+  return { status, scopes, evidenceScopes };
 }
 
 function helperScopes(input: HookInput): HelperScopeResolution {
   const agentId = stringField(input, 'agent_id', 'agentId');
   const type = stringField(input, 'agent_type', 'agentType', 'subagent_type');
   const sessionId = stringField(input, 'session_id', 'sessionId') || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
-  if (!agentId || !type || !sessionId || isCurrentExecutor(classifyExecutor(type))) return { status: 'no-active-ticket', scopes: [] };
+  if (!agentId || !type || !sessionId || isCurrentExecutor(classifyExecutor(type))) return helperScopeResolution('no-active-ticket', [], []);
   try {
     const store = require(runtimeModule('store')) as Store;
     const activeTickets: Array<{ project: string; projectPath: string; ticket: Ticket }> = [];
     const recoveryTickets: Array<{ project: string; projectPath: string; ticket: Ticket }> = [];
+    const evidenceScopes: EvidenceScope[] = [];
     for (const project of store.listProjects({ all: true })) {
       const projectPath = String(store.readMeta(project.slug)?.path || '').trim();
       if (!projectPath) continue;
       for (const ticket of store.listTickets(project.slug)) {
+        const evidence = evidenceScope(ticket);
+        if (evidence) evidenceScopes.push(evidence);
         if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId) continue;
         const candidate = { project: project.slug, projectPath, ticket };
         if (ticket.claim?.by && !ticket.dispatch?.terminalAt) activeTickets.push(candidate);
@@ -697,30 +726,39 @@ function helperScopes(input: HookInput): HelperScopeResolution {
     const ownedTickets = activeTickets.filter(({ ticket }) => dispatchIdentityMatches(ticket, agentId, type));
     if (ownedTickets.length === 1) {
       const owner = ownedTickets[0]!;
-      return { status: 'ok', scopes: [helperScope(store, owner.project, owner.projectPath, owner.ticket)] };
+      return helperScopeResolution('ok', [helperScope(store, owner.project, owner.projectPath, owner.ticket)], evidenceScopes);
     }
-    if (ownedTickets.length > 1) return { status: 'no-owner', scopes: ownedTickets.map((owner) => helperScope(store, owner.project, owner.projectPath, owner.ticket)) };
+    if (ownedTickets.length > 1) return helperScopeResolution('no-owner', ownedTickets.map((owner) => helperScope(store, owner.project, owner.projectPath, owner.ticket)), evidenceScopes);
     if (recoveryTickets.length === 1) {
       const owner = recoveryTickets[0]!;
-      return { status: 'recovery-owner', scopes: [helperScope(store, owner.project, owner.projectPath, owner.ticket)] };
+      return helperScopeResolution('recovery-owner', [helperScope(store, owner.project, owner.projectPath, owner.ticket)], evidenceScopes);
     }
     if (activeTickets.length === 1) {
       const owner = activeTickets[0]!;
-      return { status: 'ok', scopes: [helperScope(store, owner.project, owner.projectPath, owner.ticket)] };
+      return helperScopeResolution('ok', [helperScope(store, owner.project, owner.projectPath, owner.ticket)], evidenceScopes);
     }
-    return { status: activeTickets.length ? 'no-owner' : 'no-active-ticket', scopes: activeTickets.map((owner) => helperScope(store, owner.project, owner.projectPath, owner.ticket)) };
+    return helperScopeResolution(
+      activeTickets.length ? 'no-owner' : 'no-active-ticket',
+      activeTickets.map((owner) => helperScope(store, owner.project, owner.projectPath, owner.ticket)),
+      evidenceScopes,
+    );
   } catch (_) {
-    return { status: 'no-active-ticket', scopes: [] };
+    return helperScopeResolution('no-active-ticket', [], []);
   }
 }
 
-function writeTarget(input: HookInput): string {
+function writeTargetValue(input: HookInput): string {
   const toolInput = toolInputOf(input);
   if (!toolInput) return '';
   const raw = toolInput.file_path ?? toolInput.notebook_path ?? toolInput.path;
-  if (raw == null || !String(raw).trim()) return '';
+  return raw == null ? '' : String(raw).trim();
+}
+
+function writeTarget(input: HookInput): string {
+  const raw = writeTargetValue(input);
+  if (!raw) return '';
   const cwd = stringField(input, 'cwd') || process.cwd();
-  return path.resolve(cwd, String(raw));
+  return path.resolve(cwd, raw);
 }
 
 function restoresCommittedContent(input: HookInput, target: string): boolean {
@@ -795,6 +833,33 @@ function inScope(target: string, scope: HelperScope): boolean {
   return relative != null && scopeMatch(relative, scope.files);
 }
 
+function evidencePathRelation(target: string, scope: EvidenceScope): 'inside' | 'related' | null {
+  const evidenceDirectory = canonicalPath(scope.evidenceDirectory);
+  const canonicalTarget = canonicalPath(target);
+  if (relativeInside(evidenceDirectory, canonicalTarget) != null) return 'inside';
+  if (evidenceDirectory === canonicalTarget || relativeInside(canonicalTarget, evidenceDirectory) != null) return 'related';
+  return null;
+}
+
+function evidenceTraversalAttempt(input: HookInput, scope: EvidenceScope): boolean {
+  const rawTarget = writeTargetValue(input);
+  if (!rawTarget) return false;
+  const cwd = stringField(input, 'cwd') || process.cwd();
+  const candidate = (path.isAbsolute(rawTarget) ? rawTarget : path.join(cwd, rawTarget)).replace(/\\/g, '/');
+  const evidenceDirectory = path.resolve(scope.evidenceDirectory).replace(/\\/g, '/').replace(/\/+$/, '');
+  const comparableCandidate = process.platform === 'win32' ? candidate.toLowerCase() : candidate;
+  const comparableDirectory = process.platform === 'win32' ? evidenceDirectory.toLowerCase() : evidenceDirectory;
+  if (!comparableCandidate.startsWith(`${comparableDirectory}/`)) return false;
+  return comparableCandidate.slice(comparableDirectory.length + 1).split('/').includes('..');
+}
+
+function denyEvidenceWrite(target: string): void {
+  writeDeny(
+    'PreToolUse',
+    `sidequest: refusing helper write to ${target}. Board-owned verification evidence is writable only by a helper resolved to its active ticket owner. Do not request scope for board-owned verification evidence.`,
+  );
+}
+
 function isScratchpadPath(target: string): boolean {
   const configuredRoot = process.env.CLAUDE_SCRATCHPAD_DIR || process.env.CLAUDE_CODE_SCRATCHPAD_DIR;
   const roots = [configuredRoot, path.join(os.tmpdir(), 'claude')].filter((root): root is string => Boolean(root));
@@ -806,9 +871,15 @@ function isScratchpadPath(target: string): boolean {
 
 function guardHelperWrite(input: HookInput): void {
   const resolution = helperScopes(input);
-  if (resolution.status === 'no-active-ticket') return;
   const target = writeTarget(input);
   if (!target) return;
+  const evidenceRelations = resolution.evidenceScopes.map((scope) => evidencePathRelation(target, scope));
+  const evidenceTarget = evidenceRelations.some((relation) => relation != null)
+    || resolution.evidenceScopes.some((scope) => evidenceTraversalAttempt(input, scope));
+  if (resolution.status === 'no-active-ticket') {
+    if (evidenceTarget) denyEvidenceWrite(target);
+    return;
+  }
   const matchingScopes = resolution.scopes.filter((scope) => inScope(target, scope));
   if ((resolution.status === 'recovery-owner' || resolution.status === 'no-owner')
     && matchingScopes.length === 1
@@ -821,7 +892,11 @@ function guardHelperWrite(input: HookInput): void {
     return;
   }
   const scope = resolution.scopes[0]!;
-  if (isScratchpadPath(target) || inScope(target, scope)) return;
+  if (isScratchpadPath(target) || evidencePathRelation(target, scope) === 'inside' || inScope(target, scope)) return;
+  if (evidenceTarget) {
+    denyEvidenceWrite(target);
+    return;
+  }
   const display = projectRelative(target, scope.projectPath) || target;
   writeDeny(
     'PreToolUse',
