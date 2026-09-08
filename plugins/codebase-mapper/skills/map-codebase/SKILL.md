@@ -54,7 +54,12 @@ for having it? If yes, write it; if not, leave it out.
 
 ## Process
 
-### Step 0 — Assess project state (decide the path)
+### Step 0 : Assess project state (decide the path)
+
+Once a map exists, the plugin's session context tells the main session to assess the map after code
+changes and invoke `update-codebase-map` immediately when documentation work is warranted. It does not
+wait for a separate user approval. A genuine no-op ends with no map edit or state refresh. This initial
+mapping skill creates the starting map; use `update-codebase-map` for later assessments.
 
 Get the lay of the land first, then pick a path:
 
@@ -64,25 +69,29 @@ Get the lay of the land first, then pick a path:
 
 Then branch:
 
-- **Existing project with real code → use the Sidequest handoff below when it is available.** Its
-  artifact writer performs Steps 1–8; otherwise continue inline with Steps 1–8.
+- **Existing project with real code → assess and map it inline by default.** For a larger remap or a
+  small or medium initial map, use the optional Sidequest handoff below when its live contract is
+  available; otherwise continue inline with Steps 1–8.
 - **Greenfield (empty repo, scaffold only, or just a spec/README) → seed mapping inline.** Jump to the
   **Greenfield projects** section below, then do Step 8. Do not file a mapping ticket for this.
-- **Large codebase (hundreds+ of source files) → use the large-repo story below when Sidequest is
-  available.** Otherwise parallelize inline as described there, then complete Steps 7–8.
+- **Large codebase (hundreds+ of source files) → use the optional large-repo handoff below when
+  Sidequest is available.** Otherwise parallelize inline as described there, then complete Steps 7–8.
 
 Also check today's actual date (it's provided in the session context, or run `date`) so the
 "Last Updated" stamps are real, not placeholders.
 
-### Sidequest handoff for an existing project
+### Optional Sidequest handoff for an existing project
 
-Inspect the session tool roster before doing mapping reads. The handoff is available only when the
-normal native `Agent` tool and Sidequest's `category_list`, `add`, `comment`, `dispatch`, and `pulse`
-tools are present. Do not probe the Sidequest CLI or dashboard. Read the live `codebase-exploration`
-category with `category_list`; delegate only when it is enabled and its live contract permits one
-bounded documentation-artifact write. The required contract language is that project source remains
-read-only while a ticket may explicitly name one bounded documentation artifact directory as its only
-write scope.
+Use this handoff only when a small or medium initial map or a larger remap benefits from a bounded
+shared-tree artifact writer. Inspect the session tool roster before doing mapping reads. Sidequest is
+optional: the standalone path above and the inline fallback below remain valid.
+
+The handoff is available only when the normal native `Agent` tool and Sidequest's `category_list`,
+`add`, `comment`, `dispatch`, and `pulse` tools are present. Do not probe the Sidequest CLI or
+dashboard. Read the live `codebase-exploration` category with `category_list`; delegate only when it is
+enabled and its live contract permits one bounded documentation-artifact write. The required contract
+language is that project source remains read-only while a ticket may explicitly name one bounded
+documentation artifact directory as its only write scope.
 
 - When the tools are absent, continue inline without an error banner.
 - When Sidequest is present but the category is missing, disabled, or still says `no edits`, continue
@@ -101,6 +110,8 @@ lifecycle marker verbatim:
 ```text
 Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.
 ```
+
+The invoking parent session verifies the generated paths and state after the writer closes, then commits the map if its flow permits.
 
 Before dispatch, post this reason as a ticket comment:
 
@@ -130,14 +141,14 @@ and complete the map inline in this same shared tree. Validate or repair any par
 state, comment that the ticket completed through inline fallback, and give the user one short line naming
 the delegation failure and inline fallback.
 
-### Step 1 — Identify the stack
+### Step 1 : Identify the stack
 
 Read the project's manifest/config files to determine languages, frameworks, and tooling. See
 `references/language-detection.md` for a broad map of signal files across ecosystems
 (JS/TS, Python, Go, Rust, Java/Kotlin, .NET, Ruby, PHP, Swift, Elixir, C/C++, Dart/Flutter,
-monorepos, and more). Note the framework(s) — they dictate where things live.
+monorepos, and more). Note the framework(s) : they dictate where things live.
 
-### Step 2 — Map the directory structure
+### Step 2 : Map the directory structure
 
 List the tree (`git ls-files` in a git repo gives a clean, ignore-aware listing; otherwise `tree`
 or a recursive list, skipping the noise dirs above). Identify the organizing principle:
@@ -146,32 +157,32 @@ or a recursive list, skipping the noise dirs above). Identify the organizing pri
 - **Hexagonal/clean**: `domain/`, `application/`, `infrastructure/`
 - **Monorepo**: `packages/*`, `apps/*`, workspaces
 
-### Step 3 — Find the entry points
+### Step 3 : Find the entry points
 
 Where does execution begin? Web routes, API routers, CLI command handlers, background workers/cron,
 serverless handlers, library public exports, app `main`/bootstrap files, build/start scripts.
 
-### Step 4 — Trace the key flows
+### Step 4 : Trace the key flows
 
 For the 3–5 most important features, trace end to end: entry point → business logic → data layer →
 external effects. Example: `POST /api/users` → `UserController.store()` → `UserService.create()` →
 `users` table → `WelcomeEmail`. Note shared utilities and cross-cutting concerns (auth, logging,
 validation, error handling).
 
-### Step 5 — Catalog dependencies
+### Step 5 : Catalog dependencies
 
 From the manifest(s), categorize: **Core** (framework/runtime), **Data** (DB/ORM/cache),
 **External** (API clients, third-party services), **Dev** (test/lint/build). Capture only what aids
-understanding — don't transcribe the entire lockfile.
+understanding : don't transcribe the entire lockfile.
 
-### Step 6 — Capture patterns & conventions
+### Step 6 : Capture patterns & conventions
 
 Recurring design patterns, error-handling approach, configuration/secrets management, logging and
 observability, and testing structure. Derive coding style from linter/formatter configs
 (`.eslintrc`, `ruff.toml`, `.editorconfig`, `rustfmt.toml`, etc.) **and** from what the code
 actually does.
 
-### Step 7 — Write the atomic documents
+### Step 7 : Write the atomic documents
 
 First decide the doc set: walk the aspects you found in Steps 1–6 and pick the documents this project
 warrants (see "This list is a menu, not a checklist" above). Then create each one in
@@ -186,7 +197,7 @@ paths, tables/diagrams where they help). For each document:
   summarize the project in a few lines and link out to the detailed docs, which Claude reads on
   demand. Include the short "How to use / How to maintain this map" section from the template.
 
-### Step 8 — Record state
+### Step 8 : Record state
 
 Run the bundled state writer after every map document is final:
 
@@ -198,21 +209,20 @@ It records the current date, the full `HEAD` SHA (or `null` outside git), every 
 and hashes of the final bytes. It atomically replaces `.map-state.json` last so a hook can only see
 old hashes or a safely detectable stale manifest.
 
-Finally, get the map committed (outside shared-tree artifact mode, where committing is forbidden).
-A map that only exists in one working tree helps nobody else and goes stale silently, and the
-manifest is what makes staleness detectable, so the commit must include **every generated doc AND
-`.map-state.json`** — leaving the manifest out is the most common miss. Before staging, check the
-repo's ignore rules: a broad `.claude/*` ignore swallows the map and makes `git add` warn, which
-reads as "this is local-only" when it is not. If `git check-ignore .claude/.codebase-info/INDEX.md`
-matches, add the negations (`!.claude/.codebase-info/`, `!.claude/.codebase-info/**`) to
-`.gitignore` in the same commit. Commit the map as its own commit; if the user's flow means you
-should not commit right now, say plainly that `.claude/.codebase-info/` including `.map-state.json`
-still needs committing, and tell them the plugin's hook will surface the map automatically from
-now on.
+Outside shared-tree artifact mode, commit the map unless the user explicitly says not to commit. A map
+that only exists in one working tree helps nobody else and goes stale silently, and the manifest is what
+makes staleness detectable, so the commit must include **every generated doc AND `.map-state.json`**.
+Before staging, check the repo's ignore rules: a broad `.claude/*` ignore swallows the map and makes
+`git add` warn, which reads as "this is local-only" when it is not. If
+`git check-ignore .claude/.codebase-info/INDEX.md` matches, add the negations
+(`!.claude/.codebase-info/`, `!.claude/.codebase-info/**`) to `.gitignore` in the same commit. Commit
+the map as its own commit when allowed. If the user explicitly says not to commit, leave the verified
+map and `.map-state.json` in the working tree, say plainly that they still need review or committing,
+and tell them the plugin's hook will surface the map automatically from now on.
 
 ## Greenfield projects
 
-A brand-new or empty project has little to map yet — so seed the map with *intent* and let it grow:
+A brand-new or empty project has little to map yet : so seed the map with *intent* and let it grow:
 
 1. Look for any existing intent: `README`, a spec/PRD, design notes, issues, or scaffolding.
 2. If intent isn't written down anywhere, ask the user 2–3 brief questions: What are you building?
@@ -261,5 +271,5 @@ For hundreds or thousands of source files, do not try to read everything seriall
 
 ## References
 
-- `references/document-templates.md` — templates for every document type
-- `references/language-detection.md` — signal files for detecting stacks across ecosystems
+- `references/document-templates.md` : templates for every document type
+- `references/language-detection.md` : signal files for detecting stacks across ecosystems

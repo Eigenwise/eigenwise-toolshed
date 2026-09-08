@@ -1,33 +1,18 @@
 # Example Rules
 
-Copy and adapt these. Each is one rule **section** for your live-rules file (`.claude/live-rules.md`
-by default). Drop the sections you want into the file, one after another; the `---` fence is what
-separates them. They are illustrative, so swap in the real conventions of the project.
+Copy and adapt these. Each example is one atomic rule file under
+`.claude/live-rules/rules/`. After adding or editing a file, run the plugin-owned sync command:
 
-A small complete file looks like this:
-
-```markdown
-# Live rules
-
----
-description: House writing style
----
-- No em dashes. Use commas, colons, parentheses, or periods.
-- Prefer plain words over jargon. Write like a human, not a press release.
-
----
-description: React component conventions
-globs: ["**/*.tsx", "**/*.jsx"]
----
-- Function components with hooks only; no class components.
-- No inline styles; use CSS modules.
+```text
+node "${CLAUDE_PLUGIN_ROOT}/scripts/sync-atomic-rules.js" --project "${CLAUDE_PROJECT_DIR}"
 ```
 
-The rest of this file shows individual sections by scope.
+The examples are illustrative, so swap in the real conventions of the project.
 
-## Global (always-on)
+## Global rule
 
-Injected on every prompt:
+Create `.claude/live-rules/rules/house-style.md`. It is eligible on normal prompts, then appears only
+when it is new or changed in the current session:
 
 ```markdown
 ---
@@ -36,6 +21,8 @@ description: House writing style
 - No em dashes. Use commas, colons, parentheses, or periods.
 - Prefer plain words over jargon. Write like a human, not a press release.
 ```
+
+A higher priority global rule can go in `.claude/live-rules/rules/commit-hygiene.md`:
 
 ```markdown
 ---
@@ -47,9 +34,9 @@ priority: 5
 - Keep commits focused; one logical change per commit.
 ```
 
-## Path / glob scope
+## Path or glob scope
 
-Injected before editing a React component:
+Create `.claude/live-rules/rules/react-components.md`:
 
 ```markdown
 ---
@@ -61,7 +48,7 @@ globs: ["**/*.tsx", "**/*.jsx"]
 - Co-locate the test as ComponentName.test.tsx next to the component.
 ```
 
-Any SQL file, at any depth (no slash in the glob):
+Any SQL file, at any depth, can use `.claude/live-rules/rules/sql-safety.md`:
 
 ```markdown
 ---
@@ -69,36 +56,26 @@ description: SQL safety
 globs: ["*.sql"]
 priority: 10
 ---
-- Always use parameterized queries; never string-concatenate user input.
+- Always use parameterized queries; never concatenate user input.
 - Every destructive migration needs a tested down-migration.
-```
-
-```markdown
----
-description: Python conventions
-globs: ["**/*.py"]
----
-- Use httpx, not requests.
-- Full type hints on public functions.
-- Raise specific exceptions; never bare `except:`.
 ```
 
 ## Directory scope
 
-Injected when editing anything under the API package:
+Create `.claude/live-rules/rules/api-layer.md` for files under the API package:
 
 ```markdown
 ---
 description: API layer rules
 dirs: ["packages/api", "services/gateway"]
 ---
-- All endpoints validate input with the shared zod schemas in packages/api/schemas.
-- Return the standard error envelope from packages/api/errors.ts; do not invent ad hoc shapes.
+- Validate endpoints with the shared schemas in packages/api/schemas.
+- Return the standard error envelope from packages/api/errors.ts.
 ```
 
 ## Prompt-keyword scope
 
-Injected when the prompt mentions deploying:
+Create `.claude/live-rules/rules/deploy-checklist.md` for prompts about deployments:
 
 ```markdown
 ---
@@ -106,11 +83,11 @@ description: Deploy checklist
 prompt: ["deploy", "release", "ship to prod"]
 ---
 - Confirm the staging smoke tests passed.
-- Bump the version and update CHANGELOG.md.
-- Post in #releases after the rollout completes.
+- Check the release plan before changing version fields.
+- Record the rollout result after it completes.
 ```
 
-Regex match across "migrate" / "migration":
+A regex can cover both migration spellings in `.claude/live-rules/rules/database-migration.md`:
 
 ```markdown
 ---
@@ -118,12 +95,12 @@ description: Database migration care
 prompt: ["/migrat(e|ion)/i"]
 ---
 - Write the migration and its rollback together.
-- Run it against a copy of prod-shaped data before merging.
+- Run it against a copy of production-shaped data before merging.
 ```
 
 ## Combined scope
 
-Fires both when editing auth files and when the prompt mentions auth:
+Create `.claude/live-rules/rules/auth-high-risk.md` to fire for auth edits or prompts:
 
 ```markdown
 ---
@@ -134,38 +111,29 @@ priority: 20
 ---
 - Never log tokens, passwords, or session identifiers.
 - All auth changes need a second reviewer.
-- Use the existing session helpers in src/auth/session.ts; do not roll your own.
+- Use the existing session helpers in src/auth/session.ts.
 ```
 
 ## Include a live file
 
-Inject a file's current contents under the body every prompt. This rule is a self-loading codebase
-map: the body is the protocol, the `include:` is the map. If the map file does not exist, the rule
-stays silent.
+Create `.claude/live-rules/rules/codebase-map-protocol.md`. The body is the protocol and `include:`
+is the live payload:
 
 ```markdown
 ---
 description: Codebase map protocol
 include: .claude/.codebase-info/INDEX.md
 ---
-This repo has a maintained codebase map. Before starting any task, say which doc(s)
-from .claude/.codebase-info/ you will read, and read them before exploring. After
-changing code, review whether the map needs updating.
+This repo has a maintained codebase map. Read the relevant map document before exploring.
+After changing code, assess whether the map needs updating.
 ```
 
-Any file works. Keep a planning doc in front of Claude while a feature is in flight:
-
-```markdown
----
-description: Current sprint focus
-include: docs/sprint.md
----
-- Work toward the goals in the included sprint doc; flag anything that pulls away from them.
-```
+If the map file does not exist, the rule stays silent. Any file can be included, but a compact hub such
+as `INDEX.md` leaves room for the rule body and other matching rules.
 
 ## Temporarily disabling a rule
 
-Keep the section, flip one field:
+Keep the file and flip one field. Sync after saving:
 
 ```markdown
 ---
@@ -173,5 +141,11 @@ description: Strict lint gate (paused during the big refactor)
 globs: ["**/*.ts"]
 enabled: false
 ---
-- Treat all eslint warnings as errors.
+- Treat all lint warnings as errors.
 ```
+
+## Legacy explicit override
+
+Only when a project deliberately sets `LIVE_RULES_PATH`, the same frontmatter can be maintained in the
+configured single file. That format is also what the SessionStart migration reads from the default
+`.claude/live-rules.md`; it is not the path to choose for new work.

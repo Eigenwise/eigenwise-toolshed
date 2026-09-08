@@ -79,7 +79,7 @@
     {
       "name": "codebase-mapper",
       "source": "./plugins/codebase-mapper",
-      "description": "A self-maintaining codebase map: atomic docs Claude loads at the start of each session and keeps in sync as the code changes. Any stack; greenfield or existing.",
+      "description": "A self-maintaining codebase map: atomic docs Claude loads at session start and assesses after code changes. It keeps warranted updates and commits inline, with optional Sidequest artifact handoff for larger remaps and standalone fallback when Sidequest is unavailable.",
       "version": "2.15.7",
       "author": {
         "name": "Eigenwise"
@@ -127,7 +127,7 @@
     {
       "name": "live-rules",
       "source": "./plugins/live-rules",
-      "description": "Project rules in a Markdown file that Claude re-injects right when they apply: every prompt, or just before it edits a matching file. Edits apply on the next prompt, no restart. A SessionStart hook injects the always-on rules once as a fallback, and it's a way to tell whether per-prompt injection is actually wired.",
+      "description": "Atomic project rules in .claude/live-rules/rules/ with a generated manifest. Claude injects applicable rules at SessionStart, then only new or changed unseen rules as prompts and edits match; legacy single-file storage is for migration or explicit overrides.",
       "version": "2.10.4",
       "author": {
         "name": "Eigenwise"

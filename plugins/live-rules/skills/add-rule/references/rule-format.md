@@ -1,16 +1,16 @@
 # Rule Format
 
-All rules live in **one Markdown file**: by default `.claude/live-rules.md` at the project root, or
-wherever the `LIVE_RULES_PATH` environment variable points (project-relative, absolute, or
-`~`-relative; usually set in `.claude/settings.json` under `env`).
+New workspaces use **atomic storage**: one Markdown file per rule under `.claude/live-rules/rules/` and
+a generated `.claude/live-rules/manifest.json`. Rule files are authoritative. Run the plugin-owned
+sync command after every rule-file change; never hand-edit the manifest.
 
-The file is a sequence of rules. Each rule is a YAML frontmatter block between `---` fences, followed
-by its body, and the next `---` begins the next rule. The body is the instruction Claude sees; the
-frontmatter decides **when** it is injected.
+```text
+node "${CLAUDE_PLUGIN_ROOT}/scripts/sync-atomic-rules.js" --project "${CLAUDE_PROJECT_DIR}"
+```
+
+A rule file contains exactly one frontmatter block and its body:
 
 ```markdown
-# Live rules (optional title; anything before the first --- is ignored)
-
 ---
 description: React component conventions
 globs: ["**/*.tsx", "**/*.jsx"]
@@ -20,148 +20,128 @@ enabled: true
 - Prefer function components with hooks over class components.
 - No inline styles; use CSS modules.
 - Co-locate the test file next to the component.
+```
 
+A stable filename such as `react-components.md` is easier to maintain than a generated-looking name.
+The manifest records the file path, hash, and parsed metadata. Sync validates the files and atomically
+replaces the manifest. If sync fails, fix the named rule file and run it again.
+
+## Legacy single-file storage
+
+Existing projects may still use a sequence of rule sections in one Markdown file. The default path is
+`.claude/live-rules.md`; `LIVE_RULES_PATH` may point to a project-relative, absolute, or `~`-relative
+file. This format is for automatic migration or an explicit `LIVE_RULES_PATH` override, not for new
+rules.
+
+On SessionStart, the plugin migrates a readable default legacy file into `.claude/live-rules/`, verifies
+that the atomic rules match, and removes the old default file. An explicit `LIVE_RULES_PATH` file is
+preserved. If verification fails, the legacy file stays in place so it can be recovered. Review and
+commit the resulting project files.
+
+When maintaining an explicit legacy override, each section still uses this shape:
+
+```markdown
 ---
 description: House style
 ---
-- No em dashes. Use commas, colons, parentheses, or periods.
+- Prefer plain words over jargon.
+
+---
+description: SQL safety
+globs: ["*.sql"]
+---
+- Always use parameterized queries.
 ```
 
-## How the file is parsed
-
-- **A file with no complete frontmatter block** (fewer than two `---` fences) is treated as a
-  **single global rule** whose body is the whole file. So a plain `Write code as poetry.` with no
-  frontmatter just works as an always-on rule. An empty file produces no rule.
-- Once there is at least one `--- ... ---` block, the `---` lines pair up as open/close, open/close,
-  ... Each pair fences one rule's frontmatter, and the body runs from the closing fence to the next
-  opening fence (or the end of the file).
-- **Anything before the first fence** (a title or intro) is ignored.
-- A **rule body must not contain a line that is exactly `---`**: it would be read as the next rule's
-  fence and split the rule in two. For a horizontal rule inside a body, use `***` or `___`.
-- A dangling unmatched `---` at the very end is skipped.
-- Parsing is **fail-soft**: a malformed section is skipped, never fatal, and a missing file produces
-  no output at all.
+A file with no complete frontmatter block is treated as one global rule whose body is the whole file.
+Anything before the first `---` fence is ignored. Once a complete block exists, fences pair as
+open/close blocks and the body runs until the next opening fence. A rule body must not contain a line
+that is exactly `---`; use `***` or `___` for a horizontal rule. Parsing is fail-soft, so malformed
+sections are skipped and a missing file produces no output.
 
 ## Frontmatter fields
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
-| `description` | string | `""` | Human title for the rule. Shown as the heading when the rule is injected, and in `manage-rules` listings. Recommended. |
-| `globs` | list of strings | none | **Path/glob scope.** Injected right before Claude edits a file matching any of these globs. |
-| `dirs` | list of strings | none | **Directory scope.** Injected before editing a file under any of these directories, and on prompts when the session's working dir is inside one. |
-| `prompt` | list of strings | none | **Prompt-keyword scope.** Injected on a prompt whose text matches any entry (literal substring, case-insensitive, or `/regex/flags`). |
-| `include` | string or list | none | **Live file payload.** When the rule is injected, the current contents of these file(s) are read fresh and appended under the body. See "Including a live file" below. |
+| `description` | string | `""` | Human title shown when the rule is injected and in `manage-rules` listings. |
+| `globs` | list of strings | none | Path/glob scope. Injected before editing a matching file. |
+| `dirs` | list of strings | none | Directory scope. Injected before editing under a directory and on prompts when the session cwd is inside it. |
+| `prompt` | list of strings | none | Prompt-keyword scope. Injected when the submitted prompt matches a literal or `/regex/flags`. |
+| `include` | string or list | none | Live file payload. Matching injections read these files fresh and append their contents. |
 | `priority` | number | `0` | Higher numbers are injected first when several rules match. |
 | `enabled` | boolean | `true` | Set `false` to switch a rule off without deleting it. |
 
-Singular aliases are accepted (`glob`, `dir`) as are `prompts`/`keywords` for the prompt field and
-`includes` for `include`, so a quick hand-edit does not trip on a missing `s`.
+Singular aliases are accepted (`glob`, `dir`), as are `prompts`/`keywords` for the prompt field and
+`includes` for `include`.
 
-## Scope is inferred from the fields present
+## Scope and cadence
 
-You do not declare a "type". The scope follows from which fields exist:
+Scope follows from the fields present. There is no separate `type` field:
 
-- **Global (always-on):** none of `globs`, `dirs`, `prompt`. Injected on **every prompt**.
-- **Path/glob:** has `globs`. Injected before an edit to a matching file.
-- **Directory:** has `dirs`. Injected before an edit under that directory, and on prompts when the
+- **Global:** no `globs`, `dirs`, or `prompt`. Eligible on normal prompts.
+- **Path/glob:** has `globs`. Eligible before an edit to a matching file.
+- **Directory:** has `dirs`. Eligible before an edit under that directory and on prompts when the
   session cwd is inside it.
-- **Prompt-keyword:** has `prompt`. Injected when the submitted prompt matches.
+- **Prompt-keyword:** has `prompt`. Eligible when the submitted prompt matches.
 
-A rule may declare more than one scope. Conditions are combined with **OR**: the rule fires when any
-applicable condition matches. (Global and prompt-keyword rules arrive via the `UserPromptSubmit`
-hook; glob and directory rules arrive via the `PreToolUse` hook just before the edit. A rule with
-both is simply eligible on both paths.)
+A rule may declare more than one scope. Conditions are combined with **OR**.
+
+SessionStart injects the applicable startup rules first. During the session, the ledger remembers each
+rule's source path and content hash. UserPromptSubmit and PreToolUse inject only rules that newly match
+or whose hash changed and have not been seen in that session. An unchanged rule is not repeated on
+every prompt or edit. Editing, adding, disabling, or deleting a rule takes effect on the next prompt
+or relevant edit, with no restart.
+
+Global, prompt-keyword, and cwd rules arrive through UserPromptSubmit. Glob and directory rules arrive
+through PreToolUse just before an edit. A rule with both kinds of scope is eligible on both paths.
 
 ## Including a live file
 
-`include:` is **not a scope** (it does not change *when* a rule fires); it is a payload that changes
-*what* the rule injects. When a rule with `include:` fires, the current contents of each listed file
-are read fresh and appended under the body, each in its own `--- included: <path> ---` block. Because
-the file is read on every injection, edits to it show up on the next prompt with no restart, exactly
-like the rules file itself.
+`include:` is a payload, not a scope. When a matching rule fires, the current contents of each listed
+file are read fresh and appended under an `--- included: <path> ---` block. If none of the files can be
+read, the rule is dropped for that injection. Project-relative paths are resolved from the project
+root; absolute and `~`-relative paths are also honored.
 
 ```markdown
 ---
 description: Codebase map protocol
 include: .claude/.codebase-info/INDEX.md
 ---
-This repo has a maintained codebase map. Before starting any task, say which doc(s)
-from .claude/.codebase-info/ you will read, and read them before exploring. After
-changing code, review whether the map needs updating.
+This repo has a maintained codebase map. Read only the relevant map document before exploring.
 ```
 
-That one rule reproduces what the **codebase-mapper** plugin's hook does: a forceful protocol in the
-body plus the live map injected every prompt. `include:` works on any file, so it is equally good for
-a live TODO, an ADR index, the current sprint doc, or an API schema you want kept in front of Claude.
-
-- **Path resolution.** Project-relative by default (like `dirs` and `globs`). Absolute paths and
-  `~`-relative paths are also honored, the same as `LIVE_RULES_PATH`.
-- **Skip when missing.** If a rule declares `include:` and **none** of its files can be read, the rule
-  is dropped and injects nothing. So a "consult the map" rule stays silent in a project that has no map
-  yet. If at least one listed file resolves, the rule is injected with whatever was read.
-- **Budget.** Included contents count against the same ~10,000-char injection budget as the rule body
-  (see "Keep rules small" below). A compact file is ideal; an oversized one gets the same "truncated to
-  fit" treatment as a long body. Point `include:` at a compact hub (an `INDEX.md`), not a giant doc.
-
-## How injection works
-
-- **Global / prompt / cwd rules** are re-evaluated and re-injected on **every prompt**. This is
-  deliberate: it keeps them salient deep into a long session instead of getting buried once and
-  forgotten.
-- **Glob / directory rules** are injected each time Claude is about to edit a matching file, so the
-  reminder lands exactly when it is relevant.
-- The hooks read the file **fresh every time**. Editing, adding, disabling, or deleting a rule takes
-  effect on the next prompt or next edit. No restart, no `/reload`.
-- Everything is **fail-soft**: a malformed section is skipped, never fatal, and a project with no
-  live-rules file produces no output at all.
+Included content counts against the same roughly 10,000-character injection budget as the rule body.
+Point `include:` at a compact hub such as `INDEX.md`, not a giant document.
 
 ## Glob syntax
 
-Globs are matched gitignore-style against the **repo-relative** path of the file being edited:
+Globs match gitignore-style against the repo-relative path of the file being edited:
 
-- A pattern with **no `/`** matches that name **at any depth**: `*.sql` matches `db/schema.sql` and
-  `migrations/001.sql`.
-- A pattern **containing `/`** is anchored to the repo-relative path: `src/*.ts` matches
-  `src/index.ts` but not `src/util/x.ts` or `lib/index.ts`.
-
-Supported tokens:
+- A pattern with no `/` matches that name at any depth: `*.sql` matches `db/schema.sql`.
+- A pattern containing `/` is anchored to the repo-relative path: `src/*.ts` matches `src/index.ts`.
 
 | Token | Meaning |
 |-------|---------|
-| `*` | any run of characters within one path segment (does not cross `/`) |
-| `**` | any number of segments, including zero (`**/*.ts` matches `a.ts` and `a/b/c.ts`) |
-| `?` | exactly one non-`/` character |
-| `{a,b,c}` | alternation: `*.{ts,tsx}` matches both extensions |
+| `*` | Any run of characters within one path segment. |
+| `**` | Any number of segments, including zero. |
+| `?` | Exactly one non-`/` character. |
+| `{a,b,c}` | Alternation. |
 
-Trailing `**` also matches the bare directory: `packages/api/**` matches both `packages/api/x.ts`
-and `packages/api` itself. A leading `/` is accepted and ignored (patterns are already repo-anchored),
-so `/src/**` and `src/**` mean the same thing. Brace alternation may be written unquoted
-(`globs: [src/**/*.{ts,tsx}]`) or quoted; both parse correctly.
-
-**Not supported** (document the limitation rather than relying on it): POSIX character classes
-(`[a-z]`), extglobs (`!(...)`, `@(...)`), numeric ranges (`{1..3}`), and nested braces. An unmatched
-`{` is treated as a literal. For the common cases (extensions, directory subtrees, test-file
-patterns) the supported subset is plenty.
+Trailing `**` also matches the bare directory. A leading `/` is accepted and ignored. POSIX character
+classes, extglobs, numeric ranges, and nested braces are not supported.
 
 ## Prompt-keyword syntax
 
-Each `prompt` entry is one of:
-
-- A **literal substring**, matched case-insensitively: `"deploy"` fires on *"let's deploy"* and
-  *"DEPLOYMENT done"*.
-- A **regex** written as `/pattern/flags`: `"/migrat(e|ion)/i"` fires on *"migrate"* and
-  *"migration"*. If the regex is invalid it is ignored (the rule simply will not match on it).
+A `prompt` entry is either a case-insensitive literal substring or a regex written as `/pattern/flags`.
+An invalid regex is ignored and does not match.
 
 ## Directory syntax
 
-Each `dirs` entry is a repo-relative directory path (no leading `./`, trailing slash optional):
-`packages/api`, `services/worker`, `infra`. A file is "in" the directory if its repo-relative path
-equals it or starts with it plus `/`.
+Each `dirs` entry is a repo-relative directory path, such as `packages/api` or `services/worker`. A
+file is inside the directory when its repo-relative path equals it or starts with it plus `/`.
 
 ## Keep rules small
 
-All matching rules for one event share a budget of about **10,000 characters** of injected context
-(Claude Code's cap). The hooks stay safely under it and, if too many rules match at once, inject the
-highest-priority ones and note how many were held back. So: keep each body to a few tight lines, use
-`priority` to float the important rules to the top, and split unrelated guidance into separate
-sections rather than growing one giant rule.
+All matching rules for one event share a context budget of about 10,000 characters. The hooks inject
+higher-priority rules first and note when matching rules are held back. Keep each body to a few tight
+lines, use `priority` for the important rules, and split unrelated guidance into separate files.
