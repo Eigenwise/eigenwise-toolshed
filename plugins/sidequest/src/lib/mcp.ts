@@ -248,9 +248,10 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   context_page: {
     cursor: 'Opaque.',
     limit: 'UTF-8 bytes.',
-    expectedRevision: 'Required revision.',
+    expectedRevision: 'Revision.',
   },
   add: { complexity: 'Legacy score; why required.', verify: ATTESTATION_VERIFY_CONTRACT },
+  claim: { force: 'Operator-only.' },
   update: { verify: ATTESTATION_VERIFY_CONTRACT },
   supersede_submission: { supersededBy: 'Repair ticket ref, not a commit.' },
   comments: {
@@ -258,7 +259,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
     since: 'Comment id or ISO timestamp.',
   },
   list: {
-    detail: 'Full comments; default for status.',
+    detail: 'Full comments.',
     brief: 'One compact row per ticket.',
   },
   release: {

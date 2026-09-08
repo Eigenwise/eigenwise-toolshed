@@ -176,17 +176,19 @@ test('read-only executor briefings keep temporary files outside the repository',
   assert.doesNotMatch(briefing, /Put scratch files in your own worktree/);
 });
 
-test('read-only briefings name the temporary-file location for each checkout mode', () => {
-  const shared = agentsync.renderTicketBriefing({
-    ref: 'SQ-READONLY-SHARED', model: 'sonnet', effort: 'medium', dispatchExecutor: 'sidequest-exec-readonly-medium', category: {},
-    dispatch: { readonly: true, sharedTree: true },
-  }, 'readonly-shared-token');
-  const isolated = agentsync.renderTicketBriefing({
-    ref: 'SQ-READONLY-ISOLATED', model: 'sonnet', effort: 'medium', dispatchExecutor: 'sidequest-exec-readonly-medium', category: {},
-    dispatch: { readonly: true, sharedTree: false },
-  }, 'readonly-isolated-token');
-  assert.match(shared, /Read-only shared checkout: keep temporary files in the session scratchpad/);
-  assert.match(isolated, /Read-only linked worktree: keep temporary files in your own worktree/);
+test('read-only briefings keep scratch outside every repository worktree', () => {
+  for (const sharedTree of [true, false]) {
+    const briefing = agentsync.renderTicketBriefing({
+      ref: `SQ-READONLY-${sharedTree ? 'SHARED' : 'ISOLATED'}`,
+      model: 'sonnet',
+      effort: 'medium',
+      dispatchExecutor: 'sidequest-exec-readonly-medium',
+      category: {},
+      dispatch: { readonly: true, sharedTree },
+    }, 'readonly-scratch-token');
+    assert.match(briefing, /Read-only dispatch: keep temporary files in the session scratchpad, outside every repository worktree/);
+    assert.doesNotMatch(briefing, /keep temporary files in your own worktree/);
+  }
 });
 
 test('briefings surface tracked generated outputs paired into effective scope', () => {

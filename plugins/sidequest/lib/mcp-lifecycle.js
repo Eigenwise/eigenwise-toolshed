@@ -321,7 +321,7 @@ const tools = [
         tokenFile: { type: "string", description: "Dispatched token-file path." },
         direct: { type: "boolean", description: "Inline-safe exception; requires a recorded reason." },
         reason: { type: "string", description: "Inline-safe rationale (20+ chars, required with direct:true)." },
-        force: { type: "boolean", description: "Steal a live claim only when certain." },
+        force: { type: "boolean", description: "Operator-only exceptional authority. Never use to take over a live claim; pulse, observe terminal evidence, salvage, and release the exact claim first." },
         session: { type: "string" }
       },
       required: ["ref", "by"]

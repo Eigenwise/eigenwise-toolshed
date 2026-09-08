@@ -21,8 +21,9 @@ How to run both, in practice:
    nothing about how you parallelize or route the work.
 3. **Record findings on the sidequest ticket**, not just in the PR — root cause, `file:line`, what
    you ruled out — so a later agent (or you, post-compaction) can pick it up.
-4. When the work lands, update the **external** tracker/PR as the team expects; the sidequest tickets
-   were your scaffolding and can just be marked `done`.
+4. When the work lands, prepare a sanitized external tracker or PR update. Post it only when an
+   existing user or team authorization applies to that public action. Otherwise leave the prepared
+   update as a local handoff; sanitation controls content, not posting authority.
 
 GitHub issue bodies, comments, replies, and closure notes you author must stand alone: summarize a
 sanitized reproduction, relevant findings, and version, with only publicly resolvable issue, PR,

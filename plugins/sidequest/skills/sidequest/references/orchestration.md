@@ -52,10 +52,11 @@ Before dispatching a wave, ask: “What will every ticket in this wave need to c
 
 When a package commits build output, the source ticket scopes its generated output too. For content-hashed output, assign exactly one rebuild ticket per wave: parallel rebuilds choose different filenames and collide at merge.
 
-**The planning pass is for concrete scope, not ceremony.** Before filing a complexity-4+ ticket:
-direct `Read`/`Glob`/`Grep` when the affected surfaces are obvious; when they are unfamiliar, a
-proportional investigation ticket whose result pins the scope, executor anchors, and exact verify
-command before implementation tickets are filed. For a wave ticket, make that verify command a
+**The planning pass is for concrete scope, not ceremony.** Before filing a complexity-4+ ticket,
+bounded recon may `Read`/`Glob`/`Grep` named anchors and make one narrow location sweep. Route unfamiliar
+path tracing, deep investigation, or multi-angle research through the live taxonomy, with a proportional
+ticket that pins the scope, executor anchors, and exact verify command before implementation tickets are
+filed. For a wave ticket, make that verify command a
 scoped test or reproduction for its declared files; reserve full-suite green for the integration or
 ship ticket. Shrink until the complexity drops — a piece still scoring 7+ is usually a small design
 ticket plus a mechanical application ticket.
@@ -89,8 +90,9 @@ Set the acceptance boundary before splitting fixes:
   separate tickets before one matrix covers the lifecycle.
 - **Skip an audit wave when the done-oracle is deterministic.** If the ticket's executable
   acceptance commands or test suite pass, do not append a `review-audit` + fix wave by default.
-  Audit when the work has no deterministic done-oracle or high-stakes flags demand independent
-  scrutiny. A normal integration diff review still checks the combined change.
+  Audit when the work has no deterministic done-oracle, a weak oracle leaves material uncertainty, or
+  high-stakes flags demand independent scrutiny. The integrator consumes the submission report and gate
+  evidence; it does not inspect the implementation diff.
 - **Keep one implementation ticket open through a required independent review.** Attach findings as
   comments on the open implementation claim and correct them there. Submit only after that required
   review is clean, rather than closing each narrow step and filing a follow-up fix chain.

@@ -44,14 +44,14 @@ function refusalOwner(context) {
 }
 function notOwnerRecovery(ref, context) {
   if (context.submission?.by && !context.claim?.by) {
-    return `Ask the candidate owner to perform the action or run \`sidequest release ${ref}\` themselves.`;
+    return `${ref} has a parked submission from "${context.submission.by}". Its producer is terminal: do not ask it to release or resume. The control plane must publish it, use \`sidequest rework ${ref}\` when an unbound candidate needs repair, or follow the bound review's oracle and repair flow.`;
   }
-  return `Ask the claim holder to release it with \`sidequest release ${ref}\`.`;
+  return `This is a live claim. Ask the claim holder to release it with \`sidequest release ${ref}\`.`;
 }
 const CLAIM_REFUSAL_MESSAGES = Object.freeze({
   not_found: (ref) => `${ref} does not exist on this board. Run \`sidequest list\` and claim a listed ticket.`,
   done: (ref) => `${ref} is already done. Choose another ticket with \`sidequest ready\`.`,
-  claimed: (ref, claim) => `${ref} is already claimed by "${claim.by}"${claim.at ? ` since ${claim.at}` : ""}. Run \`sidequest pulse ${ref}\` and do not work it unless you deliberately use \`--force\`.`,
+  claimed: (ref, claim) => `${ref} is already claimed by "${claim.by}"${claim.at ? ` since ${claim.at}` : ""}. Run \`sidequest pulse ${ref}\`. Do not work it or force-take a live claim. Only after observed terminal evidence, salvage useful work and release that exact claim with \`sidequest release ${ref}\` before fresh dispatching.`,
   not_owner: (ref, claim) => `${ref} is owned by "${refusalOwner(claim)}" rather than you. ${notOwnerRecovery(ref, claim)}`,
   busy: (ref) => `${ref} is temporarily locked by another claim attempt. Retry \`sidequest claim ${ref}\` in a moment.`,
   empty: () => "No tickets are available on this board. Run `sidequest ready` to inspect the queue.",

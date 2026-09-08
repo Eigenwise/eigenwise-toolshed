@@ -109,9 +109,9 @@ made before the real difficulty is known. The safe manual habit is to leave the 
 model selected for everything, which quietly wastes the capacity I wanted to reserve
 for hard work.
 
-Sidequest attaches the decision to the ticket instead. The work gets a category such as
-`coding.easy`, `debugging`, `research`, or `docs-writing`. The category routes to a
-concrete model and reasoning effort. I describe the kind of work I see; the system
+Sidequest attaches the decision to the ticket instead. The work gets a category from the board's
+live taxonomy, such as `coding.easy`, `debugging`, `source-lookup`, or `review-audit`. The category
+routes to a concrete model and reasoning effort. I describe the kind of work I see; the system
 chooses the executor that fits it.
 
 This has three benefits:

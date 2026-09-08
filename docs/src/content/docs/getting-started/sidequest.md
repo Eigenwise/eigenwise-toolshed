@@ -21,12 +21,12 @@ Sidequest is local. The dashboard runs on your machine and ticket data stays in 
 ## Your first workflow
 
 1. Open the board with `/sidequest:board`, or tell Claude to show your Sidequest board.
-2. Describe the outcome you want and ask Claude to plan it as Sidequest work. For example: `Plan the checkout refresh as a Sidequest story and show me the backlog.`
+2. Describe the outcome you want and ask Claude to plan it as Sidequest work. For example: `Plan the checkout refresh as a Sidequest story and show me the backlog.` If work belongs on a feature branch, name that branch in the request.
 3. Review the proposed tickets, dependencies, and scope in the board. Adjust the plan before work starts.
-4. Ask Claude to dispatch the ready tickets. Claude chooses the configured route, starts the work, and reports verification results.
+4. Ask Claude to dispatch the ready tickets. Claude chooses the configured route, starts the work, and reports verification results. Dispatch freezes each ticket's intended target branch, so two concurrent feature branches get separate targets without changing the board default.
 5. When a ticket is ready, ask Claude to review and integrate it if the checks pass. Larger or higher-risk work may need an extra review before integration.
 
-Each ticket carries one verifier: a command suite, document or schema check, review, manual evidence, or attestation. For declared commands, the verifier wrapper binds the completed capture to the ticket, exact command, and candidate revision. A retyped command or prose cannot replace that capture, and a capture from before the final commit must be rerun. Executors cannot replace the verifier with an easier check. Required evidence goes in the dispatch's board-owned directory, not a repository worktree or integration target. A skipped required check needs a bounded human waiver naming the authority, reason, affected gate, and scope or expiry. Before delivery, Sidequest pins the source revision, participants, dependencies, and declared surfaces, then refuses overlapping live sibling work. It rechecks the candidate and final revision during integration, and keeps the delivery evidence, including failures and timeouts.
+Each ticket carries a check that decides whether its work is ready. Claude records that check against the final candidate and reports what passed, failed, or needs your decision. The agent-facing reference covers capture, evidence, and delivery mechanics.
 
 ### Choose the planning depth
 
@@ -36,7 +36,7 @@ Claude asks one batched question round for consequential choices. If the approac
 
 Review stays tied to the pinned contract. If two candidate fixes are rejected in the same defect chain, stop patching and replan before trying another candidate.
 
-The board keeps the work visible while Claude and its executors handle the ticket lifecycle. Once a terminal result and its handoff are recorded, Claude retires that executor's native teammate while leaving live claims, retained continuations, and pending integration candidates available for follow-up. Codebase work submits a verified Git range. When Sidequest registers a project outside Git, it persists the `filesystem-snapshot` adapter for that board. A source-revision submission must use that source and the SHA-256 snapshot of the current project tree, plus changed surfaces and review or attestation evidence. The server checks the candidate against the current tree and the persisted dispatch snapshot, then binds those facts to the candidate and its dispatch baseline. CLI and MCP callers cannot provide existence or membership facts. Sidequest records unavailable Git, process, and worktree capabilities instead of probing those adapters.
+The board keeps the work visible while Claude and its executors handle the ticket lifecycle. A Git ticket submits a verified range; a non-Git ticket submits a verified project snapshot. Claude reports any unavailable capability or failed delivery instead of guessing around it.
 
 ## Use the dashboard
 
@@ -107,45 +107,43 @@ Ask Claude to do the board work in plain language:
 - `Show me the Sidequest backlog for this project.`
 - `What is ready to dispatch for the checkout story?`
 - `Add a ticket for the empty-state bug and include the reproduction steps.`
-- `What is blocking SQ-7?`
-- `Review and integrate SQ-7 if its verification passed.`
+- `What is blocking the checkout ticket?`
+- `Review and integrate the checkout ticket if its verification passed.`
 
 For substantial changes, Claude can turn the request into a story with linked tickets so you can see the whole plan before execution. Side issues that come up during a session can become separate tickets instead of disappearing into the current task.
 
-Claude's persistent Sidequest Monitor runs `sidequest watch --project <path>`. Ticket alerts default to dispatches prepared by the watching Claude session, plus tickets with no attributed owner and terminal dispatches so restart recovery stays visible. GitHub CI alerts always cover the shared repository. After a restart, use `--all` when the new session must follow still-active tickets prepared by the old session; it restores project-wide ticket alerts.
+Sidequest keeps ticket activity visible in the board. Ask Claude to check active work after a restart or when you need help with a ticket that was started in another session.
 
 ## If something stops working
 
 **The board does not open.** Reload Claude Code after installing Sidequest, then ask Claude to open the board again. If the browser still does not open, ask Claude to start the Sidequest dashboard and report its local URL.
 
-**Claude reports an older loaded Sidequest after an upgrade.** Reload plugins or start a new session to pick up the current connection and packaged executor roster. Sidequest 4.48.1 and newer can finish compatible dispatches across that version skew, and Claude reports it instead of stopping the current release session. Unknown versions, schema changes, and older loaded versions still refuse dispatch until reload.
+**Claude reports an older loaded Sidequest after an upgrade.** Reload plugins or start a new session to pick up the current connection and packaged executor roster. Unknown versions, schema changes, and incompatible older loaded versions refuse dispatch until reload.
 
-**Claude says an executor is missing, but lists a `sidequest:` version of it.** Update Sidequest, then reload plugins in the affected session and ask Claude to dispatch again. Bundled executors use plugin-qualified types such as `sidequest:sidequest-exec-dispatch-readonly`; dispatch supplies that exact type. Older releases returned the bare name and rejected the qualified one, so reloading an unchanged release cannot repair it. Do not create replacement agents or disable the dispatch guard.
-
-**A prior Sidequest release left executor files in your Claude agents folder.** Start a new Sidequest session after the upgrade. Maintenance removes only files bearing a recognized Sidequest generation marker, including retired Codex route combinations. It leaves custom agents, even files with a Sidequest executor name, untouched.
+**Claude says an executor is missing.** Update Sidequest, reload plugins in the affected session, and ask Claude to dispatch again. Do not create replacement agents or disable the dispatch guard.
 
 **A ticket will not dispatch.** Ask Claude to diagnose the ticket. Common causes are an incomplete work description, a blocked dependency, or an unavailable configured route. Claude reports the specific recovery instead of silently changing the work's route.
 
-**Research fails before its worktree starts in a new repository.** Read-only tickets automatically use the shared workspace when Git has no first commit or worktree isolation is unavailable, including research whose results stay in ticket comments. Claude reports that choice and keeps the ticket read-only. You do not need to commit your notes or change the board settings. Repositories with a usable commit keep their normal worktree isolation; reviews bound to a specific candidate still require an immutable isolated checkout.
+**A read-only ticket cannot start in a new repository.** Claude reports the checkout choice and keeps the ticket read-only. You do not need to commit notes or change board settings.
 
-**A worktree setup command was incomplete.** Sidequest keeps the completed checkout and shows the command, failure reason, and captured stderr tail in the ticket. The executor runs that command in its assigned worktree before it starts work.
+**A worktree-isolated executor cannot write.** Ask Claude to redispatch if the recorded checkout is missing or does not match the assigned checkout.
 
-**A worktree-isolated executor cannot write.** Sidequest reserves the exact checkout before Git creates it, then verifies the checkout reported when the executor starts. A copied or similarly named linked worktree has no write authority. Ask Claude to redispatch the ticket if the recorded checkout is missing or does not match.
+**Work looks stuck in doing.** Ask Claude to inspect the ticket's current status and executor activity. Sidequest keeps the intended integration branch that was frozen at dispatch, even if you later change branches or the board default. For two feature branches, name the intended target on each ticket instead of changing that board-wide default between dispatches.
 
-**Work looks stuck in doing.** Ask Claude to inspect the ticket's current status and executor activity. A running ticket can stay in doing until its verification and delivery steps finish. If the work was merged by hand after an integration conflict, Claude can record the delivered commit and close the ticket with that evidence. Sidequest checks that commit against the integration target saved when the ticket was prepared, even if you later switch branches or change the board target.
+**Stale agent worktrees keep accumulating.** Ask Claude to inspect local worktree storage and clean up entries it can safely remove. The generated reference has the lifecycle and recovery details.
 
-**Stale agent worktrees keep accumulating.** Run `sidequest worktrees status --project <path>` to see the disk use of active worktrees, recovery backups, and quarantine. Session start removes a bounded batch and reports its reached plan, removal, and skipped-by-reason counts if it runs past the hook budget. Ask Claude to run `sidequest worktrees sweep --project <path>` to inspect the rest, then add `--yes` once the rows look right. The dry run includes backups and quarantine entries that will expire after 14 days or beyond the newest three per agent. Clean legacy checkouts with no lease identity are reclaimed only after the minimum age when their revision is reachable from, or patch-equivalent to, the integration branch. Dirty or unintegrated legacy rows stay put with their real dirty, ahead, and age values.
+**A ticket contract forbids commits.** Ask Claude to declare working-tree delivery before dispatch. After verification, the declared edits stay uncommitted and unpushed in the shared checkout for your normal team handoff. Ticket closure records that handoff; it does not replace your project's commit, review, or push process.
 
-**A ticket contract forbids commits.** Ask Claude to declare it for working-tree delivery before dispatch. Sidequest runs it in the shared checkout, records only the declared changed paths, and requires a final pinned verification capture before it closes.
-
-**A POSIX verify command fails on Windows.** Sidequest runs captures through a POSIX shell when Git for Windows provides one. Each capture records the shell it used. If it falls back to Command Prompt, the capture says so instead of reporting POSIX syntax as a missing toolchain.
-
-**A delivery included a reviewed interaction.** Claude may record the delivered source commit together with one reviewed interaction commit when that interaction descends from the source, stays within the submitted candidate paths, and still passes the assembled-wave and merged-tree gates. If any of those checks fail, ask Claude to inspect the submission instead of treating the interaction as delivered.
+**A POSIX verify command fails on Windows.** Ask Claude to inspect the recorded verification result and the shell it used.
 
 **A submitted ticket is not integrated.** Ask Claude to inspect the submission and complete the review and integration step. Do not start the same ticket again while a submitted result is waiting.
 
-**A wave left out a submitted ticket.** MCP wave groups go in one comma-separated `ref` string, such as `SQ-12,SQ-13`; `wave` is the options object, not a list of refs. The assembled acknowledgement names submitted siblings outside the group whose changed paths overlap the selected ticket's scope.
+**A wave left out submitted work.** Ask Claude to inspect the assembled wave and its declared participant set.
 
-**A submission sat so long it can no longer be integrated.** If the branch has moved far enough that the submitted work no longer merges, there is nothing left to review. Ask Claude to check whether the behavior the ticket asked for is already on the branch. If it is, Claude retires the submission with that evidence and closes the ticket; if it is not, the work needs re-filing against current source. Claude cannot retire a submission whose commit did reach the branch, so this cannot quietly discard work that shipped.
+**A submission sat so long it can no longer be integrated.** Ask Claude to check whether the requested behavior already reached the intended branch. If it did, Claude records that evidence; if it did not, the work needs a fresh ticket against current source.
 
-See the [generated Sidequest reference](../../reference/sidequest/) for the agent-facing tool and configuration details, or the [Sidequest plugin README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/sidequest) for the project landing page.
+## Support
+
+Optional, if Sidequest saves you time: [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise).
+
+See the [generated Sidequest reference](../../reference/sidequest/) for agent-facing tool and configuration details, or the [Sidequest plugin README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/sidequest) for the project landing page.

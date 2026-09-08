@@ -54,7 +54,7 @@ Write the verify in POSIX shell; on Windows the capture runs it through Git Bash
 A passing executable done-oracle needs no review-audit + fix wave unless it lacks determinism or is high-stakes. **Blocked-step invariant:** when a review,
 investigation, or verification awaits a ticket, every dependent action stays blocked until it closes;
 direct PRs, skill flows, manual apply, or any alternate route are the same violation as inline work.
-The board keeps plans. Before solo-fit or filing, do a stated one-line `.gitignore` entry or other mechanical edit to 1–2 named files inline; don't ticket or spawn it. Investigation or other-file reading needs a ticket.
+The board keeps plans. Before solo-fit or filing, do a stated one-line `.gitignore` entry or other mechanical edit to 1–2 named files inline; don't ticket or spawn it. Bounded recon may `Read`, `Glob`, or `Grep` named anchors and make one narrow location sweep; route unfamiliar path tracing, deep investigation, or multi-angle research through the live taxonomy.
 
 ### INLINE-SAFE direct work
 
@@ -166,8 +166,7 @@ publish transaction (lock → delivery → merged-tree gate → central version 
 `references/publishing.md`.
 **BOOKEND SUPERVISION.** Between dispatch and submission, do nothing with that ticket: no pulses,
 comment reads, or peeks. At integration, read the submit report, deliver the range, and run the
-merged-tree gate once per wave. Judge by that oracle, never by opening source or diffs. A human-grade review need is a separately routed `review-audit`
-(or `security-audit`) ticket bound with `reviewTarget`, never orchestrator re-review. Never mark a submitted ticket done without
+merged-tree gate once per wave. Judge by that oracle and the submission report, never by opening source or diffs. When the sized risk or a weak oracle requires independent review, bind a separately routed `review-audit` ticket with `reviewTarget`; never orchestrator re-review. Never mark a submitted ticket done without
 integrating it; never re-dispatch one (refused as `submitted`). A dead executor's `done` only proves
 the board transition, never that work shipped: salvage and close it per `references/publishing.md`.
 

@@ -671,9 +671,7 @@ function ticketWorktreeIdentity(ticket?: any, projectPath?: any) {
 
 function ticketReadOnlyScratchSpace(ticket?: any) {
   if (ticket?.dispatch?.readonly !== true) return null;
-  return ticket.dispatch.sharedTree === true
-    ? 'Read-only shared checkout: keep temporary files in the session scratchpad, never the repository working tree. The scratchpad is shared, so it is not a durable ticket artifact.'
-    : 'Read-only linked worktree: keep temporary files in your own worktree, not the shared session scratchpad.';
+  return 'Read-only dispatch: keep temporary files in the session scratchpad, outside every repository worktree. The scratchpad is not a durable ticket artifact.';
 }
 
 function ticketIsolationContract(ticket?: any, projectPath?: any) {
