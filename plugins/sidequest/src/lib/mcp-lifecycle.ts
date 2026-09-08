@@ -535,7 +535,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'groomClose',
-    description: 'Close with evidence. A pending candidate requires verified delivery, which reconciles the delivered commit against the candidate without checking sibling declared scope; abandonSubmission: true records discard. An unlaunched prepared dispatch is recorded abandoned.',
+    description: 'Close with evidence. Delivery uses the ticket\'s prepared integration target when recorded, even if the board target or checkout changed later. A pending candidate requires verified delivery, which reconciles the delivered commit against the candidate without checking sibling declared scope; abandonSubmission: true records discard. An unlaunched prepared dispatch is recorded abandoned.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -544,10 +544,10 @@ const tools: ToolDefinition[] = [
         by: { type: 'string' },
         reason: { type: 'string' },
         integration: { type: 'boolean' },
-        deliveryCommit: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'Reachable delivered source commit or pinned working-tree candidate.' },
+        deliveryCommit: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'Delivered source commit reachable from this ticket\'s prepared integration target, or pinned working-tree candidate.' },
         deliveryInteractionCommit: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'A reviewed merged-tree interaction after deliveryCommit, limited to submitted candidate paths.' },
         deliveryMethod: { type: 'string', enum: ['reset', 'working-tree', 'manual'], description: 'For a non-reachable pinned candidate.' },
-        abandonSubmission: { type: 'boolean', description: 'Retire a candidate that never landed; refused while it is reachable from the integration branch.' },
+        abandonSubmission: { type: 'boolean', description: 'Retire a candidate that never landed; refused while it is reachable from this ticket\'s prepared integration target.' },
         recoveryEvidence: { type: 'string', description: 'Terminal-agent evidence to recover an unclaimed prepared, launched, or bound dispatch; recorded but not applied after a terminal dispatch.' },
       },
       required: ['ref', 'by', 'reason'],

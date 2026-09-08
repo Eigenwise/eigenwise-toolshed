@@ -224,7 +224,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   dispatch: 'Dispatch; token and spawn spec.',
   done: 'Finish; declared external needs current capture.',
   release: 'Release; reason required. oracle handoff needs ask until verdict.',
-  groomClose: 'abandonSubmission:true; reset/working-tree/manual; reviewed interaction.',
+  groomClose: 'Frozen ticket target; abandonSubmission:true; reset/working-tree/manual; reviewed interaction.',
   native_agent: 'Get native Agent spawn spec.',
   archive: 'Archive.',
   archive_board: '',

@@ -2334,6 +2334,86 @@ test('MCP delivery closure binds the integration revision resolved after board i
   }, 'the closure records the exact integration revision used for reachability');
 });
 
+test('MCP delivery closure keeps each prepared branch after the project target and checkout change', async () => {
+  const repository = committedRepo('sq-ticket-delivery-target-');
+  gitAt(repository, ['switch', '-c', 'branch-a']);
+  gitAt(repository, ['branch', 'branch-b', 'main']);
+  gitAt(repository, ['config', 'user.name', 'Sidequest Tests']);
+  gitAt(repository, ['config', 'user.email', 'sidequest@example.invalid']);
+  const project = store.ensureProject(repository).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'branch-a' });
+  const correctDeliveryTicket = store.createTicket(project, {
+    title: 'deliver on prepared branch', files: ['correct.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm delivery retains the prepared branch target',
+  });
+  const wrongDeliveryTicket = store.createTicket(project, {
+    title: 'reject delivery from another branch', files: ['wrong.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm another branch cannot satisfy the prepared target',
+  });
+  for (const [ticket, by] of [
+    [correctDeliveryTicket, 'correct-branch-worker'],
+    [wrongDeliveryTicket, 'wrong-branch-worker'],
+  ]) {
+    const prepared = store.prepareDispatch(project, ticket.ref, {
+      sharedTree: true,
+      integrationMode: 'local',
+      integrationBranch: 'branch-a',
+    });
+    assert.deepEqual(prepared.ticket.dispatch.integrationTarget, {
+      mode: 'local', upstream: 'branch-a', branch: 'branch-a',
+    });
+    assert.equal(store.claimTicket(project, ticket.ref, by, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+    }).ok, true);
+    assert.equal(store.releaseTicket(project, ticket.ref, by, {
+      status: 'todo',
+      releaseKind: 'handback',
+      releaseReason: 'Prepared work is ready for user-authorized delivery.',
+    }).ok, true);
+  }
+
+  fs.writeFileSync(path.join(repository, 'correct.js'), 'delivered on branch a\n');
+  gitAt(repository, ['add', 'correct.js']);
+  gitAt(repository, ['commit', '-m', 'deliver correct branch work']);
+  const correctDeliveryCommit = gitAt(repository, ['rev-parse', 'HEAD']);
+
+  gitAt(repository, ['switch', 'branch-b']);
+  fs.writeFileSync(path.join(repository, 'wrong.js'), 'unrelated branch delivery\n');
+  gitAt(repository, ['add', 'wrong.js']);
+  gitAt(repository, ['commit', '-m', 'commit unrelated branch work']);
+  const wrongDeliveryCommit = gitAt(repository, ['rev-parse', 'HEAD']);
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'branch-b' });
+
+  const correctDelivery = await callTool('groomClose', {
+    project,
+    ref: correctDeliveryTicket.ref,
+    by: 'delivery-integrator',
+    reason: 'User authorized delivery on the branch recorded for this ticket.',
+    deliveryCommit: correctDeliveryCommit,
+  });
+  const wrongDelivery = await callTool('groomClose', {
+    project,
+    ref: wrongDeliveryTicket.ref,
+    by: 'delivery-integrator',
+    reason: 'An unrelated branch commit must not satisfy this ticket.',
+    deliveryCommit: wrongDeliveryCommit,
+  });
+
+  assert.deepEqual({
+    correctDeliveryClosed: correctDelivery.ok,
+    wrongDeliveryReason: wrongDelivery.reason,
+  }, {
+    correctDeliveryClosed: true,
+    wrongDeliveryReason: 'delivery_not_reachable',
+  }, 'groomClose must retain each ticket\'s prepared branch authority');
+  assert.match(wrongDelivery.message, /refs\/heads\/branch-a/);
+  const completed = store.getTicket(project, correctDeliveryTicket.ref);
+  assert.equal(completed.completion.delivery.targetBranch, 'branch-a');
+  assert.equal(completed.completion.delivery.integrationRevision.value, correctDeliveryCommit);
+  assert.equal(store.getTicket(project, wrongDeliveryTicket.ref).status, 'todo');
+});
+
 test('SQ-2434: MCP delivery closure accepts local main ahead of origin and records upstream reachability', async () => {
   const worktree = createGitWorktree();
   const project = store.ensureProject(worktree).slug;
