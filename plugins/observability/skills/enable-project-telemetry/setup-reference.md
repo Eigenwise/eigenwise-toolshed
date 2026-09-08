@@ -87,6 +87,7 @@ For the dashboard, open its configured loopback URL (default `http://127.0.0.1:3
 ## Dashboard reset recovery
 
 `--reset-dashboards` removes generated dashboard definitions and records a reset boundary. It does not disable telemetry or delete local history. After a reset, create fresh Claude Code activity, run setup or let SessionStart reprovision the dashboards, fully reload the Grafana browser tab, and verify the project. Report `found` or `not-found` from the verifier as-is.
+
 ## Deletion
 
 Local data stays until the user deletes it (the Grafana demo dashboard keeps seven days). `--disable` stops managed processes and the dashboard container, removes this plugin's project env wiring, and keeps data by default. Add `--delete-data` only after the user chooses deletion.

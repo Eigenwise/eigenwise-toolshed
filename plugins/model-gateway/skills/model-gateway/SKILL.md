@@ -138,7 +138,6 @@ Usage observability also writes one high-water JSON file per valid session under
 largest forwarded request-body byte count observed for that session and an observation timestamp. It does
 not contain the request body. No retention period is promised for either local record.
 
-
 For the confirmation-gated procedure, use the `remote-control-compatibility` skill. It manages the
 plugin-marked hosts block, creates a backup before an elevated write, reconciles gateway mode, and
 checks the final state. Do not edit the hosts file outside that procedure.

@@ -67,6 +67,7 @@ The observer reserves 128 MiB below its 4 GiB database limit. It prunes expired 
 ## Exhausted outbox recovery
 
 When `/health` or the outbox view reports exhausted rows, show the user the pre-action `pending_count` and `exhausted_count` plus the current health result. Ask for approval before sending `POST /v1/outbox/requeue` to the local observer. The endpoint resets **all** exhausted rows in the shared local outbox, so do not offer or imply a project-scoped requeue. After the approved request, read the counts and health again, report the post-action values, and let the normal drainer retry delivery. A requeue does not prove delivery succeeded.
+
 ## Recover a generated dashboard
 
 If the generated dashboard is stale, reset it with the setup command's `--reset-dashboards` action. The
