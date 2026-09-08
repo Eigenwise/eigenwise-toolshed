@@ -4,7 +4,9 @@ Local, metadata-only usage telemetry for Claude Code. Choose the repositories yo
 
 [Observability guide](https://eigenwise.github.io/eigenwise-toolshed/observability/) · [Generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/observability/) · [Toolshed marketplace](../../README.md)
 
-Telemetry payloads include metadata: session IDs, prompt IDs, agent IDs, task IDs, tool-use IDs, and SendMessage recipient IDs. They exclude prompt and response text, code and file contents, tool inputs and results, credentials, and environment values. Sink configuration you provide, including OTLP headers or tokens, is stored locally in `%LOCALAPPDATA%\Eigenwise\Workbench\observability.json` on Windows, or `~/.local/share/Eigenwise/Workbench/observability.json` when `LOCALAPPDATA` is not set, so the exporter can authenticate. Telemetry stays off until you approve a repository.
+The intended policy is per-repository opt-in. A separate machine-level setup consent starts the shared local observer and Collector, and can add a dashboard or remote sink. The project command then opts the current repository into that shared service. Telemetry records are designed to contain metadata such as session IDs, prompt IDs, agent IDs, task IDs, tool-use IDs, and SendMessage recipient IDs, with no prompt or response text, code or file contents, tool inputs or results, credentials, or environment values. Sink configuration you provide stays in the private observability config file so the exporter can authenticate.
+
+Known limitation: the current hook and ingest path does not enforce the per-repository opt-in at its collection boundary. Hook events can enter the shared spool and ingestion path before a repository opt-in check. Treat repository opt-in as the intended policy, not as a hard runtime privacy guarantee, until that enforcement is fixed. There is no documentation-only workaround, and this plugin does not claim the limitation is fixed.
 
 ## Install
 
@@ -23,7 +25,9 @@ Reload plugins or start a new Claude Code session. Then, from the repository you
 /observability:enable-project-telemetry
 ```
 
-Claude asks for consent, handles the local observer and optional dashboard, and verifies that the project is reporting. You choose whether to keep the data local or configure a remote sink. Any external endpoint or sign-in stays your call.
+Claude first gets consent for the machine-shared observer and Collector, then handles this repository's opt-in and the optional dashboard. A bare setup keeps data in local SQLite with no dashboard. The `--dashboard` choice explicitly requests the Docker-backed loopback dashboard. You choose whether to keep the data local or configure a remote sink. Any external endpoint or sign-in stays your call.
+
+Settings and environment wiring apply only to new Claude Code sessions. Restart every affected session in the listed repository directories before creating activity or running verification. `/reload-plugins` alone is not enough for environment changes.
 
 ## Use the dashboard
 
@@ -33,9 +37,9 @@ There are no routine observer commands to remember. Claude keeps the managed loc
 
 ## Storage pressure
 
-The observer keeps a 128 MiB writable reserve below its 4 GiB database limit. When it crosses that threshold, it first removes data past the normal 30-day retention window, then drops the oldest whole days inside that window if needed. Removed windows and row counts are recorded in `/health`, alongside remaining headroom and the selected action.
+The observer keeps a 128 MiB writable reserve below its 4 GiB database limit. Its normal retention window is 30 days. When pressure remains after expired data is removed, it prunes the oldest whole days inside that window, so data can disappear earlier than 30 days under pressure. Health records the removed windows and row counts. That retention pruning is separate from deleting all local observability data.
 
-SQLite pages freed by that work stay reusable for ingestion. New databases use incremental compaction, and the manual prune command only attempts a full `VACUUM` after confirming enough filesystem space for its temporary copy. If no removable data can restore the reserve, `/health` returns `storage_headroom_unrecoverable` while the observer continues to acknowledge committed ingestion.
+Freed SQLite pages stay reusable for ingestion. Do not recommend a managed full `VACUUM`; the observer's normal path uses incremental compaction, and the standalone prune command checks free space before any blocking file-space reclaim.
 
 ## If something stops working
 
@@ -45,7 +49,13 @@ Tell Claude what happened:
 
 > Disable Observability for this repository, but keep its local history.
 
-Claude checks project wiring, recent activity, and the local services. Existing Claude Code sessions need a restart after opt-in or settings changes. A dashboard outage does not stop local observer ingestion. The outbox retries a failed delivery up to eight times. Exhausted rows need a `POST /v1/outbox/requeue` request before delivery can resume.
+Claude checks project wiring, recent activity, and the local services. Existing Claude Code sessions need a restart after opt-in or settings changes, and that restart must happen before new activity or verification. A dashboard outage does not stop local observer ingestion. The outbox retries a failed delivery up to eight times. If rows become exhausted, ask Claude to show the pre-requeue outbox count and health, get approval for the explicit requeue action, then report the post-requeue count and health. `POST /v1/outbox/requeue` resets every exhausted row in the shared local outbox, not just rows from one project, so never describe it as project-scoped recovery.
+
+If generated dashboards were reprovisioned or reset, create fresh activity, let setup or SessionStart provision the current dashboards, fully reload the Grafana browser tab, and then verify. Grafana Refresh reruns queries already loaded in the page and does not replace stale dashboard definitions.
+
+## Support
+
+If Observability saves you time, you can support its maintenance through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise).
 
 ## License
 

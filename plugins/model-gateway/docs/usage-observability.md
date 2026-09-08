@@ -93,7 +93,7 @@ Cache economics use the exact response buckets:
 - 1-hour writes cost 2 times base input
 - reads cost 0.1 times base input
 
-The observer reports base-price-equivalent savings and surcharge for every model. It reports USD only where a maintained input price is known. Subscription-backed Codex routes keep token-equivalent economics and leave USD unavailable rather than inventing a per-token subscription price.
+The observer reports cache economics using the maintained price map for the resolved model and provider. It reports API-equivalent USD only where that public price is maintained. Public-price Codex routes, including maintained GPT-5.6 and GPT-6 Astra rows, therefore show API-equivalent USD estimates; unknown, virtual, or otherwise unpriced models remain token-only rather than receiving an invented dollar total. Cache-read and cache-write buckets follow the provider's published semantics and the map's documented fallback when a provider does not publish a separate write price. These estimates never represent actual subscription spend. The dashboard's displayed cost uses the same map and selected time range. Its Codex cost-share denominator is total priced API-equivalent cost in that range, not total tokens or subscription charges. See the [Anthropic pricing documentation](https://platform.claude.com/docs/en/pricing), [OpenAI API pricing](https://openai.com/api/pricing/), and the [GPT-6 Astra model page](https://developers.openai.com/api/docs/models/gpt-6-astra) for price authority; do not copy stale tables into this document.
 
 ## Limit and context signals
 

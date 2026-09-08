@@ -20,9 +20,19 @@ All commands: `node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" <command>`
 
 ## First-time setup
 
-Project-local wiring is the standard setup. `env --write-project` writes the current project's `.claude/settings.local.json`, so the gateway stays configured for this project's sessions and executor worktrees without putting a machine-local endpoint in a committed file. `setup` uses the same project-local target.
+Project-local wiring is the standard setup. `env --write-project` writes the current project's `.claude/settings.local.json`, so the gateway stays configured for this project's sessions and executor worktrees without putting a machine-local endpoint in a committed file. `setup` uses the same project-local target by default.
 
 `env --write-user` remains an opt-in shared fallback for people who deliberately want one gateway URL in `~/.claude/settings.json` across every project. Claude Code gives a current project's `settings.local.json` higher precedence, so `doctor` marks the winner `[effective]`, names both files, and says that project-local wiring wins when their gateway modes disagree.
+
+The first-run order matters:
+
+1. Install Model Gateway at the recommended project scope.
+2. Reload plugins so the new skill is available.
+3. Invoke this skill and run `setup`.
+4. If setup says sign-in is needed, have the user complete `login`, then run `setup` again. The second setup finishes the download, wiring, and project confirmation.
+5. After the project wiring is confirmed, tell the user to fully restart the Claude Code process for this same project before selecting a model.
+
+A plugin reload alone does not reload settings or the picker cache. Do not tell the user to select a new row until that full restart is complete.
 
 The SessionStart hook injects a one-line nudge while the gateway is in any half-configured
 state; act on it. The user sees that same line in the transcript, because a state only they can fix used to
@@ -61,8 +71,8 @@ one, so Model Gateway writes Claude Code's discovery cache whenever its advertis
 
 Restart remains necessary to surface new rows in `/model`: Claude Code reads the picker cache once at
 session start. `/reload-plugins` does not reload it. Restoring or refreshing auth on an already-wired
-install needs no restart: the proxy is a separate process, so once `login` + `setup` re-authenticate it,
-the next request routes through cleanly. The shim supervisor also probes the proxy's `/v1/models` endpoint
+install needs no restart of the current Claude Code process: the proxy is a separate process, so once `login` + `setup` re-authenticate it,
+the next request routes through cleanly. Settings, discovery-cache, plugin, or model-row changes do need a full restart of the affected project process. Keep these two recovery paths separate. The shim supervisor also probes the proxy's `/v1/models` endpoint
 while it runs, restarting an unavailable proxy with single-flight bounded backoff. It leaves a healthy proxy
 alone. Recovery output remains in `~/.claude/model-gateway/logs/guardian.log`; bounded lifecycle records in
 `~/.claude/model-gateway/logs/lifecycle.jsonl` identify supervisor, worker, and proxy PIDs, orderly
@@ -82,7 +92,7 @@ bring auth back, or you kill the session that was about to use it.
 - `/model` picker: rows like "GPT-5.6-sol (Codex)" and "Grok 4.5".
 - Typed: `/model claude-gpt-5.6-sol[1m]` or `/model claude-grok-4.5[1m]`. The picker and Sidequest catalog emit those exact ids. The suffix is stripped before routing to Codex or Grok.
 - `lib/runtime.js`'s exported `MODEL_WINDOW_POLICY` is the sole authority for gateway backend windows, picker aliases, advertised windows, and sentry mode. GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured rows. GPT ids absent from the table are deliberately advertised through its explicitly unmeasured 920k default, rather than silently inheriting a window. Grok 4.5 is a measured 500k row and now has the `[1m]` picker alias.
-- Codex GPT-5.6 and GPT-6 Astra through the ChatGPT Codex product (the subscription login this gateway routes to, not the pay-per-token API) accepted 920,012 input tokens and refused 935,012 on 2026-09-05 through claude-code-proxy 0.1.35 (upstream 55bf0b58). The shim advertises `920000` by default. Its synthetic 413 trigger is the smaller of `CODEX_GATEWAY_COMPACT_TRIGGER` when set and the policy row's backend window minus 40k tokens. `CODEX_GATEWAY_COMPACT_TRIGGER` is a ceiling, never an override of that headroom. With the client `autoCompactWindow` cap at `325000`, Claude Code compacts first, so the sentry is a backstop that normally does not fire. `CODEX_GATEWAY_CONTEXT_WINDOW` overrides every advertised Codex window. Claude Code 2.1.261 ignores a settings-file `CLAUDE_CODE_MAX_CONTEXT_TOKENS` value for its own unrecognized-model resolver, so rows above 200k use their policy's recognized `[1m]` alias. That alias gives Claude Code a 1M client window, the closest available setting to the verified 920k backend window. A lower explicit `autoCompactWindow` still wins.
+- Codex GPT-5.6 and GPT-6 Astra through the ChatGPT Codex product (the subscription login this gateway routes to, not the pay-per-token API) accepted 920,012 input tokens and refused 935,012 on 2026-09-05 through claude-code-proxy 0.1.35 (upstream 55bf0b58). The shim advertises `920000` by default. Its synthetic 413 trigger is the smaller of `CODEX_GATEWAY_COMPACT_TRIGGER` when set and the policy row's backend window minus 40k tokens. `CODEX_GATEWAY_COMPACT_TRIGGER` is a ceiling, never an override of that headroom. With the client `autoCompactWindow` cap at `325000`, Claude Code compacts first, so the sentry is a backstop that normally does not fire. `CODEX_GATEWAY_CONTEXT_WINDOW` overrides every advertised Codex window. Claude Code 2.1.261 ignores a settings-file `CLAUDE_CODE_MAX_CONTEXT_TOKENS` value for its own unrecognized-model resolver, so rows above 200k use their policy's recognized `[1m]` alias. That alias gives Claude Code a 1M client window, the closest available setting to the verified 920k backend window; it does not promise a 1M backend input limit. A lower explicit `autoCompactWindow` still wins, so compaction near the optional `325000` recommendation is expected. Use `/context` to inspect the selected model and effective cap.
 - Claude models (opus/sonnet/fable, with or without `[1m]`) keep their OWN separate native windows
   and compaction limits: the shim forwards their requests byte-identically to Anthropic and never
   applies Codex window advertisement or error rewriting to them. The env block pins the current
@@ -103,8 +113,7 @@ bring auth back, or you kill the session that was about to use it.
 - Caution: loading a huge reference skill (e.g. `claude-api`, ~800k chars) in a single turn can
   spike Codex context past the point proactive compaction can recover from. Prefer pulling large
   references incrementally on Codex models.
-- The advertised catalog is a built-in list (proxy v0.1.10 serves no /v1/models); override it in
-  `~/.claude/model-gateway/models.json` (JSON array of ids).
+- The advertised catalog is a built-in list (proxy v0.1.10 serves no /v1/models). A `models.json` file cannot add a backend that the claude-code-proxy allowlist does not support; update the proxy through `setup` instead.
 - **RC-compat and missing Codex rows**: Remote Control and the Codex/Grok rows in `/model` cannot
   both work. RC-compatibility points `ANTHROPIC_BASE_URL` at `api.anthropic.com`, and Claude Code
   disables gateway model discovery for that host. The gateway still routes explicit ids: type
@@ -114,7 +123,20 @@ bring auth back, or you kill the session that was about to use it.
 - Claude models keep working normally at the same time (passthrough path); subagents can mix tiers
   freely.
 
-## RC-compatibility mode (restoring `/remote-control`)
+## Local gateway records
+
+Request-route logging is enabled by default. It writes metadata-only JSONL records to
+`~/.claude/model-gateway/logs/request-routes.jsonl`: timestamp, backend, model, request path, route and
+effort when present, safe session and agent correlation ids, and dispatch-marker length when present. It
+never writes request bodies, prompts, messages, tools, authentication, or arbitrary headers. Honor a user
+request to disable it by setting `CODEX_GATEWAY_REQUEST_LOG=0` before the shim starts, then restart the shim
+through `setup` or `ensure`. The value is read when the shim process starts, so `/reload-plugins` does not
+change an already-running shim. `CODEX_GATEWAY_REQUEST_LOG_PATH` changes the file location.
+
+Usage observability also writes one high-water JSON file per valid session under
+`~/.claude/model-gateway/request-body/`. The filename is derived from the session id. Its contents are the
+largest forwarded request-body byte count observed for that session and an observation timestamp. It does
+not contain the request body. No retention period is promised for either local record.
 
 For the confirmation-gated procedure, use the `remote-control-compatibility` skill. It manages the
 plugin-marked hosts block, creates a backup before an elevated write, reconciles gateway mode, and
@@ -155,10 +177,14 @@ reversible workaround:
 
 `doctor` prints the full model-window table: backend and picker ids, backend and advertised windows,
 Claude Code's resolved client window and compaction point, sentry mode and trigger, and the measurement
-date. It includes Codex, Grok, and native Claude pin rows. It also compares the live shim's `/v1/models`
-ids with the installed policy. A `FAIL` naming missing and extra ids means the shim is stale even when its
-version matches: restart it through the normal `ensure` or `setup` path, then restart Claude Code sessions
-so the picker re-discovers the rows.
+date. It includes Codex, Grok, and native Claude pin rows. Its model-id check is useful for stale shim ids,
+but a `PASS` does not prove every supported model is present. A proxy from 0.1.14 through 0.1.35 can
+omit GPT-6 Astra while this check passes. If Astra is missing, check the installed and serving proxy
+version, rerun `setup` to fetch the latest release, and fully restart Claude Code. Astra requires
+claude-code-proxy 0.1.36 or newer. A `models.json` edit cannot add a backend that the proxy allowlist
+does not support. A `FAIL` naming missing and extra ids means the shim is stale even when its version
+matches: restart it through the normal `ensure` or `setup` path, then restart Claude Code sessions so the
+picker re-discovers the rows.
 
 Logs live in `~/.claude/model-gateway/logs/`. `guardian.log` has recovery output; `lifecycle.jsonl`
 has bounded process evidence that `doctor` summarizes. Ports: shim 18764, proxy 18765 (override with
@@ -186,6 +212,7 @@ agree).
   binary reads it as not authenticated and `setup` stops before wiring. Fix: re-run `login`, then
   `setup` again to finish. Until then every Codex model is down, so any run that routes to
   Codex (a whole sidequest board of Codex-tier tickets, for one) stalls entirely.
+- **GPT-6 Astra is missing from `/model`**: do not diagnose account access first. Check the installed and serving claude-code-proxy version. Astra requires 0.1.36 or newer; 0.1.35 does not include its backend allowlist, while the current doctor floor can still pass. Re-run `setup` to fetch the latest GitHub release, then fully restart Claude Code. Do not propose `models.json`: it cannot add a backend the proxy does not allow.
 - **No "From gateway" rows in /model**: discovery is off (`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`
   missing), Claude Code < v2.1.129, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set (it
   disables discovery), or RC-compatibility is active. Claude Code only refetches discovery with an

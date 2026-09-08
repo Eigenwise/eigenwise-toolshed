@@ -14,11 +14,13 @@ Run these in Claude Code:
 /plugin install model-gateway@eigenwise-toolshed --scope project
 ```
 
-Reload plugins or start a new Claude Code session. Then tell Claude:
+Reload the plugin, then start the Model Gateway skill:
 
 > Set up Model Gateway for me.
 
-Claude takes care of the rest through the bundled Model Gateway skill. It installs and starts the local gateway, checks your subscription login, writes this project's local settings, and confirms that model discovery works.
+The skill runs `setup` with project-local wiring, installs and starts the local gateway, checks your subscription login, and confirms the current project's `.claude/settings.local.json`. If setup asks for login, complete the browser sign-in, then let Claude run `setup` again to finish and confirm the project wiring.
+
+After the wiring is confirmed, fully restart the Claude Code process for that same project. A plugin reload alone does not reload the picker cache or the settings in the new process. Select a gateway model only after that restart.
 
 Model Gateway writes `ANTHROPIC_BASE_URL` to `.claude/settings.local.json`, never the committed `.claude/settings.json`. That keeps your local gateway endpoint out of other people's checkouts. You can opt into one shared fallback URL in `~/.claude/settings.json`, but a project's local setting wins. `model-gateway doctor` marks the effective source and calls out conflicting gateway modes.
 
@@ -28,10 +30,11 @@ You may need to complete a browser sign-in or restart Claude Code. Claude will a
 
 Open `/model` and choose a row labeled `From gateway`. Claude Code only refetches gateway discovery
 with an API-key credential. Model Gateway writes its discovery cache for OAuth subscriptions, and
-new rows appear after restarting Claude Code. `/reload-plugins` does not reload the picker cache.
+new rows appear after a full Claude Code restart. `/reload-plugins` does not reload the picker cache.
 
 - `claude-gpt-*[1m]` uses your ChatGPT/Codex subscription. `MODEL_WINDOW_POLICY` in Model Gateway's runtime is the authority for every gateway picker row. GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured rows; other Codex proxy rows use its explicit unmeasured 920k default until measured.
-- `claude-grok-4.5[1m]` uses your Grok subscription when the Grok CLI is installed and signed in. Its measured backend window is 500k. The `[1m]` aliases give Claude Code its 1M client window and are removed before requests reach their backend.
+- A `[1m]` alias gives Claude Code a 1M client window, but a lower explicit `autoCompactWindow` still wins. With the optional `325000` recommendation, compaction near 325k is expected. The alias is removed before forwarding to the backend and does not promise a 1M backend input limit. Use `/context` to inspect the selected model and effective cap.
+- `claude-grok-4.5[1m]` uses your Grok subscription when the Grok CLI is installed and signed in. Its measured backend window is 500k. The alias is removed before requests reach the backend.
 - Claude models keep using Anthropic.
 
 Sidequest can select these models automatically when both plugins are installed.
@@ -52,9 +55,17 @@ If something breaks, describe the symptom:
 
 > Codex fails, but Claude models still work. Repair Model Gateway.
 
-Claude checks the relevant state and tells you if a browser sign-in or restart needs your help.
+## Troubleshooting model visibility
 
-## Remote Control
+If GPT-6 Astra is missing from `/model`, check the installed and serving claude-code-proxy version before diagnosing account access. Astra requires version 0.1.36 or newer. Version 0.1.35 does not include its backend allowlist, and the current `doctor` check can still report `PASS` when Astra is the missing row. Ask Claude to rerun `setup`, which fetches the latest GitHub release, then fully restart Claude Code. A `models.json` edit cannot add a backend that the proxy does not allow.
+
+Authentication recovery has a different boundary. Complete `login` and let Claude run `setup` again; the refreshed credential can serve the already-running proxy, so a process restart is not required just for auth. Settings, discovery-cache, plugin, or model-row changes do require a full restart of the affected project process. `/reload-plugins` alone is not enough.
+
+## Local gateway records
+
+The shim writes request-route metadata to `~/.claude/model-gateway/logs/request-routes.jsonl` by default. Records contain the time, backend, model, request path, route and effort when present, and safe session or agent correlation fields. They do not contain request bodies, prompts, messages, tools, authentication, or arbitrary headers. Set `CODEX_GATEWAY_REQUEST_LOG=0` before the shim starts, then restart the shim through `setup` or `ensure`, to disable this route log. The setting is read by the shim process at startup. `CODEX_GATEWAY_REQUEST_LOG_PATH` changes the file location.
+
+Usage observability also keeps one high-water JSON file per valid session under `~/.claude/model-gateway/request-body/`. It records only the largest forwarded request-body byte count seen for that session and an observation timestamp. It does not contain the request body. No retention period is promised for either local record.
 
 Remote Control gives each project two choices.
 

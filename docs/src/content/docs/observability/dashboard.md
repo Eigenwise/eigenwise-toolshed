@@ -5,7 +5,7 @@ description: Read the local usage views after a repository starts reporting.
 
 After setup, open the configured loopback dashboard. The default URL is `http://127.0.0.1:3000`. The global **Claude Code Usage** view compares all opted-in repositories. A project view filters the same signals to one repository.
 
-A project appears after Claude Code metrics arrive for it. Restart sessions after opt-in, create activity, and allow the first records to arrive before treating an empty project view as a failure.
+A project appears after Claude Code metrics arrive for it. Restart sessions after opt-in, create activity, and allow the first records to arrive before treating an empty project view as a failure. Environment changes need a full process restart, not only `/reload-plugins`.
 
 ## Start with the main views
 
@@ -25,7 +25,7 @@ The **At a glance** row gives a quick read on model usage, roles, spend, and fai
 
 ![Where the spend goes row showing cost by model, cost by project, and context by agent role](../../../assets/screenshots/observability-where-the-spend-goes.png)
 
-The **Where the spend goes** row breaks down model totals and API list-price-equivalent cost before you change routing or prompts. Those dollar figures are estimates, not subscription charges. GPT-6 Astra uses its published API rates per gateway request, including the long-context tier. **Unpriced model token usage** keeps models without a published API price visible by resolved model name and provider-reported token volume, while the cost panels leave them out.
+The **Where the spend goes** row breaks down model totals and API list-price-equivalent cost before you change routing or prompts. Those dollar figures are estimates, not subscription charges. Pricing comes from the maintained model/provider price map and its linked public authorities, including [Anthropic pricing](https://platform.claude.com/docs/en/pricing) and [OpenAI API pricing](https://openai.com/api/pricing/). Cache buckets follow the resolved provider's semantics. **Unpriced model token usage** keeps models without a maintained public API price visible by resolved model name and provider-reported token volume, while the cost panels leave them out. The **Work routed to Codex** percentage uses resolved Codex API-equivalent cost divided by total priced API-equivalent cost in the selected range, so it is not a token share or subscription-spend measure.
 
 ![Failures and source activity row showing hook failures, gateway errors, and telemetry source activity](../../../assets/screenshots/observability-failures-and-source-activity.png)
 
@@ -43,6 +43,6 @@ The **Context recharge** row shows context-related activity alongside the rest o
 - **The dashboard has no recent data:** check the selected time range and whether the source cards have received records in the last few minutes.
 - **A model disappears after an Observability update:** ask Claude to compare the live panel query with the newest installed dashboard template before repairing it. The newest running observer owns the managed version record, so an older open session leaves newer dashboard files alone even when a downstream health check is failing.
 
-Resetting a generated dashboard does not disable telemetry or delete local history. Ask Claude to repair or reset it when the dashboard definition is stale.
+Resetting generated dashboards with `--reset-dashboards` does not disable telemetry or delete local history. After a reset, create fresh activity, run setup or let SessionStart reprovision the dashboards, fully reload the Grafana browser tab, and then verify. Grafana Refresh reruns queries already loaded in the page, so it does not replace a stale dashboard definition. Report `found` or `not-found` honestly.
 
 See the generated [Observability reference](../../reference/observability/) for the dashboard and verification details.
