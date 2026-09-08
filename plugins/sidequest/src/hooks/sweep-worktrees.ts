@@ -37,7 +37,7 @@ function releasedClaimNotices(result: unknown): string[] {
   });
 }
 
-function provisionExecAgentNotices(): string[] {
+function migrateLegacyExecAgentNotices(): string[] {
   try {
     const store = require(runtimeModule('store')) as Store;
     const sync = require(runtimeModule('agentsync')) as AgentSync;
@@ -68,7 +68,7 @@ function lostLaunchNotices(data: HookInput): string[] {
 
 async function sessionStartMaintenance(data: HookInput): Promise<string[]> {
   const notices = [
-    ...provisionExecAgentNotices(),
+    ...migrateLegacyExecAgentNotices(),
     ...lostLaunchNotices(data),
   ];
   try {

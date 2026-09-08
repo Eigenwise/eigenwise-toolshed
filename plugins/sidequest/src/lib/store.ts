@@ -1604,7 +1604,7 @@ function priorityRank(p?: any) {
   return Object.prototype.hasOwnProperty.call(PRIORITY_RANK, p) ? (PRIORITY_RANK[String(p)] ?? 9) : 9;
 }
 
-// The stable session-start executor receives the briefing and token in its prompt.
+// The plugin-bundled stable executor receives the briefing and token in its prompt.
 function stableExecutorName(ticket?: any, artifactMode = false) {
   if (!ticket || !ticket.model || !ticket.effort) throw new Error('dispatch executor requires a routable ticket.');
   const resolved = resolveExec(ticket.model, ticket.effort);

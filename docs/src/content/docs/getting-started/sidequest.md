@@ -14,7 +14,7 @@ Install Sidequest for the project you are working in:
 /plugin install sidequest@eigenwise-toolshed --scope project
 ```
 
-Reload Claude Code or start a new session after installing. You can also run `/quartermaster:setup` and let Quartermaster install and configure Sidequest for the project.
+Reload Claude Code or start a new session after installing. Sidequest packages its executor roster with the plugin, so Claude discovers every routed executor when it loads the plugin, before SessionStart maintenance. You can also run `/quartermaster:setup` and let Quartermaster install and configure Sidequest for the project.
 
 Sidequest is local. The dashboard runs on your machine and ticket data stays in the local Sidequest store.
 
@@ -118,7 +118,9 @@ Claude's persistent Sidequest Monitor runs `sidequest watch --project <path>`. T
 
 **The board does not open.** Reload Claude Code after installing Sidequest, then ask Claude to open the board again. If the browser still does not open, ask Claude to start the Sidequest dashboard and report its local URL.
 
-**Claude reports an older loaded Sidequest after an upgrade.** Reload plugins or start a new session to pick up the current connection. Sidequest 4.48.1 and newer can finish compatible dispatches across that version skew, and Claude reports it instead of stopping the current release session. Unknown versions, schema changes, and older loaded versions still refuse dispatch until reload.
+**Claude reports an older loaded Sidequest after an upgrade.** Reload plugins or start a new session to pick up the current connection and packaged executor roster. Sidequest 4.48.1 and newer can finish compatible dispatches across that version skew, and Claude reports it instead of stopping the current release session. Unknown versions, schema changes, and older loaded versions still refuse dispatch until reload.
+
+**A prior Sidequest release left executor files in your Claude agents folder.** Start a new Sidequest session after the upgrade. Maintenance removes only files bearing a recognized Sidequest generation marker, including retired Codex route combinations. It leaves custom agents, even files with a Sidequest executor name, untouched.
 
 **A ticket will not dispatch.** Ask Claude to diagnose the ticket. Common causes are an incomplete work description, a blocked dependency, or an unavailable configured route. Claude reports the specific recovery instead of silently changing the work's route.
 

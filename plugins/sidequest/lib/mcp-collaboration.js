@@ -256,7 +256,7 @@ const tools = [
   },
   {
     name: "dispatch",
-    description: "Prepare a token-gated dispatch. It returns a stable executor spawn spec and token. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor.",
+    description: "Prepare a token-gated dispatch. It returns a stable executor spawn spec and token. Each returned subagent_type is bundled in Sidequest and discoverable when the plugin loads, before SessionStart maintenance. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor.",
     inputSchema: {
       type: "object",
       properties: {

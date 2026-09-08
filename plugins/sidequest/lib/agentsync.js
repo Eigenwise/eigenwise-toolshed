@@ -177,6 +177,15 @@ function implementationExecutorSources() {
   }
   return sources;
 }
+function bundledExecutorSources(readOnlyDeniedTools) {
+  const sources = implementationExecutorSources();
+  sources.set(`${DIAGNOSTIC_PROBE_NAME}.md`, renderDiagnosticProbe());
+  sources.set(`${stableReadOnlyDispatchName()}.md`, renderReadOnlyDispatchAgent(void 0, readOnlyDeniedTools));
+  for (const effort of EXEC_EFFORTS) {
+    sources.set(`${stableReadOnlyClaudeName(effort)}.md`, renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools));
+  }
+  return sources;
+}
 function refToken(ref) {
   return String(ref || "ticket").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "ticket";
 }
@@ -1015,7 +1024,6 @@ function cleanupNativeAgents(opts) {
 function hasStableMarker(source) {
   return source.includes(MARKER) || source.includes(LEGACY_MARKER);
 }
-const INSTALL_HASH_FILE = ".sidequest-install-hash";
 function stableInstallHash(skills = EXECUTOR_SKILLS, readOnlyDeniedTools) {
   let version = "0.0.0";
   try {
@@ -1026,86 +1034,100 @@ function stableInstallHash(skills = EXECUTOR_SKILLS, readOnlyDeniedTools) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
   return crypto.createHash("sha256").update(JSON.stringify({ version, template, marker: MARKER, dispatchModel: DISPATCH_MODEL_ID, checkpointToolRounds: EXECUTOR_CHECKPOINT_TOOL_ROUNDS, readOnlyTools, skills })).digest("hex");
 }
-function installHashPath(dir) {
-  return path.join(dir || defaultAgentsDir(), INSTALL_HASH_FILE);
+function recognizedGeneratedExecutorFile(filename, bundledNames) {
+  if (bundledNames.has(filename)) return true;
+  return /^sidequest-exec-codex-[a-z0-9][a-z0-9-]*-(low|medium|high|xhigh|max)\.md$/.test(filename);
 }
-function readInstallHash(dir) {
+function migrateExecAgents(_prefs, opts) {
+  const dir = opts?.dir || defaultAgentsDir();
+  const bundledNames = new Set(bundledExecutorSources(opts?.readOnlyDeniedTools).keys());
+  let existing = [];
   try {
-    return fs.readFileSync(installHashPath(dir), "utf8").trim();
+    existing = fs.readdirSync(dir).filter((filename) => filename.toLowerCase().endsWith(".md"));
   } catch (_) {
-    return "";
+    return { written: 0, removed: 0, unchanged: 0 };
   }
-}
-function writeInstallHash(dir, hash) {
-  fs.writeFileSync(installHashPath(dir), hash + "\n");
+  let removed = 0;
+  let unchanged = 0;
+  for (const filename of existing) {
+    if (!recognizedGeneratedExecutorFile(filename, bundledNames)) continue;
+    const filePath = path.join(dir, filename);
+    let source = "";
+    try {
+      source = fs.readFileSync(filePath, "utf8");
+    } catch (_) {
+      continue;
+    }
+    if (!hasStableMarker(source)) {
+      unchanged++;
+      continue;
+    }
+    try {
+      fs.unlinkSync(filePath);
+      removed++;
+    } catch (_) {
+      unchanged++;
+    }
+  }
+  return { written: 0, removed, unchanged };
 }
 function syncExecAgentsIfChanged(_prefs, opts) {
-  const dir = opts && opts.dir ? opts.dir : defaultAgentsDir();
-  const readOnlyDeniedTools = opts && opts.readOnlyDeniedTools;
-  const installHash = stableInstallHash(EXECUTOR_SKILLS, readOnlyDeniedTools);
-  if (readInstallHash(dir) === installHash) {
-    return { written: 0, removed: 0, unchanged: 0, skipped: true, installHash };
-  }
-  const result = syncExecAgents(_prefs, { dir, readOnlyDeniedTools });
-  return Object.assign({}, result, { skipped: false, installHash });
+  const result = migrateExecAgents(_prefs, opts);
+  return Object.assign({}, result, {
+    skipped: result.removed === 0,
+    installHash: stableInstallHash(EXECUTOR_SKILLS, opts?.readOnlyDeniedTools)
+  });
 }
 function syncExecAgents(_prefs, opts) {
-  opts = opts || {};
-  const dir = opts.dir || defaultAgentsDir();
-  const readOnlyDeniedTools = opts.readOnlyDeniedTools;
-  const wanted = /* @__PURE__ */ new Map();
-  wanted.set(`${DIAGNOSTIC_PROBE_NAME}.md`, renderDiagnosticProbe());
-  for (const [filename, source] of implementationExecutorSources()) {
-    wanted.set(filename, source);
-  }
-  wanted.set(`${stableReadOnlyDispatchName()}.md`, renderReadOnlyDispatchAgent(void 0, readOnlyDeniedTools));
-  for (const effort of EXEC_EFFORTS) {
-    wanted.set(`${stableReadOnlyClaudeName(effort)}.md`, renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools));
-  }
+  if (!opts?.dir) return migrateExecAgents(_prefs, opts);
+  const dir = opts.dir;
+  const wanted = bundledExecutorSources(opts?.readOnlyDeniedTools);
   let existing = [];
   try {
     fs.mkdirSync(dir, { recursive: true });
-    existing = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith(".md"));
+    existing = fs.readdirSync(dir).filter((filename) => filename.toLowerCase().endsWith(".md"));
   } catch (_) {
-    existing = [];
+    return { written: 0, removed: 0, unchanged: 0 };
   }
   let written = 0;
   let removed = 0;
   let unchanged = 0;
-  for (const [filename, content] of wanted) {
+  for (const [filename, source] of wanted) {
     const filePath = path.join(dir, filename);
-    let prev = null;
+    let previous = null;
     try {
-      prev = fs.readFileSync(filePath, "utf8");
+      previous = fs.readFileSync(filePath, "utf8");
     } catch (_) {
-      prev = null;
     }
-    if (prev !== null && !hasStableMarker(prev)) continue;
-    if (prev === content) {
+    if (previous !== null && !hasStableMarker(previous)) {
       unchanged++;
       continue;
     }
-    fs.writeFileSync(filePath, content);
+    if (previous === source) {
+      unchanged++;
+      continue;
+    }
+    fs.writeFileSync(filePath, source);
     written++;
   }
-  const wantedNames = new Set(wanted.keys());
+  const bundledNames = new Set(wanted.keys());
   for (const filename of existing) {
-    if (wantedNames.has(filename)) continue;
+    if (!recognizedGeneratedExecutorFile(filename, bundledNames)) continue;
+    if (bundledNames.has(filename)) continue;
     const filePath = path.join(dir, filename);
-    let body = null;
+    let source = "";
     try {
-      body = fs.readFileSync(filePath, "utf8");
+      source = fs.readFileSync(filePath, "utf8");
     } catch (_) {
       continue;
     }
-    if (body == null || !hasStableMarker(body)) continue;
+    if (!hasStableMarker(source)) continue;
     try {
       fs.unlinkSync(filePath);
       removed++;
     } catch (_) {
     }
   }
-  writeInstallHash(dir, stableInstallHash(EXECUTOR_SKILLS, readOnlyDeniedTools));
   return { written, removed, unchanged };
 }
 module.exports = {
@@ -1124,6 +1146,7 @@ module.exports = {
   resolveReadOnlyTools,
   EXECUTOR_SKILLS,
   implementationExecutorSources,
+  bundledExecutorSources,
   ticketCommentsPacket,
   ticketAssetsPacket,
   routeMarker,
@@ -1150,6 +1173,7 @@ module.exports = {
   ticketIsolation,
   syncExecAgents,
   syncExecAgentsIfChanged,
+  migrateExecAgents,
   stableInstallHash,
   EXECUTOR_CONTRADICTION_RULE,
   defaultAgentsDir

@@ -3068,7 +3068,7 @@ test('session-start: stays inside its byte budget and off the retired doctrine',
   assert.match(ctx, /board path refuses verified work, deliver it yourself through groomClose with deliveryCommit/i);
 });
 
-test('session-start: reports newly provisioned executors once, then stays quiet', () => {
+test('session-start does not create user-scoped stable executor definitions', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-agents-'));
   writeCategory(home, {
     id: 'hooks-codex',
@@ -3079,13 +3079,14 @@ test('session-start: reports newly provisioned executors once, then stays quiet'
   });
   const first = JSON.parse(runSessionWithHome(home));
   const firstContext = first.hookSpecificOutput.additionalContext;
-  assert.match(firstContext, /Reload plugins before spawning newly created temporary native agents/);
+  assert.doesNotMatch(firstContext, /Executor definitions were just \(re\)provisioned/);
+  assert.ok(!fs.existsSync(path.join(home, 'agents')), 'bundled executors must not wait for SessionStart to create user files');
 
   const second = JSON.parse(runSessionWithHome(home));
   const secondContext = second.hookSpecificOutput.additionalContext;
   assert.doesNotMatch(secondContext, /Executor definitions were just \(re\)provisioned/);
 });
-test('session-start: provisions the shared dispatch executor and prunes legacy per-combo defs', () => {
+test('session-start removes legacy generated per-combo definitions without provisioning user files', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-codex-'));
   writeCategory(home, {
     id: 'hooks-codex',
@@ -3102,11 +3103,11 @@ test('session-start: provisions the shared dispatch executor and prunes legacy p
   fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
   fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, updatedAt: new Date().toISOString(), source: 'model-gateway', codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' }, models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' }] }));
   runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
-  assert.ok(!fs.existsSync(legacyFile), 'legacy per-combo Codex executor must be pruned by session sync');
-  assert.ok(fs.existsSync(path.join(agents, 'sidequest-exec-dispatch.md')), 'reachable Codex route must provision the shared dispatch executor');
+  assert.ok(!fs.existsSync(legacyFile), 'legacy per-combo Codex executor must be pruned by session migration');
+  assert.ok(!fs.existsSync(path.join(agents, 'sidequest-exec-dispatch.md')), 'the plugin package provides the shared dispatch executor before SessionStart');
 });
 
-test('session-start: category-route sync ignores retired prefs data', () => {
+test('session-start leaves user agent directories untouched when retired prefs data is unreadable', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-unreadable-'));
   const agents = path.join(home, 'agents');
   fs.mkdirSync(agents, { recursive: true });
@@ -3123,7 +3124,7 @@ test('session-start: category-route sync ignores retired prefs data', () => {
   fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
   fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, updatedAt: new Date().toISOString(), source: 'model-gateway', codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' }, models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' }] }));
   runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
-  assert.ok(fs.existsSync(codexFile), 'a category route must provision despite unreadable retired prefs data');
+  assert.ok(!fs.existsSync(codexFile), 'a packaged executor requires no user-agent write even when retired preferences are unreadable');
 });
 test('session-start preserves the live linked worktree that started the sweep', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-live-worktree-'));
