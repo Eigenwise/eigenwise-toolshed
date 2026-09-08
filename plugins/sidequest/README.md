@@ -1,6 +1,6 @@
 # Sidequest
 
-Sidequest is a local board for planning, tracking, and delivering Claude Code work. It keeps a visible backlog across your projects, groups related tickets into stories, and routes delegated work through a consistent review and delivery flow. The same lifecycle covers Git codebases and immutable revisions from wikis, documentation vaults, document sets, and research collections.
+Sidequest is a local board for planning, tracking, and delivering Claude Code work. It keeps a visible backlog across your projects, groups related tickets into stories, and gives Claude a consistent way to delegate, verify, review, and hand work back.
 
 [Setup guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/) · [Generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/sidequest/) · [Toolshed marketplace](../../README.md)
 
@@ -13,29 +13,23 @@ Install Sidequest at project scope:
 /plugin install sidequest@eigenwise-toolshed --scope project
 ```
 
-Reload Claude Code or start a new session. The executor roster ships in the Sidequest plugin package, so it is available as soon as Claude loads the plugin, before SessionStart maintenance runs. You can also run `/quartermaster:setup` and let Quartermaster install and configure Sidequest for a project.
+Reload Claude Code or start a new session. You can also run `/quartermaster:setup` and let Quartermaster install and configure Sidequest for a project.
 
 Open the board with `/sidequest:board`, or tell Claude to show it. The dashboard is local and ticket data stays on your machine.
 
-## Plan work
+## Start with Claude
 
-Tell Claude what you want to change and ask it to plan the work on Sidequest:
+Tell Claude the outcome you want:
 
 > Plan the checkout refresh as a Sidequest story and show me the backlog.
 
-Claude can create the story, split it into tickets, connect dependencies, and choose the configured work categories. You decide whether the plan is ready to run.
-
-## Run and deliver tickets
-
-Once the backlog looks right, ask Claude to dispatch the ready work. Claude handles routing, executor startup, verification, and the ticket updates. Independent tickets can run in parallel when their dependencies allow it.
-
-A codebase submission pins a verified Git range. A non-Git project pins its filesystem-snapshot revision and changed surfaces, then records verifier evidence tied to that snapshot. Its server integration registers `store.registerSourceRevisionCapability(project, resolver)`; Sidequest hydrates any preserved retry candidate, calls the current project resolver exactly once with that candidate and immutable dispatch baseline, and binds even an unavailable result to both. Replacing a registration invalidates the prior resolver, so teardown cannot restore it. CLI and MCP callers cannot assert existence or membership themselves. Missing Git, process, and worktree capabilities are explicit, so delivery does not probe or invoke those adapters.
+Claude can create the story, split it into tickets, connect dependencies, and classify the work from the board's configured categories. Review the backlog, then ask Claude to dispatch the ready tickets. Claude handles routing, executor startup, verification, and ticket updates.
 
 When work is ready, ask Claude to review and integrate it:
 
 > Review and integrate the submitted checkout tickets if their checks pass.
 
-Larger or higher-risk changes may need an additional review before integration. Claude reports what passed, what needs attention, and what is waiting for your decision.
+A codebase ticket hands back a verified revision. Non-Git work hands back a verified project snapshot. Larger or higher-risk changes can get an independent review when the verification evidence needs one.
 
 ## Use the board every day
 
@@ -46,8 +40,8 @@ Sidequest also works through natural-language requests:
 - `Show me the Sidequest backlog for this project.`
 - `What is ready to dispatch for the checkout story?`
 - `Add a ticket for the empty-state bug with the reproduction steps.`
-- `What is blocking SQ-7?`
-- `Review and integrate SQ-7 if verification passed.`
+- `What is blocking the checkout ticket?`
+- `Review and integrate the checkout ticket if verification passed.`
 
 ## If something stops working
 
@@ -55,15 +49,17 @@ Tell Claude the symptom:
 
 > The Sidequest board will not open. Diagnose it.
 
-> SQ-7 will not dispatch. Explain what is blocking it.
+> The checkout ticket will not dispatch. Explain what is blocking it.
 
 > A submitted ticket is waiting. Check it and finish the integration if it is safe.
 
-Claude checks the local plugin connection, ticket state, dependencies, configured route, and delivery status, then gives you the next action. After an install or upgrade, start a new Claude Code session or reload plugins so the session picks up the current Sidequest connection and its bundled executors. Sidequest removes only its marked generated executor files left by older releases during normal maintenance. It leaves custom agent files alone. When the loaded version is older than the installed version but at least 4.48.1, Sidequest permits dispatch and warns you to reload before the next dispatch. Malformed versions and loaded versions before 4.48.1 refuse.
+Claude checks the local plugin connection, ticket state, dependencies, configured route, and delivery status, then gives you the next action. After an install or upgrade, start a new Claude Code session or reload plugins so the session picks up the current Sidequest connection and its bundled executors.
 
-## Worktree storage
+For worktree storage, recovery, and command details, see the [generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/sidequest/). Ask Claude to inspect or clean up local worktrees rather than guessing at lifecycle commands.
 
-Run `sidequest worktrees status` to see the disk use of active worktrees, recovery backups, and quarantine. `sidequest worktrees sweep --dry-run` shows stale worktrees and expired recovery entries before changing anything. Recovery backups keep Git patches and metadata, while quarantined worktrees drop ignored build output and dependency directories. By default, backup and quarantine entries expire after 14 days and only the newest three entries per agent remain. Set `worktreeRecoveryRetentionAgeHours` and `worktreeRecoveryRetentionMaxPerAgent` through board config to change those bounds.
+## Support
+
+Optional, if Sidequest saves you time: [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise).
 
 ## License
 

@@ -7,11 +7,16 @@ interface ClaimIdentity {
   at?: string;
 }
 
-type RefusalMessage = (ref: string, claim: ClaimIdentity) => string;
+interface ClaimContext extends ClaimIdentity {
+  claim?: ClaimIdentity;
+  submission?: ClaimIdentity;
+}
+
+type RefusalMessage = (ref: string, claim: ClaimContext) => string;
 
 const { CLAIM_REFUSAL_MESSAGES, claimRefusalMessage, routingDisabledMessage } = require('../lib/refusal-guidance.js') as {
   CLAIM_REFUSAL_MESSAGES: Record<string, RefusalMessage>;
-  claimRefusalMessage(reason: string, ref: string, claim?: ClaimIdentity): string;
+  claimRefusalMessage(reason: string, ref: string, claim?: ClaimContext): string;
   routingDisabledMessage(ref: string): string;
 };
 
@@ -28,10 +33,19 @@ test('terminal claim guidance names immediate safe recovery', () => {
   assert.match(message, /Do not wait for an idle timeout/i);
 });
 
-test('not-owner guidance does not tell callers to use the claim holder identity', () => {
-  const message = claimRefusalMessage('not_owner', 'SQ-42', { by: 'other-worker' });
-  assert.match(message, /ask the claim holder to release/i);
-  assert.doesNotMatch(message, /--by <claim-owner>|--by other-worker/i);
+test('not-owner guidance separates a live claim from a parked submission', () => {
+  const liveClaim = claimRefusalMessage('not_owner', 'SQ-42', { by: 'other-worker', claim: { by: 'other-worker' } });
+  assert.match(liveClaim, /live claim/i);
+  assert.match(liveClaim, /Ask the claim holder to release/i);
+  assert.doesNotMatch(liveClaim, /--by <claim-owner>|--by other-worker/i);
+
+  const parkedSubmission = claimRefusalMessage('not_owner', 'SQ-42', { submission: { by: 'terminal-producer' } });
+  assert.match(parkedSubmission, /parked submission/i);
+  assert.match(parkedSubmission, /producer is terminal/i);
+  assert.match(parkedSubmission, /publish it, use `sidequest rework SQ-42`/i);
+  assert.match(parkedSubmission, /do not ask it to release or resume/i);
+  assert.doesNotMatch(parkedSubmission, /Ask the candidate owner/i);
+  assert.doesNotMatch(parkedSubmission, /sidequest release SQ-42/i);
 });
 
 test('unbound dispatch guidance tells an executor to present its prepared token', () => {

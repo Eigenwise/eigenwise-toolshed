@@ -115,9 +115,7 @@ Drop out of this flow when it does not fit, and say so plainly:
 Recon answers exactly one question: **what does the contract need to say?** Stop the moment you can
 write the shared interfaces, the file boundaries, and a verify command per piece.
 
-In the orchestrator, allow yourself `Read`, `Glob`, `Grep` on named anchors, plus native `Explore` for
-a fan-out sweep when you do not know where something lives. Anything deeper goes to executors: file
-`codebase-exploration` tickets, `readonly: true`, one per distinct angle, all in parallel. At
+In the orchestrator, bounded recon may `Read`, `Glob`, or `Grep` named anchors and make one narrow location sweep. Route unfamiliar path tracing, deep investigation, or multi-angle research through the live taxonomy: use a read-only `codebase-exploration` ticket for repository behavior, `source-lookup` for a bounded external question, or `evidence-research` when sources need reconciliation. Give each ticket one distinct angle and run independent investigations in parallel. At
 multi-wave size the angles that earn their keep are the closest existing feature traced end to end,
 the extension point and who else depends on it, and the convention plus test pattern to match.
 
@@ -228,8 +226,8 @@ already made, the reproduction if it is a bug, and the verify command. Front-loa
 cheaper executors cannot recover context you left out.
 
 A feature almost always has a docs piece. Any change to what a user sees or does either updates the
-affected prose page inside the story or gets a linked `docs-writing` ticket. Decide that here, while
-the backlog is being written, not at ship time.
+affected prose page inside the story or gets a linked ticket classified from the live taxonomy. Decide
+that here, while the backlog is being written, not at ship time.
 
 Flag the tickets that deserve `highStakes: true` now: data loss, auth, money, the release path, an
 irreversible migration. That flag is what pulls deeper verification and a required review pass into

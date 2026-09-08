@@ -130,23 +130,21 @@ board (submissions stay parked — fail closed).
 9. **Seam check the batch**: with 2+ integrated commits, run the shared suite the tickets sit in
    (for this repo: `node --test plugins/sidequest/test/*.test.js`, or the suites of the touched
    plugins) so per-ticket-green but jointly-red seams are caught before the push.
-10. **Review the integrated diff — the gate before the push**. Green verification is necessary but is
-   NOT a review. For each integrated ticket, review the change for correctness, scope-safety, and
-   security. Read the diff yourself (`git diff <base>..HEAD -- <scope>`) for a small or mechanical
-   change; for a substantial, cross-cutting, or security-sensitive one, dispatch a `review-audit`
-   executor (or `security-audit`) bound with `reviewTarget` to that ticket and its exact submitted
-   commit, so the review runs against a pinned immutable checkout, and read its findings before
-   continuing. A bound candidate cannot be reclaimed, amended, cleared, superseded, or integrated until
-   its review finishes, and no caller-controlled route can reject it: `rework` and every other direct route
-   return `candidate_review_locked` without writing. A review that finds a defect records its evidence on the
-   review ticket and releases that review with `kind=oracle`. When that oracle accepts the defect conclusion,
-   Sidequest marks both binding halves `rejected`; after a fresh repair is reviewed and integrated,
-   `supersede_submission` closes the rejected source against the repair. Integration also needs both runtime
-   identities from the immutable terminal dispatch attempts (the source's `submitted` attempt for that exact
-   commit, the review's `done` attempt) and refuses when either is missing or both are the same agent.
-   Resolve or explicitly accept every finding before pushing. A finding that needs rework is an
-   integration failure: drop that ticket's range, leave its submission parked, and file a scoped ticket
-   (see "Integration failures fail closed") — never push code you have only tested and not read.
+10. **Apply review at the sized depth**: consume each submission report and the delivery and
+    merged-tree gate evidence. Do not inspect executor source or diffs as an orchestrator review.
+    A deterministic singleton needs no bound review. Bind a `review-audit` ticket to the exact
+    candidate when the oracle is weak, consumers remain materially unchecked, or the work is
+    high-stakes; use distinct review lenses for high-stakes or multi-wave work. A bound candidate
+    cannot be reclaimed, amended, cleared, superseded, or integrated until its review finishes, and
+    no caller-controlled route can reject it: `rework` and every other direct route return
+    `candidate_review_locked` without writing. A review that finds a defect records its evidence on
+    the review ticket and releases that review with `kind=oracle`. When that oracle accepts the
+    defect conclusion, Sidequest marks both binding halves `rejected`; after a fresh repair is
+    reviewed and integrated, `supersede_submission` closes the rejected source against the repair.
+    Integration also needs the immutable terminal dispatch identities for the submitted source and
+    completed review, and refuses when either is missing or both are the same agent. Resolve or
+    explicitly accept every finding before pushing. A finding that needs repair leaves its
+    submission parked and goes through the applicable rejection flow below.
 11. **Push and confirm**: `git push origin HEAD:main` from the integration worktree — never a new
    branch. A non-fast-forward → `git pull --rebase origin main`, rerun steps 8-10, push again. Then
    fetch fresh and confirm the integrated commits (the cherry-picked equivalents, not the submitted
@@ -168,8 +166,15 @@ force-merged and never silently dropped:
 - Leave its submission parked (do NOT `done`, do NOT clear it reflexively).
 - File a narrowly scoped integration ticket: the conflicting ref, the exact failure output, the
   submitted commit + durable ref, and what the integrator may touch. Link it `blocks` the original.
-- Only when the fix requires REDOING the original work (not merging it) clear the submission so the
-  ticket is claimable again: `sidequest submit <ref> --clear -s todo`.
+- For an **unbound** candidate that a review rejects or otherwise needs its original work redone,
+  use `sidequest rework <ref> --by <candidate-owner> --review "<evidence>" --reason "<repair>"`.
+  It preserves the candidate and rejection evidence while returning the ticket to `todo` for a
+  normal repair claim.
+- Use `sidequest submit <ref> --clear -s todo` only for an actual integration bounce: delivery
+  returned an unbound candidate to its producer without a review rejection, and the candidate must
+  be dropped before the ticket can restart. Record the delivery refusal. A review-bound candidate
+  rejects both routes; retain its oracle, then repair through a fresh ticket and supersede it only
+  after the reviewed repair integrates.
 
 ## Dead executor salvage
 

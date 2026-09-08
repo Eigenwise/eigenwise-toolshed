@@ -3126,7 +3126,7 @@ test('MCP integrate refuses array wave inputs and documents comma-separated grou
   const gettingStarted = fs.readFileSync(path.join(repositoryRoot, 'docs', 'src', 'content', 'docs', 'getting-started', 'sidequest.md'), 'utf8');
   assert.match(cliHelp, /MCP ref uses one comma-separated string and wave is an options object/);
   assert.match(invocationContracts, /MCP `ref` is one ticket ref or a comma-separated participant group/);
-  assert.match(gettingStarted, /MCP wave groups go in one comma-separated `ref` string/);
+  assert.doesNotMatch(gettingStarted, /MCP wave groups go in one comma-separated `ref` string/);
 });
 
 test('MCP integrate acknowledges pending submitted overlaps omitted from a singleton wave', async () => {
@@ -4800,6 +4800,38 @@ test('claim requires a worker id (no shared-identity default)', async () => {
   const res = await callToolRaw('claim', { ref: added.ref });
   assert.ok(res.isError, 'a claim without by is refused');
   assert.match(res.content[0].text, /missing required argument "by"/);
+});
+
+test('MCP guidance protects live claims and labels force operator-only', async () => {
+  const added = await callTool('add', { title: 'live claim recovery guidance', category: 'coding.easy' });
+  const owner = 'mcp-live-guidance-owner';
+  const claimed = await callTool('claim', {
+    ref: added.ref,
+    by: owner,
+    direct: true,
+    reason: 'This fixture directly checks the claimed-refusal recovery guidance.',
+  });
+  assert.equal(claimed.ok, true);
+  try {
+    const refused = await callTool('claim', {
+      ref: added.ref,
+      by: 'mcp-live-guidance-contender',
+      direct: true,
+      reason: 'This fixture checks that an already claimed ticket cannot be taken over.',
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.reason, 'claimed');
+    assert.match(refused.message, new RegExp(`sidequest pulse ${added.ref}`));
+    assert.match(refused.message, /observed terminal evidence/);
+    assert.match(refused.message, /salvage useful work/);
+    assert.match(refused.message, new RegExp(`sidequest release ${added.ref}`));
+    assert.doesNotMatch(refused.message, /use `--force`/);
+
+    const claimTool = mcp.toolDescriptors().find((tool: any) => tool.name === 'claim');
+    assert.match(claimTool.inputSchema.properties.force.description, /Operator-only/);
+  } finally {
+    assert.equal(store.releaseTicket(added.project, added.ref, owner, { status: 'todo', source: 'test' }).ok, true);
+  }
 });
 
 test('MCP dispatch returns the Codex readiness recovery text without preparing state', async () => {

@@ -11,6 +11,7 @@ const skill = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'SKILL.md')
 const userStory = fs.readFileSync(path.join(ROOT, 'skills', 'user-story', 'SKILL.md'), 'utf8');
 const ticketAuthoring = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'ticket-authoring.md'), 'utf8');
 const orchestration = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'orchestration.md'), 'utf8');
+const publishing = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'publishing.md'), 'utf8');
 const invocationContracts = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'invocation-contracts.md'), 'utf8');
 const externalTrackers = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'external-trackers.md'), 'utf8');
 const executorTemplate = fs.readFileSync(path.join(ROOT, 'scripts', '_exec-template.md'), 'utf8');
@@ -75,7 +76,38 @@ test('external tracker guidance keeps authored GitHub communication self-contain
   assert.match(externalTrackers, /local `SQ-`\/`US-` identifiers, board slugs, local-only evidence paths/);
   assert.match(externalTrackers, /Keep those references in local\s+Sidequest threads with the GitHub link back/);
   assert.match(externalTrackers, /Preserve reporter text unless you are authorized to edit\s+it/);
+  assert.match(externalTrackers, /existing user or team authorization applies to that public action/);
+  assert.match(externalTrackers, /sanitation controls content, not posting authority/);
+  assert.doesNotMatch(externalTrackers, /update the \*\*external\*\* tracker\/PR as the team expects/);
   assert.match(externalTrackers, /do not strip diagnostic error text or hand-edit historical changelogs or generated release\s+history/);
+});
+
+test('operating guidance uses live taxonomy and consistent recon boundaries', () => {
+  const categoryDefaults = require('../lib/category-defaults.js').DEFAULT_CATEGORIES as Array<{ id: string }>;
+  const starterCategories = new Set(categoryDefaults.map((category) => category.id));
+  for (const category of ['review-audit', 'source-lookup', 'evidence-research', 'codebase-exploration']) {
+    assert.ok(starterCategories.has(category), `${category} must remain a starter category`);
+  }
+
+  const operationalGuidance = [skill, userStory, orchestration, publishing];
+  for (const source of operationalGuidance) {
+    assert.doesNotMatch(source, /`docs-writing`|`security-audit`/);
+  }
+  for (const source of [skill, userStory, orchestration]) {
+    assert.match(source, /bounded recon.*named anchors/i);
+    assert.match(source, /unfamiliar[\s\S]{0,80}deep investigation/i);
+  }
+});
+
+test('publishing consumes reports and oracles without an orchestrator diff review', () => {
+  assert.match(publishing, /consume each submission report and the delivery and\s+merged-tree gate evidence/);
+  assert.match(publishing, /A deterministic singleton needs no bound review/);
+  assert.match(publishing, /Bind a `review-audit` ticket/);
+  assert.match(publishing, /Do not inspect executor source or diffs/);
+  assert.doesNotMatch(publishing, /Review the integrated diff/);
+  assert.doesNotMatch(publishing, /Read the diff yourself/);
+  assert.match(publishing, /use `sidequest rework <ref>/);
+  assert.match(publishing, /only for an actual integration bounce/);
 });
 
 test('published guidance pins surgical planning before substantial dispatch', () => {
