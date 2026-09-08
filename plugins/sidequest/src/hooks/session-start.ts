@@ -145,7 +145,7 @@ function upstreamDefectDestination(): string {
     });
     if (project) return `Offer to file it as a ticket on the ${project.name} board on this machine (the Toolshed working copy), not via the Anthropic feedback tool.`;
   } catch (_) {}
-  return 'Offer to file it as a GitHub issue on Eigenwise/eigenwise-toolshed, not via the Anthropic feedback tool.';
+  return 'Offer to file it as a GitHub issue on Eigenwise/eigenwise-toolshed, not via the Anthropic feedback tool. Any GitHub body, comment, reply, or closure note you author must stand alone: summarize a sanitized reproduction, relevant findings, and version with public issue, PR, commit, or release links; omit local SQ-/US- IDs, board slugs, local-only paths, and board-only references. Preserve reporter text unless authorized to edit it; do not strip diagnostic error text or hand-edit historical changelogs or generated release history.';
 }
 
 function hasMidWaveBoard(data: HookInput): boolean {

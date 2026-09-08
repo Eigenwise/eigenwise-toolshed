@@ -24,5 +24,13 @@ How to run both, in practice:
 4. When the work lands, update the **external** tracker/PR as the team expects; the sidequest tickets
    were your scaffolding and can just be marked `done`.
 
+GitHub issue bodies, comments, replies, and closure notes you author must stand alone: summarize a
+sanitized reproduction, relevant findings, and version, with only publicly resolvable issue, PR,
+commit, or release links. Omit local `SQ-`/`US-` identifiers, board slugs, local-only evidence paths,
+and board-only references; summarize that evidence directly instead. Keep those references in local
+Sidequest threads with the GitHub link back. Preserve reporter text unless you are authorized to edit
+it, and do not strip diagnostic error text or hand-edit historical changelogs or generated release
+history.
+
 Short version: **Jira says *what* to build; sidequest is *how you execute it* here.** One doesn't
 substitute for the other.
