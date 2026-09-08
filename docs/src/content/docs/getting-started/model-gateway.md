@@ -3,7 +3,7 @@ title: Model Gateway
 description: Add ChatGPT/Codex and Grok subscription models to Claude Code.
 ---
 
-Model Gateway adds subscription-backed GPT and Grok models to Claude Code. Claude models keep using Anthropic normally.
+Model Gateway adds subscription-backed GPT and Grok models to Claude Code. Claude Code v2.1.129+ can show those gateway models in its `/model` picker. Claude models keep using Anthropic normally.
 
 ## Install
 
@@ -28,12 +28,12 @@ You may need to complete a browser sign-in or restart Claude Code. Claude will a
 
 ## Pick a model
 
-Open `/model` and choose a row labeled `From gateway`. Claude Code only refetches gateway discovery
+In Claude Code v2.1.129+, open `/model` and choose a row labeled `From gateway`. Claude Code only refetches gateway discovery
 with an API-key credential. Model Gateway writes its discovery cache for OAuth subscriptions, and
 new rows appear after a full Claude Code restart. `/reload-plugins` does not reload the picker cache.
 
 - `claude-gpt-*[1m]` uses your ChatGPT/Codex subscription. `MODEL_WINDOW_POLICY` in Model Gateway's runtime is the authority for every gateway picker row. GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured rows; other Codex proxy rows use its explicit unmeasured 920k default until measured.
-- A `[1m]` alias gives Claude Code a 1M client window, but a lower explicit `autoCompactWindow` still wins. With the optional `325000` recommendation, compaction near 325k is expected. The alias is removed before forwarding to the backend and does not promise a 1M backend input limit. Use `/context` to inspect the selected model and effective cap.
+- A `[1m]` alias gives Claude Code a 1M client window, but a lower explicit `autoCompactWindow` still wins. The optional `325000` setting is a cap, and with that cap the client compacts around `292000`. The alias is removed before forwarding to the backend and does not promise a 1M backend input limit. Use `/context` to inspect the selected model and effective cap.
 - `claude-grok-4.5[1m]` uses your Grok subscription when the Grok CLI is installed and signed in. Its measured backend window is 500k. The alias is removed before requests reach the backend.
 - Claude models keep using Anthropic.
 
