@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
+import { generateBundledAgents } from './generate-bundled-agents.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -85,6 +86,7 @@ async function buildHooks() {
 for (const directory of nonBundledBuildDirectories) {
   await buildNonBundled(directory, directory === 'bin' ? '#!/usr/bin/env node' : undefined);
 }
+await generateBundledAgents(pluginRoot);
 await buildHooks();
 
 if (budgetReportRequested) process.stdout.write(`${JSON.stringify(mcpToolsListBudgetReport(), null, 2)}\n`);

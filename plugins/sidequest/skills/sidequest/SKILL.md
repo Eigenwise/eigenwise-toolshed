@@ -86,7 +86,7 @@ schema-bumping release, reload plugins before MCP writes. Commands default to th
 `--project "<path-or-slug>"` (MCP: `project`) targets another board.
 
 `dispatch <ref>` is **instant**: it returns the ticket's stable executor, a short `spawn` fetch
-stub, and a token. Pass every supplied `spawn` field (`name` and `description` too) to Agent
+stub, and a token. Its `subagent_type` ships in the plugin, before SessionStart. Pass every supplied `spawn` field (`name` and `description` too) to Agent
 unchanged. Set `Agent.description` to `spawn.description` byte-for-byte, never deriving it from
 `spawn.prompt`, its route marker, the ticket title, model, or effort. The executor fetches its
 token-gated durable packet as the first action: full description, category route and contract, scope,

@@ -141,16 +141,16 @@ async function cmdNativeAgent(opts, positional) {
 async function cmdModelsSyncAgents(opts) {
   const { slug } = await resolveProject(opts);
   const config = store.boardConfig(slug);
-  const res = agentsync.syncExecAgents(void 0, {
+  const res = agentsync.syncExecAgentsIfChanged(void 0, {
     ...opts.dir ? { dir: opts.dir } : {},
     readOnlyDeniedTools: config?.readOnlyDeniedTools
   });
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({}, res, res.written > 0 ? { message: agentsync.RELOAD_NOTICE } : {}), null, 2) + "\n");
+    process.stdout.write(JSON.stringify(Object.assign({}, res, res.removed > 0 ? { message: "Stable executors now load from the Sidequest plugin package." } : {}), null, 2) + "\n");
     return;
   }
-  console.log(`✓ exec agents synced: ${res.written} written, ${res.removed} removed, ${res.unchanged} unchanged`);
-  if (res.written > 0) console.log(`  ${agentsync.RELOAD_NOTICE}`);
+  console.log(`✓ generated executor migration: ${res.removed} removed, ${res.unchanged} custom or unreadable files left alone`);
+  if (res.removed > 0) console.log("  Stable executors now load from the Sidequest plugin package.");
 }
 async function cmdModels(opts, positional) {
   if (positional && positional[0] === "sync-agents") {

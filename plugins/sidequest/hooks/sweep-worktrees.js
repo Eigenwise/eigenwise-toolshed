@@ -305,7 +305,7 @@ function releasedClaimNotices(result) {
     return [`sidequest: released ${kind || "stale"} claim ${ref}.`];
   });
 }
-function provisionExecAgentNotices() {
+function migrateLegacyExecAgentNotices() {
   try {
     const store = require(runtimeModule("store"));
     const sync = require(runtimeModule("agentsync"));
@@ -334,7 +334,7 @@ function lostLaunchNotices(data) {
 }
 async function sessionStartMaintenance(data) {
   const notices = [
-    ...provisionExecAgentNotices(),
+    ...migrateLegacyExecAgentNotices(),
     ...lostLaunchNotices(data)
   ];
   try {

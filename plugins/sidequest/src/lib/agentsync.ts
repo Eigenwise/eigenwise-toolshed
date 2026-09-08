@@ -2,14 +2,16 @@
 /**
  * sidequest - runtime exec agent sync (SQ-158)
  *
- * syncExecAgents() generates the complete stable executor ladder for both Claude
- * and Codex dispatch, independent of the live routing taxonomy. Each file is
- * marked as owned by Sidequest. Reconciliation updates wanted files and prunes
- * stale marked files, while never touching an unmarked user-authored agent.
+ * bundledExecutorSources() generates the complete stable executor ladder for
+ * both Claude and Codex dispatch, independent of the live routing taxonomy.
+ * Build writes those sources into this plugin's agents/ directory, so Claude Code
+ * discovers them while it loads the plugin rather than after SessionStart work.
  *
- * Claude Code loads the stable executor definitions at session start. A per-ticket
- * dispatch nonce binds the briefing to its authoritative prepared dispatch and
- * rejects stale holders after a re-dispatch.
+ * migrateExecAgents() removes only recognized, marked definitions from prior
+ * releases in the user agent directory. It never creates that directory or
+ * changes an unmarked user-authored agent. A per-ticket dispatch nonce binds the
+ * briefing to its authoritative prepared dispatch and rejects stale holders after
+ * a re-dispatch.
  *
  * A registered agent file with a `model: <full-id>` frontmatter pin genuinely
  * runs through codex-gateway when spawned with the Agent `model` parameter
@@ -74,12 +76,10 @@ const EXEC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 100;
 const EXECUTOR_CONTRADICTION_RULE = 'Executor contradiction rule: An anchor is orientation, not a contract. When an anchor names the wrong file, locate the file the work actually needs. If that file is inside declared scope, correct the anchor in your handback and continue. Stop and report a contradiction only when the needed file is outside declared scope or the ticket premise is false. Scope limits writes, never reads: reading any worktree path is allowed. Before reporting, check it and include the checked path or target and result. An existing out-of-scope path or declared output is context, not a contradiction. After evidence of absence, do not redesign the ticket, reject the base, or invent a substitute.';
 
-// Where generated exec agents go. In production that's the user's live
-// ~/.claude/agents (Claude Code loads them from there). But a test or isolated
-// server sets SIDEQUEST_HOME to a throwaway dir, and it must NOT pollute the
-// real agents dir: when SIDEQUEST_HOME is set we target <home>/agents instead,
-// so an isolated server's PUT can never write into the developer's live agents.
-// SIDEQUEST_AGENTS_DIR is an explicit override that wins over both.
+// Earlier releases generated stable executors in this directory. The migration
+// scans it without creating it, removing only Sidequest-owned generated files.
+// SIDEQUEST_AGENTS_DIR keeps that cleanup testable and gives an explicit recovery
+// target when an administrator keeps an alternate Claude agent directory.
 function defaultAgentsDir() {
   const explicit = process.env.SIDEQUEST_AGENTS_DIR;
   if (explicit && String(explicit).trim()) return path.resolve(String(explicit).trim());
@@ -281,6 +281,16 @@ function implementationExecutorSources(): Map<string, string> {
       effort,
       marker: MARKER,
     }));
+  }
+  return sources;
+}
+
+function bundledExecutorSources(readOnlyDeniedTools?: any): Map<string, string> {
+  const sources = implementationExecutorSources();
+  sources.set(`${DIAGNOSTIC_PROBE_NAME}.md`, renderDiagnosticProbe());
+  sources.set(`${stableReadOnlyDispatchName()}.md`, renderReadOnlyDispatchAgent(undefined, readOnlyDeniedTools));
+  for (const effort of EXEC_EFFORTS) {
+    sources.set(`${stableReadOnlyClaudeName(effort)}.md`, renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools));
   }
   return sources;
 }
@@ -1261,8 +1271,6 @@ function hasStableMarker(source?: any) {
 }
 
 
-const INSTALL_HASH_FILE = '.sidequest-install-hash';
-
 function stableInstallHash(skills = EXECUTOR_SKILLS, readOnlyDeniedTools?: any) {
   let version = '0.0.0';
   try {
@@ -1275,104 +1283,108 @@ function stableInstallHash(skills = EXECUTOR_SKILLS, readOnlyDeniedTools?: any) 
     .digest('hex');
 }
 
-function installHashPath(dir?: string) {
-  return path.join(dir || defaultAgentsDir(), INSTALL_HASH_FILE);
+function recognizedGeneratedExecutorFile(filename: string, bundledNames: Set<string>): boolean {
+  if (bundledNames.has(filename)) return true;
+  return /^sidequest-exec-codex-[a-z0-9][a-z0-9-]*-(low|medium|high|xhigh|max)\.md$/.test(filename);
 }
 
-function readInstallHash(dir?: string) {
+function migrateExecAgents(_prefs?: any, opts?: SyncOptions): SyncResult {
+  const dir = opts?.dir || defaultAgentsDir();
+  const bundledNames = new Set(bundledExecutorSources(opts?.readOnlyDeniedTools).keys());
+  let existing: string[] = [];
   try {
-    return fs.readFileSync(installHashPath(dir), 'utf8').trim();
+    existing = fs.readdirSync(dir).filter((filename: string) => filename.toLowerCase().endsWith('.md'));
   } catch (_) {
-    return '';
+    return { written: 0, removed: 0, unchanged: 0 };
   }
-}
 
-function writeInstallHash(dir: string, hash: string) {
-  fs.writeFileSync(installHashPath(dir), hash + '\n');
+  let removed = 0;
+  let unchanged = 0;
+  for (const filename of existing) {
+    if (!recognizedGeneratedExecutorFile(filename, bundledNames)) continue;
+    const filePath = path.join(dir, filename);
+    let source = '';
+    try {
+      source = fs.readFileSync(filePath, 'utf8');
+    } catch (_) {
+      continue;
+    }
+    if (!hasStableMarker(source)) {
+      unchanged++;
+      continue;
+    }
+    try {
+      fs.unlinkSync(filePath);
+      removed++;
+    } catch (_) {
+      unchanged++;
+    }
+  }
+  return { written: 0, removed, unchanged };
 }
 
 function syncExecAgentsIfChanged(_prefs?: any, opts?: SyncOptions): FastSyncResult {
-  const dir = opts && opts.dir ? opts.dir : defaultAgentsDir();
-  const readOnlyDeniedTools = opts && opts.readOnlyDeniedTools;
-  const installHash = stableInstallHash(EXECUTOR_SKILLS, readOnlyDeniedTools);
-  if (readInstallHash(dir) === installHash) {
-    return { written: 0, removed: 0, unchanged: 0, skipped: true, installHash };
-  }
-  const result = syncExecAgents(_prefs, { dir, readOnlyDeniedTools });
-  return Object.assign({}, result, { skipped: false, installHash });
+  const result = migrateExecAgents(_prefs, opts);
+  return Object.assign({}, result, {
+    skipped: result.removed === 0,
+    installHash: stableInstallHash(EXECUTOR_SKILLS, opts?.readOnlyDeniedTools),
+  });
 }
 
-// Sync the complete stable Claude and Codex dispatch executor ladders. An old
-// session can still add legacy definitions during version skew, but this sync
-// owns and prunes them without ever touching generation-two files it did not write.
+// An explicit directory is a build and test seam. SessionStart and every CLI
+// path use the migration above, so stable definitions are never recreated under
+// a user's agent directory after plugin discovery.
 function syncExecAgents(_prefs?: any, opts?: SyncOptions): SyncResult {
-  opts = opts || {};
-  const dir = opts.dir || defaultAgentsDir();
-  const readOnlyDeniedTools = opts.readOnlyDeniedTools;
-  const wanted = new Map();
-  // Two Codex executors cover every model x every effort: both ride the dispatch
-  // marker. The Claude ladder stays per-effort because frontmatter is the only effort
-  // carrier on that path.
-  wanted.set(`${DIAGNOSTIC_PROBE_NAME}.md`, renderDiagnosticProbe());
-  for (const [filename, source] of implementationExecutorSources()) {
-    wanted.set(filename, source);
-  }
-  wanted.set(`${stableReadOnlyDispatchName()}.md`, renderReadOnlyDispatchAgent(undefined, readOnlyDeniedTools));
-  for (const effort of EXEC_EFFORTS) {
-    wanted.set(`${stableReadOnlyClaudeName(effort)}.md`, renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools));
-  }
-
-  let existing = [];
+  if (!opts?.dir) return migrateExecAgents(_prefs, opts);
+  const dir = opts.dir;
+  const wanted = bundledExecutorSources(opts?.readOnlyDeniedTools);
+  let existing: string[] = [];
   try {
     fs.mkdirSync(dir, { recursive: true });
-    existing = fs.readdirSync(dir).filter((f: string) => f.toLowerCase().endsWith('.md'));
+    existing = fs.readdirSync(dir).filter((filename: string) => filename.toLowerCase().endsWith('.md'));
   } catch (_) {
-    existing = [];
+    return { written: 0, removed: 0, unchanged: 0 };
   }
 
   let written = 0;
   let removed = 0;
   let unchanged = 0;
-
-  for (const [filename, content] of wanted) {
+  for (const [filename, source] of wanted) {
     const filePath = path.join(dir, filename);
-    let prev = null;
+    let previous: string | null = null;
     try {
-      prev = fs.readFileSync(filePath, 'utf8');
-    } catch (_) {
-      prev = null;
-    }
-    // A file already sitting at this path that ISN'T ours (no marker) is left
-    // completely alone, even though its name matches what we'd generate.
-    if (prev !== null && !hasStableMarker(prev)) continue;
-    if (prev === content) {
+      previous = fs.readFileSync(filePath, 'utf8');
+    } catch (_) {}
+    if (previous !== null && !hasStableMarker(previous)) {
       unchanged++;
       continue;
     }
-    fs.writeFileSync(filePath, content);
+    if (previous === source) {
+      unchanged++;
+      continue;
+    }
+    fs.writeFileSync(filePath, source);
     written++;
   }
 
-  const wantedNames = new Set(wanted.keys());
+  const bundledNames = new Set(wanted.keys());
   for (const filename of existing) {
-    if (wantedNames.has(filename)) continue;
+    if (!recognizedGeneratedExecutorFile(filename, bundledNames)) continue;
+    if (bundledNames.has(filename)) continue;
     const filePath = path.join(dir, filename);
-    let body = null;
+    let source = '';
     try {
-      body = fs.readFileSync(filePath, 'utf8');
+      source = fs.readFileSync(filePath, 'utf8');
     } catch (_) {
       continue;
     }
-    if (body == null || !hasStableMarker(body)) continue; // never delete an unmarked file
+    if (!hasStableMarker(source)) continue;
     try {
       fs.unlinkSync(filePath);
       removed++;
-    } catch (_) {
-      /* best effort */
-    }
+    } catch (_) {}
   }
 
-  writeInstallHash(dir, stableInstallHash(EXECUTOR_SKILLS, readOnlyDeniedTools));
   return { written, removed, unchanged };
 }
 
@@ -1392,6 +1404,7 @@ module.exports = {
   resolveReadOnlyTools,
   EXECUTOR_SKILLS,
   implementationExecutorSources,
+  bundledExecutorSources,
   ticketCommentsPacket,
   ticketAssetsPacket,
   routeMarker,
@@ -1418,6 +1431,7 @@ module.exports = {
   ticketIsolation,
   syncExecAgents,
   syncExecAgentsIfChanged,
+  migrateExecAgents,
   stableInstallHash,
   EXECUTOR_CONTRADICTION_RULE,
   defaultAgentsDir,

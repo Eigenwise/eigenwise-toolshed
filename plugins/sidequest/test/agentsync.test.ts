@@ -517,6 +517,37 @@ test('diagnostic probe definition has only read-only tools and a bounded lifetim
   assert.match(source, /Diagnose only the Agent spawn path/);
 });
 
+test('the packaged agent roster exactly matches the generator output', () => {
+  const expected = agentsync.bundledExecutorSources();
+  const directory = path.join(__dirname, '..', 'agents');
+  assert.deepStrictEqual(readDir(directory), STABLE_EXECUTORS);
+  for (const [filename, source] of expected) {
+    assert.equal(fs.readFileSync(path.join(directory, filename), 'utf8'), source, `${filename} must be generated from agentsync`);
+  }
+});
+
+test('migration removes recognized generated definitions without creating or touching custom agents', () => {
+  const directory = tmpDir();
+  const generated = path.join(directory, 'sidequest-exec-dispatch.md');
+  const legacy = path.join(directory, 'sidequest-exec-codex-gpt-5-6-terra-high.md');
+  const customCollision = path.join(directory, 'sidequest-exec-high.md');
+  const foreign = path.join(directory, 'other-agent.md');
+  fs.writeFileSync(generated, `${agentsync.MARKER}\nold generated executor\n`);
+  fs.writeFileSync(legacy, `${agentsync.LEGACY_MARKER}\nold generated executor\n`);
+  fs.writeFileSync(customCollision, 'custom executor\n');
+  fs.writeFileSync(foreign, `${agentsync.MARKER}\nnot a recognized Sidequest executor\n`);
+
+  assert.deepStrictEqual(agentsync.migrateExecAgents(null, { dir: directory }), { written: 0, removed: 2, unchanged: 1 });
+  assert.ok(!fs.existsSync(generated));
+  assert.ok(!fs.existsSync(legacy));
+  assert.equal(fs.readFileSync(customCollision, 'utf8'), 'custom executor\n');
+  assert.equal(fs.readFileSync(foreign, 'utf8'), `${agentsync.MARKER}\nnot a recognized Sidequest executor\n`);
+
+  const absent = path.join(directory, 'absent');
+  assert.deepStrictEqual(agentsync.migrateExecAgents(null, { dir: absent }), { written: 0, removed: 0, unchanged: 0 });
+  assert.ok(!fs.existsSync(absent));
+});
+
 test('sync writes the complete stable executor ladder with the smallest valid taxonomy', () => {
   clearCatalog();
   const store = require('../lib/store.js');
@@ -744,19 +775,19 @@ test('sync is idempotent and never overwrites an unmarked collision', () => {
 });
 
 
-test('unchanged install hash skips the full executor ladder comparison', () => {
+test('session migration does not create a stable executor ladder in an explicit user directory', () => {
   const dir = tmpDir();
   const first = agentsync.syncExecAgentsIfChanged(null, { dir });
-  assert.equal(first.skipped, false);
-  assert.equal(first.written, 13);
   const second = agentsync.syncExecAgentsIfChanged(null, { dir });
-  assert.deepStrictEqual(second, {
+  assert.deepStrictEqual(first, {
     written: 0,
     removed: 0,
     unchanged: 0,
     skipped: true,
     installHash: first.installHash,
   });
+  assert.deepStrictEqual(second, first);
+  assert.deepStrictEqual(readDir(dir), []);
 });
 
 test('native dispatch fallback names Claude agents after their runtime', () => {

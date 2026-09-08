@@ -152,24 +152,22 @@ async function cmdNativeAgent(opts: any, positional: any) {
   process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectPath: meta.path, ref: ticket.ref, effort: ticket.effort, exec: ticket.exec, prompt }, created, warnings ? { warnings } : {}), null, 2) + '\n');
 }
 
-// `sidequest models sync-agents` — regenerate the runtime
-// sidequest-exec-<slug>-<effort>.md agent files for every tier pointed at a
-// Codex model (prefs.tierBackend) x that tier's enabled non-max effort, without
-// touching the dashboard (which triggers the same sync on save). Useful after
-// changing a tier's backend some other way, or to clean up stale files.
+// `sidequest models sync-agents` — remove recognized Sidequest-generated
+// executor files left by releases before executors shipped in the plugin package.
+// It never writes an executor definition or changes an unmarked custom agent.
 async function cmdModelsSyncAgents(opts: any) {
   const { slug } = await resolveProject(opts);
   const config = store.boardConfig(slug);
-  const res = agentsync.syncExecAgents(undefined, {
+  const res = agentsync.syncExecAgentsIfChanged(undefined, {
     ...(opts.dir ? { dir: opts.dir } : {}),
     readOnlyDeniedTools: config?.readOnlyDeniedTools,
   });
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({}, res, res.written > 0 ? { message: agentsync.RELOAD_NOTICE } : {}), null, 2) + '\n');
+    process.stdout.write(JSON.stringify(Object.assign({}, res, res.removed > 0 ? { message: 'Stable executors now load from the Sidequest plugin package.' } : {}), null, 2) + '\n');
     return;
   }
-  console.log(`✓ exec agents synced: ${res.written} written, ${res.removed} removed, ${res.unchanged} unchanged`);
-  if (res.written > 0) console.log(`  ${agentsync.RELOAD_NOTICE}`);
+  console.log(`✓ generated executor migration: ${res.removed} removed, ${res.unchanged} custom or unreadable files left alone`);
+  if (res.removed > 0) console.log('  Stable executors now load from the Sidequest plugin package.');
 }
 
 async function cmdModels(opts: any, positional: any) {

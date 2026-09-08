@@ -13,7 +13,7 @@ function createFixture() {
   const fixture = fs.mkdtempSync(path.join(pluginRoot, 'test', '.build-check-'));
   fs.mkdirSync(path.join(fixture, 'scripts'));
   fs.mkdirSync(path.join(fixture, 'src', 'hooks'), { recursive: true });
-  const copiedScripts = ['build.mjs', 'build-check.mjs', 'owned-process-tree.js', 'owned-phase-supervisor.js'];
+  const copiedScripts = ['build.mjs', 'build-check.mjs', 'generate-bundled-agents.mjs', 'owned-process-tree.js', 'owned-phase-supervisor.js'];
   for (const script of copiedScripts) {
     fs.copyFileSync(path.join(pluginRoot, 'scripts', script), path.join(fixture, 'scripts', script));
   }

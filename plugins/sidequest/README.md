@@ -13,7 +13,7 @@ Install Sidequest at project scope:
 /plugin install sidequest@eigenwise-toolshed --scope project
 ```
 
-Reload Claude Code or start a new session. You can also run `/quartermaster:setup` and let Quartermaster install and configure Sidequest for a project.
+Reload Claude Code or start a new session. The executor roster ships in the Sidequest plugin package, so it is available as soon as Claude loads the plugin, before SessionStart maintenance runs. You can also run `/quartermaster:setup` and let Quartermaster install and configure Sidequest for a project.
 
 Open the board with `/sidequest:board`, or tell Claude to show it. The dashboard is local and ticket data stays on your machine.
 
@@ -59,7 +59,7 @@ Tell Claude the symptom:
 
 > A submitted ticket is waiting. Check it and finish the integration if it is safe.
 
-Claude checks the local plugin connection, ticket state, dependencies, configured route, and delivery status, then gives you the next action. After an install or upgrade, start a new Claude Code session or reload plugins so the session picks up the current Sidequest connection. When the loaded version is older than the installed version but at least 4.48.1, Sidequest permits dispatch and warns you to reload before the next dispatch. Malformed versions and loaded versions before 4.48.1 refuse.
+Claude checks the local plugin connection, ticket state, dependencies, configured route, and delivery status, then gives you the next action. After an install or upgrade, start a new Claude Code session or reload plugins so the session picks up the current Sidequest connection and its bundled executors. Sidequest removes only its marked generated executor files left by older releases during normal maintenance. It leaves custom agent files alone. When the loaded version is older than the installed version but at least 4.48.1, Sidequest permits dispatch and warns you to reload before the next dispatch. Malformed versions and loaded versions before 4.48.1 refuse.
 
 ## Worktree storage
 
