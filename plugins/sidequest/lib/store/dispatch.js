@@ -328,6 +328,35 @@ function createDispatch(dependencies) {
       };
     }
   }
+  function postDispatchWorkingState(slug, state) {
+    const baselineEntries = Array.isArray(state?.dirtyBaseline) ? state.dirtyBaseline : Array.isArray(state?.workingTreeDirtyBaseline) ? state.workingTreeDirtyBaseline : null;
+    if (!baselineEntries) {
+      return {
+        working: commitScope.workingPaths(readMeta(slug)?.path || ""),
+        preExisting: [],
+        baselineRecorded: false
+      };
+    }
+    const baselineByPath = new Map(baselineEntries.map((entry) => [dirtyPathKey(entry.path), entry]));
+    const currentEntries = artifactWorkingState(slug, { allowLarge: true });
+    const currentByPath = new Map(currentEntries.map((entry) => [dirtyPathKey(entry.path), entry]));
+    const working = /* @__PURE__ */ new Set();
+    const preExisting = /* @__PURE__ */ new Set();
+    for (const entry of baselineEntries) {
+      const currentEntry = currentByPath.get(dirtyPathKey(entry.path));
+      if (currentEntry?.identity === entry.identity) preExisting.add(entry.path);
+      else working.add(entry.path);
+    }
+    for (const entry of currentEntries) {
+      const baselineEntry = baselineByPath.get(dirtyPathKey(entry.path));
+      if (!baselineEntry || baselineEntry.identity !== entry.identity) working.add(entry.path);
+    }
+    return {
+      working: Array.from(working).sort(),
+      preExisting: Array.from(preExisting).sort(),
+      baselineRecorded: true
+    };
+  }
   function captureArtifactBaseline(slug, scope) {
     const meta = readMeta(slug);
     if (!meta || !meta.path) throw new Error("prepare dispatch: shared-tree artifact mode requires a board project path.");
@@ -1927,27 +1956,45 @@ function createDispatch(dependencies) {
     return base ? { root, base } : null;
   }
   function dispatchDelta(slug, ticket) {
-    const workspace = dispatchWorkspace(slug, ticket);
+    const state = dispatchState(ticket);
+    const projectPath = readMeta(slug)?.path || null;
+    const sharedTreeWithoutCommit = state && state.sharedTree !== false && projectPath ? { root: projectPath, base: null } : null;
+    const workspace = dispatchWorkspace(slug, ticket) || sharedTreeWithoutCommit;
     if (!workspace) return { ok: false, reason: "workspace_unavailable" };
     try {
-      const working = commitScope.workingPaths(workspace.root);
-      const base = execFileSync("git", ["rev-parse", "--verify", `${workspace.base}^{commit}`], {
-        cwd: workspace.root,
-        encoding: "utf8",
-        windowsHide: true
-      }).trim();
-      const head = execFileSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], {
-        cwd: workspace.root,
-        encoding: "utf8",
-        windowsHide: true
-      }).trim();
-      const commits = base === head ? [] : execFileSync("git", ["rev-list", `${base}..${head}`], {
-        cwd: workspace.root,
-        encoding: "utf8",
-        windowsHide: true
-      }).trim().split(/\r?\n/).filter(Boolean);
+      const workingState = state?.sharedTree !== false ? postDispatchWorkingState(slug, state) : { working: commitScope.workingPaths(workspace.root), preExisting: [], baselineRecorded: false };
+      let head = null;
+      try {
+        head = execFileSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], {
+          cwd: workspace.root,
+          encoding: "utf8",
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "ignore"]
+        }).trim();
+      } catch (error) {
+        if (workspace.base) throw error;
+      }
+      let commits = [];
+      if (head && workspace.base) {
+        const base = execFileSync("git", ["rev-parse", "--verify", `${workspace.base}^{commit}`], {
+          cwd: workspace.root,
+          encoding: "utf8",
+          windowsHide: true
+        }).trim();
+        commits = base === head ? [] : execFileSync("git", ["rev-list", `${base}..${head}`], {
+          cwd: workspace.root,
+          encoding: "utf8",
+          windowsHide: true
+        }).trim().split(/\r?\n/).filter(Boolean);
+      } else if (head) {
+        commits = execFileSync("git", ["rev-list", "--reverse", head], {
+          cwd: workspace.root,
+          encoding: "utf8",
+          windowsHide: true
+        }).trim().split(/\r?\n/).filter(Boolean);
+      }
       const committed = commits.length ? commitScope.rangePaths(workspace.root, commits) : [];
-      return { ok: true, workspace, working, committed };
+      return { ok: true, workspace, ...workingState, committed };
     } catch (error) {
       return { ok: false, reason: "git_error", message: error?.message || String(error) };
     }

@@ -402,7 +402,7 @@ function isEmptyTreeBase(value) {
   return String(value || "").trim().toLowerCase() === EMPTY_TREE;
 }
 function headCommit(cwd) {
-  const head = resolvedCommit(cwd, "HEAD");
+  const head = gitResult(cwd, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
   return head.ok ? head.value : null;
 }
 function preserveCommitRef(cwd, commit, gitRef, options) {

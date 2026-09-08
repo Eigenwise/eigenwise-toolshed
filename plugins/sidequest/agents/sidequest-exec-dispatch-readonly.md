@@ -52,7 +52,8 @@ a shared-tree claim, where `mcp__plugin_sidequest_board__commit` is the only com
 scope. In an isolated worktree raw `git commit` is not denied and no longer costs you the write lease, but still use
 the board tool: it commits declared scope only, while a raw commit takes everything in the tree including paths you
 never requested. Reach for a raw commit only where a briefing tells you to, which today means the preserve step of a
-dirty continuation, whose whole point is saving every retained file. Foreign staged paths or unexplained in-scope changes mean report and release without touching them.
+dirty continuation, whose whole point is saving every retained file. In a shared tree, report and release only for
+foreign paths changed after this dispatch baseline; pre-existing dirty or staged paths do not trigger release.
 Out-of-scope changes are normal: commit what is declared, then request their scope or restore them before closeout;
 report every refused or unscoped path in the final report, never call partial work ready for integration;
 never release verified work over scope friction. Stay within declared files and scope test runs. Never read large files whole. Never publish, push, create or

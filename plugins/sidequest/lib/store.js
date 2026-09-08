@@ -2152,12 +2152,17 @@ function releaseTicket(slug, idOrRef, by, opts) {
       }
       const releaseBlocker = claimReleaseBlocker(slug, t);
       if (releaseBlocker) {
-        const changed = releaseBlocker.paths?.length ? ` Changed paths: ${releaseBlocker.paths.join(", ")}.` : "";
+        const newlyChangedPaths = releaseBlocker.newlyChangedPaths || releaseBlocker.paths || [];
+        const preExistingPaths = releaseBlocker.preExistingPaths || [];
+        const baselineDetail = releaseBlocker.baselineRecorded ? ` Pre-existing unchanged paths: ${preExistingPaths.join(", ") || "none"}.` : " Pre-existing paths could not be distinguished because no dirty baseline was recorded.";
+        const changedDetail = ` Newly changed paths: ${newlyChangedPaths.join(", ") || "none"}.`;
         return {
           ok: false,
           reason: releaseBlocker.kind,
-          message: `${t.ref} claim release refused: ${releaseBlocker.reason}.${changed}`,
-          paths: releaseBlocker.paths || [],
+          message: `${t.ref} claim release refused: ${releaseBlocker.reason}.${baselineDetail}${changedDetail}`,
+          paths: newlyChangedPaths,
+          preExistingPaths,
+          newlyChangedPaths,
           ticket: t,
           claim: held
         };
