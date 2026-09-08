@@ -926,11 +926,12 @@ function guardHelperWrite(input) {
     return;
   }
   const scope = resolution.scopes[0];
-  if (isScratchpadPath(target) || evidencePathRelation(target, scope) === "inside" || inScope(target, scope)) return;
-  if (evidenceTarget) {
+  const ownedEvidenceRelation = evidencePathRelation(target, scope);
+  if (evidenceTarget && ownedEvidenceRelation !== "inside") {
     denyEvidenceWrite(target);
     return;
   }
+  if (isScratchpadPath(target) || ownedEvidenceRelation === "inside" || inScope(target, scope)) return;
   const display = projectRelative(target, scope.projectPath) || target;
   writeDeny(
     "PreToolUse",

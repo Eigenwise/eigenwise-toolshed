@@ -1057,6 +1057,25 @@ test('pre-tool hook: helpers write only canonically contained owned verification
   assert.match(foreignEvidence.hookSpecificOutput.permissionDecisionReason, /Board-owned verification evidence/);
   assert.match(foreignEvidence.hookSpecificOutput.permissionDecisionReason, /Do not request scope/);
 
+  const scratchpad = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-helper-evidence-scratch-'));
+  const foreignEvidenceAlias = path.join(scratchpad, 'foreign-evidence');
+  try {
+    fs.symlinkSync(siblingEvidenceDirectory, foreignEvidenceAlias, process.platform === 'win32' ? 'junction' : 'dir');
+    const scratchAliasForeignEvidence = runHookOutput(FORCE_BYPASS, {
+      ...helper,
+      tool_name: 'Write',
+      tool_input: { file_path: path.join(foreignEvidenceAlias, 'through-alias.log') },
+    }, { CLAUDE_SCRATCHPAD_DIR: scratchpad });
+    assert.equal(
+      scratchAliasForeignEvidence.hookSpecificOutput.permissionDecision,
+      'deny',
+      'canonical foreign evidence ownership takes precedence over raw scratchpad allowance',
+    );
+    assert.match(scratchAliasForeignEvidence.hookSpecificOutput.permissionDecisionReason, /Board-owned verification evidence/);
+  } finally {
+    fs.rmSync(scratchpad, { recursive: true, force: true });
+  }
+
   const siblingPrefix = runHookOutput(FORCE_BYPASS, {
     ...helper,
     tool_name: 'Write',
