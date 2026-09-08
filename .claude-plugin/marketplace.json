@@ -79,7 +79,7 @@
     {
       "name": "codebase-mapper",
       "source": "./plugins/codebase-mapper",
-      "description": "A self-maintaining codebase map: atomic docs Claude loads at session start and assesses after code changes. It keeps warranted updates and commits inline, with optional Sidequest artifact handoff for larger remaps and standalone fallback when Sidequest is unavailable.",
+      "description": "A self-maintaining codebase map: atomic docs Claude loads at the start of each session and keeps in sync as the code changes. Any stack; greenfield or existing.",
       "version": "2.15.7",
       "author": {
         "name": "Eigenwise"
