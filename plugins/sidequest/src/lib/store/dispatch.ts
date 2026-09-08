@@ -1399,7 +1399,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const nonRepoOutput = nonRepoExternalOutput(t, effectiveFiles);
     const worktreeWarning = !worktreeIsolation && explicitIsolation
       ? `Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. ${sharedTreeExecutionGuidance(readonly)}`
-      : (!sharedTree ? worktreeIsolationWarning(slug, readonly) : null);
+      : (!sharedTree && (readonly || effectiveFiles.length) ? worktreeIsolationWarning(slug, readonly) : null);
     if (reviewTargetState && worktreeWarning) {
       throw new Error(`prepare dispatch: ${t.ref} cannot pin the immutable candidate checkout. ${worktreeWarning}`);
     }

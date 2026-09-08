@@ -1206,7 +1206,7 @@ function createDispatch(dependencies) {
       }
       let sharedTree = reviewTargetState ? false : worktreeIsolation ? requestedSharedTree : true;
       const nonRepoOutput = nonRepoExternalOutput(t, effectiveFiles);
-      const worktreeWarning = !worktreeIsolation && explicitIsolation ? `Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. ${sharedTreeExecutionGuidance(readonly)}` : !sharedTree ? worktreeIsolationWarning(slug, readonly) : null;
+      const worktreeWarning = !worktreeIsolation && explicitIsolation ? `Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. ${sharedTreeExecutionGuidance(readonly)}` : !sharedTree && (readonly || effectiveFiles.length) ? worktreeIsolationWarning(slug, readonly) : null;
       if (reviewTargetState && worktreeWarning) {
         throw new Error(`prepare dispatch: ${t.ref} cannot pin the immutable candidate checkout. ${worktreeWarning}`);
       }
