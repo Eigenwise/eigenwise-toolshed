@@ -7,7 +7,7 @@ description: >-
 
 # Update Codebase Map
 
-Bring an existing map up to date with surgical edits — detect changes, touch only the affected
+Bring an existing map up to date with surgical edits : detect changes, touch only the affected
 documents, keep everything internally consistent. This is a refresh, **not** a full rewrite.
 
 ## Prerequisite
@@ -17,16 +17,20 @@ use the `map-codebase` skill to create the initial map.
 
 ## Process
 
-### Step 1 — Load current state
+The installed Mapper hook tells the main session to assess the map after code changes and invoke this
+skill immediately when documentation work is warranted. A true no-op ends without editing the map or
+refreshing state. This process does not wait for a separate user approval.
+
+### Step 1 : Load current state
 
 Read `.claude/.codebase-info/.map-state.json` to get `gitCommit`, `mappedAt`, and the list of
 existing `documents`. Skim `INDEX.md` to recall what's already covered. (If `.map-state.json` is
-missing — e.g. a map from an older version — fall back to the `mappedAt` date in `INDEX.md`, and
+missing : e.g. a map from an older version : fall back to the `mappedAt` date in `INDEX.md`, and
 plan to write a fresh `.map-state.json` at the end.)
 
-### Step 2 — Detect what changed
+### Step 2 : Detect what changed
 
-**Git repo (preferred — precise):** diff against the last-mapped commit.
+**Git repo (preferred : precise):** diff against the last-mapped commit.
 ```bash
 git diff --stat <gitCommit>..HEAD          # which files changed, added, deleted
 git log --oneline <gitCommit>..HEAD        # what the changes were about
@@ -41,7 +45,7 @@ find . -type f -newer .claude/.codebase-info/INDEX.md \
   -not -path '*/dist/*' -not -path '*/build/*' -not -path '*/target/*' -not -path '*/.venv/*'
 ```
 
-### Step 2a — Decide whether to hand off
+### Step 2a : Decide whether to hand off
 
 Do not ask the user whether to update the map, run this skill, or create a handoff. Decide using this
 process, announce the applicable documentation-check outcome, and immediately perform the warranted
@@ -55,21 +59,21 @@ For an incremental refresh, work inline in the invoking session when the diff si
 `gitCommit` touches fewer than ~15 files across already-mapped areas and adds or removes no top-level
 aspect. Apply Steps 3 through 5 directly. Do not create a ticket or dispatch an agent for this case.
 
-Use the handoff only for a full remap or a large structural drift: a new subsystem, a deleted service,
-or the first Dockerfile or datastore. For that case, inspect the session tool roster before reading
-further. The handoff requires the native `Agent` tool plus Sidequest `category_list`, `add`, `comment`,
-`dispatch`, and `pulse`. Do not probe the Sidequest CLI or dashboard. Read the live
-`codebase-exploration` category and hand off only when it is enabled and its contract permits one bounded
-documentation-artifact write while keeping project source read-only.
+Use an optional shared-tree artifact handoff for a full remap or large structural drift: a new subsystem,
+a deleted service, or the first Dockerfile or datastore. For incremental work, stay inline. Inspect the
+session tool roster before reading further. The handoff requires the native `Agent` tool plus Sidequest
+`category_list`, `add`, `comment`, `dispatch`, and `pulse`. Do not probe the Sidequest CLI or dashboard.
+Read the live `codebase-exploration` category and hand off only when it is enabled and its contract
+permits one bounded documentation-artifact write while keeping project source read-only.
 
-- When the tools are absent, continue inline without an error banner.
+- When the tools are absent, continue inline without an error banner. Standalone Codebase Mapper does not
+  require Sidequest.
 - When Sidequest is present but the category is missing, disabled, or does not permit the bounded
   `.claude/.codebase-info/` artifact root, continue inline and say: `Sidequest is loaded, but its live taxonomy cannot accept map artifacts yet.`
 - A read-only category with that artifact root is ready: shared-tree artifact mode permits the bounded
   map write and refuses every other project path.
-- When it is ready, create one `codebase-exploration` artifact ticket with
-  `files: [".claude/.codebase-info/"]` and this exact clause. Creating and dispatching this ticket is the
-  required default for a full remap or large structural drift; do it immediately without checking in with
+- When it is ready, you may create one `codebase-exploration` artifact ticket with
+  `files: [".claude/.codebase-info/"]` and this exact clause. Do it immediately without checking in with
   the user: `Artifact write carve-out: write only .claude/.codebase-info/**; all project source is read-only.`
 
 The handoff ticket records the stored `gitCommit`, current `HEAD`, initial dirty-source status outside
@@ -82,6 +86,8 @@ cited path, skip generated/vendor/secret material, never touch `CLAUDE.md`, and 
 ```text
 Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.
 ```
+
+The invoking parent session verifies the generated paths and state after the writer closes, then commits the map if its flow permits.
 
 Before dispatch, comment this reason:
 
@@ -112,7 +118,7 @@ evidence, ensure no writer owns the claim, validate or repair any partial map in
 replace state last, and comment that the ticket completed through inline fallback. Give the user one short
 line naming the failure and inline fallback.
 
-### Step 3 — Re-assess the warranted doc set, then map changes to documents
+### Step 3 : Re-assess the warranted doc set, then map changes to documents
 
 An update is not only "edit the docs that exist." First **re-evaluate which documents this codebase
 now warrants**, because the right set drifts as the project grows. The map should always carry the docs
@@ -146,11 +152,11 @@ Then map the remaining changes onto the existing documents:
 Prioritize structural changes (new/removed entry points, components, infra, data model) over cosmetic
 ones. Skip pure internal refactors that don't change any documented interface, layout, or convention.
 
-### Step 4 — Apply targeted edits
+### Step 4 : Apply targeted edits
 
 For each affected document:
 1. Read it.
-2. Make focused edits — change only what's now different; don't rewrite the whole file.
+2. Make focused edits : change only what's now different; don't rewrite the whole file.
 3. Update its `*Last Updated: YYYY-MM-DD*` line to today's real date.
 
 Then carry out the additions and removals you identified in Step 3:
@@ -160,7 +166,7 @@ Then carry out the additions and removals you identified in Step 3:
 - **Prune a doc for an aspect that vanished:** delete the now-empty doc (and its `INDEX.md` row), or
   prune the stale sections from a shared doc. Remove orphaned references.
 
-### Step 5 — Re-record state
+### Step 5 : Re-record state
 
 After the final document edits, run the bundled state writer from the installed plugin:
 
@@ -173,14 +179,15 @@ git repo), hashes the final bytes, and atomically replaces `.map-state.json` las
 interrupted write can leave hashes stale; that is safe because hooks hash live files and treat the
 manifest only as a consistency check.
 
-Then summarize for the user: which docs you updated, created, or removed, and why. Commit the
-refreshed map (outside shared-tree artifact mode, where committing is forbidden), and make sure the
-commit includes **`.map-state.json` alongside the edited docs**: an uncommitted manifest means every
-other checkout sees stale hashes and re-flags docs that are actually current. If `git check-ignore
+Then summarize for the user: which docs you updated, created, or removed, and why. Outside shared-tree
+artifact mode, commit the refreshed map unless the user explicitly says not to commit, and include
+**`.map-state.json` alongside the edited docs**. An uncommitted manifest means every other checkout
+sees stale hashes and re-flags docs that are actually current. If `git check-ignore
 .claude/.codebase-info/INDEX.md` matches (a broad `.claude/*` rule), add `!.claude/.codebase-info/`
 and `!.claude/.codebase-info/**` to `.gitignore` in the same commit; the ignore warning on `git add`
-does not mean the map is local-only. If committing right now would be wrong for the user's flow, say
-plainly that the map changes including `.map-state.json` still need committing.
+does not mean the map is local-only. If the user explicitly says not to commit, leave the verified map
+changes and `.map-state.json` in the working tree and say plainly that they still need review or
+committing.
 
 ## Guidelines
 

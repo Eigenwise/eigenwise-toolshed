@@ -21,9 +21,11 @@ Tell Claude the instruction and when it applies:
 
 > Add a rule that runs the linter before every commit.
 
-Claude writes the rule with the right scope. Global rules land at session start; file, directory, and keyword rules arrive the first time they match. After that a rule comes back only when its text changes, so rules do not repeat on every prompt. Content changes take effect on the next prompt or relevant edit, with no restart.
+New workspaces use atomic storage: one Markdown rule per file under `.claude/live-rules/rules/`, plus a generated `.claude/live-rules/manifest.json`. The `add-rule` skill reads the rule format and examples before authoring, then runs the plugin-owned sync command. Rule files are the source of truth; never hand-edit the manifest.
 
-Commit the project rules so your team gets the same guidance.
+SessionStart injects the rules that apply at startup. During the session, a rule is injected again only when it newly matches or its content/hash changes. An unchanged rule does not repeat on every prompt or edit. Content changes take effect on the next prompt or relevant edit, with no restart.
+
+Existing projects may still use the legacy `.claude/live-rules.md` format. It is migration or explicit-override storage, not the default for new rules. On SessionStart, the plugin automatically migrates the default legacy file into atomic storage, verifies that the rules match, and removes the old file. A `LIVE_RULES_PATH` override is preserved, and a failed verification keeps the old file in place. Review the resulting files and commit the project rules so your team gets the same guidance.
 
 ## Daily use
 
@@ -39,7 +41,13 @@ Ask Claude to add or edit rule content with `add-rule`. Use `manage-rules` to li
 
 ## If something stops working
 
-Tell Claude the symptom and ask it to audit the live rules. If no rules appear, check that the plugin is enabled and the project has its rules file, then reload plugins or restart Claude Code. If rules stopped after an install or update, the current session has stale hook wiring and needs the same reload or restart.
+Tell Claude the symptom and ask it to audit the live rules. The audit checks both the rule files and generated manifest. If `.claude/live-rules/rules/` exists but `manifest.json` is missing, malformed, or out of sync, run the plugin-owned sync command to rebuild it. If no atomic rules exist, check the legacy path resolved from `LIVE_RULES_PATH` or the default `.claude/live-rules.md`, then reload plugins or restart Claude Code after an install or update.
+
+Migration can write and remove tracked project files at SessionStart as described above. Review those changes before committing. An explicit `LIVE_RULES_PATH` is never deleted by automatic migration, and verification failure leaves the legacy file for recovery.
+
+## Support
+
+Optional support is welcome through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise).
 
 ## License
 
