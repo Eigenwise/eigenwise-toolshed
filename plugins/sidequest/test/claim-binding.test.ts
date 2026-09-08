@@ -186,6 +186,83 @@ test('plugin namespace normalization recognizes only the shipped definitions', (
   }
 });
 
+test('empty-scope readonly dispatch uses the shared project when Git has no HEAD', () => {
+  const repository = fs.mkdtempSync(path.join(SIDEQUEST_HOME, 'unborn-readonly-'));
+  git(repository, ['init', '--quiet', '-b', 'main']);
+  const originalContents = 'User notes must remain uncommitted.\n';
+  fs.writeFileSync(path.join(repository, 'notes.md'), originalContents);
+  const originalStatus = git(repository, ['status', '--porcelain']);
+  const project = store.ensureProject(repository).slug;
+  const ticket = store.createTicket(project, { title: 'Read-only catalogue research', category: 'binding.readonly', files: [] });
+  const sessionId = `unborn-readonly-${ticket.ref}`;
+  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId, runtimeCwd: repository });
+
+  assert.equal(prepared.ticket.dispatch.sharedTree, true);
+  assert.match(prepared.ticket.dispatch.worktreeWarning, /repo has no commits or HEAD cannot be resolved/);
+  assert.match(prepared.ticket.dispatch.worktreeWarning, /Read-only/);
+  assert.doesNotMatch(prepared.ticket.dispatch.worktreeWarning, /must scoped-commit|git (?:init|add|commit)/);
+  assert.equal(prepared.ticket.dispatch.readonly, true);
+  assert.equal(prepared.ticket.dispatch.baseCommit, null);
+  const spawn = agentsync.agentSpawn(
+    prepared.ticket.dispatch.launchName,
+    agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch.sharedTree),
+    null,
+    prepared.ticket.dispatchExecutor,
+    agentsync.renderDispatchStub(prepared.ticket, repository),
+    prepared.ticket.dispatch.description,
+  );
+  assert.equal(Object.hasOwn(spawn, 'isolation'), false);
+  const pluginRoot = path.resolve(__dirname, '..');
+  function runHook(filename: string, input: Record<string, unknown>): string {
+    return execFileSync(process.execPath, [path.join(pluginRoot, 'hooks', filename)], {
+      cwd: repository,
+      input: JSON.stringify({ cwd: repository, session_id: sessionId, ...input }),
+      encoding: 'utf8',
+      windowsHide: true,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: pluginRoot, CLAUDE_PROJECT_DIR: repository, CLAUDE_CODE_SUBAGENT_MODEL: '' },
+    });
+  }
+  const admitted: { hookSpecificOutput: { permissionDecision?: string; updatedInput?: { isolation?: string } } } = JSON.parse(runHook('force-exec-bypass.js', {
+    tool_name: 'Agent', tool_input: spawn,
+  }));
+  assert.notEqual(admitted.hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(Object.hasOwn(admitted.hookSpecificOutput.updatedInput || {}, 'isolation'), false);
+  const agentId = 'unborn-readonly-agent';
+  runHook('subagent-start.js', { agent_id: agentId, agent_name: spawn.name, agent_type: spawn.subagent_type });
+  const claimed = store.claimTicket(project, ticket.ref, 'unborn-readonly-worker', {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, effort: 'high',
+  });
+  assert.equal(claimed.ok, true, JSON.stringify(claimed));
+  assert.equal(store.getTicket(project, ticket.ref).dispatch.agentId, agentId);
+  assert.equal(fs.readFileSync(path.join(repository, 'notes.md'), 'utf8'), originalContents);
+  assert.equal(git(repository, ['status', '--porcelain']), originalStatus);
+  assert.throws(() => git(repository, ['rev-parse', '--verify', 'HEAD']));
+});
+
+test('empty-scope readonly dispatch works in a non-Git workspace without creating a repository', () => {
+  const workspace = fs.mkdtempSync(path.join(SIDEQUEST_HOME, 'non-git-readonly-'));
+  fs.writeFileSync(path.join(workspace, 'notes.md'), 'Unversioned notes.\n');
+  const project = store.ensureProject(workspace).slug;
+  const ticket = store.createTicket(project, { title: 'Read-only unversioned research', category: 'binding.readonly', files: [] });
+  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId: 'non-git-readonly', runtimeCwd: workspace });
+  assert.equal(prepared.ticket.dispatch.sharedTree, true);
+  assert.equal(prepared.ticket.dispatch.readonly, true);
+  assert.equal(agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch.sharedTree), null);
+  assert.match(prepared.ticket.dispatch.worktreeWarning, /not a Git work tree/);
+  assert.doesNotMatch(prepared.ticket.dispatch.worktreeWarning, /must scoped-commit/);
+  assert.equal(fs.existsSync(path.join(workspace, '.git')), false);
+  assert.equal(fs.readFileSync(path.join(workspace, 'notes.md'), 'utf8'), 'Unversioned notes.\n');
+});
+
+test('empty-scope readonly dispatch keeps worktree isolation when Git has a HEAD', () => {
+  const ticket = store.createTicket(slug, { title: 'Read-only committed repository', category: 'binding.readonly', files: [] });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'committed-readonly', runtimeCwd: PROJECT });
+  assert.equal(prepared.ticket.dispatch.sharedTree, false);
+  assert.equal(prepared.ticket.dispatch.baseCommit, git(PROJECT, ['rev-parse', 'HEAD']));
+  assert.equal(prepared.ticket.dispatch.worktreeWarning, undefined);
+  assert.equal(agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch.sharedTree), 'worktree');
+});
+
 test('legacy scalar-only prepared executor identity hydrates into current dispatch state', () => {
   const ticket = createFixture('legacy prepared executor');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'legacy-prepared' });

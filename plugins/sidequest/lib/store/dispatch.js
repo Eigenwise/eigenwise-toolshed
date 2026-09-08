@@ -819,13 +819,17 @@ function createDispatch(dependencies) {
     }
     return `prepare dispatch: ${ticket.ref} has two prior terminal no-commit dispatches (${recordedAttempts}). Review the recorded release reasons, correct the ticket when they show a contradiction, then dispatch with allowRepeatFailure:true when a repeat is intentional.`;
   }
-  function worktreeIsolationWarning(slug) {
+  function sharedTreeExecutionGuidance(readonly) {
+    return readonly ? "Read-only executor: keep project files unchanged and close with done; do not commit or submit." : "Executor must scoped-commit immediately.";
+  }
+  function worktreeIsolationWarning(slug, readonly = false) {
+    const guidance = sharedTreeExecutionGuidance(readonly);
     const meta = readMeta(slug);
     if (!meta || !meta.path) {
-      return "Worktree isolation unavailable: board project path is unavailable; spawning in shared tree. Executor must scoped-commit immediately.";
+      return `Worktree isolation unavailable: board project path is unavailable; spawning in shared tree. ${guidance}`;
     }
     if (!fs.existsSync(meta.path)) {
-      return "Worktree isolation unavailable: project path does not exist; spawning in shared tree. Executor must scoped-commit immediately.";
+      return `Worktree isolation unavailable: project path does not exist; spawning in shared tree. ${guidance}`;
     }
     try {
       const inside = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
@@ -835,11 +839,11 @@ function createDispatch(dependencies) {
         stdio: ["ignore", "pipe", "ignore"]
       }).trim();
       if (inside !== "true") {
-        return "Worktree isolation unavailable: project is not a Git work tree; spawning in shared tree. Executor must scoped-commit immediately.";
+        return `Worktree isolation unavailable: project is not a Git work tree; spawning in shared tree. ${guidance}`;
       }
     } catch (error) {
       const reason = error && error.code === "ENOENT" ? "Git is not available" : "project is not a Git work tree";
-      return `Worktree isolation unavailable: ${reason}; spawning in shared tree. Executor must scoped-commit immediately.`;
+      return `Worktree isolation unavailable: ${reason}; spawning in shared tree. ${guidance}`;
     }
     try {
       execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
@@ -850,7 +854,7 @@ function createDispatch(dependencies) {
       });
       return null;
     } catch (_) {
-      return "Worktree isolation unavailable: repo has no commits or HEAD cannot be resolved; spawning in shared tree. Executor must scoped-commit immediately.";
+      return `Worktree isolation unavailable: repo has no commits or HEAD cannot be resolved; spawning in shared tree. ${guidance}`;
     }
   }
   function nativeGitPath(value) {
@@ -1202,7 +1206,7 @@ function createDispatch(dependencies) {
       }
       let sharedTree = reviewTargetState ? false : worktreeIsolation ? requestedSharedTree : true;
       const nonRepoOutput = nonRepoExternalOutput(t, effectiveFiles);
-      const worktreeWarning = !worktreeIsolation && explicitIsolation ? "Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. Executor must scoped-commit immediately." : !sharedTree && effectiveFiles.length ? worktreeIsolationWarning(slug) : null;
+      const worktreeWarning = !worktreeIsolation && explicitIsolation ? `Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. ${sharedTreeExecutionGuidance(readonly)}` : !sharedTree ? worktreeIsolationWarning(slug, readonly) : null;
       if (reviewTargetState && worktreeWarning) {
         throw new Error(`prepare dispatch: ${t.ref} cannot pin the immutable candidate checkout. ${worktreeWarning}`);
       }

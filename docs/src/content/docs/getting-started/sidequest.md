@@ -126,6 +126,8 @@ Claude's persistent Sidequest Monitor runs `sidequest watch --project <path>`. T
 
 **A ticket will not dispatch.** Ask Claude to diagnose the ticket. Common causes are an incomplete work description, a blocked dependency, or an unavailable configured route. Claude reports the specific recovery instead of silently changing the work's route.
 
+**Research fails before its worktree starts in a new repository.** Read-only tickets automatically use the shared workspace when Git has no first commit or worktree isolation is unavailable, including research whose results stay in ticket comments. Claude reports that choice and keeps the ticket read-only. You do not need to commit your notes or change the board settings. Repositories with a usable commit keep their normal worktree isolation; reviews bound to a specific candidate still require an immutable isolated checkout.
+
 **A worktree setup command was incomplete.** Sidequest keeps the completed checkout and shows the command, failure reason, and captured stderr tail in the ticket. The executor runs that command in its assigned worktree before it starts work.
 
 **A worktree-isolated executor cannot write.** Sidequest reserves the exact checkout before Git creates it, then verifies the checkout reported when the executor starts. A copied or similarly named linked worktree has no write authority. Ask Claude to redispatch the ticket if the recorded checkout is missing or does not match.
