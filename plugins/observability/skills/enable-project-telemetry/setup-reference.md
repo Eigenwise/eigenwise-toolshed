@@ -90,4 +90,4 @@ For the dashboard, open its configured loopback URL (default `http://127.0.0.1:3
 
 ## Deletion
 
-Local data stays until the user deletes it (the Grafana demo dashboard keeps seven days). `--disable` stops managed processes and the dashboard container, removes this plugin's project env wiring, and keeps data by default. Add `--delete-data` only after the user chooses deletion.
+Local observations are pruned automatically after the retention window (30 days by default), and storage pressure can prune older whole days within that window. The user can also delete local data manually (the Grafana demo dashboard keeps seven days). `--disable` stops managed processes and the dashboard container, removes this plugin's project env wiring, and keeps data by default. Add `--delete-data` only after the user chooses deletion.
