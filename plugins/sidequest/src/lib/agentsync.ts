@@ -717,7 +717,7 @@ function capturedVerifyCommand(verify?: any, ticketRef?: any, project?: any) {
 function ticketEvidenceGuidance(ticket?: any) {
   const directory = String(ticket?.dispatch?.evidenceDirectory || '').trim();
   if (!directory) return null;
-  return `Verification evidence: write screenshots, HTML dumps, and probe output to ${directory}. It is board-owned and excluded from ticket scope and delivery. Reference it from the ticket thread or submission report. Do not write verification evidence anywhere in the repository worktree or integration target.`;
+  return `Verification evidence: write screenshots, HTML dumps, and probe output to ${directory}. It is board-owned and excluded from ticket scope and delivery; the active owner and its admitted helpers can write it without a scope request. Reference it from the ticket thread or submission report. Do not write verification evidence anywhere in the repository worktree or integration target.`;
 }
 
 function dispatchUncertaintyPacket(ticket?: any, slug?: any) {

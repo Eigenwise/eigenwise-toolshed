@@ -5,6 +5,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { stubSidequestInstall } from './_sidequest-install-fixture.js';
+
+stubSidequestInstall();
 
 function createClaimedDispatch() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-scope-evidence-home-'));
@@ -43,7 +46,8 @@ test('scopeRequest refuses board-owned verification evidence with its directory 
 
   assert.equal(result.reason, 'invalid_scope');
   assert.match(result.message, /The refused path is board-owned verification evidence/);
-  assert.match(result.message, /Verification evidence belongs in/);
+  assert.match(result.message, /admitted helpers can write verification evidence/);
+  assert.match(result.message, /without requesting scope/);
 });
 
 test('scopeRequest identifies ticket-specific repository probe output as verification evidence', () => {
@@ -54,5 +58,6 @@ test('scopeRequest identifies ticket-specific repository probe output as verific
 
   assert.equal(result.state, 'refused');
   assert.match(comment, /The refused path is board-owned verification evidence/);
-  assert.match(comment, /Verification evidence belongs in/);
+  assert.match(comment, /admitted helpers can write verification evidence/);
+  assert.match(comment, /without requesting scope/);
 });

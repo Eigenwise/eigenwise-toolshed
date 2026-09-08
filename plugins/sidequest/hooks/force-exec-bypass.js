@@ -731,21 +731,36 @@ function guardOwnTicketDispatch(input) {
   return true;
 }
 function helperScope(store, project, projectPath, ticket) {
-  return { ref: ticket.ref, projectPath, files: store.executionScope(project, ticket) };
+  return {
+    ref: ticket.ref,
+    projectPath,
+    files: store.executionScope(project, ticket),
+    evidenceDirectory: String(ticket.dispatch?.evidenceDirectory || "").trim()
+  };
+}
+function evidenceScope(ticket) {
+  const evidenceDirectory = String(ticket.dispatch?.evidenceDirectory || "").trim();
+  return ticket.ref && evidenceDirectory ? { ref: ticket.ref, evidenceDirectory } : null;
+}
+function helperScopeResolution(status, scopes, evidenceScopes) {
+  return { status, scopes, evidenceScopes };
 }
 function helperScopes(input) {
   const agentId = stringField(input, "agent_id", "agentId");
   const type = stringField(input, "agent_type", "agentType", "subagent_type");
   const sessionId = stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
-  if (!agentId || !type || !sessionId || isCurrentExecutor(classifyExecutor(type))) return { status: "no-active-ticket", scopes: [] };
+  if (!agentId || !type || !sessionId || isCurrentExecutor(classifyExecutor(type))) return helperScopeResolution("no-active-ticket", [], []);
   try {
     const store = require(runtimeModule("store"));
     const activeTickets = [];
     const recoveryTickets = [];
+    const evidenceScopes = [];
     for (const project of store.listProjects({ all: true })) {
       const projectPath = String(store.readMeta(project.slug)?.path || "").trim();
       if (!projectPath) continue;
       for (const ticket of store.listTickets(project.slug)) {
+        const evidence = evidenceScope(ticket);
+        if (evidence) evidenceScopes.push(evidence);
         if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId) continue;
         const candidate = { project: project.slug, projectPath, ticket };
         if (ticket.claim?.by && !ticket.dispatch?.terminalAt) activeTickets.push(candidate);
@@ -755,29 +770,37 @@ function helperScopes(input) {
     const ownedTickets = activeTickets.filter(({ ticket }) => dispatchIdentityMatches(ticket, agentId, type));
     if (ownedTickets.length === 1) {
       const owner = ownedTickets[0];
-      return { status: "ok", scopes: [helperScope(store, owner.project, owner.projectPath, owner.ticket)] };
+      return helperScopeResolution("ok", [helperScope(store, owner.project, owner.projectPath, owner.ticket)], evidenceScopes);
     }
-    if (ownedTickets.length > 1) return { status: "no-owner", scopes: ownedTickets.map((owner) => helperScope(store, owner.project, owner.projectPath, owner.ticket)) };
+    if (ownedTickets.length > 1) return helperScopeResolution("no-owner", ownedTickets.map((owner) => helperScope(store, owner.project, owner.projectPath, owner.ticket)), evidenceScopes);
     if (recoveryTickets.length === 1) {
       const owner = recoveryTickets[0];
-      return { status: "recovery-owner", scopes: [helperScope(store, owner.project, owner.projectPath, owner.ticket)] };
+      return helperScopeResolution("recovery-owner", [helperScope(store, owner.project, owner.projectPath, owner.ticket)], evidenceScopes);
     }
     if (activeTickets.length === 1) {
       const owner = activeTickets[0];
-      return { status: "ok", scopes: [helperScope(store, owner.project, owner.projectPath, owner.ticket)] };
+      return helperScopeResolution("ok", [helperScope(store, owner.project, owner.projectPath, owner.ticket)], evidenceScopes);
     }
-    return { status: activeTickets.length ? "no-owner" : "no-active-ticket", scopes: activeTickets.map((owner) => helperScope(store, owner.project, owner.projectPath, owner.ticket)) };
+    return helperScopeResolution(
+      activeTickets.length ? "no-owner" : "no-active-ticket",
+      activeTickets.map((owner) => helperScope(store, owner.project, owner.projectPath, owner.ticket)),
+      evidenceScopes
+    );
   } catch (_) {
-    return { status: "no-active-ticket", scopes: [] };
+    return helperScopeResolution("no-active-ticket", [], []);
   }
 }
-function writeTarget(input) {
+function writeTargetValue(input) {
   const toolInput = toolInputOf(input);
   if (!toolInput) return "";
   const raw = toolInput.file_path ?? toolInput.notebook_path ?? toolInput.path;
-  if (raw == null || !String(raw).trim()) return "";
+  return raw == null ? "" : String(raw).trim();
+}
+function writeTarget(input) {
+  const raw = writeTargetValue(input);
+  if (!raw) return "";
   const cwd = stringField(input, "cwd") || process.cwd();
-  return import_node_path3.default.resolve(cwd, String(raw));
+  return import_node_path3.default.resolve(cwd, raw);
 }
 function restoresCommittedContent(input, target) {
   try {
@@ -851,6 +874,30 @@ function inScope(target, scope) {
   const relative = projectRelative(canonicalPath(target), canonicalPath(scope.projectPath));
   return relative != null && scopeMatch(relative, scope.files);
 }
+function evidencePathRelation(target, scope) {
+  const evidenceDirectory = canonicalPath(scope.evidenceDirectory);
+  const canonicalTarget = canonicalPath(target);
+  if (relativeInside(evidenceDirectory, canonicalTarget) != null) return "inside";
+  if (evidenceDirectory === canonicalTarget || relativeInside(canonicalTarget, evidenceDirectory) != null) return "related";
+  return null;
+}
+function evidenceTraversalAttempt(input, scope) {
+  const rawTarget = writeTargetValue(input);
+  if (!rawTarget) return false;
+  const cwd = stringField(input, "cwd") || process.cwd();
+  const candidate = (import_node_path3.default.isAbsolute(rawTarget) ? rawTarget : import_node_path3.default.join(cwd, rawTarget)).replace(/\\/g, "/");
+  const evidenceDirectory = import_node_path3.default.resolve(scope.evidenceDirectory).replace(/\\/g, "/").replace(/\/+$/, "");
+  const comparableCandidate = process.platform === "win32" ? candidate.toLowerCase() : candidate;
+  const comparableDirectory = process.platform === "win32" ? evidenceDirectory.toLowerCase() : evidenceDirectory;
+  if (!comparableCandidate.startsWith(`${comparableDirectory}/`)) return false;
+  return comparableCandidate.slice(comparableDirectory.length + 1).split("/").includes("..");
+}
+function denyEvidenceWrite(target) {
+  writeDeny(
+    "PreToolUse",
+    `sidequest: refusing helper write to ${target}. Board-owned verification evidence is writable only by a helper resolved to its active ticket owner. Do not request scope for board-owned verification evidence.`
+  );
+}
 function isScratchpadPath(target) {
   const configuredRoot = process.env.CLAUDE_SCRATCHPAD_DIR || process.env.CLAUDE_CODE_SCRATCHPAD_DIR;
   const roots = [configuredRoot, import_node_path3.default.join(import_node_os2.default.tmpdir(), "claude")].filter((root) => Boolean(root));
@@ -861,9 +908,14 @@ function isScratchpadPath(target) {
 }
 function guardHelperWrite(input) {
   const resolution = helperScopes(input);
-  if (resolution.status === "no-active-ticket") return;
   const target = writeTarget(input);
   if (!target) return;
+  const evidenceRelations = resolution.evidenceScopes.map((scope2) => evidencePathRelation(target, scope2));
+  const evidenceTarget = evidenceRelations.some((relation) => relation != null) || resolution.evidenceScopes.some((scope2) => evidenceTraversalAttempt(input, scope2));
+  if (resolution.status === "no-active-ticket") {
+    if (evidenceTarget) denyEvidenceWrite(target);
+    return;
+  }
   const matchingScopes = resolution.scopes.filter((scope2) => inScope(target, scope2));
   if ((resolution.status === "recovery-owner" || resolution.status === "no-owner") && matchingScopes.length === 1 && restoresCommittedContent(input, target)) return;
   if (resolution.status === "no-owner" || resolution.status === "recovery-owner") {
@@ -874,7 +926,12 @@ function guardHelperWrite(input) {
     return;
   }
   const scope = resolution.scopes[0];
-  if (isScratchpadPath(target) || inScope(target, scope)) return;
+  const ownedEvidenceRelation = evidencePathRelation(target, scope);
+  if (evidenceTarget && ownedEvidenceRelation !== "inside") {
+    denyEvidenceWrite(target);
+    return;
+  }
+  if (isScratchpadPath(target) || ownedEvidenceRelation === "inside" || inScope(target, scope)) return;
   const display = projectRelative(target, scope.projectPath) || target;
   writeDeny(
     "PreToolUse",
