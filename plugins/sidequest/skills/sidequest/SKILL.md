@@ -54,7 +54,7 @@ Write the verify in POSIX shell; on Windows the capture runs it through Git Bash
 A passing executable done-oracle needs no review-audit + fix wave unless it lacks determinism or is high-stakes. **Blocked-step invariant:** when a review,
 investigation, or verification awaits a ticket, every dependent action stays blocked until it closes;
 direct PRs, skill flows, manual apply, or any alternate route are the same violation as inline work.
-The board keeps plans. Before solo-fit or filing, do a stated one-line `.gitignore` entry or other mechanical edit to 1–2 named files inline; don't ticket or spawn it. Bounded recon may `Read`, `Glob`, or `Grep` named anchors and make one narrow location sweep; route unfamiliar path tracing, deep investigation, or multi-angle research through the live taxonomy.
+The board keeps plans. Before solo-fit or filing, do a stated one-line `.gitignore` entry or other mechanical edit to 1–2 named files inline; don't ticket or spawn it. Bounded recon (`Read`, `Glob`, `Grep` on named anchors, one narrow sweep) stays inline; deeper or multi-angle investigation goes through the live taxonomy.
 
 ### INLINE-SAFE direct work
 
@@ -166,19 +166,19 @@ publish transaction (lock → delivery → merged-tree gate → central version 
 `references/publishing.md`.
 **BOOKEND SUPERVISION.** Between dispatch and submission, do nothing with that ticket: no pulses,
 comment reads, or peeks. At integration, read the submit report, deliver the range, and run the
-merged-tree gate once per wave. Judge by that oracle and the submission report, never by opening source or diffs. When the sized risk or a weak oracle requires independent review, bind a separately routed `review-audit` ticket with `reviewTarget`; never orchestrator re-review. Never mark a submitted ticket done without
+merged-tree gate once per wave. Judge by that oracle and the submit report, never by opening source or diffs. When sized risk or a weak oracle needs independent review, bind a routed `review-audit` ticket with `reviewTarget`; never orchestrator re-review. Never mark a submitted ticket done without
 integrating it; never re-dispatch one (refused as `submitted`). A dead executor's `done` only proves
 the board transition, never that work shipped: salvage and close it per `references/publishing.md`.
 
 ## Route execution down; keep the loop tight
 
-The orchestrator is usually the most expensive model. Gather enough evidence with direct read-only tools or
-native `Explore`, then write precise tickets and route implementation by default. A direct claim is limited
-to the INLINE-SAFE allowlist and its meaningful 20+ character recorded reason; it cannot retroactively
+The orchestrator is the most expensive model. Gather evidence with direct read-only tools or
+native `Explore`, then write tickets and route implementation by default. A direct claim is limited
+to the INLINE-SAFE allowlist and its 20+ character reason; it cannot retroactively
 legitimize prior inline investigation. Executors own their tickets; investigations return **compressed findings** (~1–2k tokens)
-as comments, not transcripts. Routed implementation agents use a freshly dispatched Sidequest executor.
+as comments, not transcripts. Routed implementation uses a freshly dispatched executor.
 `Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness utilities; Explore is a quick
-sweep only, deep or fan-out investigation is a `codebase-exploration` spike; other delegated work needs a
+sweep only, deep or fan-out investigation is a `codebase-exploration` spike; other delegation needs a
 ticketed route.
 
 **The shape is a LOOP, not a hand-off**: spawn a wave → executors return terse reports and

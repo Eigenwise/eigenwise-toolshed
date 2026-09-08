@@ -20,7 +20,7 @@
         },
         "expectedRevision": {
           "type": "string",
-          "description": "Required revision."
+          "description": "Revision."
         }
       },
       "required": [
@@ -56,7 +56,7 @@
         },
         "detail": {
           "type": "boolean",
-          "description": "Full comments; default for status."
+          "description": "Full comments."
         },
         "brief": {
           "type": "boolean",
@@ -690,7 +690,8 @@
           "type": "string"
         },
         "force": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Operator-only."
         },
         "session": {
           "type": "string"
