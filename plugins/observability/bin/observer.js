@@ -42,6 +42,16 @@ const PROCESS_RECORD_HEARTBEAT_WORKER_SOURCE = [
   '});',
 ].join('\n');
 
+function establishObserverOwnership(dataDirectory, pluginVersion, scriptPath, options = {}) {
+  const pid = options.pid ?? process.pid;
+  const heartbeatAt = new Date(options.now ?? Date.now()).toISOString();
+  fs.mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(dataDirectory, 'observer.pid'), `${pid}\n`, { encoding: 'utf8', mode: 0o600 });
+  const filePath = path.join(dataDirectory, 'observer.pid.json');
+  fs.writeFileSync(filePath, `${JSON.stringify({ pid, pluginVersion, scriptPath, heartbeatAt })}\n`, { encoding: 'utf8', mode: 0o600 });
+  return { filePath, pid, pluginVersion, scriptPath };
+}
+
 function startProcessRecordHeartbeat(options) {
   const writer = new Worker(PROCESS_RECORD_HEARTBEAT_WORKER_SOURCE, {
     eval: true,
@@ -221,6 +231,8 @@ function createObserver(options = {}) {
   const pluginVersion = options.pluginVersion || ownPluginVersion();
   const getInstalledPluginInstallation = options.getInstalledPluginInstallation || (() => installedPluginInstallation(options.home));
   const observerDataDir = path.dirname(options.databaseFile || defaultDatabaseFile());
+  const processRecordDataDir = options.processRecordDataDir || observerDataDir;
+  const managesProcessRecord = options.manageProcessRecord ?? (!options.store && port !== 0);
   const observerConfigFile = options.configFile || defaultConfigPath(observerDataDir);
   const successor = () => {
     const installation = getInstalledPluginInstallation();
@@ -476,12 +488,21 @@ function createObserver(options = {}) {
         });
       });
       started = true;
-      processRecordHeartbeat = startProcessRecordHeartbeat({
-        filePath: path.join(path.dirname(options.databaseFile || defaultDatabaseFile()), 'observer.pid.json'),
-        pid: process.pid,
-        pluginVersion,
-        scriptPath: __filename,
-      });
+      try {
+        const processRecord = managesProcessRecord
+          ? establishObserverOwnership(processRecordDataDir, pluginVersion, __filename)
+          : {
+            filePath: path.join(processRecordDataDir, 'observer.pid.json'),
+            pid: process.pid,
+            pluginVersion,
+            scriptPath: __filename,
+          };
+        processRecordHeartbeat = startProcessRecordHeartbeat(processRecord);
+      } catch (error) {
+        await new Promise((resolve) => server.close(resolve));
+        started = false;
+        throw error;
+      }
       maintenanceStartTimer = setTimeout(runMaintenance, 0);
       if (typeof maintenanceStartTimer.unref === 'function') maintenanceStartTimer.unref();
       maintenanceTimer = setInterval(

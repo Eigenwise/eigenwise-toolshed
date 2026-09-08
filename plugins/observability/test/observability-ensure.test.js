@@ -589,6 +589,80 @@ test('an older ensure leaves a newer managed observer untouched', async (t) => {
   assert.deepEqual(result, { enabled: true, started: [], skipped: 'newer-observer' });
 });
 
+test('new observer ownership blocks older dashboard writers in either launch order', async (t) => {
+  for (const oldOwnershipExists of [true, false]) {
+    const scenarioDirectory = path.join(temporaryDirectory(t), oldOwnershipExists ? 'old-then-new' : 'new-then-old');
+    const cacheRoot = path.join(scenarioDirectory, 'cache');
+    const olderPluginRoot = installedPluginRoot(cacheRoot, '0.7.9');
+    const newerPluginRoot = installedPluginRoot(cacheRoot, '0.7.10');
+    const configFile = path.join(scenarioDirectory, 'observability.json');
+    const dashboardFile = path.join(scenarioDirectory, 'grafana-dashboards', 'claude-code-usage.json');
+    const config = enabledConfig();
+    config.observability.dashboard = true;
+    config.observability.sink = 'grafana-lgtm';
+    config.observability.sinks = { 'grafana-lgtm': {} };
+    config.observability.managedVersion = '0.7.10';
+    config.observability.dashboardVersion = '0.7.10';
+    fs.mkdirSync(path.dirname(dashboardFile), { recursive: true });
+    fs.writeFileSync(dashboardFile, 'newest dashboard\n');
+    writeObservabilityConfig(configFile, config);
+    if (oldOwnershipExists) {
+      fs.writeFileSync(path.join(scenarioDirectory, 'observer.pid'), '101\n');
+      fs.writeFileSync(path.join(scenarioDirectory, 'observer.pid.json'), `${JSON.stringify({
+        pid: 101,
+        pluginVersion: '0.7.9',
+        scriptPath: path.join(olderPluginRoot, 'bin', 'observer.js'),
+        heartbeatAt: new Date(0).toISOString(),
+      })}\n`);
+    }
+
+    const observer = createObserver({
+      databaseFile: path.join(scenarioDirectory, 'observability.db'),
+      configFile,
+      host: '127.0.0.1',
+      port: 0,
+      pluginVersion: '0.7.10',
+      processRecordDataDir: scenarioDirectory,
+      manageProcessRecord: true,
+      getInstalledPluginInstallation: () => ({ version: '0.7.10', installPath: newerPluginRoot }),
+      hookSpoolFile: path.join(scenarioDirectory, 'hook-spool.jsonl'),
+      sink: { id: 'none', egress: 'loopback', outbox: { enabled: false } },
+    });
+    await observer.start();
+    try {
+      assert.equal(fs.readFileSync(path.join(scenarioDirectory, 'observer.pid'), 'utf8'), `${process.pid}\n`);
+      const observerRecord = JSON.parse(fs.readFileSync(path.join(scenarioDirectory, 'observer.pid.json'), 'utf8'));
+      assert.equal(observerRecord.pid, process.pid);
+      assert.equal(observerRecord.pluginVersion, '0.7.10');
+      assert.equal(observerRecord.scriptPath, path.join(path.resolve(__dirname, '..'), 'bin', 'observer.js'));
+      assert.ok(Number.isFinite(Date.parse(observerRecord.heartbeatAt)));
+
+      const launched = await launchEnsure({
+        dataDir: scenarioDirectory,
+        configFile,
+        pluginRoot: olderPluginRoot,
+        checkPort: async () => true,
+        observerIdentity: async () => null,
+        processAlive: (processId) => processId === process.pid,
+        spawn() { throw new Error('older SessionStart must not launch its ensure worker'); },
+      });
+      assert.equal(launched, false);
+
+      const ensured = await ensureObservability({
+        dataDir: scenarioDirectory,
+        configFile,
+        pluginRoot: olderPluginRoot,
+        processAlive: (processId) => processId === process.pid,
+        checkPort() { throw new Error('older ensure must not reach dashboard provisioning'); },
+      });
+      assert.deepEqual(ensured, { enabled: true, started: [], skipped: 'newer-observer' });
+      assert.equal(fs.readFileSync(dashboardFile, 'utf8'), 'newest dashboard\n');
+    } finally {
+      await observer.close();
+    }
+  }
+});
+
 test('ensure keeps a managed observer that times out during its identity probe', async (t) => {
   const dataDir = temporaryDirectory(t);
   const configFile = path.join(dataDir, 'observability.json');
