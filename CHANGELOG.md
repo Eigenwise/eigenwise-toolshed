@@ -8,6 +8,21 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.529.0 (2026-09-08)
+
+### observability 0.7.26 → 0.7.27
+
+#### Fixes
+
+- Keep Astra costs in provisioned dashboards (SQ-2503)
+  The newest running observer now prevents older open sessions from replacing current provisioned dashboards during downstream health failures.
+
+### sidequest 5.0.33 → 5.0.34
+
+#### Fixes
+
+- Keep local board references out of GitHub updates (SQ-2500)
+
 ## v3.528.0 (2026-09-08)
 
 ### sidequest 5.0.32 → 5.0.33
