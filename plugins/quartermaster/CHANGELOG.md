@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.6 (2026-09-08)
+
+Released in v3.533.0, up from 0.7.5.
+
+### Fixes
+
+- Clarify Quartermaster setup and privacy guidance (SQ-2512)
+  Clarifies the guided setup handoff, registry-wide update scope, bounded session-summary privacy boundary, and maintenance reload rules.
+- Sync skill-text assertions after the documentation reword (SQ-2522)
+  Test-only: the handoff and updater skill assertions now match the reworded prose without weakening the contract they check.
+
 ## 0.7.5 (2026-09-07)
 
 Released in v3.525.0, up from 0.7.4.

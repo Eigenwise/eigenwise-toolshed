@@ -8,6 +8,62 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.533.0 (2026-09-08)
+
+### codebase-mapper 2.15.7 → 2.15.8
+
+#### Fixes
+
+- Align Live Rules and Codebase Mapper docs with automation (SQ-2515)
+  Document atomic Live Rules storage, migration and seen-hash injection cadence. Clarify automatic map assessment, no-op handling, optional Sidequest handoff and standalone fallback.
+- Sync skill-text assertions after the documentation reword (SQ-2522)
+  Test-only: the handoff and updater skill assertions now match the reworded prose without weakening the contract they check.
+
+### live-rules 2.10.4 → 2.10.5
+
+#### Fixes
+
+- Align Live Rules and Codebase Mapper docs with automation (SQ-2515)
+  Document atomic Live Rules storage, migration and seen-hash injection cadence. Clarify automatic map assessment, no-op handling, optional Sidequest handoff and standalone fallback.
+
+### model-gateway 0.50.3 → 0.50.4
+
+#### Fixes
+
+- Fix gateway and observability setup guidance (SQ-2514)
+  Clarify gateway onboarding, model visibility recovery, local record controls, and observability setup, privacy, recovery, retention, and pricing guidance.
+- Declare a 300s suite timeout for the gateway tests (SQ-2529)
+  Declare `suiteTimeout` for the Model Gateway test suite so its process-isolation tests get the same five-minute file budget the observability suite already has; the suite spawns and retires real gateway processes and can exceed two minutes on a busy machine.
+
+### observability 0.7.27 → 0.7.28
+
+#### Fixes
+
+- Fix gateway and observability setup guidance (SQ-2514)
+  Clarify gateway onboarding, model visibility recovery, local record controls, and observability setup, privacy, recovery, retention, and pricing guidance.
+
+### quartermaster 0.7.5 → 0.7.6
+
+#### Fixes
+
+- Clarify Quartermaster setup and privacy guidance (SQ-2512)
+  Clarifies the guided setup handoff, registry-wide update scope, bounded session-summary privacy boundary, and maintenance reload rules.
+- Sync skill-text assertions after the documentation reword (SQ-2522)
+  Test-only: the handoff and updater skill assertions now match the reworded prose without weakening the contract they check.
+
+### sidequest 5.0.37 → 5.0.38
+
+#### Fixes
+
+- Align Sidequest lifecycle guidance (SQ-2513)
+  Align Sidequest lifecycle guidance, recovery instructions, and human workflow docs with the shipped behavior.
+- Allow owned helper evidence writes (SQ-2518)
+  Helpers admitted to an active ticket can write that ticket's board-owned verification evidence without widening repository scope. Evidence for other tickets and escaped paths stays blocked.
+- Reject foreign evidence aliases (SQ-2520)
+  Sidequest now refuses helper writes that reach another ticket's board-owned verification evidence through a scratchpad junction.
+- Sync MCP descriptor golden and skill byte budget (SQ-2523)
+  Regenerate the MCP tool descriptor golden after the lifecycle guidance reword shortened two field descriptions, and trim the sidequest skill back under its session-load byte budget.
+
 ## v3.532.0 (2026-09-08)
 
 ### sidequest 5.0.36 → 5.0.37

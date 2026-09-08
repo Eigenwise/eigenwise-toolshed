@@ -1,6 +1,6 @@
 {
   "name": "live-rules",
-  "version": "2.10.4",
+  "version": "2.10.5",
   "description": "Atomic project rules in .claude/live-rules/rules/ with a generated manifest. Claude injects applicable rules at SessionStart, then only new or changed unseen rules as prompts and edits match; legacy single-file storage is for migration or explicit overrides.",
   "author": {
     "name": "Eigenwise",
