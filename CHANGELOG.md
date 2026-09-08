@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.531.0 (2026-09-08)
+
+### sidequest 5.0.35 → 5.0.36
+
+#### Fixes
+
+- Fix executor launch after plugin reload (SQ-2509) [`756abee`](https://github.com/Eigenwise/eigenwise-toolshed/commit/756abeee210ba3f79c84694beed228cb907e4ef9)
+
 ## v3.530.0 (2026-09-08)
 
 ### sidequest 5.0.34 → 5.0.35
