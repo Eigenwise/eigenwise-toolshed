@@ -47,6 +47,13 @@ actually uses; denial patterns show which permissions to pre-allow; correction t
 rules to seed. Also run `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" catalog --installed`
 to see what user-scope plugins already apply here.
 
+The local mining script reads transcript files and emits a bounded JSON aggregate. The setup skill
+reads that aggregate, not the raw transcripts. The active model can therefore see clipped session
+titles, opening asks, explicit goals and their status, nearby project path segments, counts,
+repeated commands, attribution, fetched hostnames, and short clipped evidence quotes. Raw
+transcripts are not loaded into model context, and this skill must not open them. Setup requests
+the all-projects aggregate; resupply uses the current project by default.
+
 ### 3. Interview, briefly
 
 Ask what the project is for (one or two lines), confirm the detected stack, and ask team-or-solo
@@ -101,17 +108,17 @@ One visible plan, then per-item approval. Draw from three sources, in this order
   node -e "const { compactionWindowFinding } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); console.log(compactionWindowFinding(process.cwd()));"
   ```
 
-  If `autoCompactWindow` is unset, separately offer to set
+  If `autoCompactWindow` is unset, separately offer the optional setting
   `"autoCompactWindow": 325000` through `configureSidequestCompaction`; get approval before running:
 
   ```sh
   node -e "const { configureSidequestCompaction } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); console.log(JSON.stringify(configureSidequestCompaction(process.cwd(), { autoCompactWindow: 325000, policy: 'pin' }), null, 2));"
   ```
 
-  The tradeoff is a consistent Codex compaction point; Claude models keep their larger windows because
-  the cap only bounds the auto-compact trigger. Recommend 325000 because it matches Kenny's established
-  setting and yields the 292000-token trigger. If either user or project settings already has a value,
-  say which one wins and leave it alone unless the user asks to change it.
+  The tradeoff is a consistent Codex compaction point; Claude models keep their larger windows
+  because the cap only bounds the auto-compact trigger. Treat 325000 as a recommendation, not a
+  prerequisite. If either user or project settings already has a value, say which one wins and
+  leave it alone unless the user asks to change it.
 
 - **Stack plugins**, from [references/stack-plugins.md](references/stack-plugins.md) plus the
   catalog (`node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" catalog --query "<stack terms>"`).
@@ -129,10 +136,10 @@ Default plugin installs to project scope so the config travels with the repo. Sh
 install and write list (every file path, including any `~/.claude/settings.json` change) and get
 approval before touching anything.
 
-### 5. Install, then write, then reload
+### 5. Install, write, activate, then verify
 
 Order matters: plugins install first, workspace artifacts that depend on them second, and
-nothing that needs a plugin loaded happens until after one reload.
+nothing that needs a plugin loaded happens until after the activation boundary.
 
 - Install approved plugins with `claude plugin install <name>@<marketplace> --scope project`.
 - Write the approved artifacts: live rules under `.claude/live-rules/rules/*.md` via live-rules'
@@ -140,12 +147,13 @@ nothing that needs a plugin loaded happens until after one reload.
   in `.claude/settings.json`, a structure note for greenfield projects per
   [references/structure-notes.md](references/structure-notes.md), and optionally a lightweight
   CLAUDE.md seeded through the built-in `/init`.
-- Then stop once: ask the user to run `/reload-plugins` (or restart) and tell you to continue.
-  Do not pretend the plugins are loaded and barrel on in the same turn.
+- Then stop once: ask the user to activate the selected installs with `/reload-plugins`, or restart
+  Claude Code when the changes affect the process environment, and tell you to continue. Do not
+  pretend the plugins are loaded and barrel on in the same turn.
 
 ### 6. Verify against reality
 
-After the reload: `claude plugin list --json` confirms every selected plugin is installed and
+After the reload or restart: `claude plugin list --json` confirms every selected plugin is installed and
 enabled at its requested scope. Then verify each piece is actually usable, not just present:
 build the codebase map via `map-codebase` (skip for not-a-codebase), confirm live-rules content
 is visibly injected in your context, bring up the sidequest board if selected, and check each
@@ -183,8 +191,8 @@ what would make the user's current work easier and whether this setup is earning
 - [ ] Project assessed (new/existing, codebase/not, existing config read and respected)
 - [ ] Cross-project mining ran and visibly informed the recommendations
 - [ ] Full install and write list shown and approved before any change
-- [ ] Plugins installed before dependent artifacts; exactly one reload requested
-- [ ] Every installed piece verified usable after reload, not assumed
+- [ ] Plugins installed before dependent artifacts; one reload or restart boundary requested
+- [ ] Every installed piece verified usable after reload or restart, not assumed
 - [ ] Every decision recorded with a fingerprint, rejections included
 
 ## References

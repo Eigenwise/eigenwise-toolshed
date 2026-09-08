@@ -20,8 +20,12 @@ description: >-
 One question drives this skill: **what is this workspace short of that would make the user's work
 easier?** Then get that one thing, with their approval.
 
-A local script does the mining and hands you a bounded aggregate. Never open raw transcripts
-yourself: they run to tens of megabytes, and the aggregate already carries what matters.
+A local script does the mining and hands you a bounded aggregate. It reads transcript files on the
+machine and does not send raw transcripts over the network. The resupply skill reads the aggregate,
+so the active model can see its bounded fields: counts, clipped session titles and opening asks,
+explicit goals and status, nearby project path segments, repeated commands, attribution, fetched
+hostnames, and short evidence quotes. Raw transcripts are never loaded into model context, and the
+skill must not open them.
 
 ## Why capability and not friction
 

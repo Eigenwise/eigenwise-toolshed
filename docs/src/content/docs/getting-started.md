@@ -1,9 +1,9 @@
 ---
 title: Getting started
-description: Install Quartermaster, prepare a project, and choose the next Toolshed workflow.
+description: Install Quartermaster, prepare a project, and choose the Toolshed plugin that fits the job.
 ---
 
-Eigenwise Toolshed is a set of Claude Code plugins for setting up a project and keeping work moving. Start with Quartermaster, then add the plugin that matches the job.
+Eigenwise Toolshed is six independent Claude Code plugins. Start with Quartermaster when you want a guided project setup. Install a different plugin directly when you already know what you need.
 
 ## Install Quartermaster
 
@@ -14,11 +14,11 @@ Run these in Claude Code from the project you want to prepare:
 /plugin install quartermaster@eigenwise-toolshed --scope project
 ```
 
-This example uses project scope. Reload plugins or start a new Claude Code session.
+This example uses project scope, which keeps the activation in the repository's settings. After the install, activate the plugin with `/reload-plugins` or by starting a new Claude Code session.
 
-## Choosing a scope
+## Choose a scope
 
-Every Toolshed plugin works at user, project, or local scope. The examples use `--scope project`: use `--scope user` to load a plugin in every project, `--scope project` to record it in this repository, or `--scope local` to keep it out of shared settings.
+Every Toolshed plugin works at user, project, or local scope. Use `--scope project` when the plugin belongs to one repository, `--scope user` when you want it in every project, or `--scope local` when it should stay out of shared settings. The setup examples use project scope, but the choice is yours.
 
 ## Prepare your first project
 
@@ -26,30 +26,29 @@ From the project directory, run:
 
 > /quartermaster:setup
 
-Quartermaster asks which project tools fit, installs the selected plugins for that project, writes the project configuration, and asks you to reload before verifying the result. You approve the plan before it changes the workspace.
+Quartermaster reads the project, mines a bounded history summary, asks a few setup questions, and proposes Toolshed plugins, stack plugins, starter rules, and permission entries. It shows the change list and waits for approval before installing or writing anything.
 
-When setup finishes, try one real request in the same project:
+After setup installs the approved plugins and writes the approved files, it pauses. Run `/reload-plugins` to activate the new plugin code. Restart Claude Code instead when setup changed the process environment or wiring that a reload cannot replace. Tell Claude `continue`, then let setup verify each selected workflow after the boundary.
+
+Try one real request after verification:
 
 > Explain the main parts of this codebase and point me to the files I should read first.
 
-If you enabled Codebase Mapper, Claude can use the maintained project map to answer that request. If you chose other plugins, their guides show the first workflow to try.
+If you enabled Codebase Mapper, Claude can use the maintained project map to answer that request. If you chose another plugin, use its guide below for the first workflow.
 
 ## Choose your next workflow
 
-The marketplace currently publishes six plugins: Quartermaster, Sidequest, Model Gateway, Codebase Mapper, Live Rules, and Observability.
+The marketplace publishes these six plugins:
 
 - [Set up and maintain a workspace](./quartermaster/)
-- [Plan and deliver tracked work](./sidequest/)
+- [Track and deliver owned work](./sidequest/)
 - [Add GPT or Grok subscription models](./model-gateway/)
 - [Keep a project map nearby](./codebase-mapper/)
 - [Load project rules when they apply](./live-rules/)
-- [Run a human-judged comparison](./experiments/)
 - [View selected local usage](../observability/)
 
-![Sidequest board with three synthetic projects and a populated work queue](../../assets/screenshots/sidequest-kanban.png)
+Quartermaster's updater covers every active Eigenwise Toolshed install in Claude Code's registry, at its recorded user, project, or local scope and project path. It can update an install in another project even when you invoke it from here. Third-party marketplaces are left alone.
 
-*An isolated synthetic board view from the Sidequest workflow guide.*
+Freshness hooks report cached availability and loaded-version mismatches. They do not install plugins or restart Claude Code. Marketplace auto-update is optional and must be enabled for the Eigenwise Toolshed marketplace. After any plugin update, reload affected open sessions. Restart Claude Code when process-level gateway wiring or model discovery changed.
 
-Quartermaster can install selected plugins during setup, update Toolshed plugins later, and check workspace health. Reload plugins or start a new session after an install or update so Claude sees the new version.
-
-The [generated plugin reference](../reference/) lists the agent-facing skills, hooks, and commands for each plugin.
+The [generated plugin reference](../reference/) lists the agent-facing skills, hooks, and commands. Maintainer material lives under [contributing](../contributing/), and the separate [support page](https://eigenwise.github.io/eigenwise-toolshed/support/) covers ways to help.

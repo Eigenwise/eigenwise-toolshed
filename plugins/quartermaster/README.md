@@ -1,21 +1,10 @@
 # quartermaster
 
-Looks at your recent Claude Code sessions and asks what would make your goals easier to reach:
-a measurement nobody can run yet, work you keep doing by hand, knowledge you keep re-deriving,
-existing skills that underperform, permissions worth allowing, plugins worth installing or disabling. Every change is proposed one at
-a time and applied only when you say yes. The next pass then tells you whether the last round
-actually helped. A result that is used but underperforms becomes a targeted improvement; an unused
-or ineffective result can roll back.
+Quartermaster helps with the setup work that tends to get repeated. It looks at a project and at bounded summaries of recent Claude Code sessions, asks what would help, and proposes one change at a time. Setup, resupply, updates, and health checks are separate workflows, and every install, file edit, or settings change waits for your approval.
 
-Friction is in there, at the bottom of the list. Fixing what went wrong gets you back to the speed
-you already expected; adding a capability you never had moves that baseline, and the best
-capabilities leave no friction trace at all.
+It can set up a new or existing workspace, keep active Toolshed installs current, check their health, and suggest a missing skill, rule, measurement, permission, or plugin after real work has accumulated. A later pass checks whether an accepted change helped. Unused or ineffective changes can be rolled back.
 
-It also outfits workspaces: the setup skill mines your history across all projects, interviews
-you briefly, and installs and verifies the Toolshed core plus stack plugins for a new or existing
-project, with every item approved individually. When it wires Model Gateway or Sidequest routing,
-Quartermaster recommends, never mandates, a 325000 `autoCompactWindow` for consistent Codex
-compaction; setup offers it and doctor surfaces the effective setting.
+When setup wires Model Gateway or Sidequest routing, it can also offer the optional `325000` `autoCompactWindow` setting for a consistent Codex compaction point. This is a consistency choice, not a prerequisite. Setup asks before writing it, and an existing user or project value is reported and preserved.
 
 ## Install
 
@@ -26,52 +15,44 @@ Quartermaster works at user, project, or local scope. Install it at the scope yo
 /plugin install quartermaster@eigenwise-toolshed --scope project
 ```
 
-User scope is convenient when you want its freshness guard and setup skills in every project; choose project or local scope when you want it only where you opt in.
+Project scope is the recommended starting point when the setup belongs to one repository. User scope makes its skills available in every project. Local scope keeps the install out of shared settings.
 
-Then `/quartermaster:setup` in a project, or `/quartermaster:resupply` after some real sessions.
+After installing, run `/reload-plugins` or start a new Claude Code session. Then use `/quartermaster:setup` in a project, or `/quartermaster:resupply` after some real sessions.
 
 ## How it works
 
-Four cheap hooks and two skills. The hooks never call a model.
+Quartermaster has hooks for setup hints, local tallies, freshness notices, and resupply offers. The hooks do not call a model for the mining pass. The plugin also ships skills for `setup`, `resupply`, `update-toolshed`, and `toolshed-doctor`.
 
-- **SessionStart auto-allowlist hook**: opt-in only. Once the project enables it, the hook streams the bounded recent-transcript window and appends project-local `permissions.allow` entries for a tool fingerprint approved at least three times with no user rejection. Bash rules use the normalized command prefix. Destructive commands are reported but never added. Every addition is logged to the decision ledger and printed. Enable it with `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" enable-auto-allowlist --project "${CLAUDE_PROJECT_DIR}"`; it writes only `.claude/settings.local.json`. Before that marker exists, both the hook and the `allowlist` command only report what they would add.
-- **SessionEnd hook**: streams the transcript that just ended and records a small tally per
-  session (prompts, denials, interrupts, corrections, tool errors) under
-  `~/.claude/quartermaster-state/`. Local file reads only.
-- **SessionStart hook**: injects the capability-capture charter, one short paragraph asking Claude
-  to notice mid-session when the thing it is doing for the third time should become a skill, a
-  codebase-map entry, a rule, or a committed measurement, and to offer capturing it right then.
-  Skipped in projects where setup already seeded the stronger self-improvement live rule, which is
-  re-grounded at session start and returns on a later prompt or edit only when its text changes. Once enough unreviewed sessions or friction events pile up, it records a nudge so a Stop-time offer will hold the next real pause open.
-- **Stop hooks**: the resupply hook reads only the project tally state at every turn end. Once a resupply is due, it blocks once for that session and directs Claude to offer the focused optimization round now. It stays silent on its own `stop_hook_active` continuation, after an offer in the same session, during the separate 24-hour offer cooldown, and after `decline-resupply` resets the evidence window. The separate update hook refreshes stale marketplace freshness, reports available Toolshed updates, and nudges a reload when installed plugin code is newer than the session's loaded version. It never installs, restarts, or blocks. The offer tells Claude to run the pass after you say yes, or automatically when you have explicitly given standing permission for optimization rounds; a whole-round decline runs `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" decline-resupply --project "${CLAUDE_PROJECT_DIR}"`.
-- **resupply skill**: after the user accepts the optimization round, runs the miner (`bin/quartermaster.js mine`), which streams recent transcripts
-  and emits a bounded JSON aggregate. Each session carries **what it was for**: its own title, its
-  first real prompt, any explicit `/goal` and whether that goal was ever met, plus a `humanDriven`
-  flag so hook-spawned sessions can't pass as your work. Alongside that: the areas of the tree the
-  work landed in, per-session cost, top repeated commands, attribution, fetch domains, and friction
-  counts with short quotes. The skill looks for what's missing against that purpose (something
-  unmeasurable, then manual work, then re-derived knowledge, then friction), and leads with whatever
-  the history actually attests rather than with whatever it found first: at most 7 findings, each
-  routed to a destination (a measurement built as a skill, plugin install, workflow skill, map
-  or CLAUDE.md knowledge, rule, permission allowlist entry, disable) and each individually approved.
-  Applied and rejected decisions land in a ledger; rejected recommendations are never surfaced again.
-- **setup skill**: for new or freshly cloned projects. Mines all projects, reads the new project's
-  stack, proposes a baseline. Same approval and ledger contract.
+- **Setup** assesses one project, mines a cross-project history summary, asks a short interview, and proposes a project baseline. The Toolshed pieces remain independent and opt in separately.
+- **Resupply** mines the current project by default after you approve a round. It ranks missing measurements, manual work, re-derived knowledge, underperforming capabilities, and setup friction, then asks for approval for each finding.
+- **Update** runs the requested updater for active Eigenwise Toolshed registry installs, at their recorded user, project, or local scope and project path. It does not update third-party marketplaces.
+- **Doctor** is read-only. It checks installed versions, freshness, workspace wiring, and any installed Observability or Model Gateway health it can inspect.
 
-Plugin recommendations come from local data: the official catalog cache (with install counts) plus
-every marketplace manifest already on the machine. No network calls from the scripts.
+The updater and the freshness hooks have different jobs. `/quartermaster:update-toolshed` changes installs when you request it. Freshness hooks report cached availability or loaded-version mismatches and point to the updater; they do not install or restart anything. Marketplace auto-update is optional and must be enabled for the Eigenwise Toolshed marketplace in Claude Code. An open session still needs `/reload-plugins` after plugin code changes. Process-level gateway wiring or model discovery may need a new Claude Code process.
 
-## Why the loop closes
+## Privacy and the history summary
 
-Every applied recommendation records what it targets. `bin/quartermaster.js verify` compares that
-signal per session before and after the decision, so each pass opens with a track record ("the
-allowlist rule: denials went 2.1 to 0.3 per session") and proposes rolling back what didn't work.
-For a capability no counter tracks, the check is whether the new skill or plugin shows up in
-attribution at all. Rejections are remembered so the same advice doesn't come back.
+Quartermaster's local script reads Claude Code transcript files from the machine and emits a bounded JSON aggregate. The active model sees that aggregate when the setup or resupply skill reads it. Raw transcript files are not loaded into model context, and the skills are explicitly forbidden from opening them. The scripts make no network calls for this catalog and mining flow.
+
+The aggregate is more than counts. It can include:
+
+- a clipped session title, up to 120 characters;
+- the first real user prompt, up to 240 characters;
+- explicit goal conditions, whether each goal was met, and bounded goal samples;
+- the two directory segments nearest touched files, with scratch and opaque paths removed;
+- counts for prompts, tool calls, errors, denials, interrupts, and corrections;
+- repeated command names, plugin, skill, and MCP attribution, and fetched hostnames; and
+- short clipped correction or denial evidence, up to 300 characters per quote.
+
+Setup explicitly requests the all-projects aggregate. Resupply reads the current project by default and only uses `--all-projects` for a global pass. The state directory stores local tallies and the decision ledger, not raw conversation transcripts.
+
+## The setup handoff
+
+Setup installs the approved plugins and writes the approved workspace files. It then stops at the plugin reload boundary. Reload plugins or restart Claude Code when the change affects the process environment, tell Claude `continue`, and let setup verify the result after that boundary. Do not treat an installed plugin as loaded in the current process until the reload or restart has happened.
 
 ## CLI
 
-```
+```text
 node bin/quartermaster.js mine [--project <path>] [--days 30] [--sessions 40] [--all-projects]
 node bin/quartermaster.js status [--project <path>]
 node bin/quartermaster.js catalog [--query <terms>] [--installed]
@@ -81,28 +62,29 @@ node bin/quartermaster.js verify [--project <path>]
 node bin/quartermaster.js mark-resupply [--project <path>]
 node bin/quartermaster.js decline-resupply [--project <path>]
 node bin/quartermaster.js allowlist [--project <path>] [--days 30] [--sessions 40] [--blocked]
-node bin/quartermaster.js enable-auto-allowlist [--project <path>]
+node bin/quartermaster.js enable-auto-allowlist --project <path>
 ```
 
-Allowlist reports summarize blocked fingerprints by tool and show the five most-approved candidates. Use `--blocked` for up to 25 detailed blocked entries, each stating whether the wildcard rule was too broad or a sighted command was destructive.
-
-Everything prints JSON. Node stdlib only, no dependencies, cross-platform.
+Everything prints JSON. Node standard library only, no dependencies, cross-platform.
 
 ## Configuration
 
-Environment variables, all optional:
+Environment variables are optional:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `QUARTERMASTER_MIN_SESSIONS` | 4 | Unreviewed sessions before a nudge |
-| `QUARTERMASTER_MIN_FRICTION` | 6 | Friction events (denials + interrupts + corrections) before a nudge |
-| `QUARTERMASTER_NUDGE_HOURS` | 24 | Cooldown between SessionStart nudges, and after a resupply pass |
+| `QUARTERMASTER_MIN_FRICTION` | 6 | Friction events before a nudge |
+| `QUARTERMASTER_NUDGE_HOURS` | 24 | Cooldown between SessionStart nudges and after a resupply pass |
 | `QUARTERMASTER_OFFER_HOURS` | 24 | Cross-session cooldown between Stop-time offers |
 | `QUARTERMASTER_STATE_DIR` | `~/.claude/quartermaster-state` | Where tallies and the decision ledger live |
 
-## Privacy
+## Links
 
-Transcripts are read locally by a script and reduced to counts plus a handful of clipped quotes
-(max 300 chars each). Raw transcripts are never loaded into model context; the resupply skill is
-explicitly forbidden from opening them. State files contain tallies and decisions, not
-conversation content.
+- [Quartermaster guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/quartermaster/)
+- [Toolshed plugin reference](https://eigenwise.github.io/eigenwise-toolshed/reference/quartermaster/)
+- [Repository](https://github.com/Eigenwise/eigenwise-toolshed)
+
+## Support
+
+Optional support is available through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise).

@@ -13,7 +13,20 @@ Run the portable updater from this plugin installation:
 node "${CLAUDE_PLUGIN_ROOT}/bin/update-toolshed.js"
 ```
 
-It reads Claude Code's installed-plugin registry, refreshes only `eigenwise-toolshed`, and updates only Toolshed plugins from that marketplace at their recorded scope and project directory. It does not inspect, refresh, or update third-party marketplaces or plugins. When Model Gateway is installed, it runs its stable updater, `node ~/.claude/model-gateway/update.js`, and surfaces that command's output. The updater downloads and verifies the proxy, swaps it by rename without asking you to close sessions, restarts it when it can, and reports the resulting state. Claude Code's registry has versions but not release notes or commit history, so the updater says that plainly instead of guessing at a changelog. Gateway wiring stays at its recorded scope: the stable updater delegates to setup, which preserves per-project `.claude/settings.local.json` or user-level `~/.claude/settings.json` wiring and never escalates scope. Remote Control compatibility points the base URL at `api.anthropic.com`, so the Codex/Grok rows disappear from `/model`; an explicit id such as `/model claude-gpt-5.6-terra` still works. Gateway wiring changes apply to new Claude Code sessions, so restart affected sessions. It continues after individual failures and prints the failing commands.
+It reads Claude Code's installed-plugin registry, refreshes the Eigenwise Toolshed marketplace, and
+updates every active Toolshed install recorded there at its recorded scope and project directory. That
+includes user, project, and local installs across projects, not only the project where this skill is
+invoked. It does not inspect, refresh, or update third-party marketplaces or plugins. When Model Gateway
+is installed, it runs its stable updater, `node ~/.claude/model-gateway/update.js`, and surfaces that
+command's output. The updater downloads and verifies the proxy, swaps it by rename without asking you to
+close sessions, restarts it when it can, and reports the resulting state. Claude Code's registry has
+versions but not release notes or commit history, so the updater says that plainly instead of guessing at
+a changelog. Gateway wiring stays at its recorded scope: the stable updater delegates to setup, which
+preserves per-project `.claude/settings.local.json` or user-level `~/.claude/settings.json` wiring and
+never escalates scope. Remote Control compatibility points the base URL at `api.anthropic.com`, so the
+Codex/Grok rows disappear from `/model`; an explicit id such as `/model claude-gpt-5.6-terra` still works.
+Gateway wiring changes apply to new Claude Code sessions, so restart affected sessions. It continues after
+individual failures and prints the failing commands.
 
 ## Gateway rename migration
 
@@ -39,16 +52,20 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/update-toolshed.js" --dry-run
 
 ## Freshness guard and reload boundary
 
-Quartermaster runs the prompt freshness check for active Toolshed plugins. When it knows an active install is behind, it blocks the prompt before Claude sees it. Run this updater, then `/reload-plugins` or restart Claude Code and resubmit the prompt. The guard allows `/update-toolshed`, `/reload-plugins`, and exact `/plugin` maintenance commands so recovery works. For an emergency only, start Claude Code with `EIGENWISE_TOOLSHED_FRESHNESS_BYPASS=1`; remove that override once updates are possible.
+Quartermaster's freshness hooks report cached availability and loaded-version mismatches. Their notices
+are advisory: they do not install plugins or restart Claude Code. Run this updater when you want the
+installed versions changed, then `/reload-plugins` or restart Claude Code and resubmit the prompt. The
+maintenance commands remain available when a freshness notice appears. For an emergency only, start
+Claude Code with `EIGENWISE_TOOLSHED_FRESHNESS_BYPASS=1`; remove that override once updates are possible.
 
 An update does not replace the plugin code already loaded by an open Claude Code session. Tell the user
 exactly what the updater reports: run `/reload-plugins` in each affected session, or restart Claude Code
 if reload does not pick up the new version. User-scoped installs affect every open session; project and
 local installs affect sessions open in their recorded project directories.
 
-## Keep normal updates automatic
+## Optional marketplace auto-update
 
-Marketplace auto-update is the normal path. In `/plugin`, open **Marketplaces**, select
+Marketplace auto-update is optional. To enable it, open `/plugin`, open **Marketplaces**, select
 `eigenwise-toolshed`, and choose **Enable auto-update**. Claude Code checks after session start with a
 random delay of up to 10 minutes. Third-party marketplaces start with auto-update off, and an already-open
 session still needs `/reload-plugins` or a restart after an update lands.
