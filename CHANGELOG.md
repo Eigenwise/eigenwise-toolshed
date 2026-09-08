@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.528.0 (2026-09-08)
+
+### sidequest 5.0.32 → 5.0.33
+
+#### Fixes
+
+- Bundle Sidequest executors for reliable first-install agent discovery (SQ-2499)
+
 ## v3.527.0 (2026-09-07)
 
 ### observability 0.7.25 → 0.7.26
