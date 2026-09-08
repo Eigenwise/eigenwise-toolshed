@@ -10,8 +10,8 @@ const mapSkill = fs.readFileSync(path.join(root, 'skills', 'map-codebase', 'SKIL
 const updateSkill = fs.readFileSync(path.join(root, 'skills', 'update-codebase-map', 'SKILL.md'), 'utf8');
 
 function sidequestHandoff(skill) {
-  const handoffStart = skill.indexOf('### Sidequest handoff');
-  const refreshStart = skill.indexOf('Use the handoff only');
+  const handoffStart = skill.search(/^### .*Sidequest handoff/m);
+  const refreshStart = skill.search(/^Use (?:the|an optional shared-tree artifact) handoff (?:only )?for a full remap/m);
   const start = handoffStart === -1 ? refreshStart : handoffStart;
   const end = skill.indexOf('\n### ', start + 5);
   assert.notEqual(start, -1, 'the skill must define a Sidequest handoff');
@@ -43,8 +43,8 @@ test('initial map handoff permits only one diagnosis-led retry', () => {
 test('incremental map refreshes inline and reserves handoff for large drifts', () => {
   assert.match(updateSkill, /touches fewer than ~15 files across already-mapped areas/);
   assert.match(updateSkill, /Do not create a ticket or dispatch an agent for this case\./);
-  assert.match(updateSkill, /handoff only for a full remap or a large structural drift/);
-  assert.match(updateSkill, /a new subsystem, a deleted service,\s*or the first Dockerfile or datastore/);
+  assert.match(updateSkill, /handoff (?:only )?for a full remap or (?:a )?large structural drift/);
+  assert.match(updateSkill, /a new subsystem,\s*a deleted service,\s*or the first Dockerfile or datastore/);
 });
 
 test('large incremental map handoff keeps the artifact boundary and retry limit', () => {
