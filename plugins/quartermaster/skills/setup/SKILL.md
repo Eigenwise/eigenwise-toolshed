@@ -76,11 +76,7 @@ One visible plan, then per-item approval. Draw from three sources, in this order
     so Claude begins oriented instead of re-exploring the tree every time. It refreshes itself
     from the diff as the code changes. Worth it for any real codebase; pointless for an empty
     scaffold until there is code to map.
-  - `live-rules` holds project rules as Markdown that gets re-injected exactly when it applies:
-    every prompt for the always-on ones, or right before Claude edits a file matching a glob.
-    That is the difference from CLAUDE.md, which is always in context whether or not it is
-    relevant. Edits take effect on the next prompt, no restart. Worth it anywhere the user has
-    conventions they keep having to repeat.
+  - `live-rules` holds project rules as Markdown. SessionStart injects rules that apply at startup, and during the session it injects a rule again only when it newly matches or its content/hash changes. Unchanged rules do not repeat on every prompt or edit. Content changes take effect on the next prompt or relevant edit, with no restart. That is the difference from CLAUDE.md, which is always in context whether or not it is relevant. Worth it anywhere the user has conventions they keep having to repeat.
   - `sidequest` is the delegation system, not just a ticket tracker, and the routing and
     executor half is where the value is. Tickets are the input; what it does with them is
     classify each into a category, route that category to a concrete model and effort level so
