@@ -12,6 +12,7 @@ const userStory = fs.readFileSync(path.join(ROOT, 'skills', 'user-story', 'SKILL
 const ticketAuthoring = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'ticket-authoring.md'), 'utf8');
 const orchestration = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'orchestration.md'), 'utf8');
 const invocationContracts = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'invocation-contracts.md'), 'utf8');
+const externalTrackers = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'external-trackers.md'), 'utf8');
 const executorTemplate = fs.readFileSync(path.join(ROOT, 'scripts', '_exec-template.md'), 'utf8');
 const activeGuidance = [skill, orchestration, executorTemplate];
 
@@ -65,6 +66,16 @@ test('sidequest listing description covers board use and inline exceptions', () 
   assert.ok(description.length <= 1536, `skill description is ${description.length} characters`);
   assert.match(description, /\bUse for\b/);
   assert.match(description, /\bStay inline for\b/);
+});
+
+test('external tracker guidance keeps authored GitHub communication self-contained', () => {
+  assert.match(externalTrackers, /GitHub issue bodies, comments, replies, and closure notes you author must stand alone/);
+  assert.match(externalTrackers, /sanitized reproduction, relevant findings, and version/);
+  assert.match(externalTrackers, /publicly resolvable issue, PR,\s+commit, or release links/);
+  assert.match(externalTrackers, /local `SQ-`\/`US-` identifiers, board slugs, local-only evidence paths/);
+  assert.match(externalTrackers, /Keep those references in local\s+Sidequest threads with the GitHub link back/);
+  assert.match(externalTrackers, /Preserve reporter text unless you are authorized to edit\s+it/);
+  assert.match(externalTrackers, /do not strip diagnostic error text or hand-edit historical changelogs or generated release\s+history/);
 });
 
 test('published guidance pins surgical planning before substantial dispatch', () => {

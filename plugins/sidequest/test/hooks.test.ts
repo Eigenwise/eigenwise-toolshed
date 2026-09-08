@@ -3055,6 +3055,10 @@ test('session-start: names the upstream-defect filing destination for the local 
     SIDEQUEST_SWEEP_DEADLINE_MS: '60000',
   });
   assert.match(nonMaintainerContext, /Offer to file it as a GitHub issue on Eigenwise\/eigenwise-toolshed, not via the Anthropic feedback tool\./);
+  assert.match(nonMaintainerContext, /Any GitHub body, comment, reply, or closure note you author must stand alone/);
+  assert.match(nonMaintainerContext, /omit local SQ-\/US- IDs, board slugs, local-only paths, and board-only references/);
+  assert.match(nonMaintainerContext, /Preserve reporter text unless authorized to edit it/);
+  assert.match(nonMaintainerContext, /do not strip diagnostic error text or hand-edit historical changelogs or generated release history/);
   assert.match(nonMaintainerContext, commonClause);
 });
 
