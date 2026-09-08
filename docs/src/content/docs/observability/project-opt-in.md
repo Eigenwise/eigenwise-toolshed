@@ -9,13 +9,13 @@ Observability is opt-in per repository. From anywhere inside the repository, run
 /observability:enable-project-telemetry
 ```
 
-Approve the setup when Claude asks. It wires that repository for metadata-only Claude Code usage, starts the managed local services you selected, and checks for incoming metrics. You can keep the local report only, use the loopback dashboard, or choose a remote sink yourself.
+Approve the setup when Claude asks. It handles the machine-shared local services you selected, then wires this repository for the intended metadata-only Claude Code usage and checks for incoming metrics. A bare setup keeps SQLite only; `--dashboard` explicitly requests the Docker dashboard. The current hook and ingest path can accept hook events before checking repository opt-in, so treat the per-repository policy as intended rather than a hard runtime privacy guarantee until enforcement is fixed.
 
 ## What one opt-in covers
 
-An opt-in wires the repository root and its eligible descendant directories. It does not wire linked worktrees, sibling checkouts, or directories outside the repository. Native Claude Code metrics require telemetry settings in the exact directory where the session starts.
+An opt-in wires the repository root and its eligible descendant directories. Native Claude Code metrics require telemetry settings in the exact directory where the session starts. Hook events from a linked worktree can still resolve to the enclosing main repository identity, but the repository opt-in does not promise native metrics for that linked-worktree session. Runtime coverage for that case is separate.
 
-Settings changes apply to new Claude Code sessions. Restart existing sessions in the directories Claude lists before expecting their native metrics to appear. The restart reloads project wiring; an older session leaves a newer live observer untouched.
+Settings changes apply to new Claude Code sessions. Restart existing sessions in every listed directory before creating activity or expecting their native metrics to appear. `/reload-plugins` alone does not apply the new environment. The restart reloads project wiring; an older session leaves a newer live observer untouched.
 
 ## Verify the first workflow
 

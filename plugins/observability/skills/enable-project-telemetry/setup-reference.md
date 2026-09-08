@@ -3,28 +3,33 @@
 This skill owns the observability interview. `/quartermaster:setup` hands off to it after telemetry
 consent, and it also runs standalone. Install this plugin at any scope (user, project, or local). The observer,
 Collector, and dashboard container are machine-shared regardless of the install scope used by the launching
-session.
+session. Machine service consent and repository opt-in are separate choices: consenting to the shared service
+does not mean every repository should send telemetry.
 
 The state directory (`%LOCALAPPDATA%\Eigenwise\Workbench` on Windows), the OpenTelemetry service name
 `workbench-observer`, and the `workbench_` attribute prefix all kept their names when this plugin split out
 of Workbench. They are on-disk and on-the-wire identifiers baked into shipped Grafana queries and existing
 data. Renaming them orphans it.
 
-## Ask one compact question
+## Ask two compact questions
 
-Ask:
+Ask for the shared service first:
 
-> Enable usage observability? It downloads a pinned Collector, edits this project's `settings.local.json`, and can add a local dashboard through Docker.
+> Enable the shared local usage service? It downloads a pinned Collector and can add a local dashboard through Docker.
 
-Never install without a clear yes. If `%LOCALAPPDATA%\Eigenwise\Workbench\observability.json` already exists, run the check pass first and show its current enabled state, sink, dashboard choice, and ports. Let the user keep it, switch sink, toggle the dashboard, change ports, or disable it. Disabling must ask whether to keep or delete observability data.
+Then ask separately:
 
-Do not ask for content-capture settings, Docker credentials, tokens, or remote endpoints during the normal interview. Docker is optional. SQLite capture and reports work without it.
+> Should this repository opt in to the shared service's metadata telemetry?
+
+Never install the shared service without a clear yes, and never treat service consent as approval for every repository. If `%LOCALAPPDATA%\Eigenwise\Workbench\observability.json` already exists, run the check pass first and show its current enabled state, sink, dashboard choice, and ports. Let the user keep it, switch sink, toggle the dashboard, change ports, or disable it. Disabling must ask whether to keep or delete observability data.
+
+Do not ask for content-capture settings, Docker credentials, tokens, or remote endpoints during the normal interview. Docker is optional. SQLite capture and reports work without it. The intended repository opt-in policy currently has a bounded enforcement limitation: hook events can enter the shared spool and ingest path before the opt-in check. State that limitation plainly and do not claim this setup fixes it.
 
 ## Check, then apply
 
 Run the desired command with `--check` first. Show the reported current state and delta, then rerun it without `--check` after the user confirms.
 
-Bare setup enables observability and adds the dashboard when Docker is available. Without Docker it prints one skip line and keeps SQLite observability running:
+Bare setup enables the shared SQLite observer with no dashboard. It does not request Docker. Use `--dashboard` when the user explicitly wants the Docker-backed loopback dashboard. If Docker is unavailable for that explicit choice, setup reports the skip and keeps SQLite observability running:
 
 ```sh
 node "${CLAUDE_PLUGIN_ROOT}/bin/setup-observability.js" --project "<absolute-project-dir>" --check
@@ -66,7 +71,9 @@ Treat an enable or settings change as another pre-reload step. Ask for the singl
 
 > The selected plugins, workspace files, and usage observability are ready. Run **`/reload-plugins`**, then tell me to continue. If Claude Code refuses because the reload changes MCP or LSP servers, run **`/reload-plugins --force`**. Restart Claude Code only if reload still does not load them.
 
-After reload, use the configured observer port and verify:
+Environment wiring is read when a Claude Code process starts. After setup or project opt-in, restart every affected same-project session in the directories the command listed before creating activity or running verification. Reloading plugins alone does not apply the new environment.
+
+After the restart and fresh activity, use the configured observer port and verify:
 
 ```sh
 claude --version
@@ -75,8 +82,11 @@ node "${CLAUDE_PLUGIN_ROOT}/lib/observability/ensure.js" --health
 node "${CLAUDE_PLUGIN_ROOT}/bin/token-usage-report.js"
 ```
 
-For the dashboard, open its configured loopback URL (default `http://127.0.0.1:3000`). It uses the pinned `grafana/otel-lgtm:0.11.0` image and persistent Docker data. SQLite remains the report source of truth while Docker is unavailable or stopped.
+For the dashboard, open its configured loopback URL (default `http://127.0.0.1:3000`). It uses the pinned `grafana/otel-lgtm:0.11.0` image and persistent Docker data. SQLite remains the report source of truth while Docker is unavailable or stopped. After dashboard reprovisioning or reset, fully reload the browser tab. Grafana Refresh reruns queries already loaded in the page and does not load a newly generated dashboard definition.
 
+## Dashboard reset recovery
+
+`--reset-dashboards` removes generated dashboard definitions and records a reset boundary. It does not disable telemetry or delete local history. After a reset, create fresh Claude Code activity, run setup or let SessionStart reprovision the dashboards, fully reload the Grafana browser tab, and verify the project. Report `found` or `not-found` from the verifier as-is.
 ## Deletion
 
 Local data stays until the user deletes it (the Grafana demo dashboard keeps seven days). `--disable` stops managed processes and the dashboard container, removes this plugin's project env wiring, and keeps data by default. Add `--delete-data` only after the user chooses deletion.

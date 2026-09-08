@@ -7,32 +7,28 @@ description: >-
 
 # Enable Project Telemetry
 
-Telemetry is opt-in per repository. A project is its enclosing git repository, so every working directory
-inside it (subdirectories, linked worktrees) reports under the repository's identity and lands on one
-dashboard. Never write user-scope settings and never enable it for a different project. The local registry
-only includes repositories that explicitly opted in, so dashboard work can exclude every other project.
+Telemetry is intended to be opt-in per repository. A machine-shared observer, Collector, and optional dashboard are a separate setup consent; installing this plugin at user, project, or local scope does not itself choose every repository. This skill asks for the shared service choice, then writes the current repository's opt-in wiring.
+
+Current privacy limitation: the hook and ingest path does not enforce the per-repository opt-in at its collection boundary. Hook events can enter the shared spool and ingestion path before the repository check. Keep the per-repository opt-in as the intended policy, but do not present it as a hard runtime guarantee or invent a documentation workaround. This limitation is not fixed by this skill.
 
 Claude Code reads `OTEL_RESOURCE_ATTRIBUTES` from the settings of the directory a session started in and does
 not walk up to the repository root. That is why the enable command writes the env into the repository root
 **and** into each subdirectory that has hosted Claude Code sessions, all carrying the repository's
-`project.id`. Hook-based observer data needs none of that: it is repository-rooted from the first event.
+`project.id`. Hook events from linked worktrees resolve to the enclosing main repository identity, but native
+Claude Code metrics from a linked-worktree-started session need wiring in that exact start directory. Do not
+promise linked-worktree native coverage from this repository opt-in alone.
 
-Read `setup-reference.md` before the first enable on a machine. It owns the consent question, the
+Read `setup-reference.md` before the first enable on a machine. It owns the separate shared-service consent question, the
 `setup-observability.js` commands that install the pinned Collector and choose a sink, dashboard, and ports,
-and the deletion rules. Do the setup pass first, then the per-project wiring below.
+and the deletion rules. Do the shared service setup pass first, then the per-project wiring below.
 
 ## Enable
 
 Gateway wiring is per-scope. If the gateway is unwired for the current project, invoke `/model-gateway:model-gateway` and use its `env --write-project` command to wire this project. Use `env --write-user` only when machine-wide wiring is wanted. Do not invoke a bare `codex-gateway` shell command, since the installed plugin command is not on PATH.
 
-1. Confirm the user wants local, metadata-only usage telemetry for the current repository. Say it writes only
-   this repository's own `.claude/settings.local.json` files, then sends metadata through the local loopback
-   observer and Collector to local Grafana: API-equivalent cost estimates for models with published API prices;
-   input, output, and cache token totals; token volumes for unpriced models; tool-call names, counts, and
-   result-token estimates; and model, session, agent, and activity information. Explain that API-equivalent
-   estimates are not subscription charges, and models without a published API price remain visible without an
-   invented USD total. It does not capture prompt or response text, code or file contents, tool inputs or results,
-   raw request bodies, credentials, or environment values.
+1. Confirm the user wants the shared local observer and Collector, then separately confirm that the current repository should opt in. Say the repository opt-in writes only this repository's `.claude/settings.local.json` files and adds it to the local project registry. The shared service can send local metadata through the loopback observer and Collector to local Grafana, or to a remote sink only when the user chooses one. Bare setup is SQLite-only with no dashboard; `--dashboard` explicitly requests the Docker-backed dashboard. Explain that API-equivalent cost estimates are not subscription charges, and models without a published API price remain visible without an invented USD total. The intended telemetry schema excludes prompt or response text, code or file contents, tool inputs or results, raw request bodies, credentials, and environment values.
+
+   Disclose the current opt-in enforcement limitation before proceeding: hook events can enter the shared spool and ingest path before the repository opt-in check. Do not describe per-repository opt-in as a hard runtime privacy guarantee, and do not claim this skill fixes that gap.
 2. Run it from anywhere inside the repository; it resolves the repository root itself:
 
    ```sh
@@ -46,8 +42,10 @@ Gateway wiring is per-scope. If the gateway is unwired for the current project, 
    Claude Code encodes `~/.claude/projects/` names and keeping the ones that exist there; `.claude/worktrees`,
    `.git`, `node_modules`, dot-directories, and nested repositories are skipped.
 3. Report every directory the command printed, and tell the user settings environment changes apply only to
-   **new Claude Code sessions**. Any session already running in one of those directories has to restart before
-   its metrics appear, not only the session in the repository root.
+   **new Claude Code sessions**. Restart every already-running session in those directories before creating
+   activity or running verification. `/reload-plugins` alone does not apply the new environment. Hook-based
+   linked-worktree attribution can still resolve to the main repository, but native metrics require the exact
+   session-start directory to be wired.
 4. After that new session creates activity, verify honestly:
 
    ```sh
@@ -66,9 +64,20 @@ Gateway wiring is per-scope. If the gateway is unwired for the current project, 
 
 The observer reserves 128 MiB below its 4 GiB database limit. It prunes expired observations first, then oldest whole days inside the 30-day window only when pressure remains, and records the exact windows and row counts in `/health`. A health failure of `storage_headroom_unrecoverable` means no removable data restored that reserve. Explain that committed ingestion still receives its normal acknowledgement, then diagnose disk and retention pressure from the health response. Do not tell the user to run `VACUUM`: the managed path compacts reusable pages when it can, and the manual prune command checks free space before a full vacuum.
 
+## Exhausted outbox recovery
+
+When `/health` or the outbox view reports exhausted rows, show the user the pre-action `pending_count` and `exhausted_count` plus the current health result. Ask for approval before sending `POST /v1/outbox/requeue` to the local observer. The endpoint resets **all** exhausted rows in the shared local outbox, so do not offer or imply a project-scoped requeue. After the approved request, read the counts and health again, report the post-action values, and let the normal drainer retry delivery. A requeue does not prove delivery succeeded.
+## Recover a generated dashboard
+
+If the generated dashboard is stale, reset it with the setup command's `--reset-dashboards` action. The
+reset removes generated definitions and records a reset boundary; it does not disable telemetry or delete
+local history. Create fresh activity, then run setup or let SessionStart reprovision the dashboards. Fully
+reload the Grafana browser tab after reprovisioning. Grafana's Refresh reruns queries already loaded in the
+page, so it does not replace stale dashboard definitions. Verify the project after the new activity arrives,
+and report `found` or `not-found` as returned.
+
 ## Disable
 
-Run:
 
 ```sh
 node "${CLAUDE_PLUGIN_ROOT}/bin/project-telemetry.js" --project "<absolute-current-project-dir>" --disable
