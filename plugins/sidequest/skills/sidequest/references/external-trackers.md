@@ -13,10 +13,10 @@ the work is "already tracked". Don't — they track different things.
 
 How to run both, in practice:
 
-1. Take the external item (e.g. `CTR-13316`) and, if it's more than a trivial change, **decompose it
+1. Take the external item (e.g. `EXAMPLE-0001`) and, if it's more than a trivial change, **decompose it
    into local sidequest tickets** — one per independent piece, `--file`-scoped, same as any other
    plan. Mirror the external ref in the title so the link is obvious:
-   `sidequest add -t "CTR-13316: guard ILIKE against <3-char variants" ...`.
+   `sidequest add -t "EXAMPLE-0001: document a placeholder change" ...`.
 2. **Execute per the normal delegation rules** (main skill) — the presence of a Jira ticket changes
    nothing about how you parallelize or route the work.
 3. **Record findings on the sidequest ticket**, not just in the PR — root cause, `file:line`, what
