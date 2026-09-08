@@ -1,16 +1,17 @@
 ---
 title: Plugin reference
-description: Generated reference for Toolshed plugins and marketplace metadata.
+description: Generated inventory of Toolshed plugin metadata and implementation files.
 ---
 
-This section is generated from the plugin manifests, skills, hooks, binaries, and marketplace metadata. The docs build regenerates it, so change those source inputs when a reference page needs an update.
+The plugin pages in this section are generated from plugin metadata, skill frontmatter, hooks, bin file inventories, and marketplace metadata. The docs build regenerates them, so change those source inputs or the generator when a generated page needs an update. Never hand-edit a generated page.
 
-Use the guides for decisions and daily workflows. Use this reference when Claude needs the exact skill, hook, command, or configuration detail.
+The generated pages describe what is present in each plugin. A `bin/` entry is an implementation file inventory, not automatically a supported user command. For supported CLI usage and daily workflows, use the owning plugin's README or guide.
 
-- [Observability](./observability/) records selected local, metadata-only telemetry.
-- [Model Gateway](./model-gateway/) adds ChatGPT, Codex, and Grok subscription models to Claude Code.
-- [Codebase Mapper](./codebase-mapper/) keeps a project map close at hand.
-- [Live Rules](./live-rules/) loads project rules when they apply.
-- [Sidequest](./sidequest/) captures and runs planned work.
-- [Quartermaster](./quartermaster/) works out what a workspace is short of and gets it, sets up new projects, and keeps Toolshed plugins current and healthy.
+- [Observability guide](../observability/setup/) and [README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/observability) for setup and supported usage.
+- [Model Gateway guide](../getting-started/model-gateway/) and [README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/model-gateway) for supported usage.
+- [Codebase Mapper guide](../getting-started/codebase-mapper/) and [README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/codebase-mapper) for supported usage.
+- [Live Rules guide](../getting-started/live-rules/) and [README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/live-rules) for supported usage.
+- [Sidequest guide](../getting-started/sidequest/) and [README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/sidequest) for supported usage.
+- [Quartermaster guide](../getting-started/quartermaster/) and [README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/quartermaster) for supported usage.
+
 - [Marketplace versions](./marketplace/) lists the shipped plugin versions.
