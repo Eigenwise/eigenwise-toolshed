@@ -852,7 +852,7 @@
   },
   {
     "name": "groomClose",
-    "description": "abandonSubmission:true; reset/working-tree/manual; reviewed interaction.",
+    "description": "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual; reviewed interaction.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -873,7 +873,8 @@
         },
         "deliveryCommit": {
           "type": "string",
-          "pattern": "^[0-9a-fA-F]{7,64}$"
+          "pattern": "^[0-9a-fA-F]{7,64}$",
+          "description": "Prepared integration target."
         },
         "deliveryInteractionCommit": {
           "type": "string",

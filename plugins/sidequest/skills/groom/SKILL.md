@@ -129,9 +129,9 @@ A ticket in (a), (b) or (d) may still hold a submitted candidate that was never 
 different closures apply, and picking the wrong one gets refused rather than guessed at:
 
 ```bash
-# the candidate DID land (its commit is reachable from the integration branch) — plain grooming
-# records it as delivered, no extra flag needed
-sidequest groom-close SQ-14 --reason "Candidate a1b2c3d is an ancestor of main; see the evidence comment."
+# the candidate DID land (its commit is reachable from the integration target recorded for this ticket)
+# plain grooming records it as delivered, no extra flag needed
+sidequest groom-close SQ-14 --reason "Candidate a1b2c3d reached this ticket's prepared integration target; see the evidence comment."
 
 # the candidate never landed and no longer merges — record it abandoned, never as a delivery
 sidequest groom-close SQ-15 --abandon-submission \
@@ -139,10 +139,11 @@ sidequest groom-close SQ-15 --abandon-submission \
 9bd41f2; see the evidence comment."
 ```
 
-`--abandon-submission` is refused while the candidate is still reachable from the integration branch,
-so it cannot be used to write off work that actually shipped. Its evidence has to say why the
-candidate is dead: the fork depth, that it no longer merges, and where the behavior now comes from
-instead. "Stale" on its own is not evidence.
+`--abandon-submission` is refused while the candidate is still reachable from the integration target
+recorded for that ticket. A later board-target or checkout change does not retarget it, so never merge work
+into another branch just to satisfy this guard. Its evidence has to say why the candidate is dead: the fork
+depth, that it no longer merges, and where the behavior now comes from instead. "Stale" on its own is not
+evidence.
 
 Normalize priorities while you're in each ticket if one is obviously miscalibrated against what you now
 know (e.g. a "todo/low" ticket for something that turned out urgent, or vice versa) — but only when the

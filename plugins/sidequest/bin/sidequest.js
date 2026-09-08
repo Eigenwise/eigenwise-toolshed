@@ -255,7 +255,7 @@ const HELP_COMMANDS = {
   next: 'sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why"]',
   reconcile: 'sidequest reconcile [--session <id>] [--reason "..."]',
   work: "sidequest work|drain",
-  "groom-close": 'sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration | --delivery-commit <sha> [--delivery-method reset|working-tree|manual] [--recovery-evidence "terminal-agent evidence"] | --abandon-submission]',
+  "groom-close": `sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration | --delivery-commit <sha> [--delivery-method reset|working-tree|manual] [--recovery-evidence "terminal-agent evidence"] | --abandon-submission]. Delivery uses the ticket's prepared integration target when one was recorded; changing the board target or checkout does not retarget that ticket.`,
   done: "sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]",
   commit: 'sidequest commit <id|SQ-n> --by who --message "message"',
   rework: 'sidequest rework <id|SQ-n> --by candidate-owner --review <review-ticket-or-evidence> --reason "what needs repair" (unbound candidates only)',

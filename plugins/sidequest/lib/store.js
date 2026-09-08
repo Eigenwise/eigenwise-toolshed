@@ -2520,7 +2520,10 @@ function commitReachedRef(repo, commit, ref) {
     return false;
   }
 }
-function recordedDelivery(slug, commit, evidence) {
+function ticketIntegrationTarget(slug, ticket) {
+  return integrationTarget(slug, ticket?.dispatch?.integrationTarget || void 0);
+}
+function recordedDelivery(slug, ticket, commit, evidence) {
   const requestedCommit = String(commit || "").trim();
   const recordedEvidence = String(evidence || "").trim();
   if (!DELIVERY_COMMIT_RE.test(requestedCommit)) {
@@ -2531,7 +2534,7 @@ function recordedDelivery(slug, commit, evidence) {
   if (!repo) return { ok: false, reason: "project_unavailable" };
   let target;
   try {
-    target = integrationTarget(slug);
+    target = ticketIntegrationTarget(slug, ticket);
     const deliveredCommit = execFileSync("git", ["rev-parse", "--verify", `${requestedCommit}^{commit}`], {
       cwd: repo,
       encoding: "utf8",
@@ -2560,7 +2563,7 @@ function recordedDelivery(slug, commit, evidence) {
     return {
       ok: false,
       reason: "delivery_not_reachable",
-      message: `The recorded delivery commit is not reachable from the local integration branch: ${String(error?.message || error).trim()}. For a submitted reset or working-tree delivery, record the pinned candidate with deliveryMethod reset, working-tree, or manual after its content is present in the integration working tree.`
+      message: `The recorded delivery commit is not reachable from this ticket's recorded local integration branch: ${String(error?.message || error).trim()}. A prepared ticket keeps its integration target when the board target or checkout later changes; do not merge it into another branch solely to satisfy closure. For a submitted reset or working-tree delivery, record the pinned candidate with deliveryMethod reset, working-tree, or manual after its content is present in the recorded integration working tree.`
     };
   }
 }
@@ -2684,7 +2687,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
   if (purpose === "grooming" && pendingSubmission(ticket)) {
     let target;
     try {
-      target = integrationTarget(slug);
+      target = ticketIntegrationTarget(slug, ticket);
     } catch (error) {
       return { ok: false, reason: "integration_target_unavailable", ticket, message: String(error?.message || error) };
     }
@@ -2709,7 +2712,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
   if (purpose === "delivery" && pendingSubmission(ticket)) {
     let target;
     try {
-      target = integrationTarget(slug);
+      target = ticketIntegrationTarget(slug, ticket);
     } catch (error) {
       return { ok: false, reason: "integration_target_unavailable", ticket, message: String(error?.message || error) };
     }
@@ -2732,7 +2735,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
       identity: integration.deliveryIdentity
     };
   }
-  const delivery = purpose === "delivery" ? reconciledDelivery || recordedDelivery(slug, opts.deliveryCommit, reason) : null;
+  const delivery = purpose === "delivery" ? reconciledDelivery || recordedDelivery(slug, ticket, opts.deliveryCommit, reason) : null;
   if (delivery && !delivery.ok) return Object.assign({ ticket }, delivery);
   const missingFragment = delivery ? missingDeliveredReleaseFragment(readMeta(slug)?.path, ticket.ref, commitPaths(readMeta(slug)?.path || "", delivery.commit)) : null;
   if (missingFragment) return {
