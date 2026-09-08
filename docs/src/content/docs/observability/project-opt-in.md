@@ -28,6 +28,6 @@ If it is still `not-found`, restart the listed session directories and create an
 
 ## Disable one repository
 
-Run the same skill and ask Claude to disable telemetry for the current repository. It stops collection for that repository by removing its wiring and registry entry, while leaving other opted-in repositories alone. Deleting history is a separate global cleanup of the shared local store, not a per-repository disable action.
+Run the same skill and ask Claude to disable telemetry for the current repository. It unwires the settings environment, removes the repository from the opted-in registry, and stops native Claude Code metrics for new sessions, while leaving other opted-in repositories alone. Hook events can still reach a running observer after disable. Deleting history is a separate global cleanup of the shared local store, not a per-repository disable action.
 
 The [dashboard guide](../dashboard/) explains how to read project and global views after verification.

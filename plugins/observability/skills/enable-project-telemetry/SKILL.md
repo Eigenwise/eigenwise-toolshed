@@ -52,10 +52,7 @@ Gateway wiring is per-scope. If the gateway is unwired for the current project, 
    node "${CLAUDE_PLUGIN_ROOT}/bin/verify-project-telemetry.js" --project "<absolute-current-project-dir>"
    ```
 
-   `found` means the local observer is healthy and the local Grafana/Loki stack has a
-   `claude_code_token_usage_tokens_total` metric tagged with this project. `not-found` means the command did
-   not see it yet, or no dashboard is configured. Report that result as-is, never claim telemetry is flowing
-   before the command says `found`. If the dashboard is unavailable, keep the observer and SQLite ingestion running; diagnose and report the observer, collector, downstream sink, and dashboard as separate planes.
+   `found` reports that Prometheus returned a `claude_code_token_usage_tokens_total` metric tagged with this project; it does not report observer health. Read the separate `observer=healthy` or `observer=unavailable` field too, because output can be `found` with `observer=unavailable`. `not-found` means the command did not see the metric yet, or no dashboard is configured. Report both fields as returned, and never infer observer health from `found` alone. If the dashboard is unavailable, keep the observer and SQLite ingestion running; diagnose and report the observer, collector, downstream sink, and dashboard as separate planes.
 5. When `not-found` persists after a restart and real activity, add `--audit` to the same command. It lists the
    repository's session directories with their wiring state, names any opted-in project sending observer events
    with no `claude_code_*` samples, and prints the command that fixes it.
