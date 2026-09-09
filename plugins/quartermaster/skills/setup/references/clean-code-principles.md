@@ -14,23 +14,20 @@ the code itself cannot express). Lean on naming and structure, not narration.
 
 ## Robert C. Martin (Uncle Bob) : *Clean Code*
 
-- **Names reveal intent.** A good name removes the need for a comment. Rename until the code reads
-  like the thing it does.
-- **Functions do one thing.** Keep them small and at a single level of abstraction; extract until each
-  function has one reason to exist.
-- **Comments are a last resort.** A comment is an apology for code that failed to explain itself.
-  Delete comments that restate the code; keep only the ones that record a real constraint or *why*.
-- **Boy Scout Rule.** Leave every file a little cleaner than you found it.
+- **Names reveal intent.** Prefer names and direct structure over explanatory comments.
+- **Change for a reason.** Extract only when it clarifies observed behavior or removes observed
+  duplication; do not use line counts as a design target.
+- **Comments are a last resort.** Delete comments that restate the code; keep only ones that record
+  a hidden constraint or *why*.
 
 ## Martin Fowler : *Refactoring*
 
 - **Write for the next human.** "Any fool can write code that a computer can understand. Good
   programmers write code that humans can understand."
-- **Refactor first, then change.** "When you have to add a feature to a program and the code is not
-  structured conveniently, first refactor the program to make it easy to add the feature, then add it."
-- **Name the smell, then fix it in small steps.** Identify the code smell (duplication, long function,
-  feature envy, primitive obsession...) and remove it with small, behavior-preserving refactorings :
-  ideally with tests green between each step.
+- **Keep behavior clear.** When code needs to change, use the smallest shared-root change that
+  preserves the requested behavior; refactor only when the observed shape blocks that change.
+- **Name the reason, then make the smallest move.** Use a focused regression check for the behavior
+  you touched.
 
 ## Kent Beck : XP / *Simple Design*
 
@@ -44,22 +41,20 @@ the code itself cannot express). Lean on naming and structure, not narration.
 
 ## Sandi Metz : *POODR*
 
-- **Prefer duplication over the wrong abstraction.** "Duplication is far cheaper than the wrong
-  abstraction." Wait until the pattern is obvious before extracting it.
-- **Keep units small.** Short classes, short methods, few parameters. When a method grows, extract a
-  well-named private method : private methods are great documentation.
-- **Depend on abstractions, not concretions.** Talk to objects through roles/messages and inject
-  collaborators, so behavior is swappable and testable.
+- **Prefer duplication over the wrong abstraction.** Reuse an existing code path where it fits;
+  otherwise wait for an observed pattern before extracting one.
+- **Keep the needed shape.** A function, class, or parameter list needs no arbitrary size target.
+- **Use boundaries that already exist.** Add an abstraction only when a real external or trust boundary
+  needs one. Validate at trust boundaries and protect data-loss paths.
 
 ## Michael Feathers : *Working Effectively with Legacy Code*
 
 - **Code without tests is legacy code.** It doesn't matter how well written it is : without tests you
   can't know whether a change made it better or worse.
-- **Characterize before you change.** Before altering unfamiliar code, pin its current behavior with a
-  characterization test, then find a *seam* (a place to alter behavior without editing in place) to
-  work at.
-- **Small, verified steps.** Change a little, run the tests, repeat : so you always know where you
-  stand.
+- **Preserve what matters.** Add a characterization test when it is the smallest reliable way to
+  establish unfamiliar behavior before changing it.
+- **Focused, verified steps.** Exercise the changed behavior with the smallest reliable check; one
+  integration owner runs the full gate after merged changes.
 
 ---
 

@@ -124,9 +124,10 @@ One visible plan, then per-item approval. Draw from three sources, in this order
   that are safe for this stack (scoped rules only, never `Bash(*)`); starter live rules derived
   from recurring correction themes, using
   [references/rule-templates.md](references/rule-templates.md) as reference material to derive
-  from, never copy (byte-identical output means it was copied; rewrite or drop it); the
-  self-improvement rule from [references/self-improvement.md](references/self-improvement.md) on
-  every workspace.
+  from, never copy (byte-identical output means it was copied; rewrite or drop it). Every workspace
+  gets the reuse-first implementation baseline and the self-improvement rule from
+  [references/self-improvement.md](references/self-improvement.md), adapted to the project and
+  included in the approved write list.
 
 Default plugin installs to project scope so the config travels with the repo. Show the full
 install and write list (every file path, including any `~/.claude/settings.json` change) and get

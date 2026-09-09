@@ -121,10 +121,10 @@ the order to propose in: step 6 ranks what you actually find.
 
 #### 4a. Is there something the user cannot measure?
 
-If they hold a standard goal and nothing can check it, **building that instrument is the most
-valuable thing available**, and it usually has to happen before any fix underneath it. An
-unverifiable goal cannot be closed: every change made under it is a guess, and the same ground gets
-re-argued later because nothing settled it.
+If they hold a standard goal and nothing can check it, first look for an existing instrument that can
+answer it or can be improved. Build a new measurement only when that is the smallest durable missing
+capability; otherwise every fix underneath is a guess, and the same ground gets re-argued later
+because nothing settled it.
 
 Tells, none of which appear as friction:
 
@@ -139,10 +139,10 @@ two different ways: that is the aggregate telling you the instrument is missing.
 title plus a habit is you inferring it. Raise either one, but only the attested kind outranks a cheap
 fix you are certain about.
 
-The fix is a **measurement built as a skill**, with its scripts committed beside it. A number that
-will be cited later needs something re-runnable behind it, and a scratch script is gone by then.
-This holds outside code too: whether a document covers what it claims, whether an export matches
-its source, whether a config still matches what is deployed.
+When a new instrument is necessary, make it re-runnable in the smallest existing capability that
+fits, usually a skill with scripts committed beside it. A number cited later needs something durable
+behind it; a scratch script is gone by then. This holds outside code too: whether a document covers
+what it claims, whether an export matches its source, whether a config still matches what is deployed.
 
 Have the instrument state its own limits when you propose it. A measurement built on whatever data
 was available usually carries a bias (a sample that only includes successes, a population that is
@@ -157,8 +157,10 @@ guess instead of their evidence.
 #### 4b. What is being done by hand that the workspace should own?
 
 Repeated command sequences, hand-rolled scripts written more than once, the same multi-step chore
-across sessions. Prefer, in order: an existing plugin, then a skill, then a rule. Plugins are
-versioned and removable; skills are yours to shape; rules only ask someone to remember.
+across sessions. First ask whether the work needs a new capability at all. Search the project, then
+existing plugins, skills, rules, standard-library or native capabilities, and installed dependencies
+before proposing anything new. Improve an existing capability when it covers the goal; a new plugin,
+skill, or rule needs evidence that the existing options do not fit.
 
 Search before building anything:
 
@@ -278,9 +280,8 @@ will check.
   standards it cannot check and chores done by hand just as much; only the instruments differ.
 - Attribution counts are evidence of use; absence is only a hint. Say "no recorded tool activity in
   the window", never "unused". Hook-only and context-injection plugins legitimately show nothing.
-- **Kaizen:** Every pass should leave at least one existing capability better, or state explicitly
-  that the existing skills, rules, and instruments were reviewed and hold up. Small repeated
-  improvements beat batching a rewrite.
+- **Kaizen:** Assess the existing skills, rules, and instruments before proposing a parallel capability.
+  Improve one only when evidence shows it misses the user's goal; otherwise say they hold up.
 - Quotes and titles are the user's own words back at them. Keep them short and only where they
   carry the finding.
 - Every number you cite is the aggregate's number, as it reports it. Rounding a count, attributing a

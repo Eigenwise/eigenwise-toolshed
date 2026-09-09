@@ -72,17 +72,21 @@ priority: 87
 - Describe what changed and why; don't narrate a fix you didn't verify.
 ```
 
-### Simple design & small reversible steps (Beck / Fowler)
+### Reuse-first implementation
 
 ```markdown
 ---
-description: Simple design & small reversible steps (Beck / Fowler)
+description: Reuse-first implementation
 priority: 90
 ---
-Wear one hat at a time; small reversible steps, re-check between moves. Separate a behavior change
-(pin with a test) from a refactor (behavior-preserving) : never fold tidy-up into a behavior change.
-Beck's order: 1) passes tests, 2) reveals intention, 3) no duplication, 4) fewest elements (YAGNI).
-Ties break toward clarity. Leave each file cleaner than you found it : as its own step.
+Before changing code, trace the real flow and decide whether the requested behavior needs new code.
+Reuse an existing code path first, then the standard library, a native platform capability, or an
+already-installed dependency. When code must change, fix the smallest shared root cause; delete code
+when behavior stays intact. Skip speculative guards, abstractions, configuration, and cleanup.
+Keep validation and error handling where trust, data loss, security, or accessibility requires them.
+During implementation, run the smallest focused regression check that exercises the changed behavior.
+One integration owner runs the full gate after merged changes. Do not bypass required gates or claim
+results you have not evaluated.
 ```
 
 ### Surgical, simple, honest (Karpathy directive)
@@ -94,10 +98,10 @@ priority: 90
 ---
 - Think before coding: state assumptions, surface ambiguity, push back on overcomplication. A wrong
   guess costs more than a question : ask instead of silently picking a reading.
-- Simplicity first: the minimum code that solves it. No speculative abstractions, no "flexibility"
-  nobody asked for, no error handling for impossible states.
-- Surgical: every changed line traces to the request. Don't "improve" adjacent code or refactor what
-  isn't broken; match the existing style. Remove only the dead code your change created.
+- Simplicity first: the minimum code that solves the observed need. Do not add speculative
+  abstractions, flexibility, guards, or configuration.
+- Surgical: every changed line traces to the request. Do not refactor or clean adjacent code without
+  evidence; match the existing style. Delete code only when the requested behavior remains.
 - Define "done" and verify it before calling a change finished.
 ```
 
@@ -108,9 +112,9 @@ priority: 90
 description: Verify behavior deterministically
 priority: 85
 ---
-- Prove changes by exercising them : a script that asserts, a test, a real run whose output you show :
-  not by eyeballing that it "looks right". Round-trip harnesses, diffs, exact-equality checks, counts.
-- A change isn't "done" until a deterministic check passes and its output is shown.
+- Prove changed behavior with the smallest focused check that exercises it: an assertion, test, or
+  real run with observed output. Do not claim a result you did not evaluate.
+- The integration owner runs the full gate once after merged changes. Do not bypass a required gate.
 ```
 
 ### House code conventions (naming over comments)
@@ -134,10 +138,10 @@ description: Refactoring discipline (Fowler)
 prompt: ["refactor", "refactoring", "clean up", "cleanup", "tidy", "restructure"]
 priority: 45
 ---
-Refactoring changes structure, never behavior : and only starts from green (add a characterization
-test first if needed). Name the smell, then apply the matching small named move (extract function,
-rename, parameter object…), running tests after each. No behavior changes or features folded in :
-separate commits. Many tiny safe moves beat one big rewrite.
+Refactor only for an observed reason and preserve behavior. Choose the smallest change that clarifies
+or removes observed duplication, including deletion or a rename; extract only when it does so. Keep
+behavior changes separate from deliberate refactors. Run the focused regression check for the changed
+behavior; do not fold in tidy-up work without evidence.
 ```
 
 ### Optional: guidelines pointer (with the bundled digest)
@@ -198,13 +202,10 @@ description: Responsibility-driven Python & API design (Metz / Wirfs-Brock / Blo
 globs: ["**/*.py"]
 priority: 50
 ---
-- One clear responsibility per function/class, named for its role (not its data).
-- Tell, don't ask; talk to friends, not strangers (Demeter). Guard clauses over deep nesting.
-- Metz targets, justify any break: methods ~5 lines, classes ~100, ≤4 params.
-- Isolate external deps (the network, the clock, RNG, heavy libs) behind small seams so core logic
-  stays pure and testable. Validate at boundaries; prefer immutable value objects.
-- Public API is a contract (Bloch): start private, widen only when needed. Log via a real logger,
-  never `print()`.
+- Give functions and classes clear, domain-revealing responsibilities. Extract only when the existing
+  shape obscures behavior or repeats an observed concern.
+- Prefer direct collaborators until a real boundary needs an abstraction. Validate at trust boundaries;
+  protect data-loss paths and public API contracts. Log through a real logger, never `print()`.
 ```
 
 ### Python testing discipline
@@ -215,8 +216,9 @@ description: Python testing discipline
 globs: ["**/tests/**", "**/test_*.py", "**/*_test.py", "**/conftest.py"]
 priority: 55
 ---
-- Red → Green → Refactor. One behavior per test; Arrange-Act-Assert; name `test_<situation>_<expected>`.
-- Add a characterization test before changing untested logic. Tests mirror the source tree.
+- Write realistic focused tests that exercise changed behavior. Reuse existing fixtures and avoid
+  redundant fixtures, waits, and tests added only to meet a function-count quota.
+- Add a characterization test only when it is the smallest reliable way to preserve unfamiliar behavior.
 ```
 
 ### Svelte 5 components

@@ -22,7 +22,7 @@ From the project directory, run:
 
 > /quartermaster:setup
 
-Setup reads the project, mines recent session history across your projects, asks a few setup questions, and proposes a plan covering Toolshed plugins, stack plugins, starter rules, and permission entries. You approve each item before it installs or writes anything.
+Setup reads the project, mines recent session history across your projects, asks a few setup questions, and proposes a plan covering Toolshed plugins, stack plugins, starter rules, and permission entries. You approve each item before it installs or writes anything. Its starter rules teach agents to trace the real flow, question whether new code is needed, and reuse existing code, the standard library, native platform features, or installed dependencies before adding anything. When a change is needed, they favor the smallest shared-root fix, preserve trust, data-loss, security, and accessibility safeguards, use focused regression checks, and leave the full gate to the integration owner.
 
 Setup installs the approved plugins and writes the approved project files, then pauses at the activation boundary. Run `/reload-plugins`, or restart Claude Code when the change affects the process environment, and tell Claude `continue`. Setup verifies the selected plugins and project configuration after that boundary.
 
@@ -72,7 +72,7 @@ The miner reads local transcript files and emits a bounded aggregate. The active
 
 Raw transcript files are never loaded into model context, and the resupply skill is forbidden from opening them. The default pass mines the current project. Setup explicitly requests the all-projects summary, while resupply only uses `--all-projects` for a global pass.
 
-The skill ranks findings in this order: a missing measurement, manual work, existing capabilities that underperform, knowledge being re-derived, then setup friction. It proposes at most seven findings one at a time with evidence and an exact change. A rejected recommendation is recorded and does not return; an accepted one is checked in a later pass.
+The skill ranks findings in this order: a missing measurement, manual work, existing capabilities that underperform, knowledge being re-derived, then setup friction. It first checks whether an existing project capability can meet the goal or be improved, and only proposes a new capability when the evidence says the existing choices do not fit. It never starts a resupply pass without current or standing approval. It proposes at most seven findings one at a time with evidence and an exact change. A rejected recommendation is recorded and does not return; an accepted one is checked in a later pass.
 
 ## How the loop closes
 
