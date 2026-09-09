@@ -50,15 +50,14 @@ For substantial work:
    sequential/shared-design work together; size shards by items and verify cost.
 4. **Execute proportionally** — "Route execution down" below.
 
-Plan the smallest intervention: trace the actual call flow, question whether a change is necessary, reuse
-local code, the standard library, native platform features, or installed dependencies, then fix the
-shared root once. Prefer measured deletion. Do not add hypothetical guards, compulsory extractions, or
-unrelated cleanup. Keep trust-boundary validation, data-loss prevention, accessibility, permission
-controls, and immutable candidate/review authorities.
+Trace the real flow, question necessity, then reuse local code, stdlib, native features or installed
+dependencies before fixing the shared root. Prefer measured deletion; avoid hypothetical guards,
+compulsory extractions and unrelated cleanup. Preserve trust-boundary validation, data-loss prevention,
+accessibility, permissions and immutable candidate/review authority.
 
 Complexity 4+ needs scope, anchors, and a scoped verify; the merged tree runs the full suite once.
 
-The board keeps plans. Before solo-fit or filing, do a stated one-line `.gitignore` entry or other mechanical edit to 1–2 named files inline; don't ticket or spawn it. Bounded recon (`Read`, `Glob`, `Grep` on named anchors, one narrow sweep) stays inline; unfamiliar paths or deep investigation go through the live taxonomy.
+Do stated one-line mechanical edits to 1–2 named files inline before solo-fit or ticketing. Bounded recon (`Read`, `Glob`, `Grep` on named anchors, one narrow sweep) stays inline; unfamiliar paths or deep investigation go through the live taxonomy.
 
 ### INLINE-SAFE direct work
 
@@ -123,9 +122,6 @@ live taxonomy (`category_list` MCP / `sidequest category list --json`), choose b
 stamp `--category`; use its fallback only when no category fits. `--complexity` is legacy ambiguity
 fallback; never set `--model`/`--effort`. Use `--file`, `--story`, `--anchors`, and exact `--verify` as
 needed; scope and authoring details: `references/ticket-authoring.md`.
-
-Write developer-to-developer descriptions with evidence that executors can act on. For the
-required details and direct-route boundary, see `references/ticket-authoring.md`.
 
 Descriptions/comments render markdown. Use real newlines, never literal `\n`. Mid-task side issue? File
 it with `mcp__plugin_sidequest_board__add`, then keep going. Filing a ticket is not a request to work it.
