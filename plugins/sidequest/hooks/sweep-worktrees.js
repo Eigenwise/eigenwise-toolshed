@@ -23,6 +23,22 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// src/hooks/shared/paths.ts
+var import_node_path = __toESM(require("node:path"));
+function pluginRoot() {
+  return process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.join(__dirname, "..");
+}
+function runtimeModule(name) {
+  return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
+}
+
+// src/hooks/shared/worktree-sweep.ts
+var import_node_child_process2 = require("node:child_process");
+var import_node_fs3 = __toESM(require("node:fs"));
+var import_promises = require("node:fs/promises");
+var import_node_os2 = __toESM(require("node:os"));
+var import_node_path3 = __toESM(require("node:path"));
+
 // src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
 
@@ -55,22 +71,6 @@ function stringField(input, ...names) {
   }
   return "";
 }
-
-// src/hooks/shared/paths.ts
-var import_node_path = __toESM(require("node:path"));
-function pluginRoot() {
-  return process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.join(__dirname, "..");
-}
-function runtimeModule(name) {
-  return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
-}
-
-// src/hooks/shared/worktree-sweep.ts
-var import_node_child_process2 = require("node:child_process");
-var import_node_fs3 = __toESM(require("node:fs"));
-var import_promises = require("node:fs/promises");
-var import_node_os2 = __toESM(require("node:os"));
-var import_node_path3 = __toESM(require("node:path"));
 
 // src/hooks/shared/sweep-handoff.ts
 var import_node_child_process = require("node:child_process");
@@ -343,23 +343,8 @@ function migrateLegacyExecAgentNotices() {
     return [];
   }
 }
-function lostLaunchNotices(data) {
-  try {
-    const sessionId2 = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
-    const store = require(runtimeModule("store"));
-    const result = store.reconcileLaunchedDispatches(sessionId2, { source: "session-start" });
-    if (!result || typeof result !== "object" || !("reconciled" in result) || !Array.isArray(result.reconciled)) return [];
-    const reconciled = result.reconciled.map((ref) => String(ref || "").trim()).filter(Boolean);
-    return reconciled.length ? [`sidequest: ${reconciled.join(", ")} launched but never claimed. Re-dispatch and spawn the returned spec.`] : [];
-  } catch (_) {
-    return [];
-  }
-}
 async function sessionStartMaintenance(data) {
-  const notices = [
-    ...migrateLegacyExecAgentNotices(),
-    ...lostLaunchNotices(data)
-  ];
+  const notices = migrateLegacyExecAgentNotices();
   try {
     notices.push(...await sweepWorktrees(data, true));
   } catch (error) {

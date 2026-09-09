@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 // SessionStart waits only for this worker's handoff deadline, so store maintenance
 // cannot make Claude discard the briefing with the hook's entire stdout.
-import { stringField, type HookInput } from './shared/input.js';
+import type { HookInput } from './shared/input.js';
 import { runtimeModule } from './shared/paths.js';
 import { sweepWorktrees } from './shared/worktree-sweep.js';
 import { writeReport } from './shared/sweep-handoff.js';
 
 interface Store {
   sweepStaleClaims: (options: { source: string }) => unknown;
-  reconcileLaunchedDispatches: (sessionId: string, options: { source: string }) => unknown;
 }
 
 interface SyncResult {
@@ -53,24 +52,8 @@ function migrateLegacyExecAgentNotices(): string[] {
   }
 }
 
-function lostLaunchNotices(data: HookInput): string[] {
-  try {
-    const sessionId = stringField(data, 'session_id', 'sessionId') || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
-    const store = require(runtimeModule('store')) as Store;
-    const result = store.reconcileLaunchedDispatches(sessionId, { source: 'session-start' });
-    if (!result || typeof result !== 'object' || !('reconciled' in result) || !Array.isArray(result.reconciled)) return [];
-    const reconciled = result.reconciled.map((ref) => String(ref || '').trim()).filter(Boolean);
-    return reconciled.length ? [`sidequest: ${reconciled.join(', ')} launched but never claimed. Re-dispatch and spawn the returned spec.`] : [];
-  } catch (_) {
-    return [];
-  }
-}
-
 async function sessionStartMaintenance(data: HookInput): Promise<string[]> {
-  const notices = [
-    ...migrateLegacyExecAgentNotices(),
-    ...lostLaunchNotices(data),
-  ];
+  const notices = migrateLegacyExecAgentNotices();
   try {
     notices.push(...await sweepWorktrees(data, true));
   } catch (error: unknown) {
