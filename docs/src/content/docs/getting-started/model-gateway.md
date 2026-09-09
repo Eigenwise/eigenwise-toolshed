@@ -41,7 +41,7 @@ Sidequest can select these models automatically when both plugins are installed.
 
 ## Daily use
 
-There are no routine Model Gateway commands to remember. The shim supervisor checks the proxy's `/v1/models` endpoint while it runs and recovers an unavailable proxy with bounded backoff. It leaves a healthy proxy alone. If a session survives a plugin update, its older plugin copy leaves the newer shim running and asks you to reload plugins or restart Claude Code. Claude handles setup, updates, authentication checks, model discovery, and settings repair through the skill.
+There are no routine Model Gateway commands to remember. The shim supervisor checks the proxy's `/v1/models` endpoint while it runs and confirms a failed probe through a fresh connection before recovering an unavailable proxy with bounded backoff. It leaves a healthy proxy alone. If a session survives a plugin update, its older plugin copy leaves the newer shim running and asks you to reload plugins or restart Claude Code. Claude handles setup, updates, authentication checks, model discovery, and settings repair through the skill.
 
 SessionStart launches a missing supervisor outside the hook's process tree, then waits no more than 12 seconds inside its 30-second hook budget. A slow proxy keeps starting in the background. Claude asks you to retry the Codex model in a few seconds instead of holding the session-start hook open.
 

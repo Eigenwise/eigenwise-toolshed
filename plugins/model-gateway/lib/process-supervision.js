@@ -9,13 +9,13 @@ const path = require('node:path');
 const { CLI_PATH, LOGS, PROXY_BIN, PROXY_PORT, PUBLIC_SHIM_PORT, resolveNewestInstalledCliPath, SHIM_PORT, STATE, WIN } = require('./runtime.js');
 const { recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
 
-function fetchUrl(url, { timeout = 15000, headers = {} } = {}) {
+function fetchUrl(url, { timeout = 15000, headers = {}, agent } = {}) {
   return new Promise((resolve, reject) => {
     const mod = url.startsWith('https:') ? https : http;
-    const req = mod.get(url, { headers: { 'user-agent': 'model-gateway', ...headers } }, (res) => {
+    const req = mod.get(url, { agent, headers: { 'user-agent': 'model-gateway', ...headers } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
-        return resolve(fetchUrl(res.headers.location, { timeout, headers }));
+        return resolve(fetchUrl(res.headers.location, { timeout, headers, agent }));
       }
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
@@ -653,7 +653,7 @@ function spawnDetached(name, command, cmdArgs, env) {
 
 async function proxyModelsAnswering(port = PROXY_PORT, fetch = fetchUrl) {
   try {
-    return (await fetch(`http://127.0.0.1:${port}/v1/models`, { timeout: 2000 })).status === 200;
+    return (await fetch(`http://127.0.0.1:${port}/v1/models`, { timeout: 2000, agent: false })).status === 200;
   } catch { return false; }
 }
 
@@ -713,17 +713,28 @@ function createProxyRecovery({
     report(`${new Date(now()).toISOString()} model-gateway: ${message}`);
   }
 
+  function resetRecoveryState() {
+    restartAttempt = 0;
+    nextRestartAt = 0;
+  }
+
   async function recover() {
     if (recovery) return recovery;
     if (halted) return { ok: false, state: 'foreign-port-owner' };
     recovery = (async () => {
       if (await probe()) {
-        restartAttempt = 0;
-        nextRestartAt = 0;
+        resetRecoveryState();
         return { ok: true, state: 'healthy' };
       }
       if (halted) return { ok: false, state: 'stopped' };
       if (now() < nextRestartAt) return { ok: false, state: 'backing-off', nextRestartAt };
+
+      const proxyIsListening = await listening(proxyPort);
+      if (proxyIsListening && await probe()) {
+        resetRecoveryState();
+        return { ok: true, state: 'healthy' };
+      }
+      if (halted) return { ok: false, state: 'stopped' };
 
       restartAttempt += 1;
       const backoffMs = Math.min(maximumBackoffMs, initialBackoffMs * (2 ** (restartAttempt - 1)));
@@ -802,8 +813,7 @@ function createProxyRecovery({
         }
       }
       if (await probe()) {
-        restartAttempt = 0;
-        nextRestartAt = 0;
+        resetRecoveryState();
         log('proxy recovered and /v1/models is ready');
         recordLifecycle('proxy-recovery-finished', { component: 'supervisor', pid: process.pid, outcome: 'recovered' });
         return { ok: true, state: 'recovered' };

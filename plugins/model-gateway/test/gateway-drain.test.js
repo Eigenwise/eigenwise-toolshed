@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { gatewayTestEnvironment, startGateway, spawnGatewayProcess } = require('./support.js');
-const { createProxyRecovery } = require('../lib/process-supervision.js');
+const { createProxyRecovery, fetchUrl, proxyModelsAnswering } = require('../lib/process-supervision.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const gateway = require(CLI);
@@ -601,6 +601,28 @@ test('doctor describes an observed lifecycle exit', async (t) => {
   assert.match(output.text, /lifecycle exit evidence: observed worker PID 4321; exit code null; signal SIGKILL/);
 });
 
+test('recovery model probes use fresh loopback connections', async (t) => {
+  let connections = 0;
+  const proxy = http.createServer((request, response) => {
+    assert.equal(request.url, '/v1/models');
+    response.end(JSON.stringify({ data: [] }));
+  });
+  proxy.on('connection', () => { connections += 1; });
+  const proxyPort = await listen(proxy);
+  const reusableAgent = new http.Agent({ keepAlive: true });
+  t.after(() => {
+    reusableAgent.destroy();
+    proxy.close();
+  });
+
+  assert.equal((await fetchUrl(`http://127.0.0.1:${proxyPort}/v1/models`, { agent: reusableAgent })).status, 200);
+  assert.equal((await fetchUrl(`http://127.0.0.1:${proxyPort}/v1/models`, { agent: reusableAgent })).status, 200);
+  assert.equal(connections, 1, 'fetchUrl forwards a supplied reusable agent');
+  assert.equal(await proxyModelsAnswering(proxyPort), true);
+  assert.equal(await proxyModelsAnswering(proxyPort), true);
+  assert.equal(connections, 3, 'each recovery probe opens a fresh connection');
+});
+
 test('supervisor restores a proxy that dies after startup without another session', async () => {
   let modelsAvailable = true;
   let starts = 0;
@@ -623,27 +645,91 @@ test('supervisor restores a proxy that dies after startup without another sessio
   assert.match(logs.join('\n'), /proxy recovered and \/v1\/models is ready/);
 });
 
-test('supervisor replaces an unresponsive bound proxy only after its owner releases the port', async () => {
-  let modelsAvailable = false;
+test('supervisor confirms a failed probe before replacing an owned listener', async () => {
+  const results = [false, true];
+  let starts = 0;
   const stopped = [];
-  let releaseChecks = 0;
   const recovery = createProxyRecovery({
     proxyBinary: 'fake-proxy',
-    probe: async () => modelsAvailable,
+    probe: async () => results.shift(),
+    listening: async () => true,
+    owner: async () => { throw new Error('healthy confirmation must avoid ownership checks'); },
+    stop: async (pid) => stopped.push(pid),
+    start: async () => { starts += 1; },
+    binaryExists: () => true,
+    now: () => 0,
+    report: () => {},
+  });
+
+  assert.equal((await recovery.recover()).state, 'healthy');
+  assert.deepEqual(stopped, [], 'a healthy confirmation leaves the owned listener running');
+  assert.equal(starts, 0, 'a healthy confirmation does not start a replacement proxy');
+});
+
+test('supervisor replaces an unresponsive bound proxy after two failed probes', async () => {
+  const results = [false, false, true];
+  const stopped = [];
+  let releaseChecks = 0;
+  let starts = 0;
+  const recovery = createProxyRecovery({
+    proxyBinary: 'fake-proxy',
+    probe: async () => results.shift(),
     listening: async () => true,
     owner: () => 4242,
     ownsProxy: () => true,
     stop: (pid) => stopped.push(pid),
     waitForRelease: async () => { releaseChecks += 1; return true; },
     binaryExists: () => true,
-    start: () => { modelsAvailable = true; },
+    start: () => { starts += 1; },
     now: () => 0,
     report: () => {},
   });
 
   assert.equal((await recovery.recover()).state, 'recovered');
   assert.deepEqual(stopped, [4242]);
+  assert.equal(starts, 1, 'two failed probes replace the owned unhealthy proxy');
   assert.equal(releaseChecks, 1);
+});
+
+test('supervisor keeps a foreign listener running after confirmed failed probes', async () => {
+  const stopped = [];
+  let starts = 0;
+  const recovery = createProxyRecovery({
+    proxyBinary: 'fake-proxy',
+    probe: async () => false,
+    listening: async () => true,
+    owner: async () => 4242,
+    ownsProxy: async () => false,
+    inspectProcess: async () => null,
+    stop: async (pid) => stopped.push(pid),
+    start: async () => { starts += 1; },
+    binaryExists: () => true,
+    now: () => 0,
+    report: () => {},
+  });
+
+  assert.equal((await recovery.recover()).state, 'foreign-port-owner');
+  assert.deepEqual(stopped, [], 'confirmed foreign ownership prevents a stop');
+  assert.equal(starts, 0, 'confirmed foreign ownership prevents a replacement proxy');
+});
+
+test('supervisor cancellation prevents recovery after a failed probe', async () => {
+  let releaseProbe;
+  const probeStarted = new Promise((resolve) => { releaseProbe = resolve; });
+  let starts = 0;
+  const recovery = createProxyRecovery({
+    probe: async () => { await probeStarted; return false; },
+    listening: async () => false,
+    start: async () => { starts += 1; },
+    report: () => {},
+  });
+
+  const recovering = recovery.recover();
+  const stopping = recovery.stop();
+  releaseProbe();
+  assert.equal((await recovering).state, 'stopped');
+  await stopping;
+  assert.equal(starts, 0, 'shutdown does not start a proxy after a failed probe');
 });
 
 test('concurrent supervisor checks share one proxy recovery attempt', async () => {
