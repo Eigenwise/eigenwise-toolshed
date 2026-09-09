@@ -333,20 +333,24 @@ test('envBlockFor differs only on ANTHROPIC_BASE_URL between modes', () => {
 
 test('writeEnv removes retired socket wiring while preserving unrelated settings', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-writeenv-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-writeenv-project-'));
   const prevUserProfile = process.env.USERPROFILE;
   const prevHome = process.env.HOME;
   // wiredMode() reads the environment too, and this suite runs inside a wired
   // Claude Code session, so the ambient base URL has to go or the file under
   // test is not what is being measured.
   const prevBaseUrl = process.env.ANTHROPIC_BASE_URL;
+  const previousCwd = process.cwd();
   t.after(() => {
     if (prevUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUserProfile;
     if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
     if (prevBaseUrl === undefined) delete process.env.ANTHROPIC_BASE_URL; else process.env.ANTHROPIC_BASE_URL = prevBaseUrl;
-    fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    process.chdir(previousCwd);
+    for (const directory of [home, project]) fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
   process.env.USERPROFILE = home;
   process.env.HOME = home;
+  process.chdir(project);
   delete process.env.ANTHROPIC_BASE_URL;
   const isolatedGateway = loadGatewayWithCurrentHome();
 
