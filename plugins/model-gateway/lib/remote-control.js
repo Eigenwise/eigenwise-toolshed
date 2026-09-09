@@ -129,8 +129,16 @@ let remoteControlDependencies = {};
 
 function configureRemoteControl(dependencies) { remoteControlDependencies = dependencies; }
 
+function servingCompatibilityStatus(result) {
+  if (result?.status === 'unavailable') return `unavailable (${result.code || 'unknown'})`;
+  return ['bound', 'bindable', 'unknown'].includes(result?.status) ? result.status : 'unknown';
+}
+
 async function remoteControlCommand() {
-  const { args, flag, log, die, doctor, fetchShimHealth, startAll, syncCompatMode, compatibilityPortConflict = () => null, unsafeRemoteControlProcessEnv = () => null } = remoteControlDependencies;
+  const {
+    args, flag, log, die, doctor, fetchShimHealth, requestServingCompatibility = async () => ({ status: 'unknown' }),
+    startAll, syncCompatMode, compatibilityPortConflict = () => null, unsafeRemoteControlProcessEnv = () => null,
+  } = remoteControlDependencies;
   const action = args[0];
   if (!['enable', 'disable', 'doctor'].includes(action)) {
     die('usage: remote-control <enable|disable|doctor>');
@@ -150,12 +158,16 @@ async function remoteControlCommand() {
     const blockState = parsed.state === 'absent' && detected
       ? 'absent (unmarked loopback mapping present, enable will adopt it)'
       : parsed.state;
+    const serving = await requestServingCompatibility({ action: 'probe' });
     log(`hosts file: ${file}`);
     log(`plugin block: ${blockState}`);
     log(`loopback mapping: ${detected ? detected.line : 'not present'}`);
     log(`conflicting mappings: ${conflicts.length ? conflicts.join(' | ') : 'none'}`);
     log(`elevated write: ${hostsWriteStatus(file)}`);
-    log(compatibilityPortConflict() || `port ${COMPAT_PORT}: available for RC-compatibility`);
+    log(`serving compatibility: ${servingCompatibilityStatus(serving)}`);
+    log(serving.status === 'unavailable'
+      ? (compatibilityPortConflict() || `port ${COMPAT_PORT}: unavailable (${serving.code || 'unknown'})`)
+      : `port ${COMPAT_PORT}: ${servingCompatibilityStatus(serving)} by serving supervisor`);
     const dnsResult = await lookupCompatHost();
     log(`DNS lookup: ${dnsResult ? `${dnsResult.address} (IPv${dnsResult.family})` : 'failed'}`);
     await doctor();
@@ -171,16 +183,11 @@ async function remoteControlCommand() {
 
   const operation = action === 'enable' ? addManagedHostsBlock : removeManagedHostsBlock;
   let transformed;
-  try { transformed = operation(text); } catch (error) { die(error.message); }
+  try { transformed = operation(text); } catch (operationError) { die(operationError.message); }
   if (!transformed.changed) {
     log(`remote-control compatibility is already ${action === 'enable' ? 'enabled' : 'disabled'} in ${file}`);
     return;
   }
-  if (action === 'enable') {
-    const conflict = compatibilityPortConflict();
-    if (conflict) die(conflict);
-  }
-
   log(`${action === 'enable' ? 'Enable' : 'Disable'} Remote Control compatibility by ${action === 'enable' ? 'adding' : 'removing'} only this block:`);
   log(action === 'enable' ? managedHostsBlock(text.includes('\r\n') ? '\r\n' : '\n').trim() : parsed.block);
   if (!flag('--confirm')) {
@@ -189,6 +196,20 @@ async function remoteControlCommand() {
     }
     log('Do you want to make this hosts-file change now? Re-run with --confirm only after the user answers yes.');
     return;
+  }
+
+  let serving = null;
+  if (action === 'enable') {
+    serving = await requestServingCompatibility({ action: 'probe' });
+    if (!['bound', 'bindable'].includes(serving.status)) {
+      const diagnostic = serving.status === 'unavailable' ? compatibilityPortConflict() : null;
+      die(`cannot enable RC-compatibility because the serving supervisor is ${servingCompatibilityStatus(serving)}${diagnostic ? `: ${diagnostic}` : ''}; start the normal-user gateway supervisor, then run remote-control doctor.`);
+    }
+  }
+  let current;
+  try { current = fs.readFileSync(file, 'utf8'); } catch (readError) { die(`could not re-read ${file}: ${readError.code || readError.message}`); }
+  if (current !== text) {
+    die(`hosts file changed after confirmation; left it untouched. Run remote-control doctor and confirm again.`);
   }
 
   const backup = `${file}.model-gateway-${new Date().toISOString().replace(/[:.]/g, '-')}.bak`;
@@ -200,24 +221,70 @@ async function remoteControlCommand() {
   }
   log(`updated hosts file: ${file}`);
   log(`backup: ${backup}`);
-  const result = await startAll();
-  if (!result.ok) die(`hosts file changed, but gateway reconciliation failed: ${result.reason}`);
-  await syncCompatMode();
-  await remoteControlVerify();
+  try {
+    if (action === 'enable') {
+      const activated = await requestServingCompatibility({ action: 'reconcile', expectedSupervisorPid: serving.supervisorPid });
+      if (activated.status !== 'bound') throw new Error(`serving supervisor activation was ${servingCompatibilityStatus(activated)}`);
+      if (!(await remoteControlVerify({ expectedSupervisorPid: serving.supervisorPid, requireCompatibility: true }))) {
+        throw new Error('serving supervisor did not report RC-compatibility ready');
+      }
+      const synchronized = await syncCompatMode({ requiredMode: 'compat' });
+      if (synchronized?.mode !== 'compat') {
+        throw new Error(`wiring synchronization achieved ${synchronized?.mode || 'unknown'} mode instead of compat`);
+      }
+      return;
+    }
+    const started = await startAll();
+    if (!started.ok) throw new Error(`gateway reconciliation failed: ${started.reason}`);
+    const reconciled = await requestServingCompatibility({ action: 'reconcile' });
+    if (reconciled.status !== 'bound') throw new Error(`serving supervisor reconciliation was ${servingCompatibilityStatus(reconciled)}`);
+    if (!(await remoteControlVerify({ requireCompatibility: false }))) {
+      throw new Error('serving supervisor did not report default mode ready');
+    }
+    await syncCompatMode();
+  } catch (activationError) {
+    if (action === 'enable') {
+      let restored = false;
+      try {
+        if (fs.readFileSync(file, 'utf8') === transformed.text) {
+          fs.writeFileSync(file, text);
+          restored = true;
+          log(`restored hosts file from this command's original bytes: ${file}`);
+        } else {
+          log(`hosts file changed again after this command wrote it; preserved the observed bytes. Manual recovery: compare backup ${backup}.`);
+        }
+      } catch (rollbackError) {
+        log(`could not inspect or restore ${file}: ${rollbackError.code || rollbackError.message}. Manual recovery: compare backup ${backup}.`);
+      }
+      const recovered = await requestServingCompatibility({ action: 'reconcile', expectedSupervisorPid: serving.supervisorPid });
+      if (recovered.status !== 'bound') {
+        log(`serving supervisor recovery was ${servingCompatibilityStatus(recovered)}. Manual recovery: compare backup ${backup}.`);
+      } else if (!restored) {
+        log(`serving supervisor reconciled the observed hosts file. Manual recovery: compare backup ${backup}.`);
+      }
+    }
+    die(`hosts file changed, but gateway reconciliation failed: ${activationError.message}. Backup ${backup}.`);
+  }
 }
 
-async function remoteControlVerify() {
+async function remoteControlVerify({ expectedSupervisorPid = null, requireCompatibility }) {
   const { log, fetchShimHealth } = remoteControlDependencies;
   const entry = detectHostsCompat();
   const health = await fetchShimHealth();
   const dnsResult = await lookupCompatHost();
   const modelCount = health ? health.models : 0;
+  const identityMatches = expectedSupervisorPid == null || health?.supervisorPid === expectedSupervisorPid;
+  const compatible = requireCompatibility
+    ? entry && health?.compat?.hostsDetected === true && health.compat.port80Bound === true
+    : !entry && health?.compat?.hostsDetected === false && health.compat.port80Bound === false;
+  const ready = health?.ok === true && identityMatches && compatible;
   log(`DNS/hosts mapping: ${dnsResult ? `${dnsResult.address} (IPv${dnsResult.family})` : 'FAILED'}`);
   log(`hosts entry: ${entry ? entry.line : 'MISSING'}`);
-  log(`port ${COMPAT_PORT}: ${health && health.compat.port80Bound ? 'bound' : 'unavailable'}`);
-  log(`shim health: ${health && health.ok ? 'healthy' : 'DOWN'}`);
+  log(`port ${COMPAT_PORT}: ${health?.compat?.port80Bound ? 'bound' : 'unavailable'}`);
+  log(`shim health: ${health?.ok ? 'healthy' : 'DOWN'}`);
   log(`Codex discovery: ${modelCount ? `${modelCount} models` : 'unavailable'}`);
-  log(`Remote Control eligibility: ${entry && health && health.compat.port80Bound ? `ready after Claude Code restarts with ${COMPAT_BASE_URL}` : 'not ready'}`);
+  log(`Remote Control eligibility: ${ready ? `ready after Claude Code restarts with ${COMPAT_BASE_URL}` : 'not ready'}`);
+  return ready;
 }
 
 // Read-only: model-gateway never writes to the hosts file. Returns

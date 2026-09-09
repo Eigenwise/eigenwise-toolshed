@@ -28,10 +28,10 @@ function freePort() {
   });
 }
 
-function request(port, method, pathname, body, host = '127.0.0.1') {
+function request(port, method, pathname, body, host = '127.0.0.1', headers = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request({ host, port, method, path: pathname,
-      headers: body ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {} }, (res) => {
+      headers: { ...(body ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {}), ...headers } }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString() }));
@@ -41,6 +41,42 @@ function request(port, method, pathname, body, host = '127.0.0.1') {
   });
 }
 
+function runGatewayCommand(argumentsList, environment, cwd) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [CLI, ...argumentsList], { cwd, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+    const output = [];
+    child.stdout.on('data', (chunk) => output.push(chunk));
+    child.stderr.on('data', (chunk) => output.push(chunk));
+    child.once('error', reject);
+    child.once('close', (exitCode, signal) => resolve({ exitCode, signal, output: Buffer.concat(output).toString() }));
+  });
+}
+
+function loadGatewayWithEnvironment(environment) {
+  const modulePaths = [
+    require.resolve(CLI),
+    require.resolve('../lib/commands.js'),
+    require.resolve('../lib/remote-control.js'),
+    require.resolve('../lib/runtime.js'),
+  ];
+  const cachedModules = new Map(modulePaths.map((modulePath) => [modulePath, require.cache[modulePath]]));
+  const previousEnvironment = new Map(Object.keys(environment).map((key) => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(environment)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  for (const modulePath of modulePaths) delete require.cache[modulePath];
+  const isolatedGateway = require(CLI);
+  for (const modulePath of modulePaths) {
+    delete require.cache[modulePath];
+    if (cachedModules.get(modulePath)) require.cache[modulePath] = cachedModules.get(modulePath);
+  }
+  for (const [key, value] of previousEnvironment) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  return isolatedGateway;
+}
 function requestSocket(socketPath, method, pathname, body) {
   return new Promise((resolve, reject) => {
     const req = http.request({ socketPath, method, path: pathname,
@@ -79,6 +115,7 @@ function spawnShim(t, { shimPort, proxyPort, compatPort, hostsFile, home, anthro
     await stopChild(child);
     fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
+  return child;
 }
 
 function loadGatewayWithCurrentHome() {
@@ -214,12 +251,13 @@ test('remote-control enable adopts unmarked loopback mappings and distinguishes 
       log: (message) => output.push(message),
       die: (message) => { throw new Error(message); },
       doctor: async () => {},
-      fetchShimHealth: async () => ({ ok: true, models: 1, compat: { port80Bound: true } }),
+      fetchShimHealth: async () => ({ ok: true, supervisorPid: 321, models: 1, compat: { hostsDetected: true, port80Bound: true } }),
+      requestServingCompatibility: async ({ action }) => ({ status: action === 'probe' ? 'bindable' : 'bound', supervisorPid: 321 }),
       startAll: async () => {
         startCalls += 1;
         return { ok: true };
       },
-      syncCompatMode: async () => {},
+      syncCompatMode: async () => ({ mode: 'compat' }),
       compatibilityPortConflict,
     });
   }
@@ -243,7 +281,7 @@ test('remote-control enable adopts unmarked loopback mappings and distinguishes 
   assert.match(output.join('\n'), /Do you want to make this hosts-file change/);
 
   output.length = 0;
-  configure(['enable', '--confirm']);
+  configure(['enable', '--confirm'], () => 'port 80: held by node.exe (PID 321). RC-compatibility cannot start until that process releases port 80.');
   await remoteControl.remoteControlCommand();
   const enabled = fs.readFileSync(hostsFile, 'utf8');
   assert.equal((enabled.match(/api\.anthropic\.com/g) || []).length, 1);
@@ -251,14 +289,14 @@ test('remote-control enable adopts unmarked loopback mappings and distinguishes 
   assert.match(enabled, /# <<< model-gateway RC compatibility <<</);
   assert.match(output.join('\n'), /updated hosts file:/);
   assert.doesNotMatch(output.join('\n'), /Do you want to make this hosts-file change|Notepad as Administrator/);
-  assert.equal(startCalls, 1);
+  assert.equal(startCalls, 0);
 
   fs.writeFileSync(hostsFile, gw.managedHostsBlock());
   output.length = 0;
   configure(['enable', '--confirm']);
   await remoteControl.remoteControlCommand();
   assert.equal(fs.readFileSync(hostsFile, 'utf8'), gw.managedHostsBlock());
-  assert.equal(startCalls, 1);
+  assert.equal(startCalls, 0);
   assert.match(output.join('\n'), /already enabled/);
 });
 
@@ -282,6 +320,7 @@ test('remote-control enable refuses a port conflict before hosts writes and name
     die: (message) => { throw new Error(message); },
     doctor: async () => {},
     fetchShimHealth: async () => ({ ok: true, models: 1, compat: { port80Bound: true } }),
+    requestServingCompatibility: async () => ({ status: 'unavailable', code: 'EADDRINUSE' }),
     startAll: async () => {
       startCalls += 1;
       return { ok: true };
@@ -324,7 +363,8 @@ test('remote-control enable refuses an HTTPS process override before hosts backu
       log: () => {},
       die: (message) => { throw new Error(message); },
       doctor: async () => {},
-      fetchShimHealth: async () => ({ ok: true, models: 1, compat: { port80Bound: true } }),
+      fetchShimHealth: async () => ({ ok: true, supervisorPid: 321, models: 1, compat: { hostsDetected: true, port80Bound: true } }),
+      requestServingCompatibility: async ({ action }) => ({ status: action === 'probe' ? 'bindable' : 'bound', supervisorPid: 321 }),
       startAll: async () => {
         startCalls += 1;
         return { ok: true };
@@ -364,6 +404,190 @@ test('remote-control enable refuses an HTTPS process override before hosts backu
   assert.equal(fs.readFileSync(hostsFile, 'utf8'), original);
 });
 
+test('remote-control enable refuses unbindable serving before backup or hosts writes', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-remote-control-serving-'));
+  const hostsFile = path.join(directory, 'hosts');
+  const previousHostsFile = process.env.CODEX_GATEWAY_HOSTS_FILE;
+  const original = '127.0.0.1 localhost\n';
+  fs.writeFileSync(hostsFile, original);
+  process.env.CODEX_GATEWAY_HOSTS_FILE = hostsFile;
+  t.after(() => {
+    if (previousHostsFile === undefined) delete process.env.CODEX_GATEWAY_HOSTS_FILE;
+    else process.env.CODEX_GATEWAY_HOSTS_FILE = previousHostsFile;
+    fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  let starts = 0;
+  let syncs = 0;
+  remoteControl.configureRemoteControl({
+    args: ['enable', '--confirm'],
+    flag: (value) => ['enable', '--confirm'].includes(value),
+    log: () => {},
+    die: (message) => { throw new Error(message); },
+    doctor: async () => {},
+    fetchShimHealth: async () => { throw new Error('must not read health after preflight refusal'); },
+    requestServingCompatibility: async () => ({ status: 'unavailable', code: 'EACCES' }),
+    startAll: async () => { starts += 1; return { ok: true }; },
+    syncCompatMode: async () => { syncs += 1; },
+    compatibilityPortConflict: () => null,
+    unsafeRemoteControlProcessEnv: () => null,
+  });
+  await assert.rejects(remoteControl.remoteControlCommand(), /serving supervisor is unavailable \(EACCES\)/);
+  assert.equal(fs.readFileSync(hostsFile, 'utf8'), original);
+  assert.deepEqual(fs.readdirSync(directory), ['hosts']);
+  assert.equal(starts, 0);
+  assert.equal(syncs, 0);
+});
+
+test('remote-control enable rolls back only its own hosts bytes', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-remote-control-rollback-'));
+  const hostsFile = path.join(directory, 'hosts');
+  const previousHostsFile = process.env.CODEX_GATEWAY_HOSTS_FILE;
+  const original = '127.0.0.1 localhost\n';
+  fs.writeFileSync(hostsFile, original);
+  process.env.CODEX_GATEWAY_HOSTS_FILE = hostsFile;
+  t.after(() => {
+    if (previousHostsFile === undefined) delete process.env.CODEX_GATEWAY_HOSTS_FILE;
+    else process.env.CODEX_GATEWAY_HOSTS_FILE = previousHostsFile;
+    fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  let action = 0;
+  remoteControl.configureRemoteControl({
+    args: ['enable', '--confirm'],
+    flag: (value) => ['enable', '--confirm'].includes(value),
+    log: () => {},
+    die: (message) => { throw new Error(message); },
+    doctor: async () => {},
+    fetchShimHealth: async () => ({ ok: true, supervisorPid: 12, compat: { hostsDetected: true, port80Bound: true } }),
+    requestServingCompatibility: async () => {
+      action += 1;
+      return action === 1 ? { status: 'bindable', supervisorPid: 12 } : { status: 'unknown' };
+    },
+    startAll: async () => ({ ok: true }),
+    syncCompatMode: async () => {},
+    compatibilityPortConflict: () => null,
+    unsafeRemoteControlProcessEnv: () => null,
+  });
+  await assert.rejects(remoteControl.remoteControlCommand(), /gateway reconciliation failed/);
+  assert.equal(fs.readFileSync(hostsFile, 'utf8'), original);
+  assert.equal(fs.readdirSync(directory).filter((name) => name.endsWith('.bak')).length, 1);
+
+  action = 0;
+  fs.writeFileSync(hostsFile, original);
+  remoteControl.configureRemoteControl({
+    args: ['enable', '--confirm'],
+    flag: (value) => ['enable', '--confirm'].includes(value),
+    log: () => {},
+    die: (message) => { throw new Error(message); },
+    doctor: async () => {},
+    fetchShimHealth: async () => ({ ok: true, supervisorPid: 12, compat: { hostsDetected: true, port80Bound: true } }),
+    requestServingCompatibility: async ({ action: requestedAction }) => {
+      action += 1;
+      if (action === 1) return { status: 'bindable', supervisorPid: 12 };
+      if (requestedAction === 'reconcile') fs.writeFileSync(hostsFile, '127.0.0.1 externally-edited.example\n');
+      return { status: 'unknown' };
+    },
+    startAll: async () => ({ ok: true }),
+    syncCompatMode: async () => {},
+    compatibilityPortConflict: () => null,
+    unsafeRemoteControlProcessEnv: () => null,
+  });
+  await assert.rejects(remoteControl.remoteControlCommand(), /gateway reconciliation failed/);
+  assert.equal(fs.readFileSync(hostsFile, 'utf8'), '127.0.0.1 externally-edited.example\n');
+});
+
+test('remote-control enable rolls back when required wiring does not attest compat', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-remote-control-sync-'));
+  const hostsFile = path.join(directory, 'hosts');
+  const previousHostsFile = process.env.CODEX_GATEWAY_HOSTS_FILE;
+  const original = '127.0.0.1 localhost\n';
+  fs.writeFileSync(hostsFile, original);
+  process.env.CODEX_GATEWAY_HOSTS_FILE = hostsFile;
+  t.after(() => {
+    if (previousHostsFile === undefined) delete process.env.CODEX_GATEWAY_HOSTS_FILE;
+    else process.env.CODEX_GATEWAY_HOSTS_FILE = previousHostsFile;
+    fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  remoteControl.configureRemoteControl({
+    args: ['enable', '--confirm'],
+    flag: (value) => ['enable', '--confirm'].includes(value),
+    log: () => {},
+    die: (message) => { throw new Error(message); },
+    doctor: async () => {},
+    fetchShimHealth: async () => ({ ok: true, supervisorPid: 12, compat: { hostsDetected: true, port80Bound: true } }),
+    requestServingCompatibility: async ({ action }) => ({ status: action === 'probe' ? 'bindable' : 'bound', supervisorPid: 12 }),
+    startAll: async () => ({ ok: true }),
+    syncCompatMode: async () => undefined,
+    unsafeRemoteControlProcessEnv: () => null,
+  });
+  await assert.rejects(remoteControl.remoteControlCommand(), /wiring synchronization achieved unknown mode instead of compat/);
+  assert.equal(fs.readFileSync(hostsFile, 'utf8'), original);
+
+  fs.writeFileSync(hostsFile, original);
+  remoteControl.configureRemoteControl({
+    args: ['enable', '--confirm'],
+    flag: (value) => ['enable', '--confirm'].includes(value),
+    log: () => {},
+    die: (message) => { throw new Error(message); },
+    doctor: async () => {},
+    fetchShimHealth: async () => ({ ok: true, supervisorPid: 12, compat: { hostsDetected: true, port80Bound: true } }),
+    requestServingCompatibility: async ({ action }) => ({ status: action === 'probe' ? 'bindable' : 'bound', supervisorPid: 12 }),
+    startAll: async () => ({ ok: true }),
+    syncCompatMode: async () => {
+      fs.writeFileSync(hostsFile, '127.0.0.1 externally-edited.example\n');
+      return { mode: 'default' };
+    },
+    unsafeRemoteControlProcessEnv: () => null,
+  });
+  await assert.rejects(remoteControl.remoteControlCommand(), /wiring synchronization achieved default mode instead of compat/);
+  assert.equal(fs.readFileSync(hostsFile, 'utf8'), '127.0.0.1 externally-edited.example\n');
+});
+
+test('remote-control CLI adopts an unmarked mapping from its serving supervisor', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-remote-control-cli-home-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-remote-control-cli-project-'));
+  const callerProject = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-remote-control-cli-caller-'));
+  const projectSettings = path.join(project, '.claude', 'settings.local.json');
+  const callerSettings = path.join(callerProject, '.claude', 'settings.local.json');
+  const callerBytes = '{\n  "sentinel": "caller-project"\n}\n';
+  fs.mkdirSync(path.dirname(projectSettings), { recursive: true });
+  fs.mkdirSync(path.dirname(callerSettings), { recursive: true });
+  fs.writeFileSync(projectSettings, JSON.stringify({ env: gw.envBlockFor('default') }));
+  fs.writeFileSync(callerSettings, callerBytes);
+  const cleanupProjectFixtures = () => {
+    for (const directory of [project, callerProject]) fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  };
+
+  const hostsFile = path.join(home, 'hosts');
+  fs.writeFileSync(hostsFile, '127.0.0.1 api.anthropic.com\n');
+  const shimPort = await freePort();
+  const proxyPort = await freePort();
+  const compatPort = await freePort();
+  const shim = spawnShim(t, { shimPort, proxyPort, compatPort, hostsFile, home });
+  shim.once('close', cleanupProjectFixtures);
+  const health = await waitForHealthz(shimPort);
+  assert.equal(health.supervisorPid, shim.pid);
+  assert.equal(health.compat.port80Bound, true);
+  const gatewayEnvironment = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    CODEX_GATEWAY_PORT: String(shimPort),
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    CODEX_GATEWAY_COMPAT_PORT: String(compatPort),
+    CODEX_GATEWAY_HOSTS_FILE: hostsFile,
+  };
+  delete gatewayEnvironment.ANTHROPIC_BASE_URL;
+  delete gatewayEnvironment.CODEX_GATEWAY_WORKER_PORT;
+  const command = await runGatewayCommand(['remote-control', 'enable', '--confirm'], gatewayEnvironment, project);
+  assert.equal(command.exitCode, 0, command.output);
+  assert.equal(JSON.parse(fs.readFileSync(projectSettings, 'utf8')).env.ANTHROPIC_BASE_URL, gw.COMPAT_BASE_URL);
+  assert.equal(fs.readFileSync(callerSettings, 'utf8'), callerBytes);
+  assert.match(fs.readFileSync(hostsFile, 'utf8'), /# >>> model-gateway RC compatibility >>>/);
+  const activeHealth = await waitForHealthz(shimPort);
+  assert.equal(activeHealth.supervisorPid, shim.pid);
+  assert.equal(activeHealth.compat.port80Bound, true);
+});
+
 // ------------------------------------------------------- detectHostsCompat
 
 test('detectHostsCompat reads an overridden path and never touches the real hosts file', (t) => {
@@ -396,6 +620,17 @@ test('envBlockFor differs only on ANTHROPIC_BASE_URL between modes', () => {
   const { ANTHROPIC_BASE_URL: _a, ...defRest } = def;
   const { ANTHROPIC_BASE_URL: _b, ...compatRest } = compat;
   assert.deepEqual(defRest, compatRest);
+});
+
+test('syncCompatMode attests default without writing fallback when required compat health is unavailable', async () => {
+  const shimPort = await freePort();
+  const isolatedGateway = loadGatewayWithEnvironment({
+    CODEX_GATEWAY_PORT: String(shimPort),
+    CODEX_GATEWAY_WORKER_PORT: undefined,
+  });
+  const synchronized = await isolatedGateway.syncCompatMode({ requiredMode: 'compat' });
+  assert.equal(synchronized.mode, 'default');
+  assert.equal(synchronized.changed, false);
 });
 
 test('writeEnv removes retired socket wiring while preserving unrelated settings', (t) => {
@@ -618,6 +853,58 @@ test('serve-shim stays default-only when no hosts entry is present', async (t) =
   assert.equal(health.compat.port80Bound, false);
 
   // nothing should be listening on the would-be compat port
+  await assert.rejects(request(compatPort, 'GET', '/healthz'));
+});
+
+test('serve-shim exposes bounded RC control only through the main loopback listener', async (t) => {
+  const hostsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-shimcontrol-'));
+  const hostsFile = path.join(hostsDir, 'hosts');
+  fs.writeFileSync(hostsFile, '127.0.0.1 localhost\n');
+  const shimPort = await freePort();
+  const proxyPort = await freePort();
+  const compatPort = await freePort();
+  spawnShim(t, { shimPort, proxyPort, compatPort, hostsFile, home: hostsDir });
+  const health = await waitForHealthz(shimPort);
+  const body = JSON.stringify({ action: 'probe', expectedSupervisorPid: health.supervisorPid });
+  const controlHeaders = { 'x-model-gateway-control': 'rc-compatibility' };
+  for (const headers of [
+    {},
+    { ...controlHeaders, origin: 'http://127.0.0.1' },
+    { ...controlHeaders, host: `localhost:${shimPort}` },
+    { ...controlHeaders, 'content-type': 'text/plain' },
+  ]) {
+    const response = await request(shimPort, 'POST', '/internal/rc-compatibility', body, '127.0.0.1', headers);
+    assert.equal(response.status, 404);
+  }
+  const wrongMethod = await request(shimPort, 'GET', '/internal/rc-compatibility');
+  assert.equal(wrongMethod.status, 404);
+
+  const startedAt = Date.now();
+  const probe = await request(shimPort, 'POST', '/internal/rc-compatibility', body, '127.0.0.1', controlHeaders);
+  assert.equal(probe.status, 200);
+  assert.equal(JSON.parse(probe.body).status, 'bindable');
+  assert.ok(Date.now() - startedAt < 1000, 'probe releases the port once bind succeeds');
+  const freeAfterProbe = net.createServer();
+  await new Promise((resolve, reject) => {
+    freeAfterProbe.once('error', reject);
+    freeAfterProbe.listen(compatPort, '127.0.0.1', resolve);
+  });
+  await new Promise((resolve, reject) => freeAfterProbe.close((error) => (error ? reject(error) : resolve())));
+
+  fs.writeFileSync(hostsFile, '127.0.0.1 api.anthropic.com\n');
+  const activate = await request(shimPort, 'POST', '/internal/rc-compatibility', JSON.stringify({ action: 'reconcile', expectedSupervisorPid: health.supervisorPid }), '127.0.0.1', controlHeaders);
+  assert.equal(JSON.parse(activate.body).status, 'bound');
+  const compatControl = await request(compatPort, 'POST', '/internal/rc-compatibility', body, '127.0.0.1', controlHeaders);
+  assert.equal(compatControl.status, 404);
+  const wrongIdentity = await request(shimPort, 'POST', '/internal/rc-compatibility', JSON.stringify({ action: 'reconcile', expectedSupervisorPid: health.supervisorPid + 1 }), '127.0.0.1', controlHeaders);
+  assert.equal(JSON.parse(wrongIdentity.body).status, 'unknown');
+  assert.equal((await waitForHealthz(shimPort)).compat.port80Bound, true);
+  fs.writeFileSync(hostsFile, '127.0.0.1 localhost\n');
+  const deactivate = await request(shimPort, 'POST', '/internal/rc-compatibility', JSON.stringify({ action: 'reconcile', expectedSupervisorPid: health.supervisorPid }), '127.0.0.1', controlHeaders);
+  assert.equal(JSON.parse(deactivate.body).status, 'bound');
+  const afterDeactivate = await waitForHealthz(shimPort);
+  assert.equal(afterDeactivate.supervisorPid, health.supervisorPid);
+  assert.equal(afterDeactivate.compat.port80Bound, false);
   await assert.rejects(request(compatPort, 'GET', '/healthz'));
 });
 
