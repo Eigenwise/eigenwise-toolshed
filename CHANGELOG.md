@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.536.0 (2026-09-09)
+
+### sidequest 5.0.40 → 5.0.41
+
+#### Fixes
+
+- Keep Sidequest release tests within budget (SQ-2596)
+  Sidequest release verification now clears submission fixtures between cases, removing the stale Git resolution work that caused the functional phase to hit its eight-minute timeout.
+
 ## v3.535.0 (2026-09-09)
 
 ### sidequest 5.0.39 → 5.0.40
