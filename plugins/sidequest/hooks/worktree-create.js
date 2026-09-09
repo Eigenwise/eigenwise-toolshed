@@ -197,6 +197,12 @@ function recordProvisioningFailure(repository, sessionId, worktree, failure) {
   if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
   return store.recordDispatchWorktreeProvisioningFailure(project.slug, sessionId, worktree, failure);
 }
+function recordDependencyLink(repository, sessionId, worktree, link) {
+  const store = require(runtimeModule("store"));
+  const project = registeredProject(store, repository);
+  if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
+  return store.recordDispatchWorktreeDependencyLink(project.slug, sessionId, worktree, link);
+}
 function plannedRevision(repository, name, baseline) {
   const branch = `worktree-${name}`;
   git(repository, ["check-ref-format", "--branch", branch]);
@@ -275,7 +281,13 @@ async function createWorktreeMain() {
         boundCreation.repository,
         boundCreation.worktree,
         provisioningConfig(boundCreation.repository),
-        { setupTimeoutMs: worktreeSetupDeadlineMs() }
+        {
+          setupTimeoutMs: worktreeSetupDeadlineMs(),
+          onDependencyLink: (link) => {
+            const recorded = recordDependencyLink(boundCreation.repository, sessionId, boundCreation.worktree, link);
+            if (!recorded.ok) throw new Error(`worktree lease could not record dependency link: ${recorded.reason || "dispatch binding is incomplete"}`);
+          }
+        }
       );
       if (provisioningFailure) {
         const recorded = recordProvisioningFailure(boundCreation.repository, sessionId, boundCreation.worktree, provisioningFailure);

@@ -1755,6 +1755,55 @@ function createDispatch(dependencies) {
     }
     return { ok: false, reason: "dispatch_binding_unavailable" };
   }
+  function normalizedOwnedDependencyLink(worktree, dependency) {
+    const relativePath = String(dependency?.relativePath || "").replace(/\\/g, "/");
+    const target = String(dependency?.target || "").trim();
+    if (!relativePath || path.isAbsolute(relativePath) || !path.isAbsolute(target)) return null;
+    const linkPath = path.resolve(worktree, relativePath);
+    const normalizedRelativePath = path.relative(worktree, linkPath).split(path.sep).join("/");
+    if (normalizedRelativePath !== relativePath || normalizedRelativePath.split("/").some((segment) => !segment || segment === "." || segment === "..")) return null;
+    const outsideWorktree = path.relative(worktree, linkPath);
+    if (outsideWorktree === ".." || outsideWorktree.startsWith(`..${path.sep}`) || path.isAbsolute(outsideWorktree)) return null;
+    return { relativePath, target: canonicalPath(target) };
+  }
+  function recordDispatchWorktreeDependencyLink(slug, sessionId, worktree, dependency) {
+    const normalizedSessionId = String(sessionId || "").trim();
+    const target = String(worktree || "").trim();
+    if (!normalizedSessionId || !target) return { ok: false, reason: "missing_dependency_link_facts" };
+    const boundWorktree = canonicalPath(target);
+    const link = normalizedOwnedDependencyLink(boundWorktree, dependency);
+    if (!link) return { ok: false, reason: "invalid_dependency_link_facts" };
+    for (const candidate of listTickets(slug)) {
+      const state = dispatchState(candidate);
+      if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false || state.outcome !== "launched" || state.terminalAt || state.worktreeBindingSource !== "worktree-create" || !state.worktree || canonicalPath(state.worktree) !== boundWorktree) continue;
+      return withTicketLock(slug, candidate.id, () => {
+        const ticket = getTicket(slug, candidate.id);
+        const current = dispatchState(ticket);
+        if (!current || current.sessionId !== normalizedSessionId || current.sharedTree !== false || current.outcome !== "launched" || current.terminalAt || current.worktreeBindingSource !== "worktree-create" || !current.worktree || canonicalPath(current.worktree) !== boundWorktree || !current.worktreeCreationCompletedAt || !current.worktreeGitDirectory || !current.worktreeCommonGitDirectory || !current.worktreeCheckoutInstance || !current.worktreeObservedRevision) {
+          return { ok: false, reason: "dispatch_binding_unavailable" };
+        }
+        const records = Array.isArray(current.ownedDependencyLinks) ? current.ownedDependencyLinks : [];
+        const existing = records.find((record2) => String(record2?.relativePath || "") === link.relativePath);
+        const record = {
+          relativePath: link.relativePath,
+          target: link.target,
+          worktree: canonicalPath(current.worktree),
+          gitDirectory: canonicalPath(current.worktreeGitDirectory),
+          commonGitDirectory: canonicalPath(current.worktreeCommonGitDirectory),
+          checkoutInstance: String(current.worktreeCheckoutInstance),
+          revision: String(current.worktreeObservedRevision)
+        };
+        if (existing) {
+          return JSON.stringify(existing) === JSON.stringify(record) ? { ok: true, alreadyRecorded: true } : { ok: false, reason: "dependency_link_record_mismatch" };
+        }
+        current.ownedDependencyLinks = [...records, record];
+        stampDispatchEvent(ticket, "worktree-dependency-link-created");
+        putTicket(slug, ticket);
+        return { ok: true, alreadyRecorded: false };
+      });
+    }
+    return { ok: false, reason: "dispatch_binding_unavailable" };
+  }
   function recoverDispatchWorktreeCreation(slug, sessionId, worktree, error) {
     const normalizedSessionId = String(sessionId || "").trim();
     const target = String(worktree || "").trim();
@@ -2346,6 +2395,7 @@ function createDispatch(dependencies) {
     bindDispatchWorktreeCreation,
     completeDispatchWorktreeCreation,
     recordDispatchWorktreeProvisioningFailure,
+    recordDispatchWorktreeDependencyLink,
     recoverDispatchWorktreeCreation,
     dispatchIdentityDiagnosis,
     dispatchIsolationExpectation,
