@@ -26,7 +26,10 @@ Sidequest is local. The dashboard runs on your machine and ticket data stays in 
 4. Ask Claude to dispatch the ready tickets. Claude chooses the configured route, starts the work, and reports verification results. Dispatch freezes each ticket's intended target branch, so two concurrent feature branches get separate targets without changing the board default.
 5. When a ticket is ready, ask Claude to review and integrate it if the checks pass. Larger or higher-risk work may need an extra review before integration.
 
-Each ticket carries a check that decides whether its work is ready. Claude records that check against the final candidate and reports what passed, failed, or needs your decision. The agent-facing reference covers capture, evidence, and delivery mechanics.
+Each ticket carries a focused check that decides whether its work is ready. Claude records that check against
+the final candidate and reports what passed, failed, or needs your decision. After integration, Claude runs
+one combined full gate for the assembled work. The agent-facing reference covers capture, evidence, and
+delivery mechanics.
 
 ### Choose the planning depth
 

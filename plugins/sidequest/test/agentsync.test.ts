@@ -1135,9 +1135,11 @@ test('small-ticket lifecycle retires three optional board round trips', () => {
   assert.doesNotMatch(briefing, /only for background verification/);
   assert.match(briefing, /verify-start\] before it only for an expected no-op/);
   assert.match(briefing, /always post \[sidequest:verify-complete\]/);
-  assert.match(generatedExecutor, /Use focused tests while editing/);
-  assert.match(generatedExecutor, /Run one final broad gate after all edits and generated output are current/);
-  assert.match(generatedExecutor, /Do not run a temporary negative-control/);
+  assert.match(generatedExecutor, /Use focused checks while editing/);
+  assert.match(generatedExecutor, /combined final full gate after integration/);
+  assert.match(generatedExecutor, /smallest meaningful runnable\s+regression/);
+  assert.doesNotMatch(generatedExecutor, /Run one final broad gate/);
+  assert.match(generatedExecutor, /Do not run a\s+temporary negative-control/);
   assert.match(generatedExecutor, /state the changed behavior it exercised and how you know/);
   assert.match(generatedExecutor, /target=<broken file:line or behavior>; assertion=<named assertion>/);
   assert.match(generatedExecutor, /verification execution evidence/);

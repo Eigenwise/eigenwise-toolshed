@@ -602,7 +602,7 @@ function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeou
   const evidenceGuidance = ticketEvidenceGuidance(ticket);
   const highStakes = ticket?.highStakes ? [
     "High-stakes verification:",
-    "Enumerate and check EVERY consumer of each changed surface. Run every affected consumer suite, including dashboard build/tests when board payloads change. A review-audit pass is mandatory before integration."
+    "Check the changed surface's consumers and suites relevant to the stated risk. Require a review-audit only when the safety-sensitive contract names an untested seam that needs independent scrutiny."
   ] : [];
   const boundReview = boundReviewGuidance(ticket);
   return [
