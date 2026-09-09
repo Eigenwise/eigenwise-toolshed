@@ -5,7 +5,10 @@ Declare scope by the surfaces a change reaches, not just the first file you foun
 ## Pinned planning contract
 
 Before dispatching a substantial or ambiguous feature, publish one visible planning checkpoint on its
-story, planning ticket, or execution tickets. It must name:
+story, planning ticket, or execution tickets. The authoring orchestrator decides what improvement is worth making,
+its concrete benefit, approach, and boundaries before dispatch. Research returns facts and bounded alternatives for
+that decision. The implementation ticket records the selected plan; it does not delegate product or tradeoff
+choices to its executor. It must name:
 
 1. The intended outcome and explicit non-goals.
 2. The smallest source of truth or authority that decides the behavior. Remove ambiguous competing
@@ -35,7 +38,7 @@ Decide explicitly whether existing materialized profiles need a seed catch-up. P
 
 ## Describe implementation work
 
-Descriptions are developer-to-developer specs, never PM summaries. Include anchors, behavior and edge cases, bounds, dependencies or decisions, and a runnable `cd <repo-relative-dir> && ...` verify command. Bugs include a reproduction. Front-load evidence for cheaper executors. Route by remaining uncertainty, not original difficulty: a settled one-or-two-file edit is `coding.easy`; use direct only for the INLINE-SAFE allowlist, with its recorded reason.
+Descriptions are developer-to-developer specs, never PM summaries. Include anchors, behavior and edge cases, bounds, dependencies or decisions, and a runnable `cd <repo-relative-dir> && ...` verify command. Bugs include a reproduction. Front-load evidence needed to implement the selected plan. Route by remaining uncertainty, not original difficulty: a settled one-or-two-file edit is `coding.easy`; use direct only for the INLINE-SAFE allowlist, with its recorded reason.
 
 Anchors are checked against the repo, so write prose freely and mark real symbols. A path is always verified. A token before `in <path>` or `is at <path>` is verified as a source symbol only when it is backticked or shaped like code (an underscore, a `$`, or a camelCase hump), which is why ordinary sentences such as "the check lives in `src/foo.ts`" no longer report `lives` as a missing symbol. Backtick an all-lowercase identifier when you do want that check.
 

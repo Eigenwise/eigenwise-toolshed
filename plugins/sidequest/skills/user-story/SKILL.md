@@ -17,9 +17,11 @@ description: >-
 A guided path from "build me X" to integrated, verified work on `main`. Two ideas run through all of
 it:
 
-**The orchestrator holds the plan; executors hold the code.** It is the most expensive model in the
-loop and the worst implementer available, because its context is the scarcest resource in the system.
-Judging plans is its job. Writing and reviewing diffs is not.
+**The orchestrator holds the plan; executors hold implementation.** Before dispatch, the orchestrator decides
+what improvement is worth making, its concrete benefit, the approach, and boundaries. Researchers return facts
+and bounded alternatives for that judgment. Executors use ordinary local coding judgment to implement the
+selected plan, then return concrete evidence when it cannot work. They do not silently replace the agenda,
+architecture, or scope.
 
 **The ceremony scales to the evidence.** A deterministic done-oracle is enough when it covers the
 contract. Add independent review only for a named untested seam or safety-sensitive risk.
@@ -166,12 +168,12 @@ of cost for an answer you already had.
 - **Cleanest seams**: what you would build if this area took three more features after this one.
 - **Risk-first**: what breaks, what is hard to reverse, what the migration and rollback actually cost.
 
-They run in parallel, on category-appropriate models, with a bounded deliverable: the seam it
+They run in parallel, on category-appropriate routes, with a bounded deliverable: the seam it
 introduces, the signatures it pins, file boundaries per piece, what it costs, and what it forecloses.
 Cap each proposal at roughly two thousand tokens. Three uncapped design docs landing in the
 orchestrator's context is the failure mode the panel is supposed to avoid.
 
-Then do the one thing the expensive model is uniquely good at: **judge the plans and merge them.**
+Then do the orchestrator's planning work: **judge the plans and merge them.**
 Pick a spine, graft the parts of the runners-up that are better than the winner's version, and write
 one contract out of the result. A panel whose output is "we went with proposal B" wasted the other
 two; the point is that the merged contract beats every individual proposal. Record in the story log
@@ -224,8 +226,8 @@ At multi-wave size the shape that usually works:
 You do not declare those waves anywhere. Dependency links make them, and `ready` hands you each one.
 
 Each description is a developer-to-developer spec: anchors, behavior and edge cases, bounds, decisions
-already made, the reproduction if it is a bug, and the verify command. Front-load evidence, because
-cheaper executors cannot recover context you left out.
+already made, the reproduction if it is a bug, and the verify command. Front-load evidence so the executor
+starts from the selected plan rather than re-deciding it.
 
 A feature almost always has a docs piece. Any change to what a user sees or does either updates the
 affected prose page inside the story or gets a linked ticket classified from the live taxonomy. Decide

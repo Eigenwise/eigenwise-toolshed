@@ -27,4 +27,16 @@ test('seeds reuse-first implementation without auto-running resupply', () => {
   assert.match(templates, /Reuse an existing code path first, then the standard library, a native platform capability/);
   assert.match(templates, /One integration owner runs the full gate after merged changes/);
   assert.match(selfImprovement, /Offer\s+`\/quartermaster:resupply` only with current or standing user approval/);
+  assert.match(selfImprovement, /Keep what works; do not\s+change the workspace for novelty/);
+  assert.match(selfImprovement, /The orchestrator decides the benefit, approach, and boundaries before\s+implementation/);
+});
+
+test('setup and resupply select concrete improvements before implementation', () => {
+  const setup = readSkill('setup');
+  const resupply = readSkill('resupply');
+
+  assert.match(setup, /Keep what works and improve a concrete weakness, never change a\s+workspace for novelty/);
+  assert.match(setup, /Decide each proposed item's benefit, approach, and boundary from the assessment before\s+handing off implementation/);
+  assert.match(resupply, /A finding is evidence, not a work order/);
+  assert.match(resupply, /Unknown facts earn focused research only when they could change that decision/);
 });

@@ -5,6 +5,15 @@ delegation rule (gather enough evidence with read-only tools or native `Explore`
 route implementation by default, batch small same-model tickets, and fan out over independent waves) lives
 in the main skill — this file is the detail on the bigger shapes.
 
+## Improvement authority
+
+The orchestrator decides whether an improvement is worth making, its concrete benefit, the approach, and
+boundaries before implementation dispatches. Research tickets gather facts and bounded alternatives; the
+orchestrator evaluates them and pins the decision. Executors implement that decision with ordinary local coding
+judgment. They report concrete contradictory evidence instead of silently choosing a new agenda, architecture, or
+scope. Unknown facts earn focused research only when they could change the decision; unrequested optimizations do
+not create an investigation by default.
+
 ## Decomposition in depth
 
 ### Solo-fit gate before decomposition
@@ -61,13 +70,10 @@ scoped test or reproduction for its declared files; reserve full-suite green for
 ship ticket. Shrink until the complexity drops — a piece still scoring 7+ is usually a small design
 ticket plus a mechanical application ticket.
 
-**Spec completeness scales inversely with the executor's model.** Work routed to a cheap model
-needs a near-patch-level spec — exact anchors, expected strings, precise verification commands —
-because the spec substitutes for judgment. Everything you already know goes in the description: a
-weaker executor fails on missing context, not on the work itself, so front-load what your
-investigation found (paths, the surrounding contract, the gotcha you spotted). If finishing the
-ticket would need context its description does not carry, gather it first and put what you learned
-in the spec, or split it further.
+**Ticket detail follows the decision and remaining uncertainty.** Every ticket needs the selected outcome,
+anchors, expected behavior, boundaries, and precise verification commands needed to implement the pinned plan.
+If finishing would need facts the contract does not carry, gather only the facts that could change the decision,
+then add them to the spec or split the work further.
 
 **Non-repo deliverables need a durable rendezvous.** A report, analysis, or dataset must land on an agent-independent surface: the ticket comment thread when it fits the comment cap, a declared artifact root under the project (for example `.claude/.codebase-info`) for larger artifacts, or a user-named absolute path outside any session temp tree. Never pin a session scratchpad path in a ticket as the deliverable location or its verify command, because different agents resolve different scratchpad roots for the same project. Put the durable location and the exact verification step in the ticket before dispatch.
 
@@ -309,59 +315,28 @@ For a small ticket, go file → dispatch → integrate in as few ref-named turns
 10 or fewer. One orchestrator turn costs about 152k cache-read tokens, so 9–17 touches can cost the
 whole executor run. Dispatch immediately after filing: p75 queue time is 36.9 minutes of dead time.
 
-## Orchestration cost: keep the lead cheap to wake
+## Orchestration load: keep the lead responsive
 
-Delegation stays the default. Routing execution down to cheaper models is the whole design, and the fix
-for its cost is never to stop delegating. Rule out the wrong turn first: pulling the work back inline
-onto the lead to dodge the wakeups. That does not save the bill, it relocates the entire execution
-onto your priciest model at full context, which is strictly worse than the wakeups it was meant to
-avoid. The wakeup tax is a reason to run leaner and more synchronous waves, never a reason to work
-inline. Inline is for genuinely small one-steps you already hold in context, not for substantial or
-parallel work you are trying to keep cheap.
+Delegation follows the pinned plan and ticket boundaries, not relative model price or capability. The
+orchestrator decides what implementation to dispatch before routing it; an executor does not pull the work back
+inline or choose a different improvement to reduce wakeups. Cost can shape the execution of that selected plan,
+such as how a wave is batched, but it does not choose product decisions or tradeoffs.
 
-So the cost to manage is the lead's own bill, roughly `wakeups × lead-context-size × lead-model-price`.
-Each time a worker finishes and hands control back, the lead resumes and re-reads its whole context to
-react. That context is often large (a planning thread sits at 300k+ tokens easily), and the lead runs
-on your session model, which may be your priciest one. The part that surprises people is not the
-executors, which route to cheaper models by design; it is the lead being woken over and over at full
-context to do almost nothing. Prompt caching softens the per-token price of those re-reads but does not
-remove them: reading a 300k context 40 times is still 40 reads.
+The load to manage is the lead's own wakeups and context size. Each time a worker finishes and hands control
+back, the lead resumes and re-reads its context to react. Prompt caching softens the per-token price of those
+re-reads but does not remove them: reading a large context repeatedly still adds up.
 
-The lead really has two kinds of turn: cheap routing/ack ("worker 3 done, spawn the next") and
-expensive plan/synthesis (decompose, weigh conflicting reports, write the spec, integrate). You want
-the frontier rate landing on the second kind, not the first. **You can cut this cost without giving up
-steering**: reach for the first two levers, which cost nothing in control, before the third, which
-trades control for cost and is optional. Keeping every worker background and steerable and simply
-paying the wakeups is a legitimate default; the first two levers are what make it affordable. Do not
-reflexively go synchronous to save money, and do not answer the wakeup cost by working inline.
+The lead has two kinds of turn: routing/ack and plan/synthesis (decompose, weigh reports, write the
+spec, integrate). Keep the plan and the execution route separate: route choice does not transfer product or
+tradeoff authority to an executor. You can reduce wakeup load without giving up steering by keeping the context
+lean first. Batching synchronously trades control for fewer wakeups and stays optional.
 
-- **Keep the lead context lean.** The executor already returns a terse summary and writes its full
-  work to the ticket comment or a notes file (the executor protocol). Do not pull those full reports
-  or notes back into the planning thread unless a synthesis step genuinely needs them: read them by
-  reference (open the file or comment at the moment you need it), so raw executor output never becomes
-  permanent weight the lead re-reads on every later wake. This shrinks `context-size` on every wakeup
-  and costs no steerability at all — reach for it first.
-- **Match the lead model to the round.** The strongest model as lead is right when the round is plan-
-  and synthesis-heavy: Anthropic's Opus lead with Sonnet workers beat a solo Opus by 90.2%. A round
-  that is mostly ack turns pays that premium on every wakeup for little return. If your session model
-  sits above Opus, an orchestration-heavy round is the case to notice it. Also free of any steering cost.
-- **Optional, and only when you do not need to steer: batch into a synchronous wave.** This one trades
-  control for cost, so it is a last resort, not the default. The wakeup tax is a property of
-  *background* execution, not of any one spawn mechanism: any worker that finishes in the background (a
-  `run_in_background: true` agent or a teammate alike) wakes the lead to re-read full context just to
-  acknowledge "done," so N background workers over a long round is N re-reads. A synchronous wave
-  (`run_in_background: false`, block until all return, process once) collapses that to a single
-  resumption — the cheap path, and why Anthropic runs its research lead synchronously
-  ([multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)).
-  But synchronous is *blind*: the lead sleeps until the batch finishes, so you cannot watch progress,
-  redirect a drifting worker, or kill a runaway — you pay for the whole batch and learn the outcome at
-  the end. Many runs reasonably refuse that trade and stay background/steerable. If you do reach
-  for it, wave SIZE is the dial: one big synchronous wave is cheapest and blindest; small synchronous
-  waves ("spawn wave, wait, re-run `ready`, repeat") give a steering checkpoint between each. Fit it to
-  work that barely needs steering — tight, verify-gated tickets whose executors retain their claims
-  for steering through questions or concerns — never to exploratory or drift-prone work. (Agent teams takes this lever off the table
-  anyway: with teams on, every spawn is a background teammate regardless of `run_in_background: false`,
-  which is no loss if you wanted the steering.)
+- **Keep the lead context lean.** Do not pull full executor reports into the planning thread unless a
+  synthesis step genuinely needs them. Read the ticket comment or artifact by reference when needed, so raw output
+  does not become permanent weight on later wakeups.
+- **Batch only when the selected work needs little steering.** A synchronous wave reduces wakeups but is blind
+  until it ends. Use it for tight, verify-gated tickets, never as a way to avoid choosing or steering the plan.
+  Agent teams stays background and steerable regardless of `run_in_background: false`.
 
 ## Discovery and research
 

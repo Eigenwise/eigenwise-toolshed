@@ -56,7 +56,7 @@ Quartermaster's SessionStart hook can flag a repeated task that may belong in a 
 
 ## Resupply an existing workspace
 
-After real work has accumulated, run it directly or accept Quartermaster's offer of a focused optimization round:
+After real work has accumulated, run it directly or accept Quartermaster's offer of a focused resupply round:
 
 > /quartermaster:resupply
 
@@ -72,7 +72,7 @@ The miner reads local transcript files and emits a bounded aggregate. The active
 
 Raw transcript files are never loaded into model context, and the resupply skill is forbidden from opening them. The default pass mines the current project. Setup explicitly requests the all-projects summary, while resupply only uses `--all-projects` for a global pass.
 
-The skill ranks findings in this order: a missing measurement, manual work, existing capabilities that underperform, knowledge being re-derived, then setup friction. It first checks whether an existing project capability can meet the goal or be improved, and only proposes a new capability when the evidence says the existing choices do not fit. It never starts a resupply pass without current or standing approval. It proposes at most seven findings one at a time with evidence and an exact change. A rejected recommendation is recorded and does not return; an accepted one is checked in a later pass.
+The skill ranks findings in this order: a missing measurement, manual work, existing capabilities that underperform, knowledge being re-derived, then setup friction. It first checks whether an existing project capability can meet the goal or be improved, and only proposes a new capability when the evidence says the existing choices do not fit. It keeps what works and changes a concrete weakness, never the workspace for novelty. Before it offers a change, it identifies the benefit, smallest approach, and boundary; focused research is only for an unknown that could change that call. It never starts a resupply pass without current or standing approval. It proposes at most seven findings one at a time with evidence and an exact change. A rejected recommendation is recorded and does not return; an accepted one is checked in a later pass.
 
 ## How the loop closes
 

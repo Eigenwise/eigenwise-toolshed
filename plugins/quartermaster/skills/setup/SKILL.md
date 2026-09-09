@@ -63,7 +63,9 @@ matters.
 
 ### 4. Propose the plan
 
-One visible plan, then per-item approval. Draw from three sources, in this order:
+One visible plan, then per-item approval. Keep what works and improve a concrete weakness, never change a
+workspace for novelty. Decide each proposed item's benefit, approach, and boundary from the assessment before
+handing off implementation. Draw from three sources, in this order:
 
 - **Toolshed core**, from the eigenwise-toolshed marketplace. Every piece is independent and
   opt-in: they compose, but none of them requires another, and a project that wants one of them

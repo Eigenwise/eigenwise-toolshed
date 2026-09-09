@@ -21,7 +21,10 @@ Ship it on every workspace as `.claude/live-rules/rules/self-improvement.md`, gl
 description: Self-improvement: build the capability that makes the next goal cheaper
 priority: 40
 ---
-At a natural pause, ask whether the work exposed a missing capability. First check whether the
+At a natural pause, assess whether a concrete weakness earns an improvement. Keep what works; do not
+change the workspace for novelty. The orchestrator decides the benefit, approach, and boundaries before
+implementation. Focused research may return facts or bounded alternatives when an unknown could change that
+decision; do not investigate unrequested optimizations by default. First check whether the
 existing project, standard library, native platform, installed plugins, skills, rules, or instruments
 already cover it. Improve the installed capability before proposing a parallel one. Offer
 `/quartermaster:resupply` only with current or standing user approval; every recommended change still

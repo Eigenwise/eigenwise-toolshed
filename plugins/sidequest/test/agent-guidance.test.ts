@@ -136,6 +136,19 @@ test('published guidance pins surgical planning before substantial dispatch', ()
   assert.match(ticketAuthoring, /After two independently rejected candidates in one defect chain/);
 });
 
+test('planning guidance keeps improvement authority with the orchestrator', () => {
+  assert.match(userStory, /The orchestrator holds the plan; executors hold implementation/);
+  assert.match(userStory, /what improvement is worth making, its concrete benefit, the approach, and boundaries/);
+  assert.match(orchestration, /The orchestrator decides whether an improvement is worth making/);
+  assert.match(orchestration, /Research tickets gather facts and bounded alternatives/);
+  assert.match(ticketAuthoring, /does not delegate product or tradeoff\s+choices to its executor/);
+  assert.match(executorTemplate, /Do not choose a new improvement agenda, expand scope, or replace the architecture/);
+  assert.match(executorTemplate, /ordinary local coding judgment/);
+  assert.doesNotMatch(orchestration, /Spec completeness scales inversely with the executor's model/);
+  assert.doesNotMatch(orchestration, /Routing execution down to cheaper models is the whole design/);
+  assert.doesNotMatch(skill, /category-appropriate cheaper models/);
+});
+
 test('the invocation contracts reference is derived from the accepted synonyms and published enums', () => {
   const mcp = require('../lib/mcp.js');
   assert.match(skill, /references\/invocation-contracts\.md/);
@@ -182,6 +195,8 @@ test('every implementation executor leaves candidate reviews to the orchestrator
     assert.match(source, /Commit and submit, then stop\./, filename);
     assert.match(source, /orchestrator reads the terminal submission, binds an independent review to its exact immutable candidate and parent under a fresh identity/, filename);
     assert.match(source, /A read-only review executor may report its findings and close normally\./, filename);
+    assert.match(source, /Implement the selected outcome, benefit, approach, and boundaries with ordinary local coding judgment\./, filename);
+    assert.match(source, /Do not choose a new improvement agenda, expand scope, or replace the architecture\./, filename);
   }
 });
 

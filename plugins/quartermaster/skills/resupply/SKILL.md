@@ -230,6 +230,10 @@ re-litigate unless they raise it.
 
 ### 6. Propose, one at a time
 
+A finding is evidence, not a work order. Decide whether a concrete weakness merits an improvement, why it
+benefits the user's current goal, and the smallest approach and boundary before offering it. Keep what works;
+do not propose change for novelty. Unknown facts earn focused research only when they could change that decision.
+
 Seven findings maximum, best first. For each: the evidence, the purpose it serves, the exact command
 or diff, and the cost (for plugin installs, `claude plugin details <name>` when context cost is
 relevant). Wait for an explicit yes or no before touching anything or moving on. Never batch-apply.
