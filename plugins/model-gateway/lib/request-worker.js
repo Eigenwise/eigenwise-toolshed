@@ -11,6 +11,7 @@ const net = require('node:net');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const { writeFileAtomically } = require('./atomic-file.js');
+const { normalizeCodexArtifactSchema } = require('./tool-schema.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
 const { fetchUrl } = require('./process-supervision.js');
@@ -1942,6 +1943,8 @@ function runWorker() {
               parsed.output_config = { ...(parsed.output_config || {}), effort: dispatchRoute.effort };
             }
             resolveCodexDeferredTools(parsed);
+            // Only normalize the known incompatible Artifact pattern on Codex.
+            normalizeCodexArtifactSchema(parsed.tools);
             // Non-Claude models call the plan-mode tools spuriously, and an
             // approved ExitPlanMode downgrades the session's permission mode
             // to acceptEdits instead of restoring it (anthropics/claude-code

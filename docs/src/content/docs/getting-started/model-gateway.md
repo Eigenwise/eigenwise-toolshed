@@ -7,6 +7,8 @@ Model Gateway adds subscription-backed GPT and Grok models to Claude Code. Claud
 
 ## Install
 
+For GPT requests, the gateway omits the specific Unicode name pattern in Claude's `Artifact` tool schema that the Codex backend rejects as "not a regex". All other schema constraints remain. This relaxes the advertised name constraint; the tool may still reject invalid names when called. Claude requests pass through unchanged.
+
 Run these in Claude Code:
 
 ```text

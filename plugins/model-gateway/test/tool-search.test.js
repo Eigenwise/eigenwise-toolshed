@@ -174,4 +174,31 @@ test('Codex tool search resolves references while Anthropic passthrough stays by
   assert.equal((await request(shimPort, '/v1/messages', anthropicRaw)).status, 200);
   assert.equal(forwardedToAnthropic, anthropicRaw);
   assert.equal(forwardedToCodex.length, 2);
+
+  const artifactPattern = String.raw`^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$`;
+  const artifact = {
+    name: 'Artifact',
+    description: 'Artifact fixture',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', pattern: artifactPattern, maxLength: 200 },
+        kind: { type: 'string', pattern: '^[a-z]+$' },
+      },
+      required: ['name'],
+    },
+  };
+  const artifactRequest = {
+    model: 'claude-gpt-6-astra[1m]',
+    max_tokens: 32,
+    messages: [{ role: 'user', content: 'Hello' }],
+    tools: [artifact, { ...artifact, name: 'OtherTool' }],
+  };
+  assert.equal((await request(shimPort, '/v1/messages', JSON.stringify(artifactRequest))).status, 200);
+  const normalized = structuredClone(artifact);
+  delete normalized.input_schema.properties.name.pattern;
+  assert.deepEqual(forwardedToCodex[2].tools, [normalized, artifactRequest.tools[1]]);
+  const artifactAnthropicRaw = JSON.stringify({ ...artifactRequest, model: 'claude-opus-4-8[1m]' }, null, 2);
+  assert.equal((await request(shimPort, '/v1/messages', artifactAnthropicRaw)).status, 200);
+  assert.equal(forwardedToAnthropic, artifactAnthropicRaw);
 });

@@ -193,6 +193,8 @@ agree).
 
 ## Failure modes worth knowing
 
+- **Artifact schema rejected as "not a regex"**: the Codex request path removes only the known incompatible Unicode name pattern from Claude's `Artifact` input schema. Other schema constraints and tools are retained, and Anthropic requests are unchanged. This relaxes the advertised name constraint for GPT models; invalid names can still be rejected when the tool executes.
+
 - **Every request fails after wiring**: a SessionStart hook can time out while it starts the shim. Claude Code cancels that hook, and a directly spawned supervisor can die with its process tree before it records an exit. Model Gateway launches the supervisor outside that tree and stops waiting before the hook budget, but if this is an older install or it still repeats, run
   `doctor`, check logs. Worst case `env --remove` restores stock behavior instantly.
 - **Codex sessions drop while this plugin's suite runs**: this version scopes fixture cleanup to
