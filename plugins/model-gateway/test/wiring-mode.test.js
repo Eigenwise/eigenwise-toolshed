@@ -54,6 +54,20 @@ function wireProject(project, baseUrl = DEFAULT_BASE_URL) {
   writeJson(path.join(project, '.claude', 'settings.local.json'), { env: { ANTHROPIC_BASE_URL: baseUrl } });
 }
 
+function gatewaySettings(extraEnv = {}) {
+  return {
+    enabledPlugins: { 'model-gateway@eigenwise-toolshed': true },
+    env: {
+      ANTHROPIC_BASE_URL: DEFAULT_BASE_URL,
+      CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
+      CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
+      ENABLE_TOOL_SEARCH: 'true',
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000',
+      ...extraEnv,
+    },
+  };
+}
+
 function wiringConfig(home) {
   return path.join(home, '.claude', 'model-gateway', 'wiring.json');
 }
@@ -436,6 +450,25 @@ function migrateLegacyProjectSettings(home, project) {
   return JSON.parse(result.output);
 }
 
+function migrateWithUnreadableUserIdentity(home, project) {
+  const result = runNode(home, project, `
+    const fs = require('node:fs');
+    const realpath = fs.realpathSync.native;
+    let calls = 0;
+    fs.realpathSync.native = (...args) => {
+      if (calls++ === 1) {
+        const error = new Error('synthetic user identity failure');
+        error.code = 'EACCES';
+        throw error;
+      }
+      return realpath(...args);
+    };
+    process.stdout.write(JSON.stringify(require(${JSON.stringify(SETTINGS_WIRING)}).migrateLegacyProjectSettings()));
+  `);
+  assert.equal(result.code, 0, result.output);
+  return JSON.parse(result.output);
+}
+
 test('SessionStart leaves a recorded project\'s unwired committed settings byte-identical', (t) => {
   const { home, project } = fixture(t);
   const legacyFile = path.join(project, '.claude', 'settings.json');
@@ -473,6 +506,68 @@ test('SessionStart migrates a gateway-owned committed settings file', (t) => {
   assert.deepEqual(JSON.parse(fs.readFileSync(legacyFile, 'utf8')), {
     enabledPlugins: { 'model-gateway@eigenwise-toolshed': true },
   });
+});
+
+test('migration preserves user settings that resolve to the legacy file', (t) => {
+  const { home } = fixture(t);
+  const userFile = path.join(home, '.claude', 'settings.json');
+  const localFile = path.join(home, '.claude', 'settings.local.json');
+  writeJson(userFile, gatewaySettings({ USER_UNRELATED: 'keep-user' }));
+  const userBytes = fs.readFileSync(userFile, 'utf8');
+
+  assert.deepEqual(migrateLegacyProjectSettings(home, home), { migrated: false });
+  assert.equal(fs.readFileSync(userFile, 'utf8'), userBytes, 'home migration preserves deliberate user-scope gateway wiring byte-for-byte');
+  assert.equal(fs.existsSync(localFile), false);
+  assert.equal(runHook(home, home).code, 0);
+  assert.equal(fs.readFileSync(userFile, 'utf8'), userBytes);
+  assert.equal(fs.existsSync(localFile), false);
+
+  const homeAlias = path.join(path.dirname(home), 'home-alias');
+  fs.symlinkSync(home, homeAlias, 'junction');
+  assert.deepEqual(migrateLegacyProjectSettings(home, homeAlias), { migrated: false });
+  assert.equal(fs.readFileSync(userFile, 'utf8'), userBytes, 'junction migration preserves deliberate user-scope gateway wiring byte-for-byte');
+  assert.equal(fs.existsSync(localFile), false);
+});
+
+test('migration keeps separate-project overrides and fails closed on uncertain identity', (t) => {
+  const { home, project } = fixture(t);
+  const userFile = path.join(home, '.claude', 'settings.json');
+  const legacyFile = path.join(project, '.claude', 'settings.json');
+  const localFile = path.join(project, '.claude', 'settings.local.json');
+  writeJson(userFile, gatewaySettings({ USER_UNRELATED: 'keep-user' }));
+  const userBytes = fs.readFileSync(userFile, 'utf8');
+  writeJson(legacyFile, gatewaySettings({ SHARED_UNRELATED: 'keep-shared' }));
+  writeJson(localFile, { env: {
+    ANTHROPIC_BASE_URL: COMPAT_BASE_URL,
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000',
+    PROJECT_LOCAL_UNRELATED: 'keep-local',
+  } });
+
+  assert.equal(migrateLegacyProjectSettings(home, project).migrated, true);
+  assert.equal(fs.readFileSync(userFile, 'utf8'), userBytes);
+  assert.deepEqual(JSON.parse(fs.readFileSync(legacyFile, 'utf8')).env, { SHARED_UNRELATED: 'keep-shared' });
+  const local = JSON.parse(fs.readFileSync(localFile, 'utf8')).env;
+  assert.equal(local.ANTHROPIC_BASE_URL, COMPAT_BASE_URL);
+  assert.equal(local.CLAUDE_CODE_MAX_OUTPUT_TOKENS, '32000');
+  assert.equal(local.PROJECT_LOCAL_UNRELATED, 'keep-local');
+  assert.equal(local.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY, '1');
+
+  const missingUser = fixture(t);
+  const missingLegacy = path.join(missingUser.project, '.claude', 'settings.json');
+  writeJson(missingLegacy, gatewaySettings());
+  assert.equal(migrateLegacyProjectSettings(missingUser.home, missingUser.project).migrated, true);
+  assert.equal(fs.existsSync(path.join(missingUser.home, '.claude', 'settings.json')), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(missingUser.project, '.claude', 'settings.local.json'), 'utf8')).env.ANTHROPIC_BASE_URL, DEFAULT_BASE_URL);
+
+  const unreadableUser = fixture(t);
+  const unreadableLegacy = path.join(unreadableUser.project, '.claude', 'settings.json');
+  const unreadableLocal = path.join(unreadableUser.project, '.claude', 'settings.local.json');
+  writeJson(path.join(unreadableUser.home, '.claude', 'settings.json'), gatewaySettings());
+  writeJson(unreadableLegacy, gatewaySettings());
+  const legacyBytes = fs.readFileSync(unreadableLegacy, 'utf8');
+  assert.deepEqual(migrateWithUnreadableUserIdentity(unreadableUser.home, unreadableUser.project), { migrated: false });
+  assert.equal(fs.readFileSync(unreadableLegacy, 'utf8'), legacyBytes);
+  assert.equal(fs.existsSync(unreadableLocal), false);
 });
 
 test('SQ-1901: the SessionStart hook shows the user an actionable state instead of only the model', (t) => {

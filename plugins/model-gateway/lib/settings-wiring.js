@@ -185,7 +185,19 @@ function hasGatewayBaseUrl(settings) {
 
 function migrateLegacyProjectSettings() {
   const legacyFile = settingsPath('legacy-project');
-  if (!fs.existsSync(legacyFile)) return { migrated: false };
+  const userFile = settingsPath('user');
+  if (!fs.existsSync(legacyFile) || path.relative(legacyFile, userFile) === '') return { migrated: false };
+  let resolvedLegacyFile;
+  try {
+    resolvedLegacyFile = fs.realpathSync.native(legacyFile);
+  } catch {
+    return { migrated: false };
+  }
+  try {
+    if (path.relative(resolvedLegacyFile, fs.realpathSync.native(userFile)) === '') return { migrated: false };
+  } catch (error) {
+    if (error?.code !== 'ENOENT') return { migrated: false };
+  }
   const legacy = readSettingsForWrite(legacyFile);
   if (!hasGatewayBaseUrl(legacy)) return { migrated: false };
   const entries = ownedGatewayEnvEntries(legacy.env);
