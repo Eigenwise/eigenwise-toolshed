@@ -1923,16 +1923,28 @@ ${verify.outputTail}` : null
       return { ok: true, ticket: t, comment, ...advisories.length ? { advisory: advisories.join(" ") } : {} };
     });
   }
-  function workingTreeVerification(ticket, candidate) {
+  function workingTreeVerification(ticket, candidate, verify) {
     const requirement = pinnedVerificationRequirement(ticket);
-    if (!requirement.command) {
+    if (requirement.kind === "review") {
       return {
         ok: false,
-        reason: "working_tree_verification_capture_required",
-        message: `${ticket.ref} working-tree delivery requires a command verifier and a completed verify-capture against the final working-tree state.`
+        reason: "working_tree_review_verification_unsupported",
+        message: `${ticket.ref} working-tree delivery cannot accept review verification because executor evidence has no independent reviewer provenance.`
       };
     }
-    const verification = commandVerificationResult(requirement, requirement.command, recordedVerificationCaptures(ticket), ticket.ref, candidate, String(ticket.dispatchNonce || ""));
+    if (requirement.command) {
+      const verification2 = commandVerificationResult(requirement, requirement.command, recordedVerificationCaptures(ticket), ticket.ref, candidate, String(ticket.dispatchNonce || ""));
+      if (!verification2.diagnostic) return { ok: true, verification: verification2.result };
+      return { ok: false, reason: verification2.diagnostic.code, message: verification2.diagnostic.message, verification: verification2.result };
+    }
+    if (!String(verify || "").trim()) {
+      return {
+        ok: false,
+        reason: "invalid_verify",
+        message: `required ${requirement.kind} verification evidence is missing`
+      };
+    }
+    const verification = submissionVerificationResult(ticket, null, verify);
     if (!verification.diagnostic) return { ok: true, verification: verification.result };
     return { ok: false, reason: verification.diagnostic.code, message: verification.diagnostic.message, verification: verification.result };
   }

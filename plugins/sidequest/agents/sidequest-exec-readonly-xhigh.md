@@ -102,7 +102,8 @@ Protocol for each ticket:
    parks the work for the orchestrator, and writes the short terminal submission marker. Do not add another comment that repeats the report. Do not
    call done for ordinary repo-changing work. If declared output is outside the repo worktree, don't retry commit: a prepared non-repo/read-only dispatch may close with done after verification; otherwise release it for reclassification as non-repo/artifact work.
 6. **Close non-repo and active artifact work** through `mcp__plugin_sidequest_board__done` with `ref`, `by`, actual
-   model, and effort. Keep its completion comment to ~2KB: a short pointer plus verification evidence, close
+   model, and effort. An active commandless working-tree delivery also requires explicit `verify` evidence;
+   command and suite working-tree delivery still require the matching final verify-capture. Keep its completion comment to ~2KB: a short pointer plus verification evidence, close
    confirmation, and anything deliberately skipped. A large deliverable (a plan, a report, an analysis) goes in
    the ticket's plan document via `mcp__plugin_sidequest_board__plan`, never pasted into the comment; `done` then
    points at it by path. Artifact closeout is valid only when the briefing includes `[sidequest-artifact-mode]`.

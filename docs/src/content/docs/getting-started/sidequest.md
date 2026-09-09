@@ -134,7 +134,7 @@ Sidequest keeps ticket activity visible in the board. Ask Claude to check active
 
 **Stale agent worktrees keep accumulating.** Ask Claude to inspect local worktree storage and clean up entries it can safely remove. The generated reference has the lifecycle and recovery details.
 
-**A ticket contract forbids commits.** Ask Claude to declare working-tree delivery before dispatch. After verification, the declared edits stay uncommitted and unpushed in the shared checkout for your normal team handoff. Ticket closure records that handoff; it does not replace your project's commit, review, or push process.
+**A ticket contract forbids commits.** Ask Claude to declare working-tree delivery before dispatch. Command and suite requirements close after the matching final capture. Commandless document, link, schema, custom, manual, and attestation requirements close with explicit typed evidence. The declared edits stay uncommitted and unpushed in the shared checkout for your normal team handoff. Ticket closure records that handoff; it does not replace your project's commit, review, or push process.
 
 **A POSIX verify command fails on Windows.** Ask Claude to inspect the recorded verification result and the shell it used.
 

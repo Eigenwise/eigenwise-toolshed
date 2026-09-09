@@ -1245,6 +1245,11 @@ function createDispatch(dependencies) {
       }
       const runtimeRefusal = sharedTree ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd) : null;
       if (runtimeRefusal) throw new Error(runtimeRefusal);
+      const workingTreeDelivery = sharedTree && t.workingTreeDelivery === true && effectiveFiles.length > 0;
+      const verificationRequirement2 = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ""));
+      if (workingTreeDelivery && verificationRequirement2.kind === "review") {
+        throw new Error(`prepare dispatch: ${t.ref} working-tree delivery cannot use review verification because executor evidence has no independent reviewer provenance.`);
+      }
       t.dispatchNonce = mintDispatchToken();
       if (priorTokenFile) {
         try {
@@ -1256,7 +1261,6 @@ function createDispatch(dependencies) {
       const category = getCategory(ticketCategory(t), { project: slug });
       const artifactRoot = sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t) ? categoryArtifactRoot(category, effectiveFiles[0]) : null;
       const artifactMode = Boolean(artifactRoot);
-      const workingTreeDelivery = sharedTree && t.workingTreeDelivery === true && effectiveFiles.length > 0;
       const declaredFiles = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(effectiveFiles, t.files, t.ref);
       const artifactScope = artifactMode ? effectiveFiles[0] : null;
       const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
@@ -1303,7 +1307,6 @@ function createDispatch(dependencies) {
         integrationTargetState.mode === "local" ? `local ${integrationTargetState.branch}` : integrationTargetState.upstream
       ) : null;
       delete t.storyContractDrift;
-      const verificationRequirement2 = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ""));
       const evidenceDirectory = ticketEvidenceDirectory(slug, t.ref, projectPath);
       fs.mkdirSync(evidenceDirectory, { recursive: true, mode: 448 });
       const baseCommit = reviewTargetState?.candidate.source === "git" ? reviewTargetState.candidate.value : integrationTargetState ? integrationTargetCommit(readMeta(slug)?.path || "", integrationTargetState) : commitScope.headCommit(readMeta(slug)?.path || "");

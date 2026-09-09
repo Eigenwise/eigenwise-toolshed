@@ -305,6 +305,10 @@ test('a shared-tree working-tree deliverable closes with its scoped paths and pi
   const candidate = store.workingTreeDeliveryCandidate(slug, store.getTicket(slug, created.ref));
   assert.ok(candidate);
   assert.deepStrictEqual(candidate.changedPaths, ['.claude/.codebase-info/working-tree.md']);
+  const fabricatedEvidence = store.completeTicket(slug, created.ref, 'working-tree-worker', { source: 'mcp', verify: 'fabricated done evidence' });
+  assert.strictEqual(fabricatedEvidence.ok, false);
+  assert.strictEqual(fabricatedEvidence.reason, 'verification_capture_required');
+  assert.strictEqual(store.getTicket(slug, created.ref).claim.by, 'working-tree-worker');
   const { capture, recorded } = await runCapturedVerification(command, { project: PROJECT, ticket: created.ref }, os.tmpdir());
   try {
     assert.strictEqual(capture.status, 'passed', capture.evidence);
@@ -314,12 +318,127 @@ test('a shared-tree working-tree deliverable closes with its scoped paths and pi
     fs.rmSync(capture.logPath, { force: true });
   }
 
-  const done = store.completeTicket(slug, created.ref, 'working-tree-worker', { source: 'mcp' });
+  const done = store.completeTicket(slug, created.ref, 'working-tree-worker', { source: 'mcp', verify: 'fabricated done evidence' });
   assert.strictEqual(done.ok, true);
   assert.strictEqual(done.ticket.completion.purpose, 'working-tree');
   assert.deepStrictEqual(done.ticket.completion.workingTree.changedPaths, ['.claude/.codebase-info/working-tree.md']);
   assert.strictEqual(done.ticket.completion.workingTree.candidate.source, 'working-tree');
   assert.strictEqual(done.ticket.completion.workingTree.verification.status, 'passed');
+});
+
+test('document working-tree done binds explicit typed evidence to its final candidate', () => {
+  const evidence = 'Read the rendered document and confirmed every required section.';
+  const created = store.createTicket(slug, {
+    title: 'leave a documented working-tree deliverable',
+    description: 'The declared document remains uncommitted in the shared checkout.',
+    category: 'repository-write',
+    files: ['.claude/.codebase-info'],
+    workingTreeDelivery: true,
+    executorVerifyKind: 'document',
+    executorVerify: 'Read the rendered document.',
+    source: 'mcp',
+  });
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+  assert.strictEqual(claim(prepared, 'document-working-tree-worker').ok, true);
+  writeProjectFile('.claude/.codebase-info/document-working-tree.md', '# Uncommitted document\n');
+  const checkpoint = store.checkpointTicket(slug, created.ref, 'document-working-tree-worker', {
+    worktree: PROJECT,
+    verify: 'Document checkpoint reviewed before closeout.',
+    source: 'mcp',
+  });
+  assert.strictEqual(checkpoint.ok, true);
+
+  const missing = store.completeTicket(slug, created.ref, 'document-working-tree-worker', { source: 'mcp', verify: ' \n\t ' });
+  assert.strictEqual(missing.ok, false);
+  assert.strictEqual(missing.reason, 'invalid_verify');
+  const retained = store.getTicket(slug, created.ref);
+  assert.strictEqual(retained.claim.by, 'document-working-tree-worker');
+
+  const done = store.completeTicket(slug, created.ref, 'document-working-tree-worker', { source: 'mcp', verify: evidence });
+  assert.strictEqual(done.ok, true);
+  assert.strictEqual(done.ticket.completion.purpose, 'working-tree');
+  assert.strictEqual(done.ticket.completion.by, 'document-working-tree-worker');
+  assert.strictEqual(done.ticket.completion.claimAt, retained.claim.at);
+  assert.deepStrictEqual(done.ticket.completion.workingTree.changedPaths, ['.claude/.codebase-info/document-working-tree.md']);
+  assert.strictEqual(done.ticket.completion.workingTree.candidate.source, 'working-tree');
+  assert.deepStrictEqual(done.ticket.completion.workingTree.verification, { kind: 'document', status: 'passed', evidence });
+});
+
+test('CLI done forwards typed evidence for commandless working-tree delivery', () => {
+  const evidence = 'Read the generated document and confirmed the required sections.';
+  const created = store.createTicket(slug, {
+    title: 'close a document working-tree deliverable through CLI',
+    description: 'The CLI must forward explicit document evidence to done.',
+    category: 'repository-write',
+    files: ['.claude/.codebase-info'],
+    workingTreeDelivery: true,
+    executorVerifyKind: 'document',
+    executorVerify: 'Read the generated document.',
+    source: 'mcp',
+  });
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+  assert.strictEqual(claim(prepared, 'cli-document-working-tree-worker').ok, true);
+  writeProjectFile('.claude/.codebase-info/cli-document-working-tree.md', '# Uncommitted document\n');
+
+  const result = runCli([
+    'done', created.ref,
+    '--by', 'cli-document-working-tree-worker',
+    '--model', 'sonnet',
+    '--effort', 'medium',
+    '--body', 'CLI document handoff completed with typed evidence.',
+    '--verify', evidence,
+    '--json',
+  ]);
+  assert.strictEqual(result.status, 0, result.output);
+  const completed = store.getTicket(slug, created.ref);
+  assert.deepStrictEqual(completed.completion.workingTree.verification, { kind: 'document', status: 'passed', evidence });
+});
+
+
+test('working-tree review verification refuses before dispatch persistence', () => {
+  const created = store.createTicket(slug, {
+    title: 'reject working-tree review evidence',
+    description: 'An executor cannot supply independent reviewer provenance.',
+    category: 'repository-write',
+    files: ['.claude/.codebase-info'],
+    workingTreeDelivery: true,
+    executorVerifyKind: 'review',
+    executorVerify: 'Independent reviewer findings.',
+    source: 'mcp',
+  });
+
+  assert.throws(
+    () => store.prepareDispatch(slug, created.ref, { sharedTree: true }),
+    /working-tree delivery cannot use review verification/,
+  );
+  const refused = store.getTicket(slug, created.ref);
+  assert.strictEqual(refused.dispatchNonce, null);
+  assert.strictEqual(refused.dispatch, undefined);
+  assert.strictEqual(refused.lifecycleAttempt, undefined);
+});
+
+test('working-tree closeout refuses review verification persisted by a legacy dispatch', () => {
+  const created = store.createTicket(slug, {
+    title: 'defend working-tree closeout from review evidence',
+    description: 'A legacy prepared dispatch cannot close on executor-supplied review evidence.',
+    category: 'repository-write',
+    files: ['.claude/.codebase-info'],
+    workingTreeDelivery: true,
+    executorVerifyKind: 'document',
+    executorVerify: 'Read the rendered document.',
+    source: 'mcp',
+  });
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+  assert.strictEqual(claim(prepared, 'legacy-review-worker').ok, true);
+  writeProjectFile('.claude/.codebase-info/legacy-review.md', '# Uncommitted document\n');
+  const legacy = store.getTicket(slug, created.ref);
+  legacy.dispatch.verificationRequirement = { kind: 'review', evidenceContract: 'independent review findings' };
+  persistTicket(legacy);
+
+  const refused = store.completeTicket(slug, created.ref, 'legacy-review-worker', { source: 'mcp', verify: 'fabricated review evidence' });
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'working_tree_review_verification_unsupported');
+  assert.strictEqual(store.getTicket(slug, created.ref).claim.by, 'legacy-review-worker');
 });
 
 test('working-tree dispatch records a warning and attributes every path when the dirty baseline exceeds its cap', () => {

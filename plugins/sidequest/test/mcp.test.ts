@@ -404,6 +404,9 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.ok(submit.inputSchema.properties.clear, 'submit exposes clear to reject a pending submission without integrating it');
   assert.equal(submit.inputSchema.required.includes('body'), false, 'body is handler-enforced, not schema-required, so clear:true can omit it');
   assert.ok(resp.result.tools.find((tool: any) => tool.name === 'done').inputSchema.required.includes('body'), 'done requires the final report');
+  const doneDescriptor = resp.result.tools.find((tool: any) => tool.name === 'done');
+  assert.equal(doneDescriptor.inputSchema.properties.verify.maxLength, 4000, 'done accepts bounded typed verification evidence');
+  assert.match(doneDescriptor.description, /commandless working-tree needs verify/);
   const groomClose = resp.result.tools.find((tool: any) => tool.name === 'groomClose');
   assert.ok(groomClose.inputSchema.properties.deliveryCommit, 'groomClose records hand-delivered commits');
   assert.ok(groomClose.inputSchema.properties.recoveryEvidence, 'groomClose requires terminal-agent evidence before clearing an unclaimed dispatch');
@@ -4445,6 +4448,46 @@ test('claim -> comment -> done return compact acknowledgements', async () => {
   assert.deepStrictEqual(Object.keys(done).sort(), ['ok', 'project', 'ref', 'status']);
   assert.strictEqual(done.status, 'done');
 });
+
+test('MCP done forwards typed evidence for commandless working-tree delivery', async () => {
+  const repo = committedRepo('sq-mcp-done-verify-');
+  const project = store.ensureProject(repo).slug;
+  const category = `mcp-done-verify-${Date.now()}`;
+  store.setCategory({ id: category, name: 'MCP done verify', route: { model: 'sonnet', effort: 'medium' } });
+  const evidence = 'Read the generated document and confirmed its required sections.';
+  const created = store.createTicket(project, {
+    title: 'MCP document working-tree delivery',
+    description: 'Exercise done.verify through the MCP handler.',
+    category,
+    files: ['docs'],
+    workingTreeDelivery: true,
+    executorVerifyKind: 'document',
+    executorVerify: 'Read the generated document.',
+    source: 'mcp',
+  });
+  const prepared = store.prepareDispatch(project, created.ref, { sharedTree: true, sessionId: MCP_SESSION_ID });
+  const by = 'mcp-done-verify-worker';
+  assert.equal(store.claimTicket(project, created.ref, by, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId: MCP_SESSION_ID,
+  }).ok, true);
+  fs.mkdirSync(path.join(repo, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'docs', 'working-tree.md'), '# Working tree document\n');
+
+  const done = await callTool('done', {
+    project: repo,
+    ref: created.ref,
+    by,
+    model: prepared.ticket.model,
+    effort: prepared.ticket.effort,
+    body: 'Document handoff completed with typed evidence.',
+    verify: evidence,
+  });
+  assert.equal(done.ok, true);
+  assert.deepEqual(store.getTicket(project, created.ref).completion.workingTree.verification, { kind: 'document', status: 'passed', evidence });
+});
+
 
 test('MCP done requires a final report and release records its reason', async () => {
   const added = await callTool('add', { title: 'required final report', complexity: 2, why: 'exercise final-report validation and durable release reasons', labels: ['direct-ok'] });

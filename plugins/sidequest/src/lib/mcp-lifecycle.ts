@@ -487,7 +487,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'done',
-    description: 'Finish. A readonly last dispatch closes without a submission; a clean writable scope needs externalDeliverable:true plus a current-attempt pinned verify-capture.',
+    description: 'Finish. A readonly last dispatch closes without a submission; a clean writable scope needs externalDeliverable:true plus a current-attempt pinned verify-capture. Commandless working-tree delivery requires typed verify evidence.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -497,6 +497,7 @@ const tools: ToolDefinition[] = [
         model: { type: 'string', description: 'Concrete runtime model that actually worked this ticket (provenance).' },
         effort: { type: 'string', enum: store.VALID_EFFORTS },
         body: { type: 'string', description: 'Final report stored as the completion comment.' },
+        verify: { type: 'string', maxLength: 4000, description: 'Typed evidence required only for active commandless working-tree delivery. Command or suite delivery still requires its matching verify-capture.' },
         session: { type: 'string' },
       },
       required: ['ref', 'by', 'body'],
@@ -507,7 +508,7 @@ const tools: ToolDefinition[] = [
       const body = requiredFinalReport(args, 'done');
       const ticket = store.getTicket(slug, args.ref);
       const model = requireKnownModel('done', args.model, ticket);
-      const opts = { source: 'mcp', model, effort: args.effort, body, sessionId: sessionOf(args) };
+      const opts = { source: 'mcp', model, effort: args.effort, body, verify: args.verify, sessionId: sessionOf(args) };
       let res = store.completeTicket(slug, args.ref, by, opts);
       if (!res.ok && ['submission_required', 'empty_declared_scope'].includes(res.reason)) {
         const noOp = provenNoOpCloseout(slug, res.ticket);

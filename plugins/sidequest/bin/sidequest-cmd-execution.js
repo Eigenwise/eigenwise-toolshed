@@ -174,6 +174,7 @@ async function cmdDone(opts, positional) {
       model: opts.model,
       effort: opts.effort,
       body,
+      verify: opts.verify,
       sessionId: sessionId(opts)
     };
     res = store.completeTicket(slug, idOrRef, by, completionOptions);

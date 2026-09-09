@@ -2166,16 +2166,28 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   });
 }
 
-function workingTreeVerification(ticket: any, candidate: any) {
+function workingTreeVerification(ticket: any, candidate: any, verify?: any) {
   const requirement = pinnedVerificationRequirement(ticket);
-  if (!requirement.command) {
+  if (requirement.kind === 'review') {
     return {
       ok: false,
-      reason: 'working_tree_verification_capture_required',
-      message: `${ticket.ref} working-tree delivery requires a command verifier and a completed verify-capture against the final working-tree state.`,
+      reason: 'working_tree_review_verification_unsupported',
+      message: `${ticket.ref} working-tree delivery cannot accept review verification because executor evidence has no independent reviewer provenance.`,
     };
   }
-  const verification = commandVerificationResult(requirement, requirement.command, recordedVerificationCaptures(ticket), ticket.ref, candidate, String(ticket.dispatchNonce || ''));
+  if (requirement.command) {
+    const verification = commandVerificationResult(requirement, requirement.command, recordedVerificationCaptures(ticket), ticket.ref, candidate, String(ticket.dispatchNonce || ''));
+    if (!verification.diagnostic) return { ok: true, verification: verification.result };
+    return { ok: false, reason: verification.diagnostic.code, message: verification.diagnostic.message, verification: verification.result };
+  }
+  if (!String(verify || '').trim()) {
+    return {
+      ok: false,
+      reason: 'invalid_verify',
+      message: `required ${requirement.kind} verification evidence is missing`,
+    };
+  }
+  const verification = submissionVerificationResult(ticket, null, verify);
   if (!verification.diagnostic) return { ok: true, verification: verification.result };
   return { ok: false, reason: verification.diagnostic.code, message: verification.diagnostic.message, verification: verification.result };
 }
