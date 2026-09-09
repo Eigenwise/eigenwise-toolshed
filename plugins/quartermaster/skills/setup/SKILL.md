@@ -99,6 +99,11 @@ handing off implementation. Draw from three sources, in this order:
   - `model-gateway` puts the user's existing ChatGPT/Codex and Grok subscription models in
     Claude Code's `/model` picker through a local gateway, no API keys. It is what makes
     sidequest's non-Claude routes possible. Project-scoped with the rest of the workspace plugins.
+  - `whittle` applies one practical clean-code policy through supported host/plugin seams. Offer it
+    only when the user wants that policy delivered beyond Claude Code. If another clean-code injector
+    is already active, explain that they must disable it manually and reload plugins or restart before
+    enabling Whittle. Do not uninstall, import preferences, write consumer configuration, or offer
+    modes: enabling the host/plugin is the whole activation path.
 
   When the plan wires Model Gateway or Sidequest routing, check the effective setting first:
 

@@ -20,6 +20,13 @@ test('documents namespaced Quartermaster commands and Live Rules deduplication',
   assert.doesNotMatch(setup, /every prompt for the always-on ones/);
 });
 
+test('offers Whittle without modes or consumer configuration', () => {
+  const setup = readSkill('setup');
+
+  assert.match(setup, /must disable it manually and reload plugins or restart before\s+enabling Whittle/);
+  assert.match(setup, /Do not uninstall, import preferences, write consumer configuration, or offer\s+modes/);
+});
+
 test('seeds reuse-first implementation without auto-running resupply', () => {
   const templates = fs.readFileSync(path.join(__dirname, '..', 'skills', 'setup', 'references', 'rule-templates.md'), 'utf8');
   const selfImprovement = fs.readFileSync(path.join(__dirname, '..', 'skills', 'setup', 'references', 'self-improvement.md'), 'utf8');
