@@ -161,7 +161,7 @@ function handleHook(eventName, input) {
   const selection = command(input);
   if (!selection) return '';
   if (selection.type === 'status') return status(activeMode(input));
-  if (selection.type === 'help') return 'Whittle commands: status, lite, full, ultra, off, or default <mode>. Mode changes persist when the host provides a session identity.';
+  if (selection.type === 'help') return 'Whittle commands: status, lite, full, ultra, off, or default <mode>. Reports stay available while mode is off: Sidequest routes readonly submitted-candidate reviews with immutable reviewTarget, named-scope repository audits, and source-comment debt scans without edits. Without Sidequest installed in this host, the routed report capability is unavailable. Gain is unmeasured without a matched baseline. Mode changes persist when the host provides a session identity.';
   const failedSelections = [];
   if (selection.type === 'default' && !selectDefaultMode(input, selection.mode)) failedSelections.push('default');
   if (!selectSessionMode(input, selection.mode)) failedSelections.push('session');
