@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.535.0 (2026-09-09)
+
+### sidequest 5.0.39 → 5.0.40
+
+#### Fixes
+
+- Let accepted repairs bypass rejected candidate overlap (SQ-2585)
+
 ## v3.534.0 (2026-09-09)
 
 ### model-gateway 0.50.4 → 0.50.5
