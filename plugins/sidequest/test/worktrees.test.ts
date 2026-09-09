@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 const worktrees = require('../src/lib/worktrees.ts');
 const worktreeLease = require('../src/lib/kernel/worktree.ts');
@@ -18,6 +18,7 @@ function repositoryFixture() {
   git(repository, ['config', 'user.name', 'Sidequest Test']);
   git(repository, ['config', 'user.email', 'sidequest-test@example.invalid']);
   fs.writeFileSync(path.join(repository, 'README.md'), 'fixture\n');
+  fs.writeFileSync(path.join(repository, '.gitignore'), 'node_modules/\n');
   git(repository, ['add', '.']);
   git(repository, ['commit', '-m', 'base']);
   const baseCommit = git(repository, ['rev-parse', 'HEAD']);
@@ -59,6 +60,7 @@ function integratedTicket(ref: string, agentId: string, worktree: string, baseCo
     claimLive: false,
     dispatch: {
       agentId,
+      sharedTree: false,
       worktree,
       baseCommit,
       worktreeBindingSource: 'worktree-create',
@@ -75,7 +77,179 @@ function integratedTicket(ref: string, agentId: string, worktree: string, baseCo
   };
 }
 
+function recordedDependencyLink(ticket: any, worktree: string, relativePath: string, target: string): void {
+  const dispatch = ticket.dispatch;
+  dispatch.ownedDependencyLinks = [{
+    relativePath,
+    target: worktrees.canonicalPath(target),
+    worktree: worktrees.canonicalPath(worktree),
+    gitDirectory: worktrees.canonicalPath(dispatch.worktreeGitDirectory),
+    commonGitDirectory: worktrees.canonicalPath(dispatch.worktreeCommonGitDirectory),
+    checkoutInstance: dispatch.worktreeCheckoutInstance,
+    revision: dispatch.worktreeObservedRevision,
+  }];
+}
+
+function createDependencyLink(worktree: string, relativePath: string, target: string): string {
+  const link = path.join(worktree, ...relativePath.split('/'));
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+  return link;
+}
+
+function dependencyTarget(repository: string, name: string): string {
+  const target = path.join(repository, 'dependency-targets', name);
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, 'sentinel.txt'), name);
+  return target;
+}
+
 const integrationTarget = { upstream: 'HEAD', branch: 'main' };
+
+test('sweep removes a recorded dependency link without following its target', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const target = dependencyTarget(repository, 'owned');
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'owned-link');
+  const ticket = integratedTicket('SQ-OWNED-LINK', 'owned-link', worktree, baseCommit);
+  const link = createDependencyLink(worktree, 'node_modules/link', target);
+  recordedDependencyLink(ticket, worktree, 'node_modules/link', target);
+  try {
+    const first = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget });
+    const second = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget });
+
+    assert.deepEqual(first.removed.map((candidate: string) => worktrees.canonicalPath(candidate)), [worktrees.canonicalPath(worktree)]);
+    assert.deepEqual(second.removed, []);
+    assert.equal(fs.existsSync(worktree), false);
+    assert.equal(fs.lstatSync(target).isDirectory(), true);
+    assert.equal(fs.readFileSync(path.join(target, 'sentinel.txt'), 'utf8'), 'owned');
+    assert.equal(fs.existsSync(link), false);
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('negative control: sweep retains a config-only dependency link without ownership evidence', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const target = dependencyTarget(repository, 'config-only');
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'unrecorded-link');
+  const ticket = integratedTicket('SQ-UNRECORDED-LINK', 'unrecorded-link', worktree, baseCommit);
+  const link = createDependencyLink(worktree, 'node_modules/link', target);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.action, 'keep');
+    assert.equal(entry.reason, 'dependency_link_untrusted');
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    assert.equal(fs.readFileSync(path.join(target, 'sentinel.txt'), 'utf8'), 'config-only');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('sweep retains a swapped recorded dependency link and its foreign target', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const expectedTarget = dependencyTarget(repository, 'expected');
+  const swappedTarget = dependencyTarget(repository, 'swapped');
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'swapped-link');
+  const ticket = integratedTicket('SQ-SWAPPED-LINK', 'swapped-link', worktree, baseCommit);
+  const link = createDependencyLink(worktree, 'node_modules/link', swappedTarget);
+  recordedDependencyLink(ticket, worktree, 'node_modules/link', expectedTarget);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.action, 'keep');
+    assert.equal(entry.reason, 'dependency_link_untrusted');
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    assert.equal(fs.readFileSync(path.join(swappedTarget, 'sentinel.txt'), 'utf8'), 'swapped');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('sweep preserves a recorded dependency link after checkout identity changes', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const target = dependencyTarget(repository, 'identity');
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'identity-link');
+  const ticket = integratedTicket('SQ-IDENTITY-LINK', 'identity-link', worktree, baseCommit);
+  recordedDependencyLink(ticket, worktree, 'node_modules/link', target);
+  git(repository, ['worktree', 'remove', '--force', worktree]);
+  git(repository, ['worktree', 'add', '--detach', worktree, baseCommit]);
+  const link = createDependencyLink(worktree, 'node_modules/link', target);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.action, 'keep');
+    assert.equal(entry.reason, 'checkout_instance_mismatch');
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    assert.equal(fs.readFileSync(path.join(target, 'sentinel.txt'), 'utf8'), 'identity');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('sweep leaves an owned link intact when salvage fails', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const target = dependencyTarget(repository, 'salvage');
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'salvage-link');
+  const ticket = integratedTicket('SQ-SALVAGE-LINK', 'salvage-link', worktree, baseCommit);
+  fs.writeFileSync(path.join(worktree, 'conflict.txt'), 'worktree\n');
+  git(worktree, ['add', 'conflict.txt']);
+  git(worktree, ['commit', '-m', 'worktree change']);
+  fs.writeFileSync(path.join(repository, 'conflict.txt'), 'repository\n');
+  git(repository, ['add', 'conflict.txt']);
+  git(repository, ['commit', '-m', 'repository change']);
+  const merge = spawnSync('git', ['merge', 'main'], { cwd: worktree, windowsHide: true });
+  assert.notEqual(merge.status, 0);
+  const link = createDependencyLink(worktree, 'node_modules/link', target);
+  recordedDependencyLink(ticket, worktree, 'node_modules/link', target);
+  const oldTimestamp = new Date(Date.now() - 4 * 60 * 60 * 1000);
+  fs.utimesSync(worktree, oldTimestamp, oldTimestamp);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], {
+      execute: true,
+      minAgeMs: 0,
+      notIntegratedSalvageAgeMs: 0,
+      integrationTarget: { upstream: 'main', branch: 'main' },
+    });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.action, 'keep');
+    assert.equal(entry.reason, 'salvage_failed');
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    assert.equal(fs.readFileSync(path.join(worktree, 'conflict.txt'), 'utf8').includes('worktree'), true);
+    assert.equal(fs.readFileSync(path.join(target, 'sentinel.txt'), 'utf8'), 'salvage');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('provisionWorktree reports every created link before a setup failure', async () => {
+  const { repository } = repositoryFixture();
+  const target = dependencyTarget(repository, 'partial');
+  const worktree = path.join(repository, 'provisioned-worktree');
+  fs.mkdirSync(worktree);
+  const recorded: { relativePath: string; target: string }[] = [];
+  try {
+    const failure = await worktrees.provisionWorktree(repository, worktree, {
+      worktreeDependencyPaths: [{ path: 'dependency-targets/partial', mode: 'link' }],
+      worktreeSetup: 'node -e "process.exit(7)"',
+    }, { onDependencyLink: (link: { relativePath: string; target: string }) => recorded.push(link) });
+
+    assert.equal(failure?.reason, 'exited with status 7');
+    assert.deepEqual(recorded, [{ relativePath: 'dependency-targets/partial', target: worktrees.canonicalPath(target) }]);
+    assert.equal(fs.lstatSync(path.join(worktree, 'dependency-targets', 'partial')).isSymbolicLink(), true);
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
 
 test('sweep reclaims clean legacy worktrees and reports facts for retained legacy worktrees', async () => {
   const { repository, baseCommit, worktreeRoot } = repositoryFixture();
@@ -231,6 +405,26 @@ test('unclaimed dispatch cleanup is denied by its unknown lease identity', () =>
     assert.equal(result.reason, 'lease_refused');
     assert.match(result.message, /store-owned terminal dispatch transition/);
     assert.equal(fs.existsSync(worktree), true);
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('unclaimed dispatch recovery removes a recorded dependency link without following its target', () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const target = dependencyTarget(repository, 'recovery-owned');
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'recovery-owned');
+  const ticket = integratedTicket('SQ-RECOVERY-OWNED', 'recovery-owned', worktree, baseCommit);
+  const link = createDependencyLink(worktree, 'node_modules/link', target);
+  recordedDependencyLink(ticket, worktree, 'node_modules/link', target);
+  try {
+    const result = worktrees.reclaimUnclaimedDispatchWorktree(repository, ticket.dispatch);
+
+    assert.equal(result.reclaimed, true);
+    assert.equal(fs.existsSync(worktree), false);
+    assert.equal(fs.existsSync(link), false);
+    assert.equal(fs.readFileSync(path.join(target, 'sentinel.txt'), 'utf8'), 'recovery-owned');
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
     fs.rmSync(repository, { recursive: true, force: true });

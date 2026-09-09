@@ -153,6 +153,15 @@ function recordProvisioningFailure(repository: string, sessionId: string, worktr
   return store.recordDispatchWorktreeProvisioningFailure(project.slug, sessionId, worktree, failure);
 }
 
+function recordDependencyLink(repository: string, sessionId: string, worktree: string, link: { relativePath: string; target: string }): CreationBinding {
+  const store = require(runtimeModule('store')) as WorktreeStore & {
+    recordDispatchWorktreeDependencyLink: (slug: string, sessionId: string, worktree: string, link: { relativePath: string; target: string }) => CreationBinding;
+  };
+  const project = registeredProject(store, repository);
+  if (!project.ok || !project.slug) return { ok: false, reason: 'project_unavailable' };
+  return store.recordDispatchWorktreeDependencyLink(project.slug, sessionId, worktree, link);
+}
+
 function plannedRevision(repository: string, name: string, baseline: string): string {
   const branch = `worktree-${name}`;
   git(repository, ['check-ref-format', '--branch', branch]);
@@ -221,7 +230,12 @@ async function createWorktreeMain(): Promise<void> {
   const repository = repositoryFor(cwd);
   const worktrees = require(runtimeModule('worktrees')) as {
     namedWorktreePath: (repo: string, worktreeName: string) => string;
-    provisionWorktree: (repo: string, worktree: string, config: { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null }, options: { setupTimeoutMs?: number }) => Promise<{ command: string; reason: string; stderrTail: string } | null>;
+    provisionWorktree: (
+      repo: string,
+      worktree: string,
+      config: { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null },
+      options: { setupTimeoutMs?: number; onDependencyLink?: (link: { relativePath: string; target: string }) => void },
+    ) => Promise<{ command: string; reason: string; stderrTail: string } | null>;
   };
   const target = worktrees.namedWorktreePath(repository, name);
   const binding = bindCreation(repository, sessionId, target);
@@ -249,7 +263,13 @@ async function createWorktreeMain(): Promise<void> {
         boundCreation.repository,
         boundCreation.worktree,
         provisioningConfig(boundCreation.repository),
-        { setupTimeoutMs: worktreeSetupDeadlineMs() },
+        {
+          setupTimeoutMs: worktreeSetupDeadlineMs(),
+          onDependencyLink: (link) => {
+            const recorded = recordDependencyLink(boundCreation.repository, sessionId, boundCreation.worktree, link);
+            if (!recorded.ok) throw new Error(`worktree lease could not record dependency link: ${recorded.reason || 'dispatch binding is incomplete'}`);
+          },
+        },
       );
       if (provisioningFailure) {
         const recorded = recordProvisioningFailure(boundCreation.repository, sessionId, boundCreation.worktree, provisioningFailure);
