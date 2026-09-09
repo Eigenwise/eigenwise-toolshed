@@ -1475,6 +1475,8 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const configuredWorktreeBase = boardConfig(slug)?.worktreeBase || 'auto';
     const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
     const isolatedRepositoryDispatch = !sharedTree && !readonly && !nonRepoOutput;
+    const automaticWorktreeBaseEligible = isolatedRepositoryDispatch
+      || (!sharedTree && readonly && !nonRepoOutput && configuredWorktreeBase !== 'auto');
     const remoteIntegrationTarget = () => {
       try {
         return integrationTarget(slug, { mode: 'remote' });
@@ -1483,7 +1485,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
         throw new Error(`${message} The configured worktreeBase is "${configuredWorktreeBase}"; use --worktree-base local-main to dispatch from the local integration branch.`);
       }
     };
-    const automaticWorktreeBase = isolatedRepositoryDispatch && !explicitIntegrationTarget && configuredIntegrationMode === 'auto'
+    const automaticWorktreeBase = automaticWorktreeBaseEligible && !explicitIntegrationTarget && configuredIntegrationMode === 'auto'
       ? configuredWorktreeBase === 'local-main'
         ? integrationTarget(slug, { mode: 'local' })
         : configuredWorktreeBase === 'origin-main'
