@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.0 (2026-09-09)
+
+Released in v3.537.0, up from 0.7.7.
+
+### Features
+
+- Add Whittle clean-code policy (SQ-2600)
+  Whittle applies one clean-code policy through Claude Code lifecycle hooks, native host adapters, static instruction exports, and a read-only MCP prompt/tool. It has no modes, saved preferences, or switching commands. Quartermaster offers it without changing consumer configuration. Native adapter checks cover callback contracts; live OpenCode, Pi, and Hermes hosts were not run.
+
+### Fixes
+
+- Seed reuse-first Quartermaster project rules (SQ-2590)
+  Seed generated Quartermaster project rules with reuse-first implementation guidance and approval-gated resupply.
+- Keep improvement decisions with orchestrator (SQ-2601)
+  Keep improvement selection and boundaries with the orchestrator while executors implement the pinned plan.
+
 ## 0.7.7 (2026-09-09)
 
 Released in v3.534.0, up from 0.7.6.

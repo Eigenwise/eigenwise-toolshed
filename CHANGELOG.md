@@ -8,6 +8,65 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.537.0 (2026-09-09)
+
+### model-gateway 0.50.5 → 0.50.6
+
+#### Fixes
+
+- Confirm gateway health before proxy recovery (SQ-2549)
+- Preserve user wiring during settings migration (SQ-2586)
+- Keep unconfirmed gateway ownership out of lifecycle changes (SQ-2602)
+- Preserve full gateway process commands in narrow terminals (SQ-2607)
+- Replay reviewed Codex schema adapter (SQ-2608)
+  Replay the independently reviewed bounded Codex schema compatibility adapter with a fresh executor submission.
+- Clarify forced host gateway guidance (SQ-2611)
+- Isolate user-wiring test from invoking checkout (SQ-2612)
+  Isolate the RC compatibility user-wiring test from project-local settings in the invoking checkout.
+
+### quartermaster 0.7.7 → 0.8.0
+
+#### Features
+
+- Add Whittle clean-code policy (SQ-2600)
+  Whittle applies one clean-code policy through Claude Code lifecycle hooks, native host adapters, static instruction exports, and a read-only MCP prompt/tool. It has no modes, saved preferences, or switching commands. Quartermaster offers it without changing consumer configuration. Native adapter checks cover callback contracts; live OpenCode, Pi, and Hermes hosts were not run.
+
+#### Fixes
+
+- Seed reuse-first Quartermaster project rules (SQ-2590)
+  Seed generated Quartermaster project rules with reuse-first implementation guidance and approval-gated resupply.
+- Keep improvement decisions with orchestrator (SQ-2601)
+  Keep improvement selection and boundaries with the orchestrator while executors implement the pinned plan.
+
+### sidequest 5.0.41 → 5.1.0
+
+#### Features
+
+- Support reduced host Agent schemas safely (SQ-2550)
+- Close commandless working-tree delivery with evidence (SQ-2594) [`023b365`](https://github.com/Eigenwise/eigenwise-toolshed/commit/023b3657ddc3348be546dbcb07abb1baf75ee26f)
+
+#### Fixes
+
+- Clean owned dependency links without following targets (SQ-2548)
+- Preserve dependency targets during worktree recovery (SQ-2558)
+- Repair reduced Agent-schema route guards and contracts (SQ-2559)
+- Honor configured worktree bases for read-only dispatches (SQ-2560)
+- Sidequest guidance favors focused verification (SQ-2589)
+  Guide executors toward minimal shared-root fixes, focused checks, and reviews only where a named seam needs them.
+- Keep fresh dispatches claimable after failed launches (SQ-2593)
+  Subagent startup no longer invalidates a newer prepared dispatch after an earlier launch fails.
+- Sidequest routes Whittle report guidance (SQ-2598)
+  Document read-only review, audit, and shortcut-debt reports through Sidequest, with Whittle help pointing to the same routes.
+- Keep improvement decisions with orchestrator (SQ-2601)
+  Keep improvement selection and boundaries with the orchestrator while executors implement the pinned plan.
+
+### whittle 0.0.0 → 0.1.0
+
+#### Features
+
+- Add Whittle clean-code policy (SQ-2600)
+  Whittle applies one clean-code policy through Claude Code lifecycle hooks, native host adapters, static instruction exports, and a read-only MCP prompt/tool. It has no modes, saved preferences, or switching commands. Quartermaster offers it without changing consumer configuration. Native adapter checks cover callback contracts; live OpenCode, Pi, and Hermes hosts were not run.
+
 ## v3.536.0 (2026-09-09)
 
 ### sidequest 5.0.40 → 5.0.41
