@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.540.0 (2026-09-10)
+
+### model-gateway 0.50.8 → 0.50.9
+
+#### Fixes
+
+- Verify RC bindability before changing hosts (SQ-2625)
+  RC compatibility now checks bindability in the running supervisor, activates its listener without restarting the gateway, and refuses unknown or unavailable capability before hosts changes. Failed enablement conditionally restores its own hosts bytes while preserving observed external edits. Wiring synchronization reports verified settings after legacy migration; inherited environment-only compatibility remains process-limited. CLI regression fixtures isolate project settings.
+
 ## v3.539.0 (2026-09-09)
 
 ### model-gateway 0.50.7 → 0.50.8
