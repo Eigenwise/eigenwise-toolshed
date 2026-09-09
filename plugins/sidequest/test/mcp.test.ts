@@ -237,6 +237,16 @@ function runForceBypass(payload?: any) {
   return output.trim() ? JSON.parse(output) : null;
 }
 
+function runRuntimeIdentityBind(payload?: any) {
+  const hook = path.join(__dirname, '..', 'hooks', 'bind-runtime-identity.js');
+  const output = execFileSync(process.execPath, [hook], {
+    input: JSON.stringify(payload),
+    encoding: 'utf8',
+    env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ, CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') },
+  });
+  return output.trim() ? JSON.parse(output) : null;
+}
+
 function createGitWorktree() {
   // The space is the point: every commit/submit path below runs against a
   // worktree whose absolute path contains one. Keep the sq- prefix too, it is
@@ -3875,7 +3885,7 @@ test('MCP board archive tools match the CLI archive-board lifecycle', async () =
 test('dispatch returns a stable executor, one spawn prompt, and a token', async () => {
   const d = mcp.toolDescriptors().find((t: any) => t.name === 'dispatch');
   assert.ok(d);
-  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['allowRepeatFailure', 'allowUnscoped', 'claimHolder', 'full', 'integrationBranch', 'project', 'recoveryEvidence', 'ref', 'sharedTree', 'worktree']);
+  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['allowRepeatFailure', 'allowUnscoped', 'claimHolder', 'full', 'integrationBranch', 'project', 'recoveryEvidence', 'reducedAgentSchema', 'ref', 'sharedTree', 'worktree']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
 
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' }]);
@@ -3946,6 +3956,168 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.equal(readonlyDispatch.spawn.subagent_type, 'sidequest:sidequest-exec-dispatch-readonly');
   assert.equal(readonlyDispatch.spawn.description, 'Terra, high · friendly readonly dispatch');
   assert.doesNotMatch(readonlyDispatch.spawn.description, /\[sidequest-route/);
+});
+
+test('reduced Agent-schema dispatch omits unsupported fields while preserving its stored launch identity', async () => {
+  store.setCategory({ id: 'reduced-agent-schema', name: 'Reduced Agent schema', route: { model: 'fable', effort: 'high' } });
+  const ticket = await callTool('add', {
+    title: 'reduced schema spawn', description: DISPATCH_DESCRIPTION, category: 'reduced-agent-schema', files: ['plugins/sidequest'],
+  });
+  const first = await callTool('dispatch', { ref: ticket.ref, reducedAgentSchema: true, full: true });
+  const supportedFields = ['description', 'isolation', 'model', 'prompt', 'subagent_type'];
+  const validateReducedHostSpawn = (spawn: Record<string, unknown>) => {
+    for (const field of Object.keys(spawn)) {
+      if (!supportedFields.includes(field)) throw new Error(`unsupported Agent field "${field}"`);
+    }
+  };
+  validateReducedHostSpawn(first.spawn);
+  assert.throws(() => validateReducedHostSpawn({ ...first.spawn, name: 'reintroduced-name' }), /unsupported Agent field "name"/);
+  assert.throws(() => validateReducedHostSpawn({ ...first.spawn, mode: 'bypassPermissions' }), /unsupported Agent field "mode"/);
+  assert.deepStrictEqual(Object.keys(first.spawn).sort(), supportedFields);
+  assert.equal(first.spawn.subagent_type, 'sidequest:sidequest-exec-high');
+  assert.equal(first.spawn.model, 'fable');
+  assert.equal(first.spawn.description, 'Claude Fable, high · reduced schema spawn');
+  const stored = store.getTicket(ticket.project, ticket.ref);
+  assert.equal(stored.dispatch.reducedAgentSchema, true);
+  assert.match(stored.dispatch.launchName, new RegExp(`^${ticket.ref.toLowerCase()}-`));
+
+  const retry = await callTool('dispatch', { ref: ticket.ref, full: true });
+  assert.deepStrictEqual(Object.keys(retry.spawn).sort(), supportedFields);
+  assert.equal(store.getTicket(ticket.project, ticket.ref).dispatch.reducedAgentSchema, true);
+
+  const hook = runForceBypass({
+    session_id: MCP_SESSION_ID,
+    cwd: PROJ,
+    tool_name: 'Agent',
+    tool_input: retry.spawn,
+  });
+  assert.deepStrictEqual(hook.hookSpecificOutput.updatedInput, retry.spawn);
+
+  const defaultTicket = await callTool('add', {
+    title: 'full schema spawn', description: DISPATCH_DESCRIPTION, category: 'reduced-agent-schema', files: ['plugins/sidequest'],
+  });
+  const full = await callTool('dispatch', { ref: defaultTicket.ref, full: true });
+  assert.equal(full.spawn.name, store.getTicket(defaultTicket.project, defaultTicket.ref).dispatch.launchName);
+  assert.equal(full.spawn.mode, 'bypassPermissions');
+
+  const cliTicket = await callTool('add', {
+    title: 'CLI reduced schema spawn', description: DISPATCH_DESCRIPTION, category: 'reduced-agent-schema', files: ['plugins/sidequest'],
+  });
+  const cli = runCli(['dispatch', cliTicket.ref, '--reduced-agent-schema', '--unverified-transport', '--json']);
+  assert.deepStrictEqual(Object.keys(cli.spawn).sort(), supportedFields);
+  assert.equal(store.getTicket(cliTicket.project, cliTicket.ref).dispatch.reducedAgentSchema, true);
+});
+
+test('reduced Codex dispatch removes injected models and nested calls stay within the host schema', async () => {
+  seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' }]);
+  store.setCategory({ id: 'reduced-codex-agent-schema', name: 'Reduced Codex Agent schema', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
+  const supportedFields = ['description', 'isolation', 'model', 'prompt', 'subagent_type'];
+  const assertReducedHostSchema = (spawn: Record<string, unknown>) => {
+    for (const field of Object.keys(spawn)) assert.ok(supportedFields.includes(field), `unsupported Agent field "${field}"`);
+  };
+
+  const reducedTicket = await callTool('add', {
+    title: 'reduced Codex schema spawn', description: DISPATCH_DESCRIPTION, category: 'reduced-codex-agent-schema', files: ['plugins/sidequest'],
+  });
+  const reducedDispatch = await callTool('dispatch', { ref: reducedTicket.ref, reducedAgentSchema: true, full: true });
+  assert.equal(reducedDispatch.spawn.model, undefined);
+  const reducedHook = runForceBypass({
+    session_id: MCP_SESSION_ID,
+    agent_id: 'reduced-codex-nested-agent',
+    cwd: PROJ,
+    tool_name: 'Agent',
+    tool_input: { ...reducedDispatch.spawn, model: 'haiku' },
+  });
+  const reducedInput = reducedHook.hookSpecificOutput.updatedInput;
+  assertReducedHostSchema(reducedInput);
+  assert.equal(Object.hasOwn(reducedInput, 'model'), false);
+  assert.equal(Object.hasOwn(reducedInput, 'run_in_background'), false);
+  assert.match(reducedHook.hookSpecificOutput.additionalContext, /removed the Agent model override/);
+  assert.throws(
+    () => assertReducedHostSchema({ ...reducedInput, run_in_background: true }),
+    /unsupported Agent field "run_in_background"/,
+  );
+
+  const fullTicket = await callTool('add', {
+    title: 'full Codex schema spawn', description: DISPATCH_DESCRIPTION, category: 'reduced-codex-agent-schema', files: ['plugins/sidequest'],
+  });
+  const fullDispatch = await callTool('dispatch', { ref: fullTicket.ref, full: true });
+  const fullHook = runForceBypass({
+    session_id: MCP_SESSION_ID,
+    agent_id: 'full-codex-nested-agent',
+    cwd: PROJ,
+    tool_name: 'Agent',
+    tool_input: fullDispatch.spawn,
+  });
+  assert.equal(fullHook.hookSpecificOutput.updatedInput.run_in_background, true);
+  assert.equal(fullHook.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+});
+
+test('reduced Agent-schema claims require hook identity and permission evidence, then bind unnamed siblings by token', async () => {
+  const launchReduced = async (title: string) => {
+    const ticket = await callTool('add', {
+      title, description: DISPATCH_DESCRIPTION, category: 'reduced-agent-schema', files: ['plugins/sidequest'],
+    });
+    const dispatch = await callTool('dispatch', { ref: ticket.ref, reducedAgentSchema: true, full: true });
+    runForceBypass({ session_id: MCP_SESSION_ID, cwd: PROJ, tool_name: 'Agent', tool_input: dispatch.spawn });
+    return { ticket, dispatch, state: store.getTicket(ticket.project, ticket.ref).dispatch };
+  };
+  const claimInput = (fixture: any, by: string) => ({
+    ref: fixture.ticket.ref,
+    project: fixture.ticket.project,
+    by,
+    effort: 'high',
+    executor: fixture.state.executor,
+    tokenFile: fixture.state.tokenFile,
+  });
+  const hookInput = (fixture: any, agentId: string, permissionMode?: string) => ({
+    tool_name: 'mcp__plugin_sidequest_board__claim',
+    cwd: PROJ,
+    session_id: MCP_SESSION_ID,
+    agent_id: agentId,
+    agent_type: fixture.dispatch.spawn.subagent_type,
+    ...(permissionMode == null ? {} : { permission_mode: permissionMode }),
+    tool_input: claimInput(fixture, `worker-${agentId}`),
+  });
+
+  const missingMode = await launchReduced('reduced schema missing mode');
+  const missingModeDeny = runRuntimeIdentityBind(hookInput(missingMode, 'missing-mode-agent'));
+  assert.equal(missingModeDeny.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(missingModeDeny.hookSpecificOutput.permissionDecisionReason, /permission_mode "bypassPermissions"/);
+  assert.equal(store.getTicket(missingMode.ticket.project, missingMode.ticket.ref).dispatch.agentId, undefined);
+  assert.equal((await callTool('claim', claimInput(missingMode, 'missing-mode-worker'))).reason, 'reduced_runtime_unverified');
+
+  const wrongMode = await launchReduced('reduced schema wrong mode');
+  const wrongModeDeny = runRuntimeIdentityBind(hookInput(wrongMode, 'wrong-mode-agent', 'acceptEdits'));
+  assert.equal(wrongModeDeny.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(wrongModeDeny.hookSpecificOutput.permissionDecisionReason, /observed "acceptEdits"/);
+  assert.equal(store.getTicket(wrongMode.ticket.project, wrongMode.ticket.ref).dispatch.agentId, undefined);
+  assert.equal((await callTool('claim', claimInput(wrongMode, 'wrong-mode-worker'))).reason, 'reduced_runtime_unverified');
+
+  const missingIdentity = await launchReduced('reduced schema missing identity');
+  const missingIdentityDeny = runRuntimeIdentityBind({ ...hookInput(missingIdentity, 'ignored-agent', 'bypassPermissions'), agent_id: '' });
+  assert.equal(missingIdentityDeny.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(missingIdentityDeny.hookSpecificOutput.permissionDecisionReason, /hook-reported agent_id/);
+  assert.equal((await callTool('claim', claimInput(missingIdentity, 'missing-identity-worker'))).reason, 'reduced_runtime_unverified');
+
+  const first = await launchReduced('first unnamed sibling');
+  const second = await launchReduced('second unnamed sibling');
+  const wrongTokenDeny = runRuntimeIdentityBind({
+    ...hookInput(first, 'first-unnamed-agent', 'bypassPermissions'),
+    tool_input: { ...claimInput(first, 'first-unnamed-worker'), tokenFile: second.state.tokenFile },
+  });
+  assert.equal(wrongTokenDeny.hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(store.getTicket(first.ticket.project, first.ticket.ref).dispatch.agentId, undefined);
+  assert.equal((await callTool('claim', {
+    ...claimInput(first, 'wrong-token-worker'), tokenFile: second.state.tokenFile,
+  })).reason, 'token');
+
+  assert.equal(runRuntimeIdentityBind(hookInput(first, 'first-unnamed-agent', 'bypassPermissions')), null);
+  assert.equal(runRuntimeIdentityBind(hookInput(second, 'second-unnamed-agent', 'bypassPermissions')), null);
+  assert.equal((await callTool('claim', claimInput(first, 'first-unnamed-worker'))).ok, true);
+  assert.equal((await callTool('claim', claimInput(second, 'second-unnamed-worker'))).ok, true);
+  assert.equal(store.getTicket(first.ticket.project, first.ticket.ref).dispatch.agentId, 'first-unnamed-agent');
+  assert.equal(store.getTicket(second.ticket.project, second.ticket.ref).dispatch.agentId, 'second-unnamed-agent');
 });
 
 test('MCP dispatch records the runtime session and the Agent lifecycle binds it', async () => {

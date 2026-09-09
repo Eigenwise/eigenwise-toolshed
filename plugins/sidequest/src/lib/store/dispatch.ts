@@ -1423,6 +1423,8 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const readonly = dispatchReadOnly(t);
     const requestedSharedTree = opts.sharedTree === true
       || (!Object.hasOwn(opts, 'sharedTree') && Boolean(current?.sharedTree));
+    const reducedAgentSchema = opts.reducedAgentSchema === true
+      || (!Object.hasOwn(opts, 'reducedAgentSchema') && current?.reducedAgentSchema === true);
     const explicitIsolation = Object.hasOwn(opts, 'sharedTree') && opts.sharedTree === false;
     const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
     const reviewTargetState = reviewDispatchTarget(slug, t);
@@ -1542,6 +1544,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       preparedBy: dispatchPreparationAttribution(opts),
       ...(preparedPluginInstall && preparedPluginIdentity ? { preparedCompatibility: { pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity } } : {}),
       sharedTree,
+      ...(reducedAgentSchema ? { reducedAgentSchema: true } : {}),
       ...(worktreeWarning ? { worktreeWarning } : {}),
       ...(pythonIoEncoding.written ? { pythonIoEncoding } : {}),
       ...(opts.dispatchSkew ? { dispatchSkew: opts.dispatchSkew } : {}),
@@ -1852,6 +1855,7 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
       sessionId: opts.sessionId ? String(opts.sessionId) : state.sessionId || null,
       preparedBy: dispatchPreparationAttribution(opts),
       sharedTree: state.sharedTree === true,
+      ...(state.reducedAgentSchema === true ? { reducedAgentSchema: true } : {}),
       declaredFiles: Array.isArray(state.declaredFiles) ? state.declaredFiles.slice() : effectiveScope(slug, t),
       artifactMode: state.artifactMode === true,
       artifactRoot: state.artifactRoot || null,

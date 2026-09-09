@@ -10,7 +10,7 @@ const { tools: collaborationTools } = require("./mcp-collaboration");
 const { tools: routingTools } = require("./mcp-routing");
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 23800;
+const MCP_TOOLS_LIST_MAX_BYTES = 24e3;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
@@ -228,6 +228,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   category_edit: { fallbackModel: "null clears fallback." },
   dispatch: {
     sharedTree: "Tree.",
+    reducedAgentSchema: "Only when caller schema lacks name/mode; hook needs agent_id + permission_mode bypassPermissions.",
     recoveryEvidence: "Proof.",
     worktree: "Checkout."
   },

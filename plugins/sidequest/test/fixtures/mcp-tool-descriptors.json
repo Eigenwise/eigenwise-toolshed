@@ -1495,6 +1495,10 @@
           "type": "boolean",
           "description": "Tree."
         },
+        "reducedAgentSchema": {
+          "type": "boolean",
+          "description": "Only when caller schema lacks name/mode; hook needs agent_id + permission_mode bypassPermissions."
+        },
         "allowRepeatFailure": {
           "type": "boolean"
         },

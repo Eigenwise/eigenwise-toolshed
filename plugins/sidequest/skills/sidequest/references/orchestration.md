@@ -137,11 +137,13 @@ When several tickets are **ready and independent**, work them in parallel — on
 all spawned in a **single message** (true parallel). This is safe precisely because claiming is
 atomic: each subagent claims a different ticket, and any race just sends the loser onward.
 
-- **Never invent a worker name.** `dispatch` returns `spawn.name` already built from the board:
+- **Never invent a worker name.** Full-schema `dispatch` returns `spawn.name` built from the board:
   ticket ref, a short title slug, resolved route token, and effort (`sq-843-release-engine-terra-high`).
-  A relaunch keeps that route then counts up (`-2`, `-3`) so a reworked or resumed launch never shadows a live sibling. That name is what shows
-  in the fleet view (filter `a:<name>`) and what `SendMessage {to: name}` resumes, and the PreToolUse
-  guard rewrites anything else back to it. Pass it through; the route remains visible in the stable name after Claude Code replaces the live activity description. `spawn.description` still leads with `<model>, <effort> ·` for notifications and stop lines.
+  A relaunch keeps that route then counts up (`-2`, `-3`) so a reworked or resumed launch never shadows a live sibling. That label is what shows
+  in the fleet view (filter `a:<name>`) and what `SendMessage {to: name}` resumes; the board retains it even when a reduced-schema spawn omits
+  callable `name` and `mode`. Opt into reduced schema only after inspecting the visible Agent tool schema, pass its returned fields unchanged, and
+  require hook-reported `agent_id` plus `permission_mode: "bypassPermissions"` on first claim. `spawn.description` still leads with `<model>, <effort> ·`
+  for notifications and stop lines.
   Every Agent launch must be a freshly dispatched Sidequest executor.
 - **The `--by` id is separate and must be genuinely random per session** (not the ticket ref, not a
   fixed label): a second session fanning out over the same board would derive the identical value

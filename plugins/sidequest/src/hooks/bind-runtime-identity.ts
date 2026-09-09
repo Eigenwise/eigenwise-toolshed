@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readStdin, stringField, isRecord, type HookInput } from './shared/input.js';
 import { runtimeModule } from './shared/paths.js';
+import { writeDeny } from './shared/output.js';
 import {
   bindObservedRuntimeIdentity,
   enclosingCheckout,
@@ -21,12 +22,17 @@ function bindClaimRuntimeIdentity(input: HookInput, agentId: string, executor: s
   const toolInput = input.tool_input;
   const ref = String(toolInput.ref || '').trim();
   const sessionId = stringField(input, 'session_id', 'sessionId');
-  if (!agentId || !sessionId || !executorAgent(executor) || !ref || String(toolInput.executor || '').trim() !== executor) return true;
+  if (!sessionId || !executorAgent(executor) || !ref || String(toolInput.executor || '').trim() !== executor) return true;
   try {
     const store = require(runtimeModule('store')) as {
       findProject: (project: string) => { ok?: boolean; slug?: string };
       sessionProjectRoot: () => string;
-      bindClaimRuntimeIdentity: (slug: string, ref: string, options: unknown) => unknown;
+      bindClaimRuntimeIdentity: (slug: string, ref: string, options: unknown) => {
+        ok?: boolean;
+        reason?: string;
+        message?: string;
+        ticket?: { dispatch?: { reducedAgentSchema?: boolean } };
+      };
     };
     // `project` is optional on claim. The MCP claim handler resolves an omitted
     // project through store.sessionProjectRoot, so the bind must use the same
@@ -36,14 +42,21 @@ function bindClaimRuntimeIdentity(input: HookInput, agentId: string, executor: s
     const project = String(toolInput.project || '').trim() || store.sessionProjectRoot();
     const found = store.findProject(project);
     if (found.ok && found.slug) {
-      store.bindClaimRuntimeIdentity(found.slug, ref, {
+      const binding = store.bindClaimRuntimeIdentity(found.slug, ref, {
         token: toolInput.token,
         tokenFile: toolInput.tokenFile,
         executor,
         effort: toolInput.effort,
         agentId,
+        permissionMode: stringField(input, 'permission_mode'),
         sessionId,
       });
+      if (binding?.ticket?.dispatch?.reducedAgentSchema === true && !binding.ok) {
+        writeDeny(
+          'PreToolUse',
+          binding.message || `sidequest: ${ref} reduced Agent-schema dispatch could not verify this hook-reported runtime identity. Reload into a host that reports agent_id and permission_mode "bypassPermissions" to PreToolUse, then dispatch again without adding unsupported Agent fields or changing permissions.`,
+        );
+      }
     }
   } catch (_) {
   }

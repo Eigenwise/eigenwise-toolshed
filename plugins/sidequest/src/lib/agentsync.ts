@@ -1176,12 +1176,14 @@ function renderDispatchStub(ticket?: any, projectPath?: any) {
   ].join('\n');
 }
 
-function agentSpawn(name?: any, isolation?: any, model?: any, agentType?: any, prompt?: any, description?: any) {
+function agentSpawn(name?: any, isolation?: any, model?: any, agentType?: any, prompt?: any, description?: any, options?: { reducedAgentSchema?: boolean }) {
   const suppliedLabel = typeof description === 'string'
     ? description.replace(EMBEDDED_ROUTE_MARKER_RE, '').replace(/\s+/g, ' ').trim()
     : '';
   const taskLabel = suppliedLabel || 'Sidequest ticket executor.';
-  return Object.assign({ subagent_type: bundledAgentType(agentType || name), name, mode: 'bypassPermissions', description: taskLabel },
+  const reducedAgentSchema = options?.reducedAgentSchema === true;
+  return Object.assign({ subagent_type: bundledAgentType(agentType || name), description: taskLabel },
+    reducedAgentSchema ? {} : { name, mode: 'bypassPermissions' },
     isolation ? { isolation } : {}, model ? { model } : {}, prompt ? { prompt } : {});
 }
 

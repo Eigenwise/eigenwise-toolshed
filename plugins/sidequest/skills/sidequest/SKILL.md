@@ -220,13 +220,12 @@ hand-pick either. Legacy complexity maps to bands at read time (1–3/4–6/7–
    prompt alongside the ticket contract; do not narrow, rewrite, or invent around it.
 3. **The ticket read tells you exactly what to spawn.** Print `SQ-n · category · Model · effort`,
    then spawn the exact `agent` a fresh `dispatch <ref>` returned through native Agent,
-   every spawn field unchanged (including `isolation`). **Claude routes**: `model: exec.model` +
-   `mode: "bypassPermissions"` + a unique `name` (omitting `model` inherits the pricey session
-   model). This includes Haiku: use the stable executor and model the dispatch returned, never a
-   plain generic Agent. **Codex routes** (`exec.model` null): `model` OMITTED — the prompt's
-   `[sidequest-route ...]` marker carries the real model; any `model` value silently runs
-   Anthropic. Effort rides **verbatim** — a mismatched claim is refused. Detail and fallbacks:
-   `references/routing-details.md`.
+   pass returned fields unchanged. If Agent omits `name`/`mode`, dispatch `reducedAgentSchema: true`; don't
+   restore them. First claim needs hook `agent_id` + `permission_mode: "bypassPermissions"`. **Claude routes**:
+   `model: exec.model` (otherwise it inherits the pricey session model), including Haiku. Use the dispatched
+   executor/model, never generic Agent. **Codex routes** (`exec.model` null): omit `model`; the route marker
+   carries the real model and any value runs Anthropic. Effort is verbatim; mismatched claims are refused.
+   Details: `references/routing-details.md`.
 4. **Claim by resolved route:** `next --model X` / `ready --model X` filter by resolved route.
 
 ## Comments

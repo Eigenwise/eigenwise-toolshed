@@ -130,6 +130,8 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(byName.get('release')?.inputSchema.properties?.deliverable?.type, 'string');
   assert.match(byName.get('release')?.description ?? '', /oracle handoff/);
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.sharedTree?.description, 'Tree.');
+  assert.match(byName.get('dispatch')?.inputSchema.properties?.reducedAgentSchema?.description ?? '', /Only when caller schema lacks name\/mode/);
+  assert.match(byName.get('dispatch')?.inputSchema.properties?.reducedAgentSchema?.description ?? '', /hook needs agent_id/);
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description, 'Proof.');
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.worktree?.description, 'Checkout.');
   const addVerify = byName.get('add')?.inputSchema.properties?.verify?.description ?? '';
