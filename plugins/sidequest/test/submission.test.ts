@@ -14,6 +14,7 @@ import './_hook-runtime.js';
  * Run: node --test plugins/sidequest/test/submission.test.js
  */
 const test = require('node:test');
+const { afterEach } = test;
 const assert = require('node:assert');
 const os = require('os');
 const path = require('path');
@@ -29,6 +30,8 @@ const agentsync = require('../lib/agentsync.js');
 const mcp = require('../lib/mcp.js');
 const db = require('../lib/db.js');
 const { submissionRangeFailureMessage } = require('../lib/mcp-lifecycle.js');
+
+afterEach(() => db.openDb(SIDEQUEST_HOME).exec('DELETE FROM tickets'));
 const { createLocks } = require('../src/lib/store/locks.ts');
 const { makeCliRunner } = require('./_helpers.js');
 
@@ -218,6 +221,10 @@ test('submit requires a held claim, records the submission, and releases the cla
   assert.strictEqual(after.submission.by, 'worker-a');
   assert.strictEqual(after.submission.integratedAt, null);
   assert.ok(store.pendingSubmission(after));
+});
+
+test('submission cases do not inherit tickets from prior cases', () => {
+  assert.deepStrictEqual(store.listTickets(slug), []);
 });
 
 test('an invalid commit hash is rejected before anything is written', () => {
