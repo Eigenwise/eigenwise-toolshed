@@ -248,7 +248,7 @@ function processInfoSync(pid) {
   if (!pid) return null;
   const result = WIN
     ? commandResultSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object ProcessId,ParentProcessId,CommandLine,CreationDate | ConvertTo-Json -Compress`])
-    : commandResultSync('ps', ['-p', String(pid), '-o', 'pid=,ppid=,lstart=,args=']);
+    : commandResultSync('ps', ['-ww', '-p', String(pid), '-o', 'pid=,ppid=,lstart=,args=']);
   return result.status === 0 ? processInfoFromOutput(result.stdout) : null;
 }
 function processTableFromOutput(output) {
@@ -273,7 +273,7 @@ function processTableFromOutput(output) {
 function processTableSync() {
   const result = WIN
     ? commandResultSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,CreationDate | ConvertTo-Json -Compress'])
-    : commandResultSync('ps', ['-eo', 'pid=,ppid=,lstart=,args=']);
+    : commandResultSync('ps', ['-ww', '-eo', 'pid=,ppid=,lstart=,args=']);
   return result.status === 0 ? processTableFromOutput(result.stdout) : null;
 }
 function probeTimeoutMs() {
@@ -413,14 +413,14 @@ async function processInfoAsync(pid, { commandResult = commandResultAsync, probe
   if (!pid) return null;
   const result = await commandResult(WIN ? 'powershell.exe' : 'ps', WIN
     ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}" | Select-Object ProcessId,ParentProcessId,CommandLine,CreationDate | ConvertTo-Json -Compress`]
-    : ['-p', String(pid), '-o', 'pid=,ppid=,lstart=,args='], { probeChildren, timeout });
+    : ['-ww', '-p', String(pid), '-o', 'pid=,ppid=,lstart=,args='], { probeChildren, timeout });
   if (result.timedOut) return undefined;
   return result.status === 0 ? processInfoFromOutput(result.stdout) : null;
 }
 async function processTableAsync({ commandResult = commandResultAsync, probeChildren = null } = {}) {
   const result = await commandResult(WIN ? 'powershell.exe' : 'ps', WIN
     ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,CreationDate | ConvertTo-Json -Compress']
-    : ['-eo', 'pid=,ppid=,lstart=,args='], { probeChildren });
+    : ['-ww', '-eo', 'pid=,ppid=,lstart=,args='], { probeChildren });
   if (result.timedOut) return undefined;
   return result.status === 0 ? processTableFromOutput(result.stdout) : null;
 }
@@ -883,7 +883,7 @@ function createProxyRecovery({
 
 module.exports = {
   commandIncludesFile, commandResultAsync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, killPidAsync, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
-  processInfoAsync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync, resolvePortOwner,
+  processInfoAsync, processInfoSync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync, processTableSync, resolvePortOwner,
   proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPids, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
   spawnSupervisedProxy, stopAll, stopProcess, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit, writePidRecord, writePidRecordAsync,
 };
