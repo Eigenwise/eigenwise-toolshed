@@ -9,7 +9,8 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway } = require('./support.js');
-const { commandIncludesFile, commandResultAsync, createProxyRecovery, installBelongsToThisPlugin, isDescendantOfAsync } = require('../lib/process-supervision.js');
+const { commandIncludesFile, commandResultAsync, createProxyRecovery, installBelongsToThisPlugin, isDescendantOfAsync, resolvePortOwner } = require('../lib/process-supervision.js');
+const { startAll } = require('../lib/commands.js');
 const { canReplaceInstalledCliPath } = require('../lib/runtime.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
@@ -280,6 +281,56 @@ function codexMessage() {
   });
 }
 
+test('startup ownership resolves bounded same-install, unowned, foreign, and unknown owners', async () => {
+  const gatewayScript = path.join(__dirname, '..', 'bin', 'model-gateway.js');
+  const foreignGatewayScript = path.join(os.tmpdir(), 'foreign-model-gateway', 'bin', 'model-gateway.js');
+  const sameInstallProcess = { command: `${process.execPath} "${gatewayScript}" serve-shim` };
+  const resolve = (owners, processes, listeners = [true]) => resolvePortOwner(18764, {
+    owner: async () => owners.shift(),
+    inspectProcess: async () => processes.shift(),
+    listening: async () => listeners.shift() ?? false,
+    belongsToThisInstall: (installRoot) => installRoot === path.join(__dirname, '..'),
+    timeout: 20,
+  });
+
+  assert.deepEqual(await resolve([701, 701], [null, sameInstallProcess]), {
+    state: 'same-install', pid: 701, installRoot: path.join(__dirname, '..'),
+  });
+  assert.deepEqual(await resolve([701, null], [null], [true, false]), { state: 'unowned', pid: null });
+  assert.deepEqual(await resolve([701, 702], [null, sameInstallProcess]), { state: 'unknown', pid: 702 });
+  assert.deepEqual(await resolve([701, 701], [undefined, undefined], [true, true]), { state: 'unknown', pid: 701 });
+  assert.deepEqual(await resolve([null, null], [], [true, true]), { state: 'unknown', pid: null });
+  assert.deepEqual(await resolve([701, 701], [{ command: 'unrecognized command' }, { command: 'unrecognized command' }]), { state: 'unknown', pid: 701 });
+  assert.deepEqual(await resolve([701], [{ command: `${process.execPath} "${foreignGatewayScript}" serve-shim` }]), {
+    state: 'foreign-install', pid: 701, installRoot: path.join(os.tmpdir(), 'foreign-model-gateway'),
+  });
+});
+
+test('startup ownership leaves unknown and confirmed foreign listeners untouched', async () => {
+  const calls = [];
+  const lifecycle = [];
+  const run = (owner) => startAll({
+    proxyExists: () => true,
+    ensureState: () => {},
+    recordLifecycle: (event, details) => lifecycle.push({ event, details }),
+    resolveOwner: async () => owner,
+    reapOrphans: () => calls.push('cleanup'),
+    stopSupervisor: async () => calls.push('stop'),
+    spawnSupervisor: () => calls.push('start'),
+  });
+
+  const unknown = await run({ state: 'unknown', pid: 701 });
+  assert.equal(unknown.ok, false);
+  assert.match(unknown.reason, /could not confirm the owner of :18764 \(last observed PID 701\); left the listener untouched/);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(lifecycle, [{ event: 'start-owner-unknown', details: { component: 'start', pid: process.pid, outcome: 'owner-unknown' } }]);
+
+  const foreign = await run({ state: 'foreign-install', pid: 702, installRoot: '/foreign/model-gateway' });
+  assert.equal(foreign.ok, false);
+  assert.match(foreign.reason, /PID 702 owns :18764 from a different install root/);
+  assert.deepEqual(calls, []);
+});
+
 test('cache ownership resolves physical install roots before accepting sibling versions', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-cache-identity-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -435,7 +486,7 @@ test('sibling ensure retires dead records without deleting replacement worker an
     CODEX_GATEWAY_PORT: String(shimPort),
     CODEX_GATEWAY_WORKER_PORT: '0',
     CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-    CODEX_GATEWAY_PROBE_TIMEOUT_MS: '100',
+    CODEX_GATEWAY_PROBE_TIMEOUT_MS: '10000',
   });
   const olderShim = spawn(process.execPath, [olderCli, 'serve-shim'], { cwd: home, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
   let ensuring = null;
@@ -782,6 +833,31 @@ test('setup restart path refuses a foreign shim before it can restart its worker
   assert.match(result.stderr, new RegExp(`refusing to stop PID ${foreign.pid} on :${port}; it belongs to a different install root`));
 });
 
+
+test('proxy recovery keeps an unresolved process owner eligible for retry', async () => {
+  const lifecycle = [];
+  let stopped = false;
+  let started = false;
+  const recovery = createProxyRecovery({
+    proxyBinary: 'fake-proxy',
+    probe: async () => false,
+    listening: async () => true,
+    owner: async () => 903,
+    inspectProcess: async () => null,
+    processTable: async () => new Map(),
+    stop: async () => { stopped = true; },
+    start: async () => { started = true; },
+    binaryExists: () => true,
+    recordLifecycle: (event, details) => lifecycle.push({ event, details }),
+    now: () => 0,
+    report: () => {},
+  });
+
+  assert.equal((await recovery.recover()).state, 'owner-unknown');
+  assert.equal(stopped, false, 'recovery does not stop an unresolved process owner');
+  assert.equal(started, false, 'recovery does not replace an unresolved process owner');
+  assert.equal(lifecycle.at(-1)?.details.outcome, 'owner-unknown');
+});
 
 test('supervisor health remains responsive while a timed-out ownership probe defers recovery', async (t) => {
   const supervisor = http.createServer((request, response) => response.end(JSON.stringify({ ok: true })));
