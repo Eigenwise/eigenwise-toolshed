@@ -699,6 +699,16 @@ function dispatchAdmissionStatus(data) {
     return "no-project";
   }
 }
+function lostLaunchNotices(data) {
+  try {
+    const sessionId3 = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
+    const store = require(runtimeModule("store"));
+    const reconciled = store.reconcileLaunchedDispatches(sessionId3, { source: "session-start" })?.reconciled || [];
+    return reconciled.length ? [`sidequest: ${reconciled.join(", ")} launched but never claimed. Re-dispatch and spawn the returned spec.`] : [];
+  } catch (_) {
+    return [];
+  }
+}
 function upstreamDefectDestination() {
   try {
     const store = require(runtimeModule("store"));
@@ -733,18 +743,19 @@ ${context}` : context;
 async function main() {
   const data = readStdin();
   if (!data) return;
-  if (isPrimarySession(data)) {
+  const primarySession = isPrimarySession(data);
+  if (primarySession) {
     const sessionId3 = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
     initializeCompactionState(sessionId3, data.transcript_path || data.transcriptPath);
   }
   reportLoadedSidequestVersion(data, { pluginRoot: pluginRoot() });
   const freshnessNotice = sidequestReloadWarning(stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd(), { pluginRoot: pluginRoot() });
   registerSweepSession(data);
-  let sweepNotices = [];
+  let sweepNotices = primarySession ? lostLaunchNotices(data) : [];
   try {
-    sweepNotices = await runSweep(data);
+    sweepNotices.push(...await runSweep(data));
   } catch (error) {
-    sweepNotices = [`sidequest: worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`];
+    sweepNotices.push(`sidequest: worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   const source = stringField(data, "source");
   const restartNotice = [

@@ -4742,6 +4742,72 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
   assert.equal(store.getTicket(slug, second.ref).dispatch.outcome, 'claimed');
 });
 
+test('a subagent session start preserves a fresh re-dispatch and stale attempt authority stays refused', () => {
+  const ticket = addEffortTicket('fresh launch after failed worktree creation', 'high');
+  const sessionId = `fresh-reprepare-${++sqSeq}`;
+  const first = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId, sharedTree: false });
+  const replacement = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId, sharedTree: true });
+  assert.notEqual(first.token, replacement.token);
+  const launch = runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    tool_name: 'Agent',
+    tool_input: {
+      subagent_type: replacement.ticket.dispatchExecutor,
+      name: replacement.ticket.dispatch.launchName,
+      description: replacement.ticket.dispatch.description,
+      prompt: preparedPrompt(replacement),
+    },
+  });
+  const agentName = launch.hookSpecificOutput.updatedInput.name;
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.outcome, 'launched');
+
+  assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+    token: first.token,
+    executor: first.ticket.dispatchExecutor,
+    sessionId,
+    taskName: agentName,
+    error: 'Prompt is too long',
+  }).reason, 'not_prepared');
+  assert.equal(store.claimTicket(slug, ticket.ref, 'stale-worker', {
+    token: first.token,
+    executor: first.ticket.dispatchExecutor,
+    sessionId,
+  }).reason, 'token');
+
+  const failedTicket = addEffortTicket('same attempt launch failure', 'high');
+  const failedSession = `same-attempt-failure-${++sqSeq}`;
+  const failed = store.prepareDispatch(slug, failedTicket.ref, { allowUnscoped: true, sessionId: failedSession, sharedTree: true });
+  assert.equal(store.recordDispatchLaunch(slug, failedTicket.ref, {
+    token: failed.token,
+    executor: failed.ticket.dispatchExecutor,
+    sessionId: failedSession,
+    agentName: failed.ticket.dispatch.launchName,
+  }).ok, true);
+  assert.equal(store.recordDispatchAgentFailure(slug, failedTicket.ref, {
+    token: failed.token,
+    executor: failed.ticket.dispatchExecutor,
+    sessionId: failedSession,
+    taskName: failed.ticket.dispatch.launchName,
+    error: 'Prompt is too long',
+  }).ok, true);
+  const terminal = store.getTicket(slug, failedTicket.ref);
+  assert.equal(terminal.dispatch.outcome, 'failed');
+  assert.equal(terminal.dispatchNonce, null);
+
+  const context = runHook(SESSION, {
+    session_id: sessionId,
+    source: 'startup',
+    agent_type: replacement.ticket.dispatchExecutor,
+    agent_id: 'fresh-reprepare-agent',
+  }, { SIDEQUEST_SWEEP_DEADLINE_MS: '60000' });
+  assert.equal(store.claimTicket(slug, ticket.ref, 'fresh-worker', {
+    token: replacement.token,
+    executor: replacement.ticket.dispatchExecutor,
+    sessionId,
+  }).ok, true, 'the subagent SessionStart must not retire the attempt it is about to claim');
+  assert.doesNotMatch(context, new RegExp(`${ticket.ref} launched but never claimed`));
+});
+
 test('session start reconciles a reload-lost launch once and leaves it ready to respawn', () => {
   const ticket = addEffortTicket('reload before claim', 'high');
   const sessionId = `reload-${++sqSeq}`;

@@ -136,6 +136,17 @@ function dispatchAdmissionStatus(data: HookInput): string {
   }
 }
 
+function lostLaunchNotices(data: HookInput): string[] {
+  try {
+    const sessionId = stringField(data, 'session_id', 'sessionId') || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
+    const store = require(runtimeModule('store')) as Store;
+    const reconciled = store.reconcileLaunchedDispatches(sessionId, { source: 'session-start' })?.reconciled || [];
+    return reconciled.length ? [`sidequest: ${reconciled.join(', ')} launched but never claimed. Re-dispatch and spawn the returned spec.`] : [];
+  } catch (_) {
+    return [];
+  }
+}
+
 function upstreamDefectDestination(): string {
   try {
     const store = require(runtimeModule('store')) as Store;
@@ -175,7 +186,8 @@ function emit(context: string, notice: string, initialUserMessage = ''): void {
 async function main(): Promise<void> {
   const data = readStdin();
   if (!data) return;
-  if (isPrimarySession(data)) {
+  const primarySession = isPrimarySession(data);
+  if (primarySession) {
     const sessionId = stringField(data, 'session_id', 'sessionId') || process.env.CLAUDE_CODE_SESSION_ID || '';
     initializeCompactionState(sessionId, data.transcript_path || data.transcriptPath);
   }
@@ -183,11 +195,11 @@ async function main(): Promise<void> {
   reportLoadedSidequestVersion(data, { pluginRoot: pluginRoot() });
   const freshnessNotice = sidequestReloadWarning(stringField(data, 'cwd', 'project_dir', 'projectDir') || process.env.CLAUDE_PROJECT_DIR || process.cwd(), { pluginRoot: pluginRoot() });
   registerSweepSession(data);
-  let sweepNotices: string[] = [];
+  let sweepNotices = primarySession ? lostLaunchNotices(data) : [];
   try {
-    sweepNotices = await runSweep(data);
+    sweepNotices.push(...await runSweep(data));
   } catch (error: unknown) {
-    sweepNotices = [`sidequest: worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`];
+    sweepNotices.push(`sidequest: worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   const source = stringField(data, 'source');
   const restartNotice = [
