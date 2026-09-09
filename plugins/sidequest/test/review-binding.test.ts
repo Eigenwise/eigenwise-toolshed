@@ -108,6 +108,46 @@ function tool(name: string) {
   return found;
 }
 
+function waveReadySource(slug: string, candidate: string, baseline: string, label: string) {
+  const dispatchBaseline = { revision: { source: 'git', value: baseline, observedAt: new Date().toISOString() }, purpose: 'dispatch' };
+  const source = submittedSource(slug, candidate, label, {
+    baseline: dispatchBaseline,
+    verificationResult: { kind: 'custom', status: 'passed', evidence: 'fixture candidate passed' },
+  });
+  source.lifecycleAttempt = {
+    state: 'submitted',
+    execution: 'dispatched',
+    baseline: dispatchBaseline,
+    authority: { actor: 'fixture-worker', operation: 'submit' },
+  };
+  persist(slug, source);
+  return store.getTicket(slug, source.ref);
+}
+
+function bindReviewOutcome(slug: string, source: any, outcome: 'accepted' | 'rejected') {
+  const review = store.createTicket(slug, {
+    title: `${outcome} review for ${source.ref}`,
+    category: 'review-audit',
+    files: ['candidate.txt'],
+  }, { ref: source.ref, commit: source.submission.commit });
+  const storedSource = store.getTicket(slug, source.ref);
+  storedSource.submission.review.outcome = outcome;
+  persist(slug, storedSource);
+  const storedReview = store.getTicket(slug, review.ref);
+  storedReview.reviewTarget.outcome = outcome;
+  persist(slug, storedReview);
+  return storedReview;
+}
+
+async function assemblePublicWave(repository: string, ref: string) {
+  return tool('integrate').handler({
+    project: repository,
+    ref,
+    by: 'orchestrator',
+    wave: { verification: { kind: 'manual', status: 'manual', evidence: 'fixture wave passed' } },
+  });
+}
+
 function throwsWith(fn: () => any, pattern: RegExp) {
   assert.throws(fn, (error: any) => {
     assert.match(String(error?.message || error), pattern);
@@ -540,6 +580,63 @@ test('a historical rejected review outcome stays readable and keeps integration 
   assert.equal(blocked.reason, 'candidate_rejected');
   assert.match(blocked.message, /repair needs fresh ticket, attempt, candidate, and review identities/);
   assert.equal(store.getTicket(slug, source.ref).rejectedSubmissions.length, 1, 'the historical record is still readable');
+});
+
+test('public wave assembly ignores an overlapping rejected candidate and preserves its binding', async () => {
+  const { repository, slug, commit: baseline } = board('rejected-wave-overlap');
+  const participant = waveReadySource(slug, 'a'.repeat(40), baseline, 'accepted-wave-participant');
+  bindReviewOutcome(slug, participant, 'accepted');
+  const rejected = waveReadySource(slug, 'b'.repeat(40), baseline, 'rejected-wave-sibling');
+  const rejectedReview = bindReviewOutcome(slug, rejected, 'rejected');
+  const rejectedBindingBefore = bindingBytes(slug, rejected.ref, rejectedReview.ref);
+
+  const assembled = await assemblePublicWave(repository, participant.ref);
+
+  assert.equal(assembled.ok, true, assembled.message);
+  assert.equal(assembled.action, 'wave_assembled');
+  assert.deepEqual(assembled.omittedPendingOverlaps || [], []);
+  assert.equal(bindingBytes(slug, rejected.ref, rejectedReview.ref), rejectedBindingBefore);
+  assert.equal(store.pendingSubmission(store.getTicket(slug, rejected.ref)), true);
+});
+
+test('public wave assembly keeps overlap protection for an accepted pending candidate', async () => {
+  const { repository, slug, commit: baseline } = board('accepted-wave-overlap');
+  const participant = waveReadySource(slug, 'c'.repeat(40), baseline, 'accepted-overlap-participant');
+  bindReviewOutcome(slug, participant, 'accepted');
+  const acceptedSibling = waveReadySource(slug, 'd'.repeat(40), baseline, 'accepted-overlap-sibling');
+  bindReviewOutcome(slug, acceptedSibling, 'accepted');
+
+  const refused = await assemblePublicWave(repository, participant.ref);
+
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'candidate_overlap');
+  assert.match(refused.message, new RegExp(`${participant.ref} and ${acceptedSibling.ref}`));
+});
+
+test('public wave assembly keeps overlap protection for an active unreviewed candidate', async () => {
+  const { repository, slug, commit: baseline } = board('active-wave-overlap');
+  const participant = waveReadySource(slug, 'e'.repeat(40), baseline, 'active-overlap-participant');
+  bindReviewOutcome(slug, participant, 'accepted');
+  const activeSibling = waveReadySource(slug, 'f'.repeat(40), baseline, 'active-overlap-sibling');
+
+  const refused = await assemblePublicWave(repository, participant.ref);
+
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'candidate_overlap');
+  assert.match(refused.message, new RegExp(`${participant.ref} and ${activeSibling.ref}`));
+});
+
+test('public integration still refuses a rejected participant', async () => {
+  const { repository, slug, commit: baseline } = board('rejected-wave-participant');
+  const rejected = waveReadySource(slug, '1'.repeat(40), baseline, 'rejected-wave-participant');
+  const rejectedReview = bindReviewOutcome(slug, rejected, 'rejected');
+  const rejectedBindingBefore = bindingBytes(slug, rejected.ref, rejectedReview.ref);
+
+  const refused = await tool('integrate').handler({ project: repository, ref: rejected.ref, by: 'orchestrator' });
+
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'candidate_rejected');
+  assert.equal(bindingBytes(slug, rejected.ref, rejectedReview.ref), rejectedBindingBefore);
 });
 
 test('an oracle rejection marks both binding halves rejected and permits a reviewed integrated replacement', async () => {

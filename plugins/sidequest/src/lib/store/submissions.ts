@@ -178,8 +178,12 @@ function putTicketTransaction(slug: any, ticket: any) {
   return transaction(() => putTicket(slug, ticket));
 }
 
-function candidateReviewRelation(slug: any, ticket: any) {
-  return reviewRelationFor(ticket, listTickets(slug), (idOrRef: string) => getTicket(slug, idOrRef));
+function candidateReviewRelation(slug: any, ticket: any, tickets: any[] = listTickets(slug)) {
+  return reviewRelationFor(ticket, tickets, (idOrRef: string) => getTicket(slug, idOrRef));
+}
+
+function pendingCandidateBlocksWave(slug: any, ticket: any, tickets: any[]) {
+  return pendingSubmission(ticket) && reviewRelationOutcome(candidateReviewRelation(slug, ticket, tickets)) !== 'rejected';
 }
 
 // Every mutation that would move, replace, or erase a candidate under review
@@ -2655,11 +2659,12 @@ function submissionWasRecordedAfter(sibling: any, participant: any) {
 
 function waveScopeConflicts(slug: any, tickets: any[]) {
   const participantRefs = new Set(tickets.map((ticket) => ticket.ref));
+  const boardTickets = listTickets(slug);
   const conflicts: any[] = [];
   for (const participant of tickets) {
     const participantChanges = scopedPaths(participant.submission?.changedPaths);
-    for (const sibling of listTickets(slug)) {
-      if (sibling.archived || sibling.status === 'done' || participantRefs.has(sibling.ref) || !pendingSubmission(sibling)) continue;
+    for (const sibling of boardTickets) {
+      if (sibling.archived || sibling.status === 'done' || participantRefs.has(sibling.ref) || !pendingCandidateBlocksWave(slug, sibling, boardTickets)) continue;
       if (!submissionWasRecordedAfter(sibling, participant)) continue;
       if (submissionIncludesCandidate(participant.submission, sibling.submission) || submissionIncludesCandidate(sibling.submission, participant.submission)) continue;
       const siblingDeclaredScope = scopedPaths(sibling.files);
@@ -2675,8 +2680,9 @@ function omittedPendingSubmissionOverlaps(slug: any, tickets: any[]) {
   if (tickets.length !== 1) return [];
   const [participant] = tickets;
   const participantScope = scopedPaths(participant.files);
-  return listTickets(slug)
-    .filter((sibling: any) => sibling.ref !== participant.ref && !sibling.archived && sibling.status !== 'done' && pendingSubmission(sibling))
+  const boardTickets = listTickets(slug);
+  return boardTickets
+    .filter((sibling: any) => sibling.ref !== participant.ref && !sibling.archived && sibling.status !== 'done' && pendingCandidateBlocksWave(slug, sibling, boardTickets))
     .map((sibling: any): { ref: string; surfaces: string[] } | null => {
       const surfaces = scopedPaths(sibling.submission?.changedPaths).filter((surface: string) => isInScope(surface, participantScope)
         || participantScope.some((participantSurface: string) => isInScope(participantSurface, [surface])));
@@ -2859,7 +2865,7 @@ function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
       ok: false,
       reason: 'candidate_overlap',
       conflicts: scopeConflicts,
-      message: `Wave assembly paused because submitted candidates overlap: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(', ')})`).join('; ')}. These refs each hold a pending candidate, not merely a live declared scope. Assemble the named candidates in one wave so the delivery merge can check their actual content, or resolve one candidate before assembling a singleton.`,
+      message: `Wave assembly paused because submitted candidates overlap: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(', ')})`).join('; ')}. These refs each hold a pending candidate that remains eligible for delivery, not merely a live declared scope; review-rejected candidates stay parked without blocking the wave. Assemble the named candidates in one wave so the delivery merge can check their actual content, or resolve one candidate before assembling a singleton.`,
     };
   }
   const firstCandidate = waveCandidates[0];

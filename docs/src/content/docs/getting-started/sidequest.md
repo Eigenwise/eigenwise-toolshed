@@ -140,7 +140,7 @@ Sidequest keeps ticket activity visible in the board. Ask Claude to check active
 
 **A submitted ticket is not integrated.** Ask Claude to inspect the submission and complete the review and integration step. Do not start the same ticket again while a submitted result is waiting.
 
-**A wave left out submitted work.** Ask Claude to inspect the assembled wave and its declared participant set.
+**A wave left out submitted work.** Ask Claude to inspect the assembled wave and its declared participant set. Active or accepted pending candidates with overlapping scope belong in the wave. Review-rejected candidates stay visible for later supersession and do not block an accepted repair wave.
 
 **A submission sat so long it can no longer be integrated.** Ask Claude to check whether the requested behavior already reached the intended branch. If it did, Claude records that evidence; if it did not, the work needs a fresh ticket against current source.
 
