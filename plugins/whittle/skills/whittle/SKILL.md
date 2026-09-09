@@ -23,6 +23,12 @@ Apply the shared policy consistently. Prefer deletion and direct code over layer
 
 Question every addition. Keep only code that carries a demonstrated behavior or safety floor.
 
+## Reports
+
+Reports do not depend on the active Whittle mode. When Sidequest is installed, ask it for a readonly candidate review, named-scope repository audit, or source-comment debt scan. Sidequest owns the routing and never makes edits. A submitted candidate review needs its immutable `reviewTarget`; an audit reports concrete delete, reuse, standard-library, native-platform, YAGNI, or shrinking opportunities; debt reports cite file:line, ceiling, observable upgrade trigger, and replacement. It recognizes `ponytail:` and `whittle:` shortcut markers. Missing ceilings or triggers are findings, never invented details or permission to create a ledger.
+
+If Sidequest is unavailable in the host, say the routed report capability is unavailable. Absolute Observability measurements are not causal gain, so report gain as unmeasured without a matched baseline. Do not reuse static headline figures or private workflow data.
+
 ## Commands
 
 `/whittle [status|lite|full|ultra|off|default <mode>]` selects a session mode. `stop whittle` and `normal mode` turn the optional overlay off. `default <mode>` is an explicit, project-scoped default change.

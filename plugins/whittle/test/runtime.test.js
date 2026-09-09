@@ -52,6 +52,21 @@ test('full starts when the installed hook runs without WHITTLE_ENABLED', () => {
   assert.match(context(runHook('SessionStart', projectDir, stateDir, { session_id: 'one' })), /Whittle mode: full\./);
 });
 
+test('help keeps Sidequest reports available while Whittle is off', () => {
+  const projectDir = temporaryDirectory('whittle-project-');
+  const stateDir = path.join(projectDir, 'state');
+
+  runHook('UserPromptSubmit', projectDir, stateDir, { session_id: 'one', user_prompt: '/whittle off' });
+  const help = context(runHook('UserPromptSubmit', projectDir, stateDir, { session_id: 'one', user_prompt: '/whittle help' }));
+
+  assert.match(help, /Reports stay available while mode is off/);
+  assert.match(help, /immutable reviewTarget/);
+  assert.match(help, /named-scope repository audits/);
+  assert.match(help, /source-comment debt scans/);
+  assert.match(help, /routed report capability is unavailable/);
+  assert.match(help, /Gain is unmeasured without a matched baseline/);
+});
+
 test('mode changes inject once, default persists, and off stays silent', () => {
   const projectDir = temporaryDirectory('whittle-project-');
   const stateDir = path.join(projectDir, 'state');
