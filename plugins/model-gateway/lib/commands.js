@@ -255,7 +255,11 @@ function compatibilityPortConflict() {
   return `port ${COMPAT_PORT}: held by ${holders.join(', ')}. RC-compatibility cannot start until ${releaser} release${owners.length === 1 ? 's' : ''} port ${COMPAT_PORT}.`;
 }
 
-configureRemoteControl({ args, flag, log, die, doctor, fetchShimHealth, startAll, syncCompatMode, compatibilityPortConflict, unsafeRemoteControlProcessEnv });
+const RC_CONTROL_PATH = '/internal/rc-compatibility';
+const RC_CONTROL_HEADER = 'x-model-gateway-control';
+const RC_CONTROL_VALUE = 'rc-compatibility';
+
+configureRemoteControl({ args, flag, log, die, doctor, fetchShimHealth, requestServingCompatibility, startAll, syncCompatMode, compatibilityPortConflict, unsafeRemoteControlProcessEnv });
 
 // Model Gateway runs where it is installed. Project-scoped installs and
 // project-local wiring are the standard configuration. We still report an
@@ -746,6 +750,53 @@ async function fetchShimHealth() {
   } catch { return null; }
 }
 
+function unknownServingCompatibility(reason) {
+  return { status: 'unknown', reason };
+}
+
+function hasServingCompatibilityHealth(health, supervisorPid) {
+  return health?.ok === true
+    && health.supervisorPid === supervisorPid
+    && typeof health.compat?.hostsDetected === 'boolean'
+    && typeof health.compat?.port80Bound === 'boolean';
+}
+
+async function requestServingCompatibility({ action = 'probe', expectedSupervisorPid = null } = {}) {
+  const owner = await resolvePortOwner(PUBLIC_SHIM_PORT).catch(() => ({ state: 'unknown', pid: null }));
+  if (owner.state !== 'same-install' || !Number.isInteger(owner.pid)) {
+    return unknownServingCompatibility('could not confirm a same-install shim supervisor');
+  }
+  if (expectedSupervisorPid != null && owner.pid !== expectedSupervisorPid) {
+    return unknownServingCompatibility('shim supervisor identity changed');
+  }
+  const health = await fetchShimHealth();
+  if (!hasServingCompatibilityHealth(health, owner.pid)) {
+    return unknownServingCompatibility('shim health did not confirm the serving supervisor');
+  }
+  if (action === 'probe' && health.compat.port80Bound) {
+    return { status: 'bound', supervisorPid: owner.pid };
+  }
+  try {
+    const response = await postJson(
+      `http://127.0.0.1:${PUBLIC_SHIM_PORT}${RC_CONTROL_PATH}`,
+      { action, expectedSupervisorPid: owner.pid },
+      3000,
+      { [RC_CONTROL_HEADER]: RC_CONTROL_VALUE },
+    );
+    if (response.status !== 200) return unknownServingCompatibility(`serving control returned ${response.status}`);
+    const result = JSON.parse(response.body.toString());
+    if (result?.supervisorPid !== owner.pid || !['bound', 'bindable', 'unavailable', 'unknown'].includes(result.status)) {
+      return unknownServingCompatibility('serving control returned an unrecognized response');
+    }
+    if (result.status === 'unavailable' && typeof result.code !== 'string') {
+      return unknownServingCompatibility('serving control omitted its bind failure code');
+    }
+    return result;
+  } catch (error) {
+    return unknownServingCompatibility(error?.message || 'serving control did not respond');
+  }
+}
+
 function servingShimVersion(health) {
   return health?.supervisorVersion || health?.version || null;
 }
@@ -936,13 +987,14 @@ function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
   const verified = readSettingsForWrite(file);
   const expected = remove ? undefined : envBlockFor(effectiveMode).ANTHROPIC_BASE_URL;
   if (verified.env?.ANTHROPIC_BASE_URL !== expected) throw new Error(`Could not verify gateway settings in ${file}`);
+  const verifiedMode = verified.env?.ANTHROPIC_BASE_URL === COMPAT_BASE_URL ? 'compat' : 'default';
   if (scope === 'project') recordProjectWiring();
-  if (quiet) return { changed: true, file };
+  if (quiet) return { changed: true, file, mode: verifiedMode };
   log(`${remove ? 'removed from' : 'written to'} ${file}`);
   if (!remove) {
     log('new Claude Code sessions now use this wiring. Restart Claude Code, then open /model to see the Codex rows.');
   }
-  return { changed: true, file };
+  return { changed: true, file, mode: verifiedMode };
 }
 
 // Called once per session (from `ensure`, after the shim is confirmed
@@ -951,12 +1003,16 @@ function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
 // to default the moment either condition stops holding (entry removed, or
 // the port became unavailable). Exactly one log line when something changes;
 // silent otherwise. Never touches settings this plugin didn't wire itself.
-async function syncCompatMode() {
+async function syncCompatMode({ requiredMode = null } = {}) {
+  const { mode: desiredMode, compat } = await resolveIntendedMode();
+  if (requiredMode && desiredMode !== requiredMode) return { mode: desiredMode, compat, changed: false };
+  migrateLegacyProjectSettings();
   const current = wiredMode();
-  if (!current?.scope) return;
-  const { mode, compat } = await resolveIntendedMode();
-  if (mode === current.mode) return;
-  writeEnv(current.scope, false, { mode, quiet: true });
+  const scope = current?.scope || (current ? null : selectedWiringScope());
+  const observedMode = current?.mode || 'default';
+  if (!scope || desiredMode === observedMode) return { mode: observedMode, compat, changed: false };
+  const written = writeEnv(scope, false, { mode: desiredMode, quiet: true });
+  const mode = written.mode;
   if (mode === 'compat') {
     log(`model-gateway: hosts entry mapping ${COMPAT_HOST} to loopback detected (${compat.hostsLine}); switched to RC-compatibility mode (http://${COMPAT_HOST} via 127.0.0.1:${COMPAT_PORT}). Restart Claude Code to enable /remote-control.`);
   } else {
@@ -965,6 +1021,7 @@ async function syncCompatMode() {
       : `the hosts entry mapping ${COMPAT_HOST} to loopback was removed`;
     log(`model-gateway: reverted to default gateway mode (${why}). Restart Claude Code.`);
   }
+  return { mode, compat, changed: true };
 }
 
 // ------------------------------------------------------------------ doctor
@@ -1978,6 +2035,8 @@ function runShim() {
   let proxyRecoveryTimer = null;
   let main = null;
   let compatServer = null;
+  let compatibilityActions = Promise.resolve();
+  let activeCompatibilityProbe = null;
   let shutdownPromise = null;
   const pendingSupervisorWrites = new Set();
 
@@ -1992,6 +2051,16 @@ function runShim() {
       if (!server) return resolve();
       try { server.close(() => resolve()); } catch { resolve(); }
     });
+  }
+
+  function serializeCompatibility(action) {
+    const result = compatibilityActions.then(action, action);
+    compatibilityActions = result.catch(() => {});
+    return result;
+  }
+
+  function stopCompatibilityProbe() {
+    activeCompatibilityProbe?.finish({ status: 'unknown', code: 'ESHUTDOWN' });
   }
 
   function waitForWorkerExit(child) {
@@ -2024,9 +2093,11 @@ function runShim() {
       }
       clearWorkerPortReportTimeout();
       clearInterval(proxyRecoveryTimer);
+      stopCompatibilityProbe();
       const stoppingWorker = worker;
       await proxyRecovery.stop();
       await Promise.all([...pendingSupervisorWrites]);
+      await compatibilityActions;
       await killPidAsync(stoppingWorker?.pid, { trusted: true });
       await waitForWorkerExit(stoppingWorker);
       await Promise.all([closeServer(compatServer), closeServer(main)]);
@@ -2125,6 +2196,7 @@ function runShim() {
         upstream.once('end', () => {
           const health = JSON.parse(Buffer.concat(response).toString());
           health.supervisorVersion = PLUGIN_VERSION;
+          health.supervisorPid = process.pid;
           health.proxyRecovery = true;
           health.compat = { ...compatState };
           res.writeHead(upstream.statusCode || 502, upstream.headers);
@@ -2175,8 +2247,103 @@ function runShim() {
     });
   }
 
-  function handle(req, res) {
+  function controlRequestAllowed(req, compatibilityListener) {
+    return !compatibilityListener
+      && req.method === 'POST'
+      && req.headers.host === `127.0.0.1:${PUBLIC_SHIM_PORT}`
+      && req.headers.origin === undefined
+      && req.headers['content-type'] === 'application/json'
+      && requestHeader(req, RC_CONTROL_HEADER) === RC_CONTROL_VALUE;
+  }
+
+  function sendControlResponse(res, response) {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ...response, supervisorPid: process.pid }));
+  }
+
+  function probeCompatibilityListener() {
+    return new Promise((resolve) => {
+      const server = net.createServer((socket) => socket.destroy());
+      let finished = false;
+      const timer = setTimeout(() => finish({ status: 'unknown', code: 'ETIMEDOUT' }), 2000);
+      const finish = (result) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        const complete = () => {
+          if (activeCompatibilityProbe?.server === server) activeCompatibilityProbe = null;
+          resolve(result);
+        };
+        if (!server.listening) return complete();
+        server.once('close', complete);
+        try { server.close(); } catch { complete(); }
+      };
+      activeCompatibilityProbe = { server, finish };
+      server.once('error', (error) => finish({ status: 'unavailable', code: error.code || 'EUNKNOWN' }));
+      server.once('listening', () => {
+        if (finished) return server.close();
+        finish({ status: 'bindable' });
+      });
+      const address = detectHostsCompat()?.ip || '127.0.0.1';
+      server.listen(COMPAT_PORT, address);
+    });
+  }
+
+  function reconcileCompatibilityListener() {
+    return serializeCompatibility(async () => {
+      const entry = detectHostsCompat();
+      await closeServer(compatServer);
+      compatServer = null;
+      compatState.hostsDetected = !!entry;
+      compatState.hostsLine = entry?.line ?? null;
+      compatState.port80Bound = false;
+      compatState.reason = null;
+      if (!entry) return { status: 'bound' };
+      return new Promise((resolve) => {
+        const server = listen(COMPAT_PORT, entry.ip, () => {
+          compatServer = server;
+          compatState.port80Bound = true;
+          console.log(`model-gateway RC-compatibility supervisor on ${entry.ip}:${COMPAT_PORT}`);
+          resolve({ status: 'bound' });
+        }, true);
+        server.once('error', (error) => {
+          if (compatServer === server) compatServer = null;
+          compatState.reason = error.code || error.message;
+          console.error(`model-gateway: RC-compatibility supervisor unavailable: ${compatState.reason}`);
+          resolve({ status: 'unavailable', code: compatState.reason });
+        });
+      });
+    });
+  }
+
+  async function handleCompatibilityControl(req, res) {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    let control;
+    try { control = JSON.parse(Buffer.concat(chunks).toString()); } catch { return sendControlResponse(res, { status: 'unknown' }); }
+    if (control?.expectedSupervisorPid !== process.pid) return sendControlResponse(res, { status: 'unknown' });
+    if (control.action === 'probe') {
+      const response = await serializeCompatibility(async () => {
+        if (compatServer?.listening && compatState.port80Bound) return { status: 'bound' };
+        return probeCompatibilityListener();
+      });
+      return sendControlResponse(res, response);
+    }
+    if (control.action === 'reconcile') return sendControlResponse(res, await reconcileCompatibilityListener());
+    return sendControlResponse(res, { status: 'unknown' });
+  }
+
+  function handle(req, res, compatibilityListener = false) {
     const pathOnly = req.url.split('?')[0];
+    if (pathOnly === RC_CONTROL_PATH) {
+      if (!controlRequestAllowed(req, compatibilityListener)) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      void handleCompatibilityControl(req, res);
+      return;
+    }
     if (req.method === 'POST' && pathOnly === '/restart') {
       const chunks = [];
       req.on('data', (chunk) => chunks.push(chunk));
@@ -2198,8 +2365,8 @@ function runShim() {
     });
   }
 
-  function listen(port, host, callback) {
-    const server = http.createServer(handle);
+  function listen(port, host, callback, compatibilityListener = false) {
+    const server = http.createServer((req, res) => handle(req, res, compatibilityListener));
     server.requestTimeout = 0;
     server.headersTimeout = 120000;
     server.keepAliveTimeout = 75000;
@@ -2207,10 +2374,11 @@ function runShim() {
     return server;
   }
 
-  main = listen(PUBLIC_SHIM_PORT, '127.0.0.1', () => {
+  main = listen(PUBLIC_SHIM_PORT, '127.0.0.1', async () => {
     const publicShimPort = main.address().port;
     try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
     console.log(`model-gateway shim supervisor listening on 127.0.0.1:${publicShimPort}`);
+    await reconcileCompatibilityListener();
     startWorker();
     monitorProxy();
     proxyRecoveryTimer = setInterval(monitorProxy, recoveryIntervalMs);
@@ -2228,16 +2396,6 @@ function runShim() {
       await stopSupervisor(1);
     })();
   });
-  if (hostsEntry) {
-    compatServer = listen(COMPAT_PORT, hostsEntry.ip, () => {
-      compatState.port80Bound = true;
-      console.log(`model-gateway RC-compatibility supervisor on ${hostsEntry.ip}:${COMPAT_PORT}`);
-    });
-    compatServer.once('error', (error) => {
-      compatState.reason = error.code || error.message;
-      console.error(`model-gateway: RC-compatibility supervisor unavailable: ${compatState.reason}`);
-    });
-  }
   process.once('SIGTERM', () => { void stopSupervisor(0, 'SIGTERM'); });
   process.once('SIGINT', () => { void stopSupervisor(0, 'SIGINT'); });
   if (process.connected) {
@@ -2400,6 +2558,8 @@ module.exports = {
   loginSuccessMessage,
   startupWaitMsFor,
   startAll,
+  requestServingCompatibility,
+  syncCompatMode,
   waitForStartupReadiness,
   settingsPath,
   COMPAT_HOST,

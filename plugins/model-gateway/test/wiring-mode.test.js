@@ -520,6 +520,98 @@ test('doctor retains a process-env gateway mode conflict', (t) => {
   assert.doesNotMatch(result.output, /bypasses model-gateway/);
 });
 
+test('syncCompatMode makes verified settings authoritative after migrating legacy wiring', (t) => {
+  const { home, project } = fixture(t);
+  const legacyFile = path.join(project, '.claude', 'settings.json');
+  const localFile = path.join(project, '.claude', 'settings.local.json');
+  writeJson(legacyFile, gatewaySettings());
+
+  const synchronized = syncCompatMode(home, project, {
+    ok: true,
+    compat: { hostsDetected: true, port80Bound: true, hostsLine: '127.0.0.1 api.anthropic.com' },
+  }, 'compat');
+
+  assert.deepEqual(synchronized.result, { mode: 'compat', compat: {
+    hostsDetected: true, port80Bound: true, hostsLine: '127.0.0.1 api.anthropic.com',
+  }, changed: true });
+  assert.equal(JSON.parse(fs.readFileSync(localFile, 'utf8')).env.ANTHROPIC_BASE_URL, COMPAT_BASE_URL);
+  assert.equal(JSON.parse(fs.readFileSync(legacyFile, 'utf8')).env, undefined);
+});
+
+test('syncCompatMode reports its verified default write after legacy compat migration', (t) => {
+  const { home, project } = fixture(t);
+  const legacyFile = path.join(project, '.claude', 'settings.json');
+  const localFile = path.join(project, '.claude', 'settings.local.json');
+  writeJson(legacyFile, gatewaySettings({ ANTHROPIC_BASE_URL: COMPAT_BASE_URL }));
+  writeJson(localFile, { env: { PROJECT_LOCAL_VALUE: 'keep-me' } });
+
+  const synchronized = syncCompatMode(home, project, {
+    ok: true,
+    compat: { hostsDetected: false, port80Bound: false },
+  }, null);
+
+  assert.equal(synchronized.result.mode, 'default');
+  assert.equal(synchronized.result.changed, true);
+  const local = JSON.parse(fs.readFileSync(localFile, 'utf8')).env;
+  assert.equal(local.ANTHROPIC_BASE_URL, DEFAULT_BASE_URL);
+  assert.equal(local.PROJECT_LOCAL_VALUE, 'keep-me');
+  assert.equal(JSON.parse(fs.readFileSync(legacyFile, 'utf8')).env, undefined);
+});
+
+test('required compat refuses unknown health before migrating legacy settings', (t) => {
+  const { home, project } = fixture(t);
+  const legacyFile = path.join(project, '.claude', 'settings.json');
+  const localFile = path.join(project, '.claude', 'settings.local.json');
+  writeJson(legacyFile, gatewaySettings());
+  const original = fs.readFileSync(legacyFile, 'utf8');
+
+  const synchronized = syncCompatMode(home, project, null, 'compat');
+
+  assert.deepEqual(synchronized.result, { mode: 'default', compat: { hostsDetected: false, port80Bound: false }, changed: false });
+  assert.equal(fs.readFileSync(legacyFile, 'utf8'), original);
+  assert.equal(fs.existsSync(localFile), false);
+});
+
+test('syncCompatMode reports observed environment-only compat wiring without creating settings', (t) => {
+  const { home, project } = fixture(t);
+  const localFile = path.join(project, '.claude', 'settings.local.json');
+  const healthyCompat = { ok: true, compat: { hostsDetected: true, port80Bound: true } };
+
+  const defaultEnvironment = syncCompatMode(home, project, healthyCompat, 'compat', {
+    extraEnv: { ANTHROPIC_BASE_URL: DEFAULT_BASE_URL },
+  });
+  assert.equal(defaultEnvironment.result.mode, 'default');
+  assert.equal(defaultEnvironment.result.changed, false);
+  assert.equal(fs.existsSync(localFile), false);
+
+  const compatEnvironment = syncCompatMode(home, project, healthyCompat, 'compat', {
+    extraEnv: { ANTHROPIC_BASE_URL: COMPAT_BASE_URL },
+  });
+  assert.equal(compatEnvironment.result.mode, 'compat');
+  assert.equal(compatEnvironment.result.changed, false);
+  assert.equal(fs.existsSync(localFile), false);
+  assert.equal(fs.existsSync(wiringConfig(home)), false);
+  assert.equal(fs.existsSync(projectRegistry(home)), false);
+  assert.deepEqual(fs.readdirSync(home), []);
+  assert.deepEqual(fs.readdirSync(project), []);
+});
+
+test('syncCompatMode rejects an unverified write instead of attesting compat', (t) => {
+  const { home, project } = fixture(t);
+  const legacyFile = path.join(project, '.claude', 'settings.json');
+  const localFile = path.join(project, '.claude', 'settings.local.json');
+  writeJson(legacyFile, gatewaySettings());
+
+  const synchronized = syncCompatMode(home, project, {
+    ok: true,
+    compat: { hostsDetected: true, port80Bound: true },
+  }, 'compat', { ignoreCompatWrite: true });
+
+  assert.match(synchronized.error, /Could not verify gateway settings/);
+  assert.equal(JSON.parse(fs.readFileSync(localFile, 'utf8')).env.ANTHROPIC_BASE_URL, DEFAULT_BASE_URL);
+  assert.equal(JSON.parse(fs.readFileSync(legacyFile, 'utf8')).env, undefined);
+});
+
 // SQ-1901. `ensure --quiet` runs from SessionStart, whose stdout is model context and nothing else, so an
 // actionable state was told to the model and to nobody who could fix it: a session sat unwired for hours and it
 // took asking which hooks had run to find out. systemMessage is the only user-visible channel, and Claude Code
@@ -545,6 +637,37 @@ function migrateLegacyProjectSettings(home, project) {
   const result = runNode(home, project, `process.stdout.write(JSON.stringify(require(${JSON.stringify(SETTINGS_WIRING)}).migrateLegacyProjectSettings()))`);
   assert.equal(result.code, 0, result.output);
   return JSON.parse(result.output);
+}
+
+function syncCompatMode(home, project, health, requiredMode, { ignoreCompatWrite = false, extraEnv = {} } = {}) {
+  const result = runNode(home, project, `
+    const fs = require('node:fs');
+    const http = require('node:http');
+    const localFile = require('node:path').join(process.cwd(), '.claude', 'settings.local.json');
+    const originalWrite = fs.writeFileSync;
+    if (${JSON.stringify(ignoreCompatWrite)}) {
+      fs.writeFileSync = (file, value, ...rest) => {
+        if (file === localFile && String(value).includes(${JSON.stringify(COMPAT_BASE_URL)})) return;
+        return originalWrite(file, value, ...rest);
+      };
+    }
+    const server = http.createServer((request, response) => {
+      response.end(JSON.stringify(${JSON.stringify(health)}));
+    });
+    server.listen(9, '127.0.0.1', async () => {
+      try {
+        const result = await require(${JSON.stringify(COMMANDS)}).syncCompatMode({ requiredMode: ${JSON.stringify(requiredMode)} });
+        process.stdout.write(JSON.stringify({ result }));
+      } catch (error) {
+        process.stdout.write(JSON.stringify({ error: error.message }));
+      } finally {
+        server.close();
+      }
+    });
+  `, extraEnv);
+  assert.equal(result.code, 0, result.output);
+  const output = result.output.trim();
+  return JSON.parse(output.slice(output.lastIndexOf('\n') + 1));
 }
 
 function migrateWithUnreadableUserIdentity(home, project) {

@@ -608,10 +608,10 @@ async function stopRunningSupervisor({ quiet = false, operation = 'restart', rep
     : null;
   return { ok: true, pid, siblingInstallRoot };
 }
-function postJson(url, body, timeout = 2000) {
+function postJson(url, body, timeout = 2000, headers = {}) {
   return new Promise((resolve, reject) => {
     const payload = Buffer.from(JSON.stringify(body));
-    const req = http.request(url, { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': payload.length } }, (res) => {
+    const req = http.request(url, { method: 'POST', headers: { ...headers, 'content-type': 'application/json', 'content-length': payload.length } }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }));
