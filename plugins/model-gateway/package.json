@@ -3,7 +3,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "test": "node --test --test-timeout=300000 \"test/*.test.js\""
+    "test": "node --test --test-concurrency=2 --test-timeout=300000 \"test/*.test.js\""
   },
   "engines": {
     "node": ">=22.5.0"
