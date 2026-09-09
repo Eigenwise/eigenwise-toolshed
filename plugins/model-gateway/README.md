@@ -23,6 +23,8 @@ The skill runs `setup`, which installs and starts the local gateway, checks your
 
 After the project wiring is confirmed, fully restart the Claude Code process for that same project. A plugin reload alone does not reload the model picker or settings from the new process. Select a gateway model only after that restart.
 
+A process `ANTHROPIC_BASE_URL` has precedence over project and user settings. If `doctor` or SessionStart says it shadows a wired settings file, it bypasses Model Gateway. If you control the Claude Code CLI launch, correct or unset that value, then restart. If the host replaces it, use the supported Claude Code CLI on the wired project instead. Model Gateway does not support Desktop routing under forced overrides on Windows or macOS, and settings, parent, or User-scope edits cannot be promised to win.
+
 ## Use a model
 
 In Claude Code v2.1.129+, open `/model` and choose a row labeled `From gateway`. Claude Code only refetches gateway discovery
@@ -89,13 +91,13 @@ Remote Control gives each project two choices.
 
 RC-compatibility keeps Model Gateway routed for the project. It maps `api.anthropic.com` to loopback in the hosts file and needs the gateway shim to bind port 80. Gateway rows disappear from `/model`, but only in RC-compatibility mode, explicit gateway ids such as `/model claude-gpt-5.6-terra[1m]` still work.
 
-Ask Claude to enable, disable, or diagnose RC-compatibility. Its read-only diagnosis checks port 80 before any hosts-file change. If another process already holds the port, RC-compatibility cannot start until that process releases it. Docker Desktop is a common holder and is named in the refusal.
+Ask Claude to enable, disable, or diagnose RC-compatibility. Its read-only diagnosis checks port 80 before any hosts-file change. If another process already holds the port, RC-compatibility cannot start until that process releases it. Docker Desktop is a common holder and is named in the refusal. Enabling also refuses before any backup, hosts write, gateway startup, or reconciliation when effective process `ANTHROPIC_BASE_URL` is HTTPS `api.anthropic.com` (including port 443): the loopback mapping would route TLS traffic to an unsupported endpoint. If you control the Claude Code CLI launch, correct or unset that value, then restart. If the host replaces it, use the supported Claude Code CLI on the wired project instead. Desktop routing is unsupported under forced overrides on Windows and macOS, and settings, parent, or User-scope edits cannot be promised to win. Disabling stays available.
 
 ### Turn the gateway off for this project
 
 To get Remote Control without RC-compatibility, remove only `ANTHROPIC_BASE_URL` from the `env` object in that project's `.claude/settings.local.json`. Keep every other gateway setting, then restart Claude Code. The project talks to `api.anthropic.com` directly and Remote Control becomes available.
 
-That project has no gateway models after the restart: gateway rows disappear from `/model` and typed gateway ids do not work either. A manually exported `ANTHROPIC_BASE_URL` still wins over the file edit, so remove that environment variable before restarting if the project remains wired.
+That project has no gateway models after the restart: gateway rows disappear from `/model` and typed gateway ids do not work either. A process-exported `ANTHROPIC_BASE_URL` still wins over the file edit. If you control the Claude Code CLI launch, correct or unset that value, then restart. If the host replaces it, use the supported Claude Code CLI on the wired project instead. Desktop routing is unsupported under forced overrides on Windows and macOS, and settings, parent, or User-scope edits cannot be promised to win.
 
 ## Support
 

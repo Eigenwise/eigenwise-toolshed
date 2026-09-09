@@ -256,13 +256,14 @@ function resolveEffective(home, project, extraEnv) {
   return JSON.parse(result.output);
 }
 
-function runDoctor(home, project) {
+function runDoctor(home, project, extraEnv = {}, readinessOverrides = {}) {
   const readiness = {
     ready: true,
     state: 'ready',
     checks: { proxyBinary: false, proxyModels: true, codexAuth: true, shimRunning: true, servingVersion: 'test', servingVersionMatches: true },
+    ...readinessOverrides,
   };
-  return runNode(home, project, `require(${JSON.stringify(COMMANDS)}).commands.doctor({ readiness: ${JSON.stringify(readiness)} })`);
+  return runNode(home, project, `require(${JSON.stringify(COMMANDS)}).commands.doctor({ readiness: ${JSON.stringify(readiness)} })`, extraEnv);
 }
 
 test('doctor reports project-local wiring as the effective source', (t) => {
@@ -276,6 +277,72 @@ test('doctor reports project-local wiring as the effective source', (t) => {
   assert.match(result.output, /default wiring target: this project's \.claude\/settings\.local\.json/);
   assert.match(result.output, /project settings\.local\.json: wired .*\[effective\] \[default write target\]/);
   assert.match(result.output, /user settings\.json: not wired/);
+});
+
+test('doctor and SessionStart give conditional forced-host guidance before auth advice', (t) => {
+  const { home, project } = fixture(t);
+  const wiredFile = path.join(project, '.claude', 'settings.local.json');
+  wireProject(project);
+  const environment = { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' };
+  const doctor = runDoctor(home, project, environment);
+
+  assert.notEqual(doctor.code, 0);
+  assert.match(doctor.output, /process env ANTHROPIC_BASE_URL .*bypasses model-gateway/);
+  assert.match(doctor.output, new RegExp(wiredFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(doctor.output, /user-controlled Claude Code CLI launch can correct or unset ANTHROPIC_BASE_URL/);
+  assert.match(doctor.output, /If a host replaces it, use the supported Claude Code CLI on this wired project/);
+  assert.match(doctor.output, /Desktop routing is unsupported under forced overrides on Windows and macOS/);
+  assert.match(doctor.output, /Settings, parent, and User-scope edits cannot be promised to win/);
+  assert.doesNotMatch(doctor.output, /Correct ANTHROPIC_BASE_URL in the launching environment/);
+  assert.doesNotMatch(doctor.output, /Desktop.*(?:repair|restore|correct)/i);
+  assert.doesNotMatch(doctor.output, /env --write-project/);
+
+  const expectedNotice = `Model Gateway is bypassed: process env ANTHROPIC_BASE_URL (https://api.anthropic.com) shadows wired ${wiredFile}. A user-controlled Claude Code CLI launch can correct or unset ANTHROPIC_BASE_URL, then restart. If a host replaces it, use the supported Claude Code CLI on this wired project; Desktop routing is unsupported under forced overrides on Windows and macOS. Settings, parent, and User-scope edits cannot be promised to win.`;
+  for (const codexAuth of [true, false]) {
+    const notice = runNode(home, project, `
+      const { effectiveBaseUrl } = require(${JSON.stringify(SETTINGS_WIRING)});
+      const { sessionStartWiringNotice } = require(${JSON.stringify(COMMANDS)});
+      process.stdout.write(sessionStartWiringNotice({
+        readiness: { checks: { codexAuth: ${codexAuth} } },
+        effectiveWiring: effectiveBaseUrl(),
+        projectWirings: [],
+      }));
+    `, environment);
+
+    assert.equal(notice.code, 0, notice.output);
+    assert.equal(notice.output, expectedNotice);
+    assert.doesNotMatch(notice.output, /Correct ANTHROPIC_BASE_URL in the launching environment/);
+    assert.doesNotMatch(notice.output, /Desktop.*(?:repair|restore|correct)/i);
+    assert.doesNotMatch(notice.output, /signed in to ChatGPT/);
+    assert.doesNotMatch(notice.output, /Offer to run its login/);
+  }
+});
+
+test('doctor and SessionStart accept matching process gateway URLs', (t) => {
+  const { home, project } = fixture(t);
+
+  for (const baseUrl of [DEFAULT_BASE_URL, COMPAT_BASE_URL]) {
+    wireProject(project, baseUrl);
+    const doctor = runDoctor(home, project, { ANTHROPIC_BASE_URL: baseUrl });
+
+    assert.equal(doctor.code, 0, doctor.output);
+    assert.match(doctor.output, /wiring: effective process env \[model-gateway\]/);
+    assert.doesNotMatch(doctor.output, /bypasses model-gateway/);
+    assert.doesNotMatch(doctor.output, /wiring is not configured/);
+    assert.doesNotMatch(doctor.output, /ERROR:/);
+
+    const sessionStart = runNode(home, project, `
+      const { isWired, sessionStartWiringNotice, effectiveBaseUrl } = require(${JSON.stringify(COMMANDS)});
+      if (!isWired()) process.stdout.write(sessionStartWiringNotice({
+        readiness: { checks: { codexAuth: false } },
+        effectiveWiring: effectiveBaseUrl(),
+        projectWirings: [],
+      }));
+    `, { ANTHROPIC_BASE_URL: baseUrl });
+
+    assert.equal(sessionStart.code, 0, sessionStart.output);
+    assert.equal(sessionStart.output, '');
+  }
 });
 
 test('SessionStart local wiring notice does not say the project is unwired', (t) => {
@@ -402,6 +469,22 @@ test('effectiveBaseUrl is re-exported through commands', (t) => {
   assert.equal(result.output, 'function');
 });
 
+test('unsafe RC preflight recognizes normalized HTTPS Anthropic process overrides only', (t) => {
+  const { home, project } = fixture(t);
+  const script = `process.stdout.write(JSON.stringify(require(${JSON.stringify(SETTINGS_WIRING)}).unsafeRemoteControlProcessEnv()))`;
+
+  for (const baseUrl of ['https://api.anthropic.com', 'HTTPS://API.ANTHROPIC.COM:443/']) {
+    const result = runNode(home, project, script, { ANTHROPIC_BASE_URL: baseUrl });
+    assert.equal(result.code, 0, result.output);
+    assert.equal(JSON.parse(result.output).value, baseUrl);
+  }
+  for (const baseUrl of ['http://api.anthropic.com', 'http://127.0.0.1:9', 'https://api.anthropic.com:444']) {
+    const result = runNode(home, project, script, { ANTHROPIC_BASE_URL: baseUrl });
+    assert.equal(result.code, 0, result.output);
+    assert.equal(JSON.parse(result.output), null);
+  }
+});
+
 test('doctor fails on a selected-mode contradiction and passes when modes agree', (t) => {
   const { home, project } = fixture(t);
   const local = path.join(project, '.claude', 'settings.local.json');
@@ -421,6 +504,20 @@ test('doctor fails on a selected-mode contradiction and passes when modes agree'
   assert.equal(result.code, 0);
   assert.match(result.output, /wiring precedence: project settings\.local\.json wins over user settings\.json/);
   assert.doesNotMatch(result.output, /ERROR:/);
+});
+
+test('doctor retains a process-env gateway mode conflict', (t) => {
+  const { home, project } = fixture(t);
+  const local = path.join(project, '.claude', 'settings.local.json');
+  wireProject(project, COMPAT_BASE_URL);
+
+  const result = runDoctor(home, project, { ANTHROPIC_BASE_URL: DEFAULT_BASE_URL });
+
+  assert.notEqual(result.code, 0);
+  assert.match(result.output, /effective process env ANTHROPIC_BASE_URL uses default mode/);
+  assert.match(result.output, new RegExp(`shadowed ${local.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} uses compat mode`));
+  assert.match(result.output, /Process env wins/);
+  assert.doesNotMatch(result.output, /bypasses model-gateway/);
 });
 
 // SQ-1901. `ensure --quiet` runs from SessionStart, whose stdout is model context and nothing else, so an

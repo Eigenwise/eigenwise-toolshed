@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { writeFileAtomically } = require('./atomic-file.js');
-const { COMPAT_BASE_URL, DEFAULT_BASE_URL, GATEWAY_MODELS_CACHE, LEGACY_ENV_BLOCK, PIN_ALIASES, PROJECT_WIRING_REGISTRY_PATH, STATIC_ENV_BLOCK, STATE, WIRING_CONFIG_PATH } = require('./runtime.js');
+const { COMPAT_BASE_URL, COMPAT_HOST, DEFAULT_BASE_URL, GATEWAY_MODELS_CACHE, LEGACY_ENV_BLOCK, PIN_ALIASES, PROJECT_WIRING_REGISTRY_PATH, STATIC_ENV_BLOCK, STATE, WIRING_CONFIG_PATH } = require('./runtime.js');
 const { isGatewayModelId, ourBaseUrls } = require('./pins.js');
 
 // Project-local wiring is the default so each repository opts into the
@@ -47,6 +47,27 @@ function effectiveBaseUrl() {
   }
   const [winner, ...shadowed] = definitions;
   return winner ? { ...winner, shadowed } : { value: null, source: null, file: null, shadowed: [] };
+}
+
+function processEnvGatewayBypass(effective = effectiveBaseUrl()) {
+  if (effective.source !== 'env' || ourBaseUrls().includes(effective.value)) return null;
+  const shadowedWiring = effective.shadowed.find((definition) => ourBaseUrls().includes(definition.value));
+  return shadowedWiring ? { effective, shadowedWiring } : null;
+}
+
+function isUnsupportedRemoteControlHttpsUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname.toLowerCase() === COMPAT_HOST
+      && (url.port === '' || url.port === '443');
+  } catch {
+    return false;
+  }
+}
+
+function unsafeRemoteControlProcessEnv(effective = effectiveBaseUrl()) {
+  if (effective.source !== 'env' || !isUnsupportedRemoteControlHttpsUrl(effective.value)) return null;
+  return effective;
 }
 
 function readSettingsForWrite(file) {
@@ -300,8 +321,8 @@ function wiredMode() {
 
 
 module.exports = {
-  cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isWired,
-  migrateLegacyProjectSettings, readSettingsForWrite, reconcileRegisteredProjectWirings,
+  cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isUnsupportedRemoteControlHttpsUrl, isWired,
+  migrateLegacyProjectSettings, processEnvGatewayBypass, readSettingsForWrite, reconcileRegisteredProjectWirings,
   recordProjectWiring, registeredProjectWirings, retireWiringModeConfig, selectedWiringScope,
-  settingsPath, wiredMode, writeSettings,
+  settingsPath, unsafeRemoteControlProcessEnv, wiredMode, writeSettings,
 };

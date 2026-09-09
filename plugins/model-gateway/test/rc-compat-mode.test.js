@@ -14,6 +14,7 @@ const { spawnGatewayProcess } = require('./support.js');
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const gw = require(CLI);
 const remoteControl = require('../lib/remote-control.js');
+const { unsafeRemoteControlProcessEnv } = require('../lib/settings-wiring.js');
 const { createHostsBypassResolver } = require('../lib/request-worker.js');
 
 function freePort() {
@@ -295,6 +296,72 @@ test('remote-control enable refuses a port conflict before hosts writes and name
   );
   assert.equal(fs.readFileSync(hostsFile, 'utf8'), original);
   assert.equal(startCalls, 0);
+});
+
+test('remote-control enable refuses an HTTPS process override before hosts backup or reconciliation', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-remote-control-process-env-'));
+  const hostsFile = path.join(directory, 'hosts');
+  const previousHostsFile = process.env.CODEX_GATEWAY_HOSTS_FILE;
+  const previousBaseUrl = process.env.ANTHROPIC_BASE_URL;
+  t.after(() => {
+    if (previousHostsFile === undefined) delete process.env.CODEX_GATEWAY_HOSTS_FILE;
+    else process.env.CODEX_GATEWAY_HOSTS_FILE = previousHostsFile;
+    if (previousBaseUrl === undefined) delete process.env.ANTHROPIC_BASE_URL;
+    else process.env.ANTHROPIC_BASE_URL = previousBaseUrl;
+    fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  const original = '127.0.0.1 localhost\n';
+  fs.writeFileSync(hostsFile, original);
+  process.env.CODEX_GATEWAY_HOSTS_FILE = hostsFile;
+
+  for (const baseUrl of ['https://api.anthropic.com', 'HTTPS://API.ANTHROPIC.COM:443/']) {
+    process.env.ANTHROPIC_BASE_URL = baseUrl;
+    let startCalls = 0;
+    let syncCalls = 0;
+    remoteControl.configureRemoteControl({
+      args: ['enable', '--confirm'],
+      flag: (value) => ['enable', '--confirm'].includes(value),
+      log: () => {},
+      die: (message) => { throw new Error(message); },
+      doctor: async () => {},
+      fetchShimHealth: async () => ({ ok: true, models: 1, compat: { port80Bound: true } }),
+      startAll: async () => {
+        startCalls += 1;
+        return { ok: true };
+      },
+      syncCompatMode: async () => { syncCalls += 1; },
+      unsafeRemoteControlProcessEnv,
+    });
+
+    await assert.rejects(remoteControl.remoteControlCommand(), (error) => {
+      assert.match(error.message, /unsupported TLS endpoint/);
+      assert.match(error.message, /user-controlled Claude Code CLI launch can correct or unset ANTHROPIC_BASE_URL/);
+      assert.match(error.message, /If a host replaces it, use the supported Claude Code CLI on this wired project/);
+      assert.match(error.message, /Desktop routing is unsupported under forced overrides on Windows and macOS/);
+      assert.match(error.message, /Settings, parent, and User-scope edits cannot be promised to win/);
+      assert.doesNotMatch(error.message, /Correct ANTHROPIC_BASE_URL in the launching environment/);
+      assert.doesNotMatch(error.message, /Desktop.*(?:repair|restore|correct)/i);
+      return true;
+    });
+    assert.equal(fs.readFileSync(hostsFile, 'utf8'), original);
+    assert.deepEqual(fs.readdirSync(directory), ['hosts']);
+    assert.equal(startCalls, 0);
+    assert.equal(syncCalls, 0);
+  }
+
+  remoteControl.configureRemoteControl({
+    args: ['disable'],
+    flag: (value) => value === 'disable',
+    log: () => {},
+    die: (message) => { throw new Error(message); },
+    doctor: async () => {},
+    fetchShimHealth: async () => null,
+    startAll: async () => ({ ok: true }),
+    syncCompatMode: async () => {},
+    unsafeRemoteControlProcessEnv: () => { throw new Error('disable must remain available'); },
+  });
+  await remoteControl.remoteControlCommand();
+  assert.equal(fs.readFileSync(hostsFile, 'utf8'), original);
 });
 
 // ------------------------------------------------------- detectHostsCompat

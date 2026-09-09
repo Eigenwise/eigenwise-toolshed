@@ -25,7 +25,7 @@ Use this when the user wants Remote Control and does not need gateway models in 
 1. In the project's `.claude/settings.local.json`, remove only `ANTHROPIC_BASE_URL` from the `env` object. Keep the other gateway keys unchanged. `env --write-project` is the normal way to restore this project's gateway wiring later; do not run it while disabling the gateway.
 2. Restart Claude Code. With no `ANTHROPIC_BASE_URL`, Claude Code calls `api.anthropic.com` directly and can offer `/remote-control`.
 3. State the full cost: this project now has no gateway models. Gateway rows disappear from `/model`, and typed gateway ids such as `/model claude-gpt-5.6-terra` do not work either.
-4. A manually exported `ANTHROPIC_BASE_URL` still routes the process through the gateway after the file edit. Remove that variable and restart Claude Code if the project remains wired.
+4. A process-exported `ANTHROPIC_BASE_URL` still has precedence after the file edit. If the user controls the Claude Code CLI launch, they can correct or unset that value, then restart. If the host replaces it, use the supported Claude Code CLI on the wired project instead. Model Gateway does not support Desktop routing under forced overrides on Windows or macOS, and settings, parent, or User-scope edits cannot be promised to win.
 
 ## RC-compatibility mode
 
@@ -40,9 +40,16 @@ Use this only when the user wants `/remote-control` while keeping Model Gateway 
    ```
 
    Stop and explain any partial plugin block, non-loopback mapping for `api.anthropic.com`, an
-   existing settings precedence contradiction, missing elevation, port-80 conflict, or failed
-   gateway recovery. If port 80 is held, the diagnosis names its owner. Do not make a hosts-file
-   change: RC-compatibility cannot start until that process releases port 80. Docker Desktop is a
+   existing settings precedence contradiction, missing elevation, port-80 conflict, an effective
+   process-env HTTPS `api.anthropic.com` URL, or failed gateway recovery. If process env shadows a
+   wired settings file, it bypasses Model Gateway. A user-controlled Claude Code CLI launch can correct
+   or unset `ANTHROPIC_BASE_URL`, then restart. If a host replaces it, use the supported Claude Code CLI
+   on the wired project instead. Desktop routing is unsupported under forced overrides on Windows and
+   macOS, and settings, parent, or User-scope edits cannot be promised to win. An HTTPS
+   `api.anthropic.com` value cannot use RC-compatibility because the loopback mapping would send TLS
+   traffic to the shim; `enable` refuses before any backup, hosts write,
+   startup, or reconciliation. If port 80 is held, the diagnosis names its owner. Do not make a
+   hosts-file change: RC-compatibility cannot start until that process releases port 80. Docker Desktop is a
    common owner. Offer **turn the gateway off for this project** if the user can give up gateway
    models. Do not repair unrelated hosts entries.
 

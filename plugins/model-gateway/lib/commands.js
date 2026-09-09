@@ -139,7 +139,8 @@ const USAGE = `usage: model-gateway.js <command>
                    is an opt-in shared fallback in ~/.claude/settings.json)
   doctor           full health check
   remote-control <enable|disable|doctor>
-                   manage the opt-in hosts-file compatibility mode
+                   manage the opt-in hosts-file compatibility mode; enable refuses an effective
+                   HTTPS api.anthropic.com process URL before hosts changes
   serve-shim       (internal) run the router in the foreground
 
   Request route logging (on by default; set CODEX_GATEWAY_REQUEST_LOG=0 to opt out):
@@ -206,8 +207,8 @@ const {
 
 const {
   cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isWired, migrateLegacyProjectSettings,
-  readSettingsForWrite, reconcileRegisteredProjectWirings, recordProjectWiring, registeredProjectWirings,
-  selectedWiringScope, retireWiringModeConfig, settingsPath, wiredMode, writeSettings,
+  processEnvGatewayBypass, readSettingsForWrite, reconcileRegisteredProjectWirings, recordProjectWiring, registeredProjectWirings,
+  selectedWiringScope, retireWiringModeConfig, settingsPath, unsafeRemoteControlProcessEnv, wiredMode, writeSettings,
 } = require('./settings-wiring.js');
 
 // ------------------------------------------------- RC-compatibility hosts
@@ -254,7 +255,7 @@ function compatibilityPortConflict() {
   return `port ${COMPAT_PORT}: held by ${holders.join(', ')}. RC-compatibility cannot start until ${releaser} release${owners.length === 1 ? 's' : ''} port ${COMPAT_PORT}.`;
 }
 
-configureRemoteControl({ args, flag, log, die, doctor, fetchShimHealth, startAll, syncCompatMode, compatibilityPortConflict });
+configureRemoteControl({ args, flag, log, die, doctor, fetchShimHealth, startAll, syncCompatMode, compatibilityPortConflict, unsafeRemoteControlProcessEnv });
 
 // Model Gateway runs where it is installed. Project-scoped installs and
 // project-local wiring are the standard configuration. We still report an
@@ -1171,8 +1172,13 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
   if (effective.source === 'project-local' && effective.shadowed.some(({ source }) => source === 'user')) {
     log('wiring precedence: project settings.local.json wins over user settings.json.');
   }
+  const processEnvBypass = processEnvGatewayBypass(effective);
+  if (processEnvBypass) {
+    console.error(`model-gateway: ERROR: process env ANTHROPIC_BASE_URL (${effective.value}) bypasses model-gateway and shadows wired ${processEnvBypass.shadowedWiring.file}. A user-controlled Claude Code CLI launch can correct or unset ANTHROPIC_BASE_URL, then restart. If a host replaces it, use the supported Claude Code CLI on this wired project; Desktop routing is unsupported under forced overrides on Windows and macOS. Settings, parent, and User-scope edits cannot be promised to win.`);
+    process.exitCode = 1;
+  }
   if (!effectiveWired) {
-    console.error('model-gateway: ERROR: wiring is not configured. Run /model-gateway:model-gateway, then use its env --write-project command and restart Claude Code.');
+    if (!processEnvBypass) console.error('model-gateway: ERROR: wiring is not configured. Run /model-gateway:model-gateway, then use its env --write-project command and restart Claude Code.');
     process.exitCode = 1;
   }
   const effectiveMode = modeFor(effective.value);
@@ -2243,6 +2249,10 @@ function runShim() {
 
 
 function sessionStartWiringNotice({ readiness, effectiveWiring, projectWirings }) {
+  const processEnvBypass = processEnvGatewayBypass(effectiveWiring);
+  if (processEnvBypass) {
+    return `Model Gateway is bypassed: process env ANTHROPIC_BASE_URL (${effectiveWiring.value}) shadows wired ${processEnvBypass.shadowedWiring.file}. A user-controlled Claude Code CLI launch can correct or unset ANTHROPIC_BASE_URL, then restart. If a host replaces it, use the supported Claude Code CLI on this wired project; Desktop routing is unsupported under forced overrides on Windows and macOS. Settings, parent, and User-scope edits cannot be promised to win.`;
+  }
   if (!readiness.checks.codexAuth) {
     return 'model-gateway is running but not signed in to ChatGPT. Offer to run its login (browser sign-in), then setup to finish wiring. See the model-gateway skill.';
   }
