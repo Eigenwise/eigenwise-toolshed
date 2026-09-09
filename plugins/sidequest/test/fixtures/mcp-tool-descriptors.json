@@ -77,7 +77,7 @@
   },
   {
     "name": "pulse",
-    "description": "Liveness.",
+    "description": "Live.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -113,7 +113,7 @@
   },
   {
     "name": "story",
-    "description": "Stories.",
+    "description": "Story.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -150,7 +150,7 @@
   },
   {
     "name": "story_contract",
-    "description": "Story contract.",
+    "description": "Contract.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -239,7 +239,7 @@
   },
   {
     "name": "add",
-    "description": "File ticket; review binds candidate.",
+    "description": "Ticket; review binds candidate.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -404,7 +404,7 @@
   },
   {
     "name": "update",
-    "description": "Update scope.",
+    "description": "Update.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -597,7 +597,7 @@
   },
   {
     "name": "remove",
-    "description": "Delete; force for claims.",
+    "description": "Delete; force.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -757,7 +757,7 @@
   },
   {
     "name": "sweepClaims",
-    "description": "Sweep dead claims.",
+    "description": "Sweep claims.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -811,7 +811,7 @@
   },
   {
     "name": "done",
-    "description": "Finish; declared external needs current capture.",
+    "description": "Finish; declared external needs current capture; commandless working-tree needs verify.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -839,6 +839,10 @@
         },
         "body": {
           "type": "string"
+        },
+        "verify": {
+          "type": "string",
+          "maxLength": 4000
         },
         "session": {
           "type": "string"
@@ -972,7 +976,7 @@
   },
   {
     "name": "verdict",
-    "description": "Record an oracle verdict.",
+    "description": "Verdict.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1039,7 +1043,7 @@
   },
   {
     "name": "commit",
-    "description": "Commit scope.",
+    "description": "Commit.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1403,7 +1407,7 @@
   },
   {
     "name": "link",
-    "description": "Ticket link.",
+    "description": "Link.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1434,7 +1438,7 @@
   },
   {
     "name": "unlink",
-    "description": "Unlink tickets.",
+    "description": "Unlink.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1456,7 +1460,7 @@
   },
   {
     "name": "assign",
-    "description": "Assignee.",
+    "description": "Assign.",
     "inputSchema": {
       "type": "object",
       "properties": {

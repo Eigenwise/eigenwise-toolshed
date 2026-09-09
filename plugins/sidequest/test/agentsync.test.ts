@@ -1159,6 +1159,26 @@ test('renderTicketBriefing embeds no route marker for a Claude-backed route', ()
   assert.doesNotMatch(briefing, /After submit, keep the terminal board comment/);
 });
 
+test('working-tree briefings split capture and typed-evidence closeout', () => {
+  clearCatalog();
+  const base = { ref: 'SQ-2594', title: 'Working-tree evidence', model: 'opus', effort: 'high', dispatchExecutor: 'sidequest-exec-high', category: {} };
+  const command = agentsync.renderTicketBriefing({
+    ...base,
+    dispatch: { workingTreeDelivery: true, verificationRequirement: { kind: 'command', command: 'npm test' } },
+  }, 'working-tree-command-token');
+  assert.match(command, /Run the pinned verify-capture wrapper/);
+  assert.match(command, /done\.verify cannot replace that capture/);
+  assert.doesNotMatch(command, /done --verify "<typed evidence>"/);
+
+  const document = agentsync.renderTicketBriefing({
+    ...base,
+    dispatch: { workingTreeDelivery: true, verificationRequirement: { kind: 'document', evidenceContract: 'rendered document evidence' } },
+  }, 'working-tree-document-token');
+  assert.match(document, /Pass explicit --verify evidence for the pinned document requirement/);
+  assert.match(document, /done --verify "<typed evidence>" --model opus --effort high/);
+});
+
+
 test('renderTicketBriefing makes the prepared read-only closeout path explicit', () => {
   clearCatalog();
   const briefing = agentsync.renderTicketBriefing({

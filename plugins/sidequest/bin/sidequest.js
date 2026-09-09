@@ -49,7 +49,7 @@ const COMMAND_FLAGS = {
   unassign: [],
   remind: ["in", "at"],
   unremind: [],
-  done: ["by", "model", "effort", "body", "body-file", "force"],
+  done: ["by", "model", "effort", "body", "body-file", "verify", "force"],
   submit: ["by", "commit", "source-revision-source", "source-revision-value", "source-revision-observed-at", "changed-surface", "no-process", "no-worktree", "review", "base", "gitref", "git-ref", "verify", "worktree", "body", "body-file", "force", "clear", "status"],
   comment: ["by", "body", "body-file", "message", "token-file"],
   comments: ["full"],
@@ -256,7 +256,7 @@ const HELP_COMMANDS = {
   reconcile: 'sidequest reconcile [--session <id>] [--reason "..."]',
   work: "sidequest work|drain",
   "groom-close": `sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration | --delivery-commit <sha> [--delivery-method reset|working-tree|manual] [--recovery-evidence "terminal-agent evidence"] | --abandon-submission]. Delivery uses the ticket's prepared integration target when one was recorded; changing the board target or checkout does not retarget that ticket.`,
-  done: "sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]",
+  done: 'sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--verify "typed evidence"] [--body-file path]',
   commit: 'sidequest commit <id|SQ-n> --by who --message "message"',
   rework: 'sidequest rework <id|SQ-n> --by candidate-owner --review <review-ticket-or-evidence> --reason "what needs repair" (unbound candidates only)',
   submit: 'sidequest submit <id|SQ-n> --by who (--commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] | --source-revision-source filesystem-snapshot --source-revision-value <current-project-SHA-256> --source-revision-observed-at <ISO-time> --changed-surface <path> [--no-process] [--no-worktree] [--review] --verify "attestation: ..." | --clear [-s todo]) [--body-file path] [--force]. Sidequest persists the filesystem-snapshot adapter when it registers a non-Git project, then resolves existence and dispatch-baseline membership server-side.',
@@ -368,7 +368,7 @@ Working the board safely (multi-agent):
   sidequest claim <id|SQ-n> [--by who] [--force] [--token-file path] [--effort level] [--direct --reason "why this is inline-safe"]   atomically take a ticket (category-routed executor claims require a prepared token file and exact executor; direct is an inline-safe exception)
   sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "<command: result>" [--ttl-minutes N]   record a live review candidate while the claim and dispatch stay active
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why this is inline-safe"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
-  sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active authorized artifact work
+  sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--verify "typed evidence"] [--body-file path]   close non-repo or active authorized artifact work
   sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration | --delivery-commit <sha> [--delivery-interaction-commit <sha>] [--delivery-method reset|working-tree|manual] [--recovery-evidence "terminal-agent evidence"]]   control-plane closure; --integration consumes a submitted ticket after publish; a pending candidate with --delivery-commit is checked for its pinned content, a passing singleton wave, and merged-tree verification; otherwise use --abandon-submission to record its discard; a reviewed interaction must descend from the delivered source, stay inside submitted candidate paths, and pass the merged-tree gate; a non-reachable submitted candidate needs --delivery-method plus matching content in the integration working tree; invalid legacy scope must move through rework or supersede_submission instead of bypassing admission; --abandon-submission records a pending submission as abandoned rather than delivered, and is refused while its candidate is still reachable from the integration target
   sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind handback | --release-kind oracle --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>] parks the ticket awaiting the human verdict, then exits
   sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"] records an oracle verdict; accepting a readonly review released with kind oracle closes it as done

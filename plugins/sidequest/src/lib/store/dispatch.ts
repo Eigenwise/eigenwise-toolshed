@@ -1443,6 +1443,11 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     }
     const runtimeRefusal = sharedTree ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd) : null;
     if (runtimeRefusal) throw new Error(runtimeRefusal);
+    const workingTreeDelivery = sharedTree && t.workingTreeDelivery === true && effectiveFiles.length > 0;
+    const verificationRequirement = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ''));
+    if (workingTreeDelivery && verificationRequirement.kind === 'review') {
+      throw new Error(`prepare dispatch: ${t.ref} working-tree delivery cannot use review verification because executor evidence has no independent reviewer provenance.`);
+    }
     t.dispatchNonce = mintDispatchToken();
     if (priorTokenFile) {
       try { fs.unlinkSync(priorTokenFile); } catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
@@ -1452,7 +1457,6 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       ? categoryArtifactRoot(category, effectiveFiles[0])
       : null;
     const artifactMode = Boolean(artifactRoot);
-    const workingTreeDelivery = sharedTree && t.workingTreeDelivery === true && effectiveFiles.length > 0;
     const declaredFiles = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(effectiveFiles, t.files, t.ref);
     const artifactScope = artifactMode ? effectiveFiles[0] : null;
     const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
@@ -1515,7 +1519,6 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       )
       : null;
     delete t.storyContractDrift;
-    const verificationRequirement = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ''));
     const evidenceDirectory = ticketEvidenceDirectory(slug, t.ref, projectPath);
     fs.mkdirSync(evidenceDirectory, { recursive: true, mode: 0o700 });
     const baseCommit = reviewTargetState?.candidate.source === 'git'

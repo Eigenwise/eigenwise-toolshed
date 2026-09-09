@@ -122,7 +122,7 @@ const tools = [
         consumes: CONTRACT_PROP("consumes"),
         contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
         readonly: { type: "boolean", description: "Closeout override." },
-        workingTreeDelivery: { type: "boolean", description: "Shared-checkout deliverable that forbids commits. The executor closes with done after the pinned verify-capture records the final declared working-tree paths." },
+        workingTreeDelivery: { type: "boolean", description: "Shared-checkout deliverable that forbids commits. Command or suite verification needs final verify-capture; commandless kinds need explicit done.verify evidence." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: VERIFY_ORACLE_PROP,
         verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Pinned verification kind. command and suite execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },

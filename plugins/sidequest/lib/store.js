@@ -2077,7 +2077,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
         return { ok: false, reason: "working_tree_delivery_unavailable", ticket: t, message: `${t.ref} cannot inspect its working-tree deliverable: ${error?.message || error}` };
       }
       if (!delivery.ok) return Object.assign({ ticket: t }, delivery);
-      const verification = workingTreeVerification(t, delivery.candidate);
+      const verification = workingTreeVerification(t, delivery.candidate, opts.verify);
       if (!verification.ok) return Object.assign({ ticket: t }, verification);
       opts.completionProvenance = {
         purpose: "working-tree",
