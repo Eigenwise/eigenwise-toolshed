@@ -1,10 +1,10 @@
 # Architecture
 
-Last Updated: 2026-09-09
+Last Updated: 2026-09-10
 
 ## Repository shape
 
-The repository is a plugin marketplace. Seven plugins are registered in `.claude-plugin/marketplace.json`: `plugins/sidequest`, `plugins/observability`, `plugins/model-gateway`, `plugins/live-rules`, `plugins/codebase-mapper`, `plugins/quartermaster`, and `plugins/whittle`. `plugins/test-support` is shared test support, not a plugin. Whittle's first publication is pending the release cut.
+The repository is a plugin marketplace. Seven plugins are registered in `.claude-plugin/marketplace.json`: `plugins/sidequest`, `plugins/observability`, `plugins/model-gateway`, `plugins/live-rules`, `plugins/codebase-mapper`, `plugins/quartermaster`, and `plugins/whittle`. `plugins/test-support` is shared test support, not a plugin.
 
 ## Runtime flow
 

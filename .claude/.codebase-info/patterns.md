@@ -1,6 +1,6 @@
 # Patterns
 
-Last Updated: 2026-09-09
+Last Updated: 2026-09-10
 
 - Build from source, run committed output: Sidequest TypeScript under `src/` compiles to `lib/`, `bin/`, and bundled hook files, while `scripts/generate-bundled-agents.mjs` renders the committed `agents/` roster from `lib/agentsync.js`. Runtime manifests point at generated files; release suite discovery is shared through `plugins/sidequest/lib/suite-resolver.js` and re-exported by `scripts/release/lib/suites.mjs`.
 - Stable executor packaging and migration: the Sidequest plugin owns its generated diagnostic, dispatch, and read-only agent definitions in `agents/`; session-start maintenance and normal CLI sync remove only marked legacy generated files from user agent directories, preserving custom content.
@@ -31,4 +31,6 @@ Last Updated: 2026-09-09
 - Bounded schema compatibility: classify all hydrated Codex tools before mutation; admit only proven positive schema/regex contexts, preserve unrelated schema bytes and refuse unsupported affected shapes locally. Ajv Draft 2020 tests compare accepted inputs and authentic prior-adapter fixtures.
 - Improvement decisions stay with the orchestrator: research supplies evidence, executors implement the pinned benefit, approach and boundary. Native read-only review/audit/debt recipes remain available independently of Whittle.
 - Synthetic wiring tests isolate home, environment and cwd so real project settings cannot shadow fixtures. Unknown and confirmed foreign process fixtures supply distinct evidence rather than sharing a null process result.
+- RC capability belongs to the serving supervisor: PID-pinned main-loopback control probes and reconciles its configured listener without restarting the worker. Probes close on successful bind and retain cleanup ownership through closure; unavailable or unknown capability refuses enable before hosts writes. Failed activation restores only unchanged command-written hosts bytes, preserving observed external edits.
+- RC synchronization checks required health before migration, finishes migration before choosing the writable scope, and reports verified settings readback rather than the requested mode. Already-compatible environment-only wiring remains process-limited and creates no settings; disable remains available without a bindability gate.
 - The Windows Sandbox harness (`sandbox/windows/`, gitignored, maintainer-only) maps only its bootstrap directory read-only and tests isolation and feature flags before launch.
