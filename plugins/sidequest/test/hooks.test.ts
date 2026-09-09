@@ -3672,7 +3672,8 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   gitFixture(['config', 'user.email', 'test@example.invalid'], repo);
   gitFixture(['config', 'user.name', 'Worktree Hook Test'], repo);
   fs.writeFileSync(path.join(repo, 'tracked.txt'), 'seed\n');
-  gitFixture(['add', 'tracked.txt'], repo);
+  fs.writeFileSync(path.join(repo, '.gitignore'), 'node_modules/\n');
+  gitFixture(['add', 'tracked.txt', '.gitignore'], repo);
   gitFixture(['commit', '--quiet', '-m', 'seed'], repo);
   fs.mkdirSync(path.join(repo, 'cached-dependency'));
   fs.writeFileSync(path.join(repo, 'cached-dependency', 'cache.txt'), 'warm\n');
@@ -3764,6 +3765,36 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   assert.match(incompleteBriefing, /Setup stderr tail: setup audit notice/);
   gitFixture(['worktree', 'remove', '--force', incompleteTarget], repo);
   gitFixture(['branch', '-D', `worktree-${incompleteName}`], repo);
+
+  const dependencyTarget = path.join(repo, 'node_modules', 'dependency-target');
+  fs.mkdirSync(dependencyTarget, { recursive: true });
+  fs.writeFileSync(path.join(dependencyTarget, 'sentinel.txt'), 'preserved');
+  store.setBoardConfig(project, {
+    worktreeDependencyPaths: [
+      { path: 'node_modules/dependency-target', mode: 'link' },
+      { path: 'missing-dependency', mode: 'link' },
+    ],
+    worktreeSetup: null,
+  });
+  const failedTicket = launch('hook-partial-dependency', 'partial dependency failure');
+  const failedName = 'agent-hook-partial-dependency';
+  const failedTarget = worktrees.namedWorktreePath(repo, failedName);
+  try {
+    assert.throws(() => execFileSync(process.execPath, [WORKTREE_CREATE], {
+      input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: 'hook-partial-dependency', cwd: repo, name: failedName }),
+      encoding: 'utf8',
+      env: process.env,
+    }), (error: any) => String(error.stderr || '').includes('configured worktree dependency path does not exist: missing-dependency'));
+
+    const failedDispatch = store.getTicket(project, failedTicket.ref).dispatch;
+    assert.equal(failedDispatch.ownedDependencyLinks.length, 1);
+    assert.equal(failedDispatch.ownedDependencyLinks[0].relativePath, 'node_modules/dependency-target');
+    assert.equal(fs.existsSync(failedTarget), false);
+    assert.equal(fs.readFileSync(path.join(dependencyTarget, 'sentinel.txt'), 'utf8'), 'preserved');
+  } finally {
+    if (fs.existsSync(failedTarget)) gitFixture(['worktree', 'remove', '--force', failedTarget], repo);
+    try { gitFixture(['branch', '-D', `worktree-${failedName}`], repo); } catch (_) {}
+  }
 });
 
 test('subagent-start warns only for embedded worktrees outside the receiving agent checkout', () => {

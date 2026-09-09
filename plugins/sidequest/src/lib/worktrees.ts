@@ -1265,8 +1265,8 @@ function normalizedWorktreeRelativePath(worktree: string, pathname: string): str
   return pathIsInside(worktree, resolved) ? relativePath : null;
 }
 
-function ownedDependencyLinks(ticket: any, worktree: string, lease: any): OwnedDependencyLink[] | null {
-  const dispatch = ticket?.dispatch;
+function ownedDependencyLinks(ticketOrDispatch: any, worktree: string, lease: any): OwnedDependencyLink[] | null {
+  const dispatch = ticketOrDispatch?.dispatch || ticketOrDispatch;
   const records = Array.isArray(dispatch?.ownedDependencyLinks) ? dispatch.ownedDependencyLinks : [];
   if (!dispatch || !records.length) return [];
   if (!lease) return null;
@@ -1307,18 +1307,18 @@ function linkTargetPath(linkPath: string, target: string): string {
     : path.resolve(path.dirname(linkPath), withoutWindowsNamespace));
 }
 
-async function ownedDependencyLinkMatches(linkPath: string, record: OwnedDependencyLink): Promise<boolean> {
+function ownedDependencyLinkMatches(linkPath: string, record: OwnedDependencyLink): boolean {
   try {
-    const status = await fs.lstat(linkPath);
+    const status = nativeFs.lstatSync(linkPath);
     if (!status.isSymbolicLink()) return false;
-    return linkTargetPath(linkPath, await fs.readlink(linkPath)) === record.target;
+    return linkTargetPath(linkPath, nativeFs.readlinkSync(linkPath)) === record.target;
   } catch (_) {
     return false;
   }
 }
 
-async function dependencyLinkSafety(worktree: string, ticket: any, lease: any): Promise<DependencyLinkSafety> {
-  const records = ownedDependencyLinks(ticket, worktree, lease);
+function dependencyLinkSafety(worktree: string, ticketOrDispatch: any, lease: any): DependencyLinkSafety {
+  const records = ownedDependencyLinks(ticketOrDispatch, worktree, lease);
   if (!records) return { safe: false, links: [] };
   const recordsByPath = new Map(records.map((record) => [record.relativePath, record]));
   if (recordsByPath.size !== records.length) return { safe: false, links: [] };
@@ -1326,50 +1326,59 @@ async function dependencyLinkSafety(worktree: string, ticket: any, lease: any): 
   for (const record of records) {
     const linkPath = path.resolve(worktree, record.relativePath);
     try {
-      await fs.lstat(linkPath);
+      nativeFs.lstatSync(linkPath);
     } catch (error: any) {
       if (error?.code === 'ENOENT') continue;
       return { safe: false, links: [] };
     }
-    if (!await ownedDependencyLinkMatches(linkPath, record)) return { safe: false, links: [] };
+    if (!ownedDependencyLinkMatches(linkPath, record)) return { safe: false, links: [] };
     links.push(linkPath);
   }
-  const scan = async (pathname: string): Promise<boolean> => {
+  const scan = (pathname: string): boolean => {
     let status: import('node:fs').Stats;
     try {
-      status = await fs.lstat(pathname);
+      status = nativeFs.lstatSync(pathname);
     } catch (_) {
       return false;
     }
     if (status.isSymbolicLink()) {
       const relativePath = normalizedWorktreeRelativePath(worktree, pathname);
       const record = relativePath ? recordsByPath.get(relativePath) : null;
-      return Boolean(record && await ownedDependencyLinkMatches(pathname, record));
+      return Boolean(record && ownedDependencyLinkMatches(pathname, record));
     }
     if (!status.isDirectory()) return true;
     let entries: import('node:fs').Dirent[];
     try {
-      entries = await fs.readdir(pathname, { withFileTypes: true });
+      entries = nativeFs.readdirSync(pathname, { withFileTypes: true });
     } catch (_) {
       return false;
     }
     for (const entry of entries) {
-      if (!await scan(path.join(pathname, entry.name))) return false;
+      if (!scan(path.join(pathname, entry.name))) return false;
     }
     return true;
   };
-  return { safe: await scan(worktree), links };
+  return { safe: scan(worktree), links };
 }
 
-async function unlinkOwnedDependencyLinks(links: readonly string[]): Promise<boolean> {
+function unlinkOwnedDependencyLinks(links: readonly string[]): boolean {
   for (const linkPath of links) {
     try {
-      await fs.unlink(linkPath);
+      nativeFs.unlinkSync(linkPath);
     } catch (_) {
       return false;
     }
   }
   return true;
+}
+
+function releaseVerifiedOwnedDependencyLinks(worktree: string, ticketOrDispatch: any, lease: any): { ok: boolean; reason?: string } {
+  const initial = dependencyLinkSafety(worktree, ticketOrDispatch, lease);
+  if (!initial.safe) return { ok: false, reason: 'dependency_link_untrusted' };
+  if (!unlinkOwnedDependencyLinks(initial.links)) return { ok: false, reason: 'dependency_link_unlink_failed' };
+  return dependencyLinkSafety(worktree, ticketOrDispatch, lease).safe
+    ? { ok: true }
+    : { ok: false, reason: 'dependency_link_changed' };
 }
 
 async function removeCandidate(repo: string, entry: any): Promise<{ ok: boolean; stderr: string }> {
@@ -1493,6 +1502,15 @@ function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, fac
       message: baseAtOrBeforeHead
         ? `immutable recovery fact: candidate commit ${head} descends from dispatch base ${baseCommit}.`
         : `immutable recovery fact: worktree head ${head} and dispatch base ${baseCommit} diverge.`,
+    };
+  }
+  const dependencyLinksReleased = releaseVerifiedOwnedDependencyLinks(entry.worktree, dispatch, lease);
+  if (!dependencyLinksReleased.ok) {
+    return {
+      worktree: entry.worktree,
+      reclaimed: false,
+      reason: dependencyLinksReleased.reason,
+      message: 'immutable recovery fact: owned dependency links could not be proven safe for cleanup.',
     };
   }
   execFileSync('git', ['worktree', 'remove', entry.worktree], { cwd: repository, windowsHide: true });
@@ -1863,22 +1881,10 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
           continue;
         }
       }
-      const finalLinkSafety = await dependencyLinkSafety(entry.path, ticket, entry.lease);
-      if (!finalLinkSafety.safe) {
+      const dependencyLinksReleased = releaseVerifiedOwnedDependencyLinks(entry.path, ticket, entry.lease);
+      if (!dependencyLinksReleased.ok) {
         entry.action = 'keep';
-        entry.reason = 'dependency_link_changed';
-        reportSweepProgress(options, entries, removed);
-        continue;
-      }
-      if (!await unlinkOwnedDependencyLinks(finalLinkSafety.links)) {
-        entry.action = 'keep';
-        entry.reason = 'dependency_link_unlink_failed';
-        reportSweepProgress(options, entries, removed);
-        continue;
-      }
-      if (!(await dependencyLinkSafety(entry.path, ticket, entry.lease)).safe) {
-        entry.action = 'keep';
-        entry.reason = 'dependency_link_changed';
+        entry.reason = dependencyLinksReleased.reason;
         reportSweepProgress(options, entries, removed);
         continue;
       }

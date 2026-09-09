@@ -60,6 +60,7 @@ function integratedTicket(ref: string, agentId: string, worktree: string, baseCo
     claimLive: false,
     dispatch: {
       agentId,
+      sharedTree: false,
       worktree,
       baseCommit,
       worktreeBindingSource: 'worktree-create',
@@ -404,6 +405,26 @@ test('unclaimed dispatch cleanup is denied by its unknown lease identity', () =>
     assert.equal(result.reason, 'lease_refused');
     assert.match(result.message, /store-owned terminal dispatch transition/);
     assert.equal(fs.existsSync(worktree), true);
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('unclaimed dispatch recovery removes a recorded dependency link without following its target', () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const target = dependencyTarget(repository, 'recovery-owned');
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'recovery-owned');
+  const ticket = integratedTicket('SQ-RECOVERY-OWNED', 'recovery-owned', worktree, baseCommit);
+  const link = createDependencyLink(worktree, 'node_modules/link', target);
+  recordedDependencyLink(ticket, worktree, 'node_modules/link', target);
+  try {
+    const result = worktrees.reclaimUnclaimedDispatchWorktree(repository, ticket.dispatch);
+
+    assert.equal(result.reclaimed, true);
+    assert.equal(fs.existsSync(worktree), false);
+    assert.equal(fs.existsSync(link), false);
+    assert.equal(fs.readFileSync(path.join(target, 'sentinel.txt'), 'utf8'), 'recovery-owned');
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
     fs.rmSync(repository, { recursive: true, force: true });
