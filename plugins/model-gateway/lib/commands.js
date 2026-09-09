@@ -199,7 +199,7 @@ function readPluginVersion() {
 function mkdirs() { for (const d of [STATE, LOGS, BIN_DIR]) fs.mkdirSync(d, { recursive: true }); }
 
 const {
-  createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, killPidAsync, portListening, postJson, processOwningPort, processOwningPortAsync, recordedGatewayPids, reapGatewayOrphans,
+  createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, killPidAsync, portListening, postJson, processOwningPortAsync, recordedGatewayPids, reapGatewayOrphans, resolvePortOwner,
   removePid, restartWorkerWithDrain, shimHealthy, spawnDetached, stopAll, stopProcess, stopRunningSupervisor,
   stopShimWithDrain, waitForShimExit, writePidRecordAsync,
 } = require('./process-supervision.js');
@@ -650,12 +650,22 @@ function reportSiblingSupervisorReplacement(stopped, quiet) {
   if (!quiet && stopped.siblingInstallRoot) log(`model-gateway: replaced older sibling shim version at ${stopped.siblingInstallRoot}.`);
 }
 
-async function startAll({ quiet = false, lifecycleOperation = null } = {}) {
-  if (!fs.existsSync(PROXY_BIN)) return { ok: false, reason: 'proxy binary missing (run setup)' };
+async function startAll({
+  quiet = false,
+  lifecycleOperation = null,
+  proxyExists = () => fs.existsSync(PROXY_BIN),
+  ensureState = mkdirs,
+  recordLifecycle = recordGatewayLifecycle,
+  resolveOwner = resolvePortOwner,
+  reapOrphans = reapGatewayOrphans,
+  stopSupervisor = stopRunningSupervisor,
+  spawnSupervisor = spawnDetached,
+} = {}) {
+  if (!proxyExists()) return { ok: false, reason: 'proxy binary missing (run setup)' };
   let recoveryAttempted = false;
   const finishRecovery = (result) => {
     if (recoveryAttempted && lifecycleOperation) {
-      recordGatewayLifecycle(`${lifecycleOperation}-recovery-finished`, {
+      recordLifecycle(`${lifecycleOperation}-recovery-finished`, {
         component: lifecycleOperation,
         pid: process.pid,
         outcome: result.ok ? 'ready' : 'failed',
@@ -666,41 +676,50 @@ async function startAll({ quiet = false, lifecycleOperation = null } = {}) {
   const beginRecovery = () => {
     if (recoveryAttempted || !lifecycleOperation) return;
     recoveryAttempted = true;
-    recordGatewayLifecycle(`${lifecycleOperation}-recovery-started`, {
+    recordLifecycle(`${lifecycleOperation}-recovery-started`, {
       component: lifecycleOperation,
       pid: process.pid,
       startedAt: new Date().toISOString(),
     });
   };
-  mkdirs();
-  const foreignOwner = foreignPortOwner(PUBLIC_SHIM_PORT);
-  if (foreignOwner) {
-    return { ok: false, reason: `PID ${foreignOwner.pid} owns :${PUBLIC_SHIM_PORT} from a different install root (${foreignOwner.installRoot || 'unknown'})` };
+  ensureState();
+  const owner = await resolveOwner(PUBLIC_SHIM_PORT);
+  if (owner.state === 'foreign-install') {
+    return { ok: false, reason: `PID ${owner.pid} owns :${PUBLIC_SHIM_PORT} from a different install root (${owner.installRoot})` };
   }
-  const portOwner = processOwningPort(PUBLIC_SHIM_PORT);
+  if (owner.state === 'unknown') {
+    const operation = lifecycleOperation || 'start';
+    recordLifecycle(`${operation}-owner-unknown`, {
+      component: operation,
+      pid: process.pid,
+      outcome: 'owner-unknown',
+    });
+    return { ok: false, reason: `could not confirm the owner of :${PUBLIC_SHIM_PORT} (last observed PID ${owner.pid || 'unknown'}); left the listener untouched` };
+  }
+  const portOwner = owner.pid;
   const started = [];
   const health = await fetchShimHealth();
   const staleSessionNotice = staleSessionReloadNotice(PLUGIN_VERSION, health);
   if (staleSessionNotice) noticeForUser(staleSessionNotice, { toStderr: true });
   if (health && shimNeedsRestart(PLUGIN_VERSION, health)) {
     beginRecovery();
-    const stopped = await stopRunningSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
+    const stopped = await stopSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
     if (!stopped.ok) return finishRecovery(stopped);
     reportSiblingSupervisorReplacement(stopped, quiet);
   } else if (health) {
-    reapGatewayOrphans(portOwner);
+    reapOrphans(portOwner);
   } else if (await portListening(PUBLIC_SHIM_PORT)) {
     beginRecovery();
-    const stopped = await stopRunningSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
+    const stopped = await stopSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
     if (!stopped.ok) return finishRecovery(stopped);
     reportSiblingSupervisorReplacement(stopped, quiet);
   } else {
-    reapGatewayOrphans(null);
+    reapOrphans(null);
   }
   if (!(await shimHealthy())) {
     beginRecovery();
     try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
-    spawnDetached('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], {});
+    spawnSupervisor('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], {});
     started.push('shim');
   }
   const startupWaitMs = startupWaitMsFor(quiet);
@@ -2260,8 +2279,8 @@ const commands = {
     if (!result.ok) die(result.reason);
     await statusReport();
   },
-  stop: () => {
-    const result = stopAll();
+  stop: async () => {
+    const result = await stopAll();
     if (!result.ok) {
       console.error(`model-gateway: ${result.reason}.`);
       process.exitCode = 1;
@@ -2370,6 +2389,7 @@ module.exports = {
   sessionStartWiringNotice,
   loginSuccessMessage,
   startupWaitMsFor,
+  startAll,
   waitForStartupReadiness,
   settingsPath,
   COMPAT_HOST,

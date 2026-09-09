@@ -127,7 +127,7 @@ test('restart with drain submits the newest installed CLI path', async (t) => {
   const shimPort = await listen(shim);
   t.after(() => shim.close());
 
-  const script = `require(${JSON.stringify(path.join(path.dirname(olderCliPath), '..', 'lib', 'process-supervision.js'))}).restartWorkerWithDrain({ quiet: true, findForeignOwner: () => null }).then((result) => process.exit(result.ok ? 0 : 1))`;
+  const script = `require(${JSON.stringify(path.join(path.dirname(olderCliPath), '..', 'lib', 'process-supervision.js'))}).restartWorkerWithDrain({ quiet: true, resolveOwner: async () => ({ state: 'same-install', pid: process.pid, installRoot: 'same-install' }) }).then((result) => process.exit(result.ok ? 0 : 1))`;
   const child = spawnGatewayProcess(t, process.execPath, ['-e', script], {
     env: { ...process.env, CODEX_GATEWAY_PORT: String(shimPort) },
     stdio: 'ignore',
@@ -154,7 +154,7 @@ test('drain timeout says that the shim was force-stopped', async (t) => {
   const shimPort = await listen(stuckShim);
   t.after(() => stuckShim.close());
 
-  const script = `require(${JSON.stringify(CLI)}).stopShimWithDrain({ timeout: 20, report: console.log, findForeignOwner: () => null }).then((result) => console.log(JSON.stringify(result)))`;
+  const script = `require(${JSON.stringify(CLI)}).stopShimWithDrain({ timeout: 20, report: console.log, resolveOwner: async () => ({ state: 'same-install', pid: process.pid, installRoot: 'same-install' }) }).then((result) => console.log(JSON.stringify(result)))`;
   const child = spawnGatewayProcess(t, process.execPath, ['-e', script], {
     env: environment,
     isolatedOverrides: {
@@ -179,6 +179,104 @@ test('drain timeout says that the shim was force-stopped', async (t) => {
   assert.match(output, /drain timed out after 1s; force-stopping it/);
   assert.match(output, /"forced":true/);
 });
+
+test('restart and drain refuse unknown and foreign listener owners before mutation', async (t) => {
+  const mutationRequests = [];
+  const shim = http.createServer((request, response) => {
+    mutationRequests.push(request.url);
+    response.writeHead(202);
+    response.end();
+  });
+  const shimPort = await listen(shim);
+  t.after(() => shim.close());
+  const environment = gatewayTestEnvironment(t);
+
+  const runLifecycleCaller = (functionName, owner, port = shimPort) => new Promise((resolve, reject) => {
+    const script = `const supervision = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'process-supervision.js'))}); const owner = ${JSON.stringify(owner)}; supervision.${functionName}({ quiet: true, resolveOwner: async () => owner }).then((result) => console.log(JSON.stringify(result))).catch((error) => { console.error(error.stack); process.exitCode = 1; });`;
+    const child = spawnGatewayProcess(t, process.execPath, ['-e', script], {
+      env: environment,
+      isolatedOverrides: {
+        CODEX_GATEWAY_PORT: String(port),
+        CODEX_GATEWAY_WORKER_PORT: String(port),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    child.stdout.on('data', (chunk) => { output += chunk; });
+    child.stderr.on('data', (chunk) => { output += chunk; });
+    child.once('error', reject);
+    child.once('exit', (code) => code === 0 ? resolve(JSON.parse(output)) : reject(new Error(`controller exited ${code}: ${output}`)));
+  });
+
+  for (const functionName of ['restartWorkerWithDrain', 'stopShimWithDrain']) {
+    const unknown = await runLifecycleCaller(functionName, { state: 'unknown', pid: null });
+    assert.equal(unknown.ok, false, `${functionName} refuses a bound listener without a PID`);
+    assert.match(unknown.reason, /could not confirm the owner/);
+
+    const foreign = await runLifecycleCaller(functionName, { state: 'foreign-install', pid: 701, installRoot: '/foreign/model-gateway' });
+    assert.equal(foreign.ok, false, `${functionName} refuses a confirmed foreign listener`);
+    assert.match(foreign.reason, /refusing to stop PID 701/);
+  }
+  assert.deepEqual(mutationRequests, [], 'uncertain and foreign owners receive no lifecycle requests');
+
+  const unboundListener = http.createServer();
+  const unboundPort = await listen(unboundListener);
+  await new Promise((resolve, reject) => unboundListener.close((error) => error ? reject(error) : resolve()));
+  const script = `const supervision = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'process-supervision.js'))}); const resolveOwner = async () => { throw new Error('unbound listener must not be resolved'); }; Promise.all([supervision.restartWorkerWithDrain({ quiet: true, resolveOwner }), supervision.stopShimWithDrain({ quiet: true, resolveOwner })]).then((results) => console.log(JSON.stringify(results))).catch((error) => { console.error(error.stack); process.exitCode = 1; });`;
+  const child = spawnGatewayProcess(t, process.execPath, ['-e', script], {
+    env: environment,
+    isolatedOverrides: {
+      CODEX_GATEWAY_PORT: String(unboundPort),
+      CODEX_GATEWAY_WORKER_PORT: String(unboundPort),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk; });
+  child.stderr.on('data', (chunk) => { output += chunk; });
+  const exitCode = await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', resolve);
+  });
+  assert.equal(exitCode, 0);
+  assert.deepEqual(JSON.parse(output), [
+    { ok: true, running: false },
+    { ok: true, drained: true, running: false },
+  ]);
+});
+
+test('legacy restart fallback keeps confirmed same-install ownership', async (t) => {
+  const requests = [];
+  const shim = http.createServer((request, response) => {
+    requests.push(request.url);
+    response.writeHead(request.url === '/restart' ? 404 : 202);
+    response.end();
+  });
+  const shimPort = await listen(shim);
+  t.after(() => shim.close());
+  const environment = gatewayTestEnvironment(t);
+  const script = `const supervision = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'process-supervision.js'))}); supervision.restartWorkerWithDrain({ quiet: true, timeout: 20, resolveOwner: async () => ({ state: 'same-install', pid: process.pid, installRoot: 'same-install' }) }).then((result) => console.log(JSON.stringify(result))).catch((error) => { console.error(error.stack); process.exitCode = 1; });`;
+  const child = spawnGatewayProcess(t, process.execPath, ['-e', script], {
+    env: environment,
+    isolatedOverrides: {
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_WORKER_PORT: String(shimPort),
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', (chunk) => { output += chunk; });
+  child.stderr.on('data', (chunk) => { output += chunk; });
+  const exitCode = await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', resolve);
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(JSON.parse(output), { ok: true, drained: false, forced: true, reason: 'drain timeout' });
+  assert.deepEqual(requests, ['/restart', '/drain']);
+});
+
 test('draining shim finishes an in-flight request before it exits', async (t) => {
   const environment = gatewayTestEnvironment(t);
   const home = environment.HOME;
