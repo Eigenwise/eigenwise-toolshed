@@ -520,14 +520,14 @@ test('sibling ensure retires dead records without deleting replacement worker an
     ensuring.once('error', reject);
     ensuring.once('exit', (status) => resolve({ status, stderr: ensureStderr, stdout: ensureStdout }));
   });
+  const ensured = await ensuredResult;
+  assert.equal(ensured.status, 0, `ensure exited with status ${ensured.status}\nstdout:\n${ensured.stdout}\nstderr:\n${ensured.stderr}`);
   replacementGuardianPid = await waitForReplacementPidRecord(path.join(state, 'guardian.pid'), retiredGuardianPid);
   const replacementWorkerPid = await waitForReplacementPidRecord(path.join(state, 'shim.pid'), retiredWorkerPid);
   const replacementProxyPid = await waitForReplacementPidRecord(path.join(state, 'proxy.pid'), retiredProxyPid);
   await waitForPidRecordDetails(path.join(state, 'shim.pid.json'), replacementWorkerPid);
   await waitForPidRecordDetails(path.join(state, 'proxy.pid.json'), replacementProxyPid);
   fs.writeFileSync(path.join(state, 'shim.pid.json'), JSON.stringify({ pid: replacementWorkerPid, command: 'replaced worker' }));
-  if (ensuring.exitCode == null) ensuring.kill();
-  const ensured = await ensuredResult;
   assert.equal(processIsRunning(olderShim.pid), false, 'ensure stopped the previous sibling supervisor');
   assert.equal(processIsRunning(replacementWorkerPid), true, 'ensure launched the replacement worker');
   assert.equal(processIsRunning(replacementProxyPid), true, 'ensure launched the replacement proxy');
