@@ -217,9 +217,10 @@ hand-pick either. Legacy complexity maps to bands at read time (1–3/4–6/7–
    prompt alongside the ticket contract; do not narrow, rewrite, or invent around it.
 3. **The ticket read tells you exactly what to spawn.** Print `SQ-n · category · Model · effort`,
    then spawn the exact `agent` a fresh `dispatch <ref>` returned through native Agent,
-   every spawn field unchanged (including `isolation`). **Claude routes**: `model: exec.model` +
-   `mode: "bypassPermissions"` + a unique `name` (omitting `model` inherits the pricey session
-   model). This includes Haiku: use the stable executor and model the dispatch returned, never a
+   every returned spawn field unchanged (including `isolation`). If the visible Agent schema excludes
+   `name` and `mode`, opt in with `reducedAgentSchema: true` on dispatch and never add either back;
+   first claim then needs hook-reported `agent_id` and `permission_mode: "bypassPermissions"`. **Claude routes**: `model: exec.model`
+   (omitting `model` inherits the pricey session model). This includes Haiku: use the stable executor and model the dispatch returned, never a
    plain generic Agent. **Codex routes** (`exec.model` null): `model` OMITTED — the prompt's
    `[sidequest-route ...]` marker carries the real model; any `model` value silently runs
    Anthropic. Effort rides **verbatim** — a mismatched claim is refused. Detail and fallbacks:

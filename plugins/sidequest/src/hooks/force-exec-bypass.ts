@@ -58,6 +58,7 @@ interface Ticket {
     description?: string;
     launchName?: string;
     launchSeq?: number;
+    reducedAgentSchema?: boolean;
     tokenFile?: string;
     sessionId?: string;
     terminalAt?: string | null;
@@ -70,6 +71,7 @@ interface PreparedDispatchSpawn {
   description: string | null;
   executor: string;
   name: string;
+  reducedAgentSchema: boolean;
   ref: string;
   project: string;
   route: { model: string; effort: string; marker: string | null } | null;
@@ -544,6 +546,7 @@ function preparedDispatchValidation(input: HookInput): PreparedDispatchValidatio
         executor: typeof ticket.dispatchExecutor === 'string' ? ticket.dispatchExecutor : '',
         name: ticket.dispatch.launchName
           || dispatchLaunchName(ticket.ref || ref, ticket.title, resolvedExec, route?.effort, ticket.dispatch.launchSeq),
+        reducedAgentSchema: ticket.dispatch.reducedAgentSchema === true,
         ref,
         project,
         route: typeof route?.model === 'string' && typeof route.effort === 'string'
@@ -1026,33 +1029,38 @@ function main(): void {
     return;
   }
 
+  const reducedAgentSchema = preparedSpawn?.reducedAgentSchema === true;
   const updatedInput: Record<string, unknown> = {
     ...toolInput,
-    mode: 'bypassPermissions',
+    ...(reducedAgentSchema ? {} : { mode: 'bypassPermissions' }),
     ...(isSubagentCaller(input) ? { run_in_background: true } : {}),
   };
+  if (reducedAgentSchema) {
+    delete updatedInput.name;
+    delete updatedInput.mode;
+  }
   if (isSubagentCaller(input)) delete updatedInput.isolation;
   const corrections: string[] = [];
   if (preparedSpawn?.description && toolInput.description !== preparedSpawn.description) {
     updatedInput.description = preparedSpawn.description;
     corrections.push('description');
   }
-  if (preparedSpawn && toolInput.name !== preparedSpawn.name) {
+  if (preparedSpawn && !reducedAgentSchema && toolInput.name !== preparedSpawn.name) {
     updatedInput.name = preparedSpawn.name;
     corrections.push('name');
   }
   const requestedAgentName = typeof toolInput.name === 'string' ? toolInput.name : null;
   const launchAgentName = preparedSpawn?.name || requestedAgentName || dispatchAgentName(input);
-  if (launchAgentName) updatedInput.name = launchAgentName;
+  if (launchAgentName && !reducedAgentSchema) updatedInput.name = launchAgentName;
   const preparedCorrection = correctionMessage(corrections);
 
   if (isDispatchExecutor) {
     const hadModel = Object.prototype.hasOwnProperty.call(toolInput, 'model');
-    if (hadModel) delete updatedInput.model;
+    if (hadModel && !reducedAgentSchema) delete updatedInput.model;
     recordAuthoritativeLaunch(input, type, launchAgentName);
     const messages = [
       preparedCorrection,
-      hadModel ? `sidequest: removed the Agent model override for ${type}; its frontmatter pin selects the routed backend.` : null,
+      hadModel && !reducedAgentSchema ? `sidequest: removed the Agent model override for ${type}; its frontmatter pin selects the routed backend.` : null,
     ].filter((message): message is string => Boolean(message));
     writeToolUpdate(updatedInput, messages.join(' '));
     return;

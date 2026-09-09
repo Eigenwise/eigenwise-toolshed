@@ -272,6 +272,7 @@ const tools: ToolDefinition[] = [
         ref: { type: 'string' },
         project: PROJECT_PROP,
         sharedTree: { type: 'boolean', description: 'Use the declared shared checkout only when the spawning runtime is already rooted there. Executors with a live claim cannot use this to dispatch child work.' },
+        reducedAgentSchema: { type: 'boolean', description: 'Omit name/mode; hook needs agent_id and permission_mode "bypassPermissions".' },
         allowRepeatFailure: { type: 'boolean' },
         allowUnscoped: { type: 'boolean', description: 'Explicitly allow a write ticket with no declared file scope.' },
         integrationBranch: { type: 'string' },
@@ -302,6 +303,7 @@ const tools: ToolDefinition[] = [
           sessionId,
           runtimeCwd: process.cwd(),
           ...(Object.hasOwn(args, 'sharedTree') ? { sharedTree: args.sharedTree === true } : {}),
+          ...(Object.hasOwn(args, 'reducedAgentSchema') ? { reducedAgentSchema: args.reducedAgentSchema === true } : {}),
           allowRepeatFailure: args.allowRepeatFailure === true,
           allowUnscoped: args.allowUnscoped === true,
           integrationBranch: args.integrationBranch,
@@ -321,7 +323,9 @@ const tools: ToolDefinition[] = [
       const description = dispatchState.description || agentsync.spawnDescription(prepared.ticket, resolved);
       // Old prepared records lack the stored task label. Regenerate it instead of
       // letting Claude Code display the route marker from the prompt.
-      const spawn = agentsync.agentSpawn(dispatchState.launchName, isolation, resolved && resolved.model, agent, prompt, description);
+      const spawn = agentsync.agentSpawn(dispatchState.launchName, isolation, resolved && resolved.model, agent, prompt, description, {
+        reducedAgentSchema: dispatchState.reducedAgentSchema === true,
+      });
       const compact: any = {
         ref: prepared.ticket.ref,
         effort: prepared.ticket.effort,
@@ -357,7 +361,9 @@ const tools: ToolDefinition[] = [
         // The agent list's own model label always reads claude-codex-auto for gateway
         // routes and cannot be changed (SQ-1350), so a paraphrased description is the
         // only thing standing between the reader and an unidentifiable running agent.
-        spawnDescriptionNote: `Copy spawn.description byte-for-byte into the Agent call. It leads with "${description.split(' · ')[0]}" for notifications, while the stable spawn.name ends with the resolved route token and effort.`,
+        spawnDescriptionNote: dispatchState.reducedAgentSchema === true
+          ? `Copy spawn.description byte-for-byte into the Agent call. This reduced-schema spawn intentionally omits name and mode; the board retains launch label "${dispatchState.launchName}" separately, and its first claim requires hook-reported agent_id plus permission_mode "bypassPermissions".`
+          : `Copy spawn.description byte-for-byte into the Agent call. It leads with "${description.split(' · ')[0]}" for notifications, while the stable spawn.name ends with the resolved route token and effort.`,
       };
     },
   },

@@ -925,11 +925,13 @@ function renderDispatchStub(ticket, projectPath) {
     ...marker ? ["", marker] : []
   ].join("\n");
 }
-function agentSpawn(name, isolation, model, agentType, prompt, description) {
+function agentSpawn(name, isolation, model, agentType, prompt, description, options) {
   const suppliedLabel = typeof description === "string" ? description.replace(EMBEDDED_ROUTE_MARKER_RE, "").replace(/\s+/g, " ").trim() : "";
   const taskLabel = suppliedLabel || "Sidequest ticket executor.";
+  const reducedAgentSchema = options?.reducedAgentSchema === true;
   return Object.assign(
-    { subagent_type: bundledAgentType(agentType || name), name, mode: "bypassPermissions", description: taskLabel },
+    { subagent_type: bundledAgentType(agentType || name), description: taskLabel },
+    reducedAgentSchema ? {} : { name, mode: "bypassPermissions" },
     isolation ? { isolation } : {},
     model ? { model } : {},
     prompt ? { prompt } : {}

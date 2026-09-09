@@ -30,6 +30,7 @@ async function cmdDispatch(opts: any, positional: any) {
       sessionId,
       runtimeCwd: process.cwd(),
       ...(Object.hasOwn(opts, 'shared-tree') ? { sharedTree: opts['shared-tree'] === true } : {}),
+      ...(Object.hasOwn(opts, 'reduced-agent-schema') ? { reducedAgentSchema: opts['reduced-agent-schema'] === true } : {}),
       allowRepeatFailure: !!opts['allow-repeat-failure'],
       allowUnscoped: !!opts['allow-unscoped'],
       recoveryEvidence: opts['recovery-evidence'],
@@ -45,7 +46,9 @@ async function cmdDispatch(opts: any, positional: any) {
   const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
   const agent = canonicalPreparedDispatchExecutor(prepared.ticket);
   const dispatchState = prepared.ticket.dispatch || {};
-  const spawn = agentsync.agentSpawn(dispatchState.launchName, isolation, resolved && resolved.model, agent, prompt, dispatchState.description);
+  const spawn = agentsync.agentSpawn(dispatchState.launchName, isolation, resolved && resolved.model, agent, prompt, dispatchState.description, {
+    reducedAgentSchema: dispatchState.reducedAgentSchema === true,
+  });
   const warnings = store.dispatchWarnings(prepared.ticket);
   if (unverifiedTransport) {
     warnings.push('dispatch warning: --unverified-transport was used — this does NOT prove any session will have the Sidequest board MCP connected; a fresh native Agent could still receive zero board tools.');

@@ -89,6 +89,62 @@ function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
+// src/hooks/shared/output.ts
+var import_node_crypto = __toESM(require("node:crypto"));
+var CONTEXT_BUDGETS = Object.freeze({
+  SessionStart: 4 * 1024,
+  UserPromptSubmit: 1024,
+  PreToolUse: 768,
+  PreCompact: 1500,
+  PostCompact: 1500,
+  SubagentStart: 512,
+  SubagentStop: 512,
+  Stop: 512,
+  PostToolUseFailure: 512,
+  TeammateIdle: 512
+});
+function byteLength(value) {
+  return Buffer.byteLength(value, "utf8");
+}
+function contextBudget(hookEventName) {
+  return CONTEXT_BUDGETS[hookEventName] || 512;
+}
+function stableWatermark(value) {
+  return import_node_crypto.default.createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
+}
+function truncateUtf8(value, maxBytes) {
+  if (byteLength(value) <= maxBytes) return value;
+  let truncated = "";
+  let bytes = 0;
+  for (const character of value) {
+    const characterBytes = byteLength(character);
+    if (bytes + characterBytes > maxBytes) break;
+    truncated += character;
+    bytes += characterBytes;
+  }
+  return truncated;
+}
+function projectedText(hookEventName, value) {
+  const budget = contextBudget(hookEventName);
+  if (byteLength(value) <= budget) return value;
+  const watermark = stableWatermark(value);
+  const omission = `
+[sidequest context v1 id=${hookEventName} revision=${watermark} watermark=${watermark}; content omitted for ${budget}B budget. Retrieve current board state with mcp__plugin_sidequest_board__comments({ref:"<ticket-ref>"}).]`;
+  return `${truncateUtf8(value, Math.max(0, budget - byteLength(omission)))}${omission}`;
+}
+function writeJson(value) {
+  process.stdout.write(JSON.stringify(value));
+}
+function writeDeny(hookEventName, permissionDecisionReason) {
+  writeJson({
+    hookSpecificOutput: {
+      hookEventName,
+      permissionDecision: "deny",
+      permissionDecisionReason: projectedText(hookEventName, permissionDecisionReason)
+    }
+  });
+}
+
 // src/hooks/shared/runtime-identity.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_path2 = __toESM(require("node:path"));
@@ -154,20 +210,27 @@ function bindClaimRuntimeIdentity(input, agentId, executor) {
   const toolInput = input.tool_input;
   const ref = String(toolInput.ref || "").trim();
   const sessionId = stringField(input, "session_id", "sessionId");
-  if (!agentId || !sessionId || !executorAgent(executor) || !ref || String(toolInput.executor || "").trim() !== executor) return true;
+  if (!sessionId || !executorAgent(executor) || !ref || String(toolInput.executor || "").trim() !== executor) return true;
   try {
     const store = require(runtimeModule("store"));
     const project = String(toolInput.project || "").trim() || store.sessionProjectRoot();
     const found = store.findProject(project);
     if (found.ok && found.slug) {
-      store.bindClaimRuntimeIdentity(found.slug, ref, {
+      const binding = store.bindClaimRuntimeIdentity(found.slug, ref, {
         token: toolInput.token,
         tokenFile: toolInput.tokenFile,
         executor,
         effort: toolInput.effort,
         agentId,
+        permissionMode: stringField(input, "permission_mode"),
         sessionId
       });
+      if (binding?.ticket?.dispatch?.reducedAgentSchema === true && !binding.ok) {
+        writeDeny(
+          "PreToolUse",
+          binding.message || `sidequest: ${ref} reduced Agent-schema dispatch could not verify this hook-reported runtime identity. Reload into a host that reports agent_id and permission_mode "bypassPermissions" to PreToolUse, then dispatch again without adding unsupported Agent fields or changing permissions.`
+        );
+      }
     }
   } catch (_) {
   }

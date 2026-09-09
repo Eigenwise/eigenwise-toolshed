@@ -1782,8 +1782,17 @@ function claimAdmission(slug?: any, idOrRef?: any, opts?: any) {
 
 function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
   const agentId = String(opts?.agentId || '').trim();
+  const observedPermissionMode = String(opts?.permissionMode || '').trim();
   const found = getTicket(slug, idOrRef);
-  if (!agentId || !found) return { ok: false, reason: !found ? 'not_found' : 'missing_identity' };
+  if (!found) return { ok: false, reason: 'not_found' };
+  if (!agentId) return {
+    ok: false,
+    reason: 'missing_identity',
+    ticket: found,
+    ...(found.dispatch?.reducedAgentSchema === true ? {
+      message: `${found.ref} reduced Agent-schema dispatch requires hook-reported agent_id before the first claim. Reload into a host that reports agent_id and permission_mode "bypassPermissions" to PreToolUse, then dispatch again without adding unsupported Agent fields or changing permissions.`,
+    } : {}),
+  };
   return withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     if (!ticket) return { ok: false, reason: 'not_found' };
@@ -1792,6 +1801,15 @@ function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
     const state = dispatchState(ticket);
     if (!state || state.terminalAt || !['prepared', 'launched', 'claimed'].includes(state.outcome)) {
       return { ok: false, reason: 'dispatch_unavailable', ticket };
+    }
+    if (state.reducedAgentSchema === true && observedPermissionMode !== 'bypassPermissions') {
+      const observed = observedPermissionMode || 'missing';
+      return {
+        ok: false,
+        reason: 'permission_mode_unverified',
+        ticket,
+        message: `${ticket.ref} reduced Agent-schema dispatch requires hook-reported permission_mode "bypassPermissions" before the first claim; observed ${JSON.stringify(observed)}. Use a host that reports that field to PreToolUse, then dispatch again without adding unsupported Agent fields or changing permissions.`,
+      };
     }
     // What binds here is the runtime the harness reported (agent_id from hook
     // stdin) to the claim the dispatch token authorizes. The token is the
@@ -1815,6 +1833,7 @@ function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
       return { ok: false, reason: 'runtime_identity_mismatch', ticket };
     }
     state.bindSource = 'claim_runtime_identity';
+    if (state.reducedAgentSchema === true) state.observedPermissionMode = observedPermissionMode;
     stampDispatchEvent(ticket, 'claim-runtime-identity', now);
     putTicket(slug, ticket);
     return { ok: true, ticket };
@@ -1848,6 +1867,17 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     const admission = claimAdmission(slug, found.id, opts);
     if (!admission.ok) return admission;
     const currentDispatch = dispatchState(t);
+    if (currentDispatch?.reducedAgentSchema === true && (
+      !String(currentDispatch.agentId || '').trim()
+      || currentDispatch.observedPermissionMode !== 'bypassPermissions'
+    )) {
+      return {
+        ok: false,
+        reason: 'reduced_runtime_unverified',
+        ticket: t,
+        message: `claim: refused ${t.ref}; this reduced Agent-schema dispatch needs hook-reported agent_id and permission_mode "bypassPermissions" before it can claim. Reload into a host that reports both fields to PreToolUse, then dispatch again without adding unsupported Agent fields or changing permissions.`,
+      };
+    }
     const terminalDispatch = Boolean(currentDispatch?.terminalAt && currentDispatch?.outcome);
     if (opts.direct && t.dispatchNonce && !terminalDispatch) return { ok: false, reason: 'direct_conflict', ticket: t };
     if (opts.direct && t.dispatchNonce && terminalDispatch && !opts.force) return { ok: false, reason: 'terminal_claim_takeover_required', ticket: t };
