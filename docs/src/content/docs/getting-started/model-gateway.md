@@ -37,6 +37,8 @@ new rows appear after a full Claude Code restart. `/reload-plugins` does not rel
 - `claude-grok-4.5[1m]` uses your Grok subscription when the Grok CLI is installed and signed in. Its measured backend window is 500k. The alias is removed before requests reach the backend.
 - Claude models keep using Anthropic.
 
+Codex rejects some JSON Schema regex Unicode property escapes, including `\p{Cc}` and `\P{Cf}`. When a deferred tool resolves, Model Gateway can make a narrow Codex-only compatibility copy of its `input_schema`. It supports a missing dialect or Draft 2020-12, and only a `pattern` on the documented positive paths: `properties`, compatible `patternProperties` values, `additionalProperties`, `items`, `prefixItems`, `allOf`, `anyOf`, `dependentSchemas`, `propertyNames`, and `unevaluatedProperties` or `unevaluatedItems`. Each real property atom has to be a standalone member of a negated character class, with no range, set syntax, capture, backreference, or negative regex context. The lexer consumes every allowed escape as one token, so escaped parentheses, brackets, and backslashes stay literal data rather than group or class structure. The copy removes only that atom and keeps every other regex byte. Unsupported affected schemas return a local 400 with the tool name, JSON Pointer, and reason code, before any request is forwarded or sent to another provider. Claude Code still holds the original tool schema and Anthropic requests stay byte-identical.
+
 Sidequest can select these models automatically when both plugins are installed.
 
 ## Daily use

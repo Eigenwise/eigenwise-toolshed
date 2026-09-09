@@ -1,0 +1,10 @@
+{
+  "20ef3d38": {
+    "source": "20ef3d38fbffa04996487aec24deb5dcc7229369:plugins/model-gateway/lib/tool-schema-compat.js",
+    "sha256": "87bb30984896f6bb601c33f3cdae35aed022d788f4d90c1a91aca3f40b6cbb67"
+  },
+  "d68e8ec5": {
+    "source": "d68e8ec5cfd17689c4a6ff8744f4dc66182e75e3:plugins/model-gateway/lib/tool-schema-compat.js",
+    "sha256": "b851e0a4d78f6d1048d55fda74b0867d05ee299126de4b8280ef601ffd6901c5"
+  }
+}

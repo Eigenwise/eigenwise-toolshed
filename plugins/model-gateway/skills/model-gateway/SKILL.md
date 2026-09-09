@@ -122,6 +122,7 @@ bring auth back, or you kill the session that was about to use it.
   explicit route marker and never uses picker discovery.
 - Claude models keep working normally at the same time (passthrough path); subagents can mix tiers
   freely.
+- **Codex schema compatibility**: Codex rejects some Unicode property escapes such as `\p{Cc}` and `\P{Cf}`. After deferred hydration, the shim changes only a Codex-bound provider hint, never Claude Code's host schema or an Anthropic request. It admits a missing dialect or Draft 2020-12 and only `pattern` instances reached through `properties`, compatible `patternProperties` values, `additionalProperties`, `items`, `prefixItems`, `allOf`, `anyOf`, `dependentSchemas`, `propertyNames`, or `unevaluatedProperties`/`unevaluatedItems`. Each real property atom must stand alone in a negated character class without ranges, set syntax, captures, backreferences, or a negative regex context. The shim removes only that atom and preserves every other regex byte. `not`, conditionals, `oneOf`, `contains`, references, definitions, content schemas, affected pattern-property keys, unknown containers, and unsafe regexes refuse locally with HTTP 400 naming the tool, JSON Pointer, and reason code. Tell the user it was not forwarded or rerouted. Do not claim arbitrary schemas are preserved or try to bypass that diagnostic.
 
 ## Local gateway records
 

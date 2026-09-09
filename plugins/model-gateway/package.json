@@ -1,0 +1,14 @@
+{
+  "name": "@eigenwise/model-gateway-tests",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test --test-timeout=300000 \"test/*.test.js\""
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "devDependencies": {
+    "ajv": "8.20.0"
+  }
+}
