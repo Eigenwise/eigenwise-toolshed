@@ -1,5 +1,5 @@
 {
-  "description": "whittle: optional session-scoped style modes",
+  "description": "whittle: one practical clean-code policy",
   "hooks": {
     "SessionStart": [
       {
@@ -7,17 +7,6 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/whittle.js\" SessionStart",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/whittle.js\" UserPromptSubmit",
             "timeout": 5
           }
         ]
