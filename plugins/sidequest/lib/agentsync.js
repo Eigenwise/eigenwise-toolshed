@@ -687,6 +687,7 @@ function executorTaskBody(ticket, category, declaredFiles, uncertainty, planDocu
     `Title: ${ticket.title || "(Untitled ticket)"}`,
     `Description:
 ${ticket.description || "(No additional description was recorded.)"}`,
+    "Implementation authority: the description and story contract are the orchestrator's selected outcome, benefit, approach, and boundaries. Use ordinary local coding judgment to implement them. Do not choose a new improvement agenda, expand scope, or replace the architecture; report concrete contradictory evidence and request steering.",
     `Category contract:
 Category: ${category.id || ticket.categoryId || "(Unclassified)"}
 Configured route: ${category.route?.model || "(No configured route)"} / ${category.route?.effort || "(No configured effort)"}

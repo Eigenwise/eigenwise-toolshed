@@ -114,6 +114,18 @@ test('executor briefings require Board MCP reconnect and re-dispatch when unavai
   assert.doesNotMatch(briefing, /version-pinned CLI fallback/);
 });
 
+test('executor briefings preserve orchestrator-owned improvement decisions', () => {
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-IMPROVEMENT-AUTHORITY', model: 'sonnet', effort: 'medium', dispatchExecutor: 'sidequest-exec-medium', category: {},
+    description: 'Implement the selected change.',
+  }, 'improvement-authority-token');
+
+  assert.match(briefing, /Implementation authority: the description and story contract are the orchestrator's selected outcome, benefit, approach, and boundaries/);
+  assert.match(briefing, /Use ordinary local coding judgment to implement them/);
+  assert.match(briefing, /Do not choose a new improvement agenda, expand scope, or replace the architecture/);
+  assert.match(briefing, /report concrete contradictory evidence and request steering/);
+});
+
 test('executor briefings name the board-owned verification evidence directory', () => {
   const directory = path.join(process.env.SIDEQUEST_HOME!, 'projects', 'briefing-fixture', 'verification', 'SQ-EVIDENCE');
   const briefing = agentsync.renderTicketBriefing({

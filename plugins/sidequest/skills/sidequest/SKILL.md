@@ -34,7 +34,7 @@ For substantial work:
 1. **Ticket shape.** If a written spec pins shared types/interfaces, file boundaries, and
    per-piece verification, 3+ independently checkable pieces use contract-first fan-out: pin the
    contract in ticket descriptions or a short planning ticket, then one parallel wave on
-   category-appropriate cheaper models and integrate once per wave. **Wave mode REQUIRES a Sidequest story** first
+   category-appropriate routes and integrate once per wave. **Wave mode REQUIRES a Sidequest story** first
    (`sidequest story add`, then `--story US-n` per piece): file the complete backlog under it and pin
    the execution contract on it. A story is Sidequest's own `US-n` grouping, not a Claude Code feature.
    One-ticket mode stays story-less; use stories for shared outcomes or dependencies. Cut along affected surfaces: store, CLI, MCP surface, skill/docs, and applicable full test directory.
@@ -124,7 +124,7 @@ stamp `--category`; use its fallback only when no category fits. `--complexity` 
 fallback; never set `--model`/`--effort`. Use `--file`, `--story`, `--anchors`, and exact `--verify` as
 needed; scope and authoring details: `references/ticket-authoring.md`.
 
-Write developer-to-developer descriptions with evidence that cheaper executors can act on. For the
+Write developer-to-developer descriptions with evidence that executors can act on. For the
 required details and direct-route boundary, see `references/ticket-authoring.md`.
 
 Descriptions/comments render markdown. Use real newlines, never literal `\n`. Mid-task side issue? File
@@ -174,11 +174,12 @@ merged-tree gate once per wave. Judge by that oracle and the submit report, neve
 integrating it; never re-dispatch one (refused as `submitted`). A dead executor's `done` only proves
 the board transition, never that work shipped: salvage and close it per `references/publishing.md`.
 
-## Route execution down; keep the loop tight
+## Route execution; keep the loop tight
 
-The orchestrator is the most expensive model. Gather evidence with direct read-only tools or
-native `Explore`, then write tickets and route implementation by default. A direct claim is limited
-to the INLINE-SAFE allowlist and its 20+ character reason; it cannot retroactively
+Before routing, the orchestrator decides what improvement is worth making, its concrete benefit, the chosen
+approach, and its boundaries. Gather evidence with direct read-only tools or native `Explore`, then write tickets
+for that selected plan and route implementation. Routes select execution capacity, not product or tradeoff decisions.
+A direct claim is limited to the INLINE-SAFE allowlist and its 20+ character reason; it cannot retroactively
 legitimize prior inline investigation. Executors own their tickets; investigations return **compressed findings** (~1–2k tokens)
 as comments, not transcripts. Routed implementation uses a freshly dispatched executor.
 `Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness utilities; Explore is a quick
@@ -188,9 +189,9 @@ ticketed route.
 **The shape is a LOOP, not a hand-off**: spawn a wave → executors return terse reports and
 submit verified commits → read each thread, use scoped verification for each ticket, then run the
 full suite once while publishing the wave in one transaction → re-plan, spawn the next. Don't accept a green suite as proof of coverage; review execution evidence. Prevent
-executor mini-sessions from the spawn side: **the ticket is the spec** (the cheaper the model,
-the more patch-level the detail); **scope the spawn prompt only with logistics**, the ticket
-contract traveling in full and unnarrowed;
+executor mini-sessions from the spawn side: **the ticket is the spec**. The ticket carries the selected
+outcome, benefit, approach, boundaries, and enough implementation detail to act; scope the spawn prompt only
+with logistics, with the ticket contract traveling in full and unnarrowed;
 **Executors keep useful work**: keep claim, checkpoint evidence, and await `SendMessage`
 steering for questions or failed checks. Release only for confirmed death or unsalvageable blockers; **batch small same-model tickets into ONE executor**
 (different models never batch); **parallel fan-out spawns one executor per ticket in a single
