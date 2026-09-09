@@ -59,6 +59,12 @@ The winning `ANTHROPIC_BASE_URL` source follows Claude Code's precedence: proces
 current-project `.claude/settings.local.json`, project `.claude/settings.json`, then user
 `~/.claude/settings.json`. A process export always wins, so settings writes cannot replace it.
 
+When `doctor` or SessionStart says that process env shadows a wired settings file, Model Gateway is
+bypassed. If the user controls the Claude Code CLI launch, they can correct or unset
+`ANTHROPIC_BASE_URL`, then restart. If the host replaces that value, use the supported Claude Code CLI
+on the wired project instead. Model Gateway does not support Desktop routing under forced overrides on
+Windows or macOS, and settings, parent, or User-scope edits cannot be promised to win.
+
 `env --write-user --reconcile` is confirmation-gated. Plain `env --write-user` writes the shared
 user fallback, then lists recorded projects whose local URL differs without changing their files.
 The confirmed command removes only Model Gateway-owned keys from those other projects'
@@ -141,7 +147,13 @@ not contain the request body. No retention period is promised for either local r
 
 For the confirmation-gated procedure, use the `remote-control-compatibility` skill. It manages the
 plugin-marked hosts block, creates a backup before an elevated write, reconciles gateway mode, and
-checks the final state. Do not edit the hosts file outside that procedure.
+checks the final state. Do not edit the hosts file outside that procedure. If effective process env
+`ANTHROPIC_BASE_URL` is HTTPS `api.anthropic.com` (including port 443), enabling is refused before any
+backup, hosts write, startup, or reconciliation because the loopback mapping cannot serve TLS. A
+user-controlled Claude Code CLI launch can correct or unset that value, then restart. If a host replaces
+it, use the supported Claude Code CLI on the wired project instead. Desktop routing is unsupported under
+forced overrides on Windows and macOS, and settings, parent, or User-scope edits cannot be promised to
+win. Disabling stays available.
 
 Claude Code's `/remote-control` only lights up when `ANTHROPIC_BASE_URL` is exactly the real
 Anthropic host, which conflicts with gateway model discovery. Remote Control and the Codex/Grok rows

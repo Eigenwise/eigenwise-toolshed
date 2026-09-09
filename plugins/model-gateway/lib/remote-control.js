@@ -130,10 +130,16 @@ let remoteControlDependencies = {};
 function configureRemoteControl(dependencies) { remoteControlDependencies = dependencies; }
 
 async function remoteControlCommand() {
-  const { args, flag, log, die, doctor, fetchShimHealth, startAll, syncCompatMode, compatibilityPortConflict = () => null } = remoteControlDependencies;
+  const { args, flag, log, die, doctor, fetchShimHealth, startAll, syncCompatMode, compatibilityPortConflict = () => null, unsafeRemoteControlProcessEnv = () => null } = remoteControlDependencies;
   const action = args[0];
   if (!['enable', 'disable', 'doctor'].includes(action)) {
     die('usage: remote-control <enable|disable|doctor>');
+  }
+  if (action === 'enable') {
+    const unsafeProcessEnv = unsafeRemoteControlProcessEnv();
+    if (unsafeProcessEnv) {
+      die(`cannot enable RC-compatibility while effective process env ANTHROPIC_BASE_URL is ${unsafeProcessEnv.value}: the hosts mapping would redirect HTTPS traffic to an unsupported TLS endpoint. A user-controlled Claude Code CLI launch can correct or unset ANTHROPIC_BASE_URL, then restart. If a host replaces it, use the supported Claude Code CLI on this wired project; Desktop routing is unsupported under forced overrides on Windows and macOS. Settings, parent, and User-scope edits cannot be promised to win.`);
+    }
   }
   const { file, text, error } = readHostsFile();
   const parsed = text == null ? { state: 'unreadable', block: null } : parseHostsCompatBlock(text);
