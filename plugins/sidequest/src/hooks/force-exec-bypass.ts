@@ -1033,7 +1033,7 @@ function main(): void {
   const updatedInput: Record<string, unknown> = {
     ...toolInput,
     ...(reducedAgentSchema ? {} : { mode: 'bypassPermissions' }),
-    ...(isSubagentCaller(input) ? { run_in_background: true } : {}),
+    ...(!reducedAgentSchema && isSubagentCaller(input) ? { run_in_background: true } : {}),
   };
   if (reducedAgentSchema) {
     delete updatedInput.name;
@@ -1056,11 +1056,11 @@ function main(): void {
 
   if (isDispatchExecutor) {
     const hadModel = Object.prototype.hasOwnProperty.call(toolInput, 'model');
-    if (hadModel && !reducedAgentSchema) delete updatedInput.model;
+    if (hadModel) delete updatedInput.model;
     recordAuthoritativeLaunch(input, type, launchAgentName);
     const messages = [
       preparedCorrection,
-      hadModel && !reducedAgentSchema ? `sidequest: removed the Agent model override for ${type}; its frontmatter pin selects the routed backend.` : null,
+      hadModel ? `sidequest: removed the Agent model override for ${type}; its frontmatter pin selects the routed backend.` : null,
     ].filter((message): message is string => Boolean(message));
     writeToolUpdate(updatedInput, messages.join(' '));
     return;

@@ -4005,6 +4005,51 @@ test('reduced Agent-schema dispatch omits unsupported fields while preserving it
   assert.equal(store.getTicket(cliTicket.project, cliTicket.ref).dispatch.reducedAgentSchema, true);
 });
 
+test('reduced Codex dispatch removes injected models and nested calls stay within the host schema', async () => {
+  seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' }]);
+  store.setCategory({ id: 'reduced-codex-agent-schema', name: 'Reduced Codex Agent schema', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
+  const supportedFields = ['description', 'isolation', 'model', 'prompt', 'subagent_type'];
+  const assertReducedHostSchema = (spawn: Record<string, unknown>) => {
+    for (const field of Object.keys(spawn)) assert.ok(supportedFields.includes(field), `unsupported Agent field "${field}"`);
+  };
+
+  const reducedTicket = await callTool('add', {
+    title: 'reduced Codex schema spawn', description: DISPATCH_DESCRIPTION, category: 'reduced-codex-agent-schema', files: ['plugins/sidequest'],
+  });
+  const reducedDispatch = await callTool('dispatch', { ref: reducedTicket.ref, reducedAgentSchema: true, full: true });
+  assert.equal(reducedDispatch.spawn.model, undefined);
+  const reducedHook = runForceBypass({
+    session_id: MCP_SESSION_ID,
+    agent_id: 'reduced-codex-nested-agent',
+    cwd: PROJ,
+    tool_name: 'Agent',
+    tool_input: { ...reducedDispatch.spawn, model: 'haiku' },
+  });
+  const reducedInput = reducedHook.hookSpecificOutput.updatedInput;
+  assertReducedHostSchema(reducedInput);
+  assert.equal(Object.hasOwn(reducedInput, 'model'), false);
+  assert.equal(Object.hasOwn(reducedInput, 'run_in_background'), false);
+  assert.match(reducedHook.hookSpecificOutput.additionalContext, /removed the Agent model override/);
+  assert.throws(
+    () => assertReducedHostSchema({ ...reducedInput, run_in_background: true }),
+    /unsupported Agent field "run_in_background"/,
+  );
+
+  const fullTicket = await callTool('add', {
+    title: 'full Codex schema spawn', description: DISPATCH_DESCRIPTION, category: 'reduced-codex-agent-schema', files: ['plugins/sidequest'],
+  });
+  const fullDispatch = await callTool('dispatch', { ref: fullTicket.ref, full: true });
+  const fullHook = runForceBypass({
+    session_id: MCP_SESSION_ID,
+    agent_id: 'full-codex-nested-agent',
+    cwd: PROJ,
+    tool_name: 'Agent',
+    tool_input: fullDispatch.spawn,
+  });
+  assert.equal(fullHook.hookSpecificOutput.updatedInput.run_in_background, true);
+  assert.equal(fullHook.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+});
+
 test('reduced Agent-schema claims require hook identity and permission evidence, then bind unnamed siblings by token', async () => {
   const launchReduced = async (title: string) => {
     const ticket = await callTool('add', {
