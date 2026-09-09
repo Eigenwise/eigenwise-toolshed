@@ -3,7 +3,7 @@
   "tool": "codebase-mapper",
   "version": "2.15.8",
   "mappedAt": "2026-09-09",
-  "gitCommit": "a17b107dbaaad53ac6fce09661bb7b4840ab59fe",
+  "gitCommit": "e1038b21b8b52a76f171415d46da8f7fddfe4793",
   "documents": [
     "architecture.md",
     "coding-style.md",
@@ -16,15 +16,15 @@
     "tech-landscape.md"
   ],
   "hashes": {
-    "INDEX.md": "b5273efdfa79be0943096cca7df966275845efb4901dffdbdb5d278c35154bd3",
-    "architecture.md": "19f8dd53160a5efa97641e0d9d5e0793d732268046f45a72166e415217b9b2a8",
+    "INDEX.md": "807a0e15048b4e151cef9253a9ba88632044f2c9933a4cba5af5d48a77099da4",
+    "architecture.md": "efe33ea045fb4438ea9c45bc4ce9ac9211ea2b2c99df93a48b566e87012e0c8e",
     "coding-style.md": "5c3bfc690edd8db7683d0aafe8a55aa8ac3b58f20884a369c7a8c0e41b2d475c",
-    "directory-structure.md": "4c24fead893bf7164c658cf9b93c5ddbd14823a9d5c8f37274e6dc3d5b377126",
-    "entry-points.md": "d409c4f524de643078944dd1b69b1b67ea64d915cacbf3eda8a8588bbfe0b3f5",
-    "modules.md": "411ee638f3f104e609baedea25352077311f4990b94a9609229dd102e7074a95",
-    "onboarding.md": "314452e2de9877da45c5e09ef4849cc6038896d2ff6bc568dc3cf6f98ca9a804",
-    "patterns.md": "a073c428952c63432a7c4ae12a2559a0438f0d4e2e2441ab3bb79b577a773406",
-    "release-publishing.md": "7ca2e96c2d1ff32987d8927d3e9ba0807485727b63c575f46be5143c949e7bcc",
-    "tech-landscape.md": "080b0c81d56ff178636410318b306594942ea07a4e85e3bb5869544cc4004ff8"
+    "directory-structure.md": "9a52be6c6814cea1a12826fbebec8e3104cfae27f788213db1b200f9dd0819c0",
+    "entry-points.md": "a94fff53a6785415f463a4f13ebaf82596ccfe792c9960f040f04d1b4f09efa9",
+    "modules.md": "9a11f840409837c0769d2cc79ab4cfd67450a37f68b6ed798dcdd193ad9548db",
+    "onboarding.md": "acc751b332f99323520a28346a5df6991d16b91dd66b4a7a691b4e15ab9e7936",
+    "patterns.md": "00136fb70b70821480e5c4f82c18592b658dc1d1a7f9928d4109e5532eadca18",
+    "release-publishing.md": "e0050abe2129501c8678bbc3062333ca159b9406da7cdba7368df54da3a62571",
+    "tech-landscape.md": "92d7fcd83a42904c5ad91ff6dceac7c2f468b8fcd9e6d0dacaea23afe425955f"
   }
 }

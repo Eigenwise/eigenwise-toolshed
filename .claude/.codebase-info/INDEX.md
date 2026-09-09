@@ -2,7 +2,7 @@
 
 Last Updated: 2026-09-09
 
-Toolshed is a public Claude Code plugin marketplace. It ships six published plugins, with Sidequest as the largest runtime system and its stable executor roster bundled in the plugin package, plus shared test support, docs, examples, and release automation. The current gateway plugin is Model Gateway. `plugins/whittle/` is an unregistered optional style-mode core, not a published plugin or marketplace entry. `sandbox/windows/` is a maintainer-only, gitignored Windows Sandbox clean-room harness — not published, not linked from docs.
+Toolshed is a public Claude Code plugin marketplace with seven registered plugins. Sidequest is the largest runtime system and bundles its stable executor roster in the plugin package. The repository also has shared test support, docs, examples, and release automation. Model Gateway owns gateway routing. Whittle applies one canonical clean-code policy through hooks, host exports/adapters and read-only MCP; its first publication is pending the release cut. `sandbox/windows/` is a maintainer-only, gitignored Windows Sandbox clean-room setup, not published or linked from docs.
 
 - [Architecture](architecture.md)
 - [Tech landscape](tech-landscape.md)
