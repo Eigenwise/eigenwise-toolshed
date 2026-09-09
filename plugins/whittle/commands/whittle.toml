@@ -1,0 +1,2 @@
+description = "Show or change the Whittle session mode"
+prompt = "Apply the requested Whittle mode: {{args}}. The runtime hook owns state and policy injection; it reports any selection that could not persist."
