@@ -17,6 +17,7 @@ const { fetchUrl } = require('./process-supervision.js');
 const { effectiveBaseUrl, wiredMode } = require('./settings-wiring.js');
 const { detectHostsCompat } = require('./remote-control.js');
 const { codexBaseFromId, ourBaseUrls } = require('./pins.js');
+const { ToolSchemaCompatibilityError, adaptCodexToolSchemas } = require('./tool-schema-compat.js');
 const {
   ANTHROPIC_UPSTREAM, AUTH_HEADERS, CODEX_FAMILY_RE, CODEX_UPSTREAM_BLOCK_PATH, COMPAT_HOST,
   COMPAT_PORT, DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GROK_ENDPOINT, GROK_PREFIX, LIST_DISPATCH_MODEL,
@@ -1942,6 +1943,32 @@ function runWorker() {
               parsed.output_config = { ...(parsed.output_config || {}), effort: dispatchRoute.effort };
             }
             resolveCodexDeferredTools(parsed);
+            try {
+              parsed.tools = adaptCodexToolSchemas(parsed.tools);
+            } catch (error) {
+              const compatibilityError = error instanceof ToolSchemaCompatibilityError ? error : null;
+              const toolName = compatibilityError?.toolName || '<unnamed tool>';
+              const pointer = compatibilityError?.pointer || '/tools';
+              const reasonCode = compatibilityError?.reasonCode || 'schema-classifier-failure';
+              const body = JSON.stringify({
+                type: 'error',
+                error: {
+                  type: 'invalid_request_error',
+                  message: `model-gateway: Codex tool schema compatibility refused tool ${toolName} at ${pointer}; reason=${reasonCode}. Nothing was forwarded or rerouted.`,
+                },
+              });
+              routeTelemetry.setRoute({
+                selectedModel: advertisedModel,
+                effectiveModel: parsed.model,
+                backend: 'codex',
+                effort: typeof parsed.output_config?.effort === 'string' ? parsed.output_config.effort : requestedEffort,
+                fallback: false,
+                via: dispatchVia || 'direct',
+              });
+              routeTelemetry.finish(400, 'invalid_tool_schema');
+              res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+              return res.end(body);
+            }
             // Non-Claude models call the plan-mode tools spuriously, and an
             // approved ExitPlanMode downgrades the session's permission mode
             // to acceptEdits instead of restoring it (anthropics/claude-code

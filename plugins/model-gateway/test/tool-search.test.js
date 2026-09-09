@@ -9,6 +9,8 @@ const test = require('node:test');
 const { spawnGatewayProcess } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
+const ARTIFACT_PATTERN = String.raw`^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$`;
+const ARTIFACT_OUTPUT = String.raw`^(?!__.*__$)[^"\\./[\]]{1,200}$`;
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -55,14 +57,19 @@ async function waitForHealthz(port) {
   throw lastError || new Error('shim did not become healthy');
 }
 
-function tool(name, deferLoading) {
+function tool(name, deferLoading, inputSchema = { type: 'object', properties: {} }) {
   const definition = {
     name,
     description: `${name} fixture`,
-    input_schema: { type: 'object', properties: {} },
+    input_schema: inputSchema,
   };
   if (deferLoading !== undefined) definition.defer_loading = deferLoading;
   return definition;
+}
+
+function assertForwardedArtifactPattern(payload, toolName = 'Artifact') {
+  assert.equal(payload.tools.find((entry) => entry.name === toolName)
+    .input_schema.properties.filename.pattern, ARTIFACT_OUTPUT, 'identity adapter leaves the rejected Artifact pattern');
 }
 
 test('Codex tool search resolves references while Anthropic passthrough stays byte-identical', async (t) => {
@@ -117,12 +124,19 @@ test('Codex tool search resolves references while Anthropic passthrough stays by
   const models = JSON.parse((await request(shimPort, '/v1/models')).body).data;
   assert.ok(models.some(({ id }) => id === 'claude-gpt-5.6-sol[1m]'));
 
+  const artifactSchema = {
+    type: 'object',
+    properties: { filename: { type: 'string', pattern: ARTIFACT_PATTERN } },
+  };
   const tools = [
     tool('ToolSearch'),
     tool('Bash', false),
-    tool('mcp__sidequest_board__list', true),
+    tool('Artifact', false, artifactSchema),
+    tool('mcp__sidequest_board__list', true, artifactSchema),
     tool('mcp__sidequest_board__comments', true),
+    tool('ExitPlanMode', false),
   ];
+  assert.throws(() => assertForwardedArtifactPattern({ tools }), /identity adapter leaves the rejected Artifact pattern/);
   const initial = JSON.stringify({
     model: 'claude-gpt-5.6-sol',
     max_tokens: 32,
@@ -130,7 +144,8 @@ test('Codex tool search resolves references while Anthropic passthrough stays by
     tools,
   });
   assert.equal((await request(shimPort, '/v1/messages', initial)).status, 200);
-  assert.deepEqual(forwardedToCodex[0].tools.map(({ name }) => name), ['ToolSearch', 'Bash']);
+  assert.deepEqual(forwardedToCodex[0].tools.map(({ name }) => name), ['ToolSearch', 'Bash', 'Artifact']);
+  assertForwardedArtifactPattern(forwardedToCodex[0]);
   assert.equal(forwardedToCodex[0].tools.some((entry) => 'defer_loading' in entry), false);
 
   const followUpBody = {
@@ -161,14 +176,49 @@ test('Codex tool search resolves references while Anthropic passthrough stays by
   assert.deepEqual(forwardedToCodex[1].tools.map(({ name }) => name), [
     'ToolSearch',
     'Bash',
+    'Artifact',
     'mcp__sidequest_board__list',
   ]);
   assert.equal(forwardedToCodex[1].tools.some((entry) => 'defer_loading' in entry), false);
+  assert.equal(forwardedToCodex[1].tools.find((entry) => entry.name === 'mcp__sidequest_board__list')
+    .input_schema.properties.filename.pattern, ARTIFACT_OUTPUT);
+  assert.equal(forwardedToCodex[1].tools.some((entry) => entry.name === 'ExitPlanMode'), false);
   assert.deepEqual(forwardedToCodex[1].messages[2].content[0].content, [
     { type: 'text', text: 'Found one tool' },
     { type: 'text', text: 'Tool reference: mcp__sidequest_board__list' },
   ]);
   assert.equal(JSON.stringify(forwardedToCodex[1]).includes('tool_reference'), false);
+
+  const rejected = await request(shimPort, '/v1/messages', JSON.stringify({
+    model: 'claude-gpt-5.6-sol',
+    max_tokens: 32,
+    messages: [{ role: 'user', content: 'Use the unsafe fixture' }],
+    tools: [tool('unsafe_fixture', false, { not: { pattern: String.raw`[^\p{Cc}a]` } })],
+  }));
+  assert.equal(rejected.status, 400);
+  const rejectedBody = JSON.parse(rejected.body);
+  assert.equal(rejectedBody.error.type, 'invalid_request_error');
+  assert.match(rejectedBody.error.message, /unsafe_fixture/);
+  assert.match(rejectedBody.error.message, /\/tools\/0\/input_schema\/not/);
+  assert.match(rejectedBody.error.message, /forbidden-schema-applicator/);
+  assert.equal(rejectedBody.error.message.includes('[^'), false);
+  assert.equal(forwardedToCodex.length, 2);
+
+  const escapedNegativeContext = await request(shimPort, '/v1/messages', JSON.stringify({
+    model: 'claude-gpt-5.6-sol',
+    max_tokens: 32,
+    messages: [{ role: 'user', content: 'Use the escaped negative fixture' }],
+    tools: [tool('escaped_negative_fixture', false, {
+      type: 'string',
+      pattern: String.raw`^(?!\)[^\p{Cc}X]).*$`,
+    })],
+  }));
+  assert.equal(escapedNegativeContext.status, 400);
+  const escapedNegativeBody = JSON.parse(escapedNegativeContext.body);
+  assert.match(escapedNegativeBody.error.message, /escaped_negative_fixture/);
+  assert.match(escapedNegativeBody.error.message, /negative-regex-context/);
+  assert.equal(escapedNegativeBody.error.message.includes('[^'), false);
+  assert.equal(forwardedToCodex.length, 2);
 
   const anthropicRaw = JSON.stringify({ ...followUpBody, model: 'claude-opus-4-8[1m]' }, null, 2);
   assert.equal((await request(shimPort, '/v1/messages', anthropicRaw)).status, 200);
