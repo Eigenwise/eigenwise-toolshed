@@ -8,6 +8,21 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.538.0 (2026-09-09)
+
+### model-gateway 0.50.6 → 0.50.7
+
+#### Fixes
+
+- Bound gateway test-file concurrency to prevent CIM saturation (SQ-2615)
+
+### sidequest 5.1.0 → 5.1.1
+
+#### Fixes
+
+- Keep Sidequest guidance within its load budget (SQ-2601)
+  Remove repeated ticket-authoring guidance and tighten existing wording while preserving the planning, inline-work and safety boundaries. The existing skill-size limit stays unchanged.
+
 ## v3.537.0 (2026-09-09)
 
 ### model-gateway 0.50.5 → 0.50.6
