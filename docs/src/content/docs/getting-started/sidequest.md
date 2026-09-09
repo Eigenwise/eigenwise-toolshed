@@ -117,6 +117,16 @@ For substantial changes, Claude can turn the request into a story with linked ti
 
 Sidequest keeps ticket activity visible in the board. Ask Claude to check active work after a restart or when you need help with a ticket that was started in another session.
 
+## Read-only reports
+
+Use Sidequest for independent candidate reviews, repository audits, and shortcut debt scans. They use the existing read-only review route and only report findings.
+
+- A candidate review starts from the submitted ticket and its immutable candidate, never a working tree. Ask Claude to bind the review to that submission.
+- A repository audit names the directory or subsystem to inspect. It reports concrete delete, reuse, standard-library, native-platform, YAGNI, and shrinking opportunities with source locations. It does not edit code.
+- A shortcut debt scan reads source comments, including `ponytail:` and `whittle:` markers. Each result gives the file and line, known ceiling, observable upgrade trigger, and replacement. A missing ceiling or trigger remains a finding.
+
+Whittle modes do not turn these read-only reports off. If Sidequest is not installed in the host, Claude reports that the routed capability is unavailable. Observability can show absolute measurements, though gain stays unmeasured without a matched baseline. Static headline figures and private workflow data do not prove a gain.
+
 ## If something stops working
 
 **The board does not open.** Reload Claude Code after installing Sidequest, then ask Claude to open the board again. If the browser still does not open, ask Claude to start the Sidequest dashboard and report its local URL.

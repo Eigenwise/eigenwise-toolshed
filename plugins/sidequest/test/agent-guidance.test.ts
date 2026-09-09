@@ -15,6 +15,7 @@ const orchestration = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 're
 const publishing = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'publishing.md'), 'utf8');
 const invocationContracts = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'invocation-contracts.md'), 'utf8');
 const externalTrackers = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'external-trackers.md'), 'utf8');
+const readonlyGuidance = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'readonly-guidance.md'), 'utf8');
 const executorTemplate = fs.readFileSync(path.join(ROOT, 'scripts', '_exec-template.md'), 'utf8');
 const activeGuidance = [skill, orchestration, executorTemplate];
 
@@ -168,6 +169,16 @@ test('the invocation contracts reference is derived from the accepted synonyms a
   const grammar = publishedVerify.slice(publishedVerify.indexOf('`'), publishedVerify.lastIndexOf('`') + 1);
   assert.ok(grammar.length > 40, publishedVerify);
   assert.ok(invocationContracts.includes(grammar), `the reference does not carry the published grammar: ${grammar}`);
+});
+
+test('read-only report guidance preserves Sidequest review authority', () => {
+  assert.match(skill, /references\/readonly-guidance\.md/);
+  assert.match(readonlyGuidance, /existing readonly `review-audit` category/);
+  assert.match(readonlyGuidance, /immutable `reviewTarget`/);
+  assert.match(readonlyGuidance, /file and line, known ceiling, observable upgrade trigger, and replacement/);
+  assert.match(readonlyGuidance, /A missing ceiling or trigger is itself a finding/);
+  assert.match(readonlyGuidance, /Call a gain unmeasured unless a matched baseline/);
+  assert.match(readonlyGuidance, /routed report capability is unavailable/);
 });
 
 test('every implementation executor leaves candidate reviews to the orchestrator', () => {
