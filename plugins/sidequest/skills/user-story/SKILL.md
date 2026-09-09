@@ -21,9 +21,8 @@ it:
 loop and the worst implementer available, because its context is the scarcest resource in the system.
 Judging plans is its job. Writing and reviewing diffs is not.
 
-**The ceremony scales to the work.** A three-proposal design panel and a five-lens review are right
-for a subsystem that changes an on-disk format, and pure waste for a new CLI flag. You decide the
-size, you state it, and every step below reads off that decision.
+**The ceremony scales to the evidence.** A deterministic done-oracle is enough when it covers the
+contract. Add independent review only for a named untested seam or safety-sensitive risk.
 
 Board mechanics live in the `sidequest` skill (claim lifecycle, dispatch fields, routing, publish
 transaction) and its `references/`. Read `../sidequest/references/orchestration.md` before a first
@@ -51,8 +50,8 @@ Three sizes, and what each dial does at each:
 | Design | write the contract yourself | one planning or spike ticket when the approach is open | 2-3 competing proposals, judged and merged into one contract |
 | Backlog | one ticket, no story | story plus the wave's full backlog | story plus the full backlog for every wave, dependency-linked |
 | Execution | one executor | one parallel wave | wave after wave, re-planned between |
-| Review | the done-oracle | oracle plus one `review-audit` when the oracle is thin | a review panel with distinct lenses, by default |
-| Integration | integrate and close | integrate the wave, full suite once | integrate per wave, full suite per wave, decisions logged between |
+| Review | the done-oracle | a `review-audit` only for a named untested seam | a `review-audit` only where the contract names a seam it cannot test |
+| Integration | integrate and close | integrate the wave, one combined full gate | integrate per wave, one combined full gate per wave, decisions logged between |
 
 Escalate mid-flight when evidence says so. A spike that comes back reporting the seam is worse than
 expected raises the size; write that in the story log so the jump is on the record and not a vibe.
@@ -66,8 +65,11 @@ a planning ticket, or the ticket descriptions. It is the handoff from planning t
 second design process. Pin:
 
 - **Outcome and explicit non-goals**, so later work has a boundary to cut against.
-- **Smallest authority**, the source of truth or existing seam that decides behavior. Prefer deleting
-  competing ambiguous authorities or fallbacks over another heuristic layer.
+- **Smallest authority and intervention**, the actual call flow and source of truth that decide behavior.
+  Question whether a change is needed; reuse local code, stdlib, native features, or installed dependencies;
+  make one minimal shared-root fix. Prefer measured deletion over hypothetical guards, forced extractions,
+  and unrelated cleanup. Preserve validation at trust boundaries, data-loss prevention, accessibility,
+  permissions, and immutable candidate/review authority.
 - **Surgical boundaries**, the files each piece may change and every public surface it may expose or
   deliberately leave alone.
 - **A bounded executable done-oracle per piece**, the behavior it observes, and the named consumer or
@@ -266,21 +268,15 @@ How much review sits on top of that floor scales with the work:
 
 - **One ticket, deterministic oracle**: the oracle is the review. Adding a review pass to a passing
   deterministic verify buys nothing.
-- **One wave**: one `review-audit` ticket when the oracle is thin, when the change touches consumers
-  the wave did not test, or when a piece came back looking different from its contract.
-- **Multi-wave, or anything high-stakes**: a review panel is the default, not an upgrade. Parallel
-  `review-audit` tickets with deliberately distinct lenses, so they do not all find the same thing:
-  correctness and regression on existing consumers; **contract conformance**, meaning did the wave
-  actually build the surface the story pinned; security and data integrity; performance and resource
-  use; convention plus public-surface and docs accuracy.
+- **Named uncertainty or safety-sensitive seam**: add a `review-audit` only when the done-oracle
+  cannot exercise a stated seam, such as a consumer the wave did not test. The contract names the
+  seam and the review mandate. A safety-sensitive contract can make that review required.
 
-Give reviewers an adversarial mandate: try to break it, name the failing input or the broken consumer,
-and default to "not proven" when uncertain. A verdict of "looks good" with no evidence is not a review
-pass, and treating it as one is worse than not having run it. Review verifies the pinned contract and
-its oracle, never silently expands the active feature. Route unrelated concerns into separately
-prioritized tickets; they block this ship only when the contract or a proven regression requires it.
-Findings that do block ship become fix tickets, and their verdicts land as comments starting
-`reviewed-by:`.
+Give reviewers an adversarial mandate: try to break the named seam, identify the failing input or
+broken consumer, and record evidence. Review verifies the pinned contract and its oracle, never silently
+expands the active feature. Route unrelated concerns into separately prioritized tickets; they block this
+ship only when the contract or a proven regression requires it. Findings that do block ship become fix
+tickets, and their verdicts land as comments starting `reviewed-by:`.
 
 After two independently rejected candidates in one defect chain, stop local patching. Re-plan, narrow
 the contract, or replace the authority or architecture before another candidate. Involve the user when
@@ -312,21 +308,21 @@ Same beats, different owner for each, and every one of them sized:
 | Ask, then wait, per ambiguity | one batched round for contract-changing calls only |
 | Three architect agents, always, then pick one | a panel when the approach is contested, and the winner gets merged with the runners-up |
 | Orchestrator implements the chosen design | story, full backlog, one or many parallel waves |
-| Three reviewer agents on the finished diff, always | oracle at the floor, a lens-partitioned `review-audit` panel where the risk earns it |
+| Three reviewer agents on the finished diff, always | done-oracle, plus a `review-audit` for a named untested seam |
 | Summary | integrate per wave, publish, docs, story decisions, report |
 
 ## Failure modes worth naming
 
 - **"I already have the context, I'll just write it."** The cheapest-looking move in the moment and
   the most expensive over the feature. Loaded context is not a reason to inline.
-- **One size for everything.** A panel and a five-lens review on a new flag is theater; the oracle
-  alone on a format migration is negligence. Both are the same mistake.
+- **One size for everything.** A blanket review panel on a new flag is theater; an untested seam on a
+  format migration needs named scrutiny. Both are the same mistake.
 - **A panel that picks a winner and discards the rest.** Merge, or do not run the panel.
 - **Reading the whole subsystem before filing anything.** Recon has a stopping condition: the contract
   is writable.
 - **A backlog that grows one ticket at a time.** Nobody can steer a plan they cannot see.
 - **Polling.** Pulses, worktree peeks, or a shell loop waiting on an executor. Reports arrive on their
   own.
-- **Re-reviewing the wave's diffs yourself.** That is what the verify command and the review panel are
-  for.
+- **Re-reviewing the wave's diffs yourself.** That is what the verify command and a contract-required
+  review ticket are for.
 - **Shipping without the docs decision.** Cheap while the backlog is open, annoying at ship time.

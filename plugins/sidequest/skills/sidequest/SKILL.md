@@ -49,11 +49,14 @@ For substantial work:
    sequential/shared-design work together; size shards by items and verify cost.
 4. **Execute proportionally** — "Route execution down" below.
 
-Complexity 4+ needs scope, anchors, and a scoped verify; full suite runs once on the merged tree.
-Write the verify in POSIX shell; on Windows the capture runs it through Git Bash when present and records the shell it used.
-A passing executable done-oracle needs no review-audit + fix wave unless it lacks determinism or is high-stakes. **Blocked-step invariant:** when a review,
-investigation, or verification awaits a ticket, every dependent action stays blocked until it closes;
-direct PRs, skill flows, manual apply, or any alternate route are the same violation as inline work.
+Plan the smallest intervention: trace the actual call flow, question whether a change is necessary, reuse
+local code, the standard library, native platform features, or installed dependencies, then fix the
+shared root once. Prefer measured deletion. Do not add hypothetical guards, compulsory extractions, or
+unrelated cleanup. Keep trust-boundary validation, data-loss prevention, accessibility, permission
+controls, and immutable candidate/review authorities.
+
+Complexity 4+ needs scope, anchors, and a scoped verify; the merged tree runs the full suite once.
+
 The board keeps plans. Before solo-fit or filing, do a stated one-line `.gitignore` entry or other mechanical edit to 1–2 named files inline; don't ticket or spawn it. Bounded recon (`Read`, `Glob`, `Grep` on named anchors, one narrow sweep) stays inline; unfamiliar paths or deep investigation go through the live taxonomy.
 
 ### INLINE-SAFE direct work

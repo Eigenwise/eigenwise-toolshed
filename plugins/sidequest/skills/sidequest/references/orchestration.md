@@ -158,10 +158,10 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   verification output there. Tickets with no declared scope never mechanically conflict, so eyeball whether
   they'd edit the same files before parallelizing them.
 - **Integrate and verify by wave.** Each executor runs its scoped verification before submission.
-  When the quiet wave lands, read each submit report, run each ticket's exact verify command, then run the
-  full suite once for the combined wave. On green, integrate. The oracle is the review: never open source
-  or inspect diffs to re-review executor work. When the stakes need human-grade review, dispatch a
-  `review-audit` for the affected files; do not turn the orchestrator into the reviewer.
+  When the quiet wave lands, read each submit report, then run one combined full gate for the wave. On
+  green, integrate. The oracle is the review: never open source or inspect diffs to re-review executor
+  work. When a named safety-sensitive seam needs independent scrutiny, dispatch a `review-audit` for that
+  seam; do not turn the orchestrator into the reviewer.
 - **Executor prompts stay lean and cannot narrow the ticket**: add only the ref, worker id, claim/done commands, stamped effort/model, and logistics the ticket does not carry. The ticket contract is authoritative and must travel in full, unchanged scope. If the plan changed, update the ticket before dispatching. **Anti-pattern: dispatch narrower than ticket.** In a sample ticket, the ticket required extracting the done block across every lesson route and two commits, while the dispatch limited work to intervals as a reference. The executor bounced correctly, then the orchestrator had to re-plan. Never create that contradiction.
 - **Read bounded briefing comments from the newest end.** A brief can carry a compact newest-first comment packet instead of the full thread. Read compact `comments` pages first, following their cursor only when needed. Read the full chronological thread only when the brief flags a decision or constraint in omitted history; otherwise the latest packet and compact pages carry the current handoff.
 - **Resume Continuation checkpoints with a fresh dispatch.** Executors create a Continuation checkpoint around 100 tool rounds by committing verified declared-scope work, writing a `Continuation checkpoint` comment with the commit, files touched, next steps, and verification state, then releasing to `todo`. On a natural wakeup, use `pulse` and the latest comment to confirm that header, commit, and no live claim. Read the checkpoint before `dispatch <ref>`, then spawn its returned continuation unchanged so it gets a fresh token and context. The dispatch validates the registered retained worktree against the repository before carrying it forward, replays a retained checkpoint onto an advanced integration target, and reports its exact Git validation evidence if it must fall back. A rebase conflict stops the executor for escalation, without resetting the retained checkpoint or resolving toward either side. A live claim means the checkpoint has not completed, so do not launch beside it; use the normal salvage path if that worker stopped.
@@ -258,10 +258,10 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 ## Bookend supervision
 
 After dispatch, leave a ticket alone until it submits: no pulse, comment read, worktree peek, or proxy
-waiting. At integration, read the submit report, run the ticket's verify command and the wave seam check
-(full suite once per wave), then integrate on green. The executable oracle is the review, so do not open
-source or inspect diffs to re-review executor work. File a separately routed `review-audit` only when the
-stakes need human-grade review.
+waiting. At integration, read the submit report and run the one combined full gate for the wave, then
+integrate on green. The executable oracle is the review, so do not open source or inspect diffs to
+re-review executor work. File a separately routed `review-audit` only when the contract names a
+safety-sensitive seam the oracle cannot exercise.
 
 ### Candidate-addressed review binding
 

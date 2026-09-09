@@ -124,13 +124,14 @@ test('profile get is a supported CLI action and unknown actions fail', () => {
   assert.match(unknown.stderr, /profile: unknown action/);
 });
 
-test('only high-stakes briefings require expanded verification', () => {
+test('only high-stakes briefings add proportional safety guidance', () => {
   const basic = agentsync.renderTicketBriefing({ ref: 'SQ-basic', title: 'Basic', category: {}, model: 'sonnet', effort: 'medium' }, 'basic-token');
   const high = agentsync.renderTicketBriefing({ ref: 'SQ-high', title: 'High', category: {}, model: 'sonnet', effort: 'medium', highStakes: true }, 'high-token');
   assert.doesNotMatch(basic, /High-stakes verification/);
   assert.match(high, /High-stakes verification/);
-  assert.match(high, /EVERY consumer/);
-  assert.match(high, /review-audit pass is mandatory before integration/);
+  assert.match(high, /consumers and suites relevant to the stated risk/);
+  assert.match(high, /safety-sensitive contract names an untested seam/);
+  assert.doesNotMatch(high, /EVERY consumer|mandatory before integration/);
 });
 
 test('high-stakes integration warns until a review is recorded', async () => {
