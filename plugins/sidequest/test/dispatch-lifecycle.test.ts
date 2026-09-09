@@ -2349,84 +2349,168 @@ test('a dispatch records the configured local integration branch without an over
   }
 });
 
-test('auto worktree bases use local main when it is ahead, and origin-main remains an opt-out', () => {
+test('configured worktree bases apply to readonly isolated dispatches without changing current-tree defaults', () => {
   const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-worktree-base-'));
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-worktree-base-remote-'));
   const executorParent = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-worktree-executor-'));
-  const executorWorktree = path.join(executorParent, 'executor');
-  let executorWorktreeAdded = false;
+  let worktreeSequence = 0;
   try {
     execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: repository });
     execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: repository });
     execFileSync('git', ['config', 'user.name', 'Dispatch Lifecycle Test'], { cwd: repository });
-    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = 1;\n');
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "origin";\n');
     execFileSync('git', ['add', 'tracked.js'], { cwd: repository });
-    execFileSync('git', ['commit', '--quiet', '-m', 'remote base'], { cwd: repository });
+    execFileSync('git', ['commit', '--quiet', '-m', 'origin sentinel'], { cwd: repository });
     execFileSync('git', ['init', '-b', 'main', '--bare', remote], { windowsHide: true });
     execFileSync('git', ['remote', 'add', 'origin', remote], { cwd: repository });
     execFileSync('git', ['push', '--quiet', '-u', 'origin', 'main'], { cwd: repository });
     const originMain = execFileSync('git', ['rev-parse', 'origin/main'], { cwd: repository, encoding: 'utf8' }).trim();
-    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = 2;\n');
-    execFileSync('git', ['commit', '--quiet', '-am', 'local-only main'], { cwd: repository });
+
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "local";\n');
+    execFileSync('git', ['commit', '--quiet', '-am', 'local sentinel'], { cwd: repository });
     const localMain = execFileSync('git', ['rev-parse', 'main'], { cwd: repository, encoding: 'utf8' }).trim();
+
+    execFileSync('git', ['checkout', '--quiet', '-b', 'feature'], { cwd: repository });
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "feature";\n');
+    execFileSync('git', ['commit', '--quiet', '-am', 'feature sentinel'], { cwd: repository });
+    const featureHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim();
+
+    execFileSync('git', ['checkout', '--quiet', '-b', 'candidate'], { cwd: repository });
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "candidate";\n');
+    execFileSync('git', ['commit', '--quiet', '-am', 'candidate sentinel'], { cwd: repository });
+    const candidateCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim();
+    execFileSync('git', ['checkout', '--quiet', 'feature'], { cwd: repository });
+
     const baseSlug = store.ensureProject(repository, 'dispatch worktree base').slug;
-
-    const defaultTicket = store.createTicket(baseSlug, { title: 'default worktree base', category: 'dispatch.lifecycle', files: ['tracked.js'] });
-    const defaultDispatch = store.prepareDispatch(baseSlug, defaultTicket.ref, { sessionId: 'default-worktree-base' });
-    assert.equal(defaultDispatch.ticket.dispatch.baseCommit, localMain);
-    assert.deepEqual(defaultDispatch.ticket.dispatch.integrationTarget, { mode: 'local', upstream: 'main', branch: 'main' });
-    assert.deepEqual(defaultDispatch.warnings, ['Local main is 1 commit ahead of origin/main; isolated worktrees will fork local main.']);
-    assert.deepEqual(defaultDispatch.ticket.dispatch.localAheadWarning, {
-      count: 1,
-      message: 'Local main is 1 commit ahead of origin/main; isolated worktrees will fork local main.',
-    });
-
-    execFileSync('git', ['worktree', 'add', '--quiet', '-b', `executor-${Date.now()}`, executorWorktree, defaultDispatch.ticket.dispatch.baseCommit], { cwd: repository });
-    executorWorktreeAdded = true;
-    assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: executorWorktree, encoding: 'utf8' }).trim(), localMain);
-    fs.appendFileSync(path.join(executorWorktree, 'tracked.js'), 'module.exports = 3;\n');
-    execFileSync('git', ['commit', '--quiet', '-am', 'executor work'], { cwd: executorWorktree });
-    const executorCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: executorWorktree, encoding: 'utf8' }).trim();
-    const gitRef = `refs/sidequest/${defaultTicket.ref}`;
-    execFileSync('git', ['update-ref', gitRef, executorCommit], { cwd: executorWorktree });
-    const submissionFacts = collectGitSubmissionFacts({
-      slug: baseSlug,
-      ticket: defaultDispatch.ticket,
-      root: executorWorktree,
-      commit: executorCommit,
-      gitRef,
-    });
-    assert.equal(submissionFacts.range.ok, true);
-    assert.equal(submissionFacts.range.base, localMain);
-    assert.equal(submissionFacts.range.upstream, 'main');
-    execFileSync('git', ['worktree', 'remove', '--force', executorWorktree], { cwd: repository });
-    executorWorktreeAdded = false;
-
-    store.setBoardConfig(baseSlug, { worktreeBase: 'origin-main' });
-    const remoteTicket = store.createTicket(baseSlug, { title: 'remote worktree base', category: 'dispatch.lifecycle', files: ['tracked.js'] });
-    const remoteDispatch = store.prepareDispatch(baseSlug, remoteTicket.ref, { sessionId: 'remote-worktree-base' });
-    assert.equal(remoteDispatch.ticket.dispatch.baseCommit, originMain);
-    assert.deepEqual(remoteDispatch.ticket.dispatch.integrationTarget, { mode: 'remote', upstream: 'origin/main', branch: 'main' });
-    assert.deepEqual(remoteDispatch.warnings, ['Local main is 1 commit ahead of origin/main; isolated worktrees will fork origin/main.']);
+    const localTarget = { mode: 'local', upstream: 'main', branch: 'main' };
+    const remoteTarget = { mode: 'remote', upstream: 'origin/main', branch: 'main' };
+    const assertCreatedWorktree = (dispatch: { ticket: { dispatch: { baseCommit: string } } }, expectedBase: string) => {
+      const worktree = path.join(executorParent, `executor-${worktreeSequence++}`);
+      execFileSync('git', ['worktree', 'add', '--quiet', '--detach', worktree, dispatch.ticket.dispatch.baseCommit], { cwd: repository });
+      try {
+        assert.equal(dispatch.ticket.dispatch.baseCommit, expectedBase);
+        assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8' }).trim(), expectedBase);
+      } finally {
+        execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: repository, windowsHide: true });
+      }
+    };
+    const prepare = (title: string, category: string, expectedBase: string, options: Record<string, unknown> = {}) => {
+      const ticket = store.createTicket(baseSlug, { title, category, files: ['tracked.js'] });
+      const dispatch = store.prepareDispatch(baseSlug, ticket.ref, { sessionId: `${title}-${Date.now()}-${worktreeSequence}`, ...options });
+      assertCreatedWorktree(dispatch, expectedBase);
+      return dispatch;
+    };
 
     store.setBoardConfig(baseSlug, { worktreeBase: 'local-main' });
-    const localTicket = store.createTicket(baseSlug, { title: 'local worktree base', category: 'dispatch.lifecycle', files: ['tracked.js'] });
-    const localDispatch = store.prepareDispatch(baseSlug, localTicket.ref, { sessionId: 'local-worktree-base' });
-    assert.equal(localDispatch.ticket.dispatch.baseCommit, localMain);
-    assert.deepEqual(localDispatch.ticket.dispatch.integrationTarget, { mode: 'local', upstream: 'main', branch: 'main' });
+    const writerLocal = prepare('writer configured local main', 'dispatch.lifecycle', localMain);
+    assert.deepEqual(writerLocal.ticket.dispatch.integrationTarget, localTarget);
+    const submissionWorktree = path.join(executorParent, `submission-${worktreeSequence++}`);
+    execFileSync('git', ['worktree', 'add', '--quiet', '-b', `submission-${Date.now()}`, submissionWorktree, writerLocal.ticket.dispatch.baseCommit], { cwd: repository });
+    try {
+      fs.appendFileSync(path.join(submissionWorktree, 'tracked.js'), 'module.exports = "submission";\n');
+      execFileSync('git', ['commit', '--quiet', '-am', 'submission sentinel'], { cwd: submissionWorktree });
+      const submissionCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: submissionWorktree, encoding: 'utf8' }).trim();
+      const gitRef = `refs/sidequest/${writerLocal.ticket.ref}`;
+      execFileSync('git', ['update-ref', gitRef, submissionCommit], { cwd: submissionWorktree });
+      const submissionFacts = collectGitSubmissionFacts({
+        slug: baseSlug,
+        ticket: writerLocal.ticket,
+        root: submissionWorktree,
+        commit: submissionCommit,
+        gitRef,
+      });
+      assert.equal(submissionFacts.range.ok, true);
+      assert.equal(submissionFacts.range.base, localMain);
+      assert.equal(submissionFacts.range.upstream, 'main');
+    } finally {
+      execFileSync('git', ['worktree', 'remove', '--force', submissionWorktree], { cwd: repository, windowsHide: true });
+    }
+    const readonlyLocal = prepare('readonly configured local main', 'research', localMain);
+    assert.deepEqual(readonlyLocal.ticket.dispatch.integrationTarget, localTarget);
+
+    store.setBoardConfig(baseSlug, { worktreeBase: 'origin-main' });
+    const writerRemote = prepare('writer configured origin main', 'dispatch.lifecycle', originMain);
+    assert.deepEqual(writerRemote.ticket.dispatch.integrationTarget, remoteTarget);
+    const readonlyRemote = prepare('readonly configured origin main', 'research', originMain);
+    assert.deepEqual(readonlyRemote.ticket.dispatch.integrationTarget, remoteTarget);
+
+    store.setBoardConfig(baseSlug, { worktreeBase: 'auto' });
+    const writerAuto = prepare('writer auto worktree base', 'dispatch.lifecycle', localMain);
+    assert.deepEqual(writerAuto.ticket.dispatch.integrationTarget, localTarget);
+    const readonlyAuto = prepare('readonly auto worktree base', 'research', featureHead);
+    assert.equal(readonlyAuto.ticket.dispatch.integrationTarget, undefined);
+
+    store.setBoardConfig(baseSlug, { worktreeBase: 'origin-main' });
+    const writerExplicitLocal = prepare('writer explicit local override', 'dispatch.lifecycle', localMain, { integrationMode: 'local' });
+    assert.deepEqual(writerExplicitLocal.ticket.dispatch.integrationTarget, localTarget);
+    const readonlyExplicitLocal = prepare('readonly explicit local override', 'research', localMain, { integrationMode: 'local' });
+    assert.deepEqual(readonlyExplicitLocal.ticket.dispatch.integrationTarget, localTarget);
+
+    store.setBoardConfig(baseSlug, { worktreeBase: 'local-main' });
+    const writerExplicitRemote = prepare('writer explicit remote override', 'dispatch.lifecycle', originMain, { integrationMode: 'remote' });
+    assert.deepEqual(writerExplicitRemote.ticket.dispatch.integrationTarget, remoteTarget);
+    const readonlyExplicitRemote = prepare('readonly explicit remote override', 'research', originMain, { integrationMode: 'remote' });
+    assert.deepEqual(readonlyExplicitRemote.ticket.dispatch.integrationTarget, remoteTarget);
 
     execFileSync('git', ['push', '--quiet', 'origin', 'main'], { cwd: repository });
     store.setBoardConfig(baseSlug, { worktreeBase: 'auto' });
-    const syncedTicket = store.createTicket(baseSlug, { title: 'in-sync worktree base', category: 'dispatch.lifecycle', files: ['tracked.js'] });
-    const syncedDispatch = store.prepareDispatch(baseSlug, syncedTicket.ref, { sessionId: 'synced-worktree-base' });
-    assert.equal(syncedDispatch.ticket.dispatch.baseCommit, localMain);
-    assert.deepEqual(syncedDispatch.ticket.dispatch.integrationTarget, { mode: 'remote', upstream: 'origin/main', branch: 'main' });
-    assert.equal(syncedDispatch.warnings, undefined);
-    assert.equal(syncedDispatch.ticket.dispatch.localAheadWarning, undefined);
+    const writerAutoSynced = prepare('writer auto synced worktree base', 'dispatch.lifecycle', localMain);
+    assert.deepEqual(writerAutoSynced.ticket.dispatch.integrationTarget, remoteTarget);
+
+    const sharedArtifact = store.createTicket(baseSlug, {
+      title: 'shared tree artifact keeps checkout base',
+      description: 'Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.',
+      category: 'codebase-exploration',
+      files: ['.claude/.codebase-info'],
+    });
+    const sharedArtifactDispatch = store.prepareDispatch(baseSlug, sharedArtifact.ref, { sessionId: 'shared-tree-artifact-base', sharedTree: true, runtimeCwd: repository });
+    assertCreatedWorktree(sharedArtifactDispatch, featureHead);
+    assert.equal(sharedArtifactDispatch.ticket.dispatch.artifactMode, true);
+    assert.equal(sharedArtifactDispatch.ticket.dispatch.integrationTarget, undefined);
+
+    const source = store.createTicket(baseSlug, { title: 'candidate source', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    const terminalAt = new Date().toISOString();
+    Object.assign(source, {
+      status: 'doing',
+      claim: null,
+      dispatch: {
+        terminalAt,
+        outcome: 'submitted',
+        agentId: 'candidate-source-agent',
+        attempts: [{ outcome: 'submitted', commit: candidateCommit, agentId: 'candidate-source-agent', terminalAt }],
+      },
+      submission: {
+        by: 'candidate-source-worker',
+        at: terminalAt,
+        commit: candidateCommit,
+        verify: 'manual: synthetic candidate',
+        changedPaths: ['tracked.js'],
+        integratedAt: null,
+      },
+    });
+    const db = require('../lib/db.js');
+    db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
+      id: source.id,
+      project: baseSlug,
+      ref: source.ref,
+      status: source.status,
+      archived: 0,
+      ord: source.order,
+      claim_by: null,
+      data: source,
+    });
+    const candidateReview = store.createTicket(
+      baseSlug,
+      { title: 'candidate base wins over configured and explicit target', category: 'review-audit', files: ['tracked.js'] },
+      { ref: source.ref, commit: candidateCommit },
+    );
+    const candidateReviewDispatch = store.prepareDispatch(baseSlug, candidateReview.ref, {
+      sessionId: 'candidate-review-base',
+      integrationMode: 'remote',
+    });
+    assertCreatedWorktree(candidateReviewDispatch, candidateCommit);
+    assert.deepEqual(candidateReviewDispatch.ticket.dispatch.integrationTarget, remoteTarget);
   } finally {
-    if (executorWorktreeAdded) {
-      try { execFileSync('git', ['worktree', 'remove', '--force', executorWorktree], { cwd: repository, windowsHide: true }); } catch (_) {}
-    }
     fs.rmSync(repository, { recursive: true, force: true });
     fs.rmSync(remote, { recursive: true, force: true });
     fs.rmSync(executorParent, { recursive: true, force: true });

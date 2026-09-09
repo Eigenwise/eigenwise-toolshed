@@ -255,6 +255,10 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 - Parallelism costs tokens and orchestration overhead — a couple of parallel investigations or an
   executor wave where sizes justify it, not a swarm for everything.
 
+## Worktree base selection
+
+For an isolated repository dispatch, a configured `worktreeBase` of `local-main` or `origin-main` selects that base for read-only and writer tickets alike. `auto` intentionally keeps a read-only ticket on the checkout that prepared it; writers retain automatic integration-target selection. An explicit local or remote dispatch target overrides the board setting. Shared-tree artifacts and non-repository output stay on the current tree. A bound Git review candidate overrides every configured or explicit integration target.
+
 ## Bookend supervision
 
 After dispatch, leave a ticket alone until it submits: no pulse, comment read, worktree peek, or proxy
