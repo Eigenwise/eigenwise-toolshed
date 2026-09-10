@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.548.0 (2026-09-10)
+
+### sidequest 5.1.1 → 5.1.2
+
+#### Fixes
+
+- Validate sibling delivery integrity (SQ-2670)
+  Refuse a working-tree delivery closeout when a completed sibling's recorded handoff no longer matches the shared checkout.
+
 ## v3.547.0 (2026-09-10)
 
 ### model-gateway 0.50.14 → 0.50.15
