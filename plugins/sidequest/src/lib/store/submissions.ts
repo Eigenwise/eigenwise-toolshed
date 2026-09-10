@@ -10,7 +10,7 @@ const { isInScope, scopedPaths } = require('../scope-match');
 import type { VerificationResult } from '../kernel/verification.js';
 
 function createSubmissions(dependencies: any) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
 
 const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
@@ -823,7 +823,7 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
   const project = readMeta(slug);
   let integrationBranch: string | undefined;
   try {
-    integrationBranch = String(integrationTarget(slug)?.branch || '').trim() || undefined;
+    integrationBranch = String(ticketIntegrationTarget(slug, ticket)?.branch || '').trim() || undefined;
   } catch {
     integrationBranch = undefined;
   }
@@ -1024,7 +1024,7 @@ function postMergeVerificationFailure(slug: any, ticket: any, verify: any, repo:
 }
 
 function submissionUsesGit(ticket?: any) {
-  return !isArtifactSubmission(ticket?.submission) || ticket.submission.projectCapabilities?.git !== false;
+  return !isArtifactSubmission(ticket?.submission);
 }
 
 function integrateArtifactSubmission(slug: any, ticket: any, opts?: any) {
@@ -1466,8 +1466,13 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
   }
   const project = readMeta(slug);
   const repo = project?.path;
-  const target = opts.target;
-  if (!repo || !target || !target.branch) return { ok: false, reason: 'integration_target_unavailable', ticket };
+  let target: any;
+  try {
+    target = ticketIntegrationTarget(slug, ticket);
+  } catch (error: any) {
+    return { ok: false, reason: 'integration_target_unavailable', ticket, message: integrationGitError(error) };
+  }
+  if (!repo || !target?.branch) return { ok: false, reason: 'integration_target_unavailable', ticket };
   let lock: string;
   try {
     lock = deliveryLockPath(repo);
@@ -1559,7 +1564,14 @@ function integrateSubmissionWave(slug?: string, refs?: string | readonly string[
   }
   const project = readMeta(slug);
   const repo = project?.path;
-  const target = opts.target;
+  let target: any;
+  try {
+    const resolvedTargets = ticketIntegrationTargets(slug, assembled.tickets);
+    if (!resolvedTargets.ok) return Object.assign({ tickets: assembled.tickets }, resolvedTargets);
+    target = resolvedTargets.target;
+  } catch (error: any) {
+    return { ok: false, reason: 'integration_target_unavailable', tickets: assembled.tickets, message: integrationGitError(error) };
+  }
   if (!repo || !target?.branch) return { ok: false, reason: 'integration_target_unavailable', tickets: assembled.tickets };
   let lock: string;
   try {
@@ -1677,8 +1689,13 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
   const project = readMeta(slug);
   const repo = project?.path;
   const mode = normalizeDeliveryMode(opts.mode);
-  const target = opts.target;
-  if (!repo || !target || !target.branch) return { ok: false, reason: 'integration_target_unavailable', ticket };
+  let target: any;
+  try {
+    target = ticketIntegrationTarget(slug, ticket);
+  } catch (error: any) {
+    return { ok: false, reason: 'integration_target_unavailable', ticket, message: integrationGitError(error) };
+  }
+  if (!repo || !target?.branch) return { ok: false, reason: 'integration_target_unavailable', ticket };
   let checkoutState: string[];
   try {
     checkoutState = integrationTargetCheckoutState(repo);
@@ -2819,10 +2836,9 @@ function submissionWaveCandidate(ticket: any) {
   };
 }
 
-function currentIntegrationWaveBaseline(slug: any, fallback: any) {
+function currentIntegrationWaveBaseline(slug: any, fallback: any, target: any) {
   if (fallback?.revision?.source !== 'git') return fallback;
   const projectPath = String(readMeta(slug)?.path || '').trim();
-  const target = integrationTarget(slug);
   const commit = integrationTargetCommit(projectPath, target);
   return Object.freeze({
     revision: Object.freeze({ source: 'git', value: commit, observedAt: new Date().toISOString() }),
@@ -2864,6 +2880,16 @@ function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
   if (tickets.some((ticket) => !pendingSubmission(ticket))) {
     return { ok: false, reason: 'submitted_candidates_required', message: 'Wave assembly requires every participant to have a submitted candidate.' };
   }
+  let target: any = null;
+  if (tickets.some(submissionUsesGit)) {
+    try {
+      const resolvedTargets = ticketIntegrationTargets(slug, tickets);
+      if (!resolvedTargets.ok) return resolvedTargets;
+      target = resolvedTargets.target;
+    } catch (error: any) {
+      return { ok: false, reason: 'integration_target_unavailable', message: integrationGitError(error) };
+    }
+  }
   const waveId = String(opts?.waveId || `wave-${crypto.randomBytes(8).toString('hex')}`);
   const dependencies = opts?.dependencies && typeof opts.dependencies === 'object' ? opts.dependencies : {};
   const candidates = tickets.map(submissionWaveCandidate);
@@ -2884,7 +2910,7 @@ function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
   if (!firstCandidate) return { ok: false, reason: 'wave_baseline_required', message: 'Wave assembly requires a candidate baseline.' };
   const omittedPendingOverlaps = omittedPendingSubmissionOverlaps(slug, tickets);
   const opened = openWave({
-    baseline: currentIntegrationWaveBaseline(slug, firstCandidate.baseline),
+    baseline: currentIntegrationWaveBaseline(slug, firstCandidate.baseline, target),
     participants: tickets.map((ticket) => ({
       ref: ticket.ref,
       dependencies: Array.isArray(dependencies[ticket.ref]) ? dependencies[ticket.ref] : [],
@@ -2894,10 +2920,11 @@ function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
   if ('code' in opened) return { ok: false, reason: opened.code, message: opened.message };
   const decision = assembleWave(opened, waveCandidatesForBaseline(slug, waveCandidates, opened.baseline));
   if (!decision.ok) {
+    const deliveryTarget = target?.branch ? `ticket delivery target ${target.branch}` : 'the current integration target';
     return {
       ok: false,
       reason: 'wave_invalidated',
-      message: `Wave ${waveId} could not assemble at the current integration target. Submitted candidates remain parked with their existing verification evidence.`,
+      message: `Wave ${waveId} could not assemble at ${deliveryTarget}: assembled baseline ${opened.baseline.revision.source}:${opened.baseline.revision.value}; candidate baselines ${waveCandidates.map((candidate) => `${candidate.ref}=${candidate.baseline.revision.source}:${candidate.baseline.revision.value}`).join(', ')}. Submitted candidates remain parked with their existing verification evidence.`,
       invalidated: decision.invalidated,
       wave: { id: waveId, baseline: opened.baseline },
     };

@@ -266,7 +266,7 @@ const tools = [
         reducedAgentSchema: { type: "boolean", description: 'Omit name/mode; hook needs agent_id and permission_mode "bypassPermissions".' },
         allowRepeatFailure: { type: "boolean" },
         allowUnscoped: { type: "boolean", description: "Explicitly allow a write ticket with no declared file scope." },
-        integrationBranch: { type: "string" },
+        integrationBranch: { type: "string", description: "Ticket delivery target branch. Dispatch records it for submit, wave assembly, and integration even if the board target later changes." },
         recoveryEvidence: { type: "string", description: "Observed failure evidence. With claimHolder, executor, and worktree, recover that live isolated claim without releasing it." },
         claimHolder: { type: "string", description: "The exact by identity holding the live claim being recovered." },
         worktree: { type: "string", description: "The resumed executor's linked worktree path for live-claim recovery." },

@@ -141,7 +141,7 @@ async function cleanupDeliveredWorktree(slug: string, projectPath: string, ticke
     await worktrees.sweep(projectPath, tickets, {
       execute: true,
       currentPath: store.nearestRepoRoot(process.cwd()),
-      integrationTarget: store.integrationTarget(slug),
+      integrationTarget: store.ticketIntegrationTarget(slug, ticket),
       ticketRef: ticket.ref,
     });
   } catch (_) {
@@ -291,7 +291,7 @@ function collectGitSubmissionFacts(options: any) {
   let target: any = null;
   let targetFailure: any = null;
   try {
-    target = store.integrationTarget(slug, dispatchTarget || undefined);
+    target = store.ticketIntegrationTarget(slug, ticket);
   } catch (error: any) {
     const targetName = dispatchTarget && typeof dispatchTarget === 'object'
       ? String(dispatchTarget.upstream || dispatchTarget.branch || 'the recorded integration target')
@@ -581,7 +581,7 @@ const tools: ToolDefinition[] = [
         // Advance before sweeping: a local integration branch that just moved
         // makes this ticket's worktree reachable, which the sweep collects on.
         try {
-          const integrationTarget = store.integrationTarget(slug);
+          const integrationTarget = store.ticketIntegrationTarget(slug, res.ticket);
           res.integrationBranch = await worktrees.advanceIntegrationBranch(meta.path, {
             integrationTarget,
             submissionCommit: res.ticket.submission ? res.ticket.submission.commit : null,
@@ -997,11 +997,9 @@ const tools: ToolDefinition[] = [
             }]));
           }
         }
-        const target = groupUsesGit ? store.integrationTarget(slug) : undefined;
         const mode = args.mode == null ? store.boardConfig(slug).delivery : args.mode;
         const delivery = store.integrateSubmissionWave(slug, refs, {
           mode,
-          target,
           skipVerify: args.skipVerify === true,
           verificationWaiver: args.verificationWaiver,
         });
@@ -1043,7 +1041,7 @@ const tools: ToolDefinition[] = [
       let target: any = null;
       if (usesGit) {
         try {
-          target = store.integrationTarget(slug);
+          target = store.ticketIntegrationTarget(slug, ticket);
         } catch (error: any) {
           failures.push({
             reason: 'integration_target_unavailable',

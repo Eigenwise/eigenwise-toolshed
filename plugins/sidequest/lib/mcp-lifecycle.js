@@ -113,7 +113,7 @@ async function cleanupDeliveredWorktree(slug, projectPath, ticket, claimWasLive 
     await worktrees.sweep(projectPath, tickets, {
       execute: true,
       currentPath: store.nearestRepoRoot(process.cwd()),
-      integrationTarget: store.integrationTarget(slug),
+      integrationTarget: store.ticketIntegrationTarget(slug, ticket),
       ticketRef: ticket.ref
     });
   } catch (_) {
@@ -240,7 +240,7 @@ function collectGitSubmissionFacts(options) {
   let target = null;
   let targetFailure = null;
   try {
-    target = store.integrationTarget(slug, dispatchTarget || void 0);
+    target = store.ticketIntegrationTarget(slug, ticket);
   } catch (error) {
     const targetName = dispatchTarget && typeof dispatchTarget === "object" ? String(dispatchTarget.upstream || dispatchTarget.branch || "the recorded integration target") : String(dispatchTarget || "the configured integration target");
     targetFailure = { code: "integration_target_unavailable", message: `submit: refused ${ticket.ref}; ${boundedSubmissionText(error && error.message || String(error))}. Remedy: Fetch or recreate ${targetName}, then resubmit the preserved candidate.`, retryable: true };
@@ -499,7 +499,7 @@ const tools = [
       if (res.ok) closeDispatchExecutor(ticket);
       if (res.ok && args.integration) {
         try {
-          const integrationTarget = store.integrationTarget(slug);
+          const integrationTarget = store.ticketIntegrationTarget(slug, res.ticket);
           res.integrationBranch = await worktrees.advanceIntegrationBranch(meta.path, {
             integrationTarget,
             submissionCommit: res.ticket.submission ? res.ticket.submission.commit : null,
@@ -899,11 +899,9 @@ const tools = [
             }]));
           }
         }
-        const target2 = groupUsesGit ? store.integrationTarget(slug) : void 0;
         const mode2 = args.mode == null ? store.boardConfig(slug).delivery : args.mode;
         const delivery2 = store.integrateSubmissionWave(slug, refs, {
           mode: mode2,
-          target: target2,
           skipVerify: args.skipVerify === true,
           verificationWaiver: args.verificationWaiver
         });
@@ -945,7 +943,7 @@ const tools = [
       let target = null;
       if (usesGit) {
         try {
-          target = store.integrationTarget(slug);
+          target = store.ticketIntegrationTarget(slug, ticket);
         } catch (error) {
           failures.push({
             reason: "integration_target_unavailable",

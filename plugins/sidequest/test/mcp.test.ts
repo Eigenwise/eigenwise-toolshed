@@ -319,7 +319,8 @@ function prepareIsolatedWorktreeDispatch(project: string, primary: string, ticke
   const gitDirectoryValue = gitAt(worktree, ['rev-parse', '--git-dir']);
   const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
   createCheckoutInstanceMarker(gitDirectory);
-  assert.equal(store.completeDispatchWorktreeCreation(project, sessionId, worktree).ok, true);
+  const worktreeCompletion = store.completeDispatchWorktreeCreation(project, sessionId, worktree);
+  assert.equal(worktreeCompletion.ok, true, JSON.stringify(worktreeCompletion));
   assert.equal(store.claimTicket(project, ticket.ref, by, {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
@@ -2427,6 +2428,146 @@ test('MCP delivery closure keeps each prepared branch after the project target a
   assert.equal(store.getTicket(project, wrongDeliveryTicket.ref).status, 'todo');
 });
 
+async function submittedTargetCandidate(repository: string, project: string, targetBranch: string, file: string) {
+  gitAt(repository, ['switch', targetBranch]);
+  const ticket = store.createTicket(project, {
+    title: `recorded target ${file}`,
+    files: [file],
+    complexity: 3,
+    labels: ['direct-ok'],
+    complexityWhy: 'exercise dispatch, submit, and delivery against the target frozen for this ticket',
+  });
+  const by = `target-worker-${ticket.id}`;
+  const worktree = prepareIsolatedWorktreeDispatch(project, repository, ticket, by);
+  fs.writeFileSync(path.join(worktree, file), `${ticket.ref}\n`);
+  gitAt(worktree, ['add', '--', file]);
+  const committed = await callTool('commit', {
+    project, ref: ticket.ref, by, message: `commit ${file}`, worktree,
+  });
+  assert.ok(committed.commit, committed.message || committed.reason);
+  const gitRef = `refs/sidequest/${ticket.ref}`;
+  gitAt(worktree, ['update-ref', gitRef, committed.commit]);
+  const submitted = await callTool('submit', {
+    project,
+    ref: ticket.ref,
+    by,
+    commit: committed.commit,
+    gitRef,
+    worktree,
+    verify: 'manual: verified the isolated target fixture',
+    body: `Submitted ${file} for recorded-target delivery.`,
+  });
+  assert.equal(submitted.ok, true, submitted.message || submitted.reason);
+  return { ticket, by, worktree, commit: committed.commit };
+}
+
+function waivedDelivery(ref: string) {
+  return {
+    skipVerify: true,
+    verificationWaiver: {
+      authority: 'fixture release manager',
+      reason: 'the target routing fixture checks the delivery policy itself',
+      affectedGate: 'manual: verified the isolated target fixture',
+      scope: ref,
+    },
+  };
+}
+
+test('SQ-2638: dispatch-recorded targets govern submit, waves, MCP delivery, and mixed target refusal', async () => {
+  const repository = createGitWorktree();
+  gitAt(repository, ['switch', '-c', 'branch-a']);
+  gitAt(repository, ['push', '-u', 'origin', 'branch-a']);
+  gitAt(repository, ['branch', 'branch-b', 'main']);
+  const project = store.ensureProject(repository).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'branch-a' });
+
+  const single = await submittedTargetCandidate(repository, project, 'branch-a', 'single-target.js');
+  const branchBHead = gitAt(repository, ['rev-parse', 'branch-b']);
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'branch-b' });
+  gitAt(repository, ['switch', 'branch-a']);
+  const singleDelivery = await callTool('integrate', {
+    project,
+    ref: single.ticket.ref,
+    by: 'target-integrator',
+    mode: 'merge',
+    ...waivedDelivery(single.ticket.ref),
+  });
+  assert.equal(singleDelivery.ok, true, singleDelivery.message || singleDelivery.reason);
+  assert.equal(gitAt(repository, ['merge-base', '--is-ancestor', single.commit, 'branch-a']), '', 'the recorded branch receives the submitted candidate');
+  assert.equal(gitAt(repository, ['rev-parse', 'branch-b']), branchBHead, 'the changed board target stays untouched');
+
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'branch-a' });
+  const groupOne = await submittedTargetCandidate(repository, project, 'branch-a', 'group-one.js');
+  const groupTwo = await submittedTargetCandidate(repository, project, 'branch-a', 'group-two.js');
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'branch-b' });
+  gitAt(repository, ['switch', 'branch-a']);
+  const groupRefs = `${groupOne.ticket.ref},${groupTwo.ticket.ref}`;
+  const assembled = await callTool('integrate', {
+    project,
+    ref: groupRefs,
+    by: 'target-integrator',
+    wave: waivedDelivery(groupRefs),
+  });
+  assert.equal(assembled.ok, true, assembled.message || assembled.reason);
+  const groupDelivery = await callTool('integrate', {
+    project,
+    ref: groupRefs,
+    by: 'target-integrator',
+    mode: 'merge',
+    ...waivedDelivery(groupRefs),
+  });
+  assert.equal(groupDelivery.ok, true, groupDelivery.message || groupDelivery.reason);
+  assert.equal(gitAt(repository, ['merge-base', '--is-ancestor', groupOne.commit, 'branch-a']), '');
+  assert.equal(gitAt(repository, ['merge-base', '--is-ancestor', groupTwo.commit, 'branch-a']), '');
+
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'branch-a' });
+  const wrongCheckout = await submittedTargetCandidate(repository, project, 'branch-a', 'wrong-checkout.js');
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'branch-b' });
+  gitAt(repository, ['switch', 'branch-b']);
+  const wrongCheckoutDelivery = await callTool('integrate', {
+    project,
+    ref: wrongCheckout.ticket.ref,
+    by: 'target-integrator',
+    mode: 'merge',
+    ...waivedDelivery(wrongCheckout.ticket.ref),
+  });
+  assert.equal(wrongCheckoutDelivery.reason, 'branch_not_checked_out');
+  assert.match(wrongCheckoutDelivery.message, /branch-a must be checked out/);
+  const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
+  const cliRefusal = spawnSync(process.execPath, [cli, 'integrate', wrongCheckout.ticket.ref, '--project', repository, '--by', 'target-cli-integrator', '--mode', 'merge', '--skip-verify', '--waiver-authority', 'fixture release manager', '--waiver-reason', 'the target routing fixture checks the delivery policy itself', '--waiver-gate', 'manual: verified the isolated target fixture', '--waiver-scope', wrongCheckout.ticket.ref, '--json'], {
+    cwd: repository,
+    encoding: 'utf8',
+    windowsHide: true,
+    env: process.env,
+  });
+  assert.equal(cliRefusal.status, 1, cliRefusal.stdout + cliRefusal.stderr);
+  assert.equal(JSON.parse(cliRefusal.stdout).reason, 'branch_not_checked_out');
+
+  const modeRepository = createGitWorktree();
+  gitAt(modeRepository, ['switch', '-c', 'branch-a']);
+  gitAt(modeRepository, ['push', '-u', 'origin', 'branch-a']);
+  gitAt(modeRepository, ['branch', 'branch-b', 'main']);
+  const modeProject = store.ensureProject(modeRepository).slug;
+  store.setBoardConfig(modeProject, { integrationMode: 'local', integrationBranch: 'branch-a' });
+  const localTarget = await submittedTargetCandidate(modeRepository, modeProject, 'branch-a', 'local-mode.js');
+  store.setBoardConfig(modeProject, { integrationMode: 'remote', integrationBranch: 'branch-a' });
+  const remoteTarget = await submittedTargetCandidate(modeRepository, modeProject, 'branch-a', 'remote-mode.js');
+  const branchAHead = gitAt(modeRepository, ['rev-parse', 'branch-a']);
+  const branchBHeadBeforeMixed = gitAt(modeRepository, ['rev-parse', 'branch-b']);
+  const mixedRefs = `${localTarget.ticket.ref},${remoteTarget.ticket.ref}`;
+  const mixed = await callTool('integrate', {
+    project: modeProject,
+    ref: mixedRefs,
+    by: 'target-integrator',
+    wave: waivedDelivery(mixedRefs),
+  });
+  assert.equal(mixed.reason, 'integration_target_mismatch');
+  assert.match(mixed.message, new RegExp(`${localTarget.ticket.ref}=local:branch-a`));
+  assert.match(mixed.message, new RegExp(`${remoteTarget.ticket.ref}=remote:origin/branch-a`));
+  assert.equal(gitAt(modeRepository, ['rev-parse', 'branch-a']), branchAHead, 'mixed assembly does not move the local target');
+  assert.equal(gitAt(modeRepository, ['rev-parse', 'branch-b']), branchBHeadBeforeMixed, 'mixed assembly does not move another checkout');
+});
+
 test('SQ-2434: MCP delivery closure accepts local main ahead of origin and records upstream reachability', async () => {
   const worktree = createGitWorktree();
   const project = store.ensureProject(worktree).slug;
@@ -3242,6 +3383,85 @@ test('MCP resolves a persisted filesystem-snapshot adapter without runtime regis
   const integrated = await callTool('integrate', { project, ref: ticket.ref, by: 'mcp-persisted-source-publisher' });
   assert.equal(integrated.ok, true, integrated.message || integrated.reason);
   assert.equal(integrated.delivery.mode, 'source-revision');
+});
+
+test('SQ-2655: MCP preserves non-Git invalidated waves and matching controls', async () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-source-wave-baselines-'));
+  const project = store.ensureProject(projectPath).slug;
+
+  async function submitSnapshotTicket(ticket: any, by: string, revision: any, surface: string) {
+    const submitted = await callTool('submit', {
+      project,
+      ref: ticket.ref,
+      by,
+      sourceRevision: revision,
+      changedSurfaces: [surface],
+      projectCapabilities: { process: false, worktree: false, review: true },
+      verify: `attestation: ${revision.value} | reviewer approved the immutable filesystem snapshot | source and snapshot value matched`,
+      body: `Reviewed ${surface}.`,
+    });
+    assert.equal(submitted.ok, true, submitted.message || submitted.reason);
+  }
+
+  function snapshotTicket(title: string, surface: string) {
+    return store.createTicket(project, {
+      title,
+      files: [surface],
+      complexity: 2,
+      complexityWhy: 'exercise persisted filesystem snapshot wave baseline handling through MCP',
+      executorVerifyKind: 'attestation',
+      executorAttestationArtifact: 'filesystem snapshot reviewed',
+      labels: ['direct-ok'],
+    });
+  }
+
+  const matchingFirst = snapshotTicket('matching first snapshot', 'wiki/matching-first.md');
+  const matchingSecond = snapshotTicket('matching second snapshot', 'wiki/matching-second.md');
+  claimDispatchedTicket(project, matchingFirst, 'mcp-matching-first-worker', true);
+  claimDispatchedTicket(project, matchingSecond, 'mcp-matching-second-worker', true);
+  fs.mkdirSync(path.join(projectPath, 'wiki'), { recursive: true });
+  fs.writeFileSync(path.join(projectPath, 'wiki', 'matching-first.md'), 'matching first\n');
+  fs.writeFileSync(path.join(projectPath, 'wiki', 'matching-second.md'), 'matching second\n');
+  const matchingRevision = sourceRevisionCapability.filesystemSnapshotRevision(projectPath);
+  assert.ok(matchingRevision);
+  await submitSnapshotTicket(matchingFirst, 'mcp-matching-first-worker', matchingRevision, 'wiki/matching-first.md');
+  await submitSnapshotTicket(matchingSecond, 'mcp-matching-second-worker', matchingRevision, 'wiki/matching-second.md');
+  const matchingWave = await callTool('integrate', {
+    project,
+    ref: `${matchingFirst.ref},${matchingSecond.ref}`,
+    by: 'mcp-source-wave-integrator',
+    wave: { verification: store.getTicket(project, matchingFirst.ref).submission.verificationResult },
+  });
+  assert.equal(matchingWave.ok, true, matchingWave.message || matchingWave.reason);
+  assert.equal(matchingWave.action, 'wave_assembled');
+
+  const earlierBaseline = snapshotTicket('earlier source baseline', 'wiki/earlier.md');
+  claimDispatchedTicket(project, earlierBaseline, 'mcp-earlier-baseline-worker', true);
+  fs.writeFileSync(path.join(projectPath, 'wiki', 'earlier.md'), 'earlier\n');
+  const laterBaseline = snapshotTicket('later source baseline', 'wiki/later.md');
+  claimDispatchedTicket(project, laterBaseline, 'mcp-later-baseline-worker', true);
+  fs.writeFileSync(path.join(projectPath, 'wiki', 'later.md'), 'later\n');
+  const mismatchedRevision = sourceRevisionCapability.filesystemSnapshotRevision(projectPath);
+  assert.ok(mismatchedRevision);
+  await submitSnapshotTicket(earlierBaseline, 'mcp-earlier-baseline-worker', mismatchedRevision, 'wiki/earlier.md');
+  await submitSnapshotTicket(laterBaseline, 'mcp-later-baseline-worker', mismatchedRevision, 'wiki/later.md');
+  const submittedRevisions = [earlierBaseline, laterBaseline].map((ticket) => store.getTicket(project, ticket.ref).submission.sourceRevision);
+
+  const invalidatedWave = await callTool('integrate', {
+    project,
+    ref: `${earlierBaseline.ref},${laterBaseline.ref}`,
+    by: 'mcp-source-wave-integrator',
+    wave: { verification: store.getTicket(project, earlierBaseline.ref).submission.verificationResult },
+  });
+  assert.equal(invalidatedWave.ok, false);
+  assert.equal(invalidatedWave.action, 'wave_assembly_refused');
+  assert.equal(invalidatedWave.reason, 'wave_invalidated');
+  assert.match(invalidatedWave.message, /current integration target/);
+  assert.deepEqual([earlierBaseline, laterBaseline].map((ticket) => store.getTicket(project, ticket.ref).submission.sourceRevision), submittedRevisions);
+  assert.equal(fs.readFileSync(path.join(projectPath, 'wiki', 'earlier.md'), 'utf8'), 'earlier\n');
+  assert.equal(fs.readFileSync(path.join(projectPath, 'wiki', 'later.md'), 'utf8'), 'later\n');
+  assert.equal(store.getTicket(project, earlierBaseline.ref).submission.integration, undefined);
+  assert.equal(store.getTicket(project, laterBaseline.ref).submission.integration, undefined);
 });
 
 test('MCP submit requires exactly one revision identity', async () => {
