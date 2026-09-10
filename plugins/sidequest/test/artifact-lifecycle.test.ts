@@ -105,6 +105,30 @@ function commitProjectFile(relativePath: string, body: string) {
   execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', `commit ${relativePath}`], { cwd: PROJECT, windowsHide: true });
 }
 
+function workingTreeDelivery(title: string, files: string[], by: string, sessionId?: string) {
+  const created = store.createTicket(slug, {
+    title,
+    description: 'Leave the declared paths uncommitted in the shared checkout.',
+    category: 'repository-write',
+    files,
+    workingTreeDelivery: true,
+    executorVerifyKind: 'document',
+    executorVerify: 'Read the declared document.',
+    source: 'mcp',
+  });
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true, ...(sessionId ? { sessionId } : {}) });
+  const claimed = claim(prepared, by);
+  assert.strictEqual(claimed.ok, true, JSON.stringify(claimed));
+  return created;
+}
+
+function closeWorkingTreeDelivery(created: any, by: string) {
+  return store.completeTicket(slug, created.ref, by, {
+    source: 'mcp',
+    verify: 'Read the declared document.',
+  });
+}
+
 function preparedArtifact(title: string, by: string) {
   const created = ticket(title, store.SHARED_TREE_ARTIFACT_MARKER);
   const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
@@ -324,6 +348,199 @@ test('a shared-tree working-tree deliverable closes with its scoped paths and pi
   assert.deepStrictEqual(done.ticket.completion.workingTree.changedPaths, ['.claude/.codebase-info/working-tree.md']);
   assert.strictEqual(done.ticket.completion.workingTree.candidate.source, 'working-tree');
   assert.strictEqual(done.ticket.completion.workingTree.verification.status, 'passed');
+});
+
+test('same-session disjoint shared-tree deliveries close in either completion order', () => {
+  for (const siblingFirst of [true, false]) {
+    const name = siblingFirst ? 'second-first' : 'first-first';
+    const sessionId = `shared-working-tree-${name}`;
+    const first = workingTreeDelivery(`deliver first ${name}`, [`${name}/first`], `${name}-first-worker`, sessionId);
+    const second = workingTreeDelivery(`deliver second ${name}`, [`${name}/second`], `${name}-second-worker`, sessionId);
+    assert.strictEqual(store.getTicket(slug, first.ref).dispatch.preparedBy.sessionId, sessionId);
+    assert.strictEqual(store.getTicket(slug, second.ref).dispatch.sessionId, sessionId);
+
+    const earlier = siblingFirst ? second : first;
+    const later = siblingFirst ? first : second;
+    const earlierWorker = siblingFirst ? `${name}-second-worker` : `${name}-first-worker`;
+    const laterWorker = siblingFirst ? `${name}-first-worker` : `${name}-second-worker`;
+    const earlierPath = siblingFirst ? `${name}/second/result.md` : `${name}/first/result.md`;
+    const laterPath = siblingFirst ? `${name}/first/result.md` : `${name}/second/result.md`;
+    writeProjectFile(earlierPath, '# Earlier\n');
+    assert.strictEqual(closeWorkingTreeDelivery(earlier, earlierWorker).ok, true);
+    writeProjectFile(laterPath, '# Later\n');
+    const done = closeWorkingTreeDelivery(later, laterWorker);
+    assert.strictEqual(done.ok, true, done.message);
+    assert.deepStrictEqual(done.ticket.completion.workingTree.changedPaths, [laterPath]);
+  }
+});
+
+test('working-tree closeout requires a shared recorded dispatch session', () => {
+  for (const [name, currentSession, siblingSession] of [
+    ['distinct-session', 'current-session', 'sibling-session'],
+    ['missing-session', 'current-session', undefined],
+  ]) {
+    const current = workingTreeDelivery(`deliver current ${name}`, [`${name}/current`], `${name}-current-worker`, currentSession);
+    workingTreeDelivery(`deliver sibling ${name}`, [`${name}/sibling`], `${name}-sibling-worker`, siblingSession);
+    writeProjectFile(`${name}/current/result.md`, '# Current\n');
+    writeProjectFile(`${name}/sibling/result.md`, '# Sibling\n');
+    const done = closeWorkingTreeDelivery(current, `${name}-current-worker`);
+    assert.strictEqual(done.ok, false);
+    assert.strictEqual(done.reason, 'working_tree_scope_violation');
+    assert.deepStrictEqual(done.unscopedPaths, [`${name}/sibling/result.md`]);
+  }
+});
+
+test('working-tree closeout refuses completed sibling candidate changes before path classification', () => {
+  const mutations: Array<[string, () => void]> = [
+    ['rewritten', () => writeProjectFile('completed-rewritten/sibling/result.md', '# Rewritten\n')],
+    ['new-path', () => writeProjectFile('completed-new-path/sibling/new.md', '# New\n')],
+  ];
+  for (const [name, mutate] of mutations) {
+    const sessionId = `completed-${name}-session`;
+    const sibling = workingTreeDelivery(`deliver completed sibling ${name}`, [`completed-${name}/sibling`], `${name}-sibling-worker`, sessionId);
+    const current = workingTreeDelivery(`deliver current ${name}`, [`completed-${name}/current`], `${name}-current-worker`, sessionId);
+    writeProjectFile(`completed-${name}/sibling/result.md`, '# Sibling\n');
+    assert.strictEqual(closeWorkingTreeDelivery(sibling, `${name}-sibling-worker`).ok, true);
+    mutate();
+    writeProjectFile(`completed-${name}/current/result.md`, '# Current\n');
+    const done = closeWorkingTreeDelivery(current, `${name}-current-worker`);
+    assert.strictEqual(done.ok, false);
+    assert.strictEqual(done.reason, 'working_tree_sibling_integrity_violation');
+    assert.deepStrictEqual(done.unscopedPaths, [`completed-${name}/sibling/result.md`]);
+    assert.match(done.message, /Preserve the shared-tree work and hand it back/);
+  }
+});
+
+test('working-tree closeout refuses completed sibling mismatches after the dirty path disappears', () => {
+  const scenarios: Array<{
+    name: string;
+    siblingPath: string;
+    beforeDispatch: () => void;
+    deliver: () => void;
+    removeDirtyState: () => void;
+  }> = [
+    {
+      name: 'deleted-new-file',
+      siblingPath: 'integrity-deleted-new/sibling/result.md',
+      beforeDispatch: () => {},
+      deliver: () => writeProjectFile('integrity-deleted-new/sibling/result.md', '# Sibling\n'),
+      removeDirtyState: () => fs.rmSync(path.join(PROJECT, 'integrity-deleted-new/sibling/result.md')),
+    },
+    {
+      name: 'restored-baseline-file',
+      siblingPath: 'integrity-restored-baseline/sibling/result.md',
+      beforeDispatch: () => commitProjectFile('integrity-restored-baseline/sibling/result.md', '# Before\n'),
+      deliver: () => writeProjectFile('integrity-restored-baseline/sibling/result.md', '# Changed\n'),
+      removeDirtyState: () => writeProjectFile('integrity-restored-baseline/sibling/result.md', '# Before\n'),
+    },
+    {
+      name: 'committed-removal',
+      siblingPath: 'integrity-committed-removal/sibling/result.md',
+      beforeDispatch: () => commitProjectFile('integrity-committed-removal/sibling/result.md', '# Before\n'),
+      deliver: () => fs.rmSync(path.join(PROJECT, 'integrity-committed-removal/sibling/result.md')),
+      removeDirtyState: () => {
+        execFileSync('git', ['rm', '--', 'integrity-committed-removal/sibling/result.md'], { cwd: PROJECT, windowsHide: true });
+        execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'remove sibling result'], { cwd: PROJECT, windowsHide: true });
+      },
+    },
+  ];
+  for (const scenario of scenarios) {
+    scenario.beforeDispatch();
+    const sessionId = `completed-${scenario.name}-session`;
+    const sibling = workingTreeDelivery(`deliver completed sibling ${scenario.name}`, [path.dirname(scenario.siblingPath)], `${scenario.name}-sibling-worker`, sessionId);
+    const currentPath = `integrity-${scenario.name}/current/result.md`;
+    const current = workingTreeDelivery(`deliver current ${scenario.name}`, [path.dirname(currentPath)], `${scenario.name}-current-worker`, sessionId);
+    scenario.deliver();
+    assert.strictEqual(closeWorkingTreeDelivery(sibling, `${scenario.name}-sibling-worker`).ok, true);
+    scenario.removeDirtyState();
+    writeProjectFile(currentPath, '# Current\n');
+    const done = closeWorkingTreeDelivery(current, `${scenario.name}-current-worker`);
+    assert.strictEqual(done.ok, false);
+    assert.strictEqual(done.reason, 'working_tree_sibling_integrity_violation');
+    assert.deepStrictEqual(done.unscopedPaths, [scenario.siblingPath]);
+    assert.match(done.message, /do not revert it, expand scope, or commit it/);
+    assert.strictEqual(store.getTicket(slug, current.ref).claim.by, `${scenario.name}-current-worker`);
+  }
+});
+
+test('working-tree closeout rejects malformed completed sibling records', () => {
+  const controls: Array<[string, (sibling: any) => void]> = [
+    ['reversed-window', (sibling) => { sibling.dispatch.terminalAt = new Date(Date.parse(sibling.completion.claimAt) - 1).toISOString(); }],
+    ['future-window', (sibling) => { sibling.dispatch.terminalAt = new Date(Date.now() + 60_000).toISOString(); }],
+    ['missing-candidate', (sibling) => { delete sibling.completion.workingTree.candidate; }],
+    ['changed-candidate', (sibling) => { sibling.completion.workingTree.candidate.value = '0'.repeat(64); }],
+  ];
+  for (const [name, mutate] of controls) {
+    const sessionId = `malformed-${name}-session`;
+    const sibling = workingTreeDelivery(`deliver malformed sibling ${name}`, [`malformed-${name}/sibling`], `${name}-sibling-worker`, sessionId);
+    const current = workingTreeDelivery(`deliver current ${name}`, [`malformed-${name}/current`], `${name}-current-worker`, sessionId);
+    writeProjectFile(`malformed-${name}/sibling/result.md`, '# Sibling\n');
+    assert.strictEqual(closeWorkingTreeDelivery(sibling, `${name}-sibling-worker`).ok, true);
+    const storedSibling = store.getTicket(slug, sibling.ref);
+    mutate(storedSibling);
+    persistTicket(storedSibling);
+    writeProjectFile(`malformed-${name}/current/result.md`, '# Current\n');
+    const done = closeWorkingTreeDelivery(current, `${name}-current-worker`);
+    assert.strictEqual(done.ok, false);
+    const candidateInvalid = ['missing-candidate', 'changed-candidate'].includes(name);
+    assert.strictEqual(done.reason, candidateInvalid ? 'working_tree_sibling_integrity_violation' : 'working_tree_scope_violation');
+    assert.ok(done.unscopedPaths.includes(`malformed-${name}/sibling/result.md`));
+  }
+});
+
+test('working-tree closeout keeps isolated, archived, unclaimed, wildcard, and overlapping siblings unattributed', () => {
+  const sessionId = 'ineligible-sibling-session';
+  const isolated = workingTreeDelivery('deliver isolated sibling', ['ineligible/isolated'], 'ineligible-isolated-worker', sessionId);
+  const archived = workingTreeDelivery('deliver archived sibling', ['ineligible/archived'], 'archived-worker', sessionId);
+  const wildcard = workingTreeDelivery('deliver wildcard sibling', ['ineligible/wildcard'], 'wildcard-worker', sessionId);
+  const overlapping = workingTreeDelivery('deliver overlapping sibling', ['ineligible/current', 'ineligible/overlap'], 'overlapping-worker', sessionId);
+  const unclaimed = store.createTicket(slug, {
+    title: 'deliver unclaimed sibling',
+    description: 'Leave the declared paths uncommitted in the shared checkout.',
+    category: 'repository-write',
+    files: ['ineligible/unclaimed'],
+    workingTreeDelivery: true,
+    executorVerifyKind: 'document',
+    executorVerify: 'Read the declared document.',
+    source: 'mcp',
+  });
+  store.prepareDispatch(slug, unclaimed.ref, { sharedTree: true, sessionId });
+  const current = workingTreeDelivery('deliver eligible current', ['ineligible/current'], 'current-worker', sessionId);
+  const isolatedTicket = store.getTicket(slug, isolated.ref);
+  isolatedTicket.dispatch.sharedTree = false;
+  persistTicket(isolatedTicket);
+  const archivedTicket = store.getTicket(slug, archived.ref);
+  archivedTicket.archived = true;
+  persistTicket(archivedTicket);
+  const wildcardTicket = store.getTicket(slug, wildcard.ref);
+  wildcardTicket.dispatch.declaredFiles = ['ineligible/*'];
+  persistTicket(wildcardTicket);
+
+  writeProjectFile('ineligible/current/result.md', '# Current\n');
+  for (const path of ['ineligible/isolated/result.md', 'ineligible/archived/result.md', 'ineligible/wildcard/result.md', 'ineligible/overlap/result.md', 'ineligible/unclaimed/result.md']) writeProjectFile(path, '# Sibling\n');
+  const done = closeWorkingTreeDelivery(current, 'current-worker');
+  assert.strictEqual(done.ok, false);
+  assert.strictEqual(done.reason, 'working_tree_scope_violation');
+  assert.deepStrictEqual(done.unscopedPaths, ['ineligible/archived/result.md', 'ineligible/isolated/result.md', 'ineligible/overlap/result.md', 'ineligible/unclaimed/result.md', 'ineligible/wildcard/result.md']);
+});
+
+test('working-tree closeout preserves unchanged baseline and refuses unattributed handoff paths', () => {
+  writeProjectFile('baseline.md', '# Before\n');
+  const current = workingTreeDelivery('deliver current output with baseline', ['baseline-current'], 'baseline-current-worker', 'baseline-session');
+  writeProjectFile('baseline-current/result.md', '# Current\n');
+  assert.strictEqual(closeWorkingTreeDelivery(current, 'baseline-current-worker').ok, true);
+
+  writeProjectFile('rewritten-baseline.md', '# Before\n');
+  const refused = workingTreeDelivery('deliver current output with unattributed paths', ['unattributed-current'], 'unattributed-current-worker', 'unattributed-session');
+  writeProjectFile('rewritten-baseline.md', '# Rewritten\n');
+  writeProjectFile('NOTES.md', '# Unattributed\n');
+  writeProjectFile('unattributed-current/result.md', '# Current\n');
+  const done = closeWorkingTreeDelivery(refused, 'unattributed-current-worker');
+  assert.strictEqual(done.ok, false);
+  assert.strictEqual(done.reason, 'working_tree_scope_violation');
+  assert.deepStrictEqual(done.unscopedPaths, ['NOTES.md', 'rewritten-baseline.md']);
+  assert.match(done.message, /cannot attribute additional shared-tree changes/);
+  assert.match(done.message, /Preserve those paths and hand them back to the existing parent for verification or grooming/);
 });
 
 test('document working-tree done binds explicit typed evidence to its final candidate', () => {
