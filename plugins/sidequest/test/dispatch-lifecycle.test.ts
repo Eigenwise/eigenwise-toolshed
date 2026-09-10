@@ -42,6 +42,8 @@ const agentsync = require('../lib/agentsync.js');
 const { claimRefusalMessage } = require('../lib/refusal-guidance.js');
 const { checkSidequestInstall } = require('../lib/dispatch-preflight.js');
 const { collectGitSubmissionFacts } = require('../lib/mcp-lifecycle.js');
+const sourceRevisionCapability = require('../lib/source-revision-capability.js');
+const database = require('../lib/db.js');
 const FORCE_EXEC_BYPASS = path.join(__dirname, '..', 'hooks', 'force-exec-bypass.js');
 const SUBAGENT_START = path.join(__dirname, '..', 'hooks', 'subagent-start.js');
 const SUBAGENT_STOP = path.join(__dirname, '..', 'hooks', 'subagent-stop.js');
@@ -63,6 +65,61 @@ store.setCategory({
 
 for (const id of ['codebase-exploration', 'research', 'review-audit', 'spike-investigation', 'visual-review']) {
   store.setCategory({ id, name: id, route: { model: 'sonnet', effort: 'high' }, fallback: null, readonly: true, artifactRoots: id === 'codebase-exploration' ? ['.claude/.codebase-info'] : [], enabled: true });
+}
+
+// store.js captures its collaborators at load, so a probe swaps the collaborator's
+// exports and reloads store.js against them. Only store.js is reloaded: every other
+// module keeps the collaborator reference it already holds.
+function withReloadedStore(modulePath: string, patch: (original: any) => any, run: (patchedStore: any) => any) {
+  const storePath = require.resolve('../lib/store.js');
+  const collaboratorPath = require.resolve(modulePath);
+  const cachedStore = require.cache[storePath];
+  const collaborator = require.cache[collaboratorPath];
+  const originalExports = collaborator.exports;
+  collaborator.exports = { ...originalExports, ...patch(originalExports) };
+  delete require.cache[storePath];
+  try {
+    return run(require(storePath));
+  } finally {
+    collaborator.exports = originalExports;
+    delete require.cache[storePath];
+    if (cachedStore) require.cache[storePath] = cachedStore;
+  }
+}
+
+function withSnapshotRevision(snapshotRevision: any, run: any) {
+  return withReloadedStore('../lib/source-revision-capability.js', (original: any) => ({
+    filesystemSnapshotRevision: snapshotRevision(original.filesystemSnapshotRevision),
+  }), run);
+}
+
+function independentProjectWrite(projectSlug: string, patch: any) {
+  const writer = database.openDb(SIDEQUEST_HOME);
+  const meta = database.getRow(writer, 'projects', projectSlug);
+  database.putRow(writer, 'projects', { slug: projectSlug, data: { ...meta, ...patch } });
+}
+
+function independentTicketWrite(projectSlug: string, ticketId: string, patch: any) {
+  const writer = database.openDb(SIDEQUEST_HOME);
+  const stored = { ...database.getRow(writer, 'tickets', ticketId), ...patch };
+  database.putRow(writer, 'tickets', {
+    id: stored.id,
+    project: projectSlug,
+    ref: stored.ref,
+    status: stored.status,
+    archived: 0,
+    ord: stored.order,
+    claim_by: stored.claim && stored.claim.by ? stored.claim.by : null,
+    data: stored,
+  });
+}
+
+function snapshotProjectFixture(snapshotStore: any, label: string, title: string) {
+  const projectDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `sq-dispatch-${label}-`));
+  fs.writeFileSync(path.join(projectDirectory, 'page.md'), `${label}\n`);
+  const projectSlug = snapshotStore.ensureProject(projectDirectory).slug;
+  const ticket = snapshotStore.createTicket(projectSlug, { title, category: 'dispatch.lifecycle', files: ['page.md'], source: 'test' });
+  return { projectDirectory, projectSlug, ticket };
 }
 
 function createFixture(title?: any, category = 'dispatch.lifecycle') {
@@ -120,6 +177,298 @@ test('preparing a ticket without a recorded verifier pins the legacy custom requ
     evidenceContract: 'legacy project verifier was not recorded',
   });
   assert.equal(store.releaseTicket(slug, ticket.ref, 'no-verifier-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+});
+
+test('preparing a non-Git ticket uses its persisted dispatch snapshot', () => {
+  const snapshotProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-filesystem-snapshot-'));
+  fs.writeFileSync(path.join(snapshotProject, 'page.md'), 'snapshot fixture\n');
+  const snapshotSlug = store.ensureProject(snapshotProject).slug;
+  const ticket = store.createTicket(snapshotSlug, {
+    title: 'prepare a filesystem snapshot dispatch', category: 'dispatch.lifecycle', files: ['page.md'], source: 'test',
+  });
+
+  const prepared = store.prepareDispatch(snapshotSlug, ticket.ref);
+  const baseline = prepared.ticket.dispatch.lifecycleAttempt.baseline;
+  const persistedSnapshots = store.readMeta(snapshotSlug).sourceRevisionSnapshots;
+
+  assert.equal(baseline.purpose, 'dispatch');
+  assert.equal(baseline.revision.source, 'filesystem-snapshot');
+  assert.equal(baseline.revision.value, sourceRevisionCapability.filesystemSnapshotRevision(snapshotProject, baseline.revision.observedAt)?.value);
+  assert.equal(persistedSnapshots.filter((snapshot: any) => snapshot.value === baseline.revision.value).length, 1);
+});
+
+test('preparing a non-Git ticket hashes once before persisting its dispatch snapshot', () => {
+  let hashCount = 0;
+  withSnapshotRevision((originalRevision: any) => (projectPath: string, observedAt: string) => {
+    hashCount += 1;
+    return originalRevision(projectPath, observedAt);
+  }, (snapshotStore: any) => {
+    const { projectSlug, ticket } = snapshotProjectFixture(snapshotStore, 'single-hash', 'hash one filesystem snapshot');
+
+    const prepared = snapshotStore.prepareDispatch(projectSlug, ticket.ref);
+
+    assert.equal(hashCount, 1, 'one dispatch capture performs one filesystem hash');
+    assert.equal(snapshotStore.readMeta(projectSlug).sourceRevisionSnapshots.filter((snapshot: any) => snapshot.value === prepared.ticket.dispatch.lifecycleAttempt.baseline.revision.value).length, 1);
+  });
+});
+
+test('a launched non-Git dispatch refuses without capturing a replacement snapshot', () => {
+  const snapshotProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-launched-snapshot-'));
+  fs.writeFileSync(path.join(snapshotProject, 'page.md'), 'before launch\n');
+  const snapshotSlug = store.ensureProject(snapshotProject).slug;
+  const ticket = store.createTicket(snapshotSlug, {
+    title: 'refuse a launched filesystem snapshot dispatch', category: 'dispatch.lifecycle', files: ['page.md'], source: 'test',
+  });
+  const prepared = store.prepareDispatch(snapshotSlug, ticket.ref);
+  assert.equal(store.recordDispatchLaunch(snapshotSlug, ticket.ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor }).ok, true);
+  const before = store.getTicket(snapshotSlug, ticket.ref);
+  const snapshots = store.readMeta(snapshotSlug).sourceRevisionSnapshots;
+  fs.writeFileSync(path.join(snapshotProject, 'page.md'), 'after launch\n');
+
+  assert.throws(() => store.prepareDispatch(snapshotSlug, ticket.ref), /already has a live dispatch attempt/);
+
+  const after = store.getTicket(snapshotSlug, ticket.ref);
+  assert.deepEqual(store.readMeta(snapshotSlug).sourceRevisionSnapshots, snapshots, 'refusal leaves no captured replacement hash');
+  assert.equal(after.dispatchNonce, before.dispatchNonce, 'refusal keeps the existing nonce');
+  assert.deepEqual(after.dispatch, before.dispatch, 'refusal keeps the existing dispatch');
+  assert.equal(fs.existsSync(prepared.ticket.dispatch.tokenFile), true, 'refusal keeps the launched token file');
+});
+
+test('a recovery reuse avoids a replacement filesystem snapshot', () => {
+  let hashCount = 0;
+  withSnapshotRevision((originalRevision: any) => (projectPath: string, observedAt: string) => {
+    hashCount += 1;
+    return originalRevision(projectPath, observedAt);
+  }, (snapshotStore: any) => {
+    const { projectSlug, ticket } = snapshotProjectFixture(snapshotStore, 'recovery-snapshot', 'reuse a recovery filesystem dispatch');
+    const prepared = snapshotStore.getTicket(projectSlug, ticket.ref);
+    prepared.dispatchNonce = 'recovery-token';
+    prepared.dispatchExecutor = 'sidequest-exec-dispatch';
+    prepared.dispatch = {
+      recovery: { kind: 'claude_quota_exhausted' }, outcome: 'prepared', executor: prepared.dispatchExecutor, launchSeq: 1, launchName: 'recovery',
+    };
+    independentTicketWrite(projectSlug, prepared.id, prepared);
+
+    const reused = snapshotStore.prepareDispatch(projectSlug, ticket.ref);
+
+    assert.equal(reused.reused, true);
+    assert.equal(hashCount, 0, 'recovery reuse does not hash the project again');
+    assert.deepEqual(snapshotStore.readMeta(projectSlug).sourceRevisionSnapshots || [], []);
+    assert.equal(snapshotStore.getTicket(projectSlug, ticket.ref).dispatchNonce, 'recovery-token');
+  });
+});
+
+test('a changed recovery route refuses before rehashing or mutating the prepared dispatch', () => {
+  let hashCount = 0;
+  withSnapshotRevision((originalRevision: any) => (projectPath: string, observedAt: string) => {
+    hashCount += 1;
+    return originalRevision(projectPath, observedAt);
+  }, (snapshotStore: any) => {
+    snapshotStore.setCategory({
+      id: 'snapshot.recovery.route', name: 'Snapshot recovery route', route: { model: 'fable', effort: 'high' }, fallback: { model: 'codex-gpt-5-6-sol', effort: 'high' }, enabled: true,
+    });
+    const snapshotProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-recovery-route-'));
+    fs.writeFileSync(path.join(snapshotProject, 'page.md'), 'recovery route\n');
+    const projectSlug = snapshotStore.ensureProject(snapshotProject).slug;
+    const ticket = snapshotStore.createTicket(projectSlug, {
+      title: 'refuse a changed recovery route', category: 'snapshot.recovery.route', files: ['page.md'], source: 'test',
+    });
+    const launched = snapshotStore.prepareDispatch(projectSlug, ticket.ref);
+    assert.equal(snapshotStore.recordDispatchLaunch(projectSlug, ticket.ref, { token: launched.token, executor: launched.ticket.dispatchExecutor }).ok, true);
+    const recovered = snapshotStore.recoverDispatchQuotaFailure(projectSlug, ticket.ref, {
+      token: launched.token, executor: launched.ticket.dispatchExecutor, error: "You've reached your Fable limit",
+    });
+    assert.equal(recovered.ok, true);
+    snapshotStore.updateTicket(projectSlug, ticket.ref, { route: { model: 'missing-provider-model', effort: 'high' } });
+    const before = snapshotStore.getTicket(projectSlug, ticket.ref);
+    const recoveryTokenFile = before.dispatch.tokenFile;
+    const recoveryTokenBytes = fs.readFileSync(recoveryTokenFile);
+    const snapshots = snapshotStore.readMeta(projectSlug).sourceRevisionSnapshots;
+
+    assert.throws(
+      () => snapshotStore.prepareDispatch(projectSlug, ticket.ref),
+      /route override "missing-provider-model" crosses providers from category "snapshot\.recovery\.route" and was refused/,
+    );
+
+    const after = snapshotStore.getTicket(projectSlug, ticket.ref);
+    assert.equal(hashCount, 1, 'the rejected recovery route does not rehash the project');
+    assert.deepEqual(snapshotStore.readMeta(projectSlug).sourceRevisionSnapshots, snapshots, 'the rejected recovery route does not persist a snapshot');
+    assert.equal(after.dispatchNonce, before.dispatchNonce, 'the rejected recovery route preserves the token');
+    assert.deepEqual(after.dispatch, before.dispatch, 'the rejected recovery route preserves the prepared dispatch');
+    assert.deepEqual(fs.readFileSync(recoveryTokenFile), recoveryTokenBytes, 'the rejected recovery route preserves the token bytes');
+  });
+});
+
+// Every one of these mutations lands between the snapshot read and the final
+// ticket lock, which is exactly where prepare used to have already deleted the
+// token file the board still pointed at (SQ-2691).
+const capturePreservationCases = [
+  {
+    label: 'source path',
+    refusal: /changed while its filesystem snapshot was being captured/,
+    mutate: (projectSlug: string) => independentProjectWrite(projectSlug, { path: fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-replacement-')) }),
+  },
+  {
+    label: 'source adapter',
+    refusal: /source revision adapter "filesystem-snapshot" is not configured/,
+    mutate: (projectSlug: string) => independentProjectWrite(projectSlug, { sourceRevisionAdapter: 'git' }),
+  },
+  {
+    label: 'ticket ref',
+    refusal: /changed while its filesystem snapshot was being captured/,
+    mutate: (projectSlug: string, ticketId: string) => independentTicketWrite(projectSlug, ticketId, { ref: 'SQ-RENAMED-MID-CAPTURE' }),
+  },
+];
+
+for (const capture of capturePreservationCases) {
+  test(`an independent ${capture.label} writer during dispatch capture preserves the prepared token file`, () => {
+    let captureCount = 0;
+    let writerCommitted = false;
+    let projectSlug = '';
+    let ticketId = '';
+    withSnapshotRevision((originalRevision: any) => (projectPath: string, observedAt: string) => {
+      captureCount += 1;
+      const revision = originalRevision(projectPath, observedAt);
+      if (captureCount === 2) {
+        capture.mutate(projectSlug, ticketId);
+        writerCommitted = true;
+      }
+      return revision;
+    }, (snapshotStore: any) => {
+      const fixture = snapshotProjectFixture(snapshotStore, 'capture-preservation', `preserve the token past a ${capture.label} change`);
+      projectSlug = fixture.projectSlug;
+      ticketId = fixture.ticket.id;
+      const prepared = snapshotStore.prepareDispatch(projectSlug, ticketId);
+      const tokenFile = prepared.ticket.dispatch.tokenFile;
+      const tokenBytes = fs.readFileSync(tokenFile);
+      const before = snapshotStore.getTicket(projectSlug, ticketId);
+
+      assert.throws(() => snapshotStore.prepareDispatch(projectSlug, ticketId), capture.refusal);
+
+      const after = snapshotStore.getTicket(projectSlug, ticketId);
+      assert.equal(writerCommitted, true, 'an independent SQLite writer committed while the project was being read');
+      assert.equal(captureCount, 2, 'the refused attempt captured its own snapshot');
+      assert.equal(after.dispatchNonce, before.dispatchNonce, 'the refusal keeps the authoritative nonce');
+      assert.deepEqual(after.dispatch, before.dispatch, 'the refusal keeps the authoritative dispatch');
+      assert.equal(fs.existsSync(tokenFile), true, 'the refusal keeps the token file the board still points at');
+      assert.deepEqual(fs.readFileSync(tokenFile), tokenBytes, 'the refusal preserves the token bytes');
+      assert.equal(snapshotStore.readDispatchBriefing(projectSlug, ticketId, null, tokenFile).ok, true, 'the preserved token still authenticates a briefing');
+    });
+  });
+}
+
+test('a final-lock claim mutation refuses the captured filesystem snapshot', () => {
+  let projectSlug = '';
+  let ticketId = '';
+  withSnapshotRevision((originalRevision: any) => (projectPath: string, observedAt: string) => {
+    const revision = originalRevision(projectPath, observedAt);
+    independentTicketWrite(projectSlug, ticketId, { claim: { by: 'independent-writer', at: new Date().toISOString() } });
+    return revision;
+  }, (snapshotStore: any) => {
+    const fixture = snapshotProjectFixture(snapshotStore, 'final-admission', 'reject final admission mutation');
+    projectSlug = fixture.projectSlug;
+    ticketId = fixture.ticket.id;
+    const before = snapshotStore.getTicket(projectSlug, ticketId);
+
+    assert.throws(() => snapshotStore.prepareDispatch(projectSlug, ticketId), /has a live claim by independent-writer/);
+
+    const after = snapshotStore.getTicket(projectSlug, ticketId);
+    assert.deepEqual(snapshotStore.readMeta(projectSlug).sourceRevisionSnapshots || [], [], 'refused final admission does not persist the captured hash');
+    assert.equal(after.dispatchNonce, before.dispatchNonce);
+    assert.deepEqual(after.dispatch, before.dispatch);
+  });
+});
+
+test('a persistence failure after staging removes only the token that attempt staged', () => {
+  let stagedTokenFile = '';
+  let armed = false;
+  withReloadedStore('../lib/db.js', (original: any) => ({
+    putRow: (handle: any, table: string, row: any) => {
+      if (armed && table === 'tickets') {
+        stagedTokenFile = String(row?.data?.dispatch?.tokenFile || '');
+        throw new Error('dispatch persistence failed');
+      }
+      return original.putRow(handle, table, row);
+    },
+  }), (patchedStore: any) => {
+    const ticket = patchedStore.createTicket(slug, {
+      title: 'roll back a staged dispatch token', category: 'dispatch.lifecycle', files: ['tracked.js'], source: 'test',
+    });
+    const prepared = patchedStore.prepareDispatch(slug, ticket.ref);
+    const tokenFile = prepared.ticket.dispatch.tokenFile;
+    const tokenBytes = fs.readFileSync(tokenFile);
+    const before = patchedStore.getTicket(slug, ticket.id);
+
+    armed = true;
+    try {
+      assert.throws(() => patchedStore.prepareDispatch(slug, ticket.id), /dispatch persistence failed/);
+    } finally {
+      armed = false;
+    }
+
+    const after = patchedStore.getTicket(slug, ticket.id);
+    assert.notEqual(stagedTokenFile, '', 'the failed attempt staged a replacement token file');
+    assert.notEqual(stagedTokenFile, tokenFile, 'the staged token file is the attempt\'s own, not the previous one');
+    assert.equal(fs.existsSync(stagedTokenFile), false, 'the rollback removes the token this attempt staged');
+    assert.equal(fs.existsSync(tokenFile), true, 'the rollback keeps the token file the board still points at');
+    assert.deepEqual(fs.readFileSync(tokenFile), tokenBytes, 'the rollback preserves the previous token bytes');
+    assert.equal(after.dispatchNonce, before.dispatchNonce, 'the rollback keeps the authoritative nonce');
+    assert.deepEqual(after.dispatch, before.dispatch, 'the rollback keeps the authoritative dispatch');
+    assert.equal(patchedStore.readDispatchBriefing(slug, ticket.id, null, tokenFile).ok, true, 'the preserved token still authenticates a briefing');
+    assert.equal(patchedStore.releaseTicket(slug, ticket.ref, 'staged-token-rollback-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+  });
+});
+
+test('a deferred commit rollback removes only the staged dispatch token', () => {
+  const ticket = createFixture('roll back a deferred dispatch commit');
+  const first = store.prepareDispatch(slug, ticket.ref);
+  const firstTokenFile = first.ticket.dispatch.tokenFile;
+  const firstTokenBytes = fs.readFileSync(firstTokenFile);
+  const before = store.getTicket(slug, ticket.id);
+  const writer = database.openDb(SIDEQUEST_HOME);
+  writer.exec('CREATE TABLE dispatch_commit_rollback_probe (ticket_id TEXT NOT NULL, FOREIGN KEY(ticket_id) REFERENCES tickets(id) DEFERRABLE INITIALLY DEFERRED)');
+  writer.exec(`CREATE TRIGGER dispatch_commit_rollback_probe_ticket_update AFTER UPDATE OF data ON tickets WHEN NEW.id = '${ticket.id}' BEGIN INSERT INTO dispatch_commit_rollback_probe(ticket_id) VALUES ('missing-dispatch-commit-ticket'); END`);
+  const unlinkSync = fs.unlinkSync;
+  let removedTokenFile = '';
+  let armed = false;
+  fs.unlinkSync = (file: Parameters<typeof fs.unlinkSync>[0]) => {
+    if (armed && String(file).endsWith('.token')) removedTokenFile = String(file);
+    return unlinkSync(file);
+  };
+  try {
+    armed = true;
+    assert.throws(() => store.prepareDispatch(slug, ticket.id), /FOREIGN KEY constraint failed/);
+  } finally {
+    fs.unlinkSync = unlinkSync;
+    writer.exec('DROP TRIGGER dispatch_commit_rollback_probe_ticket_update; DROP TABLE dispatch_commit_rollback_probe');
+  }
+
+  const after = store.getTicket(slug, ticket.id);
+  assert.notEqual(removedTokenFile, '', 'the rolled-back attempt removes its staged token file');
+  assert.notEqual(removedTokenFile, firstTokenFile, 'the rollback never removes the prior token file');
+  assert.equal(fs.existsSync(removedTokenFile), false, 'the staged token file is removed after the failed commit');
+  assert.equal(fs.existsSync(firstTokenFile), true, 'the prior token file survives the failed commit');
+  assert.deepEqual(fs.readFileSync(firstTokenFile), firstTokenBytes, 'the prior token bytes survive the failed commit');
+  assert.equal(after.dispatchNonce, before.dispatchNonce, 'the failed commit keeps the authoritative nonce');
+  assert.deepEqual(after.dispatch, before.dispatch, 'the failed commit keeps the authoritative dispatch');
+  assert.equal(store.readDispatchBriefing(slug, ticket.id, null, firstTokenFile).ok, true, 'the preserved token still authenticates a briefing');
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'deferred-commit-rollback-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+});
+
+test('a durable replacement retires only the superseded token file', () => {
+  const ticket = createFixture('retire the superseded dispatch token');
+  const first = store.prepareDispatch(slug, ticket.ref);
+  const firstTokenFile = first.ticket.dispatch.tokenFile;
+  assert.equal(fs.readFileSync(firstTokenFile, 'utf8').trim(), first.token);
+
+  const second = store.prepareDispatch(slug, ticket.ref);
+  const secondTokenFile = second.ticket.dispatch.tokenFile;
+
+  assert.notEqual(secondTokenFile, firstTokenFile);
+  assert.equal(fs.existsSync(firstTokenFile), false, 'the durable replacement retires the superseded token file');
+  assert.equal(fs.readFileSync(secondTokenFile, 'utf8').trim(), second.token);
+  assert.equal(store.readDispatchBriefing(slug, ticket.ref, null, secondTokenFile).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'superseded-token-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
 test('executors cannot prepare a shared-tree child dispatch while the orchestrator can', () => {

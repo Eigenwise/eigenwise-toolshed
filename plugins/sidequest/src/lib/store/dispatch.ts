@@ -48,7 +48,7 @@ function requirementsMatch(left: any, right: any) {
 }
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
 
   function syncLiveDispatchVerification(slug?: any, ticket?: any, amendment?: any) {
     const state = dispatchState(ticket);
@@ -1249,6 +1249,10 @@ function unclaimedWorktreeRecoveryFacts(projectPath?: any, ticket?: any, state?:
   return { state, checkpointCommit: null };
 }
 
+function reusablePreparedRecovery(ticket: any, current: any) {
+  return Boolean(current && current.recovery && current.outcome === 'prepared' && ticket.dispatchNonce && canonicalPreparedDispatchExecutor(ticket));
+}
+
 function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
@@ -1288,7 +1292,18 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   // this transport concept.
   assertDispatchTransport(opts.transport, { allowUnverifiedTransport: !!opts.allowUnverifiedTransport });
   const pythonIoEncoding = projectPath ? ensurePythonIoEncoding(projectPath) : { written: false };
-  return withTicketLock(slug, found.id, () => {
+  const captureFilesystemSnapshot = withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    if (!ticket) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+    return !reusablePreparedRecovery(ticket, dispatchState(ticket));
+  });
+  const snapshotPreflight = captureFilesystemSnapshot
+    ? dispatchFilesystemSnapshotPreflight(slug, found, new Date().toISOString())
+    : null;
+  let priorTokenFile: string | null = null;
+  let stagedTokenFile: string | null = null;
+  try {
+    const prepared = withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
     const current = dispatchState(t);
@@ -1342,7 +1357,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     }
     if (resolvedPolicy?.refusal) throw new Error(resolvedPolicy.refusal);
     const currentRoute = activeDispatchRoute(t);
-    if (current && current.recovery && current.outcome === 'prepared' && t.dispatchNonce && canonicalPreparedDispatchExecutor(t)) {
+    if (reusablePreparedRecovery(t, current)) {
       if (opts.sessionId) current.sessionId = String(opts.sessionId);
       // A record prepared before launch naming existed still has to hand back a
       // usable name, and reusing it must not renumber the sequence.
@@ -1404,7 +1419,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
         at: now,
       });
     }
-    const priorTokenFile = dispatchTokenFile(t);
+    priorTokenFile = dispatchTokenFile(t);
     // A released dispatch hands its binding to the next attempt so a
     // continuation keeps the same worktree scope. An EMPTY released binding
     // must not be inherited: it pinned the first attempt's missing scope onto
@@ -1449,10 +1464,6 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const verificationRequirement = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ''));
     if (workingTreeDelivery && verificationRequirement.kind === 'review') {
       throw new Error(`prepare dispatch: ${t.ref} working-tree delivery cannot use review verification because executor evidence has no independent reviewer provenance.`);
-    }
-    t.dispatchNonce = mintDispatchToken();
-    if (priorTokenFile) {
-      try { fs.unlinkSync(priorTokenFile); } catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
     }
     const category = getCategory(ticketCategory(t), { project: slug });
     const artifactRoot = sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t)
@@ -1530,7 +1541,13 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       : integrationTargetState
         ? integrationTargetCommit(readMeta(slug)?.path || '', integrationTargetState)
         : commitScope.headCommit(readMeta(slug)?.path || '');
-    const dispatchBaseline = dispatchBaselineForProject(slug, t, now, baseCommit, nonRepoOutput);
+    const dispatchBaseline = dispatchBaselineForProject(slug, t, now, baseCommit, nonRepoOutput, snapshotPreflight);
+    // Everything above this line only validates. Minting the replacement token
+    // any earlier meant a later refusal — a changed project registration, an
+    // unresolvable integration target, an unreadable evidence directory — left
+    // SQLite pointing at a token file that had already been deleted, so the
+    // still-authoritative dispatch could no longer authenticate (SQ-2691).
+    t.dispatchNonce = mintDispatchToken();
     t.dispatch = {
       lifecycleAttempt: prepareAttempt(
         dispatchBaseline,
@@ -1614,13 +1631,24 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       ...(supersededTokens.length ? { supersededTokens: supersededTokens.slice(-8) } : {}),
       ...(recovery ? { recovery } : {}),
     };
+    stagedTokenFile = dispatchTokenFile(t);
     t.lifecycleAttempt = t.dispatch.lifecycleAttempt;
-    writeDispatchTokenFile(t);
     stampDispatchEvent(t, 'dispatch', now);
+    writeDispatchTokenFile(t);
     putTicket(slug, t);
     const warnings = [localAheadWarning?.message, dirtyBaselineCapture?.warning].filter(Boolean);
     return { ok: true, ticket: t, token: t.dispatchNonce, recovery, ...(warnings.length ? { warnings } : {}) };
-  });
+    });
+    if (priorTokenFile && stagedTokenFile && priorTokenFile !== stagedTokenFile) {
+      try { fs.unlinkSync(priorTokenFile); } catch (_: unknown) {}
+    }
+    return prepared;
+  } catch (error) {
+    if (stagedTokenFile && stagedTokenFile !== priorTokenFile) {
+      try { fs.unlinkSync(stagedTokenFile); } catch (_: unknown) {}
+    }
+    throw error;
+  }
 }
 
 function readDispatchBriefing(slug?: any, idOrRef?: any, token?: any, tokenFile?: any) {
