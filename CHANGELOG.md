@@ -8,6 +8,24 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.543.0 (2026-09-10)
+
+### model-gateway 0.50.11 → 0.50.12
+
+#### Fixes
+
+- Emit canonical gateway route spans for failure reporting (SQ-2640)
+  Use canonical route span names so failed Codex requests reach observability with their terminal status.
+- Keep timed-out ownership inspection unknown (SQ-2645)
+  Prevent a timed-out process inspection from treating a live listener as unowned.
+- Give Windows ownership probes their measured lookup budget (SQ-2668)
+  Windows `Win32_Process` ownership lookups measure ~1.8-2.4s even on keyed
+  queries, so the shared 2-second `CODEX_GATEWAY_PROBE_TIMEOUT_MS` default left
+  no room for the two-attempt retry in `resolvePortOwner` and produced
+  false `owner-unknown` results. Windows now defaults to 8 seconds; other
+  platforms keep 2 seconds. An explicit `CODEX_GATEWAY_PROBE_TIMEOUT_MS`
+  override still wins on every platform.
+
 ## v3.542.0 (2026-09-10)
 
 ### model-gateway 0.50.10 → 0.50.11
