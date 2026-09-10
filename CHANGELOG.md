@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.544.0 (2026-09-10)
+
+### model-gateway 0.50.12 → 0.50.13
+
+#### Fixes
+
+- Normalize legacy gateway cache through canonical model-window policy (SQ-2675)
+  Fix the legacy gateway model-cache cleaner stripping the `[1m]` alias suffix from every owned row unconditionally. It now normalizes each row through the same canonical model-window policy the discovery cache already uses, so a row keeps or gains `[1m]` correctly based on its actual advertised context window instead of always losing it.
+
 ## v3.543.0 (2026-09-10)
 
 ### model-gateway 0.50.11 → 0.50.12
