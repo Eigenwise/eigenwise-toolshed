@@ -8,6 +8,21 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.545.0 (2026-09-10)
+
+### model-gateway 0.50.13 → 0.50.14
+
+#### Fixes
+
+- Document Desktop's Anthropic-only Gateway model limitation (SQ-2683)
+  Documented that installed Claude Desktop 1.49585.0's native Gateway configuration validates
+  every model ID client-side and rejects any `gpt`/`codex`/non-Anthropic family marker before it
+  reaches the picker or a session, even when the endpoint is correctly wired and there is no
+  forced `ANTHROPIC_BASE_URL` override. Only a genuinely Anthropic-backed route works there. No
+  disguise alias, binary patch, credential/auth substitution, or workaround is supported; the
+  Claude Code CLI remains the verified path for Codex/Grok gateway models. This is version-specific
+  and can be revisited if a future Desktop release removes the model-family filter.
+
 ## v3.544.0 (2026-09-10)
 
 ### model-gateway 0.50.12 → 0.50.13
