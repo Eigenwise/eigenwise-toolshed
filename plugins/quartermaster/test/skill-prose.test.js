@@ -20,11 +20,10 @@ test('documents namespaced Quartermaster commands and Live Rules deduplication',
   assert.doesNotMatch(setup, /every prompt for the always-on ones/);
 });
 
-test('offers Whittle without modes or consumer configuration', () => {
+test('names clean-code principles as the seeded baseline', () => {
   const setup = readSkill('setup');
 
-  assert.match(setup, /must disable it manually and reload plugins or restart before\s+enabling Whittle/);
-  assert.match(setup, /Do not uninstall, import preferences, write consumer configuration, or offer\s+modes/);
+  assert.match(setup, /reuse-first implementation baseline from\s+\[references\/clean-code-principles\.md\]/);
 });
 
 test('seeds reuse-first implementation without auto-running resupply', () => {

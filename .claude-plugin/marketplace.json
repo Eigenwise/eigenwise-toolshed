@@ -125,20 +125,6 @@
       ]
     },
     {
-      "name": "whittle",
-      "source": "./plugins/whittle",
-      "description": "One practical clean-code policy, applied automatically by Claude Code hooks.",
-      "version": "0.1.0",
-      "author": {
-        "name": "Eigenwise"
-      },
-      "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/whittle",
-      "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
-      "license": "MIT",
-      "category": "development",
-      "keywords": ["clean-code", "minimalism", "agent-instructions", "claude-code"]
-    },
-    {
       "name": "live-rules",
       "source": "./plugins/live-rules",
       "description": "Atomic project rules in .claude/live-rules/rules/ with a generated manifest. Claude injects applicable rules at SessionStart, then only new or changed unseen rules as prompts and edits match; legacy single-file storage is for migration or explicit overrides.",
