@@ -36,7 +36,7 @@ function requirementsMatch(left, right) {
   return JSON.stringify(left || null) === JSON.stringify(right || null);
 }
 function createDispatch(dependencies) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
   function syncLiveDispatchVerification(slug, ticket, amendment) {
     const state = dispatchState(ticket);
     if (!state || state.terminalAt) return null;
@@ -1085,6 +1085,9 @@ function createDispatch(dependencies) {
     }
     return { state, checkpointCommit: null };
   }
+  function reusablePreparedRecovery(ticket, current) {
+    return Boolean(current && current.recovery && current.outcome === "prepared" && ticket.dispatchNonce && canonicalPreparedDispatchExecutor(ticket));
+  }
   function prepareDispatch(slug, idOrRef, opts) {
     opts = opts || {};
     if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
@@ -1115,290 +1118,309 @@ function createDispatch(dependencies) {
     }
     assertDispatchTransport(opts.transport, { allowUnverifiedTransport: !!opts.allowUnverifiedTransport });
     const pythonIoEncoding = projectPath ? ensurePythonIoEncoding(projectPath) : { written: false };
-    return withTicketLock(slug, found.id, () => {
-      const t = getTicket(slug, found.id);
-      if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
-      const current = dispatchState(t);
-      if (pendingSubmission(t)) {
-        const candidate = String(t.submission.commit || t.submission.sourceRevision?.value || "").trim();
-        throw new Error(`prepare dispatch: ${t.ref} has a pending submission${candidate ? ` (${candidate})` : ""} waiting on integration, so it is parked for the publish transaction rather than for another executor. Integrate it (\`sidequest integrate ${t.ref} --by <who>\`), send it back for repair and dispatch the replacement (\`sidequest rework ${t.ref} --by ${t.submission.by || "<candidate-owner>"} --review <review-ticket-or-evidence> --reason "what needs repair"\`), or close it as abandoned (\`sidequest groom-close ${t.ref} --abandon-submission --reason "<evidence it never landed>"\`).`);
-      }
-      if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by)) {
-        const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
-        const recovery2 = reclaimUnclaimedDispatchWorktree(projectPath, recoveryFacts.state, {
-          checkpointCommit: recoveryFacts.checkpointCommit
-        });
-        if (recovery2 && recovery2.reclaimed === false && recovery2.discardable !== true) {
-          const retainedContinuation = retainedWorktreeContinuationState(slug, t, current);
-          if (!retainedContinuation?.continuation) {
-            const checkpointCommit = String(t.checkpoint?.commit || "").trim();
-            const checkpointRecovery = checkpointCommit ? ` Restore ${current.worktree} to checkpoint ${checkpointCommit}, then dispatch again; the board will resume that retained checkout without creating another.` : "";
-            throw new Error(`prepare dispatch: ${t.ref} cannot retry because ${recovery2.message || `immutable recovery fact ${recovery2.reason || "is unreadable"}`}${checkpointRecovery}`);
+    const captureFilesystemSnapshot = withTicketLock(slug, found.id, () => {
+      const ticket = getTicket(slug, found.id);
+      if (!ticket) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+      return !reusablePreparedRecovery(ticket, dispatchState(ticket));
+    });
+    const snapshotPreflight = captureFilesystemSnapshot ? dispatchFilesystemSnapshotPreflight(slug, found, (/* @__PURE__ */ new Date()).toISOString()) : null;
+    let priorTokenFile = null;
+    let stagedTokenFile = null;
+    try {
+      const prepared = withTicketLock(slug, found.id, () => {
+        const t = getTicket(slug, found.id);
+        if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+        const current = dispatchState(t);
+        if (pendingSubmission(t)) {
+          const candidate = String(t.submission.commit || t.submission.sourceRevision?.value || "").trim();
+          throw new Error(`prepare dispatch: ${t.ref} has a pending submission${candidate ? ` (${candidate})` : ""} waiting on integration, so it is parked for the publish transaction rather than for another executor. Integrate it (\`sidequest integrate ${t.ref} --by <who>\`), send it back for repair and dispatch the replacement (\`sidequest rework ${t.ref} --by ${t.submission.by || "<candidate-owner>"} --review <review-ticket-or-evidence> --reason "what needs repair"\`), or close it as abandoned (\`sidequest groom-close ${t.ref} --abandon-submission --reason "<evidence it never landed>"\`).`);
+        }
+        if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by)) {
+          const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
+          const recovery2 = reclaimUnclaimedDispatchWorktree(projectPath, recoveryFacts.state, {
+            checkpointCommit: recoveryFacts.checkpointCommit
+          });
+          if (recovery2 && recovery2.reclaimed === false && recovery2.discardable !== true) {
+            const retainedContinuation = retainedWorktreeContinuationState(slug, t, current);
+            if (!retainedContinuation?.continuation) {
+              const checkpointCommit = String(t.checkpoint?.commit || "").trim();
+              const checkpointRecovery = checkpointCommit ? ` Restore ${current.worktree} to checkpoint ${checkpointCommit}, then dispatch again; the board will resume that retained checkout without creating another.` : "";
+              throw new Error(`prepare dispatch: ${t.ref} cannot retry because ${recovery2.message || `immutable recovery fact ${recovery2.reason || "is unreadable"}`}${checkpointRecovery}`);
+            }
           }
         }
-      }
-      const activeRuntimeAttempt = current && !current.terminalAt && !(t.claim && t.claim.by) && Boolean(current.launchedAt || current.boundAt);
-      if (activeRuntimeAttempt) {
-        const evidenceCall = `so the orchestrator can supersede it in one call: \`sidequest dispatch ${t.ref} --recovery-evidence "<observed failed-claim evidence>"\`.`;
-        let recovery2 = ` Wait for that executor's terminal hook, then dispatch once from the returned todo state; do not mint a replacement token while it is still winding down. It is ${evidenceSupersessionBlocker(t, current)}.`;
-        if (supersedableUnboundAttempt(t, current)) recovery2 = ` It is unbound and unclaimed, ${evidenceCall}`;
-        else if (strandedBoundAttempt(t, current)) recovery2 = ` It bound a runtime and never claimed, and a claim is a bound runtime's first action, so that runtime is gone: ${evidenceCall}`;
-        throw new Error(`prepare dispatch: ${t.ref} already has a live dispatch attempt (${pulseDispatchState(current)}).${recovery2}`);
-      }
-      const repeatFailure = repeatNoCommitDispatchError(t, current);
-      const unboundAttemptsSkipped = skippedUnboundNoCommitAttempts(current);
-      if (repeatFailure && opts.allowRepeatFailure !== true) throw new Error(repeatFailure);
-      const releasedContinuation = retainedWorktreeContinuationState(slug, t, current);
-      if (t.claim && t.claim.by && !claimReclaimable(t)) {
-        throw new Error(`prepare dispatch: ${t.ref} has a live claim by ${t.claim.by}. Release it (\`sidequest release ${t.ref} --by ${t.claim.by}\`) before dispatching again.`);
-      }
-      rederiveUnlaunchedPreparedRoute(t, slug);
-      const policyCategory = getCategory(ticketCategory(t), { project: slug });
-      const resolvedPolicy = resolveTicketRoute(t, policyCategory);
-      if (!current?.recovery && resolvedPolicy) {
-        t.model = resolvedPolicy.model;
-        t.effort = resolvedPolicy.effort;
-        t.exec = execProjection(resolvedPolicy.exec);
-      }
-      if (resolvedPolicy?.refusal) throw new Error(resolvedPolicy.refusal);
-      const currentRoute = activeDispatchRoute(t);
-      if (current && current.recovery && current.outcome === "prepared" && t.dispatchNonce && canonicalPreparedDispatchExecutor(t)) {
-        if (opts.sessionId) current.sessionId = String(opts.sessionId);
-        if (!current.launchSeq) current.launchSeq = 1;
-        if (!current.launchName) {
-          const route = current.route || { model: t.model, effort: t.effort };
-          current.launchName = dispatchLaunchName(t.ref, t.title, resolveExec(route.model, route.effort), route.effort, current.launchSeq);
+        const activeRuntimeAttempt = current && !current.terminalAt && !(t.claim && t.claim.by) && Boolean(current.launchedAt || current.boundAt);
+        if (activeRuntimeAttempt) {
+          const evidenceCall = `so the orchestrator can supersede it in one call: \`sidequest dispatch ${t.ref} --recovery-evidence "<observed failed-claim evidence>"\`.`;
+          let recovery2 = ` Wait for that executor's terminal hook, then dispatch once from the returned todo state; do not mint a replacement token while it is still winding down. It is ${evidenceSupersessionBlocker(t, current)}.`;
+          if (supersedableUnboundAttempt(t, current)) recovery2 = ` It is unbound and unclaimed, ${evidenceCall}`;
+          else if (strandedBoundAttempt(t, current)) recovery2 = ` It bound a runtime and never claimed, and a claim is a bound runtime's first action, so that runtime is gone: ${evidenceCall}`;
+          throw new Error(`prepare dispatch: ${t.ref} already has a live dispatch attempt (${pulseDispatchState(current)}).${recovery2}`);
         }
-        putTicket(slug, t);
-        return {
-          ok: true,
-          ticket: t,
-          token: t.dispatchNonce,
-          reused: true,
-          recovery: current.recovery
+        const repeatFailure = repeatNoCommitDispatchError(t, current);
+        const unboundAttemptsSkipped = skippedUnboundNoCommitAttempts(current);
+        if (repeatFailure && opts.allowRepeatFailure !== true) throw new Error(repeatFailure);
+        const releasedContinuation = retainedWorktreeContinuationState(slug, t, current);
+        if (t.claim && t.claim.by && !claimReclaimable(t)) {
+          throw new Error(`prepare dispatch: ${t.ref} has a live claim by ${t.claim.by}. Release it (\`sidequest release ${t.ref} --by ${t.claim.by}\`) before dispatching again.`);
+        }
+        rederiveUnlaunchedPreparedRoute(t, slug);
+        const policyCategory = getCategory(ticketCategory(t), { project: slug });
+        const resolvedPolicy = resolveTicketRoute(t, policyCategory);
+        if (!current?.recovery && resolvedPolicy) {
+          t.model = resolvedPolicy.model;
+          t.effort = resolvedPolicy.effort;
+          t.exec = execProjection(resolvedPolicy.exec);
+        }
+        if (resolvedPolicy?.refusal) throw new Error(resolvedPolicy.refusal);
+        const currentRoute = activeDispatchRoute(t);
+        if (reusablePreparedRecovery(t, current)) {
+          if (opts.sessionId) current.sessionId = String(opts.sessionId);
+          if (!current.launchSeq) current.launchSeq = 1;
+          if (!current.launchName) {
+            const route = current.route || { model: t.model, effort: t.effort };
+            current.launchName = dispatchLaunchName(t.ref, t.title, resolveExec(route.model, route.effort), route.effort, current.launchSeq);
+          }
+          putTicket(slug, t);
+          return {
+            ok: true,
+            ticket: t,
+            token: t.dispatchNonce,
+            reused: true,
+            recovery: current.recovery
+          };
+        }
+        if (current && current.recovery && !current.terminalAt && !currentRoute) {
+          const replacement = resolveCategoryFallback(t.category, current.recovery.failedModel);
+          if (!replacement) throw new Error(`prepare dispatch: no fallback remains available for ${current.recovery.failedModel}.`);
+          t.model = replacement.model;
+          t.effort = replacement.effort;
+          t.exec = execProjection(replacement.exec);
+          current.recovery = Object.assign({}, current.recovery, {
+            fallbackSource: replacement.source,
+            model: replacement.model,
+            effort: replacement.effort
+          });
+        }
+        const now = (/* @__PURE__ */ new Date()).toISOString();
+        const backend = availableRoute(t.model);
+        if (backend && backend.backend === "claude" && (t.effort == null || String(t.effort).trim() === "")) {
+          t.effort = "low";
+          t.exec = execProjection(resolveExec(t.model, t.effort));
+        }
+        const refusal = dispatchRouteRefusal({ model: t.model, effort: t.effort });
+        if (refusal) throw new Error(refusal);
+        const preparedExec = resolveExec(t.model, t.effort);
+        if (!preparedExec) throw new Error(`prepare dispatch: ${t.ref} has no executable route.`);
+        const noDeclaredFileScope = unscopedWriteCannotAutoApprove(t, {
+          dispatchReadOnly,
+          normalizeFiles,
+          autoApproveScope: boardConfig(slug)?.autoApproveScope
+        });
+        if (noDeclaredFileScope && opts.allowUnscoped !== true) {
+          throw new Error(`prepare dispatch: ${t.ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to explicitly accept that the executor can block on its first write and end without a submission.`);
+        }
+        const fallbackReason = !current?.recovery && resolvedPolicy?.fallbackReason || null;
+        const recovery = current && current.recovery && activeDispatchRoute(t) ? current.recovery : null;
+        const attempts = current && Array.isArray(current.attempts) ? current.attempts.slice() : [];
+        const supersededTokens = current && Array.isArray(current.supersededTokens) ? current.supersededTokens.slice() : [];
+        if (current && !current.terminalAt && t.dispatchNonce) {
+          if (current.outcome === "prepared" && current.sharedTree === false) {
+            reclaimUnclaimedDispatchWorktree(projectPath, current);
+          }
+          supersededTokens.push({
+            digest: dispatchTokenDigest(t.dispatchNonce),
+            tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
+            at: now
+          });
+        }
+        priorTokenFile = dispatchTokenFile(t);
+        const releasedBinding = current?.outcome === "released" && Array.isArray(current.declaredFiles) && current.declaredFiles.length ? current.declaredFiles.slice() : null;
+        const effectiveFiles = releasedBinding ? Array.from(/* @__PURE__ */ new Set([...releasedBinding, ...effectiveScope(slug, t)])) : effectiveScope(slug, t);
+        const readonly = dispatchReadOnly(t);
+        const requestedSharedTree = opts.sharedTree === true || !Object.hasOwn(opts, "sharedTree") && Boolean(current?.sharedTree);
+        const reducedAgentSchema = opts.reducedAgentSchema === true || !Object.hasOwn(opts, "reducedAgentSchema") && current?.reducedAgentSchema === true;
+        const explicitIsolation = Object.hasOwn(opts, "sharedTree") && opts.sharedTree === false;
+        const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
+        const reviewTargetState = reviewDispatchTarget(slug, t);
+        if (reviewTargetState && opts.sharedTree === true) {
+          throw new Error(`prepare dispatch: ${t.ref} reviews candidate ${reviewTargetState.candidate.value} and requires an isolated immutable checkout.`);
+        }
+        let sharedTree = reviewTargetState ? false : worktreeIsolation ? requestedSharedTree : true;
+        const nonRepoOutput = nonRepoExternalOutput(t, effectiveFiles);
+        const worktreeWarning = !worktreeIsolation && explicitIsolation ? `Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. ${sharedTreeExecutionGuidance(readonly)}` : !sharedTree && (readonly || effectiveFiles.length) ? worktreeIsolationWarning(slug, readonly) : null;
+        if (reviewTargetState && worktreeWarning) {
+          throw new Error(`prepare dispatch: ${t.ref} cannot pin the immutable candidate checkout. ${worktreeWarning}`);
+        }
+        if (worktreeWarning) sharedTree = true;
+        if (t.workingTreeDelivery === true && !sharedTree) {
+          throw new Error(`prepare dispatch: ${t.ref} declares a working-tree deliverable and must run in the shared checkout. Re-dispatch with sharedTree:true.`);
+        }
+        const runtimeRefusal = sharedTree ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd) : null;
+        if (runtimeRefusal) throw new Error(runtimeRefusal);
+        const workingTreeDelivery = sharedTree && t.workingTreeDelivery === true && effectiveFiles.length > 0;
+        const verificationRequirement2 = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ""));
+        if (workingTreeDelivery && verificationRequirement2.kind === "review") {
+          throw new Error(`prepare dispatch: ${t.ref} working-tree delivery cannot use review verification because executor evidence has no independent reviewer provenance.`);
+        }
+        const category = getCategory(ticketCategory(t), { project: slug });
+        const artifactRoot = sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t) ? categoryArtifactRoot(category, effectiveFiles[0]) : null;
+        const artifactMode = Boolean(artifactRoot);
+        const declaredFiles = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(effectiveFiles, t.files, t.ref);
+        const artifactScope = artifactMode ? effectiveFiles[0] : null;
+        const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
+        const dirtyBaselineCapture = sharedTree && !artifactMode ? captureDirtyBaseline(slug) : null;
+        const workingTreeDirtyBaseline = workingTreeDelivery ? dirtyBaselineCapture?.baseline || null : null;
+        t.dispatchExecutor = stableExecutorName(t, artifactMode || workingTreeDelivery);
+        const launchSeq = nextDispatchLaunchSeq(current);
+        const story = t.storyId ? getStory(slug, t.storyId) : null;
+        const contract = storyExecutionContract(story);
+        const storyLogRevision = Number(story?.logRevision) || 0;
+        t.storyLogSeenSeq = storyLogRevision;
+        const contractDrift = t.storyContractDrift || null;
+        const configuredIntegrationMode = String(readMeta(slug)?.integrationMode || "auto").trim().toLowerCase();
+        const configuredWorktreeBase = boardConfig(slug)?.worktreeBase || "auto";
+        const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
+        const isolatedRepositoryDispatch = !sharedTree && !readonly && !nonRepoOutput;
+        const automaticWorktreeBaseEligible = isolatedRepositoryDispatch || !sharedTree && readonly && !nonRepoOutput && configuredWorktreeBase !== "auto";
+        const remoteIntegrationTarget = () => {
+          try {
+            return integrationTarget(slug, { mode: "remote" });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error(`${message} The configured worktreeBase is "${configuredWorktreeBase}"; use --worktree-base local-main to dispatch from the local integration branch.`);
+          }
         };
-      }
-      if (current && current.recovery && !current.terminalAt && !currentRoute) {
-        const replacement = resolveCategoryFallback(t.category, current.recovery.failedModel);
-        if (!replacement) throw new Error(`prepare dispatch: no fallback remains available for ${current.recovery.failedModel}.`);
-        t.model = replacement.model;
-        t.effort = replacement.effort;
-        t.exec = execProjection(replacement.exec);
-        current.recovery = Object.assign({}, current.recovery, {
-          fallbackSource: replacement.source,
-          model: replacement.model,
-          effort: replacement.effort
-        });
-      }
-      const now = (/* @__PURE__ */ new Date()).toISOString();
-      const backend = availableRoute(t.model);
-      if (backend && backend.backend === "claude" && (t.effort == null || String(t.effort).trim() === "")) {
-        t.effort = "low";
-        t.exec = execProjection(resolveExec(t.model, t.effort));
-      }
-      const refusal = dispatchRouteRefusal({ model: t.model, effort: t.effort });
-      if (refusal) throw new Error(refusal);
-      const preparedExec = resolveExec(t.model, t.effort);
-      if (!preparedExec) throw new Error(`prepare dispatch: ${t.ref} has no executable route.`);
-      const noDeclaredFileScope = unscopedWriteCannotAutoApprove(t, {
-        dispatchReadOnly,
-        normalizeFiles,
-        autoApproveScope: boardConfig(slug)?.autoApproveScope
-      });
-      if (noDeclaredFileScope && opts.allowUnscoped !== true) {
-        throw new Error(`prepare dispatch: ${t.ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to explicitly accept that the executor can block on its first write and end without a submission.`);
-      }
-      const fallbackReason = !current?.recovery && resolvedPolicy?.fallbackReason || null;
-      const recovery = current && current.recovery && activeDispatchRoute(t) ? current.recovery : null;
-      const attempts = current && Array.isArray(current.attempts) ? current.attempts.slice() : [];
-      const supersededTokens = current && Array.isArray(current.supersededTokens) ? current.supersededTokens.slice() : [];
-      if (current && !current.terminalAt && t.dispatchNonce) {
-        if (current.outcome === "prepared" && current.sharedTree === false) {
-          reclaimUnclaimedDispatchWorktree(projectPath, current);
-        }
-        supersededTokens.push({
-          digest: dispatchTokenDigest(t.dispatchNonce),
+        const automaticWorktreeBase = automaticWorktreeBaseEligible && !explicitIntegrationTarget && configuredIntegrationMode === "auto" ? configuredWorktreeBase === "local-main" ? integrationTarget(slug, { mode: "local" }) : configuredWorktreeBase === "origin-main" ? hasOriginRemote(readMeta(slug)?.path || "") ? remoteIntegrationTarget() : null : (() => {
+          const projectPath2 = readMeta(slug)?.path || "";
+          if (!hasOriginRemote(projectPath2)) return null;
+          let localTarget;
+          try {
+            localTarget = integrationTarget(slug, { mode: "local" });
+          } catch (_) {
+            return remoteIntegrationTarget();
+          }
+          return localAheadOfUpstreamWarning(projectPath2, localTarget.branch) ? localTarget : remoteIntegrationTarget();
+        })() : null;
+        const useIntegrationTarget = explicitIntegrationTarget || isolatedRepositoryDispatch && configuredIntegrationMode !== "auto" || Boolean(automaticWorktreeBase);
+        const integrationTargetState = explicitIntegrationTarget ? integrationTarget(slug, {
+          ...opts.integrationBranch != null ? { branch: opts.integrationBranch } : {},
+          ...opts.integrationMode != null ? { mode: opts.integrationMode } : {}
+        }) : automaticWorktreeBase || (useIntegrationTarget ? integrationTarget(slug) : null);
+        const localAheadWarning = !sharedTree && integrationTargetState ? localAheadOfUpstreamWarning(
+          readMeta(slug)?.path || "",
+          integrationTargetState.branch,
+          integrationTargetState.mode === "local" ? `local ${integrationTargetState.branch}` : integrationTargetState.upstream
+        ) : null;
+        delete t.storyContractDrift;
+        const evidenceDirectory = ticketEvidenceDirectory(slug, t.ref, projectPath);
+        fs.mkdirSync(evidenceDirectory, { recursive: true, mode: 448 });
+        const baseCommit = reviewTargetState?.candidate.source === "git" ? reviewTargetState.candidate.value : integrationTargetState ? integrationTargetCommit(readMeta(slug)?.path || "", integrationTargetState) : commitScope.headCommit(readMeta(slug)?.path || "");
+        const dispatchBaseline = dispatchBaselineForProject(slug, t, now, baseCommit, nonRepoOutput, snapshotPreflight);
+        t.dispatchNonce = mintDispatchToken();
+        t.dispatch = {
+          lifecycleAttempt: prepareAttempt(
+            dispatchBaseline,
+            Object.freeze({ actor: dispatchPreparationAttribution(opts), operation: "prepare", sessionId: opts.sessionId ? String(opts.sessionId) : null }),
+            preparedPluginInstall && preparedPluginIdentity ? Object.freeze({ pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity }) : void 0,
+            verificationRequirement2
+          ),
+          verificationRequirement: verificationRequirement2,
+          evidenceDirectory,
+          sessionId: opts.sessionId ? String(opts.sessionId) : null,
+          preparedBy: dispatchPreparationAttribution(opts),
+          ...preparedPluginInstall && preparedPluginIdentity ? { preparedCompatibility: { pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity } } : {},
+          sharedTree,
+          ...reducedAgentSchema ? { reducedAgentSchema: true } : {},
+          ...worktreeWarning ? { worktreeWarning } : {},
+          ...pythonIoEncoding.written ? { pythonIoEncoding } : {},
+          ...opts.dispatchSkew ? { dispatchSkew: opts.dispatchSkew } : {},
+          declaredFiles,
+          ...!sharedTree && releasedContinuation?.continuation ? {
+            continuation: releasedContinuation.continuation,
+            worktree: releasedContinuation.continuation.sourceWorktree,
+            worktreeGitDirectory: releasedContinuation.continuation.lease.boundGitDirectory,
+            worktreeCommonGitDirectory: releasedContinuation.continuation.lease.boundCommonGitDirectory,
+            worktreeCheckoutInstance: releasedContinuation.continuation.lease.boundCheckoutInstance,
+            worktreeObservedRevision: releasedContinuation.continuation.lease.boundRevision,
+            worktreeBindingSource: "continuation"
+          } : {},
+          ...releasedContinuation?.fallback ? { continuationFallback: releasedContinuation.fallback } : {},
+          ...sharedTree && releasedContinuation?.continuation ? { continuationFallback: continuationFallback("continuation_checkpoint_requires_isolated_worktree", releasedContinuation.continuation.sourceWorktree) } : {},
+          // Record the integration target commit so an isolated executor can bring
+          // its harness-created worktree forward before changing it.
+          baseCommit,
+          ...reviewTargetState ? { reviewTarget: t.reviewTarget } : {},
+          ...integrationTargetState ? { integrationTarget: integrationTargetState } : {},
+          ...localAheadWarning ? { localAheadWarning } : {},
+          readonly,
+          ...noDeclaredFileScope ? {
+            unscopedOverride: {
+              at: now,
+              source: opts.source || opts.transport || "store"
+            }
+          } : {},
+          ...nonRepoOutput ? { nonRepoOutput: true } : {},
+          artifactMode,
+          artifactRoot,
+          artifactScope,
+          ...artifactMode ? { artifactDirtyBaseline } : {},
+          ...dirtyBaselineCapture?.warning ? { dirtyBaselineWarning: dirtyBaselineCapture.warning } : {},
+          ...workingTreeDelivery ? { workingTreeDelivery: true, workingTreeDirtyBaseline } : {},
+          ...sharedTree ? { dirtyBaseline: artifactDirtyBaseline || dirtyBaselineCapture?.baseline || null } : {},
           tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
-          at: now
-        });
-      }
-      const priorTokenFile = dispatchTokenFile(t);
-      const releasedBinding = current?.outcome === "released" && Array.isArray(current.declaredFiles) && current.declaredFiles.length ? current.declaredFiles.slice() : null;
-      const effectiveFiles = releasedBinding ? Array.from(/* @__PURE__ */ new Set([...releasedBinding, ...effectiveScope(slug, t)])) : effectiveScope(slug, t);
-      const readonly = dispatchReadOnly(t);
-      const requestedSharedTree = opts.sharedTree === true || !Object.hasOwn(opts, "sharedTree") && Boolean(current?.sharedTree);
-      const reducedAgentSchema = opts.reducedAgentSchema === true || !Object.hasOwn(opts, "reducedAgentSchema") && current?.reducedAgentSchema === true;
-      const explicitIsolation = Object.hasOwn(opts, "sharedTree") && opts.sharedTree === false;
-      const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
-      const reviewTargetState = reviewDispatchTarget(slug, t);
-      if (reviewTargetState && opts.sharedTree === true) {
-        throw new Error(`prepare dispatch: ${t.ref} reviews candidate ${reviewTargetState.candidate.value} and requires an isolated immutable checkout.`);
-      }
-      let sharedTree = reviewTargetState ? false : worktreeIsolation ? requestedSharedTree : true;
-      const nonRepoOutput = nonRepoExternalOutput(t, effectiveFiles);
-      const worktreeWarning = !worktreeIsolation && explicitIsolation ? `Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. ${sharedTreeExecutionGuidance(readonly)}` : !sharedTree && (readonly || effectiveFiles.length) ? worktreeIsolationWarning(slug, readonly) : null;
-      if (reviewTargetState && worktreeWarning) {
-        throw new Error(`prepare dispatch: ${t.ref} cannot pin the immutable candidate checkout. ${worktreeWarning}`);
-      }
-      if (worktreeWarning) sharedTree = true;
-      if (t.workingTreeDelivery === true && !sharedTree) {
-        throw new Error(`prepare dispatch: ${t.ref} declares a working-tree deliverable and must run in the shared checkout. Re-dispatch with sharedTree:true.`);
-      }
-      const runtimeRefusal = sharedTree ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd) : null;
-      if (runtimeRefusal) throw new Error(runtimeRefusal);
-      const workingTreeDelivery = sharedTree && t.workingTreeDelivery === true && effectiveFiles.length > 0;
-      const verificationRequirement2 = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ""));
-      if (workingTreeDelivery && verificationRequirement2.kind === "review") {
-        throw new Error(`prepare dispatch: ${t.ref} working-tree delivery cannot use review verification because executor evidence has no independent reviewer provenance.`);
-      }
-      t.dispatchNonce = mintDispatchToken();
-      if (priorTokenFile) {
+          tokenFile: newDispatchTokenFile(),
+          executor: t.dispatchExecutor,
+          description: spawnDescription(t, preparedExec),
+          launchSeq,
+          launchName: dispatchLaunchName(t.ref, t.title, preparedExec, t.effort, launchSeq),
+          route: dispatchRouteState(t.model, t.effort, preparedExec),
+          ...repeatFailure ? {
+            repeatFailureOverride: {
+              at: now,
+              source: opts.source || opts.transport || "store",
+              priorAttempts: recentNoCommitAttempts(current).length
+            }
+          } : {},
+          ...unboundAttemptsSkipped ? { unboundAttemptsSkipped: true } : {},
+          ...fallbackReason ? { fallbackReason } : {},
+          storyContract: contract,
+          storyLogRevision,
+          ...contractDrift ? { storyContractDrift: Object.assign({}, contractDrift, { rebasedAt: now }) } : {},
+          preparedAt: now,
+          launchedAt: null,
+          boundAt: null,
+          claimedAt: null,
+          terminalAt: null,
+          outcome: "prepared",
+          ...attempts.length ? { attempts } : {},
+          ...supersededTokens.length ? { supersededTokens: supersededTokens.slice(-8) } : {},
+          ...recovery ? { recovery } : {}
+        };
+        stagedTokenFile = dispatchTokenFile(t);
+        t.lifecycleAttempt = t.dispatch.lifecycleAttempt;
+        stampDispatchEvent(t, "dispatch", now);
+        writeDispatchTokenFile(t);
+        putTicket(slug, t);
+        const warnings = [localAheadWarning?.message, dirtyBaselineCapture?.warning].filter(Boolean);
+        return { ok: true, ticket: t, token: t.dispatchNonce, recovery, ...warnings.length ? { warnings } : {} };
+      });
+      if (priorTokenFile && stagedTokenFile && priorTokenFile !== stagedTokenFile) {
         try {
           fs.unlinkSync(priorTokenFile);
-        } catch (error) {
-          if (error?.code !== "ENOENT") throw error;
+        } catch (_) {
         }
       }
-      const category = getCategory(ticketCategory(t), { project: slug });
-      const artifactRoot = sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t) ? categoryArtifactRoot(category, effectiveFiles[0]) : null;
-      const artifactMode = Boolean(artifactRoot);
-      const declaredFiles = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(effectiveFiles, t.files, t.ref);
-      const artifactScope = artifactMode ? effectiveFiles[0] : null;
-      const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
-      const dirtyBaselineCapture = sharedTree && !artifactMode ? captureDirtyBaseline(slug) : null;
-      const workingTreeDirtyBaseline = workingTreeDelivery ? dirtyBaselineCapture?.baseline || null : null;
-      t.dispatchExecutor = stableExecutorName(t, artifactMode || workingTreeDelivery);
-      const launchSeq = nextDispatchLaunchSeq(current);
-      const story = t.storyId ? getStory(slug, t.storyId) : null;
-      const contract = storyExecutionContract(story);
-      const storyLogRevision = Number(story?.logRevision) || 0;
-      t.storyLogSeenSeq = storyLogRevision;
-      const contractDrift = t.storyContractDrift || null;
-      const configuredIntegrationMode = String(readMeta(slug)?.integrationMode || "auto").trim().toLowerCase();
-      const configuredWorktreeBase = boardConfig(slug)?.worktreeBase || "auto";
-      const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
-      const isolatedRepositoryDispatch = !sharedTree && !readonly && !nonRepoOutput;
-      const automaticWorktreeBaseEligible = isolatedRepositoryDispatch || !sharedTree && readonly && !nonRepoOutput && configuredWorktreeBase !== "auto";
-      const remoteIntegrationTarget = () => {
+      return prepared;
+    } catch (error) {
+      if (stagedTokenFile && stagedTokenFile !== priorTokenFile) {
         try {
-          return integrationTarget(slug, { mode: "remote" });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          throw new Error(`${message} The configured worktreeBase is "${configuredWorktreeBase}"; use --worktree-base local-main to dispatch from the local integration branch.`);
-        }
-      };
-      const automaticWorktreeBase = automaticWorktreeBaseEligible && !explicitIntegrationTarget && configuredIntegrationMode === "auto" ? configuredWorktreeBase === "local-main" ? integrationTarget(slug, { mode: "local" }) : configuredWorktreeBase === "origin-main" ? hasOriginRemote(readMeta(slug)?.path || "") ? remoteIntegrationTarget() : null : (() => {
-        const projectPath2 = readMeta(slug)?.path || "";
-        if (!hasOriginRemote(projectPath2)) return null;
-        let localTarget;
-        try {
-          localTarget = integrationTarget(slug, { mode: "local" });
+          fs.unlinkSync(stagedTokenFile);
         } catch (_) {
-          return remoteIntegrationTarget();
         }
-        return localAheadOfUpstreamWarning(projectPath2, localTarget.branch) ? localTarget : remoteIntegrationTarget();
-      })() : null;
-      const useIntegrationTarget = explicitIntegrationTarget || isolatedRepositoryDispatch && configuredIntegrationMode !== "auto" || Boolean(automaticWorktreeBase);
-      const integrationTargetState = explicitIntegrationTarget ? integrationTarget(slug, {
-        ...opts.integrationBranch != null ? { branch: opts.integrationBranch } : {},
-        ...opts.integrationMode != null ? { mode: opts.integrationMode } : {}
-      }) : automaticWorktreeBase || (useIntegrationTarget ? integrationTarget(slug) : null);
-      const localAheadWarning = !sharedTree && integrationTargetState ? localAheadOfUpstreamWarning(
-        readMeta(slug)?.path || "",
-        integrationTargetState.branch,
-        integrationTargetState.mode === "local" ? `local ${integrationTargetState.branch}` : integrationTargetState.upstream
-      ) : null;
-      delete t.storyContractDrift;
-      const evidenceDirectory = ticketEvidenceDirectory(slug, t.ref, projectPath);
-      fs.mkdirSync(evidenceDirectory, { recursive: true, mode: 448 });
-      const baseCommit = reviewTargetState?.candidate.source === "git" ? reviewTargetState.candidate.value : integrationTargetState ? integrationTargetCommit(readMeta(slug)?.path || "", integrationTargetState) : commitScope.headCommit(readMeta(slug)?.path || "");
-      const dispatchBaseline = dispatchBaselineForProject(slug, t, now, baseCommit, nonRepoOutput);
-      t.dispatch = {
-        lifecycleAttempt: prepareAttempt(
-          dispatchBaseline,
-          Object.freeze({ actor: dispatchPreparationAttribution(opts), operation: "prepare", sessionId: opts.sessionId ? String(opts.sessionId) : null }),
-          preparedPluginInstall && preparedPluginIdentity ? Object.freeze({ pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity }) : void 0,
-          verificationRequirement2
-        ),
-        verificationRequirement: verificationRequirement2,
-        evidenceDirectory,
-        sessionId: opts.sessionId ? String(opts.sessionId) : null,
-        preparedBy: dispatchPreparationAttribution(opts),
-        ...preparedPluginInstall && preparedPluginIdentity ? { preparedCompatibility: { pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity } } : {},
-        sharedTree,
-        ...reducedAgentSchema ? { reducedAgentSchema: true } : {},
-        ...worktreeWarning ? { worktreeWarning } : {},
-        ...pythonIoEncoding.written ? { pythonIoEncoding } : {},
-        ...opts.dispatchSkew ? { dispatchSkew: opts.dispatchSkew } : {},
-        declaredFiles,
-        ...!sharedTree && releasedContinuation?.continuation ? {
-          continuation: releasedContinuation.continuation,
-          worktree: releasedContinuation.continuation.sourceWorktree,
-          worktreeGitDirectory: releasedContinuation.continuation.lease.boundGitDirectory,
-          worktreeCommonGitDirectory: releasedContinuation.continuation.lease.boundCommonGitDirectory,
-          worktreeCheckoutInstance: releasedContinuation.continuation.lease.boundCheckoutInstance,
-          worktreeObservedRevision: releasedContinuation.continuation.lease.boundRevision,
-          worktreeBindingSource: "continuation"
-        } : {},
-        ...releasedContinuation?.fallback ? { continuationFallback: releasedContinuation.fallback } : {},
-        ...sharedTree && releasedContinuation?.continuation ? { continuationFallback: continuationFallback("continuation_checkpoint_requires_isolated_worktree", releasedContinuation.continuation.sourceWorktree) } : {},
-        // Record the integration target commit so an isolated executor can bring
-        // its harness-created worktree forward before changing it.
-        baseCommit,
-        ...reviewTargetState ? { reviewTarget: t.reviewTarget } : {},
-        ...integrationTargetState ? { integrationTarget: integrationTargetState } : {},
-        ...localAheadWarning ? { localAheadWarning } : {},
-        readonly,
-        ...noDeclaredFileScope ? {
-          unscopedOverride: {
-            at: now,
-            source: opts.source || opts.transport || "store"
-          }
-        } : {},
-        ...nonRepoOutput ? { nonRepoOutput: true } : {},
-        artifactMode,
-        artifactRoot,
-        artifactScope,
-        ...artifactMode ? { artifactDirtyBaseline } : {},
-        ...dirtyBaselineCapture?.warning ? { dirtyBaselineWarning: dirtyBaselineCapture.warning } : {},
-        ...workingTreeDelivery ? { workingTreeDelivery: true, workingTreeDirtyBaseline } : {},
-        ...sharedTree ? { dirtyBaseline: artifactDirtyBaseline || dirtyBaselineCapture?.baseline || null } : {},
-        tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
-        tokenFile: newDispatchTokenFile(),
-        executor: t.dispatchExecutor,
-        description: spawnDescription(t, preparedExec),
-        launchSeq,
-        launchName: dispatchLaunchName(t.ref, t.title, preparedExec, t.effort, launchSeq),
-        route: dispatchRouteState(t.model, t.effort, preparedExec),
-        ...repeatFailure ? {
-          repeatFailureOverride: {
-            at: now,
-            source: opts.source || opts.transport || "store",
-            priorAttempts: recentNoCommitAttempts(current).length
-          }
-        } : {},
-        ...unboundAttemptsSkipped ? { unboundAttemptsSkipped: true } : {},
-        ...fallbackReason ? { fallbackReason } : {},
-        storyContract: contract,
-        storyLogRevision,
-        ...contractDrift ? { storyContractDrift: Object.assign({}, contractDrift, { rebasedAt: now }) } : {},
-        preparedAt: now,
-        launchedAt: null,
-        boundAt: null,
-        claimedAt: null,
-        terminalAt: null,
-        outcome: "prepared",
-        ...attempts.length ? { attempts } : {},
-        ...supersededTokens.length ? { supersededTokens: supersededTokens.slice(-8) } : {},
-        ...recovery ? { recovery } : {}
-      };
-      t.lifecycleAttempt = t.dispatch.lifecycleAttempt;
-      writeDispatchTokenFile(t);
-      stampDispatchEvent(t, "dispatch", now);
-      putTicket(slug, t);
-      const warnings = [localAheadWarning?.message, dirtyBaselineCapture?.warning].filter(Boolean);
-      return { ok: true, ticket: t, token: t.dispatchNonce, recovery, ...warnings.length ? { warnings } : {} };
-    });
+      }
+      throw error;
+    }
   }
   function readDispatchBriefing(slug, idOrRef, token, tokenFile) {
     const ticket = getTicket(slug, idOrRef);

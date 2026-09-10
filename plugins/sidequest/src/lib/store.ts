@@ -154,6 +154,14 @@ const FILESYSTEM_SNAPSHOT_ADAPTER = 'filesystem-snapshot';
 const GIT_SOURCE_REVISION_ADAPTER = 'git';
 const SOURCE_REVISION_SNAPSHOTS_MAX = 256;
 
+type DispatchFilesystemSnapshotPreflight = Readonly<{
+  projectPath: string;
+  adapter: typeof FILESYSTEM_SNAPSHOT_ADAPTER;
+  ticketId: string;
+  ticketRef: string;
+  revision: Readonly<{ source: string; value: string; observedAt: string }>;
+}>;
+
 function sourceRevisionAdapterForPath(projectPath: any) {
   let directory = path.resolve(projectPath);
   for (;;) {
@@ -170,11 +178,17 @@ function sourceRevisionSnapshots(meta: any) {
     : [];
 }
 
-function persistFilesystemSnapshot(slug: any, revision: any) {
+function persistFilesystemSnapshot(slug: any, revision: any, expected?: Pick<DispatchFilesystemSnapshotPreflight, 'projectPath' | 'adapter'>) {
   return withMetaLock(slug, () => {
     const meta = readMeta(slug);
     if (!meta || meta.sourceRevisionAdapter !== FILESYSTEM_SNAPSHOT_ADAPTER) {
       throw new Error(`source revision adapter "${FILESYSTEM_SNAPSHOT_ADAPTER}" is not configured for project ${slug}.`);
+    }
+    // The hash was taken outside this lock, so an independent writer can have
+    // repointed the project between the read and this write. Persisting then
+    // would file the old path's hash under the new registration (SQ-2680).
+    if (expected && (meta.sourceRevisionAdapter !== expected.adapter || path.resolve(String(meta.path || '')) !== path.resolve(expected.projectPath))) {
+      throw new Error(`project ${slug} changed while its filesystem snapshot was being captured.`);
     }
     const snapshots = sourceRevisionSnapshots(meta);
     if (!snapshots.some((snapshot: any) => snapshot.value === revision.value)) {
@@ -188,22 +202,60 @@ function persistFilesystemSnapshot(slug: any, revision: any) {
 
 function filesystemSnapshotBaseline(slug: any, observedAt: string) {
   const meta = readMeta(slug);
-  const revision = filesystemSnapshotRevision(String(meta?.path || ''), observedAt);
+  const projectPath = path.resolve(String(meta?.path || ''));
+  const revision = filesystemSnapshotRevision(projectPath, observedAt);
   if (!revision) {
     throw new Error(`project registration refused: the configured ${FILESYSTEM_SNAPSHOT_ADAPTER} adapter cannot snapshot ${String(meta?.path || slug)}.`);
   }
-  return persistFilesystemSnapshot(slug, revision);
+  return persistFilesystemSnapshot(slug, revision, { projectPath, adapter: FILESYSTEM_SNAPSHOT_ADAPTER });
 }
 
-function dispatchBaselineForProject(slug: any, ticket: any, observedAt: string, baseCommit: any, nonRepoOutput: boolean) {
+// Hashing a whole project tree is the one slow part of preparing a dispatch, so
+// it runs before the final ticket lock and hands its result forward. Recovery
+// reuse skips it entirely rather than paying for a hash it will not record.
+function dispatchFilesystemSnapshotPreflight(slug: any, ticket: any, observedAt: string): DispatchFilesystemSnapshotPreflight | null {
   const project = readMeta(slug);
-  const revision = project?.sourceRevisionAdapter === FILESYSTEM_SNAPSHOT_ADAPTER
-    ? filesystemSnapshotBaseline(slug, observedAt)
-    : Object.freeze({
-      source: nonRepoOutput ? 'project-snapshot' : 'git',
-      value: String(baseCommit || ticket.id || ticket.ref),
-      observedAt,
-    });
+  if (project?.sourceRevisionAdapter !== FILESYSTEM_SNAPSHOT_ADAPTER) return null;
+  const projectPath = path.resolve(String(project.path || ''));
+  const revision = filesystemSnapshotRevision(projectPath, observedAt);
+  if (!revision) {
+    throw new Error(`prepare dispatch: ${ticket.ref} could not snapshot ${projectPath || slug}. Retry dispatch after the project is readable.`);
+  }
+  return Object.freeze({
+    projectPath,
+    adapter: FILESYSTEM_SNAPSHOT_ADAPTER,
+    ticketId: String(ticket.id),
+    ticketRef: String(ticket.ref),
+    revision,
+  });
+}
+
+function dispatchBaselineForProject(slug: any, ticket: any, observedAt: string, baseCommit: any, nonRepoOutput: boolean, snapshotPreflight: DispatchFilesystemSnapshotPreflight | null) {
+  const project = readMeta(slug);
+  if (snapshotPreflight) {
+    persistFilesystemSnapshot(slug, snapshotPreflight.revision, snapshotPreflight);
+    const persisted = readMeta(slug);
+    const snapshotStillMatches = path.resolve(String(persisted?.path || '')) === snapshotPreflight.projectPath
+      && persisted?.sourceRevisionAdapter === snapshotPreflight.adapter
+      && ticket.id === snapshotPreflight.ticketId
+      && ticket.ref === snapshotPreflight.ticketRef
+      && sourceRevisionSnapshots(persisted).some((snapshot: any) => snapshot.value === snapshotPreflight.revision.value);
+    if (!snapshotStillMatches) {
+      throw new Error(`prepare dispatch: ${ticket.ref} changed while its filesystem snapshot was being captured. Retry dispatch; the current token remains valid.`);
+    }
+    return Object.freeze({ revision: snapshotPreflight.revision, purpose: 'dispatch' as const });
+  }
+  // A project that became non-Git after the preflight decided otherwise has no
+  // captured hash, and inventing a git-shaped baseline for it would record a
+  // revision no adapter can ever resolve.
+  if (project?.sourceRevisionAdapter === FILESYSTEM_SNAPSHOT_ADAPTER) {
+    throw new Error(`prepare dispatch: ${ticket.ref} needs a fresh filesystem snapshot. Retry dispatch; the current token remains valid.`);
+  }
+  const revision = Object.freeze({
+    source: nonRepoOutput ? 'project-snapshot' : 'git',
+    value: String(baseCommit || ticket.id || ticket.ref),
+    observedAt,
+  });
   return Object.freeze({ revision, purpose: 'dispatch' as const });
 }
 
@@ -521,6 +573,7 @@ const {
   database,
   db,
   dispatchReadOnly: (...args: any[]) => dispatchReadOnly(...args),
+  dispatchFilesystemSnapshotPreflight,
   dispatchBaselineForProject,
   dispatchVerifyCommandError: (...args: any[]) => dispatchVerifyCommandError(...args),
   dispatchRouteRefusal: (...args: any[]) => dispatchRouteRefusal(...args),
