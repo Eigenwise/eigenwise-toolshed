@@ -277,7 +277,10 @@ function processTableSync() {
   return result.status === 0 ? processTableFromOutput(result.stdout) : null;
 }
 function probeTimeoutMs() {
-  return Math.max(1, Number(process.env.CODEX_GATEWAY_PROBE_TIMEOUT_MS) || 2000);
+  // Win32_Process ownership probes measure ~1.8-2.4s even on keyed queries (SQ-2639, SQ-2646);
+  // the two-attempt budget in resolvePortOwner needs headroom past that on Windows.
+  const defaultMs = WIN ? 8000 : 2000;
+  return Math.max(1, Number(process.env.CODEX_GATEWAY_PROBE_TIMEOUT_MS) || defaultMs);
 }
 function waitForProbeChildClose(child) {
   return new Promise((resolve) => {
@@ -903,7 +906,7 @@ function createProxyRecovery({
 
 module.exports = {
   commandIncludesFile, commandResultAsync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, killPidAsync, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
-  processInfoAsync, processInfoSync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync, processTableSync, resolvePortOwner,
+  probeTimeoutMs, processInfoAsync, processInfoSync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync, processTableSync, resolvePortOwner,
   proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPids, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
   spawnSupervisedProxy, stopAll, stopProcess, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit, writePidRecord, writePidRecordAsync,
 };
