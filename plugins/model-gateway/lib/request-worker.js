@@ -19,7 +19,11 @@ const { detectHostsCompat } = require('./remote-control.js');
 const { codexBaseFromId, ourBaseUrls } = require('./pins.js');
 const { ToolSchemaCompatibilityError, adaptCodexToolSchemas } = require('./tool-schema-compat.js');
 const {
-  ANTHROPIC_UPSTREAM, AUTH_HEADERS, CODEX_FAMILY_RE, CODEX_UPSTREAM_BLOCK_PATH, COMPAT_HOST,
+  clearUpstreamBlocked, clearUpstreamUnavailable, readUpstreamBlocked, readUpstreamUnavailable,
+  setUpstreamBlocked, setUpstreamUnavailable,
+} = require('./codex-upstream-state.js');
+const {
+  ANTHROPIC_UPSTREAM, AUTH_HEADERS, CODEX_FAMILY_RE, COMPAT_HOST,
   COMPAT_PORT, DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GROK_ENDPOINT, GROK_PREFIX, LIST_DISPATCH_MODEL,
   LOGS, PLUGIN_VERSION, PREFIX, PROXY_BIN, PROXY_PORT, REQUEST_ROUTE_LOG,
   REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT, SOCKET_PATH,
@@ -40,32 +44,8 @@ const CODEX_READINESS_MESSAGES = {
   'shim-down': () => `Codex dispatch refused: the model-gateway shim is down. Run \`node "${__filename}" ensure\`, then retry. No Anthropic fallback was used.`,
   'serving-version-mismatch': () => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${resolveNewestInstalledCliPath()}" ensure\`, then retry. No Anthropic fallback was used.`,
   'upstream-blocked': () => `Codex is blocked by an OpenAI rejection. Run \`node "${__filename}" setup\`; if it persists, wait for a claude-code-proxy update or explicitly re-route this ticket. Codex tickets remain blocked.`,
+  'upstream-unavailable': () => 'Codex had a terminal upstream failure in the last 60 seconds. Wait briefly, then retry; /v1/models only proves the local proxy is answering.',
 };
-
-function readUpstreamBlocked() {
-  const blocked = readJsonFile(CODEX_UPSTREAM_BLOCK_PATH);
-  return blocked?.state === 'upstream-blocked' ? blocked : null;
-}
-
-function setUpstreamBlocked({ statusCode, evidence }) {
-  mkdirs();
-  const blocked = {
-    state: 'upstream-blocked',
-    observedAt: new Date().toISOString(),
-    statusCode,
-    evidence,
-  };
-  fs.writeFileSync(CODEX_UPSTREAM_BLOCK_PATH, JSON.stringify(blocked) + '\n');
-  return blocked;
-}
-
-function clearUpstreamBlocked() {
-  try { fs.rmSync(CODEX_UPSTREAM_BLOCK_PATH); } catch { /* absent */ }
-}
-
-function noteCodexRequestSuccess() {
-  clearUpstreamBlocked();
-}
 
 async function proxyModelsAnswering() {
   try {
@@ -74,13 +54,14 @@ async function proxyModelsAnswering() {
   } catch { return false; }
 }
 
-function readinessState(checks, upstreamBlocked) {
+function readinessState(checks, upstreamBlocked, upstreamUnavailable) {
   if (!checks.proxyBinary) return 'binary-missing';
   if (!checks.proxyModels) return 'proxy-down';
   if (!checks.codexAuth) return 'auth-missing';
   if (!checks.shimRunning) return 'shim-down';
   if (!checks.servingVersionMatches) return 'serving-version-mismatch';
   if (upstreamBlocked) return 'upstream-blocked';
+  if (upstreamUnavailable) return 'upstream-unavailable';
   return 'ready';
 }
 
@@ -90,6 +71,7 @@ async function getCodexReadiness({
   authStatus = isAuthed,
   shimHealth = undefined,
   fetchHealth = fetchShimHealth,
+  now = Date.now(),
 } = {}) {
   const proxyBinary = Boolean(binaryPresent);
   const [proxyModels, health] = await Promise.all([
@@ -109,7 +91,8 @@ async function getCodexReadiness({
     servingVersionMatches: shimRunning && servingVersionIsCurrentOrNewer(servingVersion, PLUGIN_VERSION),
   };
   const upstreamBlocked = readUpstreamBlocked();
-  const state = readinessState(checks, upstreamBlocked);
+  const upstreamUnavailable = readUpstreamUnavailable(now);
+  const state = readinessState(checks, upstreamBlocked, upstreamUnavailable);
   return {
     ready: state === 'ready',
     state,
@@ -118,6 +101,7 @@ async function getCodexReadiness({
       : CODEX_READINESS_MESSAGES[state](),
     checks,
     upstreamBlocked,
+    upstreamUnavailable,
     health,
   };
 }
@@ -129,6 +113,7 @@ function catalogReadiness(readiness) {
     message: readiness.message,
     checks: readiness.checks,
     upstreamBlocked: readiness.upstreamBlocked,
+    upstreamUnavailable: readiness.upstreamUnavailable,
   };
 }
 
@@ -906,11 +891,38 @@ function buildRouteTelemetry(req) {
 }
 
 function createRouteTelemetry(req) {
+  let telemetry;
   try {
-    return buildRouteTelemetry(req);
+    telemetry = buildRouteTelemetry(req);
   } catch {
-    return { setRoute() {}, finish() {} };
+    telemetry = { setRoute() {}, finish() {} };
   }
+  let route = {};
+  let finished = false;
+  let cancelled = false;
+  return {
+    setRoute(nextRoute) {
+      route = { ...nextRoute };
+      telemetry.setRoute(nextRoute);
+    },
+    cancel() {
+      cancelled = true;
+    },
+    finish(statusCode, statusOverride = null) {
+      if (finished || cancelled) return;
+      finished = true;
+      const status = routeStatus(statusCode, statusOverride);
+      if (route.backend === 'codex') {
+        if (status === 'ok' && statusCode >= 200 && statusCode < 300) {
+          clearUpstreamBlocked();
+          clearUpstreamUnavailable();
+        } else if (statusCode >= 500 || ['upstream_error', 'upstream_aborted'].includes(status)) {
+          setUpstreamUnavailable({ statusCode: Number.isInteger(statusCode) ? statusCode : 502 });
+        }
+      }
+      telemetry.finish(statusCode, statusOverride);
+    },
+  };
 }
 
 function requestHeader(req, name) {
@@ -1203,6 +1215,15 @@ function runWorker() {
     return value;
   }
 
+  function completedCodexJson(body) {
+    try {
+      const response = JSON.parse(body.toString());
+      return response?.type === 'message' && !response.error;
+    } catch {
+      return false;
+    }
+  }
+
   function rewriteCodexJson(body, advertisedModel, filterPlanTools) {
     let parsed;
     try { parsed = JSON.parse(body.toString()); } catch { return body; }
@@ -1416,16 +1437,16 @@ function runWorker() {
       // attempt, so no later attempt may write one. Report the real upstream
       // status and message in-band instead of crashing on ERR_HTTP_HEADERS_SENT.
       const successful2xx = upRes.statusCode >= 200 && upRes.statusCode < 300;
-      if (normalizeContextErrors && successful2xx) noteCodexRequestSuccess();
-      const streamedContentType = String(upRes.headers['content-type'] || '').toLowerCase().includes('text/event-stream');
+      const upstreamContentType = String(upRes.headers['content-type'] || '').toLowerCase();
+      const streamedContentType = upstreamContentType.includes('text/event-stream');
       if (compactGuard?.headWritten && !(successful2xx && streamedContentType)) {
         usageCapture?.setResponse(upRes.statusCode, upRes.headers);
         const chunks = [];
         let reported = false;
-        const report = () => {
+        const report = (statusOverride = null) => {
           if (reported) return;
           reported = true;
-          routeTelemetry?.finish(upRes.statusCode);
+          routeTelemetry?.finish(upRes.statusCode, statusOverride);
           // The status line is gone but the sentry's learned ceiling is not.
           if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) noteGenuineOverflow(sessionId, contextModel);
           if (normalizeContextErrors) noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, Buffer.concat(chunks));
@@ -1436,9 +1457,9 @@ function runWorker() {
           usageCapture?.noteResponseBytes(chunk.length);
           chunks.push(chunk);
         });
-        upRes.on('end', report);
-        upRes.on('error', report);
-        upRes.on('aborted', report);
+        upRes.on('end', () => report());
+        upRes.on('error', () => report('upstream_error'));
+        upRes.on('aborted', () => report('upstream_aborted'));
         return;
       }
       if (normalizeContextErrors && upRes.statusCode === 403) {
@@ -1447,8 +1468,14 @@ function runWorker() {
           usageCapture?.noteResponseBytes(chunk.length);
           chunks.push(chunk);
         });
-        upRes.on('error', () => clientRes.destroy());
-        upRes.on('aborted', () => clientRes.destroy());
+        upRes.on('error', () => {
+          routeTelemetry?.finish(upRes.statusCode, 'upstream_error');
+          clientRes.destroy();
+        });
+        upRes.on('aborted', () => {
+          routeTelemetry?.finish(upRes.statusCode, 'upstream_aborted');
+          clientRes.destroy();
+        });
         upRes.on('end', () => {
           const upstreamBody = Buffer.concat(chunks);
           if (!isWebSocketUpgradeRejection(upRes.statusCode, upstreamBody)) {
@@ -1475,15 +1502,21 @@ function runWorker() {
         return;
       }
       usageCapture?.setResponse(upRes.statusCode, upRes.headers);
-      upRes.once('end', () => routeTelemetry?.finish(upRes.statusCode));
-      upRes.once('aborted', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_aborted'));
-      upRes.once('error', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_error'));
+      const codexInferenceResponse = advertisedModel && successful2xx;
+      const compactStream = compactGuard && codexInferenceResponse && streamedContentType;
+      const bufferedContextFailure = normalizeContextErrors && upRes.statusCode >= 400;
+      if (!compactStream && !bufferedContextFailure && !codexInferenceResponse) {
+        upRes.once('end', () => routeTelemetry?.finish(upRes.statusCode));
+        upRes.once('aborted', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_aborted'));
+        upRes.once('error', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_error'));
+      }
       if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) {
         const chunks = [];
         let settled = false;
-        const failBufferedResponse = () => {
+        const failBufferedResponse = (statusOverride) => {
           if (settled) return;
           settled = true;
+          routeTelemetry?.finish(413, statusOverride);
           if (!clientRes.headersSent) clientRes.writeHead(502, { 'content-type': 'application/json' });
           clientRes.end(JSON.stringify({
             type: 'error',
@@ -1494,11 +1527,12 @@ function runWorker() {
           usageCapture?.noteResponseBytes(chunk.length);
           chunks.push(chunk);
         });
-        upRes.on('error', failBufferedResponse);
-        upRes.on('aborted', failBufferedResponse);
+        upRes.on('error', () => failBufferedResponse('upstream_error'));
+        upRes.on('aborted', () => failBufferedResponse('upstream_aborted'));
         upRes.on('end', () => {
           if (settled) return;
           settled = true;
+          routeTelemetry?.finish(413);
           const normalized = rewriteCodexJson(normalizeGenuineContextOverflow(Buffer.concat(chunks), sessionId, contextModel), advertisedModel, false);
           resHeaders['content-length'] = normalized.length;
           clientRes.writeHead(413, resHeaders);
@@ -1511,9 +1545,10 @@ function runWorker() {
       if (normalizeContextErrors && upRes.statusCode >= 400 && upRes.statusCode !== 413) {
         const chunks = [];
         let settled = false;
-        const failBufferedResponse = () => {
+        const failBufferedResponse = (statusOverride) => {
           if (settled) return;
           settled = true;
+          routeTelemetry?.finish(upRes.statusCode, statusOverride);
           if (!clientRes.headersSent) clientRes.writeHead(502, { 'content-type': 'application/json' });
           clientRes.end(JSON.stringify({
             type: 'error',
@@ -1524,8 +1559,8 @@ function runWorker() {
           usageCapture?.noteResponseBytes(chunk.length);
           chunks.push(chunk);
         });
-        upRes.on('error', failBufferedResponse);
-        upRes.on('aborted', failBufferedResponse);
+        upRes.on('error', () => failBufferedResponse('upstream_error'));
+        upRes.on('aborted', () => failBufferedResponse('upstream_aborted'));
         upRes.on('end', () => {
           if (settled) return;
           settled = true;
@@ -1540,6 +1575,7 @@ function runWorker() {
                 type: 'error',
                 error: { type: 'request_too_large', message: 'Input exceeds the model context window; compact and retry.' },
               });
+            routeTelemetry?.finish(413);
             clientRes.writeHead(413, {
               'content-type': 'application/json',
               'content-length': Buffer.byteLength(normalized),
@@ -1547,6 +1583,7 @@ function runWorker() {
             });
             return clientRes.end(normalized);
           }
+          routeTelemetry?.finish(upRes.statusCode);
           resHeaders['content-length'] = upstreamBody.length;
           clientRes.writeHead(upRes.statusCode, resHeaders);
           clientRes.end(upstreamBody);
@@ -1570,22 +1607,20 @@ function runWorker() {
         return;
       }
       if (advertisedModel && upRes.statusCode >= 200 && upRes.statusCode < 300) {
-        const contentType = String(upRes.headers['content-type'] || '').toLowerCase();
         delete resHeaders['content-length'];
-        if (contentType.includes('text/event-stream')) {
+        if (streamedContentType) {
           if (!compactGuard?.headWritten) clientRes.writeHead(upRes.statusCode, resHeaders);
           if (compactGuard) compactGuard.headWritten = true;
           keepSseAlive(upRes, clientRes);
           const attempt = compactGuard
             ? { chunks: [], bytes: 0, terminal: false, fatal: false, sawError: false, degraded: false }
             : null;
-          const observeEvent = (attempt || filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId) || usageCapture)
-            ? (event) => {
-              if (attempt) noteCompactEvent(attempt, event);
-              if (filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId)) recordSentryUsage(sessionId, event, contextModel);
-              usageCapture?.observeEvent(event);
-            }
-            : null;
+          const inference = attempt || { terminal: false, sawError: false };
+          const observeEvent = (event) => {
+            noteCompactEvent(inference, event);
+            if (filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId)) recordSentryUsage(sessionId, event, contextModel);
+            usageCapture?.observeEvent(event);
+          };
           const emit = attempt
             ? (chunk) => {
               if (attempt.degraded) return clientRes.write(chunk);
@@ -1606,13 +1641,23 @@ function runWorker() {
             filter.write(chunk);
           });
           if (!attempt) {
-            upRes.on('end', () => { filter.end(); clientRes.end(); });
-            upRes.on('error', () => clientRes.destroy());
-            upRes.on('aborted', () => clientRes.destroy());
+            upRes.on('end', () => {
+              filter.end();
+              routeTelemetry?.finish(upRes.statusCode, inference.terminal && !inference.sawError ? null : 'upstream_error');
+              clientRes.end();
+            });
+            upRes.on('error', () => {
+              routeTelemetry?.finish(upRes.statusCode, 'upstream_error');
+              clientRes.destroy();
+            });
+            upRes.on('aborted', () => {
+              routeTelemetry?.finish(upRes.statusCode, 'upstream_aborted');
+              clientRes.destroy();
+            });
             return;
           }
           let settled = false;
-          const settle = () => {
+          const settle = (statusOverride = null) => {
             if (settled) return;
             settled = true;
             filter.end();
@@ -1625,6 +1670,8 @@ function runWorker() {
                 normalizeContextErrors, filterPlanTools, sessionId, advertisedModel, contextModel, routeTelemetry,
                 usageCapture, webSocketUpgradeRetries, compactGuard), COMPACT_STREAM_RETRY_DELAY_MS);
             }
+            routeTelemetry?.finish(upRes.statusCode,
+              statusOverride || (attempt.terminal && !attempt.sawError ? null : 'upstream_error'));
             for (const buffered of attempt.chunks) clientRes.write(buffered);
             if (!attempt.terminal && !attempt.sawError) {
               const attempts = compactGuard.attempts + 1;
@@ -1633,19 +1680,27 @@ function runWorker() {
             }
             clientRes.end();
           };
-          upRes.on('end', settle);
-          upRes.on('error', settle);
-          upRes.on('aborted', settle);
+          upRes.on('end', () => settle());
+          upRes.on('error', () => settle('upstream_error'));
+          upRes.on('aborted', () => settle('upstream_aborted'));
           return;
         }
         const chunks = [];
         upRes.on('data', (chunk) => chunks.push(chunk));
-        upRes.on('error', () => clientRes.destroy());
-        upRes.on('aborted', () => clientRes.destroy());
+        upRes.on('error', () => {
+          routeTelemetry?.finish(upRes.statusCode, 'upstream_error');
+          clientRes.destroy();
+        });
+        upRes.on('aborted', () => {
+          routeTelemetry?.finish(upRes.statusCode, 'upstream_aborted');
+          clientRes.destroy();
+        });
         upRes.on('end', () => {
           const upstreamBody = Buffer.concat(chunks);
           usageCapture?.observeJson(upstreamBody);
+          const completed = completedCodexJson(upstreamBody);
           const filtered = rewriteCodexJson(upstreamBody, advertisedModel, filterPlanTools);
+          routeTelemetry?.finish(upRes.statusCode, completed ? null : 'upstream_error');
           resHeaders['content-length'] = filtered.length;
           clientRes.writeHead(upRes.statusCode, resHeaders);
           clientRes.end(filtered);
@@ -1872,6 +1927,9 @@ function runWorker() {
     // buffer the body so we can route on the model field; forward original
     // bytes untouched on the Anthropic path (prompt caching keys on them)
     const routeTelemetry = createRouteTelemetry(req);
+    req.once('aborted', () => routeTelemetry.cancel());
+    res.once('close', () => routeTelemetry.cancel());
+    res.socket?.once('close', () => routeTelemetry.cancel());
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {

@@ -47,6 +47,10 @@ const {
   syncGatewayDiscoveryCache,
 } = require('./runtime.js');
 const { latestHookWaitCutShort, latestObservedLifecycleExit, lifecycleLogPath, recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
+const {
+  CODEX_UPSTREAM_BLOCK_PATH, clearUpstreamBlocked, clearUpstreamUnavailable, readUpstreamBlocked, readUpstreamUnavailable,
+  setUpstreamBlocked, setUpstreamUnavailable,
+} = require('./codex-upstream-state.js');
 
 const WIN = process.platform === 'win32';
 const STATE = path.join(os.homedir(), '.claude', 'model-gateway');
@@ -54,7 +58,6 @@ const LOGS = path.join(STATE, 'logs');
 const BIN_DIR = path.join(STATE, 'bin');
 const WIRING_CONFIG_PATH = path.join(STATE, 'wiring.json');
 const SHIM_FAILURE_PATH = path.join(STATE, 'shim-supervisor-failure.txt');
-const CODEX_UPSTREAM_BLOCK_PATH = path.join(STATE, 'codex-upstream-blocked.json');
 const PLUGIN_VERSION = readPluginVersion();
 const PROXY_BIN = path.join(BIN_DIR, WIN ? 'claude-code-proxy.exe' : 'claude-code-proxy');
 const PROXY_SERVING_VERSION_PATH = path.join(STATE, 'proxy-serving-version.txt');
@@ -289,31 +292,12 @@ const CODEX_READINESS_MESSAGES = {
   'shim-down': () => `Codex dispatch refused: the model-gateway shim is down. Run \`node "${CLI_PATH}" ensure\`, then retry. No Anthropic fallback was used.`,
   'serving-version-mismatch': () => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${resolveNewestInstalledCliPath()}" ensure\`, then retry. No Anthropic fallback was used.`,
   'upstream-blocked': () => `Codex is blocked by an OpenAI rejection. Run \`node "${CLI_PATH}" setup\`; if it persists, wait for a claude-code-proxy update or explicitly re-route this ticket. Codex tickets remain blocked.`,
+  'upstream-unavailable': () => 'Codex had a terminal upstream failure in the last 60 seconds. Wait briefly, then retry; /v1/models only proves the local proxy is answering.',
 };
-
-function readUpstreamBlocked() {
-  const blocked = readJsonFile(CODEX_UPSTREAM_BLOCK_PATH);
-  return blocked?.state === 'upstream-blocked' ? blocked : null;
-}
-
-function setUpstreamBlocked({ statusCode, evidence }) {
-  mkdirs();
-  const blocked = {
-    state: 'upstream-blocked',
-    observedAt: new Date().toISOString(),
-    statusCode,
-    evidence,
-  };
-  fs.writeFileSync(CODEX_UPSTREAM_BLOCK_PATH, JSON.stringify(blocked) + '\n');
-  return blocked;
-}
-
-function clearUpstreamBlocked() {
-  try { fs.rmSync(CODEX_UPSTREAM_BLOCK_PATH); } catch { /* absent */ }
-}
 
 function noteCodexRequestSuccess() {
   clearUpstreamBlocked();
+  clearUpstreamUnavailable();
 }
 
 async function proxyModelsAnswering() {
@@ -323,13 +307,14 @@ async function proxyModelsAnswering() {
   } catch { return false; }
 }
 
-function readinessState(checks, upstreamBlocked) {
+function readinessState(checks, upstreamBlocked, upstreamUnavailable) {
   if (!checks.proxyBinary) return 'binary-missing';
   if (!checks.proxyModels) return 'proxy-down';
   if (!checks.codexAuth) return 'auth-missing';
   if (!checks.shimRunning) return 'shim-down';
   if (!checks.servingVersionMatches) return 'serving-version-mismatch';
   if (upstreamBlocked) return 'upstream-blocked';
+  if (upstreamUnavailable) return 'upstream-unavailable';
   return 'ready';
 }
 
@@ -339,6 +324,7 @@ async function getCodexReadiness({
   authStatus = isAuthed,
   shimHealth = undefined,
   fetchHealth = fetchShimHealth,
+  now = Date.now(),
 } = {}) {
   const proxyBinary = Boolean(binaryPresent);
   const [proxyModels, health] = await Promise.all([
@@ -358,7 +344,8 @@ async function getCodexReadiness({
     servingVersionMatches: shimRunning && servingVersionIsCurrentOrNewer(servingVersion, PLUGIN_VERSION),
   };
   const upstreamBlocked = readUpstreamBlocked();
-  const state = readinessState(checks, upstreamBlocked);
+  const upstreamUnavailable = readUpstreamUnavailable(now);
+  const state = readinessState(checks, upstreamBlocked, upstreamUnavailable);
   return {
     ready: state === 'ready',
     state,
@@ -367,6 +354,7 @@ async function getCodexReadiness({
       : CODEX_READINESS_MESSAGES[state](),
     checks,
     upstreamBlocked,
+    upstreamUnavailable,
     health,
   };
 }
@@ -378,6 +366,7 @@ function catalogReadiness(readiness) {
     message: readiness.message,
     checks: readiness.checks,
     upstreamBlocked: readiness.upstreamBlocked,
+    upstreamUnavailable: readiness.upstreamUnavailable,
   };
 }
 
@@ -546,6 +535,7 @@ async function setup() {
   const r = await startAll({ lifecycleOperation: 'setup' });
   if (!r.ok) die(r.reason);
   clearUpstreamBlocked();
+  clearUpstreamUnavailable();
   if (!isAuthed()) {
     log(`next: node "${CLI_PATH}" login   (ChatGPT browser sign-in), then setup again to wire Claude Code`);
     return;
@@ -2589,6 +2579,9 @@ module.exports = {
   getGrokReadiness,
   setUpstreamBlocked,
   clearUpstreamBlocked,
+  readUpstreamUnavailable,
+  setUpstreamUnavailable,
+  clearUpstreamUnavailable,
   noteCodexRequestSuccess,
   hasOpenAiRejectionEvidence,
   noteCodexUpstreamRejection,

@@ -76,6 +76,8 @@ SessionStart launches a missing supervisor outside the hook's process tree, then
 
 When the gateway disappears or restarts, ask Claude to run `doctor`. It names `~/.claude/model-gateway/logs/lifecycle.jsonl` and says whether it found an observed supervisor, worker, or proxy exit. The bounded records include PIDs, orderly setup/stop/restart requests, signals, and recovery outcomes. A force-killed supervisor or OS termination can leave no final record, so a missing exit entry does not prove an orderly shutdown.
 
+`doctor` can report `upstream-unavailable` for 60 seconds after a final Codex inference fails. It is passive evidence, independent of telemetry consent: a completed successful Codex response clears it, while an `upstream-blocked` OpenAI/auth rejection stays separate. Expiry only means no recent failure evidence, not live health. Sidequest reads a cached catalog, so its readiness can lag this state by up to five minutes.
+
 Running Model Gateway's own suite uses a separate test home and never touches the installed gateway. Codex sessions dropping while tests ran was a supervisor cleanup bug, fixed in this version. Cleanup uses this home's recorded PIDs and targeted ownership checks only: the live command must still identify this install, and the recorded command or start time must match. A stale record is deleted without stopping its reused PID; `doctor` reports `stale pid file guardian: PID <pid> is now <command>`. If startup, restart, or drain cannot confirm who owns a listener, it leaves that listener alone and startup records `owner-unknown`; confirmed foreign listeners are refused too.
 
 If something breaks, describe the symptom:
