@@ -37,7 +37,7 @@ Use the lightest planning that fits. Exact small changes and operational asks ca
 
 Claude asks one batched question round for consequential choices. If the approach is genuinely contested, it may offer bounded agent proposals. `Do your thing`, `use your judgment`, and similar phrases delegate decisions for the current feature or story, not for future work.
 
-Review stays tied to the pinned contract. If two candidate fixes are rejected in the same defect chain, stop patching and replan before trying another candidate.
+Review stays tied to the pinned contract. If two candidate fixes are rejected in the same defect chain, stop patching and replan before trying another candidate. A bound review and its source cannot be deleted, even with force. Keep the record and create a fresh independently reviewed replacement when needed; deletion does not repair older orphaned records.
 
 The board keeps the work visible while Claude and its executors handle the ticket lifecycle. A Git ticket submits a verified range; a non-Git ticket submits a verified project snapshot. Claude reports any unavailable capability or failed delivery instead of guessing around it.
 

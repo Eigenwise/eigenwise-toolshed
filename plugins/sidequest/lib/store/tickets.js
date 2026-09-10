@@ -1098,28 +1098,47 @@ function createTickets(dependencies) {
     queueEventNotification(slug, getTicket(slug, sourceTicket.id), "status", patch.source ? String(patch.source) : "cli");
     return updated;
   }
+  function deletionHasReviewBinding(slug, ticket) {
+    if (Object.hasOwn(ticket, "reviewTarget") || Object.hasOwn(ticket?.submission || {}, "review")) return true;
+    if (submissionReviewRelation(slug, ticket)) return true;
+    return listTickets(slug).some((sourceTicket) => {
+      const mirror = sourceTicket?.submission?.review;
+      return Object.hasOwn(sourceTicket?.submission || {}, "review") && (mirror?.ticketId === ticket.id || upperRef(mirror?.ref) === upperRef(ticket.ref));
+    });
+  }
+  function deletionReviewLockError(ticket) {
+    return `${ticket.ref}: refusing to delete a bound review or its source. Keep the immutable record; a fresh independently reviewed replacement is separate work.`;
+  }
   function deleteTicket(slug, idOrRef, options = {}) {
     const found = getTicket(slug, idOrRef);
     if (!found) return false;
-    if (found.claim && found.claim.by && !claimReclaimable(found) && options.allowLiveClaimDeletion !== true) {
-      throw new Error(`${found.ref}: refusing to delete a live-claimed ticket (held by "${found.claim.by}"). Release the claim first, or remove it with the orchestrator's main-thread MCP.`);
-    }
     const deletedRef = found.ref;
-    const lock = ticketLockPath(slug, found.id);
-    const locked = acquireLock(lock);
-    let ok = false;
-    try {
-      ok = deleteCachedRow(database(), "tickets", found.id);
-      if (ok) {
-        try {
-          fs.rmSync(assetsDir(slug, found.id), { recursive: true, force: true });
-        } catch (_) {
+    const deleteUnderTicketLock = () => {
+      const result2 = withTicketLock(slug, found.id, () => {
+        const ticket = getTicket(slug, found.id);
+        if (!ticket) return false;
+        if (ticket.claim && ticket.claim.by && !claimReclaimable(ticket) && options.allowLiveClaimDeletion !== true) {
+          throw new Error(`${ticket.ref}: refusing to delete a live-claimed ticket (held by "${ticket.claim.by}"). Release the claim first, or remove it with the orchestrator's main-thread MCP.`);
         }
+        if (deletionHasReviewBinding(slug, ticket)) throw new Error(deletionReviewLockError(ticket));
+        return deleteCachedRow(database(), "tickets", ticket.id);
+      });
+      if (result2?.reason === "busy") {
+        throw new Error(`${found.ref}: refusing to delete without its ticket lock. Retry after the concurrent mutation finishes.`);
       }
-    } finally {
-      if (locked) releaseLock(lock, locked);
+      return result2;
+    };
+    const target = found.reviewTarget;
+    const sourceTicket = target && typeof target === "object" ? getTicket(slug, target.ticketId || target.ref) : null;
+    const result = sourceTicket && sourceTicket.id !== found.id ? withTicketLock(slug, sourceTicket.id, deleteUnderTicketLock) : deleteUnderTicketLock();
+    if (result?.reason === "busy") {
+      throw new Error(`${found.ref}: refusing to delete without the bound source lock. Retry after the concurrent mutation finishes.`);
     }
-    if (!ok) return false;
+    if (!result) return false;
+    try {
+      fs.rmSync(assetsDir(slug, found.id), { recursive: true, force: true });
+    } catch (_) {
+    }
     try {
       for (const other of listTickets(slug)) {
         if (Array.isArray(other.links) && other.links.some((l) => upperRef(l.ref) === upperRef(deletedRef))) {

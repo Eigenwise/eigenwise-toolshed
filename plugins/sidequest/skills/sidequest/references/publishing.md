@@ -137,8 +137,11 @@ the ticket.
    A deterministic singleton needs no bound review. Bind a `review-audit` ticket to the exact
    candidate when the oracle is weak, consumers remain materially unchecked, or the work is
    high-stakes; use distinct review lenses for high-stakes or multi-wave work. A bound candidate
-   cannot be reclaimed, amended, cleared, superseded, or integrated until its review finishes, and
-   no caller-controlled route can reject it: `rework` and every other direct route return
+   cannot be reclaimed, amended, cleared, superseded, or integrated until its review finishes.
+   Neither the candidate nor its bound review can ever be deleted, even with `force`; keep both
+   immutable records instead of cancelling the review. This guard does not repair older orphaned
+   records. A fresh independently reviewed replacement is separate work. No caller-controlled route
+   can reject the candidate: `rework` and every other direct route return
    `candidate_review_locked` without writing. A review that finds a defect records its evidence on
    the review ticket and releases that review with `kind=oracle`. When that oracle accepts the
    defect conclusion, Sidequest marks both binding halves `rejected`; after a fresh repair is

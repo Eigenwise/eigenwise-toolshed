@@ -341,13 +341,13 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'remove',
-    description: 'Permanently and irreversibly delete a ticket by ref. Refuses a live claim unless force:true is passed.',
+    description: 'Permanently and irreversibly delete a ticket by ref. Refuses live claims unless force:true is passed, and always refuses a bound review or its source.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: { type: 'string' },
         project: PROJECT_PROP,
-        force: { type: 'boolean', description: 'Permanently remove a ticket with a live claim. Use only when certain.' },
+        force: { type: 'boolean', description: 'Permanently remove a ticket with a live claim. It never overrides a review binding.' },
       },
       required: ['ref'],
     },
