@@ -10,7 +10,18 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-review-binding-home-'));
+const discovery = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-review-binding-catalog-'));
+const catalogDirectory = path.join(discovery, 'model-gateway');
+fs.mkdirSync(catalogDirectory, { recursive: true });
+fs.writeFileSync(path.join(catalogDirectory, 'catalog.json'), JSON.stringify({
+  schemaVersion: 3,
+  updatedAt: new Date().toISOString(),
+  source: 'model-gateway',
+  codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
+  models: [{ slug: 'codex-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'Codex Sol' }],
+}));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
+process.env.SIDEQUEST_DISCOVERY_DIRS = discovery;
 
 const store = require('../lib/store.js');
 const agentsync = require('../lib/agentsync.js');
@@ -319,6 +330,45 @@ test('a second review of the same candidate and a retarget of a bound review are
     /candidate is already bound to|reviewTarget is immutable/,
   );
   assert.equal(store.getTicket(slug, review.ref).reviewTarget.ref, source.ref);
+});
+
+test('a bound effectively readonly review preserves its candidate and prepared route after category edits', async () => {
+  const { repository, slug, commit } = board('effective-readonly-route');
+  const source = submittedSource(slug, commit, 'effective-readonly-route');
+  const reviewCategory = store.getCategory('review-audit');
+  store.setCategory(Object.assign({}, reviewCategory, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));
+  try {
+    const created = await tool('add').handler({
+      project: repository,
+      title: 'review with a readonly Codex override',
+      category: 'review-audit',
+      readonly: true,
+      route: { model: 'codex-sol', effort: 'high' },
+      reviewTarget: { ref: source.ref, commit },
+    });
+    const prepared = store.prepareDispatch(slug, created.ref, { sessionId: `effective-readonly-route-${Date.now()}`, sharedTree: false });
+    const preparedIdentity = {
+      route: prepared.ticket.dispatch.route,
+      executor: prepared.ticket.dispatch.executor,
+      readonly: prepared.ticket.dispatch.readonly,
+    };
+
+    store.setCategory(Object.assign({}, reviewCategory, { route: { model: 'opus', effort: 'high' }, fallback: null }));
+
+    const active = store.getTicket(slug, created.ref);
+    assert.deepEqual(
+      { route: active.dispatch.route, executor: active.dispatch.executor, readonly: active.dispatch.readonly },
+      preparedIdentity,
+    );
+    assert.deepEqual(preparedIdentity.route, { model: 'codex-sol', effort: 'high', marker: 'gpt-5.6-sol' });
+    assert.equal(preparedIdentity.executor, 'sidequest-exec-dispatch-readonly');
+    assert.equal(active.reviewTarget.ref, source.ref);
+    assert.equal(active.reviewTarget.candidate.value, commit);
+    assert.equal(store.getTicket(slug, source.ref).submission.review.ref, created.ref);
+    assert.equal(store.getTicket(slug, source.ref).submission.review.candidate.value, commit);
+  } finally {
+    store.setCategory(reviewCategory);
+  }
 });
 
 test('no generic field or patch can set, change, or clear reviewTarget', () => {

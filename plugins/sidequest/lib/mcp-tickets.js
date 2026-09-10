@@ -136,7 +136,7 @@ const tools = [
           type: "object",
           properties: { model: { type: "string" }, effort: { type: "string", enum: store.VALID_EFFORTS } },
           required: ["model", "effort"],
-          description: "Optional route override for this ticket only. It never changes the category route."
+          description: "Optional route override for this ticket only. It never changes the category route. An effectively readonly ticket can explicitly cross providers; writable tickets and automatic fallbacks cannot."
         },
         unclassified: { type: "boolean", description: "Deliberately defer classification until an update before dispatch." }
       },
@@ -241,7 +241,7 @@ const tools = [
             },
             { const: "none" }
           ],
-          description: 'Set a per-ticket route override or "none" to clear it. This never changes the category route.'
+          description: 'Set a per-ticket route override or "none" to clear it. This never changes the category route. An effectively readonly ticket can explicitly cross providers; writable tickets and automatic fallbacks cannot.'
         }
       },
       required: ["ref"]

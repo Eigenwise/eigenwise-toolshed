@@ -8,6 +8,7 @@ function createRouting(dependencies: any) {
     crypto,
     database,
     db,
+    dispatchReadOnly,
     discoverExternalModels,
     invalidateStoreCaches,
     listProjects,
@@ -1120,7 +1121,7 @@ function resolveTicketRoute(ticket?: any, category?: any) {
 
   const primary = normalizeRoute(category && category.route);
   const provider = routeProvider(primary);
-  if (primary && routeProvider(override) !== provider) {
+  if (primary && routeProvider(override) !== provider && !dispatchReadOnly(Object.assign({}, ticket, { category }))) {
     const message = `${ref} route override "${override.model}" crosses providers from category "${category.id}" and was refused.`;
     return { model: override.model, effort: override.effort, exec: null, warnings: [message], refusal: message };
   }
