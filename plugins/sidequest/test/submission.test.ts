@@ -58,6 +58,19 @@ function cleanBranch() {
 function pin(ticket?: any, commit?: any) {
   git(['update-ref', `refs/sidequest/${ticket.ref}`, commit]);
 }
+// Integration resolves its delivery target from the ticket and the board, never
+// from the caller, so a fixture delivering onto the scratch branch it checked out
+// has to say so on the board for the length of the call.
+function integrateOnCurrentTestBranch(ref?: any, opts?: any) {
+  const originalConfig = store.boardConfig(slug);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']) });
+  try {
+    const target = store.integrationTarget(slug);
+    return store.integrateSubmission(slug, ref, Object.assign({ target }, opts));
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+  }
+}
 const { slug } = store.ensureProject(PROJECT_DIR);
 const exploration = store.getCategory('codebase-exploration');
 store.setCategory(Object.assign({}, exploration, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));
@@ -1516,8 +1529,7 @@ test('integration refuses delivery when the assembled-wave gate fails', () => {
   assert.strictEqual(runCli(['submit', t.ref, '--by', 'post-merge-worker', '--commit', commit, '--verify', 'node -e "process.exit(1)"']).status, 0);
 
   const before = git(['rev-parse', 'HEAD']);
-  const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
-  const rejected = store.integrateSubmission(slug, t.ref, { mode: 'merge', target });
+  const rejected = integrateOnCurrentTestBranch(t.ref, { mode: 'merge' });
   assert.strictEqual(rejected.ok, false);
   assert.strictEqual(rejected.reason, 'assembled_wave_gate_failed');
   assert.strictEqual(rejected.gate.verification.command, 'node -e "process.exit(1)"');
@@ -1525,7 +1537,7 @@ test('integration refuses delivery when the assembled-wave gate fails', () => {
   assert.strictEqual(git(['rev-parse', 'HEAD']), before);
   assert.strictEqual(store.getTicket(slug, t.ref).submission.integration, undefined);
 
-  const missingWaiver = store.integrateSubmission(slug, t.ref, { mode: 'merge', target, skipVerify: true });
+  const missingWaiver = integrateOnCurrentTestBranch(t.ref, { mode: 'merge', skipVerify: true });
   assert.strictEqual(missingWaiver.ok, false);
   assert.strictEqual(missingWaiver.reason, 'verification_waiver_required');
   assert.match(missingWaiver.message, /human waiver with authority, reason, affectedGate/);
@@ -1579,8 +1591,7 @@ test('SQ-1743: a held delivery lock refuses another integration before it change
   const lock = path.resolve(PROJECT_DIR, git(['rev-parse', '--git-common-dir']), 'sidequest-delivery.lock');
   fs.writeFileSync(lock, 'another integration\n');
   try {
-    const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
-    const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge', target });
+    const refused = integrateOnCurrentTestBranch(t.ref, { mode: 'merge' });
     assert.strictEqual(refused.ok, false);
     assert.strictEqual(refused.reason, 'delivery_in_progress');
     assert.strictEqual(git(['rev-parse', 'HEAD']), before);
@@ -1627,8 +1638,7 @@ test('integration reports and records merge conflict paths before aborting', () 
   fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'merge-conflict.js'), 'target\n');
   git(['add', 'lib/merge-conflict.js']);
   git(['commit', '-m', 'merge conflict target']);
-  const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
-  const rejected = store.integrateSubmission(slug, t.ref, { mode: 'merge', target });
+  const rejected = integrateOnCurrentTestBranch(t.ref, { mode: 'merge' });
 
   assert.strictEqual(rejected.ok, false);
   assert.strictEqual(rejected.reason, 'merge_failed');
@@ -1655,8 +1665,7 @@ test('integration reports and records replay conflict paths before aborting', ()
   fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'replay-conflict.js'), 'target\n');
   git(['add', 'lib/replay-conflict.js']);
   git(['commit', '-m', 'replay conflict target']);
-  const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
-  const rejected = store.integrateSubmission(slug, t.ref, { mode: 'replay', target });
+  const rejected = integrateOnCurrentTestBranch(t.ref, { mode: 'replay' });
 
   assert.strictEqual(rejected.ok, false);
   assert.strictEqual(rejected.reason, 'replay_failed');
@@ -1691,8 +1700,7 @@ test('integration closure consumes an in-scope submission with control-plane pro
   const submitted = store.getTicket(slug, t.ref);
   assert.strictEqual(submitted.lifecycleAttempt.state, 'submitted');
   assert.strictEqual(submitted.dispatch.lifecycleAttempt.state, 'submitted');
-  const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
-  const delivered = store.integrateSubmission(slug, t.ref, { target });
+  const delivered = integrateOnCurrentTestBranch(t.ref);
   assert.strictEqual(delivered.ok, true, delivered.message);
 
   const completed = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${commit} into main.`]);
@@ -2174,8 +2182,7 @@ test('CLI: a dependent submission retains its pinned dispatch baseline after an 
   const firstTip = git(['rev-parse', 'HEAD']);
   pin(first, firstTip);
   assert.strictEqual(runCli(['submit', first.ref, '--by', 'first-integrated-worker', '--commit', firstTip]).status, 0);
-  const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
-  const delivered = store.integrateSubmission(slug, first.ref, { target });
+  const delivered = integrateOnCurrentTestBranch(first.ref);
   assert.strictEqual(delivered.ok, true, delivered.message);
   const integrated = runCli(['groom-close', first.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${firstTip} into main.`]);
   assert.strictEqual(integrated.status, 0, integrated.stderr + integrated.stdout);
@@ -2206,8 +2213,7 @@ test('CLI: a dependent submission cannot hide an ancestor path outside its pinne
   const firstTip = git(['rev-parse', 'HEAD']);
   pin(first, firstTip);
   assert.strictEqual(runCli(['submit', first.ref, '--by', 'first-scope-worker', '--commit', firstTip]).status, 0);
-  const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
-  const delivered = store.integrateSubmission(slug, first.ref, { target });
+  const delivered = integrateOnCurrentTestBranch(first.ref);
   assert.strictEqual(delivered.ok, true, delivered.message);
   const integrated = runCli(['groom-close', first.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${firstTip} into main.`]);
   assert.strictEqual(integrated.status, 0, integrated.stderr + integrated.stdout);
