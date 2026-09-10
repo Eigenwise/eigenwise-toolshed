@@ -306,6 +306,65 @@ test('startup ownership resolves bounded same-install, unowned, foreign, and unk
   });
 });
 
+test('startup ownership keeps unknown and expired absence evidence unknown', async () => {
+  let listeningCalls = 0;
+  const unknownInspection = await resolvePortOwner(18764, {
+    owner: async () => 701,
+    inspectProcess: async () => undefined,
+    listening: async () => { listeningCalls += 1; return false; },
+    timeout: 20,
+    now: () => 0,
+  });
+  assert.deepEqual(unknownInspection, { state: 'unknown', pid: 701 });
+  assert.equal(listeningCalls, 0);
+
+  let currentTime = 0;
+  let ownerCalls = 0;
+  listeningCalls = 0;
+  const expiredBeforeFallback = await resolvePortOwner(18764, {
+    owner: async () => { ownerCalls += 1; currentTime = 20; return null; },
+    inspectProcess: async () => null,
+    listening: async () => { listeningCalls += 1; return false; },
+    timeout: 20,
+    now: () => currentTime,
+  });
+  assert.deepEqual(expiredBeforeFallback, { state: 'unknown', pid: null });
+  assert.equal(ownerCalls, 1);
+  assert.equal(listeningCalls, 0);
+
+  currentTime = 0;
+  ownerCalls = 0;
+  listeningCalls = 0;
+  const expiredBeforeRetry = await resolvePortOwner(18764, {
+    owner: async () => { ownerCalls += 1; return null; },
+    inspectProcess: async () => null,
+    listening: async () => { listeningCalls += 1; currentTime = 20; return false; },
+    timeout: 20,
+    now: () => currentTime,
+  });
+  assert.deepEqual(expiredBeforeRetry, { state: 'unknown', pid: null });
+  assert.equal(ownerCalls, 1);
+  assert.equal(listeningCalls, 1);
+
+  const confirmedAbsent = await resolvePortOwner(18764, {
+    owner: async () => null,
+    inspectProcess: async () => null,
+    listening: async () => false,
+    timeout: 20,
+    now: () => 0,
+  });
+  assert.deepEqual(confirmedAbsent, { state: 'unowned', pid: null });
+
+  const goneProcess = await resolvePortOwner(18764, {
+    owner: async () => 701,
+    inspectProcess: async () => null,
+    listening: async () => false,
+    timeout: 20,
+    now: () => 0,
+  });
+  assert.deepEqual(goneProcess, { state: 'unowned', pid: 701 });
+});
+
 test('startup ownership leaves unknown and confirmed foreign listeners untouched', async () => {
   const calls = [];
   const lifecycle = [];
