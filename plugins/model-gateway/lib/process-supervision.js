@@ -474,23 +474,33 @@ async function resolvePortOwner(port = PUBLIC_SHIM_PORT, {
   now = Date.now,
 } = {}) {
   const deadline = now() + timeout;
-  const remainingTimeout = () => Math.max(1, deadline - now());
+  const remainingTimeout = () => deadline - now();
+  const unknownOwner = (pid = null) => ({ state: 'unknown', pid });
+  const confirmAbsence = async (pid) => {
+    const listeningTimeout = remainingTimeout();
+    if (listeningTimeout <= 0) return unknownOwner(pid);
+    const isListening = await listening(port, listeningTimeout);
+    if (!isListening && remainingTimeout() <= 0) return unknownOwner(pid);
+    return isListening ? unknownOwner(pid) : { state: 'unowned', pid };
+  };
   const inspectOwner = async () => {
-    const pid = await owner(port, { probeChildren, timeout: remainingTimeout() });
-    if (pid === undefined) return { state: 'unknown', pid: null };
-    if (!pid) return (await listening(port, remainingTimeout()))
-      ? { state: 'unknown', pid: null }
-      : { state: 'unowned', pid: null };
-    const process = await inspectProcess(pid, { probeChildren, timeout: remainingTimeout() });
-    if (!process) return (await listening(port, remainingTimeout()))
-      ? { state: 'unknown', pid }
-      : { state: 'unowned', pid };
+    const ownerTimeout = remainingTimeout();
+    if (ownerTimeout <= 0) return unknownOwner();
+    const pid = await owner(port, { probeChildren, timeout: ownerTimeout });
+    if (pid === undefined) return unknownOwner();
+    if (!pid) return confirmAbsence(null);
+    const inspectionTimeout = remainingTimeout();
+    if (inspectionTimeout <= 0) return unknownOwner(pid);
+    const process = await inspectProcess(pid, { probeChildren, timeout: inspectionTimeout });
+    if (process === undefined) return unknownOwner(pid);
+    if (process === null) return confirmAbsence(pid);
     const installRoot = gatewayInstallRootFromCommand(process.command);
-    if (!installRoot) return { state: 'unknown', pid };
+    if (!installRoot) return unknownOwner(pid);
     return { state: belongsToThisInstall(installRoot) ? 'same-install' : 'foreign-install', installRoot, pid };
   };
   const firstOwner = await inspectOwner();
   if (firstOwner.state !== 'unknown') return firstOwner;
+  if (remainingTimeout() <= 0) return firstOwner;
   const retriedOwner = await inspectOwner();
   if (retriedOwner.state === 'foreign-install' || retriedOwner.state === 'unowned') return retriedOwner;
   if (retriedOwner.state === 'same-install' && retriedOwner.pid === firstOwner.pid) return retriedOwner;
