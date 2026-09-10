@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.550.0 (2026-09-10)
+
+### sidequest 5.1.3 → 5.1.4
+
+#### Fixes
+
+- Keep ticket attachments after failed deletion (SQ-2694)
+  Keep ticket attachments when a database rollback prevents ticket deletion.
+
 ## v3.549.0 (2026-09-10)
 
 ### sidequest 5.1.2 → 5.1.3
