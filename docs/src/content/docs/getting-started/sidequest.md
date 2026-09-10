@@ -121,6 +121,8 @@ Sidequest keeps ticket activity visible in the board. Ask Claude to check active
 
 Use Sidequest for independent candidate reviews, repository audits, and shortcut debt scans. They use the existing read-only review route and only report findings.
 
+An explicit per-ticket route can use a different provider when the ticket is effectively readonly. It leaves the category route alone; writable tickets and automatic fallbacks stay with their provider.
+
 - A candidate review starts from the submitted ticket and its immutable candidate, never a working tree. Ask Claude to bind the review to that submission.
 - A repository audit names the directory or subsystem to inspect. It reports concrete delete, reuse, standard-library, native-platform, YAGNI, and shrinking opportunities with source locations. It does not edit code.
 - A shortcut debt scan reads source comments, including `ponytail:` and `whittle:` markers. Each result gives the file and line, known ceiling, observable upgrade trigger, and replacement. A missing ceiling or trigger remains a finding.

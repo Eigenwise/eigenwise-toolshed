@@ -391,6 +391,7 @@ const {
   crypto,
   database,
   db,
+  dispatchReadOnly: (...args: any[]) => dispatchReadOnly(...args),
   discoverExternalModels,
   invalidateStoreCaches,
   listProjects,
