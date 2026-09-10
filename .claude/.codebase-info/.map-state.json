@@ -3,7 +3,7 @@
   "tool": "codebase-mapper",
   "version": "2.15.8",
   "mappedAt": "2026-09-10",
-  "gitCommit": "7ef826eeceae37f614275a6cf82eac90cf295e57",
+  "gitCommit": "efd35a14bd1177508d39e46560ac1a347b7a5ace",
   "documents": [
     "architecture.md",
     "coding-style.md",
@@ -16,15 +16,15 @@
     "tech-landscape.md"
   ],
   "hashes": {
-    "INDEX.md": "19f433f6ade28058e44aba12503528868d9a26a77af5875f4c0349b6b6394a75",
-    "architecture.md": "3745536be115857e15c8faf868397d58826e41aa339ca149c0c0c771ec2f539c",
+    "INDEX.md": "e7577e9fbc2b6581eca1f88dded09910b7f8ae1a824951f0f2fb835b9600630f",
+    "architecture.md": "d931cd8841103bf3138621ef31390c355f1442484219a288243440ed0993707b",
     "coding-style.md": "5c3bfc690edd8db7683d0aafe8a55aa8ac3b58f20884a369c7a8c0e41b2d475c",
-    "directory-structure.md": "9a52be6c6814cea1a12826fbebec8e3104cfae27f788213db1b200f9dd0819c0",
-    "entry-points.md": "078ea767f0a9b18c2eba299eb69b5789483d92844cba65e11c7f959aadf8aa9a",
-    "modules.md": "ed20f4c331ac667604d9fb22be1f3eb28ee33088ee680cab55a78a1f51b8efe8",
-    "onboarding.md": "c812f0c6f3de3ee07aa4a3ba2711c7bc5849ffd8a674ed5abb7a0c95c10595be",
-    "patterns.md": "814dadfb4b819f27a17051b49e1eecc8fdef28ea1434d3183c1ddc6c4b1cd994",
-    "release-publishing.md": "294f51f3cb918e6adfdbaf3c150875c34f42eb84fa0af23c6a2333e72fe52920",
-    "tech-landscape.md": "f868daff9a2d0df4fea633eb15289cca1e6eafee019d15143a3bbea4038a3eb0"
+    "directory-structure.md": "d25ed3b21ebd948a371af1bc538c373865a3470b45a9ff8422dd0c463441e0c3",
+    "entry-points.md": "412aa56e3eb48f2a9d07b58866bf491ce6e721e594bf5eeae386bf0e851bc7d1",
+    "modules.md": "42f98f8f94eb37a9ee27744f4f5f974c0efc4fe0d4cd827ba3b3d6cd01b2ed9d",
+    "onboarding.md": "19069db4af8269a1badb0d673118b9081291abc3b20892f9f097dc8fa26ebd92",
+    "patterns.md": "546b26e138e971543c2b6cb7005e22dd7384c82259b93f99017d96950afa70e3",
+    "release-publishing.md": "b91a21145e920b9aa4f04a1f0d0e8c4b48266f1518785b82aa30683ca81f5fb6",
+    "tech-landscape.md": "9ae2634b3688212e19ed651b574ddd63ded739c4641b7569c45009ada461b783"
   }
 }
