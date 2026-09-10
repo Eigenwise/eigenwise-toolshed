@@ -23,7 +23,7 @@ Tell Claude the instruction and when it applies:
 
 New workspaces use atomic storage: one Markdown rule per file under `.claude/live-rules/rules/`, plus a generated `.claude/live-rules/manifest.json`. The `add-rule` skill reads the rule format and examples before authoring, then runs the plugin-owned sync command. Rule files are the source of truth; never hand-edit the manifest.
 
-SessionStart injects the rules that apply at startup. During the session, a rule is injected again only when it newly matches or its content/hash changes. An unchanged rule does not repeat on every prompt or edit. Content changes take effect on the next prompt or relevant edit, with no restart.
+SessionStart injects the rules that apply at startup. Native subagents (Explore, general-purpose, custom agents) get those same startup rules once at SubagentStart, since they never submit a prompt of their own. During the session, a rule is injected again only when it newly matches or its content/hash changes. An unchanged rule does not repeat on every prompt or edit. Content changes take effect on the next prompt or relevant edit, with no restart.
 
 Existing projects may still use the legacy `.claude/live-rules.md` format. It is migration or explicit-override storage, not the default for new rules. On SessionStart, the plugin automatically migrates the default legacy file into atomic storage, verifies that the rules match, and removes the old file. A `LIVE_RULES_PATH` override is preserved, and a failed verification keeps the old file in place. Review the resulting files and commit the project rules so your team gets the same guidance.
 

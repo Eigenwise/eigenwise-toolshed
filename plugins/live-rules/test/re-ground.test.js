@@ -159,6 +159,30 @@ test('startup, resume, compact, and clear rehydrate current prompt rules once', 
   }
 });
 
+test('SubagentStart grounds startup rules once per subagent without touching the parent ledger', () => {
+  const dir = project();
+  const state = path.join(dir, 'state');
+  atomic(dir, [{ data: { description: 'Always' }, body: 'Subagent rule.' }]);
+  const hooksJson = JSON.parse(fs.readFileSync(path.join(root, 'hooks', 'hooks.json'), 'utf8'));
+  assert.match(hooksJson.hooks.SubagentStart[0].hooks[0].command, /session-start-rules\.js/);
+
+  assert.strictEqual(hook(promptHook, dir, state, { session_id: 'parent', prompt: 'hello' }).includes('Subagent rule'), true);
+  const agentA = { session_id: 'parent', hook_event_name: 'SubagentStart', agent_id: 'A', agent_type: 'Explore' };
+  const first = hook(startHook, dir, state, agentA);
+  assert.match(first, /subagent start/);
+  assert.match(first, /SubagentStart \(Explore\)/);
+  assert.match(first, /Subagent rule/);
+  assert.match(first, /"hookEventName":"SubagentStart"/);
+  assert.strictEqual(hook(startHook, dir, state, agentA), '');
+  assert.match(hook(startHook, dir, state, { ...agentA, agent_id: 'B' }), /Subagent rule/);
+  assert.strictEqual(hook(promptHook, dir, state, { session_id: 'parent', prompt: 'again' }), '');
+});
+
+test('SubagentStart is silent without rules', () => {
+  const dir = project();
+  assert.strictEqual(hook(startHook, dir, path.join(dir, 'state'), { session_id: 'parent', hook_event_name: 'SubagentStart', agent_id: 'A' }), '');
+});
+
 test('path-scoped rules ground once when their edited path first applies', () => {
   const dir = project();
   const state = path.join(dir, 'state');

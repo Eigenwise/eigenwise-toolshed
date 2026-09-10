@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 /**
- * live-rules - SessionStart hook
+ * live-rules - SessionStart and SubagentStart hook
  *
  * Injects the project's always-on rules once, at session start, as a fallback
- * delivery path alongside the UserPromptSubmit hook.
+ * delivery path alongside the UserPromptSubmit hook. The same script runs at
+ * SubagentStart because native subagents (Explore, general-purpose, custom
+ * agents) never submit a prompt, so UserPromptSubmit cannot reach them. Each
+ * subagent keeps its own ledger under the parent session so it is grounded
+ * once and the parent's ledger is left alone.
  *
  * Why this exists: Claude Code snapshots a session's hook registrations at
  * session start. If live-rules is installed or updated mid-session, the new
@@ -38,41 +42,54 @@ try {
   process.exit(0);
 }
 
+function subagentLedgerKey(data) {
+  const agentId = data.agent_id || data.agentId;
+  return data.session_id && agentId ? data.session_id + '/agent/' + agentId : null;
+}
+
 function main() {
   // Deliberately does not filter on data.source (startup | resume | clear |
   // compact): always-on rules must re-inject after compaction too, or the
   // README's promise that they survive compaction would silently break.
   const data = lib.readStdin();
+  const eventName = data.hook_event_name === 'SubagentStart' ? 'SubagentStart' : 'SessionStart';
   const projectDir = lib.getProjectDir(data);
   const migration = lib.migrateLegacyRules(projectDir, { detailed: true });
   if (lib.atomicSchema(projectDir) === 'future') {
-    lib.emit('SessionStart', 'Live Rules uses a newer schema. Preserve its files and update the plugin before changing its metadata.');
+    lib.emit(eventName, 'Live Rules uses a newer schema. Preserve its files and update the plugin before changing its metadata.');
     process.exit(0);
   }
 
   const ruleSet = lib.loadRuleSet(projectDir);
   if (!ruleSet.rules.length) {
-    if (migration.notice) lib.emit('SessionStart', migration.notice);
+    if (migration.notice) lib.emit(eventName, migration.notice);
     process.exit(0);
   }
 
   const cwd = (data && typeof data.cwd === 'string' && data.cwd) || projectDir;
   const cwdRel = projectRelative(projectDir, cwd);
   const selected = lib.attachIncludes(lib.selectForPrompt(ruleSet.rules, { promptText: '', cwdRel }), projectDir);
-  const changed = ledger.changed(projectDir, data.session_id, selected, true);
+  // A session start resets the ledger so rules survive compaction. A subagent
+  // has its own ledger keyed under the parent session, grounded once: a second
+  // SubagentStart for the same agent id must not paste the rules again.
+  const isSubagent = eventName === 'SubagentStart';
+  const ledgerKey = isSubagent ? subagentLedgerKey(data) : data.session_id;
+  const changed = ledger.changed(projectDir, ledgerKey, selected, !isSubagent);
   if (!changed.length) {
-    if (migration.notice) lib.emit('SessionStart', migration.notice);
+    if (migration.notice) lib.emit(eventName, migration.notice);
     process.exit(0);
   }
 
   const header =
     (migration.notice ? migration.notice + '\n\n' : '') +
-    '=== LIVE RULES (live-rules, session start) ===\n' +
-    'Rules re-grounded after SessionStart (' + (data.source || 'startup') + '). ' +
+    '=== LIVE RULES (live-rules, ' + (isSubagent ? 'subagent start' : 'session start') + ') ===\n' +
+    (isSubagent
+      ? 'Rules grounded for this subagent at SubagentStart' + (data.agent_type ? ' (' + data.agent_type + ')' : '') + '. '
+      : 'Rules re-grounded after SessionStart (' + (data.source || 'startup') + '). ') +
     lib.formatRuleSetStatus(ruleSet) +
     'Source: ' + lib.displayPath(projectDir, ruleSet.source);
 
-  lib.emit('SessionStart', lib.renderRules(changed, header));
+  lib.emit(eventName, lib.renderRules(changed, header));
   process.exit(0);
 }
 
