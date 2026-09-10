@@ -10,6 +10,20 @@ the code itself cannot express). Lean on naming and structure, not narration.
 > This is the optional digest bundled with the quartermaster setup skill. Copy it into a project's `.claude/` only
 > when the user wants the "guidelines pointer" live rule (see `rule-templates.md`). It's stack-agnostic.
 
+## Implementation baseline
+
+- Understand the flow before changing it. First decide whether the change needs to exist, then reuse an
+  existing code path before adding one. Prefer the standard library, native platform features, and
+  already-installed dependencies.
+- Keep the smallest clear shared-root fix that covers the behavior. Prefer deletion and direct code over
+  layers, wrappers, speculative abstractions, knobs, guards, tests, and process. Keep code only when it
+  carries a demonstrated behavior or a real safety floor.
+- Preserve input validation at trust boundaries and safeguards for security, data loss, accessibility, and
+  permissions. Mark a deliberate simplification with a `whittle:` comment that names its ceiling and
+  observable upgrade trigger. Leave a meaningful runnable regression check for non-trivial logic; name
+  what a focused check exercised and do not claim a mock ran live. One integration owner runs the full
+  gate after merged changes.
+
 ---
 
 ## Robert C. Martin (Uncle Bob) : *Clean Code*

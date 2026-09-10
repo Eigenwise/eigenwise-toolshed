@@ -43,7 +43,6 @@ export default defineConfig({
           label: 'Use the plugins',
           items: [
             { label: 'Quartermaster', slug: 'getting-started/quartermaster' },
-            { label: 'Whittle', slug: 'getting-started/whittle' },
             { label: 'Model Gateway', slug: 'getting-started/model-gateway' },
             { label: 'Sidequest', slug: 'getting-started/sidequest' },
             { label: 'Codebase Mapper', slug: 'getting-started/codebase-mapper' },

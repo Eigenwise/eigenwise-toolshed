@@ -3,7 +3,7 @@ title: Getting started
 description: Install Quartermaster, prepare a project, and choose the Toolshed plugin that fits the job.
 ---
 
-Eigenwise Toolshed is seven independent Claude Code plugins. Start with Quartermaster when you want a guided project setup. Install a different plugin directly when you already know what you need.
+Eigenwise Toolshed is six independent Claude Code plugins. Start with Quartermaster when you want a guided project setup. Install a different plugin directly when you already know what you need.
 
 ## Install Quartermaster
 
@@ -38,10 +38,9 @@ If you enabled Codebase Mapper, Claude can use the maintained project map to ans
 
 ## Choose your next workflow
 
-Toolshed includes these seven plugins:
+Toolshed includes these six plugins:
 
 - [Set up and maintain a workspace](./quartermaster/)
-- [Apply one clean-code policy](./whittle/)
 - [Track and deliver owned work](./sidequest/)
 - [Add GPT or Grok subscription models](./model-gateway/)
 - [Keep a project map nearby](./codebase-mapper/)

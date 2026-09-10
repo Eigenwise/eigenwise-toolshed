@@ -99,11 +99,6 @@ handing off implementation. Draw from three sources, in this order:
   - `model-gateway` puts the user's existing ChatGPT/Codex and Grok subscription models in
     Claude Code's `/model` picker through a local gateway, no API keys. It is what makes
     sidequest's non-Claude routes possible. Project-scoped with the rest of the workspace plugins.
-  - `whittle` applies one practical clean-code policy through Claude Code hooks. Offer it only when the user wants that policy
-    applied automatically. If another clean-code injector is already active, explain that they must disable it manually and reload plugins or restart before
-    enabling Whittle. Do not uninstall, import preferences, write consumer configuration, or offer
-    modes: enabling the Claude Code plugin is the whole activation path.
-
   When the plan wires Model Gateway or Sidequest routing, check the effective setting first:
 
   ```sh
@@ -127,13 +122,14 @@ handing off implementation. Draw from three sources, in this order:
   For LSP plugins, check the required binary is on PATH first; report a missing binary with its
   install hint, but never run a package manager yourself.
 - **History-derived seeds**: permission allowlist entries from repeated approved permission calls,
-  subject to the existing approval flow, never from a host policy label alone; starter live rules
-  derived from recurring correction themes, using
-  [references/rule-templates.md](references/rule-templates.md) as reference material to derive
-  from, never copy (byte-identical output means it was copied; rewrite or drop it). Every workspace
-  gets the reuse-first implementation baseline and the self-improvement rule from
-  [references/self-improvement.md](references/self-improvement.md), adapted to the project and
-  included in the approved write list.
+    subject to the existing approval flow, never from a host policy label alone; starter live rules
+    derived from recurring correction themes, using
+    [references/rule-templates.md](references/rule-templates.md) as reference material to derive
+    from, never copy (byte-identical output means it was copied; rewrite or drop it). Every workspace
+    gets the reuse-first implementation baseline from
+    [references/clean-code-principles.md](references/clean-code-principles.md) and the self-improvement
+    rule from [references/self-improvement.md](references/self-improvement.md), adapted to the project
+    and included in the approved write list.
 
 Default plugin installs to project scope so the config travels with the repo. Show the full
 install and write list (every file path, including any `~/.claude/settings.json` change) and get
