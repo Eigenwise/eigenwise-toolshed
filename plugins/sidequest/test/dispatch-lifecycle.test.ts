@@ -75,6 +75,7 @@ function withReloadedStore(modulePath: string, patch: (original: any) => any, ru
   const collaboratorPath = require.resolve(modulePath);
   const cachedStore = require.cache[storePath];
   const collaborator = require.cache[collaboratorPath];
+  if (!collaborator) throw new Error(`${modulePath} is not loaded, so store.js cannot be reloaded against it`);
   const originalExports = collaborator.exports;
   collaborator.exports = { ...originalExports, ...patch(originalExports) };
   delete require.cache[storePath];
