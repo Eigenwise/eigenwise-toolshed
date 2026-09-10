@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0 (2026-09-10)
+
+Released in v3.552.0, up from 0.8.1.
+
+### Features
+
+- Retire Whittle into Quartermaster's clean-code baseline (SQ-2710)
+  Quartermaster setup now seeds the clean-code baseline as its single policy home, and the Whittle plugin is retired.
+
+### Fixes
+
+- Strip Whittle to its Claude Code integration (SQ-2708)
+  Stale third-party notices are dropped from Sidequest and Quartermaster, and Quartermaster setup no longer offers a separate clean-code plugin.
+
 ## 0.8.1 (2026-09-10)
 
 Released in v3.546.0, up from 0.8.0.

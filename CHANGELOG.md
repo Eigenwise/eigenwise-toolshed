@@ -8,6 +8,34 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.552.0 (2026-09-10)
+
+### live-rules 2.10.5 → 2.11.0
+
+#### Features
+
+- Deliver startup live rules to native subagents (SQ-2709)
+  Startup-scoped live rules now reach native subagents once at SubagentStart, under a per-subagent ledger that leaves the parent session's ledger alone.
+
+### quartermaster 0.8.1 → 0.9.0
+
+#### Features
+
+- Retire Whittle into Quartermaster's clean-code baseline (SQ-2710)
+  Quartermaster setup now seeds the clean-code baseline as its single policy home, and the Whittle plugin is retired.
+
+#### Fixes
+
+- Strip Whittle to its Claude Code integration (SQ-2708)
+  Stale third-party notices are dropped from Sidequest and Quartermaster, and Quartermaster setup no longer offers a separate clean-code plugin.
+
+### sidequest 5.1.5 → 5.1.6
+
+#### Fixes
+
+- Strip Whittle to its Claude Code integration (SQ-2708)
+  Stale third-party notices are dropped from Sidequest and Quartermaster, and Quartermaster setup no longer offers a separate clean-code plugin.
+
 ## v3.551.0 (2026-09-10)
 
 ### model-gateway 0.50.15 → 0.50.16
