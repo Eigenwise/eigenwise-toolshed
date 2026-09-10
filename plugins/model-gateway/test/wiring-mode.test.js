@@ -654,7 +654,8 @@ function syncCompatMode(home, project, health, requiredMode, { ignoreCompatWrite
     const server = http.createServer((request, response) => {
       response.end(JSON.stringify(${JSON.stringify(health)}));
     });
-    server.listen(9, '127.0.0.1', async () => {
+    server.listen(0, '127.0.0.1', async () => {
+      process.env.CODEX_GATEWAY_WORKER_PORT = String(server.address().port);
       try {
         const result = await require(${JSON.stringify(COMMANDS)}).syncCompatMode({ requiredMode: ${JSON.stringify(requiredMode)} });
         process.stdout.write(JSON.stringify({ result }));
