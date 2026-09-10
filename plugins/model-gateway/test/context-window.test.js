@@ -883,7 +883,9 @@ test('SessionStart cleanup migrates an already-wired install', () => {
   assert.equal(settings.env.USER_SETTING, 'keep-me');
   const migratedCache = JSON.parse(fs.readFileSync(gatewayCache, 'utf8'));
   assert.equal(migratedCache.baseUrl, 'http://127.0.0.1:18764');
-  assert.equal(migratedCache.models[0].id, 'claude-gpt-5.6-sol');
+  // gpt-5.6-sol's advertised window is 920000, well above the 200k threshold, so its
+  // canonical MODEL_WINDOW_POLICY id keeps the [1m] suffix; this row was never legacy.
+  assert.equal(migratedCache.models[0].id, 'claude-gpt-5.6-sol[1m]');
 });
 
 test('SessionStart cleanup leaves unrelated gateway caches alone', () => {
