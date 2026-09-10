@@ -274,6 +274,7 @@ test('remote-control enable adopts unmarked loopback mappings and distinguishes 
   configure(['doctor']);
   await remoteControl.remoteControlCommand();
   assert.match(output.join('\n'), /plugin block: absent \(unmarked loopback mapping present, enable will adopt it\)/);
+  assert.match(output.join('\n'), /Remote Control transport: this bind check covers the local HTTP listener only; it does not verify end-to-end Remote Control\./);
 
   output.length = 0;
   configure(['enable']);
@@ -298,6 +299,13 @@ test('remote-control enable adopts unmarked loopback mappings and distinguishes 
   assert.equal(fs.readFileSync(hostsFile, 'utf8'), gw.managedHostsBlock());
   assert.equal(startCalls, 0);
   assert.match(output.join('\n'), /already enabled/);
+
+  fs.writeFileSync(hostsFile, '127.0.0.1 localhost\n');
+  output.length = 0;
+  configure(['enable', '--confirm']);
+  await remoteControl.remoteControlCommand();
+  assert.match(output.join('\n'), /RC-compatibility transport: ready after Claude Code restarts with http:\/\/api\.anthropic\.com/);
+  assert.match(output.join('\n'), /Remote Control end-to-end: not verified for reported Claude Code 2\.1\.259 or inspected 2\.1\.267; inspected session creation uses HTTPS while compatibility transport is HTTP\./);
 });
 
 test('remote-control enable refuses a port conflict before hosts writes and names Docker Desktop', async (t) => {

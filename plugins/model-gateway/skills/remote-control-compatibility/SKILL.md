@@ -29,7 +29,7 @@ Use this when the user wants Remote Control and does not need gateway models in 
 
 ## RC-compatibility mode
 
-Use this only when the user wants `/remote-control` while keeping Model Gateway routed. Enabling RC-compatibility points `ANTHROPIC_BASE_URL` at `api.anthropic.com`, so Claude Code disables gateway model discovery and the rows disappear from the picker. In RC-compatibility mode, the models still work: an explicit id such as `/model claude-gpt-5.6-terra` is accepted and saved as the default. Routing and Sidequest dispatch are unaffected.
+Use this only when the user wants `/remote-control` while keeping Model Gateway transport configured. Enabling RC-compatibility points `ANTHROPIC_BASE_URL` at `api.anthropic.com`; inspected Claude Code 2.1.267 disables gateway discovery for that hostname, so rows disappear from the picker and a cache refresh cannot restore them. Claude Code can accept and persist an explicit id such as `/model claude-gpt-5.6-terra[1m]`, but that client-side action does not prove a later request reaches the gateway. The current cleaner preserves canonical `[1m]` ids; do not present it as a fix for a reported request error. A detected hosts entry or bound listener proves local HTTP transport only. The reported 2.1.259 client and inspected 2.1.267 client have no verified end-to-end RC result: inspected session creation uses HTTPS while compatibility transport is HTTP. Normal gateway mode remains the verified inference path. Routing setup and Sidequest dispatch are unaffected.
 
 ## Enable
 
@@ -41,7 +41,7 @@ Use this only when the user wants `/remote-control` while keeping Model Gateway 
 
    `doctor` reports the serving supervisor as `bound`, `bindable`, `unavailable (CODE)`, or `unknown`. Start the normal-user gateway supervisor before enabling when it is not `bound` or `bindable`. Stop and explain any partial plugin block, non-loopback mapping for `api.anthropic.com`, an
    existing settings precedence contradiction, missing elevation, an `unavailable` or `unknown` serving
-   result, an effective process-env HTTPS `api.anthropic.com` URL, or failed gateway recovery. If process env shadows a
+   result, an effective process-env HTTPS `api.anthropic.com` URL, or failed gateway recovery. A `bound` or `bindable` result reports only the local HTTP transport and does not verify end-to-end Remote Control. If process env shadows a
    wired settings file, it bypasses Model Gateway. A user-controlled Claude Code CLI launch can correct
    or unset `ANTHROPIC_BASE_URL`, then restart. If a host replaces it, use the supported Claude Code CLI
    on the wired project instead. Desktop routing is unsupported under forced overrides on Windows and
@@ -80,11 +80,12 @@ Use this only when the user wants `/remote-control` while keeping Model Gateway 
    verification, or wiring fails, it restores its exact original bytes only when the file still contains the
    bytes this command wrote. Later external edits stay in place and the output names the backup for manual
    recovery. A successful `--confirm` run does not ask for another confirmation. The user must restart
-   Claude Code before `/remote-control` appears.
+   Claude Code before it uses the updated RC-compatibility transport; do not promise that this makes
+   `/remote-control` work end-to-end.
 
 ## Disable
 
-Disabling RC-compatibility restores the Codex/Grok rows in `/model`. While compatibility is enabled, an explicit model id such as `/model claude-gpt-5.6-terra` still works and persists as the default.
+Disabling RC-compatibility restores the Codex/Grok rows in `/model`. It does not change the end-to-end RC qualification: compatibility transport was not verified for the reported 2.1.259 or inspected 2.1.267 clients.
 
 1. Run `remote-control doctor` first.
 2. Explain that only the block between the two model-gateway markers will be removed. It leaves all
