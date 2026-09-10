@@ -2379,6 +2379,81 @@ function makeWorkedBy(input) {
   const at = input.at && Number.isFinite(Date.parse(input.at)) ? new Date(input.at).toISOString() : (/* @__PURE__ */ new Date()).toISOString();
   return { model, effort, by, at };
 }
+function deliveryClaimAt(ticket) {
+  const dispatch2 = dispatchState(ticket);
+  const claimAt = String(ticket?.claim?.at || ticket?.completion?.claimAt || "").trim();
+  if (!claimAt || claimAt !== String(dispatch2?.claimedAt || "").trim()) return Number.NaN;
+  return Date.parse(claimAt);
+}
+function deliveryRelationshipIdentity(ticket) {
+  const dispatch2 = dispatchState(ticket);
+  const preparingSessionId = String(dispatch2?.preparedBy?.sessionId || "").trim();
+  const dispatchSessionId = String(dispatch2?.sessionId || "").trim();
+  if (preparingSessionId && dispatchSessionId && preparingSessionId !== dispatchSessionId) return null;
+  return preparingSessionId || dispatchSessionId || null;
+}
+function deliveryScopesOverlap(left, right) {
+  const leftScopes = commitScope.scopedPaths(left);
+  const rightScopes = commitScope.scopedPaths(right);
+  if (!leftScopes.length || !rightScopes.length) return true;
+  if ([...leftScopes, ...rightScopes].some((scope) => scope.includes("*"))) return true;
+  return leftScopes.some((leftScope) => rightScopes.some((rightScope) => commitScope.isInScope(leftScope, [rightScope]) || commitScope.isInScope(rightScope, [leftScope])));
+}
+function sameWorkingTreePaths(left, right) {
+  return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((path2, index) => path2 === right[index]);
+}
+function siblingDeliveryIntegrityFailure(ticket, sibling, recordedPaths) {
+  const paths = Array.isArray(recordedPaths) ? recordedPaths : [];
+  return {
+    ok: false,
+    reason: "working_tree_sibling_integrity_violation",
+    message: `${ticket.ref} cannot close its working-tree deliverable because completed sibling ${sibling.ref}'s recorded delivery no longer matches its candidate. Preserve the shared-tree work and hand it back to the existing parent for verification or grooming; do not revert it, expand scope, or commit it.`,
+    unscopedPaths: paths
+  };
+}
+function completedSiblingWorkingTreeDelivery(slug, ticket, sibling, siblingClaimAt, currentClaimAt, now) {
+  const siblingDispatch = dispatchState(sibling);
+  const completionAt = Date.parse(String(siblingDispatch?.terminalAt || ""));
+  if (!Number.isFinite(completionAt) || siblingClaimAt > completionAt || completionAt > now || currentClaimAt > completionAt) return null;
+  const recorded = sibling?.completion?.workingTree;
+  const recordedCandidate = recorded?.candidate;
+  const recordedPaths = Array.isArray(recorded?.changedPaths) ? recorded.changedPaths : null;
+  if (recordedCandidate?.source !== "working-tree" || !/^[a-f0-9]{64}$/i.test(String(recordedCandidate?.value || "")) || !recordedPaths?.length || !commitScope.validateRelativeScopes(recordedPaths).ok || recordedPaths.some((file) => file.includes("*") || !commitScope.isInScope(file, siblingDispatch.declaredFiles))) {
+    return siblingDeliveryIntegrityFailure(ticket, sibling, recordedPaths);
+  }
+  const current = workingTreeDeliveryCandidate(slug, sibling);
+  if (!current || current.candidate.value !== recordedCandidate.value || !sameWorkingTreePaths(current.changedPaths, recordedPaths)) {
+    return siblingDeliveryIntegrityFailure(ticket, sibling, recordedPaths);
+  }
+  return { ok: true, paths: recordedPaths };
+}
+function siblingWorkingTreeDeliveryPaths(slug, ticket) {
+  const dispatch2 = dispatchState(ticket);
+  const currentClaimAt = deliveryClaimAt(ticket);
+  const relationship = deliveryRelationshipIdentity(ticket);
+  const now = Date.now();
+  if (dispatch2?.sharedTree !== true || dispatch2?.workingTreeDelivery !== true || dispatch2?.terminalAt != null || !ticket?.claim?.by || !relationship || !Number.isFinite(currentClaimAt) || currentClaimAt > now) return { ok: true, paths: [] };
+  const root = String(readMeta(slug)?.path || "").trim();
+  const declaredFiles = dispatch2.declaredFiles;
+  if (!root || !commitScope.validateRelativeScopes(declaredFiles).ok) return { ok: true, paths: [] };
+  const paths = [];
+  for (const sibling of listTickets(slug)) {
+    if (!sibling || sibling.ref === ticket.ref || sibling.archived) continue;
+    const siblingDispatch = dispatchState(sibling);
+    const siblingClaimAt = deliveryClaimAt(sibling);
+    if (siblingDispatch?.sharedTree !== true || siblingDispatch?.workingTreeDelivery !== true || deliveryRelationshipIdentity(sibling) !== relationship || !commitScope.validateRelativeScopes(siblingDispatch.declaredFiles).ok || deliveryScopesOverlap(declaredFiles, siblingDispatch.declaredFiles) || !Number.isFinite(siblingClaimAt) || siblingClaimAt > now) continue;
+    if (sibling.claim?.by) {
+      if (sibling.status === "doing" && siblingDispatch.terminalAt == null) paths.push(...commitScope.scopedPaths(siblingDispatch.declaredFiles));
+      continue;
+    }
+    if (sibling.status !== "done" || sibling.completion?.purpose !== "working-tree") continue;
+    const completed = completedSiblingWorkingTreeDelivery(slug, ticket, sibling, siblingClaimAt, currentClaimAt, now);
+    if (!completed) continue;
+    if (!completed.ok) return completed;
+    paths.push(...completed.paths);
+  }
+  return { ok: true, paths };
+}
 function workingTreeDeliveryCandidate(slug, ticket) {
   const dispatch2 = dispatchState(ticket);
   const declaredFiles = Array.isArray(dispatch2?.declaredFiles) ? dispatch2.declaredFiles : [];
@@ -2408,6 +2483,8 @@ function workingTreeDeliveryCandidate(slug, ticket) {
 }
 function workingTreeDeliveryCloseout(slug, ticket, completionDelta) {
   const dispatch2 = dispatchState(ticket);
+  const siblingDelivery = siblingWorkingTreeDeliveryPaths(slug, ticket);
+  if (!siblingDelivery.ok) return siblingDelivery;
   const candidate = workingTreeDeliveryCandidate(slug, ticket);
   if (!candidate) return { ok: false, reason: "working_tree_delivery_unavailable", message: `${ticket.ref} cannot inspect its pinned working-tree deliverable. Release it and dispatch again.` };
   const declaredFiles = dispatch2.declaredFiles;
@@ -2416,16 +2493,18 @@ function workingTreeDeliveryCloseout(slug, ticket, completionDelta) {
   const baseline = new Map(baselineEntries.map((entry) => [dirtyPathKey(entry.path), entry]));
   const current = artifactWorkingState(slug, { allowLarge: !baselineRecorded });
   const currentByPath = new Map(current.map((entry) => [dirtyPathKey(entry.path), entry]));
+  const siblingPaths = new Set(siblingDelivery.paths.map(dirtyPathKey));
+  const belongsToSiblingDelivery = (file) => siblingPaths.has(dirtyPathKey(file));
   const outside = /* @__PURE__ */ new Set();
   for (const entry of baselineEntries) {
     if (commitScope.isInScope(entry.path, declaredFiles)) continue;
     const currentEntry = currentByPath.get(dirtyPathKey(entry.path));
-    if (!currentEntry || currentEntry.identity !== entry.identity) outside.add(entry.path);
+    if ((!currentEntry || currentEntry.identity !== entry.identity) && !belongsToSiblingDelivery(entry.path)) outside.add(entry.path);
   }
   for (const entry of current) {
-    if ((!baselineRecorded || !baseline.has(dirtyPathKey(entry.path))) && !commitScope.isInScope(entry.path, declaredFiles)) outside.add(entry.path);
+    if ((!baselineRecorded || !baseline.has(dirtyPathKey(entry.path))) && !commitScope.isInScope(entry.path, declaredFiles) && !belongsToSiblingDelivery(entry.path)) outside.add(entry.path);
   }
-  if (outside.size) return { ok: false, reason: "working_tree_scope_violation", message: `${ticket.ref} changed paths outside its working-tree deliverable: ${Array.from(outside).sort().join(", ")}. Revert them or release the ticket.`, unscopedPaths: Array.from(outside).sort() };
+  if (outside.size) return { ok: false, reason: "working_tree_scope_violation", message: `${ticket.ref} cannot attribute additional shared-tree changes to its working-tree deliverable: ${Array.from(outside).sort().join(", ")}. Preserve those paths and hand them back to the existing parent for verification or grooming.`, unscopedPaths: Array.from(outside).sort() };
   const committed = Array.isArray(completionDelta?.committed) ? completionDelta.committed.filter((file) => commitScope.isInScope(file, declaredFiles)) : [];
   if (committed.length) return { ok: false, reason: "working_tree_commit_forbidden", message: `${ticket.ref} declares a working-tree deliverable, but committed declared paths: ${committed.join(", ")}. Restore the shared checkout to the uncommitted deliverable before closing.` };
   if (!candidate.changedPaths.length) return { ok: false, reason: "working_tree_delivery_empty", message: `${ticket.ref} has no changed declared paths to record as a working-tree deliverable.` };

@@ -57,6 +57,10 @@ the contract, then clears the log. If the contract changes after a member is cla
 about revision drift. This keeps context completeness cheap without the orchestrator rediscovering the
 codebase inline.
 
+### Shared working-tree deliveries
+
+A live sibling allocation is excluded only when both shared-tree working-tree dispatches record the same nonempty preparing session, their claims overlap, and their scopes are disjoint. Before dirty-path classification, Sidequest validates every eligible completed sibling's recorded candidate against its recorded paths and current content. A mismatch refuses closeout: preserve the shared-tree work and hand it back to the existing parent for verification or grooming. Do not revert it or expand scope to absorb it.
+
 Before dispatching a wave, ask: “What will every ticket in this wave need to change that none of them owns?” For each shared file or seam, pin its shape in the story execution contract before dispatch, or file one prerequisite ticket that the wave depends on. Do not reformat regions you did not functionally change in shared files; a prettier pass over a file three peers are editing can turn five-line changes into unmergeable successors.
 
 When a package commits build output, the source ticket scopes its generated output too. For content-hashed output, assign exactly one rebuild ticket per wave: parallel rebuilds choose different filenames and collide at merge.
