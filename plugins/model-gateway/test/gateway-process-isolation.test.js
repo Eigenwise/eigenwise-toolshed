@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway } = require('./support.js');
-const { commandIncludesFile, commandResultAsync, createProxyRecovery, installBelongsToThisPlugin, isDescendantOfAsync, resolvePortOwner } = require('../lib/process-supervision.js');
+const { commandIncludesFile, commandResultAsync, createProxyRecovery, installBelongsToThisPlugin, isDescendantOfAsync, probeTimeoutMs, resolvePortOwner } = require('../lib/process-supervision.js');
 const { startAll } = require('../lib/commands.js');
 const { canReplaceInstalledCliPath } = require('../lib/runtime.js');
 
@@ -280,6 +280,43 @@ function codexMessage() {
     messages: [{ role: 'user', content: 'fixture isolation' }],
   });
 }
+
+function probeTimeoutMsForPlatform(platform) {
+  const modulePaths = [require.resolve('../lib/runtime.js'), require.resolve('../lib/process-supervision.js')];
+  const cachedModules = new Map(modulePaths.map((modulePath) => [modulePath, require.cache[modulePath]]));
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  for (const modulePath of modulePaths) delete require.cache[modulePath];
+  Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
+  try {
+    return require('../lib/process-supervision.js').probeTimeoutMs();
+  } finally {
+    Object.defineProperty(process, 'platform', platformDescriptor);
+    for (const modulePath of modulePaths) {
+      delete require.cache[modulePath];
+      if (cachedModules.get(modulePath)) require.cache[modulePath] = cachedModules.get(modulePath);
+    }
+  }
+}
+
+test('probe timeout defaults to the measured Windows lookup budget, keeps 2s elsewhere, and still clamps an explicit override', (t) => {
+  const previousOverride = process.env.CODEX_GATEWAY_PROBE_TIMEOUT_MS;
+  t.after(() => {
+    if (previousOverride === undefined) delete process.env.CODEX_GATEWAY_PROBE_TIMEOUT_MS;
+    else process.env.CODEX_GATEWAY_PROBE_TIMEOUT_MS = previousOverride;
+  });
+
+  delete process.env.CODEX_GATEWAY_PROBE_TIMEOUT_MS;
+  assert.equal(probeTimeoutMsForPlatform('win32'), 8000, 'win32 gets the measured ownership-probe budget');
+  assert.equal(probeTimeoutMsForPlatform('linux'), 2000, 'non-Windows default is unchanged');
+  assert.equal(probeTimeoutMsForPlatform('darwin'), 2000, 'non-Windows default is unchanged');
+
+  process.env.CODEX_GATEWAY_PROBE_TIMEOUT_MS = '5000';
+  assert.equal(probeTimeoutMsForPlatform('win32'), 5000, 'explicit override wins over the Windows default');
+  assert.equal(probeTimeoutMsForPlatform('linux'), 5000, 'explicit override wins over the non-Windows default');
+
+  process.env.CODEX_GATEWAY_PROBE_TIMEOUT_MS = '-5';
+  assert.equal(probeTimeoutMsForPlatform('win32'), 1, 'explicit override is still clamped to a minimum of 1ms');
+});
 
 test('startup ownership resolves bounded same-install, unowned, foreign, and unknown owners', async () => {
   const gatewayScript = path.join(__dirname, '..', 'bin', 'model-gateway.js');

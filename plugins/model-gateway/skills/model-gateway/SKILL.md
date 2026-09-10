@@ -240,7 +240,8 @@ agree).
   when they tighten it, requests die mid-stream until claude-code-proxy ships a fix, so
   suggest re-running `setup` (it fetches the latest release).
 - **Startup, recovery, restart, or drain refuses to touch a listener**: each ownership probe is bounded by
-  `CODEX_GATEWAY_PROBE_TIMEOUT_MS` (2 seconds by default). A timeout, malformed process result, or
+  `CODEX_GATEWAY_PROBE_TIMEOUT_MS` (2 seconds by default, 8 seconds on Windows, where the Win32_Process
+  lookup itself typically takes 1.8-2.4 seconds). A timeout, malformed process result, or
   unrecognized command leaves ownership unknown. Startup records `owner-unknown` and leaves that
   listener untouched; recovery leaves it for the next tick. A confirmed foreign owner gets the same
   refusal. Probe children are stopped with the supervisor, so they cannot keep a test fixture home open.
