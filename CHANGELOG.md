@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.547.0 (2026-09-10)
+
+### model-gateway 0.50.14 → 0.50.15
+
+#### Fixes
+
+- Normalize legacy context failures (SQ-2681)
+  Model Gateway now classifies legacy upstream context-window errors as client request-too-large responses before recording Codex readiness and route telemetry.
+
 ## v3.546.0 (2026-09-10)
 
 ### quartermaster 0.8.0 → 0.8.1
