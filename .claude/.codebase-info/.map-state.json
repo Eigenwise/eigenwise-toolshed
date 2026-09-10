@@ -3,7 +3,7 @@
   "tool": "codebase-mapper",
   "version": "2.15.8",
   "mappedAt": "2026-09-10",
-  "gitCommit": "57e3e1d3a8fe1a6b9e524b85e9f56b8517406812",
+  "gitCommit": "7ef826eeceae37f614275a6cf82eac90cf295e57",
   "documents": [
     "architecture.md",
     "coding-style.md",
@@ -23,7 +23,7 @@
     "entry-points.md": "078ea767f0a9b18c2eba299eb69b5789483d92844cba65e11c7f959aadf8aa9a",
     "modules.md": "ed20f4c331ac667604d9fb22be1f3eb28ee33088ee680cab55a78a1f51b8efe8",
     "onboarding.md": "c812f0c6f3de3ee07aa4a3ba2711c7bc5849ffd8a674ed5abb7a0c95c10595be",
-    "patterns.md": "0563ffde55e01bea2ff739ac16e031bbecf2fd727c83d4bdefd00c3469097899",
+    "patterns.md": "814dadfb4b819f27a17051b49e1eecc8fdef28ea1434d3183c1ddc6c4b1cd994",
     "release-publishing.md": "294f51f3cb918e6adfdbaf3c150875c34f42eb84fa0af23c6a2333e72fe52920",
     "tech-landscape.md": "f868daff9a2d0df4fea633eb15289cca1e6eafee019d15143a3bbea4038a3eb0"
   }
