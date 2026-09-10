@@ -10,8 +10,10 @@ const test = require('node:test');
 const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway } = require('./support.js');
 
 const RUNTIME = path.join(__dirname, '..', 'lib', 'runtime.js');
+const WIRING = path.join(__dirname, '..', 'lib', 'settings-wiring.js');
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const runtime = require(RUNTIME);
+const wiring = require(WIRING);
 
 function cachePath() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-discovery-cache-'));
@@ -260,4 +262,108 @@ test('ensure writes the discovery cache before reporting missing ChatGPT auth', 
     discoveryProcessOverrides(shimPort, workerPort, proxyPort),
   );
   assert.equal(stopped.status, 0, stopped.stderr);
+});
+
+test('cleanLegacyGatewayModelCache upgrades a legacy bare Codex id whose window exceeds 200k', () => {
+  const file = cachePath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({
+    baseUrl: runtime.DEFAULT_BASE_URL,
+    fetchedAt: 1,
+    models: [
+      { id: 'claude-gpt-6-astra', display_name: 'GPT-6 Astra (Codex)' },
+      { id: 'claude-grok-4.5[1m]', display_name: 'Grok 4.5' },
+      { id: 'anthropic-custom', display_name: 'Anthropic Custom' },
+    ],
+  }));
+
+  const changed = wiring.cleanLegacyGatewayModelCache(file);
+
+  assert.equal(changed, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).models, [
+    { id: 'claude-gpt-6-astra[1m]', display_name: 'GPT-6 Astra (Codex)' },
+    { id: 'claude-grok-4.5[1m]', display_name: 'Grok 4.5' },
+    { id: 'anthropic-custom', display_name: 'Anthropic Custom' },
+  ]);
+});
+
+test('cleanLegacyGatewayModelCache leaves an already-canonical cache byte-identical', () => {
+  const file = cachePath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const original = JSON.stringify({
+    baseUrl: runtime.DEFAULT_BASE_URL,
+    fetchedAt: 1,
+    models: [{ id: 'claude-gpt-6-astra[1m]', display_name: 'GPT-6 Astra (Codex)' }],
+  });
+  fs.writeFileSync(file, original);
+  const before = fs.statSync(file).mtimeMs;
+
+  const changed = wiring.cleanLegacyGatewayModelCache(file);
+
+  assert.equal(changed, false);
+  assert.equal(fs.readFileSync(file, 'utf8'), original);
+  assert.equal(fs.statSync(file).mtimeMs, before);
+});
+
+test('cleanLegacyGatewayModelCache leaves a foreign baseUrl cache untouched', () => {
+  const file = cachePath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const original = JSON.stringify({
+    baseUrl: 'http://other-gateway.example',
+    fetchedAt: 1,
+    models: [{ id: 'claude-gpt-6-astra', display_name: 'GPT-6 Astra (Codex)' }],
+  });
+  fs.writeFileSync(file, original);
+
+  const changed = wiring.cleanLegacyGatewayModelCache(file);
+
+  assert.equal(changed, false);
+  assert.equal(fs.readFileSync(file, 'utf8'), original);
+});
+
+test('cleanLegacyGatewayModelCache leaves malformed cache alone', () => {
+  const missing = cachePath();
+  assert.equal(wiring.cleanLegacyGatewayModelCache(missing), false);
+
+  const notJson = cachePath();
+  fs.mkdirSync(path.dirname(notJson), { recursive: true });
+  fs.writeFileSync(notJson, 'not json');
+  assert.equal(wiring.cleanLegacyGatewayModelCache(notJson), false);
+  assert.equal(fs.readFileSync(notJson, 'utf8'), 'not json');
+
+  const nonArrayModels = cachePath();
+  fs.mkdirSync(path.dirname(nonArrayModels), { recursive: true });
+  const original = JSON.stringify({ baseUrl: runtime.DEFAULT_BASE_URL, fetchedAt: 1, models: 'not-an-array' });
+  fs.writeFileSync(nonArrayModels, original);
+  assert.equal(wiring.cleanLegacyGatewayModelCache(nonArrayModels), false);
+  assert.equal(fs.readFileSync(nonArrayModels, 'utf8'), original);
+});
+
+test('cleanLegacyGatewayModelCache normalizes a stale [1m] suffix down when the configured window is <=200k', () => {
+  const file = cachePath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-cache-cleaner-home-'));
+  try {
+    const script = [
+      `const runtime = require(${JSON.stringify(RUNTIME)});`,
+      `const wiring = require(${JSON.stringify(WIRING)});`,
+      `const fs = require('fs');`,
+      `const file = ${JSON.stringify(file)};`,
+      `fs.writeFileSync(file, JSON.stringify({ baseUrl: runtime.DEFAULT_BASE_URL, fetchedAt: 1, models: [{ id: 'claude-gpt-6-astra[1m]', display_name: 'GPT-6 Astra (Codex)' }] }));`,
+      `const changed = wiring.cleanLegacyGatewayModelCache(file);`,
+      `console.log(JSON.stringify({ changed, models: JSON.parse(fs.readFileSync(file, 'utf8')).models }));`,
+    ].join('');
+    const result = spawnGatewayProcessSync(process.execPath, ['-e', script], {
+      encoding: 'utf8',
+      env: { HOME: home, USERPROFILE: home },
+      isolatedOverrides: { CODEX_GATEWAY_CONTEXT_WINDOW: '200000' },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const { changed, models } = JSON.parse(result.stdout);
+    assert.equal(changed, true);
+    assert.deepEqual(models, [{ id: 'claude-gpt-6-astra', display_name: 'GPT-6 Astra (Codex)' }]);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });

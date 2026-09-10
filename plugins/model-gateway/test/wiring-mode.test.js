@@ -85,6 +85,26 @@ test('env --write-project wires the current project-local settings', (t) => {
   assert.equal(fs.existsSync(path.join(home, '.claude', 'settings.json')), false);
 });
 
+test('env --write-project normalizes a legacy gateway model cache through the canonical window policy', (t) => {
+  const { home, project } = fixture(t);
+  const cache = path.join(home, '.claude', 'cache', 'gateway-models.json');
+  writeJson(cache, {
+    baseUrl: DEFAULT_BASE_URL,
+    fetchedAt: 1,
+    models: [
+      { id: 'claude-gpt-6-astra', display_name: 'GPT-6 Astra (Codex)' },
+      { id: 'anthropic-custom', display_name: 'Anthropic Custom' },
+    ],
+  });
+
+  assert.equal(run(home, project, ['env', '--write-project']).code, 0);
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(cache, 'utf8')).models, [
+    { id: 'claude-gpt-6-astra[1m]', display_name: 'GPT-6 Astra (Codex)' },
+    { id: 'anthropic-custom', display_name: 'Anthropic Custom' },
+  ]);
+});
+
 test('env --write-user keeps a deliberate shared fallback available', (t) => {
   const { home, project } = fixture(t);
 

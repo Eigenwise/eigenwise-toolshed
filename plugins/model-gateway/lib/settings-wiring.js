@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { writeFileAtomically } = require('./atomic-file.js');
-const { COMPAT_BASE_URL, COMPAT_HOST, DEFAULT_BASE_URL, GATEWAY_MODELS_CACHE, LEGACY_ENV_BLOCK, PIN_ALIASES, PROJECT_WIRING_REGISTRY_PATH, STATIC_ENV_BLOCK, STATE, WIRING_CONFIG_PATH } = require('./runtime.js');
+const { COMPAT_BASE_URL, COMPAT_HOST, DEFAULT_BASE_URL, GATEWAY_MODELS_CACHE, gatewayClientModelId, LEGACY_ENV_BLOCK, PIN_ALIASES, PROJECT_WIRING_REGISTRY_PATH, STATIC_ENV_BLOCK, STATE, WIRING_CONFIG_PATH } = require('./runtime.js');
 const { isGatewayModelId, ourBaseUrls } = require('./pins.js');
 
 // Project-local wiring is the default so each repository opts into the
@@ -267,18 +267,22 @@ function cleanLegacyEnvSettings() {
   }
 }
 
-function cleanLegacyGatewayModelCache() {
+function cleanLegacyGatewayModelCache(cachePath = GATEWAY_MODELS_CACHE) {
   let cache;
-  try { cache = JSON.parse(fs.readFileSync(GATEWAY_MODELS_CACHE, 'utf8')); } catch { return false; }
+  try { cache = JSON.parse(fs.readFileSync(cachePath, 'utf8')); } catch { return false; }
   if (!ourBaseUrls().includes(cache.baseUrl) || !Array.isArray(cache.models)) return false;
-  if (!cache.models.some((m) => m && typeof m.id === 'string'
-    && isGatewayModelId(m.id) && /\[1m\]$/.test(m.id))) return false;
-  cache.models = cache.models.map((m) => {
+  let changed = false;
+  const models = cache.models.map((m) => {
     if (!m || typeof m.id !== 'string' || !isGatewayModelId(m.id)) return m;
-    return { ...m, id: m.id.replace(/\[1m\]$/, '') };
+    const canonicalId = gatewayClientModelId(m.id);
+    if (canonicalId === m.id) return m;
+    changed = true;
+    return { ...m, id: canonicalId };
   });
+  if (!changed) return false;
+  cache.models = models;
   try {
-    writeFileAtomically(GATEWAY_MODELS_CACHE, JSON.stringify(cache, null, 2) + '\n', { mode: 0o600 });
+    writeFileAtomically(cachePath, JSON.stringify(cache, null, 2) + '\n', { mode: 0o600 });
   } catch { return false; }
   return true;
 }
