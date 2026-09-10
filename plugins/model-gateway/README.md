@@ -25,6 +25,8 @@ After the project wiring is confirmed, fully restart the Claude Code process for
 
 A process `ANTHROPIC_BASE_URL` has precedence over project and user settings. If `doctor` or SessionStart says it shadows a wired settings file, it bypasses Model Gateway. If you control the Claude Code CLI launch, correct or unset that value, then restart. If the host replaces it, use the supported Claude Code CLI on the wired project instead. Model Gateway does not support Desktop routing under forced overrides on Windows or macOS, and settings, parent, or User-scope edits cannot be promised to win.
 
+Claude Desktop's own native Gateway configuration can point at Model Gateway's endpoint, but installed Desktop 1.49585.0 validates every Gateway model ID client-side and rejects any `gpt`/`codex`/non-Anthropic family marker before it reaches the picker or a session, whether the ID came from explicit config or from discovery. Only a genuinely Anthropic-backed route is usable there. This is separate from the override limitation above, and it is version-specific: it can be revisited if a later Desktop release stops filtering by model family. The Claude Code CLI remains the verified way to use gateway models; VS Code success has been reported but is not verified here.
+
 ## Use a model
 
 In Claude Code v2.1.129+, open `/model` and choose a row labeled `From gateway`. Claude Code only refetches gateway discovery
