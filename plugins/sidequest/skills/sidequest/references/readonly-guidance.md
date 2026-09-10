@@ -14,7 +14,7 @@ Create a readonly `review-audit` ticket with a named scope such as `plugins/side
 
 ## Shortcut debt
 
-Create a readonly `review-audit` ticket with the source directories to inspect. Scan actual source comments for `ponytail:` markers and Whittle equivalents. Report each deliberate shortcut with its file and line, known ceiling, observable upgrade trigger, and replacement. A missing ceiling or trigger is itself a finding. Do not invent either one, require a marker for every simplification, or move results into a ledger.
+Create a readonly `review-audit` ticket with the source directories to inspect. Scan actual source comments for `whittle:` markers. Report each deliberate shortcut with its file and line, known ceiling, observable upgrade trigger, and replacement. A missing ceiling or trigger is itself a finding. Do not invent either one, require a marker for every simplification, or move results into a ledger.
 
 ## Measurement
 
