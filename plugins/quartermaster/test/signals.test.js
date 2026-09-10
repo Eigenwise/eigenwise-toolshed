@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
 
+const { mine } = require('../lib/mine.js');
 const { createSignalCollector, normalizeCommand, tallyFromSignals } = require('../lib/signals.js');
 const { streamTranscript } = require('../lib/stream.js');
 
@@ -35,23 +36,69 @@ async function collect(records) {
   return collector.finish();
 }
 
-test('counts denials with kind, tool, and target', async () => {
-  const use = assistantToolUse('Bash', { command: 'npm test' });
-  const toolUseId = use.message.content[0].id;
-  const signals = await collect([
-    use,
+test('mine reports host policy blocks without inventing permission provenance', async () => {
+  const configDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-mine-'));
+  const root = path.join(configDirectory, 'projects');
+  const slug = 'test-project';
+  const sessionDirectory = path.join(root, slug);
+  fs.mkdirSync(sessionDirectory, { recursive: true });
+
+  const hostBlock = assistantToolUse('Bash', { command: 'npm test' });
+  const realRule = assistantToolUse('Read', { file_path: 'src/config.js' });
+  const userRejection = assistantToolUse('Edit', { file_path: 'src/config.js' });
+  const unlabelledResult = assistantToolUse('Bash', { command: 'npm test --watch' });
+  fs.writeFileSync(path.join(sessionDirectory, 'session-1.jsonl'), [
+    hostBlock,
     {
       type: 'user',
-      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'denied' }] },
-      toolUseResult: 'denied',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: hostBlock.message.content[0].id, content: 'host policy blocked this call', is_error: true }] },
+      toolUseResult: 'host policy blocked this call',
       toolDenialKind: 'permission-rule',
       timestamp: '2026-08-01T10:02:00Z',
     },
-  ]);
-  assert.equal(signals.friction.denials.total, 1);
-  assert.equal(signals.friction.denials.byKind['permission-rule'], 1);
-  assert.equal(signals.friction.denials.byTool.Bash, 1);
-  assert.equal(signals.friction.denials.targets[0].target, 'npm test');
+    realRule,
+    {
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: realRule.message.content[0].id, content: 'a strict rule blocked this call', is_error: true }] },
+      toolUseResult: 'a strict rule blocked this call',
+      toolDenialKind: 'permission-rule',
+      timestamp: '2026-08-01T10:03:00Z',
+    },
+    userRejection,
+    {
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: userRejection.message.content[0].id, content: 'host policy blocked this call', is_error: true }] },
+      toolUseResult: 'host policy blocked this call',
+      toolDenialKind: 'user-rejected',
+      timestamp: '2026-08-01T10:04:00Z',
+    },
+    unlabelledResult,
+    {
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: unlabelledResult.message.content[0].id, content: 'host policy blocked this call', is_error: true }] },
+      toolUseResult: 'host policy blocked this call',
+      timestamp: '2026-08-01T10:05:00Z',
+    },
+  ].map((record) => JSON.stringify(record)).join('\n'), 'utf8');
+
+  const output = await mine({
+    root,
+    slug,
+    days: 30,
+    sessions: 1,
+    includeSubagents: false,
+    env: { CLAUDE_CONFIG_DIR: configDirectory, QUARTERMASTER_STATE_DIR: path.join(configDirectory, 'quartermaster-state') },
+  });
+
+  assert.equal(output.friction.denials.total, 3);
+  assert.equal(output.friction.denials.byKind['permission-rule'], 2);
+  assert.equal(output.friction.denials.byKind['user-rejected'], 1);
+  assert.deepEqual(output.friction.denials.targets.slice(0, 2).map((target) => target.kind), ['permission-rule', 'permission-rule']);
+  assert.equal(output.friction.toolErrors.total, 4);
+  assert.equal(
+    output.friction.denials.meaning,
+    'Host-reported policy blocks. permission-rule cannot distinguish a permission rule from a PreToolUse hook policy block.',
+  );
 });
 
 test('detects corrections and interrupts from user prompts', async () => {

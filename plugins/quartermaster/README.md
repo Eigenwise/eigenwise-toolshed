@@ -41,10 +41,12 @@ The aggregate is more than counts. It can include:
 - explicit goal conditions, whether each goal was met, and bounded goal samples;
 - the two directory segments nearest touched files, with scratch and opaque paths removed;
 - counts for prompts, tool calls, errors, denials, interrupts, and corrections;
+- a denial meaning that identifies `permission-rule` as a host-reported policy block, not proof of
+  whether a permission rule or PreToolUse hook blocked the call;
 - repeated command names, plugin, skill, and MCP attribution, and fetched hostnames; and
 - short clipped correction or denial evidence, up to 300 characters per quote.
 
-Setup explicitly requests the all-projects aggregate. Resupply reads the current project by default and only uses `--all-projects` for a global pass. The state directory stores local tallies and the decision ledger, not raw conversation transcripts.
+Setup explicitly requests the all-projects aggregate. Resupply reads the current project by default and only uses `--all-projects` for a global pass. A host policy label alone never justifies a permission allowlist or hook change; existing approval requirements still apply. The state directory stores local tallies and the decision ledger, not raw conversation transcripts.
 
 ## The setup handoff
 

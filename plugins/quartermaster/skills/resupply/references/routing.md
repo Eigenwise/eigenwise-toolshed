@@ -97,7 +97,10 @@ For repeated corrections on one theme, conventions, and "stop doing X" findings.
 
 ## 8. Permission rule
 
-For `permission-rule` denials that keep hitting the same safe pattern.
+A host-reported `permission-rule` label is not a permission-rule destination by itself. Ordinary
+transcripts cannot distinguish a permission rule from a PreToolUse hook policy block, so do not
+propose an allowlist or weaken a hook from that label alone. Route only separately confirmed rules
+through the existing approval-based allowlist flow.
 
 - Target file: project `.claude/settings.json`, key `permissions.allow`, array of rule strings like
   `Bash(npm test:*)` or `Read(src/**)`. Global patterns go in `~/.claude/settings.json`.

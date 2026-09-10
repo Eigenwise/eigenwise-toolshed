@@ -207,9 +207,11 @@ The marker and every learned rule stay in the project's `.claude/settings.local.
 
 Now the friction: repeated denials on the same safe pattern, corrections clustering on one theme,
 tool errors concentrated in one tool, hook errors. Each is real and each has a cheap fix; they just
-cap out at restoring the speed the user already expected. Note the difference between
-`permission-rule` denials (a rule is too strict, so allowlist the pattern) and `user-rejected`
-denials (the user does not want the action at all, so it is a rule about not doing it).
+cap out at restoring the speed the user already expected. A host `permission-rule` label means a
+host-reported policy block, not proven permission-rule provenance: ordinary transcripts cannot
+distinguish a permission rule from a PreToolUse hook policy block. Do not allowlist a pattern or
+weaken a hook from that label alone. `user-rejected` still means the user does not want the action,
+so it is a rule about not doing it.
 
 ### 5. Route
 
