@@ -168,6 +168,7 @@ async function remoteControlCommand() {
     log(serving.status === 'unavailable'
       ? (compatibilityPortConflict() || `port ${COMPAT_PORT}: unavailable (${serving.code || 'unknown'})`)
       : `port ${COMPAT_PORT}: ${servingCompatibilityStatus(serving)} by serving supervisor`);
+    log('Remote Control transport: this bind check covers the local HTTP listener only; it does not verify end-to-end Remote Control.');
     const dnsResult = await lookupCompatHost();
     log(`DNS lookup: ${dnsResult ? `${dnsResult.address} (IPv${dnsResult.family})` : 'failed'}`);
     await doctor();
@@ -283,7 +284,10 @@ async function remoteControlVerify({ expectedSupervisorPid = null, requireCompat
   log(`port ${COMPAT_PORT}: ${health?.compat?.port80Bound ? 'bound' : 'unavailable'}`);
   log(`shim health: ${health?.ok ? 'healthy' : 'DOWN'}`);
   log(`Codex discovery: ${modelCount ? `${modelCount} models` : 'unavailable'}`);
-  log(`Remote Control eligibility: ${ready ? `ready after Claude Code restarts with ${COMPAT_BASE_URL}` : 'not ready'}`);
+  log(`RC-compatibility transport: ${ready ? `ready after Claude Code restarts with ${COMPAT_BASE_URL}` : 'not ready'}`);
+  if (requireCompatibility) {
+    log('Remote Control end-to-end: not verified for reported Claude Code 2.1.259 or inspected 2.1.267; inspected session creation uses HTTPS while compatibility transport is HTTP.');
+  }
   return ready;
 }
 

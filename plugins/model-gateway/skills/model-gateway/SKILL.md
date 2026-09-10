@@ -133,12 +133,7 @@ bring auth back, or you kill the session that was about to use it.
   Code CLI is the verified path. VS Code success has been reported by users but is not independently
   verified here. This is version-specific and can be revisited if a future Desktop release removes
   the model-family filter.
-- **RC-compat and missing Codex rows**: Remote Control and the Codex/Grok rows in `/model` cannot
-  both work. RC-compatibility points `ANTHROPIC_BASE_URL` at `api.anthropic.com`, and Claude Code
-  disables gateway model discovery for that host. The gateway still routes explicit ids: type
-  `/model claude-gpt-5.6-terra[1m]`, and Claude Code accepts and saves it as the default. Disabling
-  compatibility restores the picker rows. Sidequest dispatch is unaffected because it resolves its
-  explicit route marker and never uses picker discovery.
+- **RC-compat and missing Codex rows**: On inspected Claude Code 2.1.267, RC-compatibility points `ANTHROPIC_BASE_URL` at `api.anthropic.com`, which disables gateway model discovery. The rows disappear and cache refresh cannot restore them. Claude Code can accept and persist `/model claude-gpt-5.6-terra[1m]`, but that client-side action does not prove a later request reaches the gateway. The current cleaner preserves canonical `[1m]` ids; do not present it as a fix for a reported request error. Normal gateway mode is the verified inference path. The reported 2.1.259 client and inspected 2.1.267 client have no verified end-to-end RC result: inspected session creation uses HTTPS while compatibility transport is HTTP. A detected hosts entry or bound listener proves local HTTP transport only. Sidequest dispatch is unaffected because it resolves its explicit route marker and never uses picker discovery.
 - Claude models keep working normally at the same time (passthrough path). That does not mean a
   subagent invocation can mix in a gateway id freely: the `Agent` tool's own `model` parameter is a
   fixed host enum (`sonnet`/`opus`/`haiku`/`fable`), independent of gateway or plugin state, and a
@@ -182,22 +177,26 @@ Usage observability also writes one high-water JSON file per valid session under
 largest forwarded request-body byte count observed for that session and an observation timestamp. It does
 not contain the request body. No retention period is promised for either local record.
 
+Claude Code's `/remote-control` only lights up when `ANTHROPIC_BASE_URL` is exactly the real
+Anthropic host, which conflicts with gateway model discovery. RC-compatibility is a reversible,
+opt-in local HTTP transport configuration, not a verified end-to-end Remote Control solution. At
+inspected Claude Code 2.1.267 its session creation uses HTTPS while the compatibility listener is
+HTTP; the reported 2.1.259 client and inspected client have no verified end-to-end RC result. A
+bound port or detected hosts entry proves only that transport state. Before enabling, tell the user
+that the picker rows disappear and an explicit `[1m]` id may be accepted client-side without proving
+its later inference request reaches the gateway. Keep normal gateway mode as the verified inference
+path. Do not suggest a cache refresh as a fix for a reported request error; the current cleaner
+preserves canonical `[1m]` ids.
+
 For the confirmation-gated procedure, use the `remote-control-compatibility` skill. It manages the
 plugin-marked hosts block, creates a backup before an elevated write, reconciles gateway mode, and
-checks the final state. Do not edit the hosts file outside that procedure. If effective process env
-`ANTHROPIC_BASE_URL` is HTTPS `api.anthropic.com` (including port 443), enabling is refused before any
-backup, hosts write, startup, or reconciliation because the loopback mapping cannot serve TLS. A
-user-controlled Claude Code CLI launch can correct or unset that value, then restart. If a host replaces
-it, use the supported Claude Code CLI on the wired project instead. Desktop routing is unsupported under
-forced overrides on Windows and macOS, and settings, parent, or User-scope edits cannot be promised to
-win. Disabling stays available.
-
-Claude Code's `/remote-control` only lights up when `ANTHROPIC_BASE_URL` is exactly the real
-Anthropic host, which conflicts with gateway model discovery. Remote Control and the Codex/Grok rows
-in `/model` cannot both work. Before enabling compatibility, tell the user that the rows disappear
-from the picker, while explicit ids such as `/model claude-gpt-5.6-terra` still work and persist as
-the default. Disabling compatibility restores the rows. model-gateway offers an opt-in, fully
-reversible workaround:
+checks the final transport state. Do not edit the hosts file outside that procedure. If effective
+process env `ANTHROPIC_BASE_URL` is HTTPS `api.anthropic.com` (including port 443), enabling is
+refused before any backup, hosts write, startup, or reconciliation because the loopback mapping
+cannot serve TLS. A user-controlled Claude Code CLI launch can correct or unset that value, then
+restart. If a host replaces it, use the supported Claude Code CLI on the wired project instead.
+Desktop routing is unsupported under forced overrides on Windows and macOS, and settings, parent,
+or User-scope edits cannot be promised to win. Disabling stays available.
 
 - The user (never this plugin, never automatically) adds one hosts entry mapping
   `api.anthropic.com` to loopback — `127.0.0.1 api.anthropic.com` on Windows

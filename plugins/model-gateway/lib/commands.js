@@ -848,6 +848,7 @@ async function statusReport({ readiness = null } = {}) {
   if (compat?.hostsDetected) {
     log(`RC-compatibility hosts entry: detected (${compat.hostsLine})`);
     log(`  127.0.0.1:${COMPAT_PORT} bound: ${compat.port80Bound ? 'yes' : `no${compat.reason ? ` (${compat.reason})` : ''}`}`);
+    log('  Remote Control transport: this reports local HTTP listener status only, not end-to-end Remote Control.');
   } else if (compat) {
     log('RC-compatibility hosts entry: not present (default gateway mode)');
   }
@@ -916,8 +917,7 @@ async function envCommand() {
     log('\nor use /model-gateway:model-gateway to run its env --write-project command');
     log('\nProject wiring is the default: this local block keeps this project and its executor worktrees routed after restart.');
     log('Use env --write-user only when you deliberately want the same fallback URL in every project.');
-    log('RC-compatibility mode (restores /remote-control) is opt-in and automatic once you add the');
-    log('hosts entry yourself; see the RC-compatibility mode section of the README.');
+    log('RC-compatibility mode is opt-in once you add the hosts entry yourself; it configures compatibility transport, not verified end-to-end Remote Control.');
     return;
   }
 
@@ -1004,7 +1004,7 @@ async function syncCompatMode({ requiredMode = null } = {}) {
   const written = writeEnv(scope, false, { mode: desiredMode, quiet: true });
   const mode = written.mode;
   if (mode === 'compat') {
-    log(`model-gateway: hosts entry mapping ${COMPAT_HOST} to loopback detected (${compat.hostsLine}); switched to RC-compatibility mode (http://${COMPAT_HOST} via 127.0.0.1:${COMPAT_PORT}). Restart Claude Code to enable /remote-control.`);
+    log(`model-gateway: hosts entry mapping ${COMPAT_HOST} to loopback detected (${compat.hostsLine}); switched to RC-compatibility transport (http://${COMPAT_HOST} via 127.0.0.1:${COMPAT_PORT}). Restart Claude Code to use the updated transport.`);
   } else {
     const why = compat.hostsDetected
       ? `127.0.0.1:${COMPAT_PORT} is unavailable${compat.reason ? ` (${compat.reason})` : ''}`
