@@ -70,6 +70,30 @@ async function waitForHealth(port) {
   throw new Error(`shim on ${port} did not become healthy`);
 }
 
+function runStateControl(t, environment) {
+  const script = `
+    const fs = require('node:fs');
+    const state = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'codex-upstream-state.js'))});
+    state.setUpstreamUnavailable({ statusCode: 502, now: 0 });
+    const expired = state.readUpstreamUnavailable(state.UPSTREAM_UNAVAILABLE_TTL_MS + 1);
+    state.setUpstreamUnavailable({ statusCode: 503, now: state.UPSTREAM_UNAVAILABLE_TTL_MS + 1 });
+    const retained = JSON.parse(fs.readFileSync(state.CODEX_UPSTREAM_UNAVAILABLE_PATH, 'utf8'));
+    state.clearUpstreamUnavailable();
+    state.setUpstreamBlocked({ statusCode: 429, evidence: 'headers:x-openai-request-id' });
+    const suppressed = state.setUpstreamUnavailable({ statusCode: 502, now: state.UPSTREAM_UNAVAILABLE_TTL_MS + 2 });
+    process.stdout.write(JSON.stringify({ expired, retained, suppressed, unavailable: state.readUpstreamUnavailable(), blocked: state.readUpstreamBlocked() }));
+  `;
+  return new Promise((resolve, reject) => {
+    const child = spawnGatewayProcess(t, process.execPath, ['-e', script], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.once('error', reject);
+    child.once('exit', (code) => code === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(`state child exited ${code}: ${stderr}`)));
+  });
+}
+
 function runReadiness(t, environment, proxyPort, options) {
   const script = `
     const gateway = require(${JSON.stringify(CLI)});
@@ -146,6 +170,18 @@ test('readiness reports each local failure state from an isolated home', async (
     false,
     'fixture teardown removes the home after the supervisor and worker exit',
   ));
+});
+
+test('transient evidence expires without reader mutation and cannot replace an auth block', async (t) => {
+  const result = await runStateControl(t, gatewayTestEnvironment(t));
+
+  assert.equal(result.expired, null);
+  assert.equal(result.retained.state, 'upstream-unavailable');
+  assert.equal(result.retained.statusCode, 503,
+    'the new atomic write remains after an expired reader observed the old record');
+  assert.equal(result.suppressed, null);
+  assert.equal(result.unavailable, null);
+  assert.equal(result.blocked.state, 'upstream-blocked');
 });
 
 test('upstream-blocked survives a health check and clears on a successful Codex request', async (t) => {

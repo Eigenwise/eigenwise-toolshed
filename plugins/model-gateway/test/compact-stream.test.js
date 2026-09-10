@@ -112,6 +112,18 @@ function normalBody() {
   });
 }
 
+function normalJsonBody() {
+  return JSON.stringify({
+    model: 'claude-gpt-5.6-sol',
+    max_tokens: 512,
+    messages: [{ role: 'user', content: 'hello' }],
+  });
+}
+
+async function codexReadiness(port) {
+  return JSON.parse((await get(port, '/healthz')).body).codexReadiness;
+}
+
 function countFrames(body, type) {
   return body.split(`"type":"${type}"`).length - 1;
 }
@@ -136,10 +148,11 @@ function scriptedProxy(scripts) {
       attempts++;
       const script = scripts[index];
       if (script.status && script.status >= 400) {
-        res.writeHead(script.status, { 'content-type': 'application/json' });
+        res.writeHead(script.status, { 'content-type': script.contentType || 'application/json', ...(script.headers || {}) });
         return res.end(script.body);
       }
-      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.writeHead(200, { 'content-type': script.contentType || 'text/event-stream', ...(script.headers || {}) });
+      if (script.abort) return res.write(script.body || '', () => res.destroy());
       res.end(script.body);
     });
   });
@@ -183,6 +196,64 @@ test('a compaction stream truncated with no error event at all is also retried',
   assert.match(response.body, /recovered summary/);
   assert.match(response.body, /"type":"message_stop"/);
   assert.equal(countFrames(response.body, 'message_start'), 1);
+});
+
+test('a terminal semantic failure preserves attributed auth until a completed inference clears it', async (t) => {
+  const proxy = scriptedProxy([
+    {
+      status: 429,
+      headers: { 'x-openai-request-id': 'req-attributed' },
+      body: JSON.stringify({ error: { message: 'OpenAI rate limit' } }),
+    },
+    { body: missingTerminalStream() },
+    { body: completeStream('recovered') },
+  ]);
+  const proxyPort = await listen(proxy.server);
+  t.after(() => proxy.server.close());
+  const shimPort = await spawnShim(t, proxyPort);
+
+  assert.equal((await postStream(shimPort, normalBody())).status, 429);
+  assert.equal((await codexReadiness(shimPort)).upstreamBlocked.state, 'upstream-blocked');
+
+  const failed = await postStream(shimPort, normalBody());
+  assert.equal(failed.status, 200);
+  assert.match(failed.body, /websocket_missing_terminal/);
+  const blocked = await codexReadiness(shimPort);
+  assert.equal(blocked.upstreamBlocked.state, 'upstream-blocked');
+  assert.equal(blocked.upstreamUnavailable, null);
+
+  assert.match((await postStream(shimPort, normalBody())).body, /"type":"message_stop"/);
+  const recovered = await codexReadiness(shimPort);
+  assert.equal(recovered.upstreamBlocked, null);
+  assert.equal(recovered.upstreamUnavailable, null);
+});
+
+test('a 200 JSON error does not clear attributed auth evidence', async (t) => {
+  const proxy = scriptedProxy([
+    {
+      status: 429,
+      headers: { 'x-openai-request-id': 'req-json-attributed' },
+      body: JSON.stringify({ error: { message: 'OpenAI rate limit' } }),
+    },
+    {
+      contentType: 'application/json',
+      body: JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'backend failed' } }),
+    },
+    {
+      contentType: 'application/json',
+      body: JSON.stringify({ type: 'message', model: 'gpt-5.6-sol', content: [] }),
+    },
+  ]);
+  const proxyPort = await listen(proxy.server);
+  t.after(() => proxy.server.close());
+  const shimPort = await spawnShim(t, proxyPort);
+
+  assert.equal((await postStream(shimPort, normalJsonBody())).status, 429);
+  assert.equal((await postStream(shimPort, normalJsonBody())).status, 200);
+  assert.equal((await codexReadiness(shimPort)).upstreamBlocked.state, 'upstream-blocked');
+
+  assert.equal((await postStream(shimPort, normalJsonBody())).status, 200);
+  assert.equal((await codexReadiness(shimPort)).upstreamBlocked, null);
 });
 
 test('a healthy compaction stream is passed through untouched and never retried', async (t) => {

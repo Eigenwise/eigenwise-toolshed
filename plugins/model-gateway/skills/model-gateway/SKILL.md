@@ -239,6 +239,12 @@ agree).
   (`doctor` shows auth), then proxy log. OpenAI gates non-Codex clients by request fingerprint;
   when they tighten it, requests die mid-stream until claude-code-proxy ships a fix, so
   suggest re-running `setup` (it fetches the latest release).
+- **`doctor` says `upstream-unavailable`**: a final Codex inference failed in the last 60 seconds.
+  It records completed request outcomes, not `/v1/models` or a health check, and clears only after
+  a completed successful Codex response. The 60-second expiry means there is no recent failure
+  evidence, not that Codex is live. An `upstream-blocked` OpenAI/auth rejection stays separate
+  and does not expire; `setup` deliberately clears either record. Sidequest consumes a cached
+  catalog and can lag this state by up to five minutes.
 - **Startup, recovery, restart, or drain refuses to touch a listener**: each ownership probe is bounded by
   `CODEX_GATEWAY_PROBE_TIMEOUT_MS` (2 seconds by default, 8 seconds on Windows, where the Win32_Process
   lookup itself typically takes 1.8-2.4 seconds). A timeout, malformed process result, or

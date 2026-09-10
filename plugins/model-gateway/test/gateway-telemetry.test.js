@@ -137,7 +137,7 @@ test('emits a linked metadata-only route span and strips trace and auth before C
   const proxy = modelProxy((req, body, res) => {
     upstream = { headers: req.headers, body: body.toString() };
     res.writeHead(201, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true }));
+    res.end(JSON.stringify({ type: 'message', model: 'gpt-5.6-sol', content: [] }));
   });
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
@@ -257,12 +257,116 @@ test('records failed Codex spans as canonical route observations', async (t) => 
   assert.equal(observations.some((observation) => observation.event_name === 'coverage_gap'), false);
 });
 
+test('normalizes legacy context failures before final Codex readiness classification', async (t) => {
+  let attempts = 0;
+  const contextFailure = JSON.stringify({ error: { message: 'input exceeds context window' } });
+  const proxy = modelProxy((req, body, res) => {
+    attempts++;
+    if ([1, 3, 6].includes(attempts)) {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      return res.end(contextFailure);
+    }
+    if (attempts === 2) {
+      res.writeHead(503, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ error: { message: 'synthetic upstream failure' } }));
+    }
+    if (attempts === 4) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ type: 'message', model: 'gpt-5.6-sol', content: [] }));
+    }
+    res.writeHead(429, { 'content-type': 'application/json', 'x-openai-request-id': 'req-attributed' });
+    res.end(JSON.stringify({ error: { message: 'OpenAI rate limit' } }));
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const collector = await telemetryCollector(t);
+  const shimPort = await spawnShim(t, proxyPort, {
+    CLAUDE_CODE_PROPAGATE_TRACEPARENT: '1',
+    CODEX_GATEWAY_TELEMETRY_ENDPOINT: collector.endpoint,
+  });
+  const readiness = async () => JSON.parse((await request(shimPort, 'GET', '/healthz')).body).codexReadiness;
+  const assertNormalizedContextSpan = (received) => {
+    const attributes = attributeMap(spanFrom(received).attributes);
+    assert.equal(attributes.status, 'client_error');
+    assert.equal(attributes.status_code, 413);
+  };
+
+  const fresh = await request(shimPort, 'POST', '/v1/messages', directBody);
+  assert.equal(fresh.status, 413);
+  assert.equal(JSON.parse(fresh.body).error.type, 'request_too_large');
+  await waitFor(() => collector.received.length === 1, 'fresh context failure did not produce one terminal span');
+  assertNormalizedContextSpan(collector.received[0]);
+  assert.equal((await readiness()).upstreamUnavailable, null);
+  assert.equal((await readiness()).upstreamBlocked, null);
+
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', directBody)).status, 503);
+  assert.equal((await readiness()).upstreamUnavailable.state, 'upstream-unavailable');
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', directBody)).status, 413);
+  await waitFor(() => collector.received.length === 3, 'transient context failure did not produce one terminal span');
+  assertNormalizedContextSpan(collector.received[2]);
+  assert.equal((await readiness()).upstreamUnavailable.state, 'upstream-unavailable');
+
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', directBody)).status, 200);
+  assert.equal((await readiness()).upstreamUnavailable, null);
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', directBody)).status, 429);
+  assert.equal((await readiness()).upstreamBlocked.state, 'upstream-blocked');
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', directBody)).status, 413);
+  await waitFor(() => collector.received.length === 6, 'attributed context failure did not produce one terminal span');
+  assertNormalizedContextSpan(collector.received[5]);
+  assert.equal((await readiness()).upstreamBlocked.state, 'upstream-blocked');
+  assert.equal((await readiness()).upstreamUnavailable, null);
+});
+
+test('uses one failed semantic span and one successful retry span', async (t) => {
+  let attempts = 0;
+  const proxy = modelProxy((req, body, res) => {
+    attempts++;
+    if (attempts === 1) {
+      res.writeHead(429, { 'content-type': 'application/json', 'x-openai-request-id': 'req-telemetry-attributed' });
+      return res.end(JSON.stringify({ error: { message: 'OpenAI rate limit' } }));
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    if (attempts === 2 || attempts === 3) {
+      return res.end('event: error\ndata: {"type":"error","error":{"type":"api_error","message":"upstream failed"}}\n\n');
+    }
+    return res.end('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const collector = await telemetryCollector(t);
+  const shimPort = await spawnShim(t, proxyPort, {
+    CLAUDE_CODE_PROPAGATE_TRACEPARENT: '1',
+    CODEX_GATEWAY_TELEMETRY_ENDPOINT: collector.endpoint,
+    CODEX_GATEWAY_COMPACT_STREAM_RETRY_DELAY_MS: '0',
+  });
+  const compactRequest = JSON.stringify({
+    model: 'claude-gpt-5.6-sol',
+    max_tokens: 1,
+    stream: true,
+    system: [{ type: 'text', text: 'You are a helpful AI assistant tasked with summarizing conversations.' }],
+    messages: [{ role: 'user', content: 'summarize' }],
+  });
+
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', directBody)).status, 429);
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', directBody)).status, 200);
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', compactRequest)).status, 200);
+  await waitFor(() => collector.received.length === 3, 'terminal route telemetry was incomplete');
+
+  const failedAttributes = attributeMap(spanFrom(collector.received[1]).attributes);
+  const retriedAttributes = attributeMap(spanFrom(collector.received[2]).attributes);
+  assert.equal(failedAttributes.status, 'upstream_error');
+  assert.equal(failedAttributes.status_code, 200);
+  assert.equal(retriedAttributes.status, 'ok');
+  assert.equal(retriedAttributes.status_code, 200);
+  assert.equal(attempts, 4);
+});
+
 test('reports dispatch and cached-route truth while invalid trace context stays unlinked', async (t) => {
   const models = [];
   const proxy = modelProxy((req, body, res) => {
     models.push(JSON.parse(body.toString()).model);
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true }));
+    res.end(JSON.stringify({ type: 'message', model: 'gpt-5.6-sol', content: [] }));
   });
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
@@ -312,7 +416,7 @@ test('telemetry transport failure cannot change the routed response', async (t) 
   const proxy = modelProxy((req, body, res) => {
     routed++;
     res.writeHead(202, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ accepted: true }));
+    res.end(JSON.stringify({ type: 'message', model: 'gpt-5.6-sol', content: [] }));
   });
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
@@ -326,7 +430,7 @@ test('telemetry transport failure cannot change the routed response', async (t) 
     traceparent: linkedTraceparent,
   });
   assert.equal(response.status, 202);
-  assert.deepEqual(JSON.parse(response.body), { accepted: true });
+  assert.deepEqual(JSON.parse(response.body), { type: 'message', model: 'claude-gpt-5.6-sol', content: [] });
   assert.equal(routed, 1);
 });
 
@@ -335,7 +439,7 @@ test('Anthropic passthrough consumes trace context but keeps its required creden
   const anthropic = http.createServer((req, res) => {
     upstreamHeaders = req.headers;
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true }));
+    res.end(JSON.stringify({ type: 'message', model: 'gpt-5.6-sol', content: [] }));
   });
   const anthropicPort = await listen(anthropic);
   t.after(() => anthropic.close());
