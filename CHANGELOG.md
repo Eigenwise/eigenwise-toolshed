@@ -8,6 +8,22 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.551.0 (2026-09-10)
+
+### model-gateway 0.50.15 → 0.50.16
+
+#### Fixes
+
+- Pin POSIX process probe locale (SQ-2702)
+  Process ownership probes now use a stable POSIX locale without changing your global settings.
+- Qualify RC compatibility transport and eligibility guidance (SQ-2704)
+
+### sidequest 5.1.4 → 5.1.5
+
+#### Fixes
+
+- Preserve dispatch tokens on transaction rollback (SQ-2698) [`2a344c6`](https://github.com/Eigenwise/eigenwise-toolshed/commit/2a344c60dea3e4bb2f550fa5060a9eb9cfd9fc78)
+
 ## v3.550.0 (2026-09-10)
 
 ### sidequest 5.1.3 → 5.1.4
