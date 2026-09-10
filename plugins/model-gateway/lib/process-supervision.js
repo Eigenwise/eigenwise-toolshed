@@ -182,8 +182,11 @@ function recordStopRequest(operation, name) {
     signal: WIN ? 'TASKKILL' : 'SIGTERM',
   });
 }
+function processProbeEnvironment() {
+  return WIN ? undefined : { ...process.env, LC_ALL: 'C' };
+}
 function commandResultSync(command, commandArgs) {
-  return spawnSync(command, commandArgs, { encoding: 'utf8', windowsHide: true });
+  return spawnSync(command, commandArgs, { encoding: 'utf8', windowsHide: true, env: processProbeEnvironment() });
 }
 function listeningSocketInodesInProc(port) {
   if (process.platform !== 'linux') return new Set();
@@ -383,7 +386,7 @@ function commandResultAsync(command, commandArgs, { timeout = probeTimeoutMs(), 
     let closed;
     try {
       // Windows detached children lose PowerShell probe output.
-      child = spawnProcess(command, commandArgs, { detached: !WIN, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawnProcess(command, commandArgs, { detached: !WIN, windowsHide: true, env: processProbeEnvironment(), stdio: ['ignore', 'pipe', 'pipe'] });
       closed = probeChildren ? probeChildren.track(child) : waitForProbeChildClose(child);
     } catch (error) {
       finish({ status: null, stdout, stderr: String(error), timedOut: false });
@@ -905,7 +908,7 @@ function createProxyRecovery({
 }
 
 module.exports = {
-  commandIncludesFile, commandResultAsync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, killPidAsync, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
+  commandIncludesFile, commandResultAsync, commandResultSync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, killPidAsync, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
   probeTimeoutMs, processInfoAsync, processInfoSync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync, processTableSync, resolvePortOwner,
   proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPids, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
   spawnSupervisedProxy, stopAll, stopProcess, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit, writePidRecord, writePidRecordAsync,
