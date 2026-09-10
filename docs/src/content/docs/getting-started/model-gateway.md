@@ -41,7 +41,26 @@ new rows appear after a full Claude Code restart. `/reload-plugins` does not rel
 
 Codex rejects some JSON Schema regex Unicode property escapes, including `\p{Cc}` and `\P{Cf}`. When a deferred tool resolves, Model Gateway can make a narrow Codex-only compatibility copy of its `input_schema`. It supports a missing dialect or Draft 2020-12, and only a `pattern` on the documented positive paths: `properties`, compatible `patternProperties` values, `additionalProperties`, `items`, `prefixItems`, `allOf`, `anyOf`, `dependentSchemas`, `propertyNames`, and `unevaluatedProperties` or `unevaluatedItems`. Each real property atom has to be a standalone member of a negated character class, with no range, set syntax, capture, backreference, or negative regex context. The lexer consumes every allowed escape as one token, so escaped parentheses, brackets, and backslashes stay literal data rather than group or class structure. The copy removes only that atom and keeps every other regex byte. Unsupported affected schemas return a local 400 with the tool name, JSON Pointer, and reason code, before any request is forwarded or sent to another provider. Claude Code still holds the original tool schema and Anthropic requests stay byte-identical.
 
-Sidequest can select these models automatically when both plugins are installed.
+### Route a subagent to a gateway model
+
+Claude Code's `Agent` tool takes an optional `model` override, but that parameter only accepts `sonnet`, `opus`, `haiku`, or `fable` — a fixed list on the host, independent of any gateway or installed plugin. Passing a gateway id there (for example `claude-gpt-5.6-luna[1m]`) is refused.
+
+To send one subagent through a specific gateway model, skip that parameter and give the subagent its own definition file instead. Claude Code reads `model:` frontmatter from a subagent definition and accepts a full model id there (see [Claude Code's subagent docs](https://code.claude.com/docs/en/sub-agents)):
+
+```markdown
+---
+name: luna-reviewer
+description: Reviews code changes using the GPT-5.6 Luna gateway model.
+model: claude-gpt-5.6-luna[1m]
+tools: Read, Grep, Glob
+---
+
+Review the diff for correctness and report findings.
+```
+
+Save that as `.claude/agents/luna-reviewer.md`, then start a new Claude Code session before invoking it — definitions are read at session start, so a session already running won't see a file you just added. Invoke it with `subagent_type: "luna-reviewer"` and no `model` argument in the call: the invocation param takes precedence over frontmatter when set, so leaving it out is what lets the frontmatter's gateway id apply.
+
+This works with Model Gateway alone; Sidequest isn't required. Sidequest's own execution subagents use this same frontmatter path internally, pinned to its `claude-codex-auto` id, which is reserved for Sidequest's own dispatch marker system. A concrete gateway id like the one above needs no such marker. The frontmatter contract above and Model Gateway's routing for a concrete id are both confirmed; spawning a custom agent end-to-end through this path hasn't been separately verified here, so treat it as documented, not guaranteed.
 
 ## Daily use
 

@@ -126,8 +126,32 @@ bring auth back, or you kill the session that was about to use it.
   `/model claude-gpt-5.6-terra[1m]`, and Claude Code accepts and saves it as the default. Disabling
   compatibility restores the picker rows. Sidequest dispatch is unaffected because it resolves its
   explicit route marker and never uses picker discovery.
-- Claude models keep working normally at the same time (passthrough path); subagents can mix tiers
-  freely.
+- Claude models keep working normally at the same time (passthrough path). That does not mean a
+  subagent invocation can mix in a gateway id freely: the `Agent` tool's own `model` parameter is a
+  fixed host enum (`sonnet`/`opus`/`haiku`/`fable`), independent of gateway or plugin state, and a
+  gateway id passed there is refused. To route one subagent to a specific gateway model, give it a
+  definition file instead, with a full gateway id in `model:` frontmatter, and omit `model` from the
+  invocation so that frontmatter applies:
+
+  ```markdown
+  ---
+  name: luna-reviewer
+  description: Reviews code changes using the GPT-5.6 Luna gateway model.
+  model: claude-gpt-5.6-luna[1m]
+  tools: Read, Grep, Glob
+  ---
+
+  Review the diff for correctness and report findings.
+  ```
+
+  Save that as `.claude/agents/luna-reviewer.md` and start a new session before invoking it —
+  definitions are read at session start, so a running session won't see one just added. Invoke with
+  `subagent_type: "luna-reviewer"` and no `model` argument. This needs only Model Gateway, not
+  Sidequest: a concrete gateway id needs no route marker, only Sidequest's own `claude-codex-auto` id
+  does. Never edit Claude Code's built-in model aliases, the `Agent` tool schema, or the host binary —
+  none of that is supported or necessary. This frontmatter contract and Model Gateway's routing for a
+  concrete id are confirmed; an end-to-end custom-agent spawn through this path has not been verified
+  here.
 - **Codex schema compatibility**: Codex rejects some Unicode property escapes such as `\p{Cc}` and `\P{Cf}`. After deferred hydration, the shim changes only a Codex-bound provider hint, never Claude Code's host schema or an Anthropic request. It admits a missing dialect or Draft 2020-12 and only `pattern` instances reached through `properties`, compatible `patternProperties` values, `additionalProperties`, `items`, `prefixItems`, `allOf`, `anyOf`, `dependentSchemas`, `propertyNames`, or `unevaluatedProperties`/`unevaluatedItems`. Each real property atom must stand alone in a negated character class without ranges, set syntax, captures, backreferences, or a negative regex context. The shim removes only that atom and preserves every other regex byte. `not`, conditionals, `oneOf`, `contains`, references, definitions, content schemas, affected pattern-property keys, unknown containers, and unsafe regexes refuse locally with HTTP 400 naming the tool, JSON Pointer, and reason code. Tell the user it was not forwarded or rerouted. Do not claim arbitrary schemas are preserved or try to bypass that diagnostic.
 
 ## Local gateway records
