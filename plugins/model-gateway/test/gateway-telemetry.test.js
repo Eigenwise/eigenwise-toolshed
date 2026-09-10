@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { spawnGatewayProcess } = require('./support.js');
+const { otlpToObservations } = require('../../observability/lib/observability/otlp.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 
@@ -170,6 +171,8 @@ test('emits a linked metadata-only route span and strips trace and auth before C
 
   const received = await waitFor(() => collector.received[0], 'route telemetry was not received');
   const span = spanFrom(received);
+  assert.equal(span.name, 'codex_gateway.route');
+  assert.equal(span.events[0].name, 'codex_gateway.route');
   const attributes = attributeMap(span.attributes);
   assert.equal(span.traceId, '4bf92f3577b34da6a3ce929d0e0e4736');
   assert.equal(span.parentSpanId, '00f067aa0ba902b7');
@@ -220,6 +223,38 @@ test('emits a linked metadata-only route span and strips trace and auth before C
   assert.match(routeEntry.at, /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(logText.includes('secret'), false);
   if (process.platform !== 'win32') assert.equal(fs.statSync(routeLog).mode & 0o777, 0o600);
+});
+
+test('records failed Codex spans as canonical route observations', async (t) => {
+  const proxy = modelProxy((req, body, res) => {
+    res.writeHead(503, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'synthetic upstream failure' }));
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const collector = await telemetryCollector(t);
+  const shimPort = await spawnShim(t, proxyPort, {
+    CLAUDE_CODE_PROPAGATE_TRACEPARENT: '1',
+    CODEX_GATEWAY_TELEMETRY_ENDPOINT: collector.endpoint,
+  });
+
+  const response = await request(shimPort, 'POST', '/v1/messages', directBody, {
+    traceparent: linkedTraceparent,
+  });
+  assert.equal(response.status, 503);
+
+  const received = await waitFor(() => collector.received[0], 'failed route telemetry was not received');
+  const span = spanFrom(received);
+  const attributes = attributeMap(span.attributes);
+  const observations = otlpToObservations('traces', JSON.parse(received.body), { projectId: 'a'.repeat(64) });
+  const route = observations.find((observation) => observation.event_name === 'codex_gateway.route');
+  assert.equal(span.name, 'codex_gateway.route');
+  assert.equal(attributes.status, 'server_error');
+  assert.equal(attributes.status_code, 503);
+  assert.ok(route);
+  assert.equal(route.attributes.status, 'server_error');
+  assert.equal(route.attributes.status_code, 503);
+  assert.equal(observations.some((observation) => observation.event_name === 'coverage_gap'), false);
 });
 
 test('reports dispatch and cached-route truth while invalid trace context stays unlinked', async (t) => {
