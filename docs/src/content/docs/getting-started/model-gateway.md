@@ -90,6 +90,8 @@ The shim writes request-route metadata to `~/.claude/model-gateway/logs/request-
 
 Usage observability also keeps one high-water JSON file per valid session under `~/.claude/model-gateway/request-body/`. It records only the largest forwarded request-body byte count seen for that session and an observation timestamp. It does not contain the request body. No retention period is promised for either local record.
 
+When project telemetry is already enabled, route traces carry the terminal request status and status code. A failed inference cannot fabricate usage, so it does not create token-usage or limit records.
+
 Remote Control gives each project two choices.
 
 ### Use RC-compatibility mode

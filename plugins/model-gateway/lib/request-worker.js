@@ -892,12 +892,12 @@ function buildRouteTelemetry(req) {
           spanId,
           ...(parentSpanId ? { parentSpanId } : {}),
           ...(incoming ? { flags: incoming.flags } : {}),
-          name: 'codex-gateway.route',
+          name: 'codex_gateway.route',
           kind: 2,
           startTimeUnixNano: startedAt.toString(),
           endTimeUnixNano: endedAt.toString(),
           attributes,
-          events: [{ timeUnixNano: endedAt.toString(), name: 'codex-gateway.route', attributes }],
+          events: [{ timeUnixNano: endedAt.toString(), name: 'codex_gateway.route', attributes }],
           status: { code: status === 'ok' ? 1 : 2 },
         });
       } catch {}
