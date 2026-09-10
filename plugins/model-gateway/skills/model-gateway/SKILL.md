@@ -120,6 +120,19 @@ bring auth back, or you kill the session that was about to use it.
   spike Codex context past the point proactive compaction can recover from. Prefer pulling large
   references incrementally on Codex models.
 - The advertised catalog is a built-in list (proxy v0.1.10 serves no /v1/models). A `models.json` file cannot add a backend that the claude-code-proxy allowlist does not support; update the proxy through `setup` instead.
+- **Claude Desktop cannot use Codex/Grok models in this version**: Desktop has its own native Gateway
+  configuration, separate from Claude Code CLI settings, and can point at this shim's endpoint. But
+  installed Desktop 1.49585.0 validates every Gateway model ID client-side and rejects any
+  `gpt`/`codex`/non-Anthropic family marker before it reaches the picker or a session, whether the ID
+  came from an explicit config entry or from discovery; a terminal `[1m]` is stripped first and does
+  not change the outcome. Only a genuinely Anthropic-backed route (a real Claude alias) is usable
+  there. This is a Desktop-side restriction, not a Model Gateway bug, and there is no supported
+  workaround: do not suggest an Anthropic-named alias to disguise a Codex/Grok route, patch the
+  Desktop binary, substitute credentials or auth, intercept TLS, or use a global env or hosts trick.
+  Tell the user Desktop end-to-end Codex/Grok support is not available on this version; the Claude
+  Code CLI is the verified path. VS Code success has been reported by users but is not independently
+  verified here. This is version-specific and can be revisited if a future Desktop release removes
+  the model-family filter.
 - **RC-compat and missing Codex rows**: Remote Control and the Codex/Grok rows in `/model` cannot
   both work. RC-compatibility points `ANTHROPIC_BASE_URL` at `api.anthropic.com`, and Claude Code
   disables gateway model discovery for that host. The gateway still routes explicit ids: type

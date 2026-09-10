@@ -62,6 +62,12 @@ Save that as `.claude/agents/luna-reviewer.md`, then start a new Claude Code ses
 
 This works with Model Gateway alone; Sidequest isn't required. Sidequest's own execution subagents use this same frontmatter path internally, pinned to its `claude-codex-auto` id, which is reserved for Sidequest's own dispatch marker system. A concrete gateway id like the one above needs no such marker. The frontmatter contract above and Model Gateway's routing for a concrete id are both confirmed; spawning a custom agent end-to-end through this path hasn't been separately verified here, so treat it as documented, not guaranteed.
 
+### Claude Desktop
+
+Claude Desktop has its own native Gateway configuration, separate from the Claude Code CLI settings above. You can point it at Model Gateway's endpoint, but installed Desktop 1.49585.0 validates every Gateway model ID on the client side and rejects any `gpt`, `codex`, or other non-Anthropic family marker before it reaches the picker or a session. This applies to both an explicit model entry you add yourself and an ID Desktop discovers automatically; a trailing `[1m]` is stripped first and does not change the outcome. Only a genuinely Anthropic-backed route, such as a real Claude alias, is usable there.
+
+This is a Desktop-side restriction, not a Model Gateway bug, and there is no supported workaround: no Anthropic-named alias to disguise a Codex or Grok route, no binary patch, no credential or auth substitution, no TLS interception, no global env or hosts trick. The Claude Code CLI remains the verified way to use gateway models. VS Code success has been reported by users but is not independently verified here. This limitation is specific to the installed Desktop version and can be revisited if a future release removes the model-family filter.
+
 ## Daily use
 
 There are no routine Model Gateway commands to remember. The shim supervisor checks the proxy's `/v1/models` endpoint while it runs and confirms a failed probe through a fresh connection before recovering an unavailable proxy with bounded backoff. It leaves a healthy proxy alone. If a session survives a plugin update, its older plugin copy leaves the newer shim running and asks you to reload plugins or restart Claude Code. Claude handles setup, updates, authentication checks, model discovery, and settings repair through the skill.
