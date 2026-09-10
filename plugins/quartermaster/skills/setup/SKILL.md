@@ -18,7 +18,7 @@ in the user's actual history, interview briefly, install in the right order arou
 reload boundary, and verify the result really works.
 
 What makes this different from a checklist bootstrap: recommendations come from evidence. The
-miner shows which plugins the user leans on across projects, which permission denials repeat,
+miner shows which plugins the user leans on across projects, which host-reported policy blocks repeat,
 and which corrections they keep giving. A new project starts where the others left off.
 
 ## Process
@@ -43,8 +43,8 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" mine --all-projects --days 45 
 ```
 
 This is the cross-project view: attribution shows which plugins and MCP servers the user
-actually uses; denial patterns show which permissions to pre-allow; correction themes show which
-rules to seed. Also run `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" catalog --installed`
+actually uses; host-reported policy blocks need separate confirmation before any permission change;
+correction themes show which rules to seed. Also run `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" catalog --installed`
 to see what user-scope plugins already apply here.
 
 The local mining script reads transcript files and emits a bounded JSON aggregate. The setup skill
@@ -127,9 +127,9 @@ handing off implementation. Draw from three sources, in this order:
   catalog (`node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" catalog --query "<stack terms>"`).
   For LSP plugins, check the required binary is on PATH first; report a missing binary with its
   install hint, but never run a package manager yourself.
-- **History-derived seeds**: permission allowlist entries from repeated global denial patterns
-  that are safe for this stack (scoped rules only, never `Bash(*)`); starter live rules derived
-  from recurring correction themes, using
+- **History-derived seeds**: permission allowlist entries from repeated approved permission calls,
+  subject to the existing approval flow, never from a host policy label alone; starter live rules
+  derived from recurring correction themes, using
   [references/rule-templates.md](references/rule-templates.md) as reference material to derive
   from, never copy (byte-identical output means it was copied; rewrite or drop it). Every workspace
   gets the reuse-first implementation baseline and the self-improvement rule from

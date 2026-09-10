@@ -306,6 +306,7 @@ function createSignalCollector() {
           },
           denials: {
             total: totals.denials,
+            meaning: 'Host-reported policy blocks. permission-rule cannot distinguish a permission rule from a PreToolUse hook policy block.',
             byKind: countsOf(denialsByKind),
             byTool: countsOf(denialsByTool),
             targets: denialTargets,
