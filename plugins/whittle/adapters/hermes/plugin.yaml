@@ -1,6 +1,0 @@
-name: whittle
-description: One practical clean-code policy for Hermes Agent.
-provides_hooks:
-  - pre_llm_call
-provides_skills:
-  - whittle

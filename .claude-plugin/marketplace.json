@@ -127,7 +127,7 @@
     {
       "name": "whittle",
       "source": "./plugins/whittle",
-      "description": "One practical clean-code policy. Claude Code hooks apply it automatically; static exports and native adapters reuse host instructions without modes or saved preferences.",
+      "description": "One practical clean-code policy, applied automatically by Claude Code hooks.",
       "version": "0.1.0",
       "author": {
         "name": "Eigenwise"
@@ -136,7 +136,7 @@
       "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
       "license": "MIT",
       "category": "development",
-      "keywords": ["clean-code", "minimalism", "agent-instructions", "claude-code", "mcp"]
+      "keywords": ["clean-code", "minimalism", "agent-instructions", "claude-code"]
     },
     {
       "name": "live-rules",
