@@ -8,6 +8,18 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.549.0 (2026-09-10)
+
+### sidequest 5.1.2 → 5.1.3
+
+#### Fixes
+
+- Route effective readonly ticket overrides (SQ-2649)
+- Preserve source wave invalidation (SQ-2655)
+  Sidequest preserves submitted filesystem-snapshot candidates when mismatched source-revision wave baselines refuse assembly.
+- Align submission fixtures with per-ticket delivery targets (SQ-2690)
+  Submission test fixtures now tell the board about the scratch branch they deliver onto instead of fabricating a delivery target object, so the suite stays correct once integration resolves each ticket's delivery target from recorded board/ticket configuration rather than the caller-supplied target.
+
 ## v3.548.0 (2026-09-10)
 
 ### sidequest 5.1.1 → 5.1.2
