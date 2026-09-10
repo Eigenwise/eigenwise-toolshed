@@ -274,7 +274,7 @@ async function cmdGroomClose(opts: any, positional: any) {
     // Advance before sweeping: a local integration branch that just moved makes
     // this ticket's worktree reachable, which is what the sweep collects on.
     try {
-      const integrationTarget = store.integrationTarget(slug);
+      const integrationTarget = store.ticketIntegrationTarget(slug, res.ticket);
       res.integrationBranch = await worktrees.advanceIntegrationBranch(meta.path, {
         integrationTarget,
         submissionCommit: res.ticket.submission ? res.ticket.submission.commit : null,
@@ -682,7 +682,13 @@ async function cmdIntegrate(opts: any, positional: any) {
   let target: any = null;
   if (usesGit) {
     try {
-      target = store.integrationTarget(slug);
+      if (refs.length > 1) {
+        const targets = store.ticketIntegrationTargets(slug, refs.map((ref: string) => store.getTicket(slug, ref)));
+        if (!targets.ok) fail(`integrate: ${targets.message || targets.reason}.`);
+        target = targets.target;
+      } else {
+        target = store.ticketIntegrationTarget(slug, ticket);
+      }
     } catch (error: any) {
       fail(`integrate: ${(error && error.message) || error}`);
       return;

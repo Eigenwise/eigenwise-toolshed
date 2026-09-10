@@ -14,8 +14,11 @@ reachable from the integration branch. A base that is not reachable from the int
 dispatch-recorded boundary; otherwise admission refuses it as `unrecognized_base` and preserves the candidate
 for retry. The range still has to satisfy the current ticket's declared scope and ownership checks. For an
 executor based on a feature branch, pass that branch as MCP dispatch `integrationBranch`. The dispatch
-records that target and its starting commit. A submitted range may contain merge commits; validate its
-reachable range and scope instead of treating a merge commit as an automatic refusal.
+records that ticket delivery target and its starting commit. Submit validation, wave assembly, and delivery
+keep using it even if the board default later changes. A wave can contain only tickets with the same recorded
+target identity, including local versus remote mode; mixed targets refuse before assembly or branch writes.
+A submitted range may contain merge commits; validate its reachable range and scope instead of treating a
+merge commit as an automatic refusal.
 
 A retryable admission refusal preserves the claim plus the immutable candidate, changed surfaces, Git ref, optional worktree, verifier evidence, diagnostics, and foreign working paths. A retry may send only corrected verifier evidence; the checkpoint supplies omitted candidate fields and the original verifier. For non-Git candidates, the server integration registers `store.registerSourceRevisionCapability(project, resolver)`. Sidequest restores a checkpointed candidate before calling the current project resolver exactly once with that candidate and dispatch-pinned baseline. The result, including null or an exception, stays bound to both and is never re-probed by the store. A replacement registration invalidates the earlier resolver; either unregister callback only removes its own current generation and never restores a stale resolver. CLI and MCP callers cannot supply existence or baseline-membership facts or replace a checkpointed candidate. A missing or unavailable capability returns `baseline_membership_unavailable` and keeps the checkpoint for retry. Update `refs/sidequest/<SQ-n>` only when an explicit rework transition creates a different candidate. Do not sync onto a moving integration tip to work around an admission refusal.
 
@@ -45,7 +48,7 @@ wave delivers its exact Git participant set and the resulting revision passes it
 participant only after the record exists. It validates each submitted range and admitted scope again,
 names stray paths, and never deletes a pinned ref.
 
-`integrate` with `wave: {}` opens a fresh wave at the configured integration target's current head.
+`integrate` with `wave: {}` opens a fresh wave at the matching tickets' recorded delivery target current head.
 A recorded wave for the same participants whose baseline is behind that head is superseded rather than
 reused. A candidate verified against an ancestor of the current target can join that wave; the merged-tree
 gate covers the newer target content. An assembly refusal leaves every submitted participant parked in

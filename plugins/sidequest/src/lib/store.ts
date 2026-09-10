@@ -1193,6 +1193,8 @@ const {
   getTicket,
   integrationTarget,
   integrationTargetCommit,
+  ticketIntegrationTarget,
+  ticketIntegrationTargets,
   listTickets,
   manualVerify,
   VERIFY_ORACLE_KINDS,
@@ -2726,6 +2728,24 @@ function ticketIntegrationTarget(slug?: any, ticket?: any) {
   return integrationTarget(slug, ticket?.dispatch?.integrationTarget || undefined);
 }
 
+function ticketIntegrationTargets(slug?: any, tickets?: any) {
+  const participants = Array.isArray(tickets) ? tickets : [tickets];
+  const resolved = participants.map((ticket) => ({
+    ref: String(ticket?.ref || '').trim() || '<unknown>',
+    target: ticketIntegrationTarget(slug, ticket),
+  }));
+  const first = resolved[0]?.target;
+  if (!first || resolved.some(({ target }) => target.mode !== first.mode || target.branch !== first.branch || target.upstream !== first.upstream)) {
+    return {
+      ok: false,
+      reason: 'integration_target_mismatch',
+      targets: resolved,
+      message: `Wave delivery requires one recorded ticket delivery target; received ${resolved.map(({ ref, target }) => `${ref}=${target.mode}:${target.upstream}`).join(', ')}. Split the refs by target before assembly or delivery.`,
+    };
+  }
+  return { ok: true, target: first, targets: resolved };
+}
+
 function recordedDelivery(slug?: any, ticket?: any, commit?: any, evidence?: any) {
   const requestedCommit = String(commit || '').trim();
   const recordedEvidence = String(evidence || '').trim();
@@ -3350,6 +3370,8 @@ module.exports = {
   boardConfig,
   setBoardConfig,
   integrationTarget,
+  ticketIntegrationTarget,
+  ticketIntegrationTargets,
   normalizeDeliveryMode,
   validateIntegrationSubmission,
   recordDeliveredSubmission,

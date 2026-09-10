@@ -23,7 +23,7 @@ Sidequest is local. The dashboard runs on your machine and ticket data stays in 
 1. Open the board with `/sidequest:board`, or tell Claude to show your Sidequest board.
 2. Describe the outcome you want and ask Claude to plan it as Sidequest work. For example: `Plan the checkout refresh as a Sidequest story and show me the backlog.` If work belongs on a feature branch, name that branch in the request.
 3. Review the proposed tickets, dependencies, and scope in the board. Adjust the plan before work starts.
-4. Ask Claude to dispatch the ready tickets. Claude chooses the configured route, starts the work, and reports verification results. Dispatch freezes each ticket's intended target branch, so two concurrent feature branches get separate targets without changing the board default.
+4. Ask Claude to dispatch the ready tickets. Claude chooses the configured route, starts the work, and reports verification results. Dispatch freezes each ticket's intended target branch, so two concurrent feature branches get separate targets without changing the board default. Integration keeps that recorded target through submission and delivery; a group with different targets stops before changing either branch.
 5. When a ticket is ready, ask Claude to review and integrate it if the checks pass. Larger or higher-risk work may need an extra review before integration.
 
 Each ticket carries a focused check that decides whether its work is ready. Claude records that check against

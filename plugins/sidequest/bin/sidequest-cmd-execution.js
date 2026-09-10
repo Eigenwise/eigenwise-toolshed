@@ -244,7 +244,7 @@ async function cmdGroomClose(opts, positional) {
   if (res.ok && !res.idempotent) closeDispatchExecutor(ticket);
   if (res.ok && opts.integration) {
     try {
-      const integrationTarget = store.integrationTarget(slug);
+      const integrationTarget = store.ticketIntegrationTarget(slug, res.ticket);
       res.integrationBranch = await worktrees.advanceIntegrationBranch(meta.path, {
         integrationTarget,
         submissionCommit: res.ticket.submission ? res.ticket.submission.commit : null,
@@ -619,7 +619,13 @@ async function cmdIntegrate(opts, positional) {
   let target = null;
   if (usesGit) {
     try {
-      target = store.integrationTarget(slug);
+      if (refs.length > 1) {
+        const targets = store.ticketIntegrationTargets(slug, refs.map((ref) => store.getTicket(slug, ref)));
+        if (!targets.ok) fail(`integrate: ${targets.message || targets.reason}.`);
+        target = targets.target;
+      } else {
+        target = store.ticketIntegrationTarget(slug, ticket);
+      }
     } catch (error) {
       fail(`integrate: ${error && error.message || error}`);
       return;
