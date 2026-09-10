@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.1 (2026-09-10)
+
+Released in v3.546.0, up from 0.8.0.
+
+### Fixes
+
+- Report host policy blocks without inventing permission provenance (SQ-2682)
+  Clarify that permission-rule is a host policy label, not permission-rule provenance.
+
 ## 0.8.0 (2026-09-09)
 
 Released in v3.537.0, up from 0.7.7.

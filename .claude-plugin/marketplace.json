@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.545.0",
+  "version": "3.546.0",
   "plugins": [
     {
       "name": "observability",
@@ -103,7 +103,7 @@
       "name": "quartermaster",
       "source": "./plugins/quartermaster",
       "description": "Set up a project from your existing Claude Code habits, keep Toolshed installs healthy, and find missing capabilities after real work accumulates. Local scripts reduce session history to a bounded summary before the active model sees it; setup, resupply, updates, and config changes happen only with your approval.",
-      "version": "0.8.0",
+      "version": "0.8.1",
       "author": {
         "name": "Eigenwise"
       },

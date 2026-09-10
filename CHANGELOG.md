@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.546.0 (2026-09-10)
+
+### quartermaster 0.8.0 → 0.8.1
+
+#### Fixes
+
+- Report host policy blocks without inventing permission provenance (SQ-2682)
+  Clarify that permission-rule is a host policy label, not permission-rule provenance.
+
 ## v3.545.0 (2026-09-10)
 
 ### model-gateway 0.50.13 → 0.50.14
