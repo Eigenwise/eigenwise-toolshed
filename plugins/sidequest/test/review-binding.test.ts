@@ -391,6 +391,129 @@ test('no generic field or patch can set, change, or clear reviewTarget', () => {
   assert.equal(store.getTicket(slug, source.ref).submission.review.ref, review.ref);
 });
 
+test('bound review deletion refuses planned, archived, restored, and todo lifecycle records', () => {
+  const { repository, slug, commit } = board('delete-lifecycle');
+  const source = submittedSource(slug, commit, 'delete-lifecycle');
+  const review = store.createTicket(slug, { title: 'delete lifecycle review', category: 'review-audit' }, { ref: source.ref, commit });
+  const assertRefused = (ref: string) => throwsWith(
+    () => store.deleteTicket(slug, ref, { allowLiveClaimDeletion: true }),
+    /refusing to delete a bound review or its source/,
+  );
+
+  assertRefused(source.ref);
+  assertRefused(review.ref);
+  throwsWith(
+    () => tool('remove').handler({ project: repository, ref: source.ref, force: true }),
+    /refusing to delete a bound review or its source/,
+  );
+  assert.equal(store.validateIntegrationSubmission(slug, source.ref, {}).reason, 'candidate_review_required', 'the bound candidate still needs its review');
+
+  completeReview(slug, review.ref, 'completed-reviewer');
+  assertRefused(source.ref);
+  assertRefused(review.ref);
+
+  assert.equal(store.archiveTicket(slug, source.ref).ok, true);
+  assertRefused(source.ref);
+  assert.equal(store.unarchiveTicket(slug, source.ref).ok, true);
+  assertRefused(source.ref);
+  const todoReview = store.getTicket(slug, review.ref);
+  todoReview.status = 'doing';
+  persist(slug, todoReview);
+  assertRefused(review.ref);
+  todoReview.status = 'todo';
+  persist(slug, todoReview);
+  assertRefused(review.ref);
+  assert.equal(store.getTicket(slug, source.ref).archived, false, 'restoring does not clear the source binding');
+  assert.equal(store.getTicket(slug, review.ref).reviewTarget.ref, source.ref, 'moving to todo does not clear the review target');
+});
+
+test('deletion fails closed for partial bindings, a concurrent bind, and a failed lock', () => {
+  const partial = board('delete-partial');
+  const partialSource = submittedSource(partial.slug, partial.commit, 'delete-partial');
+  const partialReview = reviewTicket(partial.slug, 'delete-partial');
+  const sourceWithMissingMirror = store.getTicket(partial.slug, partialSource.ref);
+  sourceWithMissingMirror.submission.review = {};
+  persist(partial.slug, sourceWithMissingMirror);
+  const reviewWithMissingTarget = store.getTicket(partial.slug, partialReview.ref);
+  reviewWithMissingTarget.reviewTarget = {};
+  persist(partial.slug, reviewWithMissingTarget);
+  throwsWith(() => store.deleteTicket(partial.slug, partialSource.ref), /bound review or its source/);
+  throwsWith(() => store.deleteTicket(partial.slug, partialReview.ref), /bound review or its source/);
+
+  const ambiguous = board('delete-ambiguous');
+  const ambiguousSource = submittedSource(ambiguous.slug, ambiguous.commit, 'delete-ambiguous');
+  store.createTicket(ambiguous.slug, { title: 'first ambiguous review', category: 'review-audit' }, { ref: ambiguousSource.ref, commit: ambiguous.commit });
+  const secondAmbiguousReview = reviewTicket(ambiguous.slug, 'delete-ambiguous-second');
+  secondAmbiguousReview.reviewTarget = { ticketId: ambiguousSource.id, ref: ambiguousSource.ref };
+  persist(ambiguous.slug, secondAmbiguousReview);
+  assert.equal(store.submissionReviewRelation(ambiguous.slug, store.getTicket(ambiguous.slug, ambiguousSource.ref)).conflict, true);
+  throwsWith(() => store.deleteTicket(ambiguous.slug, ambiguousSource.ref), /bound review or its source/);
+
+  const concurrent = board('delete-concurrent');
+  const concurrentSource = submittedSource(concurrent.slug, concurrent.commit, 'delete-concurrent');
+  const concurrentReview = reviewTicket(concurrent.slug, 'delete-concurrent');
+  const concurrentLock = path.join(SIDEQUEST_HOME, 'projects', concurrent.slug, 'tickets', `.${concurrentSource.id}.lock`);
+  const openSync = fs.openSync;
+  let boundDuringDelete = false;
+  fs.openSync = (lockPath: string, ...args: string[]) => {
+    if (!boundDuringDelete && lockPath === concurrentLock && args[0] === 'wx') {
+      boundDuringDelete = true;
+      store.updateTicket(concurrent.slug, concurrentReview.ref, {}, { ref: concurrentSource.ref, commit: concurrent.commit });
+    }
+    return openSync(lockPath, ...args);
+  };
+  try {
+    throwsWith(() => store.deleteTicket(concurrent.slug, concurrentSource.ref), /bound review or its source/);
+  } finally {
+    fs.openSync = openSync;
+  }
+  assert.equal(boundDuringDelete, true, 'the bind landed after the stale read and before the locked reread');
+  assert.ok(store.getTicket(concurrent.slug, concurrentSource.ref), 'the source survives the concurrent bind');
+  assert.ok(store.getTicket(concurrent.slug, concurrentReview.ref), 'the review survives the concurrent bind');
+
+  const locked = board('delete-lock');
+  const unbound = store.createTicket(locked.slug, {
+    title: 'unbound deletion lock',
+    imagesData: [{ name: 'evidence.txt', base64: Buffer.from('ordinary cleanup').toString('base64') }],
+  });
+  const attachmentPath = path.join(SIDEQUEST_HOME, 'projects', locked.slug, 'assets', unbound.id, unbound.assets[0]);
+  const lockPath = path.join(SIDEQUEST_HOME, 'projects', locked.slug, 'tickets', `.${unbound.id}.lock`);
+  fs.openSync = (target: string, ...args: string[]) => {
+    if (target === lockPath && args[0] === 'wx') {
+      const error = Object.assign(new Error('injected lock refusal'), { code: 'EACCES' });
+      throw error;
+    }
+    return openSync(target, ...args);
+  };
+  try {
+    throwsWith(() => store.deleteTicket(locked.slug, unbound.ref), /without its ticket lock/);
+  } finally {
+    fs.openSync = openSync;
+  }
+  assert.ok(store.getTicket(locked.slug, unbound.ref), 'a failed lock leaves the unbound ticket intact');
+  assert.equal(fs.readFileSync(attachmentPath, 'utf8'), 'ordinary cleanup', 'a failed lock preserves attachment bytes');
+  assert.equal(store.deleteTicket(locked.slug, unbound.ref), true, 'an unbound ticket deletes after a real lock succeeds');
+  assert.equal(store.getTicket(locked.slug, unbound.ref), null);
+  assert.equal(fs.existsSync(attachmentPath), false, 'a committed ordinary deletion removes its attachment');
+});
+
+test('a deferred foreign-key rollback preserves an unbound ticket attachment', () => {
+  const { slug } = board('delete-rollback-attachment');
+  const ticket = store.createTicket(slug, {
+    title: 'unbound ticket with attachment',
+    imagesData: [{ name: 'evidence.txt', base64: Buffer.from('retained attachment').toString('base64') }],
+  });
+  const attachmentPath = path.join(SIDEQUEST_HOME, 'projects', slug, 'assets', ticket.id, ticket.assets[0]);
+  const database = db.openDb(SIDEQUEST_HOME);
+  database.exec('CREATE TABLE ticket_delete_rollback_guard (ticket_id TEXT PRIMARY KEY, FOREIGN KEY(ticket_id) REFERENCES tickets(id) DEFERRABLE INITIALLY DEFERRED)');
+  database.prepare('INSERT INTO ticket_delete_rollback_guard(ticket_id) VALUES (?)').run(ticket.id);
+
+  throwsWith(() => store.deleteTicket(slug, ticket.ref), /FOREIGN KEY constraint failed/);
+
+  assert.ok(store.getTicket(slug, ticket.ref), 'the ticket row rolls back after the failed commit');
+  assert.equal(fs.readFileSync(attachmentPath, 'utf8'), 'retained attachment', 'the attachment bytes survive the failed commit');
+});
+
 test('a bound candidate refuses reclaim, amendment, and clearing from either legacy direction', () => {
   for (const direction of ['both', 'target-only', 'mirror-only']) {
     const { slug, commit } = board(`locked-${direction}`);
@@ -408,6 +531,8 @@ test('a bound candidate refuses reclaim, amendment, and clearing from either leg
     }
     const relation = store.submissionReviewRelation(slug, store.getTicket(slug, source.ref));
     assert.equal(relation.side, direction, `${direction} relation is detected`);
+    throwsWith(() => store.deleteTicket(slug, source.ref), /bound review or its source/);
+    throwsWith(() => store.deleteTicket(slug, review.ref), /bound review or its source/);
 
     const claim = store.claimTicket(slug, source.ref, 'reclaimer', {});
     assert.equal(claim.ok, false, `${direction} refuses reclaim`);

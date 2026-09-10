@@ -1232,36 +1232,62 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
   return updated;
 }
 
+function deletionHasReviewBinding(slug: any, ticket: any) {
+  if (Object.hasOwn(ticket, 'reviewTarget') || Object.hasOwn(ticket?.submission || {}, 'review')) return true;
+  if (submissionReviewRelation(slug, ticket)) return true;
+  return listTickets(slug).some((sourceTicket: any) => {
+    const mirror = sourceTicket?.submission?.review;
+    return Object.hasOwn(sourceTicket?.submission || {}, 'review')
+      && (mirror?.ticketId === ticket.id || upperRef(mirror?.ref) === upperRef(ticket.ref));
+  });
+}
+
+function deletionReviewLockError(ticket: any) {
+  return `${ticket.ref}: refusing to delete a bound review or its source. Keep the immutable record; a fresh independently reviewed replacement is separate work.`;
+}
+
 // Locked so a delete can never yank the ticket/lock file out from under a
 // concurrent addComment/claimTicket that still believes it holds the lock.
 function deleteTicket(slug?: any, idOrRef?: any, options: { allowLiveClaimDeletion?: boolean } = {}) {
   const found = getTicket(slug, idOrRef);
   if (!found) return false;
-  // Deleting a live-claimed ticket sheds the claim and all closeout state, so it
-  // is the same escape as flipping closeout flags: the store refuses it unless an
-  // explicit grant is passed. Only the hook-authenticated main-thread MCP remove
-  // supplies that grant; CLI --force and the unauthenticated dashboard DELETE do
-  // not, and so must release the claim first.
-  if (found.claim && found.claim.by && !claimReclaimable(found) && options.allowLiveClaimDeletion !== true) {
-    throw new Error(`${found.ref}: refusing to delete a live-claimed ticket (held by "${found.claim.by}"). Release the claim first, or remove it with the orchestrator's main-thread MCP.`);
-  }
   const deletedRef = found.ref;
-  const lock = ticketLockPath(slug, found.id);
-  const locked = acquireLock(lock);
-  let ok = false;
-  try {
-    ok = deleteCachedRow(database(), 'tickets', found.id);
-    if (ok) {
-      try {
-        fs.rmSync(assetsDir(slug, found.id), { recursive: true, force: true });
-      } catch (_: any) {
-        /* best effort */
+  const deleteUnderTicketLock = () => {
+    const result = withTicketLock(slug, found.id, () => {
+      const ticket = getTicket(slug, found.id);
+      if (!ticket) return false;
+      // Deleting a live-claimed ticket sheds the claim and all closeout state, so it
+      // is the same escape as flipping closeout flags: the store refuses it unless an
+      // explicit grant is passed. Only the hook-authenticated main-thread MCP remove
+      // supplies that grant; CLI --force and the unauthenticated dashboard DELETE do
+      // not, and so must release the claim first.
+      if (ticket.claim && ticket.claim.by && !claimReclaimable(ticket) && options.allowLiveClaimDeletion !== true) {
+        throw new Error(`${ticket.ref}: refusing to delete a live-claimed ticket (held by "${ticket.claim.by}"). Release the claim first, or remove it with the orchestrator's main-thread MCP.`);
       }
+      if (deletionHasReviewBinding(slug, ticket)) throw new Error(deletionReviewLockError(ticket));
+      return deleteCachedRow(database(), 'tickets', ticket.id);
+    });
+    if (result?.reason === 'busy') {
+      throw new Error(`${found.ref}: refusing to delete without its ticket lock. Retry after the concurrent mutation finishes.`);
     }
-  } finally {
-    if (locked) releaseLock(lock, locked); // also removes the lock file itself
+    return result;
+  };
+  const target = found.reviewTarget;
+  const sourceTicket = target && typeof target === 'object'
+    ? getTicket(slug, target.ticketId || target.ref)
+    : null;
+  const result = sourceTicket && sourceTicket.id !== found.id
+    ? withTicketLock(slug, sourceTicket.id, deleteUnderTicketLock)
+    : deleteUnderTicketLock();
+  if (result?.reason === 'busy') {
+    throw new Error(`${found.ref}: refusing to delete without the bound source lock. Retry after the concurrent mutation finishes.`);
   }
-  if (!ok) return false;
+  if (!result) return false;
+  try {
+    fs.rmSync(assetsDir(slug, found.id), { recursive: true, force: true });
+  } catch (_: any) {
+    /* best effort */
+  }
   // Drop any links other tickets had pointing at the one we just removed, so no
   // dangling "blocked-by SQ-deleted" leaves a ticket falsely blocked forever.
   try {
