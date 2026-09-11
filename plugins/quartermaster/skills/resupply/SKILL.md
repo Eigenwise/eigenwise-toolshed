@@ -49,7 +49,7 @@ If the user declines a SessionStart nudge or Stop-time offer before the round st
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" decline-resupply --project "${CLAUDE_PROJECT_DIR}"
 ```
 
-It resets the evidence window, so another offer waits for new sessions or friction to accumulate.
+It resets the evidence window, so another offer waits for new session activity or friction to accumulate.
 
 ### 1. Mine
 

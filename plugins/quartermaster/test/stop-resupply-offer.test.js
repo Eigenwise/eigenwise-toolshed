@@ -7,7 +7,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { test } = require('node:test');
 
-const { markNudged, recordSessionTally } = require('../lib/state.js');
+const { slugForProject } = require('../lib/paths.js');
+const { markNudged, markResupply, readProjectState, recordSessionTally } = require('../lib/state.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'quartermaster.js');
 const HOOK = path.join(__dirname, '..', 'hooks', 'stop-resupply-offer.js');
@@ -23,6 +24,21 @@ function overdueProject() {
   };
 }
 
+function transcriptProject() {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-config-'));
+  return {
+    projectDir: fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-project-')),
+    configDir,
+    stateDir: path.join(configDir, 'quartermaster-state'),
+  };
+}
+
+function writeTranscript(projectDir, configDir, sessionId) {
+  const file = path.join(configDir, 'projects', slugForProject(projectDir), `${sessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '', 'utf8');
+}
+
 function recordOverdueTallies(projectDir, stateDir) {
   const environment = stateEnvironment(stateDir);
   for (let index = 0; index < 4; index += 1) {
@@ -34,6 +50,21 @@ function runHook(projectDir, stateDir, overrides = {}) {
   const result = spawnSync(process.execPath, [HOOK], {
     env: {
       ...process.env,
+      CLAUDE_PROJECT_DIR: projectDir,
+      QUARTERMASTER_STATE_DIR: stateDir,
+    },
+    input: JSON.stringify({ session_id: 'stop-session', stop_hook_active: false, cwd: projectDir, ...overrides }),
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout;
+}
+
+function runTranscriptHook(projectDir, configDir, stateDir, overrides = {}) {
+  const result = spawnSync(process.execPath, [HOOK], {
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: configDir,
       CLAUDE_PROJECT_DIR: projectDir,
       QUARTERMASTER_STATE_DIR: stateDir,
     },
@@ -70,6 +101,34 @@ test('Stop offer blocks once with the resupply skill and decline escape hatch', 
   assert.match(output.reason, /decline-resupply/);
   assert.match(output.reason, /4 sessions/);
   assert.ok(Buffer.byteLength(JSON.stringify(output)) <= 512, 'Stop guidance stays inside the hook output budget');
+});
+
+test('Stop offer uses active transcript metadata without starting resupply', () => {
+  const { projectDir, configDir, stateDir } = transcriptProject();
+  for (let index = 0; index < 4; index += 1) {
+    writeTranscript(projectDir, configDir, `active-${index}`);
+  }
+
+  const rawOutput = runTranscriptHook(projectDir, configDir, stateDir);
+  assert.notEqual(rawOutput, '', 'four active transcripts refill the due window without SessionEnd tallies');
+  const output = JSON.parse(rawOutput);
+  const state = readProjectState(projectDir, { CLAUDE_CONFIG_DIR: configDir, QUARTERMASTER_STATE_DIR: stateDir });
+  assert.equal(output.decision, 'block');
+  assert.match(output.reason, /If they say yes or gave standing permission/, 'the reason asks for permission before resupply');
+  assert.equal(state.lastResupplyAt, null, 'the offer does not start a resupply');
+  assert.equal(fs.existsSync(path.join(stateDir, 'decisions.jsonl')), false, 'the offer does not create a decision ledger');
+  assert.deepEqual(fs.readdirSync(projectDir), [], 'the offer does not write project settings');
+});
+
+test('Stop offer ignores transcript metadata from before a reset', () => {
+  const { projectDir, configDir, stateDir } = transcriptProject();
+  const environment = { CLAUDE_CONFIG_DIR: configDir, QUARTERMASTER_STATE_DIR: stateDir };
+  for (let index = 0; index < 4; index += 1) {
+    writeTranscript(projectDir, configDir, `before-reset-${index}`);
+  }
+
+  markResupply(projectDir, environment);
+  assert.equal(runTranscriptHook(projectDir, configDir, stateDir), '', 'a reset excludes earlier transcript activity');
 });
 
 test('Stop offer stays silent while handling its own continuation', () => {
