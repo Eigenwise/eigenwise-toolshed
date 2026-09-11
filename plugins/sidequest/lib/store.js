@@ -12,7 +12,8 @@ const {
   filesystemSnapshotRevision,
   registerSourceRevisionCapability,
   sourceRevision,
-  sourceRevisionAdapterFacts: resolveSourceRevisionAdapterFacts
+  sourceRevisionAdapterFacts: resolveSourceRevisionAdapterFacts,
+  isFilesystemSnapshotLimitError
 } = sourceRevisionCapability;
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } = require("./category-defaults.js");
 const commitScope = require("./commit-scope.js");
@@ -23,7 +24,7 @@ const { reviewLockMessage } = require("./kernel/review-binding.js");
 const { migrateIfNeeded } = require("./migrate.js");
 const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, providerReadiness } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
-const { negativeControlRecoveryGuidance, routingDisabledMessage } = require("./refusal-guidance.js");
+const { negativeControlRecoveryGuidance, routingDisabledMessage, filesystemSnapshotLimitGuidance } = require("./refusal-guidance.js");
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require("./prepared-dispatch.js");
 const { assertSidequestInstall, checkSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require("./dispatch-preflight.js");
 const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic, VERIFICATION_KINDS } = require("./kernel/index.js");
@@ -234,7 +235,15 @@ function persistFilesystemSnapshot(slug, revision, expected) {
 function filesystemSnapshotBaseline(slug, observedAt) {
   const meta = readMeta(slug);
   const projectPath = path.resolve(String(meta?.path || ""));
-  const revision = filesystemSnapshotRevision(projectPath, observedAt);
+  let revision;
+  try {
+    revision = filesystemSnapshotRevision(projectPath, observedAt);
+  } catch (error) {
+    if (isFilesystemSnapshotLimitError(error)) {
+      throw new Error(`project registration refused: ${filesystemSnapshotLimitGuidance(projectPath, error)}`);
+    }
+    throw error;
+  }
   if (!revision) {
     throw new Error(`project registration refused: the configured ${FILESYSTEM_SNAPSHOT_ADAPTER} adapter cannot snapshot ${String(meta?.path || slug)}.`);
   }
@@ -244,7 +253,15 @@ function dispatchFilesystemSnapshotPreflight(slug, ticket, observedAt) {
   const project = readMeta(slug);
   if (project?.sourceRevisionAdapter !== FILESYSTEM_SNAPSHOT_ADAPTER) return null;
   const projectPath = path.resolve(String(project.path || ""));
-  const revision = filesystemSnapshotRevision(projectPath, observedAt);
+  let revision;
+  try {
+    revision = filesystemSnapshotRevision(projectPath, observedAt);
+  } catch (error) {
+    if (isFilesystemSnapshotLimitError(error)) {
+      throw new Error(`prepare dispatch: ${ticket.ref} ${filesystemSnapshotLimitGuidance(projectPath, error)}`);
+    }
+    throw error;
+  }
   if (!revision) {
     throw new Error(`prepare dispatch: ${ticket.ref} could not snapshot ${projectPath || slug}. Retry dispatch after the project is readable.`);
   }

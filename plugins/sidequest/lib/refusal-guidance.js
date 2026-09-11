@@ -20,6 +20,7 @@ var refusal_guidance_exports = {};
 __export(refusal_guidance_exports, {
   CLAIM_REFUSAL_MESSAGES: () => CLAIM_REFUSAL_MESSAGES,
   claimRefusalMessage: () => claimRefusalMessage,
+  filesystemSnapshotLimitGuidance: () => filesystemSnapshotLimitGuidance,
   manualCandidateDeliveryGuidance: () => manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance: () => negativeControlRecoveryGuidance,
   routingDisabledMessage: () => routingDisabledMessage,
@@ -94,10 +95,15 @@ function manualCandidateDeliveryGuidance() {
 function negativeControlRecoveryGuidance() {
   return "Revert the non-test changes, run the changed tests, and keep them importable. Say which one happened: failure-kind=assertion when the changed tests failed their assertions, failure-kind=import or failure-kind=collection when the revert stopped them loading, because only an assertion failure proves they catch wrong behavior. Post [sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=<assertion|import|collection> with n greater than zero. The target and assertion must be the changed behavior this ticket is about. Then restore the change and run the declared verify. You may add context after failed=<n>. For every added or modified named test, add [sidequest:negative-control-test] failed <test name>. If a named test does not cover the reverted change, add [sidequest:negative-control-test] unaffected <test name> because <reason> instead. If the control cannot run, post a line beginning [sidequest:negative-control] waived <reason of at least 20 characters>.";
 }
+function filesystemSnapshotLimitGuidance(projectPath, limit) {
+  const unit = limit.bound === "path cap" ? "paths" : limit.bound === "byte cap" ? "bytes" : "ms";
+  return `filesystem snapshot refused for ${projectPath}: ${limit.bound} reached ${limit.observed} ${unit}; cap ${limit.cap} ${unit}. Initialize a git repository at the project root so dispatch uses the cheaper git adapter, or point the board at a smaller directory.`;
+}
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   CLAIM_REFUSAL_MESSAGES,
   claimRefusalMessage,
+  filesystemSnapshotLimitGuidance,
   manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance,
   routingDisabledMessage,

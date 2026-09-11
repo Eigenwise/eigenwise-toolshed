@@ -198,6 +198,39 @@ test('preparing a non-Git ticket uses its persisted dispatch snapshot', () => {
   assert.equal(persistedSnapshots.filter((snapshot: any) => snapshot.value === baseline.revision.value).length, 1);
 });
 
+for (const limit of [
+  { bound: 'path cap', observed: 501, cap: 500, unit: 'paths' },
+  { bound: 'byte cap', observed: 65, cap: 64, unit: 'bytes' },
+  { bound: 'deadline', observed: 11, cap: 10, unit: 'ms' },
+]) {
+  test(`preparing a non-Git ticket reports a ${limit.bound} refusal`, () => {
+    withSnapshotRevision(() => () => {
+      throw new sourceRevisionCapability.FilesystemSnapshotLimitError(limit.bound, limit.observed, limit.cap);
+    }, (snapshotStore: any) => {
+      const { projectSlug, ticket } = snapshotProjectFixture(snapshotStore, `snapshot-${limit.bound}`, `refuse ${limit.bound}`);
+
+      assert.throws(
+        () => snapshotStore.prepareDispatch(projectSlug, ticket.ref),
+        new RegExp(`${limit.bound} reached ${limit.observed} ${limit.unit}; cap ${limit.cap} ${limit.unit}`),
+      );
+    });
+  });
+}
+
+test('preparing a Git ticket does not capture a filesystem snapshot', () => {
+  withSnapshotRevision(() => () => {
+    throw new Error('Git-backed dispatch must not capture a filesystem snapshot');
+  }, (snapshotStore: any) => {
+    const ticket = snapshotStore.createTicket(slug, {
+      title: 'prepare a Git dispatch without a filesystem snapshot', category: 'dispatch.lifecycle', files: ['tracked.js'], source: 'test',
+    });
+
+    const prepared = snapshotStore.prepareDispatch(slug, ticket.ref);
+
+    assert.equal(prepared.ticket.dispatch.lifecycleAttempt.baseline.revision.source, 'git');
+  });
+});
+
 test('preparing a non-Git ticket hashes once before persisting its dispatch snapshot', () => {
   let hashCount = 0;
   withSnapshotRevision((originalRevision: any) => (projectPath: string, observedAt: string) => {
