@@ -4206,6 +4206,65 @@ test('SQ-2429: pending candidates block a singleton without invalidation while a
   }
 });
 
+test('SQ-2752: a pending candidate blocks a singleton only where their recorded changed paths collide', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  try {
+    const docsDir = path.join(PROJECT_DIR, 'docs');
+    fs.mkdirSync(docsDir, { recursive: true });
+    for (const name of ['alpha.md', 'beta.md', 'gamma.md']) fs.writeFileSync(path.join(docsDir, name), 'base\n');
+    git(['add', 'docs']);
+    git(['commit', '-m', 'shared declared directory baseline']);
+    const baseline = git(['rev-parse', 'HEAD']);
+
+    // Every candidate declares the whole docs directory, exactly as sibling
+    // tickets on this board declare plugins/sidequest/lib and .../test.
+    const submitCandidate = (label: string, owner: string, edits: Record<string, string>) => {
+      git(['reset', '--hard', baseline]);
+      const ticket = addTicket(label, { files: ['docs'] });
+      assert.strictEqual(store.claimTicket(slug, ticket.ref, owner, { direct: true, reason: 'The changed-path overlap fixture requires a local direct claim.' }).ok, true);
+      for (const [name, body] of Object.entries(edits)) fs.writeFileSync(path.join(docsDir, name), body);
+      git(['add', 'docs']);
+      git(['commit', '-m', label]);
+      const candidate = git(['rev-parse', 'HEAD']);
+      pin(ticket, candidate);
+      assert.strictEqual(store.submitTicket(slug, ticket.ref, owner, { commit: candidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+      const submitted = store.getTicket(slug, ticket.ref);
+      Object.assign(submitted.submission, {
+        base: baseline, upstream: 'origin/main', upstreamCommit: baseline, integrationBranch,
+        commits: [candidate], changedPaths: Object.keys(edits).map((name) => `docs/${name}`),
+      });
+      persist(submitted);
+      return submitted;
+    };
+
+    const participant = submitCandidate('participant changing two declared files', 'overlap-participant-worker', { 'alpha.md': 'base\nparticipant\n', 'gamma.md': 'base\nparticipant\n' });
+    const disjoint = submitCandidate('sibling changing another file in the same directory', 'overlap-disjoint-worker', { 'beta.md': 'base\ndisjoint\n' });
+    const colliding = submitCandidate('sibling changing the same file', 'overlap-colliding-worker', { 'alpha.md': 'base\ncolliding\n' });
+
+    const refused = store.assembleSubmissionWave(slug, [participant.ref]);
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'candidate_overlap');
+    assert.deepStrictEqual(refused.conflicts, [{ participant: participant.ref, sibling: colliding.ref, surfaces: ['docs/alpha.md'] }]);
+    assert.ok(!refused.message.includes(disjoint.ref), refused.message);
+    assert.ok(!refused.message.includes('docs/gamma.md'), refused.message);
+
+    const resolved = store.getTicket(slug, colliding.ref);
+    resolved.status = 'done';
+    persist(resolved);
+
+    const singleton = store.assembleSubmissionWave(slug, [participant.ref]);
+    assert.strictEqual(singleton.ok, true, singleton.message);
+    assert.deepStrictEqual(singleton.wave.participants, [participant.ref]);
+    assert.strictEqual(store.pendingSubmission(store.getTicket(slug, disjoint.ref)), true);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
 test('SQ-2463: wave assembly replaces a stale wave baseline with the current target and gates ancestor candidates once', () => {
   cleanBranch();
   const originalConfig = store.boardConfig(slug);

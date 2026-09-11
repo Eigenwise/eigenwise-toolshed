@@ -2470,18 +2470,20 @@ ${verify.outputTail}` : null
     const participantAt = String(participant?.submission?.at || "").trim();
     return Boolean(siblingAt && participantAt) && siblingAt >= participantAt;
   }
+  function collidingChangedPaths(participant, sibling) {
+    const siblingChanges = scopedPaths(sibling?.submission?.changedPaths);
+    return scopedPaths(participant?.submission?.changedPaths).filter((surface) => isInScope(surface, siblingChanges));
+  }
   function waveScopeConflicts(slug, tickets) {
     const participantRefs = new Set(tickets.map((ticket) => ticket.ref));
     const boardTickets = listTickets(slug);
     const conflicts = [];
     for (const participant of tickets) {
-      const participantChanges = scopedPaths(participant.submission?.changedPaths);
       for (const sibling of boardTickets) {
         if (sibling.archived || sibling.status === "done" || participantRefs.has(sibling.ref) || !pendingCandidateBlocksWave(slug, sibling, boardTickets)) continue;
         if (!submissionWasRecordedAfter(sibling, participant)) continue;
         if (submissionIncludesCandidate(participant.submission, sibling.submission) || submissionIncludesCandidate(sibling.submission, participant.submission)) continue;
-        const siblingDeclaredScope = scopedPaths(sibling.files);
-        const surfaces = participantChanges.filter((surface) => isInScope(surface, siblingDeclaredScope) || siblingDeclaredScope.some((siblingSurface) => isInScope(siblingSurface, [surface])));
+        const surfaces = collidingChangedPaths(participant, sibling);
         if (surfaces.length) conflicts.push({ participant: participant.ref, sibling: sibling.ref, surfaces });
       }
     }

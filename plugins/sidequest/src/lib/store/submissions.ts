@@ -2772,19 +2772,24 @@ function submissionWasRecordedAfter(sibling: any, participant: any) {
   return Boolean(siblingAt && participantAt) && siblingAt >= participantAt;
 }
 
+// Two candidates conflict only when their recorded content collides. A shared
+// declared directory is not a collision: siblings routinely declare the same
+// lib/ and test/ directories and change disjoint files inside them (SQ-2752).
+function collidingChangedPaths(participant: any, sibling: any) {
+  const siblingChanges = scopedPaths(sibling?.submission?.changedPaths);
+  return scopedPaths(participant?.submission?.changedPaths).filter((surface: string) => isInScope(surface, siblingChanges));
+}
+
 function waveScopeConflicts(slug: any, tickets: any[]) {
   const participantRefs = new Set(tickets.map((ticket) => ticket.ref));
   const boardTickets = listTickets(slug);
   const conflicts: any[] = [];
   for (const participant of tickets) {
-    const participantChanges = scopedPaths(participant.submission?.changedPaths);
     for (const sibling of boardTickets) {
       if (sibling.archived || sibling.status === 'done' || participantRefs.has(sibling.ref) || !pendingCandidateBlocksWave(slug, sibling, boardTickets)) continue;
       if (!submissionWasRecordedAfter(sibling, participant)) continue;
       if (submissionIncludesCandidate(participant.submission, sibling.submission) || submissionIncludesCandidate(sibling.submission, participant.submission)) continue;
-      const siblingDeclaredScope = scopedPaths(sibling.files);
-      const surfaces = participantChanges.filter((surface: string) => isInScope(surface, siblingDeclaredScope)
-        || siblingDeclaredScope.some((siblingSurface: string) => isInScope(siblingSurface, [surface])));
+      const surfaces = collidingChangedPaths(participant, sibling);
       if (surfaces.length) conflicts.push({ participant: participant.ref, sibling: sibling.ref, surfaces });
     }
   }
