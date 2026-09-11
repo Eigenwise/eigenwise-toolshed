@@ -9,6 +9,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { gatewayTestEnvironment, startGateway, spawnGatewayProcess } = require('./support.js');
 const { createProxyRecovery, fetchUrl, proxyModelsAnswering } = require('../lib/process-supervision.js');
+const { CONTROL_HEADER, controlRequestHeaders } = require('../lib/control-auth.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const gateway = require(CLI);
@@ -17,7 +18,7 @@ function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
 }
 
-function request(port, method, pathname, body) {
+function request(port, method, pathname, body, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const encoded = body ? Buffer.from(JSON.stringify(body)) : null;
     const req = http.request({
@@ -25,7 +26,7 @@ function request(port, method, pathname, body) {
       port,
       method,
       path: pathname,
-      headers: encoded ? { 'content-type': 'application/json', 'content-length': encoded.length } : {},
+      headers: { ...(encoded ? { 'content-type': 'application/json', 'content-length': encoded.length } : {}), ...extraHeaders },
     }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
@@ -34,6 +35,10 @@ function request(port, method, pathname, body) {
     req.on('error', reject);
     req.end(encoded);
   });
+}
+
+function lifecycleHeaders(home) {
+  return controlRequestHeaders(path.join(home, '.claude', 'model-gateway', 'control-token'));
 }
 
 async function waitFor(port, expected) {
@@ -307,7 +312,7 @@ test('draining shim finishes an in-flight request before it exits', async (t) =>
     model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1,
   });
   await received;
-  const draining = await request(shimPort, 'POST', '/drain', {});
+  const draining = await request(shimPort, 'POST', '/drain', {}, lifecycleHeaders(home));
   assert.equal(draining.status, 202);
 
   let exited = false;
@@ -442,7 +447,7 @@ test('supervisor drains a planned worker restart without refusing connections', 
 
   const inFlight = request(shimPort, 'POST', '/v1/messages', { model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1 });
   while (!release) await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.equal((await request(shimPort, 'POST', '/restart', {})).status, 202);
+  assert.equal((await request(shimPort, 'POST', '/restart', {}, lifecycleHeaders(home))).status, 202);
   const restartRequested = await waitForLifecycleRecord(home, (record) => record.event === 'restart-worker-requested');
   assert.equal(restartRequested.component, 'supervisor');
   assert.equal(restartRequested.outcome, 'drain');
@@ -452,7 +457,7 @@ test('supervisor drains a planned worker restart without refusing connections', 
   assert.equal((await health).status, 200);
 });
 
-test('restart keeps a newer installed worker script when supplied an older one', async (t) => {
+test('restart rejects an older installed worker script without restarting', async (t) => {
   const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-worker-cache-'));
   const environment = gatewayTestEnvironment(t);
   const home = environment.HOME;
@@ -468,8 +473,8 @@ test('restart keeps a newer installed worker script when supplied an older one',
   const pidFile = path.join(home, '.claude', 'model-gateway', 'shim.pid');
   const previousPid = Number(fs.readFileSync(pidFile, 'utf8'));
 
-  assert.equal((await request(shimPort, 'POST', '/restart', { script: olderCliPath })).status, 202);
-  await waitForChangedWorkerPid(pidFile, previousPid);
+  assert.equal((await request(shimPort, 'POST', '/restart', { script: olderCliPath }, lifecycleHeaders(home))).status, 400);
+  assert.equal(Number(fs.readFileSync(pidFile, 'utf8')), previousPid);
   await waitForWorkerVersion(shimPort, '0.48.12');
 });
 
@@ -489,12 +494,12 @@ test('restart adopts a newer installed worker script', async (t) => {
   const pidFile = path.join(home, '.claude', 'model-gateway', 'shim.pid');
   const previousPid = Number(fs.readFileSync(pidFile, 'utf8'));
 
-  assert.equal((await request(shimPort, 'POST', '/restart', { script: newerCliPath })).status, 202);
+  assert.equal((await request(shimPort, 'POST', '/restart', { script: newerCliPath }, lifecycleHeaders(home))).status, 202);
   await waitForChangedWorkerPid(pidFile, previousPid);
   await waitForWorkerVersion(shimPort, '0.48.13');
 });
 
-test('restart does not treat a dev-checkout worker script as newer than an installed script', async (t) => {
+test('restart refuses to switch a development checkout to a different installation', async (t) => {
   const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-worker-cache-'));
   const environment = gatewayTestEnvironment(t);
   const home = environment.HOME;
@@ -509,9 +514,52 @@ test('restart does not treat a dev-checkout worker script as newer than an insta
   const pidFile = path.join(home, '.claude', 'model-gateway', 'shim.pid');
   const previousPid = Number(fs.readFileSync(pidFile, 'utf8'));
 
-  assert.equal((await request(shimPort, 'POST', '/restart', { script: installedCliPath })).status, 202);
-  await waitForChangedWorkerPid(pidFile, previousPid);
-  await waitForWorkerVersion(shimPort, '0.48.12');
+  assert.equal((await request(shimPort, 'POST', '/restart', { script: installedCliPath }, lifecycleHeaders(home))).status, 400);
+  assert.equal(Number(fs.readFileSync(pidFile, 'utf8')), previousPid);
+  await waitForWorkerVersion(shimPort, gateway.PLUGIN_VERSION);
+});
+
+test('supervisor rejects unauthenticated and browser-origin controls and foreign worker paths', async (t) => {
+  const environment = gatewayTestEnvironment(t);
+  const home = environment.HOME;
+  const { port: shimPort } = await startGateway(t, 'serve-shim', environment);
+  const headers = lifecycleHeaders(home);
+  for (const endpoint of ['/restart', '/drain']) {
+    assert.equal((await request(shimPort, 'POST', endpoint, {})).status, 403);
+    assert.equal((await request(shimPort, 'POST', endpoint, {}, { ...headers, origin: 'https://fixture.invalid' })).status, 403);
+    assert.equal((await request(shimPort, 'POST', endpoint, {}, { ...headers, 'content-type': 'text/plain' })).status, 403);
+    assert.equal((await request(shimPort, 'POST', endpoint, {}, { ...headers, host: `fixture.invalid:${shimPort}` })).status, 403);
+    assert.equal((await request(shimPort, 'POST', endpoint, {}, { [CONTROL_HEADER]: '0'.repeat(64) })).status, 403);
+  }
+  const foreign = path.join(home, 'foreign', '99.0.0', 'bin', 'model-gateway.js');
+  fs.mkdirSync(path.dirname(foreign), { recursive: true });
+  fs.writeFileSync(foreign, "throw new Error('foreign worker must never execute');\n");
+  assert.equal((await request(shimPort, 'POST', '/restart', { script: foreign }, headers)).status, 400);
+  assert.equal((await request(shimPort, 'POST', '/restart', { script: '../foreign.js' }, headers)).status, 400);
+  assert.equal((await request(shimPort, 'POST', '/restart', { padding: 'x'.repeat(5000) }, headers)).status, 413);
+  assert.equal((await request(shimPort, 'GET', '/healthz')).status, 200);
+  assert.equal((await request(shimPort, 'GET', '/v1/models')).status, 200);
+  assert.equal(lifecycleRecords(home).filter((record) => record.event === 'restart-worker-requested').length, 0);
+});
+
+test('authenticated drain relays through a random-port supervisor without leaking its token upstream', async (t) => {
+  const environment = gatewayTestEnvironment(t);
+  let upstreamHeaders;
+  const upstream = http.createServer((req, res) => {
+    upstreamHeaders = req.headers;
+    req.resume();
+    res.end(JSON.stringify({ type: 'message', content: [] }));
+  });
+  const upstreamPort = await listen(upstream);
+  t.after(() => upstream.close());
+  const { port } = await startGateway(t, 'serve-shim', environment, {
+    isolatedOverrides: { CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${upstreamPort}` },
+  });
+  const headers = lifecycleHeaders(environment.HOME);
+  const response = await request(port, 'POST', '/v1/messages', { model: 'claude-opus-4-7', messages: [], max_tokens: 1 }, headers);
+  assert.equal(response.status, 200);
+  assert.equal(upstreamHeaders[CONTROL_HEADER], undefined);
+  assert.equal((await request(port, 'POST', '/drain', {}, headers)).status, 202);
 });
 
 test('a second supervisor exits when the singleton listener is already owned', async (t) => {

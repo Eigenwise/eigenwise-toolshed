@@ -8,6 +8,7 @@ const net = require('node:net');
 const path = require('node:path');
 const { CLI_PATH, LOGS, PROXY_BIN, PROXY_PORT, PUBLIC_SHIM_PORT, resolveNewestInstalledCliPath, SHIM_PORT, STATE, WIN } = require('./runtime.js');
 const { recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
+const { controlRequestHeaders } = require('./control-auth.js');
 
 function fetchUrl(url, { timeout = 15000, headers = {}, agent } = {}) {
   return new Promise((resolve, reject) => {
@@ -664,7 +665,7 @@ async function stopShimWithDrain({ quiet = false, timeout = Number(process.env.C
   if (owner.state === 'unowned') return { ok: true, drained: true, running: false };
   if (!quiet) report(`model-gateway: restarting shim. It stopped accepting new requests and is waiting up to ${Math.ceil(timeout / 1000)}s for in-flight requests to finish.`);
   try {
-    const response = await postJson(`http://127.0.0.1:${SHIM_PORT}/drain`, { timeout });
+    const response = await postJson(`http://127.0.0.1:${SHIM_PORT}/drain`, { timeout }, 2000, controlRequestHeaders());
     if (response.status !== 202) throw new Error(`drain endpoint returned ${response.status}`);
   } catch (error) {
     if (!quiet) report(`model-gateway: could not ask the shim to drain (${error.message}); force-stopping it.`);
@@ -688,7 +689,7 @@ async function restartWorkerWithDrain({ quiet = false, timeout = Number(process.
   if (owner.state === 'unowned') return { ok: true, running: false };
   if (!quiet) report(`model-gateway: restarting shim without dropping its listener; waiting up to ${Math.ceil(timeout / 1000)}s for in-flight requests.`);
   try {
-    const response = await postJson(`http://127.0.0.1:${PUBLIC_SHIM_PORT}/restart`, { script: resolveNewestInstalledCliPath() }, 2000);
+    const response = await postJson(`http://127.0.0.1:${PUBLIC_SHIM_PORT}/restart`, { script: resolveNewestInstalledCliPath() }, 2000, controlRequestHeaders());
     if (response.status === 202) return { ok: true, draining: true };
     if (response.status === 404) {
       if (!quiet) report('model-gateway: upgrading the legacy shim to a supervised listener; this one transition reconnects live sessions.');

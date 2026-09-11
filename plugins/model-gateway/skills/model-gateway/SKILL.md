@@ -41,6 +41,10 @@ run `ensure` yourself when you need an exit code. SessionStart waits at most 12 
 gateway, then leaves its supervisor to finish in the background so it stays inside Claude Code's hook budget. `setup` is one-shot and idempotent: it downloads the claude-code-proxy binary
 (sha256-verified) and starts everything. Re-running it later is also the upgrade path. A newer cached Model Gateway version replaces an older sibling version from the same marketplace and plugin name. A different marketplace, plugin name, or non-cache install stays foreign and is refused.
 
+Setup fails before extraction when the required checksum asset is absent, its download fails, its contents are invalid or name a different archive, or the archive digest does not match. Report the verification failure; never skip the checksum check or run the unverified download.
+
+Use the bundled lifecycle commands for restarts and drains. They authenticate with the per-user `~/.claude/model-gateway/control-token` file. Never print or copy this secret into a conversation, request body, or settings file. Browser-origin lifecycle requests are refused, and a replacement worker must be this CLI or a non-older sibling within the same resolved plugin cache. Development checkouts cannot hot-switch to unrelated installations. After updating, restart the calling Claude Code process to load the current control protocol. These controls do not authenticate inference requests to the separate proxy or protect against a process with the same OS-user access.
+
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" setup
 # only if setup says sign-in is needed:

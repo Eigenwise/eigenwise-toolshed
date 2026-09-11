@@ -248,10 +248,28 @@ function parseInstalledCliVersion(cliPath) {
 }
 
 function canReplaceInstalledCliPath(currentCliPath, candidateCliPath) {
-  const currentVersion = parseInstalledCliVersion(currentCliPath);
-  const candidateVersion = parseInstalledCliVersion(candidateCliPath);
-  if (!candidateVersion) return !currentVersion;
-  return !currentVersion || !versionIsOlder(candidateVersion, currentVersion);
+  if (typeof currentCliPath !== 'string' || typeof candidateCliPath !== 'string'
+      || !path.isAbsolute(currentCliPath) || !path.isAbsolute(candidateCliPath)) return false;
+  const current = path.resolve(currentCliPath);
+  const candidate = path.resolve(candidateCliPath);
+  let realCurrent;
+  let realCandidate;
+  try {
+    realCurrent = fs.realpathSync(current);
+    realCandidate = fs.realpathSync(candidate);
+  } catch { return false; }
+  if (current === candidate) return realCurrent === realCandidate;
+  const canonicalCli = (file) => path.basename(file) === 'model-gateway.js' && path.basename(path.dirname(file)) === 'bin';
+  if (![current, candidate, realCurrent, realCandidate].every(canonicalCli)) return false;
+  const cacheRoot = (file) => path.dirname(path.dirname(path.dirname(file)));
+  // Version ordering is meaningful only within the same lexical AND resolved cache root.
+  // Development checkouts can restart themselves, but cannot adopt unrelated installations.
+  if (cacheRoot(current) !== cacheRoot(candidate) || cacheRoot(realCurrent) !== cacheRoot(realCandidate)) return false;
+  const currentVersion = parseInstalledCliVersion(current);
+  const candidateVersion = parseInstalledCliVersion(candidate);
+  if (!currentVersion || !candidateVersion) return false;
+  if (path.basename(path.dirname(path.dirname(candidate))) !== path.basename(path.dirname(path.dirname(realCandidate)))) return false;
+  return !versionIsOlder(candidateVersion, currentVersion);
 }
 
 function resolveNewestInstalledCliPath({ cliPath = CLI_PATH, readDirectory = fs.readdirSync, pathExists = fs.existsSync } = {}) {

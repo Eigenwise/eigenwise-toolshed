@@ -30,6 +30,10 @@ You may need to complete a browser sign-in or restart Claude Code. Claude will a
 
 ## Pick a model
 
+Setup now requires the proxy release's checksum file and stops before extraction if verification fails. Keep that refusal in place and report the error rather than running the downloaded archive manually.
+
+Gateway restart and drain commands use a private local control token automatically. Do not share the `~/.claude/model-gateway/control-token` file. After an update, fully restart Claude Code so it uses the current lifecycle protocol. A hot worker update is limited to the same plugin cache; switching between a development checkout and an installed copy requires stopping the old supervisor through its bundled CLI first. These protections apply to gateway lifecycle operations, not to the separate proxy's inference endpoint.
+
 In Claude Code v2.1.129+, open `/model` and choose a row labeled `From gateway`. Claude Code only refetches gateway discovery
 with an API-key credential. Model Gateway writes its discovery cache for OAuth subscriptions, and
 new rows appear after a full Claude Code restart. `/reload-plugins` does not reload the picker cache.
