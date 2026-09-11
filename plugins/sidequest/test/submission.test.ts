@@ -1596,6 +1596,7 @@ test('SQ-2528: an automatic dispatch keeps the pushed baseline after a transient
     git(['add', 'README.md']);
     git(['commit', '-m', 'transient failed release']);
     const transientCommit = git(['rev-parse', 'HEAD']);
+    git(['branch', '-f', 'main', transientCommit]);
 
     const ticket = addTicket('transient release baseline', {
       category: 'submission.fixture',
@@ -1607,6 +1608,7 @@ test('SQ-2528: an automatic dispatch keeps the pushed baseline after a transient
     assert.strictEqual(prepared.ticket.dispatch.lifecycleAttempt.baseline.revision.value, pushedBase);
 
     git(['reset', '--hard', 'origin/main']);
+    git(['branch', '-f', 'main', 'origin/main']);
     fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
     fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'transient-release.js'), 'candidate\n');
     git(['add', 'lib/transient-release.js']);
