@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.3 (2026-09-11)
+
+Released in v3.556.0, up from 0.9.2.
+
+### Fixes
+
+- Keep resupply offers current for active sessions (SQ-2740)
+  Count current-project transcript metadata so resupply can become due after sessions that do not end cleanly.
+
 ## 0.9.2 (2026-09-11)
 
 Released in v3.555.0, up from 0.9.1.

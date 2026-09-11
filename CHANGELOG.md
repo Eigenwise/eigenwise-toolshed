@@ -8,6 +8,22 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.556.0 (2026-09-11)
+
+### model-gateway 0.50.16 → 0.50.17
+
+#### Fixes
+
+- Refuse unsupported thread continuations (SQ-2741)
+  Model Gateway now refuses Codex and Grok thread continuations locally, so supported clients can retry with full message history instead of losing context.
+
+### quartermaster 0.9.2 → 0.9.3
+
+#### Fixes
+
+- Keep resupply offers current for active sessions (SQ-2740)
+  Count current-project transcript metadata so resupply can become due after sessions that do not end cleanly.
+
 ## v3.555.0 (2026-09-11)
 
 ### quartermaster 0.9.1 → 0.9.2

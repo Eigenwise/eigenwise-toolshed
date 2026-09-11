@@ -1,6 +1,6 @@
 {
   "name": "quartermaster",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "Set up a project from your existing Claude Code habits, keep Toolshed installs healthy, and find missing capabilities after real work accumulates. Local scripts reduce session history to a bounded summary before the active model sees it; setup, resupply, updates, and config changes happen only with your approval.",
   "author": { "name": "Eigenwise", "email": "kenny@eigenwise.io" },
   "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/quartermaster",
