@@ -27,7 +27,8 @@ function overdueProject() {
 function transcriptProject() {
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-config-'));
   return {
-    projectDir: fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-project-')),
+    // The hook slugs the realpath of the project; a short-named temp dir (RUNNER~1) would slug differently.
+    projectDir: fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-project-'))),
     configDir,
     stateDir: path.join(configDir, 'quartermaster-state'),
   };
