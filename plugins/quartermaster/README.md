@@ -44,7 +44,7 @@ The aggregate is more than counts. It can include:
 - a denial meaning that identifies `permission-rule` as a host-reported policy block, not proof of
   whether a permission rule or PreToolUse hook blocked the call;
 - repeated command names, plugin, skill, and MCP attribution, and fetched hostnames; and
-- short clipped correction or denial evidence, up to 300 characters per quote.
+- short clipped user-correction or denial evidence, up to 300 characters per quote; leading harness blocks are excluded from correction evidence.
 
 Setup explicitly requests the all-projects aggregate. Resupply reads the current project by default and only uses `--all-projects` for a global pass. A host policy label alone never justifies a permission allowlist or hook change; existing approval requirements still apply. The state directory stores local tallies and the decision ledger, not raw conversation transcripts. Resupply due checks also stat current-project transcript files, using only their modification time to count activity since a reset; they never open transcript content.
 

@@ -113,6 +113,25 @@ test('detects corrections and interrupts from user prompts', async () => {
   assert.equal(signals.friction.interrupts, 2);
 });
 
+test('removes leading harness blocks before collecting correction evidence', async () => {
+  const signals = await collect([
+    userPrompt('<task-notification>you keep committing generated files</task-notification>'),
+    userPrompt('<system-reminder>i told you to preserve the verification state</system-reminder>'),
+    userPrompt('<task-notification>you keep committing generated files</task-notification>\n<system-reminder>i told you to preserve the verification state</system-reminder>'),
+    userPrompt('<task-notification>you keep committing generated files</task-notification>\nno, do not commit generated files'),
+    userPrompt('<task-notification>you keep committing generated files'),
+    userPrompt('no, the retry path is correct'),
+    userPrompt('please use the existing implementation'),
+  ]);
+
+  assert.equal(signals.friction.corrections.count, 2);
+  assert.deepEqual(signals.friction.corrections.samples.map((sample) => sample.quote), [
+    'no, do not commit generated files',
+    'no, the retry path is correct',
+  ]);
+  assert.deepEqual(signals.friction.corrections.byTheme, { 'commit/git': 1, general: 1 });
+});
+
 test('meta and tool-result user records are not prompts', async () => {
   const signals = await collect([
     userPrompt('<command-name>/model</command-name>', { isMeta: true }),
