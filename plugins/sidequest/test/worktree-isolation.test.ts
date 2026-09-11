@@ -200,6 +200,59 @@ test('the assigned linked worktree remains allowed', () => {
   }
 });
 
+// SQ-2570. WorktreeCreate resolves the board from the session's own checkout, so
+// a dispatch prepared for another registered project finds nothing to bind and
+// the executor dies before it starts. The hook cannot reach across boards -- the
+// worktree it is asked to place belongs to THIS checkout -- so what it owes the
+// orchestrator is a refusal that names the cause instead of a bare reason code.
+test('a cross-project worktree creation refuses with the board it actually searched', () => {
+  const other = initRepo('sq-isolation-other-project-');
+  const otherSlug = store.ensureProject(other).slug;
+  const sessionId = `cross-project-create-${Date.now()}`;
+  const ticket = store.createTicket(otherSlug, {
+    title: 'cross-project creation fixture',
+    category: 'codebase-exploration',
+    files: ['README.md'],
+  });
+  const prepared = store.prepareDispatch(otherSlug, ticket.ref, { sessionId });
+  assert.equal(store.recordDispatchLaunch(otherSlug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+    agentName: 'crossproject',
+  }).ok, true);
+
+  const createWorktree = (cwd: string) => {
+    try {
+      return {
+        ok: true,
+        output: execFileSync(process.execPath, [path.join(HOOKS, 'worktree-create.js')], {
+          input: JSON.stringify({ hook_event_name: 'WorktreeCreate', name: 'crossproject', session_id: sessionId, cwd }),
+          encoding: 'utf8',
+          env: { ...process.env, SIDEQUEST_HOME },
+          windowsHide: true,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }).trim(),
+      };
+    } catch (error: any) {
+      return { ok: false, output: String(error?.stderr || error?.message || error).trim() };
+    }
+  };
+
+  const hubSession = createWorktree(PROJECT);
+  const ownSession = createWorktree(other);
+  try {
+    assert.equal(hubSession.ok, false, 'a session rooted in another project cannot place this dispatch');
+    assert.match(hubSession.output, /dispatch_binding_unavailable/);
+    assert.match(hubSession.output, /sharedTree:true/);
+    assert.ok(hubSession.output.includes(PROJECT), 'the refusal names the board it searched');
+    assert.equal(ownSession.ok, true, 'a session rooted in the ticket project still places it');
+    assert.equal(store.getTicket(otherSlug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(ownSession.output));
+  } finally {
+    if (ownSession.ok) execFileSync('git', ['worktree', 'remove', '--force', ownSession.output], { cwd: other, windowsHide: true });
+  }
+});
+
 // SQ-1546. Claude Code's own `isolation: worktree` provisions under
 // <project>/.claude/worktrees/agent-<id>, not under sidequest's worktree root,
 // so the guard used to compare the executor's real tree against a path that

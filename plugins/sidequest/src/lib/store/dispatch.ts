@@ -233,6 +233,32 @@ function sharedTreeRuntimeRefusal(ticket?: any, projectPath?: any, runtimeCwd?: 
   return `prepare dispatch: refused ${ticket.ref}; sharedTree:true requires the spawning runtime to be rooted in the declared project checkout. This runtime is an isolated linked worktree. Record the follow-up on the owning ticket; the orchestration session must dispatch it.`;
 }
 
+function repositoryIdentity(cwd?: any) {
+  try {
+    const value = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      cwd: String(cwd), encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    return canonicalPath(path.isAbsolute(value) ? value : path.resolve(String(cwd), value));
+  } catch (_) {
+    return null;
+  }
+}
+
+// An isolated dispatch is created by the spawning session's WorktreeCreate hook,
+// and that hook resolves the board from its own checkout. A dispatch prepared for
+// a different repository therefore hands back a spawn spec whose lease can never
+// bind, and the executor dies before it starts (SQ-2570). Refuse while the caller
+// can still choose sharedTree, rather than after the Agent fails. Linked worktrees
+// of the project share its common git dir, so they are NOT a mismatch; that case
+// is the existing stale-cwd warning's.
+function isolatedTreeRuntimeRefusal(ticket?: any, projectPath?: any, runtimeCwd?: any) {
+  if (!runtimeCwd || !projectPath) return null;
+  const project = repositoryIdentity(projectPath);
+  const runtime = repositoryIdentity(runtimeCwd);
+  if (!project || !runtime || project === runtime) return null;
+  return `prepare dispatch: refused ${ticket.ref}; an isolated worktree is created by this session's WorktreeCreate hook, which resolves the board from the spawning checkout ${runtimeCwd} rather than from ${projectPath}. Its worktree lease would refuse creation with dispatch_binding_unavailable and the executor would never start. Dispatch it with sharedTree:true, or from a session rooted in ${projectPath}.`;
+}
+
 function dispatchPreparationAttribution(opts?: any) {
   return {
     sessionId: opts?.sessionId ? String(opts.sessionId) : null,
@@ -1458,7 +1484,9 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     if (t.workingTreeDelivery === true && !sharedTree) {
       throw new Error(`prepare dispatch: ${t.ref} declares a working-tree deliverable and must run in the shared checkout. Re-dispatch with sharedTree:true.`);
     }
-    const runtimeRefusal = sharedTree ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd) : null;
+    const runtimeRefusal = sharedTree
+      ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd)
+      : isolatedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd);
     if (runtimeRefusal) throw new Error(runtimeRefusal);
     const workingTreeDelivery = sharedTree && t.workingTreeDelivery === true && effectiveFiles.length > 0;
     const verificationRequirement = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ''));
@@ -1927,6 +1955,20 @@ function dispatchCreationCandidate(state?: any, sessionId?: any) {
     && !state.continuation?.sourceWorktree);
 }
 
+// A WorktreeCreate that finds only a PREPARED dispatch for its session means the
+// Agent launch marker never reached the board, so there is no launched attempt to
+// reserve the checkout. A prepared attempt still supplies no creation authority;
+// naming the case separately only tells the orchestrator which failure it hit,
+// because "dispatch_binding_unavailable" alone reads as a missing dispatch and
+// sends it hunting for the wrong cause (SQ-2570).
+function unlaunchedSessionDispatch(slug?: any, sessionId?: string) {
+  return listTickets(slug).some((candidate?: any) => {
+    const state = dispatchState(candidate);
+    return Boolean(state && state.sessionId === sessionId && state.sharedTree === false
+      && state.outcome === 'prepared' && !state.terminalAt && !state.worktree);
+  });
+}
+
 function bindDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: any) {
   const normalizedSessionId = String(sessionId || '').trim();
   const target = String(worktree || '').trim();
@@ -1970,7 +2012,10 @@ function bindDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: an
     });
     if (result?.ok) return result;
   }
-  return { ok: false, reason: 'dispatch_binding_unavailable' };
+  return {
+    ok: false,
+    reason: unlaunchedSessionDispatch(slug, normalizedSessionId) ? 'dispatch_launch_unrecorded' : 'dispatch_binding_unavailable',
+  };
 }
 
 function completeDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: any) {

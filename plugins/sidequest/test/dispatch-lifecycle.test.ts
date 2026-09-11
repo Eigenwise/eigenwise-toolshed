@@ -1769,6 +1769,81 @@ test('creation bindings reserve one launched dispatch each within a shared sessi
   }
 });
 
+// SQ-2570. The WorktreeCreate hook resolves the board from the spawning
+// session's own checkout, so a worktree dispatch prepared for another repository
+// handed back a spawn spec whose lease refused creation and an executor that
+// never started. Each runtime shape runs as its own prepared dispatch with its
+// own catch, so one refusal cannot hide the others.
+test('isolated dispatch refuses a spawning runtime outside the board repository', () => {
+  const foreign = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-foreign-repo-'));
+  execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: foreign });
+  execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: foreign });
+  execFileSync('git', ['config', 'user.name', 'Foreign Repository'], { cwd: foreign });
+  fs.writeFileSync(path.join(foreign, 'foreign.js'), 'module.exports = 2;\n');
+  execFileSync('git', ['add', 'foreign.js'], { cwd: foreign });
+  execFileSync('git', ['commit', '--quiet', '-m', 'seed foreign repository'], { cwd: foreign });
+  const branch = `cross-project-runtime-${Date.now()}`;
+  const linked = path.join(SIDEQUEST_HOME, 'worktrees', branch);
+  execFileSync('git', ['worktree', 'add', '--quiet', '-b', branch, linked, 'main'], { cwd: PROJECT });
+
+  const cases = [
+    { name: 'another repository', runtimeCwd: foreign },
+    { name: 'the project root', runtimeCwd: PROJECT },
+    { name: 'a linked worktree of the project', runtimeCwd: linked },
+    { name: 'an unreported runtime', runtimeCwd: undefined },
+  ];
+  const dispatched: string[] = [];
+  const outcomes = cases.map((runtime) => {
+    const ticket = createFixture(`cross-project runtime ${runtime.name}`);
+    try {
+      const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `cross-project-${Date.now()}`, runtimeCwd: runtime.runtimeCwd });
+      dispatched.push(ticket.ref);
+      return { name: runtime.name, outcome: prepared.ticket.dispatch.sharedTree === false ? 'isolated' : 'shared' };
+    } catch (error: any) {
+      return { name: runtime.name, outcome: 'refused', message: String(error?.message || error) };
+    }
+  });
+
+  try {
+    assert.deepEqual(outcomes.map((entry: any) => `${entry.name}: ${entry.outcome}`), [
+      'another repository: refused',
+      'the project root: isolated',
+      'a linked worktree of the project: isolated',
+      'an unreported runtime: isolated',
+    ]);
+    const refusal = String((outcomes[0] as any).message);
+    assert.match(refusal, /dispatch_binding_unavailable/);
+    assert.match(refusal, /sharedTree:true/);
+    assert.ok(refusal.includes(foreign), 'the refusal names the spawning checkout');
+  } finally {
+    for (const ref of dispatched) {
+      assert.equal(store.releaseTicket(slug, ref, 'cross-project-runtime-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+    }
+    execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
+    execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT, windowsHide: true });
+    fs.rmSync(foreign, { recursive: true, force: true });
+  }
+});
+
+// SQ-2570/SQ-2739. A creation that finds only a prepared dispatch for its session
+// is still refused, but it has to say so: "dispatch_binding_unavailable" sent the
+// orchestrator hunting for a missing dispatch that was sitting right there.
+test('creation binding separates an unrecorded launch from a missing dispatch', () => {
+  const sessionId = `creation-refusal-${Date.now()}`;
+  const target = path.join(SIDEQUEST_HOME, 'worktrees', `creation-refusal-${Date.now()}`);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, target).reason, 'dispatch_binding_unavailable');
+  const ticket = createFixture('unrecorded launch creation fixture');
+  store.prepareDispatch(slug, ticket.ref, { sessionId });
+  try {
+    const refused = store.bindDispatchWorktreeCreation(slug, sessionId, target);
+    assert.equal(refused.ok, false);
+    assert.equal(refused.reason, 'dispatch_launch_unrecorded');
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.outcome, 'prepared');
+  } finally {
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'unrecorded-launch-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+  }
+});
+
 test('a prepared sibling cannot supply authority for a launched dispatch checkout', () => {
   const sessionId = `prepared-sibling-${Date.now()}`;
   const preparedTicket = createFixture('prepared sibling isolation fixture');
