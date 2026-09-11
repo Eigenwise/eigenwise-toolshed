@@ -27,7 +27,7 @@ Reload plugins or start a new Claude Code session. Then, from the repository you
 
 Claude first gets consent for the machine-shared observer and Collector, then handles this repository's opt-in and the optional dashboard. A bare setup keeps data in local SQLite with no dashboard. The `--dashboard` choice explicitly requests the Docker-backed loopback dashboard. You choose whether to keep the data local or configure a remote sink. Any external endpoint or sign-in stays your call.
 
-Settings and environment wiring apply only to new Claude Code sessions. Restart every affected session in the listed repository directories before creating activity or running verification. `/reload-plugins` alone is not enough for environment changes.
+Settings and environment wiring apply only to new Claude Code sessions. The project command writes the repository SHA-256 identity as `OTEL_RESOURCE_ATTRIBUTES` `project.id` and its sanitized basename as `project.name`, matching the local opt-in registry. Re-run the command to rewrite this repository's env after an update; it never changes another repository's settings. Restart every affected session in the listed repository directories before creating activity or running verification. `/reload-plugins` alone is not enough for environment changes.
 
 ## Use the dashboard
 

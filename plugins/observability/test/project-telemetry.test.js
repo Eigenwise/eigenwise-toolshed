@@ -8,6 +8,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { buildObservation, projectMetadata } = require('../hooks/observability.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
+const { otlpToObservations } = require('../lib/observability/otlp.js');
 const {
   applyProjectTelemetry,
   disableProjectTelemetry,
@@ -57,7 +58,7 @@ test('adds the Claude Code telemetry block to fresh project settings', (t) => {
   assert.equal(settings.env.CLAUDE_CODE_ENABLE_TELEMETRY, '1');
   assert.equal(settings.env.OTEL_EXPORTER_OTLP_ENDPOINT, 'http://127.0.0.1:4318');
   assert.equal(settings.env.OTEL_METRICS_INCLUDE_SESSION_ID, 'false');
-  assert.equal(settings.env.OTEL_RESOURCE_ATTRIBUTES, 'project.id=fresh-project,service.name=claude-code');
+  assert.equal(settings.env.OTEL_RESOURCE_ATTRIBUTES, `project.id=${projectMetadata(projectDir).project_id},project.name=fresh-project,service.name=claude-code`);
   assert.ok(fs.existsSync(result.statePath));
 
   applyProjectTelemetry(projectDir);
@@ -84,7 +85,7 @@ test('merges telemetry settings without dropping existing environment keys', (t)
   assert.deepEqual(settings.permissions, { allow: ['Read'] });
   assert.equal(settings.env.KEEP_ME, 'yes');
   assert.equal(settings.env.OTEL_METRICS_EXPORTER, 'otlp');
-  assert.equal(settings.env.OTEL_RESOURCE_ATTRIBUTES, 'deployment.environment=dev,project.id=telemetry-project,service.name=claude-code');
+  assert.equal(settings.env.OTEL_RESOURCE_ATTRIBUTES, `deployment.environment=dev,project.id=${projectMetadata(projectDir).project_id},project.name=telemetry-project,service.name=claude-code`);
 });
 
 
@@ -164,17 +165,40 @@ test('wires the repository and every subdirectory that hosts sessions, from any 
 
   assert.equal(enabled.repositoryRoot, root);
   assert.deepEqual(enabled.directories.map((entry) => entry.directory), [root, gui]);
+  const registered = JSON.parse(fs.readFileSync(configFile, 'utf8')).observability.optedInProjects;
+  const expectedProject = projectMetadata(root);
+  assert.deepEqual(registered.map(({ project_name: name }) => name), ['sample-repo']);
+  assert.equal(registered[0].project_id, expectedProject.project_id);
+  assert.match(registered[0].project_id, /^[a-f0-9]{64}$/);
   for (const { directory: wired } of enabled.directories) {
     const settings = JSON.parse(fs.readFileSync(path.join(wired, '.claude', 'settings.local.json'), 'utf8'));
-    assert.equal(settings.env.OTEL_RESOURCE_ATTRIBUTES, 'project.id=sample-repo,service.name=claude-code');
+    const attributes = new Map(settings.env.OTEL_RESOURCE_ATTRIBUTES.split(',').map((entry) => entry.split('=')));
+    assert.equal(attributes.get('project.id'), registered[0].project_id);
+    assert.equal(attributes.get('project.name'), registered[0].project_name);
     assert.equal(settings.env.CLAUDE_CODE_ENABLE_TELEMETRY, '1');
   }
+
   for (const untouched of [quiet, vendored, dependency, worktree]) {
     assert.equal(fs.existsSync(path.join(untouched, '.claude')), false, `${untouched} should not be wired`);
   }
-  const registered = JSON.parse(fs.readFileSync(configFile, 'utf8')).observability.optedInProjects;
-  assert.deepEqual(registered.map(({ project_name: name }) => name), ['sample-repo']);
-  assert.equal(registered[0].project_id, projectMetadata(root).project_id);
+
+  const otlp = otlpToObservations('logs', {
+    resourceLogs: [{
+      resource: { attributes: [
+        { key: 'project.id', value: { stringValue: registered[0].project_id } },
+        { key: 'project.name', value: { stringValue: registered[0].project_name } },
+      ] },
+      scopeLogs: [{ logRecords: [{
+        timeUnixNano: '1721378400000000000',
+        eventName: 'claude_code.api_request',
+        attributes: [],
+      }] }],
+    }],
+  });
+  const otlpStore = openObservabilityStore(path.join(directory, 'otlp.db'), { outboxEnabled: false });
+  assert.equal(otlpStore.ingestBatch(otlp).every((result) => result.accepted), true);
+  assert.equal(otlpStore.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE event_name = 'schema_drop'").get().count, 0);
+  otlpStore.close();
 
   const disabled = disableProjectTelemetry(gui, { configFile });
   assert.equal(disabled.changed, true);
@@ -184,6 +208,26 @@ test('wires the repository and every subdirectory that hosts sessions, from any 
     assert.equal(fs.existsSync(telemetryStatePath(unwired)), false);
   }
   assert.deepEqual(JSON.parse(fs.readFileSync(configFile, 'utf8')).observability.optedInProjects, []);
+});
+
+test('the audit accepts canonical and legacy project.id wiring', async (t) => {
+  const { directory, root, projects } = temporaryRepository(t);
+  const gui = path.join(root, 'apps', 'gui');
+  fs.mkdirSync(gui, { recursive: true });
+  hostSessions(projects, gui);
+  const configFile = path.join(directory, 'observability.json');
+  fs.writeFileSync(configFile, JSON.stringify({
+    observability: { dashboard: false, optedInProjects: [registryEntry(root)] },
+  }));
+  applyProjectTelemetry(root);
+  fs.mkdirSync(path.join(gui, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(gui, '.claude', 'settings.local.json'), JSON.stringify({
+    env: { OTEL_RESOURCE_ATTRIBUTES: 'project.id=sample-repo,service.name=claude-code' },
+  }));
+
+  const audit = await auditProjectTelemetry(root, { configFile, databaseFile: path.join(directory, 'missing.db'), projectsDir: projects });
+
+  assert.deepEqual(audit.directories, [{ directory: root, wired: true }, { directory: gui, wired: true }]);
 });
 
 test('the audit names half-wired projects, the unwired directories, and the fixing command', async (t) => {

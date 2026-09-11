@@ -7,9 +7,18 @@ const path = require('node:path');
 const { defaultConfigPath, defaultDataDir, readObservabilityConfig } = require('../observability/sinks/index.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
 const { defaultDatabaseFile } = require('./observer.js');
-const { projectName, sessionDirectories, telemetryRoot, wiredProjectId } = require('./project-telemetry.js');
+const { projectMetadata } = require('../hooks/observability.js');
+const { sessionDirectories, telemetryRoot, wiredProjectId } = require('./project-telemetry.js');
 
 const DEFAULT_WINDOW_HOURS = 6;
+
+function projectIdentifiers(project) {
+  return [project?.project_id, project?.project_name].filter((value) => typeof value === 'string' && value.length > 0);
+}
+
+function hasSampledProject(projects, project) {
+  return projectIdentifiers(project).some((identifier) => projects.has(identifier));
+}
 
 function getJson(url) {
   return new Promise((resolve) => {
@@ -66,15 +75,19 @@ async function prometheusQuery(config, query) {
 
 async function verifyProjectTelemetry(projectDir, options = {}) {
   const config = observabilityConfig(options);
-  const project = projectName(projectDir);
+  const project = projectMetadata(telemetryRoot(projectDir));
   const observer = await getJson(`http://127.0.0.1:${config.ports?.observer || 14319}/health`);
   const observerHealthy = observer?.statusCode === 200 && observer.body?.ok === true;
-  const query = `claude_code_token_usage_tokens_total{project_id=${JSON.stringify(project)}}`;
-  const prometheus = await prometheusQuery(config, query);
-  if (!prometheus.ok) return { found: false, project, observerHealthy, reason: prometheus.reason };
+  let prometheus = { ok: true, result: [] };
+  for (const projectId of projectIdentifiers(project)) {
+    const query = `claude_code_token_usage_tokens_total{project_id=${JSON.stringify(projectId)}}`;
+    prometheus = await prometheusQuery(config, query);
+    if (!prometheus.ok || prometheus.result.length > 0) break;
+  }
+  if (!prometheus.ok) return { found: false, project: project.project_name, observerHealthy, reason: prometheus.reason };
 
   const found = prometheus.result.length > 0;
-  return { found, project, observerHealthy, reason: found ? undefined : 'metric_not_found' };
+  return { found, project: project.project_name, observerHealthy, reason: found ? undefined : 'metric_not_found' };
 }
 
 // Hook events reach the observer from any directory, but the claude_code_* metrics only
@@ -112,29 +125,35 @@ async function sampledProjects(config, windowHours) {
 async function auditProjectTelemetry(projectDir, options = {}) {
   const config = observabilityConfig(options);
   const root = telemetryRoot(projectDir);
-  const project = projectName(root);
+  const project = projectMetadata(root);
   const windowHours = options.windowHours || DEFAULT_WINDOW_HOURS;
   const now = options.now ? new Date(options.now) : new Date();
   const since = new Date(now.getTime() - windowHours * 3600 * 1000).toISOString();
   const observed = observerActivity(options.databaseFile || defaultDatabaseFile(), since);
   const sampled = await sampledProjects(config, windowHours);
-  const registered = new Set((config.optedInProjects || []).map((entry) => entry?.project_name));
+  const registered = new Map((config.optedInProjects || [])
+    .filter((entry) => typeof entry?.project_name === 'string')
+    .map((entry) => [entry.project_name, entry]));
   const directories = sessionDirectories(root, options).map((directory) => ({
     directory,
-    wired: wiredProjectId(directory) === project,
+    wired: projectIdentifiers(project).includes(wiredProjectId(directory)),
   }));
   const active = observed && sampled.available
-    ? [...observed].filter(([name, events]) => events > 0 && !sampled.projects.has(name))
+    ? [...observed].filter(([name, events]) => {
+      const entry = registered.get(name);
+      const identifiers = entry ? projectIdentifiers(entry) : [name];
+      return events > 0 && !identifiers.some((identifier) => sampled.projects.has(identifier));
+    })
     : [];
   const byEvents = (left, right) => right.events - left.events || left.project.localeCompare(right.project);
   const entries = active.map(([name, events]) => ({ project: name, events }));
 
   return {
-    project,
+    project: project.project_name,
     repositoryRoot: root,
     windowHours,
-    observerEvents: observed ? (observed.get(project) || 0) : null,
-    nativeSamples: sampled.available ? sampled.projects.has(project) : null,
+    observerEvents: observed ? (observed.get(project.project_name) || 0) : null,
+    nativeSamples: sampled.available ? hasSampledProject(sampled.projects, project) : null,
     reason: sampled.available ? undefined : sampled.reason,
     halfWired: entries.filter(({ project: name }) => registered.has(name)).sort(byEvents),
     // Names nothing opted in: mostly other repositories, so this is a hint rather than a
