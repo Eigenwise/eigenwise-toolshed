@@ -2,6 +2,7 @@
 
 const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require('../kernel/verification.js');
 const { runProcessVerification } = require('../ports/process.js');
+const { worktreeSetupDeadlineMs } = require('../hook-timeouts.js');
 const { decideSubmissionAdmission } = require('../kernel/submission');
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require('../source-revision-capability.js');
 const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require('../kernel/review-binding');
@@ -2826,6 +2827,68 @@ function waveVerificationRequirement(tickets: any[]) {
   return { ok: true, requirement: first };
 }
 
+function pathIsInside(root: string, candidate: string) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function provisionWaveGateWorktree(slug: any, candidateWorktree: string) {
+  if (!candidateWorktree) {
+    return { ok: true, evidence: 'The gate used the project root, so isolated-worktree provisioning was skipped.' };
+  }
+  if (!fs.existsSync(candidateWorktree) || !fs.statSync(candidateWorktree).isDirectory()) {
+    return { ok: false, message: `The candidate worktree ${JSON.stringify(candidateWorktree)} is unavailable for gate provisioning.` };
+  }
+  const repository = String(readMeta(slug)?.path || '').trim();
+  if (!repository) return { ok: false, message: 'The board repository is unavailable for gate provisioning.' };
+  const config = boardConfig(slug) || {};
+  const dependencies = Array.isArray(config.worktreeDependencyPaths) ? config.worktreeDependencyPaths : [];
+  let created = 0;
+  let existing = 0;
+  try {
+    for (const dependency of dependencies) {
+      const dependencyPath = String(dependency?.path || '').trim();
+      const source = path.resolve(repository, dependencyPath);
+      const target = path.resolve(candidateWorktree, dependencyPath);
+      if (!dependencyPath || !pathIsInside(repository, source) || !pathIsInside(candidateWorktree, target)) {
+        return { ok: false, message: `Configured worktree dependency path ${JSON.stringify(dependencyPath)} is outside the gate worktree.` };
+      }
+      if (fs.existsSync(target)) {
+        existing += 1;
+        continue;
+      }
+      if (!fs.existsSync(source) || !fs.statSync(source).isDirectory()) {
+        return { ok: false, message: `Configured worktree dependency path ${JSON.stringify(dependencyPath)} is unavailable in the board repository.` };
+      }
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      if (dependency.mode === 'copy') fs.cpSync(source, target, { recursive: true });
+      else if (dependency.mode === 'link') fs.symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
+      else return { ok: false, message: `Configured worktree dependency path ${JSON.stringify(dependencyPath)} has an unsupported mode.` };
+      created += 1;
+    }
+  } catch (error: any) {
+    return { ok: false, message: `Could not provision gate worktree dependencies: ${error.message || String(error)}` };
+  }
+  const dependenciesEvidence = dependencies.length
+    ? `Worktree dependency provisioning created ${created} path${created === 1 ? '' : 's'} and retained ${existing} existing path${existing === 1 ? '' : 's'}.`
+    : 'Worktree dependency provisioning was skipped because no paths are configured.';
+  const setup = String(config.worktreeSetup || '').trim();
+  if (!setup) return { ok: true, evidence: `${dependenciesEvidence} Worktree setup was skipped because none is configured.` };
+  const setupResult = spawnSync(setup, {
+    cwd: candidateWorktree,
+    shell: true,
+    windowsHide: true,
+    timeout: worktreeSetupDeadlineMs(),
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  if (setupResult.error || setupResult.status !== 0) {
+    const error = setupResult.error ? String(setupResult.error.message || setupResult.error) : `exited with status ${setupResult.status ?? 'unknown'}`;
+    const stderr = String(setupResult.stderr || '').trim();
+    return { ok: false, message: `${dependenciesEvidence} Configured worktree setup ${JSON.stringify(setup)} ran but ${error}${stderr ? `: ${stderr.slice(-1_000)}` : ''}.` };
+  }
+  return { ok: true, evidence: `${dependenciesEvidence} Configured worktree setup ${JSON.stringify(setup)} ran successfully.` };
+}
+
 function authoritativeWaveVerification(slug: any, tickets: any[], waveId: string, supplied: any, opts?: any) {
   const requirement = waveVerificationRequirement(tickets);
   if (!requirement.ok) return requirement;
@@ -2833,8 +2896,17 @@ function authoritativeWaveVerification(slug: any, tickets: any[], waveId: string
   if (requirement.requirement.command) {
     const timeoutMilliseconds = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
     const candidateWorktree = tickets.length === 1 ? String(tickets[0]?.submission?.worktree || '').trim() : '';
+    const provisioning = provisionWaveGateWorktree(slug, candidateWorktree);
+    if (!provisioning.ok) {
+      return {
+        ok: false,
+        reason: 'assembled_wave_environment_problem',
+        message: `Wave ${waveId} gate could not prepare its verification environment. ${provisioning.message} No candidate was rejected.`,
+      };
+    }
     return {
       ok: true,
+      provisioning: provisioning.evidence,
       verification: runProcessVerification(requirement.requirement, {
         cwd: candidateWorktree || readMeta(slug)?.path,
         timeoutMilliseconds,
@@ -3064,14 +3136,11 @@ function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
   if (gate.state === 'gate_failed') {
     const wave = { id: waveId, baseline: opened.baseline, participants: participantRefs };
     if (gate.verification.status === 'toolchain_missing') {
-      const worktreeSetup = String(boardConfig(slug)?.worktreeSetup || '').trim();
-      const setupEvidence = worktreeSetup
-        ? `Configured worktree setup ${JSON.stringify(worktreeSetup)} should provide that command before the gate runs.`
-        : 'No worktree setup is configured to provide the missing command.';
+      const provisioningEvidence = verification.provisioning || 'The gate did not use an isolated candidate worktree, so worktree provisioning was skipped.';
       return {
         ok: false,
         reason: 'assembled_wave_environment_problem',
-        message: `Wave ${waveId} gate could not run because its verification environment is incomplete. ${gate.verification.evidence} ${setupEvidence} Provision the gate environment and retry; no candidate was rejected.`,
+        message: `Wave ${waveId} gate could not run because its verification environment is incomplete. ${gate.verification.evidence} ${provisioningEvidence} Provision the missing toolchain and retry; no candidate was rejected.`,
         wave,
         assembly: decision.assembly,
         gate,
