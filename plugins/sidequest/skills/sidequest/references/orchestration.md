@@ -255,9 +255,11 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   server or build is fine; waiting on an executor through a side channel is not.
 - **Retire terminal teammates.** Once terminal board evidence has been consumed and its submission report,
   done comment, or recovery handoff has been preserved, call `TaskStop({ task_id: "<agent name>" })` once for
-  that exact native teammate. This is a Claude Code host action, not a Sidequest tool. It applies to submitted,
-  done, released, failed-before-claim, and superseded attempts. Never stop a live claim, retained continuation,
-  or candidate awaiting integration. Do not wake a completed executor, poll FleetView, or create a cleanup loop.
+  that exact native teammate, but only while it is still registered as a running task. This is a Claude Code host action, not a Sidequest tool.
+  It applies to submitted, done, released, failed-before-claim, and superseded attempts. A background native
+  Agent can already have exited on its own before you call this: a `No task found with ID` or `Task <name> is
+  not running (status: completed)` reply means it already exited, needs no retry, and is not a failure to
+  investigate. Never stop a live claim, retained continuation, or candidate awaiting integration. Do not wake a completed executor, poll FleetView, or create a cleanup loop.
   A `READY_FOR_INTEGRATION` verdict additionally queues the ticket for the publish transaction
   ([publishing.md](publishing.md)) — publish the wave's submissions in one batch; never respawn an executor for a
   submitted ticket. Sweep ALL finished executors, not just the one that notified, so session exit only stops live work.
