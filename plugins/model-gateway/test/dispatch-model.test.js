@@ -206,6 +206,20 @@ test('dispatch model rejects missing and malformed route markers', async (t) => 
       },
     });
   }
+
+  const continuationResponse = await request(shimPort, '/v1/messages', JSON.stringify({
+    model: 'claude-codex-auto',
+    messages: [{ role: 'user', content: 'sliced continuation' }],
+    thread: { type: 'continue', previous_message_id: 'message_123' },
+  }));
+  assert.deepEqual(JSON.parse(continuationResponse.body), {
+    type: 'error',
+    error: {
+      type: 'invalid_request_error',
+      message: 'capability_rejected: beta_header:message-threads-2026-08-12; model-gateway Codex and Grok backends hold no conversation state. Resend this turn with the full message history.',
+      details: { error_code: 'thread_unsupported_request' },
+    },
+  });
 });
 
 test('dispatchRouteFromMessages scans only user-authored text blocks', () => {
