@@ -4,7 +4,7 @@ const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 const DEFAULT_WORKTREE_RECOVERY_RETENTION_AGE_HOURS = 14 * 24;
 const DEFAULT_WORKTREE_RECOVERY_RETENTION_MAX_PER_AGENT = 3;
 
-function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }: any) {
+function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, integrationTargetRef, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }: any) {
 function defaultProjectName(absPath?: any) {
   return path.basename(path.resolve(absPath)) || 'project';
 }
@@ -298,15 +298,18 @@ function integrationTarget(slug?: any, override?: any) {
   const mode = configured === 'auto' ? (hasOriginRemote(meta.path) ? 'remote' : 'local') : configured;
   const branch = normalizeIntegrationBranch(requested.branch ?? (typeof override === 'string' ? override : meta.integrationBranch));
   const upstream = mode === 'local' ? branch : `origin/${branch}`;
-  const ref = mode === 'local' ? `refs/heads/${branch}` : `refs/remotes/origin/${branch}`;
+  const target = { mode, upstream, branch };
+  const ref = integrationTargetRef(target);
   if (!integrationBranchExists(meta.path, ref)) {
     throw new Error(`Configured integration ref "${ref}" for branch "${branch}" does not exist. Create or fetch it, or set integrationBranch with board-config --integration-branch <branch>.`);
   }
-  return { mode, upstream, branch };
+  return target;
 }
 
+// Reading the bare `origin/main` or `main` name lets a same-named tag shadow the
+// intended ref, so the frozen target commit resolves through the qualified ref.
 function integrationTargetCommit(absPath: any, target: any) {
-  return execFileSync('git', ['rev-parse', '--verify', `${target.upstream}^{commit}`], {
+  return execFileSync('git', ['rev-parse', '--verify', `${integrationTargetRef(target) || target.upstream}^{commit}`], {
     cwd: absPath,
     encoding: 'utf8',
     windowsHide: true,

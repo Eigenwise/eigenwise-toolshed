@@ -59,21 +59,101 @@ function patchIdsForCommits(cwd: string, commits: string[]): Set<string> | null 
   return ids;
 }
 
-function submissionAlreadyOnIntegrationBranch(cwd: string, submission: UnknownRecord): { reconciled: boolean; divergedPath?: string } {
+function remoteTrackingUpstream(upstream: unknown, branch: string): string {
+  const value = String(upstream ?? '').trim();
+  return value.includes('/') ? value : `origin/${branch}`;
+}
+
+// Which refs may answer "did this candidate reach the integration branch". A board
+// frozen to remote mode still DELIVERS by merging into the local branch, but its
+// landed proof can also come from the frozen remote-tracking ref, because an
+// out-of-band merge (a reviewed PR) lands there first and the board never fetches
+// (GitHub #51). Local mode stays local-only, and a record carrying no mode is a
+// legacy record: local-only, so nothing that closes today starts reading a new ref.
+// Refs are always fully qualified so a tag named `main` or `origin/main` cannot
+// shadow the intended branch.
+export function integrationTargetRefs(target: unknown): string[] {
+  const record = isRecord(target) ? target : {};
+  const branch = String(record.branch ?? record.integrationBranch ?? '').trim();
+  if (!branch) return [];
+  const refs = [`refs/heads/${branch}`];
+  const mode = String(record.mode ?? record.integrationMode ?? '').trim().toLowerCase();
+  if (mode === 'remote') refs.push(`refs/remotes/${remoteTrackingUpstream(record.upstream, branch)}`);
+  return refs;
+}
+
+// The one ref the target's own mode names: the remote-tracking ref in remote mode,
+// the local branch in local mode. This is the frozen target itself, not the
+// reachability set.
+export function integrationTargetRef(target: unknown): string {
+  const refs = integrationTargetRefs(target);
+  return refs[refs.length - 1] ?? '';
+}
+
+function qualifiedSubmissionUpstream(options: UnknownRecord, upstream: string): string {
+  const target = isRecord(options.integrationTarget) ? options.integrationTarget : null;
+  if (String(target?.mode ?? target?.integrationMode ?? '').trim().toLowerCase() !== 'remote') return upstream;
+  const ref = integrationTargetRef(target);
+  return isRemoteIntegrationRef(ref) ? ref : upstream;
+}
+
+// `refs/remotes/origin/main` -> `origin/main`, `refs/heads/main` -> `main`: the short
+// name a recorded revision label uses, so a label always says which ref the evidence
+// actually came from.
+export function integrationRefLabel(ref: unknown): string {
+  return String(ref ?? '').trim().replace(/^refs\/(?:heads|remotes)\//, '');
+}
+
+export function isRemoteIntegrationRef(ref: unknown): boolean {
+  return String(ref ?? '').trim().startsWith('refs/remotes/');
+}
+
+function integrationRefNames(override: unknown, submission: UnknownRecord): string[] {
+  if (Array.isArray(override)) {
+    const names = override.map((ref) => String(ref ?? '').trim()).filter(Boolean);
+    if (names.length) return names;
+  } else {
+    const single = String(override ?? '').trim();
+    if (single) return [single];
+    const derived = integrationTargetRefs(submission);
+    if (derived.length) return derived;
+  }
+  const stored = String(submission.integrationBranch || submission.upstream || '').trim();
+  return stored ? [stored] : [];
+}
+
+function resolvedIntegrationRefs(cwd: string, names: readonly string[]): { ref: string; commit: string }[] {
+  const resolved: { ref: string; commit: string }[] = [];
+  for (const name of names) {
+    const commit = resolvedCommit(cwd, name);
+    if (commit.ok) resolved.push({ ref: name, commit: commit.value });
+  }
+  return resolved;
+}
+
+function submissionAlreadyOnIntegrationBranch(cwd: string, submission: UnknownRecord, integrationBranchOverride?: unknown): { reconciled: boolean; ref?: string; commit?: string; divergedPath?: string } {
   const commits = Array.isArray(submission.commits) ? submission.commits.filter((commit): commit is string => typeof commit === 'string' && commit.length > 0) : [];
   const changedPaths = Array.isArray(submission.changedPaths) ? submission.changedPaths.filter((file): file is string => typeof file === 'string' && file.length > 0) : [];
-  const integrationBranch = String(submission.integrationBranch || submission.upstream || '').trim();
-  if (!commits.length || !changedPaths.length || !integrationBranch || submission.noOp === true) return { reconciled: false };
+  const integrationRefs = resolvedIntegrationRefs(cwd, integrationRefNames(integrationBranchOverride, submission));
+  if (!commits.length || !changedPaths.length || !integrationRefs.length || submission.noOp === true) return { reconciled: false };
   const submittedPatchIds = patchIdsForCommits(cwd, commits);
   if (!submittedPatchIds?.size) return { reconciled: false };
-  const integrationCommits = gitResult(cwd, ['rev-list', '--no-merges', integrationBranch]);
-  if (!integrationCommits.ok) return { reconciled: false };
-  const integrationPatchIds = patchIdsForCommits(cwd, integrationCommits.value.split(/\r?\n/).filter(Boolean));
-  if (integrationPatchIds == null || ![...submittedPatchIds].every((patchId) => integrationPatchIds.has(patchId))) return { reconciled: false };
-  const differingPaths = gitResult(cwd, ['diff', '--name-only', integrationBranch, String(submission.commit), '--', ...changedPaths]);
-  if (!differingPaths.ok) return { reconciled: false };
-  const divergedPath = differingPaths.value.split(/\r?\n/).find(Boolean);
-  return divergedPath ? { reconciled: false, divergedPath } : { reconciled: true };
+  let divergedPath: string | undefined;
+  for (const { ref, commit } of integrationRefs) {
+    const integrationCommits = gitResult(cwd, ['rev-list', '--no-merges', commit]);
+    if (!integrationCommits.ok) continue;
+    const integrationPatchIds = patchIdsForCommits(cwd, integrationCommits.value.split(/\r?\n/).filter(Boolean));
+    if (integrationPatchIds == null || ![...submittedPatchIds].every((patchId) => integrationPatchIds.has(patchId))) continue;
+    // The content check has to run against the ref whose history carried the
+    // equivalent patch, or an accepted patch id would waive the scope-content
+    // comparison against a ref that never held it (SQ-1743/SQ-1749).
+    const differingPaths = gitResult(cwd, ['diff', '--name-only', commit, String(submission.commit), '--', ...changedPaths]);
+    if (!differingPaths.ok) continue;
+    const diverged = differingPaths.value.split(/\r?\n/).find(Boolean);
+    if (!diverged) return { reconciled: true, ref, commit };
+    divergedPath = divergedPath ?? diverged;
+  }
+  return divergedPath ? { reconciled: false, divergedPath } : { reconciled: false };
 }
 
 export function repoRoot(cwd: string): string {
@@ -404,11 +484,21 @@ function isAncestor(cwd: string, ancestor: string, descendant: string): boolean 
   }
 }
 
-export function submissionCommitReachedIntegrationBranch(cwd: string, submission: UnknownRecord, integrationBranchOverride?: unknown): boolean {
-  if (submission.noOp === true) return false;
+// Which ref proves the candidate landed, and at what commit. Callers record the
+// answer rather than a bare boolean: a revision labelled `git:origin/main` when only
+// the local branch contains it, or the reverse, is a false delivery record.
+export function submissionLandedIntegrationRef(cwd: string, submission: UnknownRecord, integrationBranchOverride?: unknown): { ref: string; commit: string } | null {
+  if (submission.noOp === true) return null;
   const commit = String(submission.commit || '').trim();
-  const integrationBranch = String(integrationBranchOverride || submission.integrationBranch || submission.upstream || '').trim();
-  return Boolean(commit && integrationBranch && isAncestor(cwd, commit, integrationBranch));
+  if (!commit) return null;
+  for (const candidate of resolvedIntegrationRefs(cwd, integrationRefNames(integrationBranchOverride, submission))) {
+    if (isAncestor(cwd, commit, candidate.commit)) return candidate;
+  }
+  return null;
+}
+
+export function submissionCommitReachedIntegrationBranch(cwd: string, submission: UnknownRecord, integrationBranchOverride?: unknown): boolean {
+  return submissionLandedIntegrationRef(cwd, submission, integrationBranchOverride) !== null;
 }
 
 function parentCommits(cwd: string, commit: string): string[] {
@@ -502,7 +592,7 @@ export function submissionRange(cwd: string, options: unknown) {
   if (!refTip.ok) return { ok: false, reason: 'missing_git_ref', message: refTip.message };
   if (tip.value !== refTip.value) return { ok: false, reason: 'tip_mismatch', tip: tip.value, refTip: refTip.value, gitRef };
 
-  const currentUpstream = resolvedCommit(cwd, upstream);
+  const currentUpstream = resolvedCommit(cwd, qualifiedSubmissionUpstream(opts, upstream));
   if (!currentUpstream.ok) return { ok: false, reason: 'missing_upstream', upstream, message: currentUpstream.message };
   const recordedUpstream = opts.upstreamCommit ? resolvedCommit(cwd, opts.upstreamCommit) : null;
   if (recordedUpstream && !recordedUpstream.ok) return { ok: false, reason: 'missing_recorded_upstream', message: recordedUpstream.message };
@@ -516,7 +606,8 @@ export function submissionRange(cwd: string, options: unknown) {
   const rootBase = isEmptyTreeBase(opts.base);
   const requestedBase = opts.base && !rootBase ? resolvedCommit(cwd, opts.base) : null;
   if (requestedBase && !requestedBase.ok) return { ok: false, reason: 'missing_base', message: requestedBase.message };
-  const integrationBranch = resolvedCommit(cwd, opts.integrationBranch || upstream);
+  const integrationRefs = resolvedIntegrationRefs(cwd, integrationRefNames(opts.integrationBranch, { upstream }));
+  const integratedFrom = (commit: string) => integrationRefs.find((entry) => isAncestor(cwd, commit, entry.commit)) || null;
   const dispatchBase = !rootBase && opts.dispatchBase ? resolvedCommit(cwd, opts.dispatchBase) : null;
   const approvedBoundaryBase = (candidate: GitResult): candidate is { ok: true; value: string } => {
     if (!candidate.ok) return false;
@@ -525,7 +616,7 @@ export function submissionRange(cwd: string, options: unknown) {
   };
   const baseIsOnTip = !!requestedBase && isAncestor(cwd, requestedBase.value, tip.value);
   const baseIsAfterMergeBase = !!requestedBase && isAncestor(cwd, mergeBase.value, requestedBase.value);
-  const baseIsIntegrated = !!requestedBase && integrationBranch.ok && isAncestor(cwd, requestedBase.value, integrationBranch.value);
+  const baseIsIntegrated = !!requestedBase && integratedFrom(requestedBase.value) !== null;
   if (requestedBase && (!baseIsOnTip || (!baseIsAfterMergeBase && !baseIsIntegrated))) {
     return { ok: false, reason: 'base_not_reachable', base: requestedBase.value, actualBase: mergeBase.value, upstream, tip: tip.value };
   }
@@ -554,7 +645,7 @@ export function submissionRange(cwd: string, options: unknown) {
   if (!requestedBase && dispatchBase) {
     const dispatchBaseIsOnTip = dispatchBase.ok && isAncestor(cwd, dispatchBase.value, tip.value);
     const dispatchBaseIsAfterMergeBase = dispatchBase.ok && isAncestor(cwd, mergeBase.value, dispatchBase.value);
-    const dispatchBaseIsIntegrated = dispatchBase.ok && integrationBranch.ok && isAncestor(cwd, dispatchBase.value, integrationBranch.value);
+    const dispatchBaseIsIntegrated = dispatchBase.ok && integratedFrom(dispatchBase.value) !== null;
     if (dispatchBaseIsOnTip && (dispatchBaseIsAfterMergeBase || dispatchBaseIsIntegrated)) {
       effectiveBase = dispatchBase.value;
     }
@@ -631,19 +722,23 @@ export function submissionRange(cwd: string, options: unknown) {
 
 export function validateStoredSubmissionRange(cwd: string, submissionValue: unknown, ticketRef?: unknown, integrationBranchOverride?: unknown) {
   const submission = isRecord(submissionValue) ? submissionValue : {};
-  const candidateReachedIntegration = submissionCommitReachedIntegrationBranch(cwd, submission, integrationBranchOverride);
+  // One derivation for every caller, including the override-less publish queue: the
+  // submission itself records the mode, branch and upstream the dispatch froze.
+  const integrationRefs = integrationRefNames(integrationBranchOverride, submission);
+  const landed = submissionLandedIntegrationRef(cwd, submission, integrationRefs);
   const range = submissionRange(cwd, {
     commit: submission.commit,
     gitRef: submission.gitRef,
     upstream: submission.upstream,
     upstreamCommit: submission.upstreamCommit,
-    integrationBranch: submission.integrationBranch,
+    integrationTarget: submission,
+    integrationBranch: integrationRefs,
     base: submission.base,
   });
-  const reconciliation = candidateReachedIntegration
-    ? { reconciled: true }
+  const reconciliation: { reconciled: boolean; ref?: string; commit?: string; divergedPath?: string } = landed
+    ? { reconciled: true, ref: landed.ref, commit: landed.commit }
     : !range.ok && range.reason === 'expected_upstream_diverged'
-      ? submissionAlreadyOnIntegrationBranch(cwd, submission)
+      ? submissionAlreadyOnIntegrationBranch(cwd, submission, integrationRefs)
       : { reconciled: false };
   if (!range.ok && !reconciliation.reconciled) {
     if (reconciliation.divergedPath) {
@@ -686,7 +781,11 @@ export function validateStoredSubmissionRange(cwd: string, submissionValue: unkn
     commits: rangeCommits,
     changedPaths: rangeChangedPaths,
     admittedScope,
-    ...(reconciled ? { reconciled: true } : {}),
+    ...(reconciled ? {
+      reconciled: true,
+      reconciledRef: reconciliation.ref ?? null,
+      reconciledCommit: reconciliation.commit ?? null,
+    } : {}),
   });
 }
 

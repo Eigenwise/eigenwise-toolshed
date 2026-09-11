@@ -1488,7 +1488,7 @@ function autoStoryColor(index) {
   const n = STORY_PALETTE.length;
   return STORY_PALETTE[((index || 0) % n + n) % n];
 }
-configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, isTrackedBuildOutput: (...args) => warningsLayer?.isTrackedBuildOutput(...args), packageBuildOutputs: (...args) => warningsLayer?.packageBuildOutputs(...args) || [], packageRootForScope: (...args) => warningsLayer?.packageRootForScope(...args), path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
+configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, integrationTargetRef: commitScope.integrationTargetRef, isTrackedBuildOutput: (...args) => warningsLayer?.isTrackedBuildOutput(...args), packageBuildOutputs: (...args) => warningsLayer?.packageBuildOutputs(...args) || [], packageRootForScope: (...args) => warningsLayer?.packageRootForScope(...args), path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
 function parseTicketData(slug, data) {
   try {
     const ticket = typeof data === "string" ? JSON.parse(data) : data;
@@ -2706,23 +2706,33 @@ function recordedDelivery(slug, ticket, commit, evidence) {
       windowsHide: true,
       stdio: "pipe"
     }).trim();
-    const localBranchRef = `refs/heads/${target.branch}`;
-    const localBranchCommit = execFileSync("git", ["rev-parse", "--verify", `${localBranchRef}^{commit}`], {
-      cwd: repo,
-      encoding: "utf8",
-      windowsHide: true,
-      stdio: "pipe"
-    }).trim();
+    const integrationRefs = commitScope.integrationTargetRefs(target);
+    let evidenceRef = null;
+    for (const ref of integrationRefs) {
+      let refCommit;
+      try {
+        refCommit = execFileSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
+          cwd: repo,
+          encoding: "utf8",
+          windowsHide: true,
+          stdio: "pipe"
+        }).trim();
+      } catch (_) {
+        continue;
+      }
+      if (commitReachedRef(repo, deliveredCommit, refCommit)) {
+        evidenceRef = { ref, commit: refCommit };
+        break;
+      }
+    }
+    if (!evidenceRef) throw new Error(`${deliveredCommit} is not reachable from ${integrationRefs.join(" or ") || "the recorded integration ref"}`);
     const integrationRevision = sourceRevision({
-      source: `git:${target.branch}`,
-      value: localBranchCommit,
+      source: `git:${commitScope.integrationRefLabel(evidenceRef.ref)}`,
+      value: evidenceRef.commit,
       observedAt: (/* @__PURE__ */ new Date()).toISOString()
     });
-    if (!integrationRevision) throw new Error("could not record the current local integration revision");
-    if (!commitReachedRef(repo, deliveredCommit, integrationRevision.value)) {
-      throw new Error(`${deliveredCommit} is not reachable from ${localBranchRef}`);
-    }
-    const upstream = target.mode === "remote" ? { ref: target.upstream, reachable: commitReachedRef(repo, deliveredCommit, target.upstream) } : null;
+    if (!integrationRevision) throw new Error("could not record the current integration revision");
+    const upstream = target.mode === "remote" ? { ref: target.upstream, reachable: commitReachedRef(repo, deliveredCommit, `refs/remotes/${target.upstream}`) } : null;
     return { ok: true, commit: deliveredCommit, target, integrationRevision, upstream, evidence: recordedEvidence };
   } catch (error) {
     return {
@@ -2866,9 +2876,10 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
         reason
       });
       if (!deliveredSubmission.ok) {
-        const landed = commitScope.submissionCommitReachedIntegrationBranch(readMeta(slug)?.path || "", ticket.submission || {}, target?.branch);
+        const integrationRefs = commitScope.integrationTargetRefs(target);
+        const landed = commitScope.submissionCommitReachedIntegrationBranch(readMeta(slug)?.path || "", ticket.submission || {}, integrationRefs);
         return landed ? deliveredSubmission : Object.assign({}, deliveredSubmission, {
-          message: `${String(deliveredSubmission.message || `${ticket.ref} submission could not be recorded as delivered.`)} Its candidate is not reachable from ${target?.branch || "the integration branch"}, so if it never landed and no longer merges, close it as an abandoned submission instead: \`sidequest groom-close ${ticket.ref} --abandon-submission --reason "<evidence it never landed>"\` (MCP \`abandonSubmission: true\`).`
+          message: `${String(deliveredSubmission.message || `${ticket.ref} submission could not be recorded as delivered.`)} Its candidate is not reachable from ${integrationRefs.join(" or ") || target?.branch || "the integration branch"}, so if it never landed and no longer merges, close it as an abandoned submission instead: \`sidequest groom-close ${ticket.ref} --abandon-submission --reason "<evidence it never landed>"\` (MCP \`abandonSubmission: true\`).`
         });
       }
     }

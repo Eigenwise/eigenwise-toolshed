@@ -4254,4 +4254,189 @@ test('SQ-2463: a wave invalidation preserves submitted candidate status', () => 
   }
 });
 
+// GitHub #51 (SQ-2717): landed proof, not delivery location. Each fixture gets its own
+// repo plus bare origin so origin/main can be advanced past a stale local main without
+// touching the shared PROJECT_DIR fixtures.
+const commitScope = require('../lib/commit-scope.js');
+
+function landedProofFixture(prefix: string, integrationMode: string) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}origin-`));
+  const at = (args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true }).trim();
+  at(['init', '-b', 'main']);
+  at(['config', 'user.name', 'Sidequest Test']);
+  at(['config', 'user.email', 'sidequest-test@example.invalid']);
+  fs.writeFileSync(path.join(root, 'README.md'), 'landed proof fixture\n');
+  fs.mkdirSync(path.join(root, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'verify-candidate.cjs'), [
+    "const fs = require('fs');",
+    "const file = process.argv[2];",
+    "const marker = process.argv[3];",
+    "if (!fs.existsSync(file) || !fs.readFileSync(file, 'utf8').includes(marker)) {",
+    "  console.error(`# the verified tree does not carry ${file} at ${marker}`);",
+    "  process.exit(1);",
+    "}",
+    "console.log('ok 1 - the verified source matches the certified revision');",
+    '',
+  ].join('\n'));
+  at(['add', '.']);
+  at(['commit', '-m', 'base']);
+  execFileSync('git', ['init', '-b', 'main', '--bare', bare], { encoding: 'utf8', windowsHide: true });
+  at(['remote', 'add', 'origin', bare]);
+  at(['push', '-u', 'origin', 'main']);
+  const project = store.ensureProject(root).slug;
+  store.setBoardConfig(project, { integrationMode, integrationBranch: 'main' });
+  return { root, project, at };
+}
+
+// A real benign verifier: it fails unless the tree it runs in carries the candidate's
+// exact bytes, so a passing gate is evidence about the certified revision itself.
+function candidateVerifier(file: string, marker: string) {
+  return `"${process.execPath}" verify-candidate.cjs ${file} ${marker}`;
+}
+
+function submitLandedProofCandidate(fixture: any, file: string, marker: string, opts: { pushCandidate: boolean }) {
+  const contents = `${marker}\n`;
+  const ticket = store.createTicket(fixture.project, {
+    title: `landed proof ${file}`,
+    files: [file],
+    complexity: 3,
+    labels: ['direct-ok'],
+    complexityWhy: 'exercise remote landed proof against a stale local integration branch',
+  });
+  const base = fixture.at(['rev-parse', 'HEAD']);
+  fs.writeFileSync(path.join(fixture.root, file), contents);
+  fixture.at(['add', '--', file]);
+  fixture.at(['commit', '-m', `candidate ${file}`]);
+  const candidate = fixture.at(['rev-parse', 'HEAD']);
+  fixture.at(['update-ref', `refs/sidequest/${ticket.ref}`, candidate]);
+  if (opts.pushCandidate) {
+    fixture.at(['push', 'origin', 'main']);
+    fixture.at(['reset', '--hard', base]);
+  }
+  assert.strictEqual(store.claimTicket(fixture.project, ticket.ref, 'landed-proof-worker', {
+    direct: true, reason: 'The landed-proof fixture requires a local direct claim.',
+  }).ok, true);
+  const target = store.integrationTarget(fixture.project);
+  const submitted = store.submitTicket(fixture.project, ticket.ref, 'landed-proof-worker', {
+    commit: candidate,
+    gitRef: `refs/sidequest/${ticket.ref}`,
+    verify: candidateVerifier(file, marker),
+    range: {
+      base,
+      upstream: target.upstream,
+      upstreamCommit: base,
+      commits: [candidate],
+      changedPaths: [file],
+      integrationMode: target.mode,
+      integrationBranch: target.branch,
+    },
+  });
+  assert.strictEqual(submitted.ok, true, submitted.message || submitted.reason);
+  return { ticket, candidate, base, target };
+}
+
+test('SQ-2717: a remote-target candidate that landed only on origin records already-landed, never abandoned', () => {
+  const fixture = landedProofFixture('sq-2717-remote-abandon-', 'remote');
+  const { ticket, candidate, base } = submitLandedProofCandidate(fixture, 'lib/landed.js', 'sq2717-landed-through-a-reviewed-pull-request', { pushCandidate: true });
+  assert.strictEqual(fixture.at(['rev-parse', 'refs/heads/main']), base, 'local main stays behind the landed candidate');
+  assert.strictEqual(fixture.at(['rev-parse', 'refs/remotes/origin/main']), candidate, 'origin/main carries the candidate');
+
+  const abandoned = store.recordAbandonedSubmission(fixture.project, ticket.ref, {
+    target: store.integrationTarget(fixture.project),
+    reason: 'grooming believed this candidate never landed',
+  });
+
+  assert.strictEqual(abandoned.ok, true, abandoned.message || abandoned.reason);
+  assert.strictEqual(abandoned.integration.mode, 'already-landed');
+  assert.strictEqual(abandoned.integration.outcome, 'delivered');
+  assert.strictEqual(abandoned.integration.deliveryIdentity.landedRef, 'refs/remotes/origin/main');
+  assert.deepStrictEqual(abandoned.integration.deliveryRevision, {
+    source: 'git:origin/main',
+    value: candidate,
+    observedAt: abandoned.integration.deliveryRevision.observedAt,
+  }, 'the record names the ref that actually contained the candidate');
+});
+
+test('SQ-2717: a remote-target delivery on local main records the local branch, never origin', () => {
+  const fixture = landedProofFixture('sq-2717-remote-local-label-', 'remote');
+  const { ticket, candidate } = submitLandedProofCandidate(fixture, 'lib/delivered.js', 'sq2717-delivered-on-local-main-before-any-push', { pushCandidate: false });
+  assert.notStrictEqual(fixture.at(['rev-parse', 'refs/remotes/origin/main']), candidate, 'origin does not have the candidate yet');
+
+  const recorded = store.recordDeliveredSubmission(fixture.project, ticket.ref, {
+    target: store.integrationTarget(fixture.project),
+    deliveryCommit: candidate,
+    reason: 'the candidate reached local main and awaits the next push',
+  });
+
+  assert.strictEqual(recorded.ok, true, recorded.message || recorded.reason);
+  assert.strictEqual(recorded.integration.verify.status, 'passed');
+  assert.strictEqual(recorded.integration.deliveryRevision.source, 'git:main');
+  assert.strictEqual(recorded.integration.deliveryRevision.value, candidate);
+});
+
+test('SQ-2717: tags named main and origin/main cannot shadow either mode of integration ref', () => {
+  const localFixture = landedProofFixture('sq-2717-local-tag-', 'local');
+  const local = submitLandedProofCandidate(localFixture, 'lib/tagged.js', 'sq2717-delivered-under-a-shadowing-tag', { pushCandidate: false });
+  const shadow = localFixture.at(['rev-parse', 'refs/remotes/origin/main']);
+  localFixture.at(['tag', 'main', shadow]);
+  localFixture.at(['tag', 'origin/main', shadow]);
+  assert.strictEqual(localFixture.at(['rev-parse', 'main^{commit}']), shadow, 'the bare name resolves the tag, not the branch');
+
+  const recorded = store.recordDeliveredSubmission(localFixture.project, local.ticket.ref, {
+    target: store.integrationTarget(localFixture.project),
+    deliveryCommit: local.candidate,
+    reason: 'local delivery with a shadowing tag present',
+  });
+  assert.strictEqual(recorded.ok, true, recorded.message || recorded.reason);
+  assert.strictEqual(recorded.integration.deliveryRevision.source, 'git:main');
+  assert.strictEqual(recorded.integration.deliveryRevision.value, local.candidate, 'the branch commit is recorded, not the tag');
+
+  const remoteFixture = landedProofFixture('sq-2717-remote-tag-', 'remote');
+  const remote = submitLandedProofCandidate(remoteFixture, 'lib/remote-tagged.js', 'sq2717-remote-tag-shadow-candidate', { pushCandidate: true });
+  remoteFixture.at(['tag', 'origin/main', remote.base]);
+  const remoteTarget = store.integrationTarget(remoteFixture.project);
+  assert.deepStrictEqual(commitScope.integrationTargetRefs(remoteTarget), ['refs/heads/main', 'refs/remotes/origin/main']);
+  assert.strictEqual(commitScope.integrationTargetRef(remoteTarget), 'refs/remotes/origin/main');
+  assert.strictEqual(remoteFixture.at(['rev-parse', 'origin/main^{commit}']), remote.base, 'the bare upstream name resolves the tag');
+  assert.strictEqual(remoteFixture.at([
+    'rev-parse', `${commitScope.integrationTargetRef(remoteTarget)}^{commit}`,
+  ]), remote.candidate, 'the qualified frozen ref still resolves the remote-tracking commit');
+  const landed = commitScope.submissionLandedIntegrationRef(
+    remoteFixture.root,
+    store.getTicket(remoteFixture.project, remote.ticket.ref).submission,
+    commitScope.integrationTargetRefs(remoteTarget),
+  );
+  assert.deepStrictEqual(landed, { ref: 'refs/remotes/origin/main', commit: remote.candidate });
+});
+
+test('SQ-2720: grooming recognizes a remotely landed candidate when the optional local branch is absent', () => {
+  const fixture = landedProofFixture('sq-2720-missing-local-', 'remote');
+  const { ticket, candidate } = submitLandedProofCandidate(
+    fixture,
+    'lib/missing-local.js',
+    'sq2720-remotely-landed-without-local-proof-ref',
+    { pushCandidate: true },
+  );
+  fixture.at(['checkout', '--detach', candidate]);
+  fixture.at(['update-ref', '-d', 'refs/heads/main']);
+  assert.throws(() => fixture.at(['rev-parse', '--verify', 'refs/heads/main^{commit}']), undefined, 'the local branch proof ref is deliberately absent');
+  assert.strictEqual(fixture.at(['rev-parse', 'refs/remotes/origin/main']), candidate);
+
+  const closed = store.completeTicketAsControlPlane(fixture.project, ticket.ref, {
+    by: 'groomer',
+    purpose: 'grooming',
+    abandonSubmission: true,
+    reason: 'The frozen remote ref already contains this candidate.',
+  });
+
+  assert.strictEqual(closed.ok, true, closed.message || closed.reason);
+  assert.strictEqual(closed.ticket.status, 'done');
+  assert.strictEqual(closed.ticket.submission.integration.mode, 'already-landed');
+  assert.strictEqual(closed.ticket.submission.integration.outcome, 'delivered');
+  assert.strictEqual(closed.ticket.submission.integration.candidateState, undefined, 'an optional missing local ref cannot be recorded as an unresolvable candidate');
+  assert.strictEqual(closed.ticket.submission.integration.deliveryIdentity.landedRef, 'refs/remotes/origin/main');
+  assert.strictEqual(store.pendingSubmission(store.getTicket(fixture.project, ticket.ref)), false);
+});
+
 export {};

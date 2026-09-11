@@ -961,3 +961,209 @@ test('scopeRequest and commit refuse a foreign release fragment with the same ru
     commitScope.foreignReleaseFragmentRefusalMessage('commit', ticket.ref, [foreignFragment]),
   );
 });
+
+// GitHub #51 (SQ-2717): in remote mode the frozen remote-tracking ref is an ADDITIONAL
+// reachability authority. These fixtures never point the remote ref at the candidate
+// itself, so a reverted union cannot pass them through direct ancestry (SQ-2711).
+function remoteTargetRepo(): { root: string; remoteRefs: string[] } {
+  const root = repo();
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-commit-scope-origin-'));
+  execFileSync('git', ['init', '-b', 'main', '--bare', bare], { encoding: 'utf8', windowsHide: true });
+  git(root, ['remote', 'add', 'origin', bare]);
+  git(root, ['push', '-u', 'origin', 'main']);
+  return { root, remoteRefs: ['refs/heads/main', 'refs/remotes/origin/main'] };
+}
+
+test('SQ-2717: an equivalent patch on the frozen remote ref reconciles while a whitespace variant still refuses', () => {
+  for (const variant of ['equivalent', 'whitespace'] as const) {
+    const { root, remoteRefs } = remoteTargetRepo();
+    const base = git(root, ['rev-parse', 'HEAD']);
+    fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'discarded-base.js'), 'discarded\n');
+    git(root, ['add', '--', 'plugins/other-plugin/discarded-base.js']);
+    git(root, ['commit', '-m', 'discarded integration base']);
+    git(root, ['push', 'origin', 'main']);
+    const discardedBase = git(root, ['rev-parse', 'HEAD']);
+    git(root, ['checkout', '-q', '-b', 'ticket-work']);
+    fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'replayed.js'), 'replayed\n');
+    git(root, ['add', '--', 'plugins/sidequest/replayed.js']);
+    git(root, ['commit', '-m', 'ticket work']);
+    const tip = git(root, ['rev-parse', 'HEAD']);
+    pin(root, 'refs/sidequest/SQ-2717', tip);
+    const range = commitScope.submissionRange(root, {
+      commit: tip,
+      gitRef: 'refs/sidequest/SQ-2717',
+      upstream: 'origin/main',
+      integrationBranch: remoteRefs,
+    });
+    assert.equal(range.ok, true, `ticket range was refused: ${range.reason}`);
+    assert.equal(range.base, discardedBase);
+
+    // origin rewrites its history and replays the patch; the local branch never sees it.
+    git(root, ['checkout', '-q', 'main']);
+    git(root, ['reset', '--hard', base]);
+    git(root, ['cherry-pick', tip]);
+    if (variant === 'whitespace') {
+      fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'replayed.js'), '  replayed\n');
+      git(root, ['add', '--', 'plugins/sidequest/replayed.js']);
+      git(root, ['commit', '--amend', '--no-edit']);
+    }
+    const replayed = git(root, ['rev-parse', 'HEAD']);
+    git(root, ['push', '--force', 'origin', 'main']);
+    git(root, ['reset', '--hard', discardedBase]);
+    assert.notEqual(git(root, ['rev-parse', 'refs/remotes/origin/main']), tip, 'the remote ref is not the candidate itself');
+    assert.equal(git(root, ['rev-parse', 'refs/remotes/origin/main']), replayed);
+    assert.equal(git(root, ['rev-parse', 'refs/heads/main']), discardedBase, 'the local branch stays stale');
+
+    const stored = {
+      commit: tip,
+      gitRef: 'refs/sidequest/SQ-2717',
+      upstream: range.upstream,
+      upstreamCommit: range.upstreamCommit,
+      integrationMode: 'remote',
+      integrationBranch: 'main',
+      base: range.base,
+      commits: range.commits,
+      changedPaths: range.changedPaths,
+      admittedScope: ['plugins/sidequest/replayed.js'],
+    };
+    const revalidated = commitScope.validateStoredSubmissionRange(root, stored) as RangeResult & { reconciledRef?: string; reconciledCommit?: string };
+    if (variant === 'equivalent') {
+      assert.equal(revalidated.ok, true, `the remote equivalent patch was refused: ${revalidated.reason}`);
+      assert.equal(revalidated.reconciled, true);
+      assert.equal(revalidated.reconciledRef, 'refs/remotes/origin/main', 'the evidence names the ref that carried the patch');
+      assert.equal(revalidated.reconciledCommit, replayed);
+    } else {
+      assert.equal(revalidated.ok, false, 'a whitespace-variant patch must not reconcile');
+      assert.equal(revalidated.reason, 'reconciled_path_diverged');
+      assert.equal(revalidated.divergedPath, 'plugins/sidequest/replayed.js');
+    }
+  }
+});
+
+test('SQ-2717: a base on the frozen remote ref before the merge-base is admitted while wrong and unrelated targets refuse', () => {
+  const { root, remoteRefs } = remoteTargetRepo();
+  fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'shared.js'), 'shared\n');
+  git(root, ['add', '--', 'plugins/other-plugin/shared.js']);
+  git(root, ['commit', '-m', 'shared boundary']);
+  const boundary = git(root, ['rev-parse', 'HEAD']);
+  fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'branch-point.js'), 'branch point\n');
+  git(root, ['add', '--', 'plugins/other-plugin/branch-point.js']);
+  git(root, ['commit', '-m', 'branch point']);
+  const branchPoint = git(root, ['rev-parse', 'HEAD']);
+  git(root, ['checkout', '-q', '-b', 'ticket-work']);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'admitted.js'), 'admitted\n');
+  git(root, ['add', '--', 'plugins/sidequest/admitted.js']);
+  git(root, ['commit', '-m', 'ticket work']);
+  const tip = git(root, ['rev-parse', 'HEAD']);
+  pin(root, 'refs/sidequest/SQ-2717-base', tip);
+  git(root, ['checkout', '-q', 'main']);
+  git(root, ['push', 'origin', 'main']);
+  // Only origin carries the boundary commit; the local branch is reset behind it.
+  git(root, ['reset', '--hard', `${boundary}~1`]);
+  assert.equal(git(root, ['rev-parse', 'refs/remotes/origin/main']), branchPoint);
+
+  const admitted = commitScope.submissionRange(root, {
+    commit: tip,
+    gitRef: 'refs/sidequest/SQ-2717-base',
+    upstream: 'origin/main',
+    integrationBranch: remoteRefs,
+    base: boundary,
+  });
+  assert.equal(admitted.ok, true, `a base contained only in the frozen remote ref was refused: ${admitted.reason}`);
+  assert.equal(admitted.base, boundary);
+
+  const localOnly = commitScope.submissionRange(root, {
+    commit: tip,
+    gitRef: 'refs/sidequest/SQ-2717-base',
+    upstream: 'origin/main',
+    integrationBranch: ['refs/heads/main'],
+    base: boundary,
+  });
+  assert.equal(localOnly.ok, false, 'local-only authority cannot admit a base the local branch lacks');
+  assert.equal(localOnly.reason, 'base_not_reachable');
+
+  git(root, ['branch', 'wrong-target', `${boundary}~1`]);
+  const wrongTarget = commitScope.submissionRange(root, {
+    commit: tip,
+    gitRef: 'refs/sidequest/SQ-2717-base',
+    upstream: 'origin/main',
+    integrationBranch: ['refs/heads/wrong-target'],
+    base: boundary,
+  });
+  assert.equal(wrongTarget.ok, false, 'an unrelated target branch cannot admit the base');
+  assert.equal(wrongTarget.reason, 'base_not_reachable');
+
+  const unrelated = greenfieldRepo('src/only.rs');
+  const unrelatedTip = git(unrelated, ['rev-parse', 'HEAD']);
+  git(unrelated, ['checkout', '-q', '--orphan', 'other-root']);
+  fs.writeFileSync(path.join(unrelated, 'src', 'only.rs'), 'other root\n');
+  git(unrelated, ['add', '--', 'src/only.rs']);
+  git(unrelated, ['commit', '-m', 'unrelated root']);
+  pin(unrelated, 'refs/sidequest/SQ-2717-unrelated', unrelatedTip);
+  const unrelatedRange = commitScope.submissionRange(unrelated, {
+    commit: unrelatedTip,
+    gitRef: 'refs/sidequest/SQ-2717-unrelated',
+    upstream: 'other-root',
+    integrationBranch: ['refs/heads/other-root'],
+  });
+  assert.equal(unrelatedRange.ok, false, 'an unrelated root candidate still refuses');
+  assert.equal(unrelatedRange.reason, 'unrelated_history');
+});
+
+test('SQ-2720: submissionRange resolves a remote target through its qualified ref despite a shadowing tag', () => {
+  const { root, remoteRefs } = remoteTargetRepo();
+  const initial = git(root, ['rev-parse', 'HEAD']);
+  fs.writeFileSync(path.join(root, 'remote-base.js'), 'remote base\n');
+  git(root, ['add', '--', 'remote-base.js']);
+  git(root, ['commit', '-m', 'remote base']);
+  const recordedBase = git(root, ['rev-parse', 'HEAD']);
+  git(root, ['push', 'origin', 'main']);
+  git(root, ['checkout', '-q', '-b', 'ticket-work']);
+  fs.writeFileSync(path.join(root, 'candidate.js'), 'candidate\n');
+  git(root, ['add', '--', 'candidate.js']);
+  git(root, ['commit', '-m', 'candidate']);
+  const candidate = git(root, ['rev-parse', 'HEAD']);
+  pin(root, 'refs/sidequest/SQ-2720', candidate);
+  git(root, ['tag', 'origin/main', initial]);
+  const target = { mode: 'remote', upstream: 'origin/main', branch: 'main' };
+
+  const accepted = commitScope.submissionRange(root, {
+    commit: candidate,
+    gitRef: 'refs/sidequest/SQ-2720',
+    upstream: target.upstream,
+    upstreamCommit: recordedBase,
+    integrationTarget: target,
+    integrationBranch: remoteRefs,
+    base: recordedBase,
+  });
+  assert.equal(accepted.ok, true, `the qualified remote target was refused: ${accepted.reason}`);
+  assert.equal(accepted.upstreamCommit, recordedBase, 'the range uses refs/remotes/origin/main, not the tag');
+
+  git(root, ['branch', 'wrong-target', initial]);
+  const wrongTarget = commitScope.submissionRange(root, {
+    commit: candidate,
+    gitRef: 'refs/sidequest/SQ-2720',
+    upstream: 'wrong-target',
+    upstreamCommit: recordedBase,
+    integrationTarget: { mode: 'local', upstream: 'wrong-target', branch: 'wrong-target' },
+    integrationBranch: ['refs/heads/wrong-target'],
+    base: recordedBase,
+  });
+  assert.equal(wrongTarget.ok, false, 'a wrong target must not inherit remote-mode authority');
+  assert.equal(wrongTarget.reason, 'expected_upstream_diverged');
+
+  git(root, ['checkout', '-q', '--orphan', 'unrelated-target']);
+  git(root, ['rm', '-rf', '.']);
+  fs.writeFileSync(path.join(root, 'unrelated.js'), 'unrelated\n');
+  git(root, ['add', '--', 'unrelated.js']);
+  git(root, ['commit', '-m', 'unrelated target']);
+  const unrelatedTarget = commitScope.submissionRange(root, {
+    commit: candidate,
+    gitRef: 'refs/sidequest/SQ-2720',
+    upstream: 'unrelated-target',
+    integrationTarget: { mode: 'local', upstream: 'unrelated-target', branch: 'unrelated-target' },
+    integrationBranch: ['refs/heads/unrelated-target'],
+  });
+  assert.equal(unrelatedTarget.ok, false, 'an unrelated target must still refuse the candidate');
+  assert.equal(unrelatedTarget.reason, 'unrelated_history');
+});

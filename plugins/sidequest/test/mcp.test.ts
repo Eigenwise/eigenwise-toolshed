@@ -48,7 +48,7 @@ const agentsync = require('../lib/agentsync.js');
 const store = require('../lib/store.js');
 const db = require('../lib/db.js');
 const sourceRevisionCapability = require('../lib/source-revision-capability.js');
-const { runCapturedVerification } = require('../lib/verify-capture.js');
+const { runCapturedVerification, runVerifyCapture, recordCapture } = require('../lib/verify-capture.js');
 const worktrees = require('../lib/worktrees.js');
 const { createCheckoutInstanceMarker } = require('../lib/kernel/worktree.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
@@ -6307,6 +6307,236 @@ test('MCP add, update, and route_recipe carry a one-ticket route override', asyn
   const recipe = await callTool('route_recipe', { project: PROJ, category, ticket: added.ref });
   assert.deepEqual(recipe.route, { model: 'opus', effort: 'high' });
   assert.deepEqual(recipe.ticket, { ref: added.ref, route: { model: 'opus', effort: 'high' } });
+});
+
+// GitHub #51 (SQ-2717). Delivery location does not change: default `auto` resolves the
+// remote target whenever origin exists, and integration still merges into the LOCAL
+// branch and verifies there, with origin untouched until the operator pushes. What
+// changes is landed proof. No skipVerify below: the gate runs a real command that fails
+// unless the tree it ran in carries the candidate's bytes.
+// A real benign gate: it fails unless the tree it runs in is exactly its own revision,
+// and it names that revision in the log, so a passing gate is evidence about the
+// certified revision rather than about some other checkout. It also writes the revision
+// it saw into an ignored run log, so every refusal path below can prove a would-be
+// mutating verifier never executed instead of inferring it.
+function landedProofWorktree() {
+  const worktree = createGitWorktree();
+  fs.writeFileSync(path.join(worktree, '.gitignore'), 'verify-runs.log\n');
+  fs.writeFileSync(path.join(worktree, 'verify-tree.cjs'), [
+    "const { execFileSync } = require('child_process');",
+    "const fs = require('fs');",
+    "const path = require('path');",
+    "const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();",
+    "fs.appendFileSync(path.join(__dirname, 'verify-runs.log'), `${head}\\n`);",
+    "const drift = execFileSync('git', ['status', '--porcelain=v2', '--untracked-files=all'], { encoding: 'utf8' }).trim();",
+    'if (drift) {',
+    '  console.error(`# the verified tree does not match revision ${head}`);',
+    '  process.exit(1);',
+    '}',
+    'console.log(`ok 1 - the verified source matches revision ${head}`);',
+    '',
+  ].join('\n'));
+  gitAt(worktree, ['add', '.gitignore', 'verify-tree.cjs']);
+  gitAt(worktree, ['commit', '-m', 'candidate verifier fixture']);
+  gitAt(worktree, ['push', 'origin', 'main']);
+  return worktree;
+}
+
+function verifierRunLog(worktree: string) {
+  const logPath = path.join(worktree, 'verify-runs.log');
+  return fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
+}
+
+const LANDED_PROOF_CATEGORY = 'sq2717-landed-proof';
+const LANDED_PROOF_VERIFY = `"${process.execPath}" verify-tree.cjs`;
+
+async function submittedLandedProofCandidate(repository: string, project: string, file: string, marker: string) {
+  // Pinned to a Claude route on purpose: the default routes are Codex, and CI has no
+  // model gateway to confirm dispatch readiness against.
+  store.setCategory({ id: LANDED_PROOF_CATEGORY, name: 'SQ-2717 landed proof', route: { model: 'sonnet', effort: 'medium' }, fallback: null, enabled: true });
+  const ticket = store.createTicket(project, {
+    title: `landed proof ${file}`,
+    category: LANDED_PROOF_CATEGORY,
+    files: [file],
+    complexity: 3,
+    labels: ['direct-ok'],
+    complexityWhy: 'exercise landed proof against the frozen integration target',
+    executorVerify: LANDED_PROOF_VERIFY,
+  });
+  const by = `landed-proof-worker-${ticket.id}`;
+  const worktree = prepareIsolatedWorktreeDispatch(project, repository, ticket, by);
+  fs.writeFileSync(path.join(worktree, file), `${marker}\n`);
+  gitAt(worktree, ['add', '--', file]);
+  const committed = await callTool('commit', { project, ref: ticket.ref, by, message: `commit ${file}`, worktree });
+  assert.ok(committed.commit, committed.message || committed.reason);
+  const gitRef = `refs/sidequest/${ticket.ref}`;
+  gitAt(worktree, ['update-ref', gitRef, committed.commit]);
+  const capture = await runVerifyCapture(LANDED_PROOF_VERIFY, worktree);
+  assert.equal(capture.status, 'passed', capture.reason || capture.evidence);
+  const recordedCapture = recordCapture({ project: repository, ticket: ticket.ref }, capture, worktree);
+  assert.equal(recordedCapture.ok, true, recordedCapture.message);
+  const submitted = await callTool('submit', {
+    project,
+    ref: ticket.ref,
+    by,
+    commit: committed.commit,
+    gitRef,
+    worktree,
+    verify: LANDED_PROOF_VERIFY,
+    body: `Submitted ${file} for landed-proof delivery.`,
+  });
+  assert.equal(submitted.ok, true, submitted.message || submitted.reason);
+  return { ticket, by, worktree, commit: committed.commit, marker, file };
+}
+
+test('SQ-2717: default auto integration merges single and wave candidates into the local branch and never touches origin', async () => {
+  const repository = landedProofWorktree();
+  const project = store.ensureProject(repository).slug;
+  const target = store.integrationTarget(project);
+  assert.deepEqual(target, { mode: 'remote', upstream: 'origin/main', branch: 'main' }, 'default auto resolves the remote target when origin exists');
+  const originBefore = gitAt(repository, ['rev-parse', 'refs/remotes/origin/main']);
+
+  const single = await submittedLandedProofCandidate(repository, project, 'auto-single.txt', 'sq2717-auto-single');
+  const singleDelivery = await callTool('integrate', { project, ref: single.ticket.ref, by: 'auto-integrator', mode: 'merge' });
+  assert.equal(singleDelivery.ok, true, singleDelivery.message || singleDelivery.reason);
+  assert.equal(singleDelivery.verify.status, 'passed', 'the real merged-tree verifier ran and passed');
+  assert.match(fs.readFileSync(singleDelivery.verify.logPath, 'utf8'), new RegExp(gitAt(repository, ['rev-parse', 'HEAD'])), 'the gate certified the delivered revision itself');
+  assert.equal(gitAt(repository, ['merge-base', '--is-ancestor', single.commit, 'refs/heads/main']), '');
+  assert.equal(gitAt(repository, ['rev-parse', 'refs/remotes/origin/main']), originBefore, 'the board never pushes');
+
+  const first = await submittedLandedProofCandidate(repository, project, 'auto-wave-one.txt', 'sq2717-auto-wave-one');
+  const second = await submittedLandedProofCandidate(repository, project, 'auto-wave-two.txt', 'sq2717-auto-wave-two');
+  const groupRefs = `${first.ticket.ref},${second.ticket.ref}`;
+  const assembled = await callTool('integrate', { project, ref: groupRefs, by: 'auto-integrator', wave: {} });
+  assert.equal(assembled.ok, true, assembled.message || assembled.reason);
+  const waveDelivery = await callTool('integrate', { project, ref: groupRefs, by: 'auto-integrator', mode: 'merge' });
+  assert.equal(waveDelivery.ok, true, waveDelivery.message || waveDelivery.reason);
+  assert.equal(waveDelivery.verify.status, 'passed', 'one merged-tree verify run certifies the wave');
+  assert.match(fs.readFileSync(waveDelivery.verify.logPath, 'utf8'), new RegExp(gitAt(repository, ['rev-parse', 'HEAD'])), 'the wave gate certified the delivered revision itself');
+  assert.equal(gitAt(repository, ['merge-base', '--is-ancestor', first.commit, 'refs/heads/main']), '');
+  assert.equal(gitAt(repository, ['merge-base', '--is-ancestor', second.commit, 'refs/heads/main']), '');
+  assert.equal(gitAt(repository, ['rev-parse', 'refs/remotes/origin/main']), originBefore, 'wave delivery leaves origin untouched too');
+});
+
+test('SQ-2717: a candidate landed only on origin refuses single, wave and pending closure without running a verifier', async () => {
+  const repository = landedProofWorktree();
+  const project = store.ensureProject(repository).slug;
+  const behind = await submittedLandedProofCandidate(repository, project, 'origin-only.txt', 'sq2717-origin-only');
+  const ordinary = await submittedLandedProofCandidate(repository, project, 'not-yet-landed.txt', 'sq2717-not-yet-landed');
+
+  // origin receives the candidate out of band; the registered checkout stays behind.
+  const localBefore = gitAt(repository, ['rev-parse', 'refs/heads/main']);
+  gitAt(repository, ['push', 'origin', `${behind.commit}:main`]);
+  gitAt(repository, ['fetch', 'origin']);
+  assert.equal(gitAt(repository, ['rev-parse', 'refs/remotes/origin/main']), behind.commit);
+  assert.equal(gitAt(repository, ['rev-parse', 'refs/heads/main']), localBefore, 'the local branch does not contain it');
+  const indexBefore = gitAt(repository, ['status', '--porcelain=v2', '--untracked-files=all']);
+  const verifierRunsBefore = verifierRunLog(repository);
+  const verificationDirectory = path.join(SIDEQUEST_HOME, 'projects', project, 'verification');
+  const verifyLogsBefore = fs.existsSync(verificationDirectory)
+    ? fs.readdirSync(verificationDirectory, { recursive: true }).length
+    : 0;
+
+  const refused = await callTool('integrate', { project, ref: behind.ticket.ref, by: 'behind-integrator', mode: 'merge' });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'integration_target_behind_landed_candidate');
+  assert.match(refused.message, /refs\/remotes\/origin\/main/);
+  assert.match(refused.message, new RegExp(behind.commit));
+  assert.match(refused.message, /merge --ff-only origin\/main/);
+  assert.equal(store.getTicket(project, behind.ticket.ref).submission.integration, undefined, 'the refusal writes no partial integration record');
+
+  const closure = await callTool('groomClose', {
+    project, ref: behind.ticket.ref, by: 'behind-integrator', reason: 'closing the pending candidate that landed upstream', deliveryCommit: behind.commit,
+  });
+  assert.equal(closure.ok, false);
+  assert.equal(closure.reason, 'integration_target_behind_landed_candidate');
+
+  const waveRefs = `${behind.ticket.ref},${ordinary.ticket.ref}`;
+  const waveRefusal = await callTool('integrate', { project, ref: waveRefs, by: 'behind-integrator', wave: {} });
+  assert.equal(waveRefusal.ok, false);
+  assert.equal(waveRefusal.reason, 'integration_target_behind_landed_candidate', 'the wave preflights every participant before any branch moves');
+
+  assert.equal(gitAt(repository, ['rev-parse', 'refs/heads/main']), localBefore, 'no refusal path moved the local branch');
+  assert.equal(gitAt(repository, ['status', '--porcelain=v2', '--untracked-files=all']), indexBefore, 'no refusal path touched the index or working tree');
+  assert.equal(verifierRunLog(repository), verifierRunsBefore, 'the pinned verifier never executed in the registered checkout on any refusal path');
+  assert.equal(fs.existsSync(verificationDirectory)
+    ? fs.readdirSync(verificationDirectory, { recursive: true }).length
+    : 0, verifyLogsBefore, 'no verifier ran on a refusal path');
+
+  // The ordinary not-yet-landed candidate still integrates locally, so default auto is not stranded.
+  const delivered = await callTool('integrate', { project, ref: ordinary.ticket.ref, by: 'behind-integrator', mode: 'merge' });
+  assert.equal(delivered.ok, true, delivered.message || delivered.reason);
+  assert.equal(delivered.verify.status, 'passed');
+});
+
+test('SQ-2717: an untracked file refuses integration with its bytes intact and no verifier run', async () => {
+  const repository = landedProofWorktree();
+  const project = store.ensureProject(repository).slug;
+  const candidate = await submittedLandedProofCandidate(repository, project, 'dirty-guard.txt', 'sq2717-dirty-guard');
+  const untrackedPath = path.join(repository, 'operator-scratch.txt');
+  const untrackedBytes = Buffer.from('operator bytes that integration must never touch\n');
+  fs.writeFileSync(untrackedPath, untrackedBytes);
+  const trackedPath = path.join(repository, 'verify-tree.cjs');
+  const trackedBytes = fs.readFileSync(trackedPath);
+  fs.appendFileSync(trackedPath, '// operator edit\n');
+  const localBefore = gitAt(repository, ['rev-parse', 'refs/heads/main']);
+  const verifierRunsBefore = verifierRunLog(repository);
+
+  const refused = await callTool('integrate', { project, ref: candidate.ticket.ref, by: 'dirty-integrator', mode: 'merge' });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'integration_target_dirty');
+  assert.equal(verifierRunLog(repository), verifierRunsBefore, 'the pinned verifier never executed against the dirty checkout');
+  assert.deepEqual(fs.readFileSync(untrackedPath), untrackedBytes, 'the untracked file keeps its exact bytes');
+  assert.deepEqual(fs.readFileSync(trackedPath), Buffer.concat([trackedBytes, Buffer.from('// operator edit\n')]), 'the dirty tracked file keeps its exact bytes');
+  assert.equal(gitAt(repository, ['rev-parse', 'refs/heads/main']), localBefore);
+  assert.equal(store.getTicket(project, candidate.ticket.ref).submission.integration, undefined);
+});
+
+test('SQ-2717: a missing frozen remote ref refuses integration closure instead of answering from the local branch', async () => {
+  const repository = landedProofWorktree();
+  const project = store.ensureProject(repository).slug;
+  const candidate = await submittedLandedProofCandidate(repository, project, 'frozen-ref.txt', 'sq2717-frozen-ref');
+  gitAt(repository, ['update-ref', '-d', 'refs/remotes/origin/main']);
+
+  const refused = await callTool('integrate', { project, ref: candidate.ticket.ref, by: 'frozen-integrator', mode: 'merge' });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'integration_target_unavailable');
+  assert.match(refused.message, /refs\/remotes\/origin\/main/);
+
+  // The admission seam itself must refuse. It used to swallow the resolution failure and
+  // answer "did this land" from the submission's stored local branch, which is the exact
+  // silent fallback this ticket removes, and the publish queue reads this seam directly.
+  const admission = store.validateIntegrationSubmission(project, candidate.ticket.ref);
+  assert.equal(admission.ok, false, 'admission never falls back to the local branch when the frozen ref is gone');
+  assert.equal(admission.reason, 'integration_target_unavailable');
+  assert.match(admission.message, /refs\/remotes\/origin\/main/);
+
+  // The fail-closed propagation is scoped to Git candidates: an artifact submission
+  // never resolves a target, so it must not inherit this refusal.
+  const artifact = store.createTicket(project, {
+    title: 'artifact submission beside a missing frozen ref',
+    category: LANDED_PROOF_CATEGORY,
+    files: ['artifact-note.md'],
+    complexity: 3,
+    labels: ['direct-ok'],
+    complexityWhy: 'confirm artifact submissions do not resolve a Git integration target',
+  });
+  const artifactTicket = store.getTicket(project, artifact.ref);
+  artifactTicket.status = 'doing';
+  artifactTicket.submission = {
+    sourceRevision: { source: 'artifact', value: 'artifact-note.md', observedAt: new Date().toISOString() },
+    changedSurfaces: ['artifact-note.md'],
+    changedPaths: ['artifact-note.md'],
+    verify: 'attestation: the artifact was reviewed in place',
+    admittedScope: ['artifact-note.md'],
+  };
+  const dbModule = require('../lib/db.js');
+  dbModule.putRow(dbModule.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: artifactTicket.id, project, ref: artifactTicket.ref, status: artifactTicket.status,
+    archived: 0, ord: artifactTicket.order, claim_by: null, data: artifactTicket,
+  });
+  const artifactAdmission = store.validateIntegrationSubmission(project, artifact.ref);
+  assert.notEqual(artifactAdmission.reason, 'integration_target_unavailable', 'artifact submissions stay clear of frozen Git ref resolution');
 });
 
 export {};

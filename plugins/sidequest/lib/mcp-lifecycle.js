@@ -252,7 +252,8 @@ function collectGitSubmissionFacts(options) {
     commit,
     gitRef,
     upstream: target.upstream,
-    integrationBranch: target.branch,
+    integrationTarget: target,
+    integrationBranch: commitScope.integrationTargetRefs(target),
     base,
     ...ticket.dispatch?.sharedTree === true ? {
       ...dispatchBase ? { dispatchBase } : {},
@@ -456,7 +457,7 @@ const tools = [
   },
   {
     name: "groomClose",
-    description: "Close with evidence. Delivery uses the ticket's prepared integration target when recorded, even if the board target or checkout changed later. A pending candidate requires verified delivery, which reconciles the delivered commit against the candidate without checking sibling declared scope; abandonSubmission: true records discard. An unlaunched prepared dispatch is recorded abandoned.",
+    description: "Close with evidence. Delivery uses the ticket's prepared integration target when recorded, even if the board target or checkout changed later. A pending candidate requires verified delivery, which reconciles the delivered commit against the candidate without checking sibling declared scope; abandonSubmission: true records discard, and a candidate already contained in the recorded target (in remote mode that includes the frozen origin/<branch> ref) records already-landed delivery instead of abandoning shipped work. A recorded revision names the ref that actually contained it, so a local delivery reads git:<branch> until origin has it. A pending candidate landed only on the frozen remote ref refuses integration_target_behind_landed_candidate until that local branch is synchronized, and a frozen integration ref that no longer resolves refuses integration_target_unavailable rather than answering from the local branch. An unlaunched prepared dispatch is recorded abandoned.",
     inputSchema: {
       type: "object",
       properties: {
@@ -852,7 +853,7 @@ const tools = [
   },
   {
     name: "integrate",
-    description: "Deliver one ref or a comma-separated ref group. wave assembles and gates only as an options object at the current integration-target head; a refusal keeps submitted candidates parked. Review-rejected candidates stay parked for later supersession without blocking overlap checks; active and accepted pending candidates still block an incomplete participant set. Call again without wave to deliver. Terminal isolated worktrees are reclaimed best-effort after durable delivery.",
+    description: `Deliver one ref or a comma-separated ref group into the registered checkout's local target branch, verified there; the board never fetches or pushes, so the operator pushes afterwards. In remote mode the frozen origin/<branch> ref may also answer "did this already land", and a candidate proven landed ONLY there refuses integration_target_behind_landed_candidate for single and wave alike, before any branch moves or verifier runs: synchronize that local branch yourself, then retry. wave assembles and gates only as an options object at the current integration-target head; a refusal keeps submitted candidates parked. Review-rejected candidates stay parked for later supersession without blocking overlap checks; active and accepted pending candidates still block an incomplete participant set. Call again without wave to deliver. Terminal isolated worktrees are reclaimed best-effort after durable delivery.`,
     inputSchema: {
       type: "object",
       properties: {
