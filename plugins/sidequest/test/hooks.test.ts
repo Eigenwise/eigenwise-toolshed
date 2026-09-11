@@ -3892,6 +3892,13 @@ test('four concurrent Stop hooks preserve independent responsibilities in one ho
   const mapperHook = path.join(__dirname, '..', '..', 'codebase-mapper', 'hooks', 'inject-context.js');
   const observerHook = path.join(__dirname, '..', '..', 'observability', 'hooks', 'observability.js');
   const observerSpool = path.join(directory, 'hook-spool.jsonl');
+  // Observability only captures for repositories the user opted in, so the fixture board
+  // has to consent or the hook stays silent and never writes a spool line.
+  const observerConfig = path.join(directory, 'observability.json');
+  const { project_id: observerProjectId } = require(observerHook).projectMetadata(BOARD_PATH);
+  fs.writeFileSync(observerConfig, JSON.stringify({
+    observability: { optedInProjects: [{ project_id: observerProjectId }] },
+  }));
   const mapperState = path.join(directory, 'mapper-state');
   const payload = {
     hook_event_name: 'Stop',
@@ -3909,7 +3916,10 @@ test('four concurrent Stop hooks preserve independent responsibilities in one ho
       script: mapperHook,
       env: { CODEBASE_MAPPER_STATE_DIR: mapperState },
     },
-    { script: observerHook, env: { WORKBENCH_HOOK_SPOOL: observerSpool } },
+    {
+      script: observerHook,
+      env: { WORKBENCH_HOOK_SPOOL: observerSpool, WORKBENCH_OBSERVABILITY_CONFIG: observerConfig },
+    },
     { script: securityHook, env: {}, asyncRewake: true },
   ];
   const runAll = (input?: any, securityEnv?: any) => Promise.all(hooks.map((hook?: any) => runHookProcessForBudget(
