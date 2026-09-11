@@ -180,6 +180,20 @@ const DEFAULT_MODELS = [
 ];
 const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 
+function statelessBackendThreadRefusal(payload) {
+  if (!Object.prototype.hasOwnProperty.call(payload, 'thread')) return null;
+  const thread = payload.thread;
+  if (thread && Object.getPrototypeOf(thread) === Object.prototype && thread.type === 'create') return null;
+  return {
+    type: 'error',
+    error: {
+      type: 'invalid_request_error',
+      message: 'capability_rejected: beta_header:message-threads-2026-08-12; model-gateway Codex and Grok backends hold no conversation state. Resend this turn with the full message history.',
+      details: { error_code: 'thread_unsupported_request' },
+    },
+  };
+}
+
 const CODEX_SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
 const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
 const CODEX_COMPACT_HEADROOM = 40000;
@@ -1946,6 +1960,21 @@ function runWorker() {
           const requestedBase = codexBaseFromId(parsed.model);
           if (requestedBase) {
             const advertisedModel = parsed.model;
+            const threadRefusal = pathOnly === '/v1/messages' && statelessBackendThreadRefusal(parsed);
+            if (threadRefusal) {
+              const body = JSON.stringify(threadRefusal);
+              routeTelemetry.setRoute({
+                selectedModel: advertisedModel,
+                effectiveModel: requestedBase === 'auto' ? null : requestedBase,
+                backend: 'codex',
+                effort: requestedEffort,
+                fallback: false,
+                via: requestedBase === 'auto' ? 'dispatch' : 'direct',
+              });
+              routeTelemetry.finish(400, 'thread_unsupported');
+              res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+              return res.end(body);
+            }
             let dispatchRoute = null;
             let dispatchVia = null;
             let dispatchIdentity = null;
@@ -2089,6 +2118,21 @@ function runWorker() {
             const cachedGrokModels = grokBackend.grokModelIdsFromCache();
             const model = grokBackend.grokModelFromPicker(pickerId, cachedGrokModels.length ? cachedGrokModels : DEFAULT_GROK_MODELS);
             const effort = typeof parsed.output_config?.effort === 'string' ? parsed.output_config.effort : null;
+            const threadRefusal = pathOnly === '/v1/messages' && statelessBackendThreadRefusal(parsed);
+            if (threadRefusal) {
+              const body = JSON.stringify(threadRefusal);
+              routeTelemetry.setRoute({
+                selectedModel: advertisedModel,
+                effectiveModel: model,
+                backend: 'grok',
+                effort,
+                fallback: false,
+                via: 'direct',
+              });
+              routeTelemetry.finish(400, 'thread_unsupported');
+              res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+              return res.end(body);
+            }
             counters.grok = (counters.grok || 0) + 1;
             requestRouteLog(req, 'grok', model, pathOnly, 'direct', effort);
             routeTelemetry.setRoute({
