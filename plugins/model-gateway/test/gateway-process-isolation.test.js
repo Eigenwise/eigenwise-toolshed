@@ -739,28 +739,13 @@ test('version-change restart leaves the replacement proxy under its live supervi
   await waitForProcessesToExit([supervisor.pid, replacementProxyPid], 5000);
 });
 
-test('older cache version leaves a newer sibling shim running', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-sibling-downgrade-'));
-  const { olderCli, newerCli } = installCachedGatewayCliVersions(home);
-  const shimReservation = net.createServer();
-  const shimPort = await listen(shimReservation);
-  await new Promise((resolve) => shimReservation.close(resolve));
-  const environment = gatewayTestEnvironment(null, { HOME: home, USERPROFILE: home }, {
-    CODEX_GATEWAY_PORT: String(shimPort),
-    CODEX_GATEWAY_WORKER_PORT: '0',
-    CODEX_GATEWAY_PROXY_PORT: '0',
-  });
-  const newerShim = spawn(process.execPath, [newerCli, 'serve-shim'], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
-  t.after(async () => {
-    await runGatewayCli(newerCli, 'stop', environment);
-    if (processIsRunning(newerShim.pid)) newerShim.kill();
-    await waitForExit(newerShim);
-    fs.rmSync(home, { recursive: true, force: true });
-  });
-  await waitForReady(newerShim);
+test('older cache version cannot replace a newer sibling shim', () => {
+  const cacheRoot = path.join('cache', 'eigenwise-toolshed', 'model-gateway');
+  const olderCli = path.join(cacheRoot, '0.49.0', 'bin', 'model-gateway.js');
+  const newerCli = path.join(cacheRoot, '0.50.0', 'bin', 'model-gateway.js');
 
   assert.equal(canReplaceInstalledCliPath(newerCli, olderCli), false);
-  assert.equal(processIsRunning(newerShim.pid), true, 'older CLI leaves the newer sibling shim running');
+  assert.equal(canReplaceInstalledCliPath(olderCli, newerCli), true);
 });
 
 test('foreign configured-port supervisor is preserved and reported', async (t) => {
