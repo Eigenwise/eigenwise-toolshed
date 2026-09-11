@@ -79,6 +79,40 @@ test('leaves undeletable old proxies for a later sweep', (t) => {
   assert.equal(fs.existsSync(oldProxy), true);
 });
 
+test('version change without a supervisor stops the proxy and reports the next ensure', async () => {
+  let listeningChecks = 0;
+  let stopped = false;
+  const restarted = await commands.restartProxyForVersionChange({
+    listening: async () => listeningChecks++ === 0,
+    stop: () => { stopped = true; },
+    supervisorRunning: async () => false,
+  });
+  let report = '';
+  const result = await commands.restartProxyIfOutdated({
+    currentVersion: () => '2.0.0',
+    readServingVersion: () => '1.0.0',
+    restart: async () => false,
+    report: (message) => { report = message; },
+  });
+
+  assert.equal(restarted, false);
+  assert.equal(stopped, true);
+  assert.deepEqual(result, { restarted: false, onDisk: '2.0.0', serving: '1.0.0' });
+  assert.match(report, /proxy on disk: 2\.0\.0\s+serving: 1\.0\.0\s+restarts on next `ensure`/);
+});
+
+test('matching serving and on-disk proxy versions do nothing', async () => {
+  let restarted = false;
+  const result = await commands.restartProxyIfOutdated({
+    currentVersion: () => '2.0.0',
+    readServingVersion: () => '2.0.0',
+    restart: async () => { restarted = true; },
+  });
+
+  assert.deepEqual(result, { restarted: false, onDisk: '2.0.0', serving: '2.0.0' });
+  assert.equal(restarted, false);
+});
+
 test('stable updater launches the highest installed model-gateway version', (t) => {
   const home = temporaryDirectory(t);
   const registryDirectory = path.join(home, '.claude', 'plugins');

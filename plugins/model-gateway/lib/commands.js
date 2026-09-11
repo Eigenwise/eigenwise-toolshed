@@ -460,12 +460,18 @@ async function restartProxyForVersionChange({
   return supervisorRunning();
 }
 
-async function restartProxyIfOutdated({ quiet = false } = {}) {
-  const onDisk = currentProxyVersion();
-  const serving = readProxyServingVersion() || onDisk;
+async function restartProxyIfOutdated({
+  quiet = false,
+  currentVersion = currentProxyVersion,
+  readServingVersion = readProxyServingVersion,
+  restart = restartProxyForVersionChange,
+  report = log,
+} = {}) {
+  const onDisk = currentVersion();
+  const serving = readServingVersion() || onDisk;
   if (!onDisk || !serving || onDisk === serving) return { restarted: false, onDisk, serving };
-  const restarted = await restartProxyForVersionChange({ previousVersion: serving, currentVersion: onDisk });
-  if (!restarted && !quiet) log(`proxy on disk: ${onDisk}   serving: ${serving}   restarts on next \`ensure\``);
+  const restarted = await restart({ previousVersion: serving });
+  if (!restarted && !quiet) report(`proxy on disk: ${onDisk}   serving: ${serving}   restarts on next \`ensure\``);
   return { restarted, onDisk, serving };
 }
 
