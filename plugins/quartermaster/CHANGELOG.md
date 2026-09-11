@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.2 (2026-09-11)
+
+Released in v3.555.0, up from 0.9.1.
+
+### Fixes
+
+- Preflight Claude Code before Toolshed updates (SQ-2732)
+
 ## 0.9.1 (2026-09-11)
 
 Released in v3.554.0, up from 0.9.0.
