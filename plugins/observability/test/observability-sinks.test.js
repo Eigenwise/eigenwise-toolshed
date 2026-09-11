@@ -738,7 +738,7 @@ test('Grafana dashboard answers cost, attribution, role, and reliability questio
   assert.equal(byTitle.has('Claude cost by model'), false);
   assert.match(byTitle.get('Context by orchestrator vs executor').targets[0].expr, /workbench_attribute_agent_role/);
   assert.match(byTitle.get('Hook failures over time').targets[0].expr, /workbench_attribute_status =~ \"error\|failed\"/);
-  assert.match(byTitle.get('Gateway errors and throttles').targets[0].expr, /throttl\|rate\.\?limit\|429/);
+  assert.match(byTitle.get('Gateway errors and throttles').targets[0].expr, /workbench_attribute_status =~ \"throttled\|client_error\|server_error\"/);
   for (const title of ['Assistant turns by project', 'Tool-result bytes by tool', 'Recharge-weighted result bytes by tool']) {
     const expression = byTitle.get(title).targets[0].expr;
     assert.match(expression, /workbench\.recharge_rollup/);
@@ -752,6 +752,9 @@ test('Grafana dashboard answers cost, attribution, role, and reliability questio
   for (const expression of lokiExpressions) {
     assert.doesNotMatch(expression, /\| json/);
     assert.doesNotMatch(expression, /\$__rate_interval/);
+    // The collector no longer exports raw gateway logs to a sink; only the observer's
+    // canonical payload gets there, so no panel may read the raw stream.
+    assert.doesNotMatch(expression, /service_name="codex-gateway"/);
   }
 });
 

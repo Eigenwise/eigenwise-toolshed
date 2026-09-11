@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { createConsentGate, defaultConfigPath, defaultDataDir } = require('../lib/observability/consent.js');
 const { canonicalPath, resolvedPath } = require('../lib/observability/path-identity.js');
 
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
@@ -272,7 +273,9 @@ async function main() {
     const payload = JSON.parse(raw);
     if (payload.hook_event_name === 'Stop' && payload.stop_hook_active === true) return;
     const observation = buildObservation(payload, new Date());
-    if (observation) spool(process.env.WORKBENCH_HOOK_SPOOL || defaultSpoolPath(), observation);
+    const configFile = process.env.WORKBENCH_OBSERVABILITY_CONFIG || defaultConfigPath(defaultDataDir(process.env));
+    const consent = createConsentGate({ configFile });
+    if (observation && consent(observation.project_id)) spool(process.env.WORKBENCH_HOOK_SPOOL || defaultSpoolPath(), observation);
   } catch {
     // Fail open: observability must never block Claude work.
   }

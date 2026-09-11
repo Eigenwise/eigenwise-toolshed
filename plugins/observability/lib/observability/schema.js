@@ -442,6 +442,14 @@ const TABLE_SQL = `
 
   CREATE INDEX IF NOT EXISTS otlp_outbox_available_idx ON otlp_outbox(available_at, id);
 
+  -- A denied session must stay denied across a restart, and warmProjectMap would otherwise
+  -- rebuild the mapping from the consented history that preceded the denial. Session id and
+  -- timestamp only: the repository that was refused has no identity here by construction.
+  CREATE TABLE IF NOT EXISTS consent_denial (
+    session_id TEXT PRIMARY KEY,
+    denied_at TEXT NOT NULL
+  ) STRICT;
+
   CREATE TRIGGER IF NOT EXISTS observation_no_update
   BEFORE UPDATE ON observation BEGIN
     SELECT RAISE(ABORT, 'observation is append-only');

@@ -122,36 +122,42 @@ async function drainHookSpool(options) {
     let duplicates = 0;
     let rejected = 0;
     let malformed = 0;
+    const withheldLines = [];
     for (let offset = 0; offset < lines.length; offset += batchSize) {
       assertWithinBudget(deadline, startedAt, budgetMs, lines.length - offset);
       const batchLines = lines.slice(offset, offset + batchSize);
       const observations = [];
+      const parsedLines = [];
       for (const line of batchLines) {
         try {
           const observation = JSON.parse(line);
           if (options.projectId && !observation.project_id) observation.project_id = options.projectId;
           observations.push(observation);
+          parsedLines.push(line);
         } catch {
           malformed += 1;
         }
       }
       if (observations.length > 0) {
         const results = await store.ingestBatch(observations);
-        for (const result of results) {
-          if (!result.accepted) rejected += 1;
-          else if (result.duplicate) duplicates += 1;
+        for (const [index, result] of results.entries()) {
+          if (!result.accepted) {
+            rejected += 1;
+            if (result.consent_denied) withheldLines.push(parsedLines[index]);
+          } else if (result.duplicate) duplicates += 1;
           else drained += 1;
         }
       }
       const remainingLines = lines.slice(offset + batchSize);
-      if (remainingLines.length === 0) fs.writeFileSync(drainingPath, '');
-      else fs.writeFileSync(drainingPath, `${remainingLines.join('\n')}\n`);
+      const retainedLines = [...withheldLines, ...remainingLines];
+      if (retainedLines.length === 0) fs.writeFileSync(drainingPath, '');
+      else fs.writeFileSync(drainingPath, `${retainedLines.join('\n')}\n`);
       if (remainingLines.length > 0) {
         assertWithinBudget(deadline, startedAt, budgetMs, remainingLines.length);
       }
       await yieldToEventLoop();
     }
-    fs.unlinkSync(drainingPath);
+    if (withheldLines.length === 0) fs.unlinkSync(drainingPath);
     recordDrainSuccess(options);
     return { drained, duplicates, rejected, malformed, droppedBytes };
   } catch (error) {

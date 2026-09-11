@@ -71,12 +71,68 @@ function requestObservation(overrides = {}) {
   };
 }
 
+function otlpLog(projectId, sessionId) {
+  const attribute = (key, value) => ({ key, value: { stringValue: value } });
+  return {
+    resourceLogs: [{
+      resource: { attributes: [attribute('project.id', projectId), attribute('session.id', sessionId)] },
+      scopeLogs: [{
+        logRecords: [{
+          timeUnixNano: '1721378400000000000',
+          eventName: 'claude_code.api_request',
+          attributes: [attribute('model', 'claude-test'), attribute('status', 'ok')],
+        }],
+      }],
+    }],
+  };
+}
+
 function measurement(name, value, scope = 'request', quality = 'exact_provider') {
   return { name, value, unit: name === 'duration_ms' ? 'ms' : 'tokens', scope, quality };
 }
 
 test('uses a ten-second default hook spool drain budget', () => {
   assert.equal(DEFAULT_DRAIN_BUDGET_MS, 10_000);
+});
+
+test('the observer gates every ingress door', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-consent-'));
+  const databaseFile = path.join(directory, 'observability.db');
+  const configFile = path.join(directory, 'observability.json');
+  const writeConfig = (projects) => fs.writeFileSync(configFile, JSON.stringify({ observability: { optedInProjects: projects } }));
+  writeConfig([{ project_id: PROJECT_ID }]);
+  const observer = createObserver({
+    databaseFile,
+    configFile,
+    port: 0,
+    hookSpoolFile: path.join(directory, 'hook-spool.jsonl'),
+    sink: { id: 'none', egress: 'disabled', outbox: { enabled: false } },
+    getInstalledPluginInstallation: () => null,
+  });
+  const address = await observer.start();
+  t.after(async () => {
+    await observer.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const post = (pathname, body) => fetch(`http://127.0.0.1:${address.port}${pathname}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  const unconsentedProjectId = 'b'.repeat(64);
+
+  assert.equal((await post('/v1/observations', requestObservation({ project_id: unconsentedProjectId }))).status, 422);
+  assert.equal((await post('/v1/logs', otlpLog(unconsentedProjectId, 'unconsented-session'))).status, 422);
+  assert.equal(observer.store.database.prepare('SELECT COUNT(*) AS count FROM observation').get().count, 0);
+  assert.deepEqual(observer.store.pendingOutbox(), []);
+
+  assert.equal((await post('/v1/observations', requestObservation({ source_event_id: 'consented-direct' }))).status, 200);
+  assert.equal((await post('/v1/logs', otlpLog(PROJECT_ID, 'consented-session'))).status, 200);
+  assert.equal(observer.store.database.prepare('SELECT COUNT(*) AS count FROM observation').get().count, 2);
+
+  writeConfig([]);
+  assert.equal((await post('/v1/observations', requestObservation({ source_event_id: 'withdrawn-direct' }))).status, 422);
+  const health = await (await fetch(`http://127.0.0.1:${address.port}/health`)).json();
+  assert.deepEqual(health.consent, { projects: 0, configFile });
+  assert.equal(observer.store.database.prepare('SELECT COUNT(*) AS count FROM observation').get().count, 2);
 });
 
 test('opens a single-writer WAL ledger with append-only facts and all resolved views', (t) => {

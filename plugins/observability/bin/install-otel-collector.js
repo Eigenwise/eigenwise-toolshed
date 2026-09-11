@@ -119,8 +119,10 @@ function buildCollectorConfig(options = {}) {
         [pipelineName('logs', observerSuffix)]: pipeline(['otlp'], ['otlphttp/observer'], observerProcessorOrder),
         [pipelineName('traces', observerSuffix)]: pipeline(['otlp'], ['otlphttp/observer'], observerProcessorOrder),
         [pipelineName('metrics', observerSuffix)]: pipeline(['otlp'], ['otlphttp/observer'], observerMetricsProcessorOrder),
+        // No logs/sink pipeline: a log record carries project identity, and only the observer
+        // can decide whether the repository it belongs to opted in. Logs reach a sink through
+        // the observer's outbox or not at all.
         ...(sinkExporter ? {
-          [pipelineName('logs', SINK_PIPELINE)]: pipeline(['otlp'], [SINK_EXPORTER], sinkProcessorOrder),
           [pipelineName('traces', SINK_PIPELINE)]: pipeline(['otlp'], [SINK_EXPORTER], sinkProcessorOrder),
           [pipelineName('metrics', SINK_PIPELINE)]: pipeline(['otlp'], [SINK_EXPORTER], sinkMetricsProcessorOrder),
         } : {}),
@@ -219,11 +221,14 @@ function validateCollectorConfig(config, options = {}) {
   }
 
   const processorSuffixes = declaredSink ? [OBSERVER_PIPELINE, SINK_PIPELINE] : [null];
+  const signalsOf = (suffix) => suffix === SINK_PIPELINE ? ['traces', 'metrics'] : ['logs', 'traces', 'metrics'];
   for (const suffix of processorSuffixes) {
     const processorName = (name) => suffix ? `${name}/${suffix}` : name;
-    const signalFilter = config.processors?.[processorName('filter/signals')]?.logs?.log_record;
-    if (JSON.stringify(signalFilter) !== JSON.stringify([REQUIRED_LOG_FILTER])) {
-      errors.push('filter/signals logs must retain claude_code, agent_sdk, and gateway events');
+    if (signalsOf(suffix).includes('logs')) {
+      const signalFilter = config.processors?.[processorName('filter/signals')]?.logs?.log_record;
+      if (JSON.stringify(signalFilter) !== JSON.stringify([REQUIRED_LOG_FILTER])) {
+        errors.push('filter/signals logs must retain claude_code, agent_sdk, and gateway events');
+      }
     }
 
     const redact = config.processors?.[processorName('transform/redact')];
@@ -250,7 +255,7 @@ function validateCollectorConfig(config, options = {}) {
   const pipelines = config.service?.pipelines || {};
   const expectedPipelineNames = [];
   for (const suffix of processorSuffixes) {
-    for (const signal of ['logs', 'traces', 'metrics']) {
+    for (const signal of signalsOf(suffix)) {
       const name = pipelineName(signal, suffix);
       expectedPipelineNames.push(name);
       const expectedProcessors = processorOrder(suffix, signal === 'metrics' ? REQUIRED_METRICS_PROCESSOR_ORDER : REQUIRED_PROCESSOR_ORDER);

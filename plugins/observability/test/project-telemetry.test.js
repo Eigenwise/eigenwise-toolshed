@@ -125,6 +125,23 @@ test('keeps a machine-local opted-in project registry in sync', (t) => {
   assert.deepEqual(JSON.parse(fs.readFileSync(configFile, 'utf8')).observability.optedInProjects, []);
 });
 
+test('disabling one repository leaves the other registry entry intact', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-project-registry-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const first = path.join(directory, 'first');
+  const second = path.join(directory, 'second');
+  const configFile = path.join(directory, 'observability.json');
+  fs.mkdirSync(first);
+  fs.mkdirSync(second);
+  const firstEntry = updateProjectRegistry(first, { configFile, now: '2026-07-20T08:00:00.000Z' }).entry;
+  const secondEntry = updateProjectRegistry(second, { configFile, now: '2026-07-20T08:01:00.000Z' }).entry;
+
+  assert.equal(disableProjectTelemetry(first, { configFile }).changed, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configFile, 'utf8')).observability.optedInProjects, [secondEntry]);
+  assert.equal(secondEntry.optedInAt, '2026-07-20T08:01:00.000Z');
+  assert.notEqual(firstEntry.project_id, secondEntry.project_id);
+});
+
 test('wires the repository and every subdirectory that hosts sessions, from any of them', async (t) => {
   const { directory, root, projects } = temporaryRepository(t);
   const gui = path.join(root, 'apps', 'gui');
