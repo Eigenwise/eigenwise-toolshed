@@ -86,6 +86,12 @@ function processIsRunning(pid) {
   } catch { return false; }
 }
 
+function killProcessTree(pid) {
+  if (!pid || !processIsRunning(pid)) return;
+  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+  else { try { process.kill(pid, 'SIGTERM'); } catch {} }
+}
+
 async function waitForPidRecord(filePath) {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
@@ -158,6 +164,21 @@ async function waitForProcessesToExit(processIds, timeout = 1000) {
     await pause(20);
   }
   assert.deepEqual(processIds.filter(processIsRunning), [], 'probe child survived its supervisor');
+}
+
+async function waitForFileToUnlock(filePath, timeout = 5000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    try {
+      const handle = fs.openSync(filePath, 'r+');
+      fs.closeSync(handle);
+      return;
+    } catch (error) {
+      if (error.code === 'ENOENT') return;
+    }
+    await pause(20);
+  }
+  throw new Error(`file remained locked: ${filePath}`);
 }
 
 function installNodeProxy(home) {
@@ -598,12 +619,16 @@ test('sibling ensure retires dead records without deleting replacement worker an
   const olderShim = spawn(process.execPath, [olderCli, 'serve-shim'], { cwd: home, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
   let ensuring = null;
   let replacementGuardianPid = null;
+  let replacementWorkerPid = null;
+  let replacementProxyPid = null;
   t.after(async () => {
     if (ensuring?.exitCode == null) ensuring.kill();
+    for (const pid of [replacementGuardianPid, replacementWorkerPid, replacementProxyPid]) killProcessTree(pid);
     await runGatewayCli(newerCli, 'stop', environment, { cwd: home });
     if (processIsRunning(olderShim.pid)) olderShim.kill();
-    if (replacementGuardianPid && processIsRunning(replacementGuardianPid)) spawnSync('taskkill', ['/pid', String(replacementGuardianPid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     await waitForExit(olderShim);
+    await waitForProcessesToExit([replacementGuardianPid, replacementWorkerPid, replacementProxyPid].filter(Boolean), 5000);
+    await waitForFileToUnlock(proxyBinary);
     fs.rmSync(home, { recursive: true, force: true });
   });
   await waitForReady(olderShim);
@@ -630,8 +655,8 @@ test('sibling ensure retires dead records without deleting replacement worker an
   const ensured = await ensuredResult;
   assert.equal(ensured.status, 0, `ensure exited with status ${ensured.status}\nstdout:\n${ensured.stdout}\nstderr:\n${ensured.stderr}`);
   replacementGuardianPid = await waitForReplacementPidRecord(path.join(state, 'guardian.pid'), retiredGuardianPid);
-  const replacementWorkerPid = await waitForReplacementPidRecord(path.join(state, 'shim.pid'), retiredWorkerPid);
-  const replacementProxyPid = await waitForReplacementPidRecord(path.join(state, 'proxy.pid'), retiredProxyPid);
+  replacementWorkerPid = await waitForReplacementPidRecord(path.join(state, 'shim.pid'), retiredWorkerPid);
+  replacementProxyPid = await waitForReplacementPidRecord(path.join(state, 'proxy.pid'), retiredProxyPid);
   await waitForPidRecordDetails(path.join(state, 'shim.pid.json'), replacementWorkerPid);
   await waitForPidRecordDetails(path.join(state, 'proxy.pid.json'), replacementProxyPid);
   fs.writeFileSync(path.join(state, 'shim.pid.json'), JSON.stringify({ pid: replacementWorkerPid, command: 'replaced worker' }));
@@ -673,6 +698,13 @@ test('version-change restart leaves the replacement proxy under its live supervi
   const proxyReservation = net.createServer();
   const proxyPort = await listen(proxyReservation);
   await new Promise((resolve) => proxyReservation.close(resolve));
+  let replacementProxyPid = null;
+  let supervisor = null;
+  t.after(async () => {
+    killProcessTree(supervisor?.pid);
+    killProcessTree(replacementProxyPid);
+    await waitForProcessesToExit([supervisor?.pid, replacementProxyPid].filter(Boolean), 5000);
+  });
   const environment = gatewayTestEnvironment(t, {}, {
     CODEX_GATEWAY_PORT: String(shimPort),
     CODEX_GATEWAY_WORKER_PORT: '',
@@ -683,7 +715,7 @@ test('version-change restart leaves the replacement proxy under its live supervi
   const proxyBinary = path.join(home, '.claude', 'model-gateway', 'bin', process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy');
   installNodeProxy(home);
   fs.writeFileSync(path.join(home, 'serve'), "require('node:http').createServer((request, response) => request.url === '/v1/models' ? response.end(JSON.stringify({ data: [] })) : response.end('{}')).listen(process.env.PORT, '127.0.0.1'); setInterval(() => {}, 1000);\n");
-  const supervisor = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
+  supervisor = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
     cwd: home,
     env: environment,
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
@@ -698,7 +730,7 @@ test('version-change restart leaves the replacement proxy under its live supervi
 
   const updated = await runGatewayCli(CLI, 'ensure', environment, { arguments: ['--quiet'], cwd: home });
   assert.equal(updated.status, 0, updated.stderr);
-  const replacementProxyPid = await waitForReplacementPidRecord(path.join(state, 'proxy.pid'), originalProxyPid);
+  replacementProxyPid = await waitForReplacementPidRecord(path.join(state, 'proxy.pid'), originalProxyPid);
   assert.equal(await isDescendantOfAsync(replacementProxyPid, supervisor.pid), true, 'recovery starts the replacement as a supervisor descendant');
   await waitForFileText(path.join(state, 'proxy-serving-version.txt'), proxyVersion);
 
