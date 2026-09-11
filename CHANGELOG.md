@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.553.0 (2026-09-11)
+
+### sidequest 5.1.6 → 5.1.7
+
+#### Fixes
+
+- Repair remote landed-proof reads (SQ-2720)
+  Remote-mode landed proof now resolves the frozen remote-tracking ref even when a tag shadows its short upstream name, and grooming checks that required ref before optional local proof. Delivery remains local integration plus verification, with no board fetch or push.
+
 ## v3.552.0 (2026-09-10)
 
 ### live-rules 2.10.5 → 2.11.0
