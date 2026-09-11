@@ -23,7 +23,9 @@ const {
 } = require('../lib/state.js');
 
 const DAY_MS = 86400000;
-const PROJECT = 'C:\\dev\\example-project';
+// A platform-native path: the transcript counter re-resolves the canonical project directory, and a
+// Windows-literal path resolves to a different slug on Linux runners.
+const PROJECT = path.resolve(os.tmpdir(), 'example-project');
 
 let environment;
 
