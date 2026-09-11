@@ -279,7 +279,7 @@ test('PostToolUseFailure ignores generic errors and prepares quota fallback for 
   assert.equal(cliDispatch.recovery.failedModel, 'fable');
   assert.equal(cliDispatch.effort, 'max');
   assert.equal(cliDispatch.exec.backend, 'codex');
-  assert.match(cliDispatch.spawn.prompt, /\[sidequest-route model=gpt-5\.6-sol effort=max\]/);
+  assert.match(cliDispatch.spawn.prompt, /\[sidequest-route model=gpt-5\.6-sol effort=max ticket=SQ-\d+\]/);
   assert.equal(store.getTicket(slug, ticket.ref).dispatch.sessionId, 'quota-cli-adopted');
 
   const mcpRuntimeSessionId = 'quota-mcp-runtime-session';

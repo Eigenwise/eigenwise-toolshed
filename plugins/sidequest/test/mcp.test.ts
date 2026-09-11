@@ -4168,7 +4168,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.ok(instant.spawn.prompt.includes(DISPATCH_DESCRIPTION));
   assert.ok(instant.spawn.prompt.includes(`briefing ${addedInstant.ref} --token-file "${store.getTicket(slug, addedInstant.ref).dispatch.tokenFile}"`));
   assert.match(instant.spawn.prompt, /FIRST action:/);
-  assert.match(instant.spawn.prompt, /\[sidequest-route model=gpt-5\.6-terra effort=high\]/);
+  assert.match(instant.spawn.prompt, /\[sidequest-route model=gpt-5\.6-terra effort=high ticket=SQ-\d+\]/);
   assert.doesNotMatch(instant.spawn.prompt, /## This ticket/);
   assert.doesNotMatch(instant.spawn.prompt, /You are a sidequest ticket executor/);
   assert.doesNotMatch(instant.spawn.prompt, /^---$/m);
