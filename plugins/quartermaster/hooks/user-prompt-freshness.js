@@ -11,6 +11,7 @@ const {
   parseSemver,
   pluginIdParts,
   readJson,
+  reportLoadedPluginVersion,
   reportedLoadedPluginVersion,
 } = require('./freshness-helpers.js');
 const { cacheIsCurrent, readCache } = require('./marketplace-freshness-cache.js');
@@ -50,11 +51,12 @@ function reportedReloads(instances, input, options) {
   const updates = new Map();
   for (const instance of instances) {
     const parts = pluginIdParts(instance.id);
-    const loadedVersion = parts && reportedLoadedPluginVersion(input, instance.id, {
+    if (!parts || parts.name === 'quartermaster') continue;
+    const loadedVersion = reportedLoadedPluginVersion(input, instance.id, {
       directory: options.loadedVersionStateDirectory,
       fileSystem: options.fileSystem,
     });
-    if (!parts || !loadedVersion || compareSemver(loadedVersion, instance.version) !== -1) continue;
+    if (!loadedVersion || compareSemver(loadedVersion, instance.version) !== -1) continue;
     const existing = updates.get(parts.name);
     if (!existing || compareSemver(existing.installedVersion, instance.version) === -1) {
       updates.set(parts.name, { name: parts.name, loadedVersion, installedVersion: instance.version });
@@ -130,8 +132,15 @@ function remoteWarning(instances, cache, now) {
 }
 
 function decide(input, options = {}) {
-  if (process.env.EIGENWISE_TOOLSHED_FRESHNESS_BYPASS === '1' || isMaintenancePrompt(input?.prompt)) return '';
   const fileSystem = options.fileSystem || fs;
+  const pluginRoot = options.pluginRoot || process.env.CLAUDE_PLUGIN_ROOT;
+  const loadedVersion = loadedPluginVersion(fileSystem, pluginRoot);
+  reportLoadedPluginVersion(input, 'quartermaster@eigenwise-toolshed', loadedVersion, {
+    directory: options.loadedVersionStateDirectory,
+    fileSystem,
+    pluginRoot,
+  });
+  if (process.env.EIGENWISE_TOOLSHED_FRESHNESS_BYPASS === '1' || isMaintenancePrompt(input?.prompt)) return '';
   const home = options.home || os.homedir();
   const registryFile = options.registryFile || path.join(home, '.claude', 'plugins', 'installed_plugins.json');
   const instances = activeInstances(readJson(fileSystem, registryFile) || {}, input?.cwd, MARKETPLACE, options.platform);
@@ -139,7 +148,6 @@ function decide(input, options = {}) {
   const remoteMessage = remoteWarning(instances, cache, options.now ?? Date.now());
   const updates = remoteUpdates(instances, cache?.manifest);
   if (remoteMessage && warnOnce(input, 'remote', options, availableVersionsKey(updates))) return warningOutput(remoteMessage);
-  const loadedVersion = loadedPluginVersion(fileSystem, options.pluginRoot || process.env.CLAUDE_PLUGIN_ROOT);
   const installedVersion = newerInstalledVersion(instances, loadedVersion);
   if (installedVersion) return warnOnce(input, 'reload', options, `quartermaster@${installedVersion}`) ? warningOutput(reloadWarning(installedVersion, loadedVersion)) : '';
   const reportedUpdates = reportedReloads(instances, input, options);

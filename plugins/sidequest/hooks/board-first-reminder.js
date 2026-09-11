@@ -22,8 +22,49 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// src/hooks/shared/input.ts
+// src/lib/plugin-freshness.ts
+var import_node_crypto = __toESM(require("node:crypto"));
 var import_node_fs = __toESM(require("node:fs"));
+var import_node_os = __toESM(require("node:os"));
+var import_node_path = __toESM(require("node:path"));
+var SIDEQUEST_PLUGIN_ID = "sidequest@eigenwise-toolshed";
+function loadedPluginVersion(pluginRoot2 = process.env.CLAUDE_PLUGIN_ROOT) {
+  if (!pluginRoot2) return null;
+  try {
+    const manifest = JSON.parse(import_node_fs.default.readFileSync(import_node_path.default.join(pluginRoot2, ".claude-plugin", "plugin.json"), "utf8"));
+    return typeof manifest.version === "string" ? manifest.version : null;
+  } catch (_) {
+    return null;
+  }
+}
+function stateDirectory(options = {}) {
+  return options.stateDirectory || import_node_path.default.join(import_node_os.default.tmpdir(), "eigenwise-toolshed", "freshness-warnings", "loaded-plugin-versions");
+}
+function sessionId(input) {
+  const value = input.session_id ?? input.sessionId;
+  return value == null ? "" : String(value);
+}
+function loadedVersionStateFile(input, pluginId = SIDEQUEST_PLUGIN_ID, options = {}) {
+  const id = sessionId(input);
+  if (!id) return null;
+  const digest = import_node_crypto.default.createHash("sha256").update(`${id}\0${pluginId}`).digest("hex");
+  return import_node_path.default.join(stateDirectory(options), `${digest}.json`);
+}
+function reportLoadedSidequestVersion(input, options = {}) {
+  const pluginRoot2 = options.pluginRoot || process.env.CLAUDE_PLUGIN_ROOT;
+  const version = loadedPluginVersion(pluginRoot2);
+  const stateFile = loadedVersionStateFile(input, SIDEQUEST_PLUGIN_ID, options);
+  if (!version || !stateFile || !pluginRoot2) return version;
+  try {
+    import_node_fs.default.mkdirSync(import_node_path.default.dirname(stateFile), { recursive: true });
+    import_node_fs.default.writeFileSync(stateFile, JSON.stringify({ pluginId: SIDEQUEST_PLUGIN_ID, pluginRoot: pluginRoot2, version }));
+  } catch (_) {
+  }
+  return version;
+}
+
+// src/hooks/shared/input.ts
+var import_node_fs2 = __toESM(require("node:fs"));
 
 // src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
@@ -58,7 +99,7 @@ function isRecord(value) {
 }
 function readStdin() {
   try {
-    const raw = import_node_fs.default.readFileSync(0, "utf8");
+    const raw = import_node_fs2.default.readFileSync(0, "utf8");
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!isRecord(parsed)) return null;
@@ -86,7 +127,7 @@ function isSubagent(input) {
 }
 
 // src/hooks/shared/output.ts
-var import_node_crypto = __toESM(require("node:crypto"));
+var import_node_crypto2 = __toESM(require("node:crypto"));
 var CONTEXT_BUDGETS = Object.freeze({
   SessionStart: 4 * 1024,
   UserPromptSubmit: 1024,
@@ -106,7 +147,7 @@ function contextBudget(hookEventName) {
   return CONTEXT_BUDGETS[hookEventName] || 512;
 }
 function stableWatermark(value) {
-  return import_node_crypto.default.createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
+  return import_node_crypto2.default.createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
 }
 function truncateUtf8(value, maxBytes) {
   if (byteLength(value) <= maxBytes) return value;
@@ -142,33 +183,33 @@ function writeContext(hookEventName, additionalContext, initialUserMessage = "")
 }
 
 // src/hooks/shared/paths.ts
-var import_node_path = __toESM(require("node:path"));
+var import_node_path2 = __toESM(require("node:path"));
 function pluginRoot() {
-  return process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.join(__dirname, "..");
+  return process.env.CLAUDE_PLUGIN_ROOT || import_node_path2.default.join(__dirname, "..");
 }
 function runtimeModule(name) {
-  return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
+  return import_node_path2.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
 // src/hooks/shared/session-state.ts
-var import_node_fs2 = __toESM(require("node:fs"));
-var import_node_os = __toESM(require("node:os"));
-var import_node_path2 = __toESM(require("node:path"));
-function sessionStateFile(prefix, sessionId) {
-  const home = process.env.SIDEQUEST_HOME || import_node_path2.default.join(import_node_os.default.homedir(), ".claude", "sidequest");
-  return import_node_path2.default.join(home, "tmp", "state", `${prefix}-${encodeURIComponent(sessionId)}.json`);
+var import_node_fs3 = __toESM(require("node:fs"));
+var import_node_os2 = __toESM(require("node:os"));
+var import_node_path3 = __toESM(require("node:path"));
+function sessionStateFile(prefix, sessionId2) {
+  const home = process.env.SIDEQUEST_HOME || import_node_path3.default.join(import_node_os2.default.homedir(), ".claude", "sidequest");
+  return import_node_path3.default.join(home, "tmp", "state", `${prefix}-${encodeURIComponent(sessionId2)}.json`);
 }
 function readSessionState(file) {
   try {
-    const parsed = JSON.parse(import_node_fs2.default.readFileSync(file, "utf8"));
+    const parsed = JSON.parse(import_node_fs3.default.readFileSync(file, "utf8"));
     return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   } catch (_) {
     return {};
   }
 }
 function writeSessionState(file, state) {
-  import_node_fs2.default.mkdirSync(import_node_path2.default.dirname(file), { recursive: true });
-  import_node_fs2.default.writeFileSync(file, JSON.stringify(state));
+  import_node_fs3.default.mkdirSync(import_node_path3.default.dirname(file), { recursive: true });
+  import_node_fs3.default.writeFileSync(file, JSON.stringify(state));
 }
 
 // src/hooks/board-first-reminder.ts
@@ -182,7 +223,9 @@ function boardFor(input) {
 }
 function main() {
   const input = readStdin();
-  if (!input || isSubagent(input)) return;
+  if (!input) return;
+  reportLoadedSidequestVersion(input);
+  if (isSubagent(input)) return;
   const id = stringField(input, "session_id", "sessionId").trim();
   const prompt = stringField(input, "prompt").trim();
   if (!id || !prompt || AUTOMATION_TAG.test(prompt)) return;

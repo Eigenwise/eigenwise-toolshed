@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 const {
   installedSidequestVersion,
+  loadedVersionStateFile,
   reportLoadedSidequestVersion,
   sidequestDispatchFreshness,
   sidequestDispatchRefusal,
@@ -117,8 +118,13 @@ test('records this session loaded version for the Workbench prompt guard', () =>
   const stateDirectory = path.join(directory, 'state');
   writePluginVersion(pluginRoot, '1.0.0');
 
-  assert.equal(reportLoadedSidequestVersion({ session_id: 'freshness-session' }, { pluginRoot, stateDirectory }), '1.0.0');
-  assert.equal(fs.readdirSync(stateDirectory).length, 1);
+  const input = { session_id: 'freshness-session' };
+  assert.equal(reportLoadedSidequestVersion(input, { pluginRoot, stateDirectory }), '1.0.0');
+  assert.deepEqual(JSON.parse(fs.readFileSync(loadedVersionStateFile(input, undefined, { stateDirectory })!, 'utf8')), {
+    pluginId: 'sidequest@eigenwise-toolshed',
+    pluginRoot,
+    version: '1.0.0',
+  });
 });
 
 test('writes a SessionStart reload notice when the installed Sidequest is newer', () => {

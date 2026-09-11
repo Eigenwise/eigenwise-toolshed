@@ -536,7 +536,7 @@ function main() {
   try {
     const input = sessionInput();
     const loadedVersion = loadedPluginVersion();
-    reportLoadedPluginVersion(input, 'quartermaster@eigenwise-toolshed', loadedVersion);
+    reportLoadedPluginVersion(input, 'quartermaster@eigenwise-toolshed', loadedVersion, { pluginRoot: process.env.CLAUDE_PLUGIN_ROOT });
     const result = audit({ currentProject: input.cwd });
     const context = [
       projectWarning(result.projectProblems),
