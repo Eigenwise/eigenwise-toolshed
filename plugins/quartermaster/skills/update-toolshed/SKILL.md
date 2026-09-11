@@ -25,8 +25,12 @@ a changelog. Gateway wiring stays at its recorded scope: the stable updater dele
 preserves per-project `.claude/settings.local.json` or user-level `~/.claude/settings.json` wiring and
 never escalates scope. Remote Control compatibility points the base URL at `api.anthropic.com`, so the
 Codex/Grok rows disappear from `/model`; an explicit id such as `/model claude-gpt-5.6-terra` still works.
-Gateway wiring changes apply to new Claude Code sessions, so restart affected sessions. It continues after
-individual failures and prints the failing commands.
+Gateway wiring changes apply to new Claude Code sessions, so restart affected sessions. Before any
+mutation, the updater runs the configured Claude Code command once. If it is unavailable, the updater
+stops before refreshing marketplaces, updating plugins, or invoking the gateway updater. The default uses
+`claude` from `PATH`; when Claude Code is installed elsewhere, retry with `--claude <absolute claude.exe
+path>`. Check and dry-run stay non-mutating. It continues after individual update failures and prints the
+failing commands.
 
 ## Gateway rename migration
 
