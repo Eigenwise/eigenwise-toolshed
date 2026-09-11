@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert');
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -14,12 +15,12 @@ function temporaryProject() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-allowlist-'));
 }
 
-function permissionTranscript(command, outcome = 'approved') {
+function permissionTranscript(command, outcome = 'approved', toolName = 'Bash') {
   const identifier = `tool-${Math.random()}`;
   const assistant = {
     type: 'assistant',
     timestamp: '2026-08-12T12:00:00.000Z',
-    message: { content: [{ type: 'tool_use', id: identifier, name: 'Bash', input: { command } }] },
+    message: { content: [{ type: 'tool_use', id: identifier, name: toolName, input: { command } }] },
   };
   const user = {
     type: 'user',
@@ -70,6 +71,33 @@ test('always-approved permission fingerprints append project-local allow rules',
     detail: 'auto-approved after 3 approvals',
     approvals: 3,
   });
+});
+
+test('PowerShell candidates are blocked before reports and settings writes', async () => {
+  const projectDir = temporaryProject();
+  const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  const before = '{\n  "quartermaster": { "autoApprovePermissions": true },\n  "permissions": {\n    "allow": [\n      "Read"\n    ]\n  }\n}\n';
+  fs.writeFileSync(settingsFile, before, 'utf8');
+  const environment = writeWindow(projectDir, [
+    ...Array.from({ length: 5 }, () => permissionTranscript('Get-ChildItem src', 'approved', 'PowerShell')),
+    ...Array.from({ length: 3 }, () => permissionTranscript('npm test -- --unit')),
+  ]);
+
+  const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
+  const after = fs.readFileSync(settingsFile, 'utf8');
+  const output = execFileSync(process.execPath, [path.join(__dirname, '..', 'bin', 'quartermaster.js'), 'allowlist', '--project', projectDir], {
+    encoding: 'utf8',
+    env: { ...process.env, ...environment },
+  });
+
+  assert.deepEqual(result.additions.map((entry) => entry.fingerprint), ['permission:Bash:npm test']);
+  assert.deepEqual(result.eligible.map((entry) => entry.fingerprint), ['permission:Bash:npm test']);
+  assert.equal(result.blocked[0].fingerprint, 'permission:PowerShell');
+  assert.equal(result.blocked[0].vetoReason, 'unsafe shell rule');
+  assert.match(output, /blocked permission:PowerShell: vetoed as too broad a rule \(unsafe shell rule\) after 5 approvals/);
+  assert.match(after, /"allow": \[\n      "Read",\n      "Bash\(npm test:\*\)"\n    \]/);
+  assert.equal(after.replace(',\n      "Bash(npm test:*)"', ''), before);
 });
 
 test('without the opt-in marker the pass reports candidates and writes nothing', async () => {

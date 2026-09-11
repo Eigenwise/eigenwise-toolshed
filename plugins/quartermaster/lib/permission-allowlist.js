@@ -78,6 +78,7 @@ function isDestructive(input) {
 // subcommands differ wildly in blast radius, or a family with a destructive
 // sibling the wildcard would cover.
 function ruleTooBroadReason(fingerprint) {
+  if (fingerprint === 'permission:PowerShell') return 'unsafe shell rule';
   const match = /^permission:Bash:(.+)$/.exec(fingerprint);
   if (!match) return null;
   const prefix = match[1];
@@ -86,6 +87,15 @@ function ruleTooBroadReason(fingerprint) {
   if (!prefix.includes(' ') && NEEDS_SUBCOMMAND.test(executable)) return 'bare tool';
   if (DESTRUCTIVE_FAMILY.test(prefix)) return 'wildcard would cover destructive siblings';
   return null;
+}
+
+function ruleIsBlocked(entry) {
+  const vetoReason = ruleTooBroadReason(entry.fingerprint);
+  if (vetoReason) {
+    entry.destructive = true;
+    entry.vetoReason = vetoReason;
+  }
+  return entry.destructive;
 }
 
 function createPermissionCollector() {
@@ -240,17 +250,19 @@ function enablePermissionAutomation(projectDir) {
 async function applyPermissionAllowlist(options = {}) {
   const projectDir = path.resolve(options.projectPath ?? process.cwd());
   const collected = await collectPermissionDecisions({ ...options, projectPath: projectDir });
-  const eligible = collected.decisions.filter((entry) => entry.approvals >= MIN_APPROVALS && entry.denials === 0);
-  const blocked = eligible.filter((entry) => entry.destructive);
+  const candidates = collected.decisions.filter((entry) => entry.approvals >= MIN_APPROVALS && entry.denials === 0);
+  const blocked = candidates.filter(ruleIsBlocked);
+  const eligible = candidates.filter((entry) => !ruleIsBlocked(entry));
   // Writing permission rules is the opt-in itself, so a caller that has not
   // enabled the marker only ever gets the report. Without this, `quartermaster
   // allowlist` silently granted permissions in any project it was run in.
   if (!permissionAutomationEnabled(projectDir)) {
     return { projectDir, additions: [], blocked, eligible, applied: false, scanned: collected.window.files.length };
   }
-  const added = appendRulesToSettings(projectDir, eligible.filter((entry) => !entry.destructive).map((entry) => ruleFor(entry.fingerprint)));
+  const writable = eligible.filter((entry) => !ruleIsBlocked(entry));
+  const added = appendRulesToSettings(projectDir, writable.map((entry) => ruleFor(entry.fingerprint)));
   const addedRules = new Set(added);
-  const additions = eligible.filter((entry) => addedRules.has(ruleFor(entry.fingerprint)));
+  const additions = writable.filter((entry) => addedRules.has(ruleFor(entry.fingerprint)));
   for (const entry of additions) {
     appendDecision({
       projectDir,
