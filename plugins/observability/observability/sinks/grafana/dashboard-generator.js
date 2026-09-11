@@ -33,18 +33,16 @@ function quoted(value) {
   return JSON.stringify(value);
 }
 
-function projectMatchers(projects, kind) {
-  const values = projects.map((project) => project[kind]);
+function projectMatchers(projects, keys) {
+  const values = [...new Set(projects.flatMap((project) => keys.map((key) => project[key])))];
   if (values.length === 1) return `=${quoted(values[0])}`;
   if (values.length === 0) return '=~"$^"';
   return `=~${quoted(values.map(escapeRegex).join('|'))}`;
 }
 
 function filterPrometheus(expression, projects) {
-  // The claude_code metrics carry the sanitized project BASENAME in their
-  // project_id label (OTEL_RESOURCE_ATTRIBUTES project.id), not the registry's
-  // sha256 project_id — matching on the hash starves every panel.
-  const matcher = `project_id${projectMatchers(projects, 'project_name')}`;
+  // Existing projects emit names until telemetry is re-enabled, so accept both shapes until every project is rewritten.
+  const matcher = `project_id${projectMatchers(projects, ['project_id', 'project_name'])}`;
   const filtered = expression.replace(/project_id=~"\$project"/g, matcher);
   if (filtered.includes('claude_code_') && !filtered.includes(matcher)) {
     throw new Error(`Dashboard query is missing its project filter: ${expression}`);
@@ -53,7 +51,7 @@ function filterPrometheus(expression, projects) {
 }
 
 function filterLoki(expression, projects) {
-  const matcher = `workbench_attribute_project_name${projectMatchers(projects, 'project_name')}`;
+  const matcher = `workbench_attribute_project_name${projectMatchers(projects, ['project_name'])}`;
   return expression.replaceAll('{service_name="workbench-observer"}', `{service_name="workbench-observer"} | ${matcher}`);
 }
 
