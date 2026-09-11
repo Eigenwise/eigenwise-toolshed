@@ -1,16 +1,13 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { spawnGatewayProcess } = require('./support.js');
+const { startGateway } = require('./support.js');
 const { otlpToObservations } = require('../../observability/lib/observability/otlp.js');
-
-const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 
 function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
@@ -47,16 +44,6 @@ async function waitFor(predicate, message) {
   throw new Error(message);
 }
 
-async function waitForShim(port) {
-  await waitFor(async () => {
-    try {
-      return (await request(port, 'GET', '/healthz')).status === 200;
-    } catch {
-      return false;
-    }
-  }, 'shim did not start');
-}
-
 async function unusedPort() {
   const probe = http.createServer();
   const port = await listen(probe);
@@ -65,20 +52,13 @@ async function unusedPort() {
 }
 
 async function spawnShim(t, proxyPort, extraEnv = {}) {
-  const shimPort = await unusedPort();
-  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
-    env: {
-      ...process.env,
-      CODEX_GATEWAY_PORT: String(shimPort),
-      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-      CODEX_GATEWAY_REQUEST_LOG: '0',
-      ...extraEnv,
-    },
-    stdio: 'ignore',
+  const { port } = await startGateway(t, 'serve-shim', {
+    ...process.env,
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    CODEX_GATEWAY_REQUEST_LOG: '0',
+    ...extraEnv,
   });
-  t.after(() => child.kill());
-  await waitForShim(shimPort);
-  return shimPort;
+  return port;
 }
 
 function modelProxy(onRequest) {
