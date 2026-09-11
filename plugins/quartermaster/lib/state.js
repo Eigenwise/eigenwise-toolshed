@@ -36,7 +36,7 @@ function positiveNumber(value, fallback) {
 function nudgeThresholds(env = process.env) {
   return {
     minSessions: positiveNumber(env.QUARTERMASTER_MIN_SESSIONS, NUDGE_DEFAULTS.minSessions),
-    minFriction: positiveNumber(env.QUARTMASTER_MIN_FRICTION, NUDGE_DEFAULTS.minFriction),
+    minFriction: positiveNumber(env.QUARTERMASTER_MIN_FRICTION, NUDGE_DEFAULTS.minFriction),
     cooldownHours: positiveNumber(env.QUARTERMASTER_NUDGE_HOURS, NUDGE_DEFAULTS.cooldownHours),
   };
 }

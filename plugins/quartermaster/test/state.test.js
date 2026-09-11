@@ -14,10 +14,13 @@ const {
   markNudged,
   markOffered,
   markResupply,
+  nudgeThresholds,
+  offerThresholds,
   projectStateFile,
   readProjectState,
   recordSessionTally,
   rejectedFingerprints,
+  resupplyThresholds,
   statusFor,
   verifyDecisions,
 } = require('../lib/state.js');
@@ -319,4 +322,23 @@ test('verifyDecisions declines to judge on thin data', () => {
   recordSessionTally(PROJECT, 'only-one', tallyWith(), environment, now - DAY_MS);
   appendDecision({ projectDir: PROJECT, fingerprint: 'rule:x', status: 'applied', title: 'x' }, environment, now);
   assert.equal(verifyDecisions(PROJECT, environment)[0].verdict, 'insufficient-data');
+});
+
+test('every documented threshold variable is read under its documented name', () => {
+  const documented = [
+    ['QUARTERMASTER_MIN_SESSIONS', 11, () => nudgeThresholds(environment).minSessions],
+    ['QUARTERMASTER_MIN_FRICTION', 13, () => nudgeThresholds(environment).minFriction],
+    ['QUARTERMASTER_NUDGE_HOURS', 17, () => nudgeThresholds(environment).cooldownHours],
+    ['QUARTERMASTER_OFFER_HOURS', 19, () => offerThresholds(environment).cooldownHours],
+    ['QUARTERMASTER_RESUPPLY_HOURS', 23, () => resupplyThresholds(environment).cooldownHours],
+    ['QUARTERMASTER_RESUPPLY_MULTIPLIER', 29, () => resupplyThresholds(environment).escalationMultiplier],
+  ];
+
+  for (const [variable, value, read] of documented) {
+    const withoutOverride = read();
+    environment[variable] = String(value);
+    assert.notEqual(withoutOverride, value, `${variable} test value must differ from the default to prove anything`);
+    assert.equal(read(), value, `${variable} is documented in README.md but state.js does not read that exact name`);
+    delete environment[variable];
+  }
 });
