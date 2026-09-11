@@ -64,10 +64,12 @@ interface Ticket {
     terminalAt?: string | null;
     route?: { model?: string; effort?: string; marker?: string };
     evidenceDirectory?: string;
+    continuation?: { sourceWorktree?: string };
   };
 }
 interface PreparedDispatchSpawn {
   briefingCommand: string;
+  continuationWorktree: string | null;
   description: string | null;
   executor: string;
   name: string;
@@ -542,6 +544,7 @@ function preparedDispatchValidation(input: HookInput): PreparedDispatchValidatio
       status: 'valid',
       spawn: {
         briefingCommand,
+        continuationWorktree: String(ticket.dispatch.continuation?.sourceWorktree || '').trim() || null,
         description: typeof description === 'string' && description ? description : null,
         executor: typeof ticket.dispatchExecutor === 'string' ? ticket.dispatchExecutor : '',
         name: ticket.dispatch.launchName
@@ -1025,6 +1028,17 @@ function main(): void {
       `sidequest: CLAUDE_CODE_SUBAGENT_MODEL="${subagentOverride}" is set — it overrides every sidequest ` +
         `executor's routed model (a Codex route would silently run on a Claude model; builtins collapse to one ` +
         `route), defeating routing. Unset it before spawning sidequest executors.`,
+    );
+    return;
+  }
+
+  // A continuation spawn carries no isolation field because the board already bound it to the checkout the
+  // previous attempt retained. Adding one sends the harness to WorktreeCreate, which cannot bind a checkout
+  // this dispatch never reserved, and the spawn dies there with no executor and a launched attempt (SQ-2537).
+  if (preparedSpawn?.continuationWorktree && Object.hasOwn(toolInput, 'isolation') && !isSubagentCaller(input)) {
+    writeDeny(
+      'PreToolUse',
+      `sidequest: ${preparedSpawn.ref} continues the retained checkout ${preparedSpawn.continuationWorktree}, so its prepared spawn carries no isolation field. Spawn it unchanged: an added isolation asks the harness to create a checkout the board cannot bind, and the Agent call fails before the executor starts.`,
     );
     return;
   }
