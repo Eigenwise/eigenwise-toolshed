@@ -6,7 +6,7 @@ const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require("../sou
 const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require("../kernel/review-binding");
 const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require("../kernel/wave");
 const { isInScope, scopedPaths } = require("../scope-match");
-const { manualCandidateDeliveryGuidance } = require("../refusal-guidance.js");
+const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance } = require("../refusal-guidance.js");
 function createSubmissions(dependencies) {
   const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
@@ -142,10 +142,11 @@ function createSubmissions(dependencies) {
       return `${reviewRelationRef(relation)} has no terminal done dispatch attempt for its bound review of ${ticket.ref}`;
     }
     if (provenance.reason === "agent_identity_missing") {
-      return `${reviewRelationRef(relation)} and ${ticket.ref} do not both carry a hook-bound runtime agent identity`;
+      const unidentified = [!provenance.source && ticket.ref, !provenance.reviewer && reviewRelationRef(relation)].filter(Boolean).join(" and ");
+      return `${unidentified} recorded no runtime identity on the terminal attempt: neither a hook-bound agent id nor the dispatch token and agent name a claim-token binding records`;
     }
     if (provenance.reason === "shared_agent_identity") {
-      return `${reviewRelationRef(relation)} was completed by the same runtime identity that submitted ${ticket.ref}`;
+      return `${reviewRelationRef(relation)} was completed by the same runtime identity that submitted ${ticket.ref} (${provenance.source?.identity})`;
     }
     return null;
   }
@@ -693,7 +694,12 @@ ${verify.outputTail}` : null
       }
       const reviewFailure = terminalReviewFailure(ticket, candidateReview);
       if (reviewFailure) {
-        return { ok: false, reason: "candidate_review_required", ticket, message: `${ticket.ref} integration refused; ${reviewFailure}.` };
+        return {
+          ok: false,
+          reason: "candidate_review_required",
+          ticket,
+          message: `${ticket.ref} integration refused; ${reviewFailure}. ${candidateReviewRequiredGuidance()}`
+        };
       }
     }
     const requiredVerification = pinnedVerificationRequirement(ticket);
