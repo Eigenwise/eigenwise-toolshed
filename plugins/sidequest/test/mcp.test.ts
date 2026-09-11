@@ -434,9 +434,7 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.match(doneDescriptor.description, /commandless working-tree needs verify/);
   const groomClose = resp.result.tools.find((tool: any) => tool.name === 'groomClose');
   assert.ok(groomClose.inputSchema.properties.deliveryCommit, 'groomClose records hand-delivered commits');
-  assert.match(groomClose.description, /manual: pinned candidate/i);
-  assert.match(groomClose.description, /all checks/i);
-  assert.match(groomClose.description, /no integration:true/i);
+  assert.match(groomClose.description, /reset\/working-tree\/manual: pinned candidate/i);
   assert.ok(groomClose.inputSchema.properties.recoveryEvidence, 'groomClose requires terminal-agent evidence before clearing an unclaimed dispatch');
   const release = resp.result.tools.find((tool: any) => tool.name === 'release');
   assert.ok(release.inputSchema.properties.oracle, 'release exposes an oracle ask');

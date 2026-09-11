@@ -169,7 +169,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   dispatch: "Dispatch; token and spawn spec.",
   done: "Finish; declared external needs current capture; commandless working-tree needs verify.",
   release: "Release; reason required. oracle handoff needs ask until verdict.",
-  groomClose: "Frozen target; manual: pinned candidate, all checks, no integration:true.",
+  groomClose: "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; reviewed interaction.",
   native_agent: "Agent spawn.",
   verdict: "Verdict.",
   archive: "Archive.",

@@ -243,7 +243,7 @@ async function runTool(tool: ToolDefinition, rawArgs: any) {
 // compactSchema strips property descriptions, so an authored one that is not repeated here reaches nobody: the
 // full attestation grammar has been on `add.verify` in the source all along and three tickets in a row were still
 // refused for not knowing it (SQ-1955). Anything a caller cannot get right on the FIRST call belongs in this table.
-const ATTESTATION_VERIFY_CONTRACT = 'verifyKind attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.';
+const ATTESTATION_VERIFY_CONTRACT = 'For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.';
 
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> = {
   context_page: {
@@ -271,7 +271,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   category_edit: { fallbackModel: 'null clears fallback.' },
   dispatch: {
     sharedTree: 'Tree.',
-    reducedAgentSchema: 'Only when caller schema lacks name/mode; hook needs agent_id + permission_mode bypassPermissions.',
+    reducedAgentSchema: 'Only when caller schema lacks name/mode; hook needs agent_id + bypassPermissions mode.',
     recoveryEvidence: 'Proof.',
     worktree: 'Checkout.',
   },

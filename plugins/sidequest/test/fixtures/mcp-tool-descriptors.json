@@ -310,7 +310,7 @@
         "verify": {
           "type": "string",
           "maxLength": 1000,
-          "description": "verifyKind attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
+          "description": "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
         },
         "verifyKind": {
           "type": "string",
@@ -493,7 +493,7 @@
         "verify": {
           "type": "string",
           "maxLength": 1000,
-          "description": "verifyKind attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
+          "description": "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
         },
         "verifyKind": {
           "type": "string",
@@ -857,7 +857,7 @@
   },
   {
     "name": "groomClose",
-    "description": "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual; reviewed interaction.",
+    "description": "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; reviewed interaction.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1498,7 +1498,7 @@
         },
         "reducedAgentSchema": {
           "type": "boolean",
-          "description": "Only when caller schema lacks name/mode; hook needs agent_id + permission_mode bypassPermissions."
+          "description": "Only when caller schema lacks name/mode; hook needs agent_id + bypassPermissions mode."
         },
         "allowRepeatFailure": {
           "type": "boolean"
