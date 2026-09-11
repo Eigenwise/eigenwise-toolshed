@@ -756,7 +756,7 @@ ${verify.outputTail}` : null
           outside,
           ticket,
           scopeValidation,
-          message: `${ticket.ref} integration refused; recorded expected upstream ${scopeValidation.upstreamCommit} is no longer reachable from target branch ${targetBranch}. Recovery: manually merge the verified candidate onto the current target, re-gate it, then record delivery with groomClose using deliveryCommit.`
+          message: `${ticket.ref} integration refused; recorded expected upstream ${scopeValidation.upstreamCommit} is no longer reachable from target branch ${targetBranch}. Rework and submit a fresh candidate against current main, or when the work is verified, have the orchestrator record delivery through groomClose with deliveryCommit.`
         };
       }
       const scopeFailure = scopeValidation.message || (scopeValidation.reason === "missing_scope_snapshot" ? `${ticket.ref} submission has no admitted scope snapshot.` : outside.length ? `${ticket.ref} integration refused; submitted range changes paths outside its admitted scope: ${outside.join(", ")}.` : `${ticket.ref} integration refused; submitted range validation failed: ${scopeValidation.reason || "unknown"}.`);
