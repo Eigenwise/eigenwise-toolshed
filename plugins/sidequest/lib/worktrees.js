@@ -1158,11 +1158,13 @@ function reclaimUnclaimedDispatchWorktree(repository, dispatch, facts = {}) {
   }
   const incompleteCreation = !dispatchHasCompletedWorktreeCreation(dispatch);
   if (incompleteCreation && dispatch?.worktreeBindingSource !== "worktree-create") {
+    const retainedCheckout = !dispatch?.boundAt;
     return {
       worktree: entry.worktree,
       reclaimed: false,
+      ...retainedCheckout ? { retainedCheckout: true } : {},
       reason: "lease_refused",
-      message: "WorktreeCreate binding was incomplete and could not be matched to this checkout; preserved the checkout."
+      message: retainedCheckout ? `this attempt never created a checkout of its own, so the retained checkout ${entry.worktree} stays with the attempt that did.` : "WorktreeCreate binding was incomplete and could not be matched to this checkout; preserved the checkout."
     };
   }
   const resolveGitPath = (value) => path.isAbsolute(value) ? value : path.resolve(entry.worktree, value);

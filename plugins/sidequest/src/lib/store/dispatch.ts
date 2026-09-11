@@ -594,6 +594,8 @@ function strandedBoundAttempt(ticket?: any, state?: any) {
   return Number.isFinite(boundMs) && Date.now() - boundMs >= claimIdleMs();
 }
 
+const EVIDENCE_SUPERSEDED_FAILURE_SHAPES = new Set(['unclaimed_launch_superseded', 'stranded_bound_launch_superseded']);
+
 function evidenceRetirableAttempt(ticket?: any, state?: any) {
   return supersedableUnboundAttempt(ticket, state) || strandedBoundAttempt(ticket, state);
 }
@@ -614,6 +616,11 @@ function boundRuntimeBlocker(state?: any) {
 }
 
 function evidenceSupersessionBlocker(ticket?: any, state?: any) {
+  // Retiring an attempt clears its token, so repeating the evidence command answered "not an active attempt"
+  // while describing the exact case that had just been retired (SQ-2537). Name the retirement instead.
+  if (state?.terminalAt && EVIDENCE_SUPERSEDED_FAILURE_SHAPES.has(state.failureShape)) {
+    return `already retired on recovery evidence at ${state.terminalAt}, so dispatch again without recoveryEvidence to prepare the replacement`;
+  }
   if (!state || !ticket?.dispatchNonce) return 'not an active attempt';
   if (state.terminalAt) return `already terminal (${state.outcome || 'terminal'})`;
   if (ticket.claim?.by) return `claimed by ${ticket.claim.by}`;
@@ -1346,7 +1353,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       const recovery = reclaimUnclaimedDispatchWorktree(projectPath, recoveryFacts.state, {
         checkpointCommit: recoveryFacts.checkpointCommit,
       });
-      if (recovery && recovery.reclaimed === false && recovery.discardable !== true) {
+      if (recovery && recovery.reclaimed === false && recovery.discardable !== true && recovery.retainedCheckout !== true) {
         const retainedContinuation = retainedWorktreeContinuationState(slug, t, current);
         if (!retainedContinuation?.continuation) {
           const checkpointCommit = String(t.checkpoint?.commit || '').trim();

@@ -1414,11 +1414,18 @@ function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, fac
   }
   const incompleteCreation = !dispatchHasCompletedWorktreeCreation(dispatch);
   if (incompleteCreation && dispatch?.worktreeBindingSource !== 'worktree-create') {
+    // A continuation attempt inherits a checkout an earlier attempt created, so an attempt that never bound a
+    // runtime owns nothing here: there is no checkout of its own to match, and the inherited one stays either
+    // way. Reporting that as a retry blocker locked the ticket until the claim-idle backstop (SQ-2537).
+    const retainedCheckout = !dispatch?.boundAt;
     return {
       worktree: entry.worktree,
       reclaimed: false,
+      ...(retainedCheckout ? { retainedCheckout: true } : {}),
       reason: 'lease_refused',
-      message: 'WorktreeCreate binding was incomplete and could not be matched to this checkout; preserved the checkout.',
+      message: retainedCheckout
+        ? `this attempt never created a checkout of its own, so the retained checkout ${entry.worktree} stays with the attempt that did.`
+        : 'WorktreeCreate binding was incomplete and could not be matched to this checkout; preserved the checkout.',
     };
   }
   const resolveGitPath = (value: string) => path.isAbsolute(value) ? value : path.resolve(entry.worktree, value);
