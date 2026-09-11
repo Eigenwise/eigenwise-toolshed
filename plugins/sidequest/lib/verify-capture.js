@@ -276,6 +276,8 @@ function report(capture, recorded) {
   } else if (recorded) {
     process.stdout.write(`capture=unrecorded reason=${recorded.reason || "unknown"}
 `);
+    if (recorded.message) process.stdout.write(`${recorded.message}
+`);
   }
 }
 async function main() {

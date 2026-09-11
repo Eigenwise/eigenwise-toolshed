@@ -410,6 +410,76 @@ test('capture accepts a live verify amendment and still rejects unrelated comman
   }
 });
 
+// SQ-2713. A bound review reviewer ran its pinned verify twice and the wrapper
+// refused both with verification_capture_command_mismatch, so this pins the one
+// byte-for-byte contract the reviewer could not check: the base64 the briefing
+// tells it to run has to decode to exactly the command the capture demands,
+// including the `&&` and `--` a real suite verifier carries.
+test('a bound review briefs the exact base64 bytes its capture requires', async () => {
+  const command = 'node -e "process.exit(0)" && node -e "process.exit(0)" -- test/first.test.ts test/second.test.ts';
+  const source = submittedGateSource('bound review capture source', 'review-capture-source.txt', 'bound-review-capture-source');
+  const review = store.createTicket(slug, {
+    title: 'bound review capture',
+    category: 'review-audit',
+    files: ['lib/bound-review-capture.js'],
+    executorVerifyKind: 'command',
+    executorVerify: command,
+  }, { ref: source.ticket.ref, commit: source.commit });
+  const prepared = store.prepareDispatch(slug, review.ref, { sessionId: 'bound-review-capture-session' });
+  assert.strictEqual(prepared.ticket.dispatch.reviewTarget.candidate.value, source.commit);
+  assert.strictEqual(prepared.ticket.dispatch.verificationRequirement.command, command);
+
+  const briefing = agentsync.renderTicketBriefing(store.getTicket(slug, review.ref), prepared.token, slug, PROJECT_DIR);
+  const encoded = briefing.match(/verify-capture\.js" --base64 (\S+)/)?.[1];
+  assert.ok(encoded, 'the review briefing must carry a base64 capture command');
+  const briefedCommand = Buffer.from(encoded, 'base64').toString('utf8');
+  assert.strictEqual(briefedCommand, command);
+
+  const capture = await runVerifyCapture(briefedCommand, PROJECT_DIR);
+  try {
+    assert.deepStrictEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 });
+    const recorded = recordCapture({ project: PROJECT_DIR, ticket: review.ref }, capture, PROJECT_DIR);
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.capture.command, command);
+  } finally {
+    fs.rmSync(capture.logPath, { force: true });
+  }
+});
+
+// SQ-2713. The SQ-2711 reviewer saw only `capture=unrecorded reason=...`, so it
+// never learned which side of the comparison differed and retried the same run.
+// The wrapper has to print the store's message, which is the only place the two
+// command strings appear side by side.
+test('the capture wrapper prints which command the refused capture used', () => {
+  const pinnedCommand = 'node -e "process.exit(0)" && node -e "process.exit(0)" -- test/pinned.test.ts';
+  const ranCommand = 'node -e "process.exit(0)"';
+  const ticket = addTicket('wrapper capture diagnostics', {
+    category: 'submission.fixture',
+    executorVerifyKind: 'command',
+    executorVerify: pinnedCommand,
+  });
+  store.prepareDispatch(slug, ticket.ref, { sessionId: 'wrapper-capture-diagnostics', sharedTree: true });
+
+  let status = 0;
+  let output = '';
+  try {
+    output = execFileSync(process.execPath, [
+      path.join(__dirname, '..', 'lib', 'verify-capture.js'),
+      '--base64', Buffer.from(ranCommand, 'utf8').toString('base64'),
+      '--project', PROJECT_DIR,
+      '--ticket', ticket.ref,
+    ], { cwd: PROJECT_DIR, encoding: 'utf8', env: { ...process.env, SIDEQUEST_HOME }, windowsHide: true });
+  } catch (error: any) {
+    status = error.status;
+    output = String(error.stdout || '');
+  }
+
+  assert.strictEqual(status, 2);
+  assert.match(output, /capture=unrecorded reason=verification_capture_command_mismatch/);
+  assert.ok(output.includes(`Pinned command: ${JSON.stringify(pinnedCommand)}`), output);
+  assert.ok(output.includes(`Captured command: ${JSON.stringify(ranCommand)}`), output);
+});
+
 test('repeated captures use the dispatch pin after a stale lifecycle mirror rewrite', async () => {
   cleanBranch();
   const command = 'node --version';
