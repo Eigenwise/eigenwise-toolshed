@@ -43,9 +43,50 @@ function safeIdentifier(value) {
   return typeof value === 'string' && SAFE_IDENTIFIER.test(value) ? value : null;
 }
 
+function entryStat(target) {
+  return fs.statSync(target, { throwIfNoEntry: false });
+}
+
+function pointedWorktreeRoot(marker) {
+  const pointer = fs.readFileSync(marker, 'utf8').trim();
+  if (!pointer.startsWith('gitdir:')) return null;
+  const gitDirectory = path.resolve(path.dirname(marker), pointer.slice('gitdir:'.length).trim());
+  const commonDirectory = path.join(gitDirectory, 'commondir');
+  const commonStat = entryStat(commonDirectory);
+  let candidate = commonStat && commonStat.isFile()
+    ? path.resolve(gitDirectory, fs.readFileSync(commonDirectory, 'utf8').trim())
+    : gitDirectory;
+  while (path.basename(candidate) !== '.git') {
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return null;
+    candidate = parent;
+  }
+  const root = path.dirname(candidate);
+  const rootStat = entryStat(root);
+  return rootStat && rootStat.isDirectory() ? root : null;
+}
+
+function repositoryRoot(cwd) {
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null;
+  try {
+    for (let directory = path.resolve(cwd); ;) {
+      const marker = path.join(directory, '.git');
+      const markerStat = entryStat(marker);
+      if (markerStat && markerStat.isDirectory()) return directory;
+      if (markerStat && markerStat.isFile()) return pointedWorktreeRoot(marker);
+      const parent = path.dirname(directory);
+      if (parent === directory) return null;
+      directory = parent;
+    }
+  } catch {
+    return null;
+  }
+}
+
 function projectNameFromCwd(cwd) {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null;
-  const name = path.basename(path.resolve(cwd)).replace(/[^A-Za-z0-9_.:@-]/g, '-').slice(0, 64);
+  const root = repositoryRoot(cwd) || path.resolve(cwd);
+  const name = path.basename(root).replace(/[^A-Za-z0-9_.:@-]/g, '-').slice(0, 64);
   return safeIdentifier(name);
 }
 
@@ -588,7 +629,6 @@ function buildOtlpLogPayload(record) {
     .filter(([, value]) => value !== null && value !== undefined)
     .map(([key, value]) => ({ key, value: otlpValue(value) }));
   const resourceAttributes = [{ key: 'service.name', value: { stringValue: 'codex-gateway' } }];
-  if (record.projectId) resourceAttributes.push({ key: 'project.id', value: { stringValue: record.projectId } });
   const logRecord = {
     timeUnixNano: String(BigInt(record.observedAt.getTime()) * 1000000n),
     observedTimeUnixNano: String(BigInt(record.observedAt.getTime()) * 1000000n),
@@ -783,6 +823,7 @@ function createUsageCapture(options) {
       client_request_id: safeIdentifier(headerValue(requestHeaders, 'x-claude-code-request-id'))
         || safeIdentifier(headerValue(requestHeaders, 'x-request-id')),
       session_id: sessionId,
+      project_name: projectId,
       agent_id: safeIdentifier(headerValue(requestHeaders, 'x-claude-code-agent-id')),
       parent_agent_id: safeIdentifier(headerValue(requestHeaders, 'x-claude-code-parent-agent-id')),
       agent_role: safeIdentifier(headerValue(requestHeaders, 'x-claude-code-agent-id')) ? 'executor' : 'orchestrator',
@@ -834,6 +875,7 @@ function toolResultUsageRecord(requestRecord, attribution) {
     request_id: request.request_id,
     client_request_id: request.client_request_id,
     session_id: request.session_id,
+    project_name: request.project_name,
     agent_id: request.agent_id,
     parent_agent_id: request.parent_agent_id,
     agent_role: request.agent_role,
@@ -875,6 +917,7 @@ function mcpFootprintRecords(requestRecord) {
         request_id: request.request_id,
         client_request_id: request.client_request_id,
         session_id: request.session_id,
+        project_name: request.project_name,
         agent_id: request.agent_id,
         parent_agent_id: request.parent_agent_id,
         agent_role: request.agent_role,
