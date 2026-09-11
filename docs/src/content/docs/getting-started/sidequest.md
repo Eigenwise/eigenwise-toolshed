@@ -166,6 +166,8 @@ These read-only reports work independently. If Sidequest is not installed in the
 
 **A wave left out submitted work.** Ask Claude to inspect the assembled wave and its declared participant set. Active or accepted pending candidates with overlapping scope belong in the wave. Review-rejected candidates stay visible for later supersession and do not block an accepted repair wave.
 
+**A verdict on a bound review approved the candidate, but you meant to agree the reviewer was right to reject it.** A verdict's outcome always describes the candidate, not the reviewer's prose: `accepted` approves the candidate, `rejected` confirms it must not ship. A finalized `accepted` cannot be reversed by another verdict, and there is no recovery path for a mistaken accept. To reject a candidate a reviewer flagged, record the verdict as `rejected`.
+
 **Integration stops because the work already landed on the remote.** Your local target branch is behind a commit that already contains the candidate, usually because someone merged it outside the board. Sidequest refuses instead of merging, and it does not move your branch, fetch, or run the check. For a group, it checks every participant before touching anything, so nothing is half delivered. Fetch and bring the local branch forward yourself, then ask Claude to retry the closure.
 
 **A submission sat so long it can no longer be integrated.** Ask Claude to check whether the requested behavior already reached the intended branch. If it did, Claude records that evidence; if it did not, the work needs a fresh ticket against current source.

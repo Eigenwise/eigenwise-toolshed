@@ -280,6 +280,9 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
     deliveryCommit: 'Prepared integration target.',
     deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.',
   },
+  verdict: {
+    outcome: 'Candidate, not reviewer prose.',
+  },
 };
 
 function toolDescriptor(tool: ToolDefinition) {

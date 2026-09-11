@@ -114,7 +114,7 @@ async function cmdVerdict(opts: any, positional: any) {
   const text = opts.text;
   const outcome = opts.outcome;
   if (text == null) fail('verdict: --text is required and must contain the user\'s words verbatim.');
-  if (outcome == null) fail('verdict: --outcome is required: accepted, rejected, or inconclusive.');
+  if (outcome == null) fail('verdict: --outcome is required: accepted, rejected, or inconclusive. It is candidate-addressed: for a bound review, accepted approves the candidate, not the reviewer\'s prose, and rejected confirms the candidate must not ship.');
   const { slug, meta } = await resolveProject(opts);
   let res;
   try {

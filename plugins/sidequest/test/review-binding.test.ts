@@ -947,6 +947,14 @@ test('oracle outcomes retain their candidate review meaning', () => {
   assert.equal(reviewBinding.reviewOutcomeFromOracleVerdict('inconclusive'), 'inconclusive');
 });
 
+test('the verdict tool schema documents outcome as candidate-addressed, not agreement with the reviewer\'s prose (GitHub #54 / SQ-2722)', () => {
+  const outcome = tool('verdict').inputSchema.properties.outcome;
+  assert.match(outcome.description, /rejected confirms the candidate must not ship/);
+  assert.match(outcome.description, /accepted approves the candidate, not the reviewer/);
+  assert.match(outcome.description, /inconclusive approves nothing/);
+  assert.match(outcome.description, /cannot be reversed/);
+});
+
 test('unbound owner rework still parks the candidate and reopens the ticket', () => {
   const { slug, commit } = board('unbound-rework');
   const source = submittedSource(slug, commit, 'unbound-rework');
