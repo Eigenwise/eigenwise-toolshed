@@ -791,7 +791,7 @@ function isTestSidePath(file) {
   return /(^|\/)(?:test|tests|__tests__)(?:\/|$)/.test(normalized) || /(?:^|\/)[^/]+\.(?:test|spec)\.[^/]+$/.test(normalized);
 }
 function negativeControlDeclaredFailureKind(markerLine) {
-  return markerLine.match(/\bfailure-kind=(assertion|import|collection)\b/i)?.[1].toLowerCase() || "";
+  return (markerLine.match(/\bfailure-kind=(assertion|import|collection)\b/i)?.[1] ?? "").toLowerCase();
 }
 function changedTestNames(delta, changedPaths) {
   if (!delta?.workspace) return [];

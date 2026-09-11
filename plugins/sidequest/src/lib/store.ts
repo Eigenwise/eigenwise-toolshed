@@ -739,7 +739,7 @@ function isTestSidePath(file?: any) {
 }
 
 function negativeControlDeclaredFailureKind(markerLine: string) {
-  return markerLine.match(/\bfailure-kind=(assertion|import|collection)\b/i)?.[1].toLowerCase() || '';
+  return (markerLine.match(/\bfailure-kind=(assertion|import|collection)\b/i)?.[1] ?? '').toLowerCase();
 }
 
 function changedTestNames(delta?: any, changedPaths?: any[]) {
