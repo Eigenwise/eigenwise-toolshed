@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { readStdin, stringField } from './shared/input.js';
 import { runtimeModule } from './shared/paths.js';
 import { worktreeSetupDeadlineMs } from '../lib/hook-timeouts.js';
+import { worktreeCreationRefusalMessage } from '../lib/refusal-guidance.js';
 
 const leaseKernel = require(runtimeModule('kernel/worktree')) as {
   canonicalPath: (value: string) => string;
@@ -240,7 +241,7 @@ async function createWorktreeMain(): Promise<void> {
   const target = worktrees.namedWorktreePath(repository, name);
   const binding = bindCreation(repository, sessionId, target);
   if (!binding.ok || !binding.ref || !binding.baseline || !binding.repository || !binding.worktree) {
-    throw new Error(`worktree lease refused creation: ${binding.reason || 'dispatch binding is incomplete'}`);
+    throw new Error(worktreeCreationRefusalMessage(String(binding.reason || ''), repository));
   }
   const boundCreation: CreationBinding & Required<Pick<CreationBinding, 'ref' | 'baseline' | 'repository' | 'worktree'>> = {
     ...binding,

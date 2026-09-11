@@ -21,7 +21,8 @@ __export(refusal_guidance_exports, {
   CLAIM_REFUSAL_MESSAGES: () => CLAIM_REFUSAL_MESSAGES,
   claimRefusalMessage: () => claimRefusalMessage,
   negativeControlRecoveryGuidance: () => negativeControlRecoveryGuidance,
-  routingDisabledMessage: () => routingDisabledMessage
+  routingDisabledMessage: () => routingDisabledMessage,
+  worktreeCreationRefusalMessage: () => worktreeCreationRefusalMessage
 });
 module.exports = __toCommonJS(refusal_guidance_exports);
 var import_prepared_dispatch = require("./prepared-dispatch.js");
@@ -73,6 +74,16 @@ function claimRefusalMessage(reason, ref, claim = {}, projectPath) {
   const message = CLAIM_REFUSAL_MESSAGES[reason];
   return message ? message(ref, claim, projectPath) : `${ref} could not be claimed because ${reason}. Run \`sidequest pulse ${ref}\` and follow its current status.`;
 }
+const WORKTREE_CREATION_REFUSALS = Object.freeze({
+  project_unavailable: (repository) => `${repository} is not a registered Sidequest board, so this session cannot create a dispatch worktree in it. Register the project, or dispatch with sharedTree:true.`,
+  dispatch_binding_unavailable: (repository) => `This session has no launched isolated dispatch on the board for ${repository}. WorktreeCreate resolves the board from this checkout alone, so a dispatch prepared for a different project can never bind here: dispatch it with sharedTree:true, or from a session rooted in that project. Otherwise run \`sidequest pulse <ref>\` and re-dispatch with recovery evidence.`,
+  dispatch_launch_unrecorded: (repository) => `The board for ${repository} holds a prepared dispatch for this session but no recorded launch, so no launched attempt exists to reserve this checkout, and a prepared attempt never supplies creation authority. Run \`sidequest pulse <ref>\`, then \`sidequest dispatch <ref> --recovery-evidence "WorktreeCreate refused: the dispatch launch was never recorded"\`.`,
+  baseline_unavailable: () => "The launched dispatch recorded no base commit, so its worktree has no revision to check out. Re-dispatch the ticket for a fresh baseline."
+});
+function worktreeCreationRefusalMessage(reason, repository) {
+  const guidance = WORKTREE_CREATION_REFUSALS[reason];
+  return `worktree lease refused creation: ${reason || "dispatch binding is incomplete"}${guidance ? `. ${guidance(repository)}` : ""}`;
+}
 function routingDisabledMessage(ref) {
   return `Routing is disabled on this board, so ${ref} cannot be dispatched. Run \`sidequest routing enabled\` then \`sidequest dispatch ${ref}\`; direct work is limited to the inline-safe allowlist: \`sidequest claim ${ref} --direct --reason "why this is inline-safe"\`.`;
 }
@@ -84,5 +95,6 @@ function negativeControlRecoveryGuidance() {
   CLAIM_REFUSAL_MESSAGES,
   claimRefusalMessage,
   negativeControlRecoveryGuidance,
-  routingDisabledMessage
+  routingDisabledMessage,
+  worktreeCreationRefusalMessage
 });

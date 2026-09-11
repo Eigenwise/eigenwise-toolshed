@@ -202,6 +202,26 @@ function createDispatch(dependencies) {
     if (!runtimeCwd || !staleWorktreeCwdWarning(runtimeCwd, projectPath, true)) return null;
     return `prepare dispatch: refused ${ticket.ref}; sharedTree:true requires the spawning runtime to be rooted in the declared project checkout. This runtime is an isolated linked worktree. Record the follow-up on the owning ticket; the orchestration session must dispatch it.`;
   }
+  function repositoryIdentity(cwd) {
+    try {
+      const value = execFileSync("git", ["rev-parse", "--git-common-dir"], {
+        cwd: String(cwd),
+        encoding: "utf8",
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"]
+      }).trim();
+      return canonicalPath(path.isAbsolute(value) ? value : path.resolve(String(cwd), value));
+    } catch (_) {
+      return null;
+    }
+  }
+  function isolatedTreeRuntimeRefusal(ticket, projectPath, runtimeCwd) {
+    if (!runtimeCwd || !projectPath) return null;
+    const project = repositoryIdentity(projectPath);
+    const runtime = repositoryIdentity(runtimeCwd);
+    if (!project || !runtime || project === runtime) return null;
+    return `prepare dispatch: refused ${ticket.ref}; an isolated worktree is created by this session's WorktreeCreate hook, which resolves the board from the spawning checkout ${runtimeCwd} rather than from ${projectPath}. Its worktree lease would refuse creation with dispatch_binding_unavailable and the executor would never start. Dispatch it with sharedTree:true, or from a session rooted in ${projectPath}.`;
+  }
   function dispatchPreparationAttribution(opts) {
     return {
       sessionId: opts?.sessionId ? String(opts.sessionId) : null,
@@ -1256,7 +1276,7 @@ function createDispatch(dependencies) {
         if (t.workingTreeDelivery === true && !sharedTree) {
           throw new Error(`prepare dispatch: ${t.ref} declares a working-tree deliverable and must run in the shared checkout. Re-dispatch with sharedTree:true.`);
         }
-        const runtimeRefusal = sharedTree ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd) : null;
+        const runtimeRefusal = sharedTree ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd) : isolatedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd);
         if (runtimeRefusal) throw new Error(runtimeRefusal);
         const workingTreeDelivery = sharedTree && t.workingTreeDelivery === true && effectiveFiles.length > 0;
         const verificationRequirement2 = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ""));
@@ -1678,6 +1698,12 @@ function createDispatch(dependencies) {
   function dispatchCreationCandidate(state, sessionId) {
     return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && state.outcome === "launched" && !state.terminalAt && !state.worktree && !state.continuation?.sourceWorktree);
   }
+  function unlaunchedSessionDispatch(slug, sessionId) {
+    return listTickets(slug).some((candidate) => {
+      const state = dispatchState(candidate);
+      return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && state.outcome === "prepared" && !state.terminalAt && !state.worktree);
+    });
+  }
   function bindDispatchWorktreeCreation(slug, sessionId, worktree) {
     const normalizedSessionId = String(sessionId || "").trim();
     const target = String(worktree || "").trim();
@@ -1719,7 +1745,10 @@ function createDispatch(dependencies) {
       });
       if (result?.ok) return result;
     }
-    return { ok: false, reason: "dispatch_binding_unavailable" };
+    return {
+      ok: false,
+      reason: unlaunchedSessionDispatch(slug, normalizedSessionId) ? "dispatch_launch_unrecorded" : "dispatch_binding_unavailable"
+    };
   }
   function completeDispatchWorktreeCreation(slug, sessionId, worktree) {
     const normalizedSessionId = String(sessionId || "").trim();
