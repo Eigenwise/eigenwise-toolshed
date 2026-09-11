@@ -31,9 +31,7 @@ The `Test` and `Release guard` workflows run on pull requests and pushes to `mai
 
 The cut also runs tests itself. It writes the release commit and every tag locally, then runs the test suite of each plugin the release moves, and only pushes if they all pass. `--dry-run` lists those suites under `suites (N)`, so you can see what a cut will run before it runs it.
 
-A failing suite publishes nothing, but the local release commit and its tags are already written by that point. The cut prints the two commands that undo them, a `git reset --hard` back to the previous head and a `git tag -d` naming every tag it created. Run both. A reset alone leaves the tags behind, and a later cut for the same version will not be able to create them.
-
-Deleting those tags needs the publish lock, because Sidequest refuses a manual `git tag` on this repository without one. Acquire it with `sidequest publish lock`, delete the tags, then `sidequest publish unlock`. The refusal blocks the whole shell invocation, so run the lock, the deletion, and the unlock as three separate commands rather than chaining them.
+A failing suite publishes nothing. The cut automatically resets the local release window to the previous head and deletes every tag it created, while preserving the suite log under `.release/logs/`. A marketplace tag that has already been published keeps its existing roll-forward recovery path.
 
 This gate is local and it runs on your machine, so a test that reads your own environment can fail here while CI is green on the same commit. That is a bug in the test, not a reason to skip the gate.
 
