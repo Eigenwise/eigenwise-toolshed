@@ -76,7 +76,54 @@ test('uses the stable model-gateway updater for upgrades and the installed comma
   assert.equal(doctor.args.at(-1), 'doctor');
 });
 
+test('preflights Claude Code once before update mutations and preserves an explicit path', () => withRegistry(registry, (registryFile) => {
+  const calls = [];
+  const claudePath = 'C:/Program Files/Claude Code/claude.exe';
+  const result = runUpdate({
+    registryFile,
+    options: { claude: claudePath, dryRun: false, check: false },
+    run: (command) => {
+      calls.push(command);
+      return { ok: true };
+    },
+    report: () => {},
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(calls[0].command, claudePath);
+  assert.deepEqual(calls[0].args, ['--version']);
+  assert.equal(calls.filter((command) => command.args[0] === '--version').length, 1);
+}));
+
+test('stops before update mutations when the Claude executable is unavailable', () => withRegistry(registry, (registryFile) => {
+  const calls = [];
+  const lines = [];
+  let installedGatewayLauncher = false;
+  const result = runUpdate({
+    registryFile,
+    options: { claude: 'missing-claude', dryRun: false, check: false },
+    run: (command) => {
+      calls.push(command);
+      return { ok: false, error: 'spawnSync missing-claude ENOENT' };
+    },
+    report: (line) => lines.push(line),
+    installGatewayLauncher: () => {
+      installedGatewayLauncher = true;
+      return { written: true };
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.failures, ['Claude Code availability']);
+  assert.deepEqual(calls.map((command) => command.args), [['--version']]);
+  assert.equal(installedGatewayLauncher, false);
+  assert.match(lines.join('\n'), /Claude Code executable "missing-claude" could not be run/);
+  assert.match(lines.join('\n'), /--claude <absolute claude\.exe path>/);
+  assert.equal(lines.filter((line) => line.includes('Claude Code executable')).length, 1);
+}));
+
 test('dry-run scopes the update plan to Toolshed and does not enumerate third-party plugins', () => withRegistry(registry, (registryFile) => {
+  const originalRegistry = fs.readFileSync(registryFile, 'utf8');
   const calls = [];
   const lines = [];
   const result = runUpdate({
@@ -91,6 +138,7 @@ test('dry-run scopes the update plan to Toolshed and does not enumerate third-pa
 
   assert.equal(result.ok, true);
   assert.equal(calls.length, 0);
+  assert.equal(fs.readFileSync(registryFile, 'utf8'), originalRegistry);
   assert.match(lines.join('\n'), /marketplace.*update.*eigenwise-toolshed/);
   assert.doesNotMatch(lines.join('\n'), /another-marketplace|managed-marketplace|other@another-marketplace/);
   assert.match(lines.join('\n'), /Other marketplaces are managed by Claude Code auto-update — not touched\./);
@@ -110,6 +158,8 @@ test('update and check modes touch only Toolshed installs', () => withRegistry(r
     report: () => {},
   });
 
+  assert.equal(updateCalls[0].command, 'claude');
+  assert.deepEqual(updateCalls[0].args, ['--version']);
   assert.ok(updateCalls.some((command) => command.args.join(' ') === 'plugin marketplace update eigenwise-toolshed'));
   assert.equal(updateCalls.some((command) => command.args.join(' ').includes('another-marketplace') || command.args.join(' ').includes('other@')), false);
 
@@ -203,7 +253,7 @@ test('deferred migration installs model-gateway, moves owned state, verifies it,
       assert.equal(fs.existsSync(path.join(home, '.claude', 'codex-gateway')), false);
       assert.equal(fs.existsSync(path.join(home, '.claude', 'model-gateway', 'wiring.json')), true);
       assert.deepEqual(calls.map((command) => command.args.at(-1)), [
-        'user', 'setup', 'ensure', 'doctor', '--reconcile', '--reconcile', '--reconcile', 'user',
+        '--version', 'user', 'setup', 'ensure', 'doctor', '--reconcile', '--reconcile', '--reconcile', 'user',
       ]);
       assert.equal(calls.at(-1).args.join(' '), 'plugin uninstall codex-gateway@eigenwise-toolshed --scope user');
     } finally {
@@ -444,7 +494,7 @@ test('continues after failures and returns every failed operation', () => withRe
   const failed = runUpdate({
     registryFile,
     options: { claude: 'claude', dryRun: false, check: false },
-    run: () => ({ ok: false, error: 'unreachable' }),
+    run: (command) => ({ ok: command.args[0] === '--version', error: 'unreachable' }),
     report: () => {},
   });
 

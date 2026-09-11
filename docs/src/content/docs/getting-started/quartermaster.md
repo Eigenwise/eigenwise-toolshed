@@ -44,7 +44,7 @@ Or run the maintenance skills directly:
 
 > /quartermaster:toolshed-doctor
 
-The requested updater reads Claude Code's installed-plugin registry and updates every active Eigenwise Toolshed install at its recorded user, project, or local scope and project path. It can update installs in other recorded projects, not only the project where you invoked it. Third-party plugins and marketplaces are left alone.
+The requested updater reads Claude Code's installed-plugin registry and updates every active Eigenwise Toolshed install at its recorded user, project, or local scope and project path. It can update installs in other recorded projects, not only the project where you invoked it. Third-party plugins and marketplaces are left alone. Before it changes anything, it runs the configured Claude Code command once. The default uses `claude` from `PATH`; if Claude Code is installed elsewhere, retry with `--claude <absolute claude.exe path>`. An unavailable command stops the run before marketplace, plugin, or Model Gateway updates.
 
 Freshness hooks are advisory. They report cached availability and loaded-version mismatches, and they point to `/quartermaster:update-toolshed`; they do not install, restart, or replace the requested updater. Marketplace auto-update is optional and must be enabled for the Eigenwise Toolshed marketplace in Claude Code. An open session still needs `/reload-plugins` after plugin code changes. Restart Claude Code when process-level gateway wiring or model discovery changed.
 

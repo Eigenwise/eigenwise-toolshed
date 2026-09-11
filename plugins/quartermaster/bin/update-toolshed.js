@@ -47,7 +47,8 @@ their recorded project directory so Claude Code updates the right scope.
                 Migrate the retired codex-gateway install after every Claude Code session is closed
   --confirm-sessions-closed
                 Required with --migrate-model-gateway because migration moves shared gateway state
-  --claude      Claude Code command to run (default: claude)`;
+  --claude      Claude Code command to run (default: claude). If it is not on PATH,
+                use --claude <absolute claude.exe path>.`;
 }
 
 function registryPath(home = os.homedir()) {
@@ -443,6 +444,21 @@ function defaultRun(command) {
   };
 }
 
+function claudePreflightCommand(claude) {
+  return { command: claude, args: ['--version'], label: 'Claude Code availability' };
+}
+
+function preflightClaude(options, run, report) {
+  if (options.check || options.dryRun) return true;
+
+  const result = run(claudePreflightCommand(options.claude));
+  if (result.ok) return true;
+
+  const detail = result.error ?? result.output ?? 'command exited unsuccessfully';
+  report(`Toolshed update stopped: Claude Code executable ${JSON.stringify(options.claude)} could not be run (${detail}). Retry with --claude <absolute claude.exe path> if Claude Code is installed elsewhere.`);
+  return false;
+}
+
 function reloadAdvice(instances) {
   const projects = [...new Set(instances.map((instance) => instance.projectPath).filter(Boolean))];
   const lines = ['Reload required: every Claude Code session that had a plugin loaded before this run. Use /reload-plugins, or restart if reload does not pick up the new version.'];
@@ -475,6 +491,7 @@ function runModelGatewayMigration({ registryFile = registryPath(), home = os.hom
     report('model-gateway migration is not needed: no active codex-gateway install remains.');
     return { ok: true, failures: [] };
   }
+  if (!preflightClaude(options, run, report)) return { ok: false, failures: ['Claude Code availability'] };
 
   const failures = [];
   for (const instance of legacy) {
@@ -551,6 +568,15 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
       registryGc: { entries: [], backupPath: null, cleaned: false },
       failures: ['model-gateway migration required'],
       migrationRequired: true,
+    };
+  }
+  if (!preflightClaude(options, run, report)) {
+    return {
+      ok: false,
+      instances: toolshedPlugins(registry),
+      staleInstances: [],
+      registryGc: { entries: [], backupPath: null, cleaned: false },
+      failures: ['Claude Code availability'],
     };
   }
   const registryGc = cleanStaleAgentWorktreeInstalls(registryFile, registry, options, report);
