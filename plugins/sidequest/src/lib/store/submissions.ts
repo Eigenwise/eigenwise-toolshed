@@ -223,8 +223,12 @@ function terminalReviewFailure(ticket: any, relation: any) {
     return `${reviewRelationRef(relation)} has no terminal done dispatch attempt for its bound review of ${ticket.ref}`;
   }
   if (provenance.reason === 'agent_identity_missing') {
-    const unidentified = [!provenance.source && ticket.ref, !provenance.reviewer && reviewRelationRef(relation)].filter(Boolean).join(' and ');
-    return `${unidentified} recorded no runtime identity on the terminal attempt: neither a hook-bound agent id nor the dispatch token and agent name a claim-token binding records`;
+    return [
+      !provenance.source && `${ticket.ref} recorded no runtime identity on the terminal attempt that submitted the candidate:`
+        + ' neither a hook-bound agent id nor the token prefix and agent name a proven claim-token binding records',
+      !provenance.reviewer && `${reviewRelationRef(relation)} recorded no hook-bound agent id on its terminal review attempt:`
+        + ' a dispatch token and agent name authenticate a dispatch, not the runtime that ran it, so they cannot establish a reviewer independent of the submitter',
+    ].filter(Boolean).join('; ');
   }
   if (provenance.reason === 'shared_agent_identity') {
     return `${reviewRelationRef(relation)} was completed by the same runtime identity that submitted ${ticket.ref} (${provenance.source?.identity})`;

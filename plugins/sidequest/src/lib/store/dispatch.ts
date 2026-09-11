@@ -789,6 +789,10 @@ function appendDispatchAttempt(state?: any, outcome?: any, source?: any, failure
     agentId: state.agentId || null,
     agentName: state.agentName || null,
     tokenPrefix: state.tokenPrefix || null,
+    // Without this an attempt that bound through its dispatch token is
+    // indistinguishable from one that never bound at all: both carry a null
+    // agentId. Review provenance needs to tell those apart.
+    bindSource: state.bindSource || null,
     preparedAt: state.preparedAt || null,
     launchedAt: state.launchedAt || null,
     boundAt: state.boundAt || null,
