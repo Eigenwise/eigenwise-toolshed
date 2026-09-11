@@ -790,11 +790,8 @@ function isTestSidePath(file) {
   const normalized = String(file || "").replace(/\\/g, "/").toLowerCase();
   return /(^|\/)(?:test|tests|__tests__)(?:\/|$)/.test(normalized) || /(?:^|\/)[^/]+\.(?:test|spec)\.[^/]+$/.test(normalized);
 }
-function negativeControlFailureKind(body) {
-  const text = String(body || "");
-  if (/\bimport\s*error\b/i.test(text)) return "import_error";
-  if (/\bcollection\s+(?:error|failed|failure)\b/i.test(text)) return "collection_error";
-  return "";
+function negativeControlDeclaredFailureKind(markerLine) {
+  return markerLine.match(/\bfailure-kind=(assertion|import|collection)\b/i)?.[1].toLowerCase() || "";
 }
 function changedTestNames(delta, changedPaths) {
   if (!delta?.workspace) return [];
@@ -897,8 +894,9 @@ function negativeControlResult(ticket, expectedTestNames = []) {
     if (failed) {
       if (!failed[1]?.trim() || !failed[2]?.trim()) return { kind: "missing_target_or_assertion" };
       if (Number(failed[4]) === 0) return { kind: "zero_failures" };
-      const failureKind = negativeControlFailureKind(body);
-      if (failureKind) return { kind: failureKind };
+      const declaredFailureKind = negativeControlDeclaredFailureKind(markerLine);
+      if (!declaredFailureKind) return { kind: "undeclared_failure_kind" };
+      if (declaredFailureKind !== "assertion") return { kind: `${declaredFailureKind}_error` };
       const testReport = negativeControlTestReport(comments.filter((comment2) => comment2.by === claimHolder), expectedTestNames);
       return testReport.unreported.length ? { kind: "unreported_tests", tests: testReport.unreported, markerLines: testReport.markerLines } : { kind: "failed" };
     }
@@ -916,6 +914,13 @@ function negativeControlRefusal(ticket, result) {
       ok: false,
       reason: `negative_control_${result.kind}`,
       message: `${ticket.ref} completion refused: the recorded negative control failed with ${failure}. ${recipe}`
+    };
+  }
+  if (result.kind === "undeclared_failure_kind") {
+    return {
+      ok: false,
+      reason: "negative_control_failure_kind_required",
+      message: `${ticket.ref} completion refused: the negative control must declare how the changed tests failed. Add failure-kind=assertion, failure-kind=import, or failure-kind=collection after failed=<n> on the marker line. ${recipe}`
     };
   }
   if (result.kind === "missing_target_or_assertion") {
