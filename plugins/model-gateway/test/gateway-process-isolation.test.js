@@ -116,6 +116,17 @@ async function waitForReplacementPidRecord(filePath, retiredPid) {
   throw new Error(`replacement pid record was not written: ${filePath}`);
 }
 
+async function waitForFileText(filePath, expectedText) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      if (fs.readFileSync(filePath, 'utf8').trim() === expectedText) return;
+    } catch {}
+    await pause(25);
+  }
+  assert.equal(fs.readFileSync(filePath, 'utf8').trim(), expectedText);
+}
+
 function descendantPids(parentPid) {
   if (process.platform === 'win32') {
     const result = spawnSync('powershell.exe', [
@@ -653,6 +664,90 @@ test('sibling ensure retires dead records without deleting replacement worker an
   const stopped = await runGatewayCli(newerCli, 'stop', environment, { cwd: home });
   assert.equal(stopped.status, 0, stopped.stderr);
   await waitForProcessesToExit([replacementGuardianPid, replacementWorkerPid, replacementProxyPid], 5000);
+});
+
+test('version-change restart leaves the replacement proxy under its live supervisor', async (t) => {
+  const shimReservation = net.createServer();
+  const shimPort = await listen(shimReservation);
+  await new Promise((resolve) => shimReservation.close(resolve));
+  const proxyReservation = net.createServer();
+  const proxyPort = await listen(proxyReservation);
+  await new Promise((resolve) => proxyReservation.close(resolve));
+  const environment = gatewayTestEnvironment(t, {}, {
+    CODEX_GATEWAY_PORT: String(shimPort),
+    CODEX_GATEWAY_WORKER_PORT: '',
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    CODEX_GATEWAY_PROXY_RECOVERY_INTERVAL_MS: '1000',
+  });
+  const home = environment.HOME;
+  const proxyBinary = path.join(home, '.claude', 'model-gateway', 'bin', process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy');
+  installNodeProxy(home);
+  fs.writeFileSync(path.join(home, 'serve'), "require('node:http').createServer((request, response) => request.url === '/v1/models' ? response.end(JSON.stringify({ data: [] })) : response.end('{}')).listen(process.env.PORT, '127.0.0.1'); setInterval(() => {}, 1000);\n");
+  const supervisor = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
+    cwd: home,
+    env: environment,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  await waitForReady(supervisor);
+  const state = path.join(home, '.claude', 'model-gateway');
+  const originalProxyPid = await waitForPidRecord(path.join(state, 'proxy.pid'));
+  const proxyVersion = (spawnSync(proxyBinary, ['--version'], { encoding: 'utf8', windowsHide: true }).stdout.match(/\d+\.\d+\.\d+/) || [])[0];
+  assert.ok(proxyVersion, 'fixture proxy reports a semver version');
+  fs.writeFileSync(path.join(state, 'proxy-serving-version.txt'), '0.0.0\n');
+
+  const updated = await runGatewayCli(CLI, 'ensure', environment, { arguments: ['--quiet'], cwd: home });
+  assert.equal(updated.status, 0, updated.stderr);
+  const replacementProxyPid = await waitForReplacementPidRecord(path.join(state, 'proxy.pid'), originalProxyPid);
+  assert.equal(await isDescendantOfAsync(replacementProxyPid, supervisor.pid), true, 'recovery starts the replacement as a supervisor descendant');
+  await waitForFileText(path.join(state, 'proxy-serving-version.txt'), proxyVersion);
+
+  const unchanged = await runGatewayCli(CLI, 'ensure', environment, { arguments: ['--quiet'], cwd: home });
+  assert.equal(unchanged.status, 0, unchanged.stderr);
+  assert.equal(Number(fs.readFileSync(path.join(state, 'proxy.pid'), 'utf8')), replacementProxyPid, 'matching serving and on-disk versions leave the replacement running');
+
+  const stopped = await runGatewayCli(CLI, 'stop', environment, { cwd: home });
+  assert.equal(stopped.status, 0, stopped.stderr);
+  await waitForProcessesToExit([supervisor.pid, replacementProxyPid], 5000);
+});
+
+test('version-change restart without a supervisor reports the next-ensure recovery', async (t) => {
+  const shimReservation = net.createServer();
+  const shimPort = await listen(shimReservation);
+  await new Promise((resolve) => shimReservation.close(resolve));
+  const proxyReservation = net.createServer();
+  const proxyPort = await listen(proxyReservation);
+  await new Promise((resolve) => proxyReservation.close(resolve));
+  const environment = gatewayTestEnvironment(t, {}, {
+    CODEX_GATEWAY_PORT: String(shimPort),
+    CODEX_GATEWAY_WORKER_PORT: '',
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    CODEX_GATEWAY_PROXY_RECOVERY_INTERVAL_MS: '1000',
+  });
+  const home = environment.HOME;
+  const proxyBinary = path.join(home, '.claude', 'model-gateway', 'bin', process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy');
+  installNodeProxy(home);
+  fs.writeFileSync(path.join(home, 'serve'), "require('node:http').createServer((request, response) => request.url === '/v1/models' ? response.end(JSON.stringify({ data: [] })) : response.end('{}')).listen(process.env.PORT, '127.0.0.1', () => process.stdout.write('ready\\n')); setInterval(() => {}, 1000);\n");
+  const originalProxy = spawn(proxyBinary, ['serve', '--no-monitor'], { cwd: home, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(async () => {
+    if (processIsRunning(originalProxy.pid)) originalProxy.kill();
+    await waitForExit(originalProxy);
+  });
+  await waitForReady(originalProxy);
+  const state = path.join(home, '.claude', 'model-gateway');
+  fs.mkdirSync(state, { recursive: true });
+  fs.writeFileSync(path.join(state, 'proxy.pid'), String(originalProxy.pid));
+  fs.writeFileSync(path.join(state, 'proxy-serving-version.txt'), '0.0.0\n');
+
+  const updated = await runGatewayCli(CLI, 'ensure', environment, { cwd: home });
+  assert.equal(updated.status, 0, updated.stderr);
+  assert.match(`${updated.stdout}${updated.stderr}`, /proxy on disk: \d+\.\d+\.\d+\s+serving: 0\.0\.0\s+restarts on next `ensure`/);
+  await waitForProcessesToExit([originalProxy.pid], 5000);
+  const supervisorPid = await waitForPidRecord(path.join(state, 'guardian.pid'));
+  const replacementProxyPid = await waitForPidRecord(path.join(state, 'proxy.pid'));
+
+  const stopped = await runGatewayCli(CLI, 'stop', environment, { cwd: home });
+  assert.equal(stopped.status, 0, stopped.stderr);
+  await waitForProcessesToExit([supervisorPid, replacementProxyPid], 5000);
 });
 
 test('older cache version leaves a newer sibling shim running', async (t) => {
