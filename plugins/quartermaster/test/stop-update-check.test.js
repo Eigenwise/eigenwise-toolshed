@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { CACHE_MAX_AGE_MS, readCache } = require('../hooks/marketplace-freshness-cache.js');
-const { reportLoadedPluginVersion } = require('../hooks/freshness-helpers.js');
+const { loadedVersionStateFile, reportLoadedPluginVersion } = require('../hooks/freshness-helpers.js');
 const { decide: decideUserPrompt } = require('../hooks/user-prompt-freshness.js');
 const { decide } = require('../hooks/stop-update-check.js');
 
@@ -148,6 +148,30 @@ test('reports newer installed Quartermaster versions once without blocking', asy
   assert.equal(await decide(input('loaded-version-current'), sharedOptions), '');
 });
 
+test('rewrites the Quartermaster loaded-version record before Stop checks reported reloads', async (testContext) => {
+  const home = tempDirectory();
+  testContext.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  writeRegistry(home, '0.7.6');
+  const stateDirectory = path.join(home, 'loaded-plugin-versions');
+  const sessionInput = input('stop-reloaded-quartermaster');
+  const previousRoot = writeLoadedQuartermaster(home, '0.7.3');
+  reportLoadedPluginVersion(sessionInput, 'quartermaster@eigenwise-toolshed', '0.7.3', { directory: stateDirectory, pluginRoot: previousRoot });
+  const reloadedRoot = path.join(home, 'reloaded-quartermaster');
+  fs.mkdirSync(path.join(reloadedRoot, '.claude-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(reloadedRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: '0.7.6' }));
+
+  assert.equal(await decide(sessionInput, options(home, {
+    cache: cacheAt(NOW, '0.7.6'),
+    loadedVersionStateDirectory: stateDirectory,
+    pluginRoot: reloadedRoot,
+  })), '');
+  assert.deepEqual(JSON.parse(fs.readFileSync(loadedVersionStateFile(sessionInput, 'quartermaster@eigenwise-toolshed', stateDirectory), 'utf8')), {
+    pluginId: 'quartermaster@eigenwise-toolshed',
+    pluginRoot: reloadedRoot,
+    version: '0.7.6',
+  });
+});
+
 test('reports newer installed versions reported by other Toolshed plugins', async (testContext) => {
   const home = tempDirectory();
   testContext.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -158,7 +182,9 @@ test('reports newer installed versions reported by other Toolshed plugins', asyn
   } }));
   const sessionInput = input('reported-reload-version-change');
   const loadedVersionStateDirectory = path.join(home, 'loaded-plugin-versions');
-  reportLoadedPluginVersion(sessionInput, 'sidequest@eigenwise-toolshed', '1.0.0', { directory: loadedVersionStateDirectory });
+  const sidequestRoot = path.join(home, 'loaded-sidequest');
+  fs.mkdirSync(sidequestRoot);
+  reportLoadedPluginVersion(sessionInput, 'sidequest@eigenwise-toolshed', '1.0.0', { directory: loadedVersionStateDirectory, pluginRoot: sidequestRoot });
   const sharedOptions = options(home, {
     cache: { checkedAt: new Date(NOW).toISOString(), manifest: { plugins: [{ name: 'sidequest', version: '2.0.0' }] } },
     loadedVersionStateDirectory,

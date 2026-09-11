@@ -1,3 +1,4 @@
+import type { TestContext } from 'node:test';
 import './_temp-cleanup.js';
 import './_gateway-catalog-freshness.js';
 import './_sidequest-install-fixture.js';
@@ -33,6 +34,7 @@ process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY;
 const store = require('../lib/store.js');
 const { boardReconciliationReminderForStore } = require('../src/hooks/board-reconciliation-reminder.ts');
+const { loadedVersionStateFile, reportLoadedSidequestVersion } = require('../lib/plugin-freshness.js');
 const worktrees = require('../lib/worktrees.js');
 const worktreeLease = require('../lib/kernel/worktree.js');
 const { WORKTREE_CREATE_HOOK_TIMEOUT_SECONDS } = require('../src/lib/hook-timeouts.ts');
@@ -1646,6 +1648,30 @@ test('user-prompt reminder fires once for the first human prompt', () => {
   assert.match(reminder.hookSpecificOutput.additionalContext, /using Explore only for a quick sweep/);
   assert.match(reminder.hookSpecificOutput.additionalContext, /codebase-exploration spike/);
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, payload), null);
+});
+
+test('user-prompt hook replaces the SessionStart Sidequest version after reload', (testContext: TestContext) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sidequest-reloaded-hook-'));
+  const payload = { session_id: `sidequest-reloaded-${Date.now()}-${Math.random()}`, prompt: '<task-notification>Executor completed.</task-notification>' };
+  const previousRoot = path.join(directory, 'sidequest-5.0.34');
+  const reloadedRoot = path.join(directory, 'sidequest-5.0.38');
+  for (const [root, version] of [[previousRoot, '5.0.34'], [reloadedRoot, '5.0.38']]) {
+    fs.mkdirSync(path.join(root, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ version }));
+  }
+  const stateFile = loadedVersionStateFile(payload)!;
+  testContext.after(() => {
+    fs.rmSync(directory, { recursive: true, force: true });
+    fs.rmSync(stateFile, { force: true });
+  });
+  reportLoadedSidequestVersion(payload, { pluginRoot: previousRoot });
+
+  assert.equal(runHookOutput(BOARD_FIRST_REMINDER, payload, { CLAUDE_PLUGIN_ROOT: reloadedRoot }), null);
+  assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, 'utf8')), {
+    pluginId: 'sidequest@eigenwise-toolshed',
+    pluginRoot: reloadedRoot,
+    version: '5.0.38',
+  });
 });
 
 test('user-prompt reminder ignores automation without consuming the session flag', () => {

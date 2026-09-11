@@ -1,3 +1,4 @@
+import { reportLoadedSidequestVersion } from '../lib/plugin-freshness.js';
 import { isSubagent, readStdin, stringField, type HookInput } from './shared/input.js';
 import { writeContext } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
@@ -21,7 +22,9 @@ function boardFor(input: HookInput): string | null {
 
 function main(): void {
   const input = readStdin();
-  if (!input || isSubagent(input)) return;
+  if (!input) return;
+  reportLoadedSidequestVersion(input);
+  if (isSubagent(input)) return;
 
   const id = stringField(input, 'session_id', 'sessionId').trim();
   const prompt = stringField(input, 'prompt').trim();

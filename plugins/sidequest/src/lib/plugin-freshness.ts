@@ -195,12 +195,13 @@ export function loadedVersionStateFile(input: Record<string, unknown>, pluginId 
 }
 
 export function reportLoadedSidequestVersion(input: Record<string, unknown>, options: FreshnessOptions = {}): string | null {
-  const version = loadedPluginVersion(options.pluginRoot);
+  const pluginRoot = options.pluginRoot || process.env.CLAUDE_PLUGIN_ROOT;
+  const version = loadedPluginVersion(pluginRoot);
   const stateFile = loadedVersionStateFile(input, SIDEQUEST_PLUGIN_ID, options);
-  if (!version || !stateFile) return version;
+  if (!version || !stateFile || !pluginRoot) return version;
   try {
     fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-    fs.writeFileSync(stateFile, JSON.stringify({ pluginId: SIDEQUEST_PLUGIN_ID, version }));
+    fs.writeFileSync(stateFile, JSON.stringify({ pluginId: SIDEQUEST_PLUGIN_ID, pluginRoot, version }));
   } catch (_) {
   }
   return version;

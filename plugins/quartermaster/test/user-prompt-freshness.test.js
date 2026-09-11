@@ -11,7 +11,7 @@ const {
   decide,
   isMaintenancePrompt,
 } = require('../hooks/user-prompt-freshness.js');
-const { reportLoadedPluginVersion } = require('../hooks/freshness-helpers.js');
+const { loadedVersionStateFile, reportLoadedPluginVersion } = require('../hooks/freshness-helpers.js');
 
 function tempDirectory() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-freshness-'));
@@ -86,10 +86,12 @@ test('warns for a newer installed version reported by another Toolshed plugin', 
   const registryFile = path.join(directory, 'installed_plugins.json');
   const stateDirectory = path.join(directory, 'loaded-plugin-versions');
   const input = { prompt: 'dispatch SQ-1', cwd: path.join(directory, 'project'), session_id: 'reported-sidequest' };
+  const sidequestRoot = path.join(directory, 'loaded-sidequest');
+  fs.mkdirSync(sidequestRoot);
   fs.writeFileSync(registryFile, JSON.stringify({ plugins: {
     'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: input.cwd, version: '2.0.0' }],
   } }));
-  reportLoadedPluginVersion(input, 'sidequest@eigenwise-toolshed', '1.0.0', { directory: stateDirectory });
+  reportLoadedPluginVersion(input, 'sidequest@eigenwise-toolshed', '1.0.0', { directory: stateDirectory, pluginRoot: sidequestRoot });
 
   const output = JSON.parse(decide(input, {
     registryFile,
@@ -102,15 +104,70 @@ test('warns for a newer installed version reported by another Toolshed plugin', 
   assert.match(output.hookSpecificOutput.additionalContext, /\/reload-plugins/);
 });
 
+test('replaces the SessionStart Quartermaster record after a plugin reload', () => {
+  const directory = tempDirectory();
+  const stateDirectory = path.join(directory, 'loaded-plugin-versions');
+  const input = { prompt: 'continue', cwd: path.join(directory, 'project'), session_id: 'quartermaster-reloaded' };
+  const previousRoot = path.join(directory, 'quartermaster-0.7.3');
+  const reloadedRoot = path.join(directory, 'quartermaster-0.7.6');
+  for (const [root, version] of [[previousRoot, '0.7.3'], [reloadedRoot, '0.7.6']]) {
+    fs.mkdirSync(path.join(root, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ version }));
+  }
+  reportLoadedPluginVersion(input, 'quartermaster@eigenwise-toolshed', '0.7.3', { directory: stateDirectory, pluginRoot: previousRoot });
+  const registryFile = path.join(directory, 'installed_plugins.json');
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: {
+    'quartermaster@eigenwise-toolshed': [{ scope: 'user', version: '0.7.6' }],
+  } }));
+
+  assert.equal(decide(input, {
+    cache: { checkedAt: new Date().toISOString(), manifest: { plugins: [] } },
+    loadedVersionStateDirectory: stateDirectory,
+    pluginRoot: reloadedRoot,
+    registryFile,
+    warnedStates: new Set(),
+    warningStateDirectory: path.join(directory, 'warnings'),
+  }), '');
+  assert.deepEqual(JSON.parse(fs.readFileSync(loadedVersionStateFile(input, 'quartermaster@eigenwise-toolshed', stateDirectory), 'utf8')), {
+    pluginId: 'quartermaster@eigenwise-toolshed',
+    pluginRoot: reloadedRoot,
+    version: '0.7.6',
+  });
+});
+
+test('ignores a reported version whose plugin root was replaced', () => {
+  const directory = tempDirectory();
+  const registryFile = path.join(directory, 'installed_plugins.json');
+  const stateDirectory = path.join(directory, 'loaded-plugin-versions');
+  const input = { prompt: 'dispatch SQ-1', cwd: path.join(directory, 'project'), session_id: 'deleted-sidequest-root' };
+  const deletedRoot = path.join(directory, 'sidequest-5.0.34');
+  fs.mkdirSync(deletedRoot);
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: {
+    'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: input.cwd, version: '5.0.38' }],
+  } }));
+  reportLoadedPluginVersion(input, 'sidequest@eigenwise-toolshed', '5.0.34', { directory: stateDirectory, pluginRoot: deletedRoot });
+  fs.rmSync(deletedRoot, { recursive: true });
+
+  assert.equal(decide(input, {
+    cache: { checkedAt: new Date().toISOString(), manifest: { plugins: [] } },
+    loadedVersionStateDirectory: stateDirectory,
+    registryFile,
+    warnedStates: new Set(),
+    warningStateDirectory: path.join(directory, 'warnings'),
+  }), '');
+});
+
 test('ignores absent or malformed reported versions', () => {
   const directory = tempDirectory();
   const registryFile = path.join(directory, 'installed_plugins.json');
   const stateDirectory = path.join(directory, 'loaded-plugin-versions');
   const input = { prompt: 'dispatch SQ-1', cwd: path.join(directory, 'project'), session_id: 'malformed-sidequest' };
+  const sidequestRoot = path.join(directory, 'loaded-sidequest');
+  fs.mkdirSync(sidequestRoot);
   fs.writeFileSync(registryFile, JSON.stringify({ plugins: {
     'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: input.cwd, version: '2.0.0' }],
   } }));
-  reportLoadedPluginVersion(input, 'sidequest@eigenwise-toolshed', 'not-semver', { directory: stateDirectory });
+  reportLoadedPluginVersion(input, 'sidequest@eigenwise-toolshed', 'not-semver', { directory: stateDirectory, pluginRoot: sidequestRoot });
 
   assert.doesNotThrow(() => assert.equal(decide(input, {
     registryFile,

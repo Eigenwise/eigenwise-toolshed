@@ -107,10 +107,11 @@ function loadedVersionStateFile(input, pluginId, directory = path.join(os.tmpdir
 
 function reportLoadedPluginVersion(input, pluginId, version, options = {}) {
   const file = loadedVersionStateFile(input, pluginId, options.directory);
-  if (!file || !version) return false;
+  if (!file || !version || !options.pluginRoot) return false;
   try {
-    (options.fileSystem || fs).mkdirSync(path.dirname(file), { recursive: true });
-    (options.fileSystem || fs).writeFileSync(file, JSON.stringify({ pluginId, version }));
+    const fileSystem = options.fileSystem || fs;
+    fileSystem.mkdirSync(path.dirname(file), { recursive: true });
+    fileSystem.writeFileSync(file, JSON.stringify({ pluginId, pluginRoot: options.pluginRoot, version }));
     return true;
   } catch (_) {
     return false;
@@ -119,8 +120,9 @@ function reportLoadedPluginVersion(input, pluginId, version, options = {}) {
 
 function reportedLoadedPluginVersion(input, pluginId, options = {}) {
   const file = loadedVersionStateFile(input, pluginId, options.directory);
-  const state = file ? readJson(options.fileSystem || fs, file) : null;
-  return typeof state?.version === 'string' ? state.version : null;
+  const fileSystem = options.fileSystem || fs;
+  const state = file ? readJson(fileSystem, file) : null;
+  return typeof state?.version === 'string' && typeof state?.pluginRoot === 'string' && fileSystem.existsSync(state.pluginRoot) ? state.version : null;
 }
 
 module.exports = {

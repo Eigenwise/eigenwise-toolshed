@@ -185,12 +185,13 @@ function loadedVersionStateFile(input, pluginId = SIDEQUEST_PLUGIN_ID, options =
   return import_node_path.default.join(stateDirectory(options), `${digest}.json`);
 }
 function reportLoadedSidequestVersion(input, options = {}) {
-  const version = loadedPluginVersion(options.pluginRoot);
+  const pluginRoot = options.pluginRoot || process.env.CLAUDE_PLUGIN_ROOT;
+  const version = loadedPluginVersion(pluginRoot);
   const stateFile = loadedVersionStateFile(input, SIDEQUEST_PLUGIN_ID, options);
-  if (!version || !stateFile) return version;
+  if (!version || !stateFile || !pluginRoot) return version;
   try {
     import_node_fs.default.mkdirSync(import_node_path.default.dirname(stateFile), { recursive: true });
-    import_node_fs.default.writeFileSync(stateFile, JSON.stringify({ pluginId: SIDEQUEST_PLUGIN_ID, version }));
+    import_node_fs.default.writeFileSync(stateFile, JSON.stringify({ pluginId: SIDEQUEST_PLUGIN_ID, pluginRoot, version }));
   } catch (_) {
   }
   return version;

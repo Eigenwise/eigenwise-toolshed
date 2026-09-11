@@ -24,7 +24,7 @@ const {
   reportedReloadWarning,
   warnOnce,
 } = require('./user-prompt-freshness.js');
-const { readJson } = require('./freshness-helpers.js');
+const { readJson, reportLoadedPluginVersion } = require('./freshness-helpers.js');
 
 const REFRESH_TIMEOUT_MS = 2_000;
 
@@ -74,7 +74,13 @@ async function decide(input, options = {}) {
     messages.push(remoteWarning(instances, cache, now));
   }
 
-  const loadedVersion = loadedPluginVersion(fileSystem, options.pluginRoot || environment.CLAUDE_PLUGIN_ROOT);
+  const pluginRoot = options.pluginRoot || environment.CLAUDE_PLUGIN_ROOT;
+  const loadedVersion = loadedPluginVersion(fileSystem, pluginRoot);
+  reportLoadedPluginVersion(input, 'quartermaster@eigenwise-toolshed', loadedVersion, {
+    directory: options.loadedVersionStateDirectory,
+    fileSystem,
+    pluginRoot,
+  });
   const installedVersion = newerInstalledVersion(instances, loadedVersion);
   if (installedVersion && warnOnce(input, 'stop-reload', options, `quartermaster@${installedVersion}`)) {
     messages.push(reloadWarning(installedVersion, loadedVersion));
