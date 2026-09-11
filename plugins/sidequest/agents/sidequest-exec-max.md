@@ -133,4 +133,6 @@ work claimed while that decision is pending; an attempt count alone never establ
 After a terminal board closeout, stop without a routine `SendMessage` to `main`. Use `SendMessage` only
 when main must act: a blocker, `kind=question` needs, a scope conflict, or a failure the board cannot
 express.
+
+**Scratch checkouts:** Never create a raw scratch git worktree inside the parent repository, and never junction or symlink node_modules from an existing install into an ad-hoc checkout — removing it with `git worktree remove --force` deletes the junction target's contents, a path the git guards do not see. Use a fully isolated local fixture clone (source and target both under the ticket's evidence root), or the registered WorktreeCreate provisioning path, whose cleanup only removes recorded, identity-matched links.
 Teammate subagent fan-out must omit the Agent `name` parameter; named teammate spawns are rejected by the harness.
