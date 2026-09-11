@@ -421,7 +421,7 @@ const tools: ToolDefinition[] = [
         alwaysInScope: { type: 'array', items: { type: 'string' }, description: 'When supplied, replaces the board paths merged into every ticket scope.' },
         readOnlyDeniedTools: { type: 'array', items: { type: 'string' } },
         generatedPairs: {},
-        integrationMode: { type: 'string', description: 'auto is local without origin; local does not push.' },
+        integrationMode: { type: 'string', description: 'auto (default) picks remote whenever an origin remote exists, local otherwise. remote mode still DELIVERS by merging into the local branch and verifying there; it only adds the frozen origin/<branch> ref as landed proof. The board never fetches and never pushes in any mode.' },
         integrationBranch: { type: 'string', minLength: 1, description: 'Branch used as the integration baseline. Defaults to main. Remote mode requires origin/<branch>.' },
         delivery: { type: 'string', description: 'Default submission delivery mode. Defaults to merge.' },
         integrationVerifyTimeoutMs: { type: 'integer' },

@@ -34,7 +34,11 @@ __export(commit_scope_exports, {
   foreignReleaseFragmentRefusalMessage: () => foreignReleaseFragmentRefusalMessage,
   foreignReleaseFragmentScopePaths: () => foreignReleaseFragmentScopePaths,
   headCommit: () => headCommit,
+  integrationRefLabel: () => integrationRefLabel,
+  integrationTargetRef: () => integrationTargetRef,
+  integrationTargetRefs: () => integrationTargetRefs,
   isInScope: () => import_scope_match2.isInScope,
+  isRemoteIntegrationRef: () => isRemoteIntegrationRef,
   linkedWorktree: () => linkedWorktree,
   preserveCommitRef: () => preserveCommitRef,
   rangePaths: () => rangePaths,
@@ -42,6 +46,7 @@ __export(commit_scope_exports, {
   scopedPaths: () => import_scope_match2.scopedPaths,
   scopedWorkPending: () => scopedWorkPending,
   submissionCommitReachedIntegrationBranch: () => submissionCommitReachedIntegrationBranch,
+  submissionLandedIntegrationRef: () => submissionLandedIntegrationRef,
   submissionRange: () => submissionRange,
   ticketCommitScope: () => ticketCommitScope,
   ticketReleaseFragment: () => ticketReleaseFragment,
@@ -104,21 +109,76 @@ function patchIdsForCommits(cwd, commits) {
   }
   return ids;
 }
-function submissionAlreadyOnIntegrationBranch(cwd, submission) {
+function remoteTrackingUpstream(upstream, branch) {
+  const value = String(upstream ?? "").trim();
+  return value.includes("/") ? value : `origin/${branch}`;
+}
+function integrationTargetRefs(target) {
+  const record = isRecord(target) ? target : {};
+  const branch = String(record.branch ?? record.integrationBranch ?? "").trim();
+  if (!branch) return [];
+  const refs = [`refs/heads/${branch}`];
+  const mode = String(record.mode ?? record.integrationMode ?? "").trim().toLowerCase();
+  if (mode === "remote") refs.push(`refs/remotes/${remoteTrackingUpstream(record.upstream, branch)}`);
+  return refs;
+}
+function integrationTargetRef(target) {
+  const refs = integrationTargetRefs(target);
+  return refs[refs.length - 1] ?? "";
+}
+function qualifiedSubmissionUpstream(options, upstream) {
+  const target = isRecord(options.integrationTarget) ? options.integrationTarget : null;
+  if (String(target?.mode ?? target?.integrationMode ?? "").trim().toLowerCase() !== "remote") return upstream;
+  const ref = integrationTargetRef(target);
+  return isRemoteIntegrationRef(ref) ? ref : upstream;
+}
+function integrationRefLabel(ref) {
+  return String(ref ?? "").trim().replace(/^refs\/(?:heads|remotes)\//, "");
+}
+function isRemoteIntegrationRef(ref) {
+  return String(ref ?? "").trim().startsWith("refs/remotes/");
+}
+function integrationRefNames(override, submission) {
+  if (Array.isArray(override)) {
+    const names = override.map((ref) => String(ref ?? "").trim()).filter(Boolean);
+    if (names.length) return names;
+  } else {
+    const single = String(override ?? "").trim();
+    if (single) return [single];
+    const derived = integrationTargetRefs(submission);
+    if (derived.length) return derived;
+  }
+  const stored = String(submission.integrationBranch || submission.upstream || "").trim();
+  return stored ? [stored] : [];
+}
+function resolvedIntegrationRefs(cwd, names) {
+  const resolved = [];
+  for (const name of names) {
+    const commit = resolvedCommit(cwd, name);
+    if (commit.ok) resolved.push({ ref: name, commit: commit.value });
+  }
+  return resolved;
+}
+function submissionAlreadyOnIntegrationBranch(cwd, submission, integrationBranchOverride) {
   const commits = Array.isArray(submission.commits) ? submission.commits.filter((commit) => typeof commit === "string" && commit.length > 0) : [];
   const changedPaths = Array.isArray(submission.changedPaths) ? submission.changedPaths.filter((file) => typeof file === "string" && file.length > 0) : [];
-  const integrationBranch = String(submission.integrationBranch || submission.upstream || "").trim();
-  if (!commits.length || !changedPaths.length || !integrationBranch || submission.noOp === true) return { reconciled: false };
+  const integrationRefs = resolvedIntegrationRefs(cwd, integrationRefNames(integrationBranchOverride, submission));
+  if (!commits.length || !changedPaths.length || !integrationRefs.length || submission.noOp === true) return { reconciled: false };
   const submittedPatchIds = patchIdsForCommits(cwd, commits);
   if (!submittedPatchIds?.size) return { reconciled: false };
-  const integrationCommits = gitResult(cwd, ["rev-list", "--no-merges", integrationBranch]);
-  if (!integrationCommits.ok) return { reconciled: false };
-  const integrationPatchIds = patchIdsForCommits(cwd, integrationCommits.value.split(/\r?\n/).filter(Boolean));
-  if (integrationPatchIds == null || ![...submittedPatchIds].every((patchId) => integrationPatchIds.has(patchId))) return { reconciled: false };
-  const differingPaths = gitResult(cwd, ["diff", "--name-only", integrationBranch, String(submission.commit), "--", ...changedPaths]);
-  if (!differingPaths.ok) return { reconciled: false };
-  const divergedPath = differingPaths.value.split(/\r?\n/).find(Boolean);
-  return divergedPath ? { reconciled: false, divergedPath } : { reconciled: true };
+  let divergedPath;
+  for (const { ref, commit } of integrationRefs) {
+    const integrationCommits = gitResult(cwd, ["rev-list", "--no-merges", commit]);
+    if (!integrationCommits.ok) continue;
+    const integrationPatchIds = patchIdsForCommits(cwd, integrationCommits.value.split(/\r?\n/).filter(Boolean));
+    if (integrationPatchIds == null || ![...submittedPatchIds].every((patchId) => integrationPatchIds.has(patchId))) continue;
+    const differingPaths = gitResult(cwd, ["diff", "--name-only", commit, String(submission.commit), "--", ...changedPaths]);
+    if (!differingPaths.ok) continue;
+    const diverged = differingPaths.value.split(/\r?\n/).find(Boolean);
+    if (!diverged) return { reconciled: true, ref, commit };
+    divergedPath = divergedPath ?? diverged;
+  }
+  return divergedPath ? { reconciled: false, divergedPath } : { reconciled: false };
 }
 function repoRoot(cwd) {
   return git(cwd, ["rev-parse", "--show-toplevel"]).trim();
@@ -387,11 +447,17 @@ function isAncestor(cwd, ancestor, descendant) {
     return false;
   }
 }
-function submissionCommitReachedIntegrationBranch(cwd, submission, integrationBranchOverride) {
-  if (submission.noOp === true) return false;
+function submissionLandedIntegrationRef(cwd, submission, integrationBranchOverride) {
+  if (submission.noOp === true) return null;
   const commit = String(submission.commit || "").trim();
-  const integrationBranch = String(integrationBranchOverride || submission.integrationBranch || submission.upstream || "").trim();
-  return Boolean(commit && integrationBranch && isAncestor(cwd, commit, integrationBranch));
+  if (!commit) return null;
+  for (const candidate of resolvedIntegrationRefs(cwd, integrationRefNames(integrationBranchOverride, submission))) {
+    if (isAncestor(cwd, commit, candidate.commit)) return candidate;
+  }
+  return null;
+}
+function submissionCommitReachedIntegrationBranch(cwd, submission, integrationBranchOverride) {
+  return submissionLandedIntegrationRef(cwd, submission, integrationBranchOverride) !== null;
 }
 function parentCommits(cwd, commit) {
   const parents = gitResult(cwd, ["rev-list", "--parents", "-n", "1", commit]);
@@ -468,7 +534,7 @@ function submissionRange(cwd, options) {
   const refTip = resolvedCommit(cwd, gitRef);
   if (!refTip.ok) return { ok: false, reason: "missing_git_ref", message: refTip.message };
   if (tip.value !== refTip.value) return { ok: false, reason: "tip_mismatch", tip: tip.value, refTip: refTip.value, gitRef };
-  const currentUpstream = resolvedCommit(cwd, upstream);
+  const currentUpstream = resolvedCommit(cwd, qualifiedSubmissionUpstream(opts, upstream));
   if (!currentUpstream.ok) return { ok: false, reason: "missing_upstream", upstream, message: currentUpstream.message };
   const recordedUpstream = opts.upstreamCommit ? resolvedCommit(cwd, opts.upstreamCommit) : null;
   if (recordedUpstream && !recordedUpstream.ok) return { ok: false, reason: "missing_recorded_upstream", message: recordedUpstream.message };
@@ -480,7 +546,8 @@ function submissionRange(cwd, options) {
   const rootBase = isEmptyTreeBase(opts.base);
   const requestedBase = opts.base && !rootBase ? resolvedCommit(cwd, opts.base) : null;
   if (requestedBase && !requestedBase.ok) return { ok: false, reason: "missing_base", message: requestedBase.message };
-  const integrationBranch = resolvedCommit(cwd, opts.integrationBranch || upstream);
+  const integrationRefs = resolvedIntegrationRefs(cwd, integrationRefNames(opts.integrationBranch, { upstream }));
+  const integratedFrom = (commit) => integrationRefs.find((entry) => isAncestor(cwd, commit, entry.commit)) || null;
   const dispatchBase = !rootBase && opts.dispatchBase ? resolvedCommit(cwd, opts.dispatchBase) : null;
   const approvedBoundaryBase = (candidate) => {
     if (!candidate.ok) return false;
@@ -489,7 +556,7 @@ function submissionRange(cwd, options) {
   };
   const baseIsOnTip = !!requestedBase && isAncestor(cwd, requestedBase.value, tip.value);
   const baseIsAfterMergeBase = !!requestedBase && isAncestor(cwd, mergeBase.value, requestedBase.value);
-  const baseIsIntegrated = !!requestedBase && integrationBranch.ok && isAncestor(cwd, requestedBase.value, integrationBranch.value);
+  const baseIsIntegrated = !!requestedBase && integratedFrom(requestedBase.value) !== null;
   if (requestedBase && (!baseIsOnTip || !baseIsAfterMergeBase && !baseIsIntegrated)) {
     return { ok: false, reason: "base_not_reachable", base: requestedBase.value, actualBase: mergeBase.value, upstream, tip: tip.value };
   }
@@ -513,7 +580,7 @@ function submissionRange(cwd, options) {
   if (!requestedBase && dispatchBase) {
     const dispatchBaseIsOnTip = dispatchBase.ok && isAncestor(cwd, dispatchBase.value, tip.value);
     const dispatchBaseIsAfterMergeBase = dispatchBase.ok && isAncestor(cwd, mergeBase.value, dispatchBase.value);
-    const dispatchBaseIsIntegrated = dispatchBase.ok && integrationBranch.ok && isAncestor(cwd, dispatchBase.value, integrationBranch.value);
+    const dispatchBaseIsIntegrated = dispatchBase.ok && integratedFrom(dispatchBase.value) !== null;
     if (dispatchBaseIsOnTip && (dispatchBaseIsAfterMergeBase || dispatchBaseIsIntegrated)) {
       effectiveBase = dispatchBase.value;
     }
@@ -577,16 +644,18 @@ function submissionRange(cwd, options) {
 }
 function validateStoredSubmissionRange(cwd, submissionValue, ticketRef, integrationBranchOverride) {
   const submission = isRecord(submissionValue) ? submissionValue : {};
-  const candidateReachedIntegration = submissionCommitReachedIntegrationBranch(cwd, submission, integrationBranchOverride);
+  const integrationRefs = integrationRefNames(integrationBranchOverride, submission);
+  const landed = submissionLandedIntegrationRef(cwd, submission, integrationRefs);
   const range = submissionRange(cwd, {
     commit: submission.commit,
     gitRef: submission.gitRef,
     upstream: submission.upstream,
     upstreamCommit: submission.upstreamCommit,
-    integrationBranch: submission.integrationBranch,
+    integrationTarget: submission,
+    integrationBranch: integrationRefs,
     base: submission.base
   });
-  const reconciliation = candidateReachedIntegration ? { reconciled: true } : !range.ok && range.reason === "expected_upstream_diverged" ? submissionAlreadyOnIntegrationBranch(cwd, submission) : { reconciled: false };
+  const reconciliation = landed ? { reconciled: true, ref: landed.ref, commit: landed.commit } : !range.ok && range.reason === "expected_upstream_diverged" ? submissionAlreadyOnIntegrationBranch(cwd, submission, integrationRefs) : { reconciled: false };
   if (!range.ok && !reconciliation.reconciled) {
     if (reconciliation.divergedPath) {
       return Object.assign({}, range, {
@@ -628,7 +697,11 @@ function validateStoredSubmissionRange(cwd, submissionValue, ticketRef, integrat
     commits: rangeCommits,
     changedPaths: rangeChangedPaths,
     admittedScope,
-    ...reconciled ? { reconciled: true } : {}
+    ...reconciled ? {
+      reconciled: true,
+      reconciledRef: reconciliation.ref ?? null,
+      reconciledCommit: reconciliation.commit ?? null
+    } : {}
   });
 }
 function commitScoped(cwd, message, files) {
@@ -671,7 +744,11 @@ function commitScoped(cwd, message, files) {
   foreignReleaseFragmentRefusalMessage,
   foreignReleaseFragmentScopePaths,
   headCommit,
+  integrationRefLabel,
+  integrationTargetRef,
+  integrationTargetRefs,
   isInScope,
+  isRemoteIntegrationRef,
   linkedWorktree,
   preserveCommitRef,
   rangePaths,
@@ -679,6 +756,7 @@ function commitScoped(cwd, message, files) {
   scopedPaths,
   scopedWorkPending,
   submissionCommitReachedIntegrationBranch,
+  submissionLandedIntegrationRef,
   submissionRange,
   ticketCommitScope,
   ticketReleaseFragment,

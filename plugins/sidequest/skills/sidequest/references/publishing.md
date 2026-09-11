@@ -73,15 +73,41 @@ usually want `apply` or `replay`; use `merge` where the repository's release flo
 
 If a repair ticket deliberately delivers an earlier parked submission, do not replay the obsolete range. Use MCP `supersede_submission` with the earlier ref, the later integrated repair ref, concise closure evidence, and `reviewedReplacements` for every original path whose delivered content intentionally differs. The control plane requires the repair's recorded delivery to include every original changed path, preserves the earlier submission and its lineage under `supersededBy`, marks it done, and removes its pending-submission warning. A missing path, an unintegrated repair, or unreviewed divergent content leaves the original submission parked.
 
-## Local-only repositories
+## Integration mode: where delivery happens versus what proves a candidate landed
 
-`board-config --integration-mode local` records ranges against local `main`; `auto` chooses that mode when
-`origin` is absent. Integrate in a clean worktree from `main`, run the same reachability checks against
-`main`, then skip fetch and push. Local delivery uses the same assembled-wave gate: assemble the exact
-participant set, record a passing gate, and deliver it through `integrate` before any participant can
-be recorded as delivered or closed. The configured delivery mode runs only from a clean checkout on
-the target branch; any other checkout state refuses and names the condition. Remote mode keeps the
-transaction below unchanged; an existing but broken upstream still rejects the submission.
+`auto` (the default) picks `remote` mode whenever an `origin` remote exists and `local` otherwise;
+`board-config --integration-mode local` pins local. The mode does not change where delivery happens.
+**Both modes deliver by merging or cherry-picking into the LOCAL configured branch in the registered
+checkout and running the pinned verifier there.** The board never fetches and never pushes, so your
+push is still a separate operator step after `integrate` returns. What `remote` mode adds is a second
+piece of landed proof: the frozen `refs/remotes/<upstream>` ref counts alongside `refs/heads/<branch>`
+when the control plane asks whether a candidate, an accepted equivalent patch, or a submitted base is
+already contained in the integration target. Local mode stays local-only. Refs are always read fully
+qualified, so a tag named `main` or `origin/main` cannot shadow either one.
+
+Two consequences worth knowing before a publish run:
+
+- A recorded delivery revision names the ref that actually carried it. Work you merged and verified
+  locally is recorded as `git:<branch>`, never as `git:origin/<branch>` when origin does not have it
+  yet. A candidate someone landed out of band and that the board only observes on the remote ref is
+  recorded as already-landed against that remote ref, not abandoned.
+- If a closure needs the merged-tree gate but the candidate (or its exact accepted equivalent) exists
+  only on the remote ref while the local branch is behind, `integrate` refuses with
+  `integration_target_behind_landed_candidate`, naming the ref, the observed commit, and the candidate.
+  It does not move your checkout, does not fast-forward anything, and does not run the verifier. For a
+  wave, every participant is preflighted before any branch moves or any verifier runs, so the refusal
+  leaves no partial delivery. Synchronize the local target deliberately (your own fetch, then
+  `git merge --ff-only <ref>`) and re-run the closure. A candidate that simply has not landed yet
+  still merges locally as usual.
+
+A missing or unreadable frozen integration ref fails closed as `integration_target_unavailable`
+instead of quietly falling back to a local ref; fetch or recreate it, then retry. Non-Git and artifact
+completions are unaffected by all of this. Legacy submissions recorded before the mode was stored keep
+local semantics.
+
+Local-only repositories use the same assembled-wave gate: assemble the exact participant set, record a
+passing gate, and deliver it through `integrate` before any participant can be recorded as delivered or
+closed, then skip fetch and push. An existing but broken upstream still rejects the submission.
 
 ## The publish transaction
 
@@ -102,14 +128,15 @@ the ticket.
    `sidequest comments <ref> --json` for it. The queue is intentionally compact and does not replace the
    full thread. Act on unresolved risks or questions: resolve them, skip and file a scoped integration
    ticket, or leave the submission parked. Do not cherry-pick until the thread is understood.
-4. **Create a clean integration worktree** from the configured integration target, never from any
-   working tree: `git fetch origin`, then create the worktree with the configured target branch
-   checked out, for example `git worktree add <scratch>/sq-integrate <configured-target-branch>`.
-   Do not pass `--detach`. Before running `sidequest integrate`, confirm that
-   `git branch --show-current` reports the configured target branch; `integrate` refuses a detached
-   HEAD or any other branch. Install the touched plugin's dependencies before reverifying, for this
-   repo: `cd <worktree>/plugins/<name> && npm ci`. Never integrate in the shared session tree —
-   pre-staged or dirty files there are exactly the contamination this flow exists to prevent.
+4. **Put the project's registered checkout on a clean configured target branch.** `integrate` always
+   merges and verifies in that registered checkout: the control plane folds whatever directory you call
+   it from back to the registered repo root, so adding a scratch linked worktree does NOT move the
+   target. Check out the configured integration branch there and confirm
+   `git branch --show-current` reports it; a detached HEAD or any other branch refuses. Any staged,
+   modified, or untracked file in that checkout refuses with `integration_target_dirty` and names the
+   offending paths before a branch moves or a verifier runs, so commit, stash, or remove them first
+   rather than trying to hide them in another worktree. Install the touched plugin's dependencies
+   before reverifying, for this repo: `cd plugins/<name> && npm ci`.
 5. **Reconstruct each admitted submission before assembly**. Resolve its durable ref and require it
    still points to the submitted tip. Require the recorded upstream commit to remain reachable from
    the current recorded integration target, then require the stored dispatch base to lie on the tip's
@@ -158,7 +185,7 @@ the ticket.
    root `.claude-plugin/marketplace.json` (they must match) in one commit. Executors no longer bump
    anything, so versioning has exactly one writer: this step. If this or the seam/review gate fails,
    the locally delivered ticket is already done; record the failure and do not claim that it was pushed.
-10. **Push and confirm**: `git push origin HEAD:main` from the integration worktree — never a new
+10. **Push and confirm**: `git push origin HEAD:main` from the registered checkout — never a new
     branch. A non-fast-forward → `git pull --rebase origin main`, rerun steps 7-9, push again. Then
     fetch fresh and confirm the integrated commits (the cherry-picked equivalents, not the submitted
     range hashes) are covered by `git log origin/main`; the assembled-wave record identifies the exact
@@ -167,11 +194,10 @@ the ticket.
     ticket instead of claiming remote reachability.
 11. **Clean up after confirmation**: do not use `groom-close --integration` as a publish step or to
     close a wave participant individually. After every delivered commit is reachable, remove its
-    durable ref (`git update-ref -d refs/sidequest/<SQ-n>`), remove the integration worktree (`git
-    worktree remove <scratch>/sq-integrate`), and run `sidequest publish unlock`. Unlock happens LAST,
-    in a step that runs even when earlier cleanup partially fails. If a later step failed, retain the
-    refs or worktree needed for recovery, record the failure on the done ticket, and still release the
-    publish lock.
+    durable ref (`git update-ref -d refs/sidequest/<SQ-n>`) and run `sidequest publish unlock`. Unlock
+    happens LAST, in a step that runs even when earlier cleanup partially fails. If a later step
+    failed, retain the refs or executor worktrees needed for recovery, record the failure on the done
+    ticket, and still release the publish lock.
 
 ## Integration failures fail closed
 
@@ -207,9 +233,10 @@ just to run `submit` or `done`.
 
 The lock records owner pid + session metadata + timestamp. A publisher that dies mid-transaction leaves: a
 held lock (reclaimable — same session refreshes on re-acquire; anyone else waits for the TTL or
-`--steal`s a provably stale holder), an orphan integration worktree (`git worktree list` →
-`git worktree remove --force`), and either parked submissions from a pre-delivery failure or done
-tickets whose local delivery has not reached the remote yet. Nothing is lost: rerun the transaction
-from step 1, inspect each ticket's completion and delivery record, recover any durable refs or worktree
-needed for the push, then finish the push or record the failure on the ticket. A done ticket alone never
+`--steal`s a provably stale holder), a registered checkout left mid-delivery or dirty (`git status`,
+and `integrate` refuses it as `integration_target_dirty` until it is clean), and either parked
+submissions from a pre-delivery failure or done tickets whose local delivery has not reached the remote
+yet. Nothing is lost: rerun the transaction from step 1, inspect each ticket's completion and delivery
+record, recover any durable refs needed for the push, then finish the push or record the failure on the
+ticket. A done ticket alone never
 proves that its commit is reachable from `origin/main`.

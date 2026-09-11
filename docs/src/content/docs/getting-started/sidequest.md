@@ -31,6 +31,13 @@ the final candidate and reports what passed, failed, or needs your decision. Aft
 one combined full gate for the assembled work. The agent-facing reference covers capture, evidence, and
 delivery mechanics.
 
+Integration always happens in your local checkout: Claude merges the work into the local target branch and
+runs the check there. Sidequest never fetches and never pushes, so the push stays a deliberate step you or
+Claude take afterwards. When the project has an `origin` remote, Sidequest additionally reads
+`origin/<branch>` as evidence about what already landed, which is how it recognizes work that someone merged
+outside the board. That only affects what counts as proof; the merge and the check still run locally, and a
+recorded delivery always names the branch that actually carried it.
+
 ### Choose the planning depth
 
 Use the lightest planning that fits. Exact small changes and operational asks can stay lightweight. Substantial or ambiguous work starts with a visible surgical contract: the outcome, non-goals, smallest authority needed, scope, bounded oracle (the check that decides whether it worked), and review limit. Claude settles why an improvement is worth making, its approach, and its boundary before dispatch. Research can supply facts and bounded alternatives. Executors implement that plan with normal local coding judgment and report evidence when a pinned choice cannot work.
@@ -158,6 +165,8 @@ These read-only reports work independently. If Sidequest is not installed in the
 **A submitted ticket is not integrated.** Ask Claude to inspect the submission and complete the review and integration step. Do not start the same ticket again while a submitted result is waiting.
 
 **A wave left out submitted work.** Ask Claude to inspect the assembled wave and its declared participant set. Active or accepted pending candidates with overlapping scope belong in the wave. Review-rejected candidates stay visible for later supersession and do not block an accepted repair wave.
+
+**Integration stops because the work already landed on the remote.** Your local target branch is behind a commit that already contains the candidate, usually because someone merged it outside the board. Sidequest refuses instead of merging, and it does not move your branch, fetch, or run the check. For a group, it checks every participant before touching anything, so nothing is half delivered. Fetch and bring the local branch forward yourself, then ask Claude to retry the closure.
 
 **A submission sat so long it can no longer be integrated.** Ask Claude to check whether the requested behavior already reached the intended branch. If it did, Claude records that evidence; if it did not, the work needs a fresh ticket against current source.
 

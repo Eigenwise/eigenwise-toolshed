@@ -1482,7 +1482,7 @@ function autoStoryColor(index?: any) {
   return STORY_PALETTE[(((index || 0) % n) + n) % n];
 }
 
-configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, isTrackedBuildOutput: (...args: any[]) => warningsLayer?.isTrackedBuildOutput(...args), packageBuildOutputs: (...args: any[]) => warningsLayer?.packageBuildOutputs(...args) || [], packageRootForScope: (...args: any[]) => warningsLayer?.packageRootForScope(...args), path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
+configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, integrationTargetRef: commitScope.integrationTargetRef, isTrackedBuildOutput: (...args: any[]) => warningsLayer?.isTrackedBuildOutput(...args), packageBuildOutputs: (...args: any[]) => warningsLayer?.packageBuildOutputs(...args) || [], packageRootForScope: (...args: any[]) => warningsLayer?.packageRootForScope(...args), path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
 
 
 /* ------------------------------------------------------------------ *
@@ -2920,24 +2920,36 @@ function recordedDelivery(slug?: any, ticket?: any, commit?: any, evidence?: any
       windowsHide: true,
       stdio: 'pipe',
     }).trim();
-    const localBranchRef = `refs/heads/${target.branch}`;
-    const localBranchCommit = execFileSync('git', ['rev-parse', '--verify', `${localBranchRef}^{commit}`], {
-      cwd: repo,
-      encoding: 'utf8',
-      windowsHide: true,
-      stdio: 'pipe',
-    }).trim();
+    // The local branch answers first, so a delivery already on local main keeps its
+    // `git:<branch>` revision even after origin catches up (SQ-2434). In remote mode
+    // the frozen remote-tracking ref may answer instead, which is the only proof left
+    // for a candidate that landed through a reviewed PR the operator has not merged
+    // into the local branch yet.
+    const integrationRefs = commitScope.integrationTargetRefs(target);
+    let evidenceRef: { ref: string; commit: string } | null = null;
+    for (const ref of integrationRefs) {
+      let refCommit: string;
+      try {
+        refCommit = execFileSync('git', ['rev-parse', '--verify', `${ref}^{commit}`], {
+          cwd: repo, encoding: 'utf8', windowsHide: true, stdio: 'pipe',
+        }).trim();
+      } catch (_: any) {
+        continue;
+      }
+      if (commitReachedRef(repo, deliveredCommit, refCommit)) {
+        evidenceRef = { ref, commit: refCommit };
+        break;
+      }
+    }
+    if (!evidenceRef) throw new Error(`${deliveredCommit} is not reachable from ${integrationRefs.join(' or ') || 'the recorded integration ref'}`);
     const integrationRevision = sourceRevision({
-      source: `git:${target.branch}`,
-      value: localBranchCommit,
+      source: `git:${commitScope.integrationRefLabel(evidenceRef.ref)}`,
+      value: evidenceRef.commit,
       observedAt: new Date().toISOString(),
     });
-    if (!integrationRevision) throw new Error('could not record the current local integration revision');
-    if (!commitReachedRef(repo, deliveredCommit, integrationRevision.value)) {
-      throw new Error(`${deliveredCommit} is not reachable from ${localBranchRef}`);
-    }
+    if (!integrationRevision) throw new Error('could not record the current integration revision');
     const upstream = target.mode === 'remote'
-      ? { ref: target.upstream, reachable: commitReachedRef(repo, deliveredCommit, target.upstream) }
+      ? { ref: target.upstream, reachable: commitReachedRef(repo, deliveredCommit, `refs/remotes/${target.upstream}`) }
       : null;
     return { ok: true, commit: deliveredCommit, target, integrationRevision, upstream, evidence: recordedEvidence };
   } catch (error: any) {
@@ -3105,9 +3117,10 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
       // refused for divergence long before the reachability check runs, and a candidate that did
       // land can be refused for reasons abandonment would not fix, like a pending candidate review.
       if (!deliveredSubmission.ok) {
-        const landed = commitScope.submissionCommitReachedIntegrationBranch(readMeta(slug)?.path || '', ticket.submission || {}, target?.branch);
+        const integrationRefs = commitScope.integrationTargetRefs(target);
+        const landed = commitScope.submissionCommitReachedIntegrationBranch(readMeta(slug)?.path || '', ticket.submission || {}, integrationRefs);
         return landed ? deliveredSubmission : Object.assign({}, deliveredSubmission, {
-          message: `${String(deliveredSubmission.message || `${ticket.ref} submission could not be recorded as delivered.`)} Its candidate is not reachable from ${target?.branch || 'the integration branch'}, so if it never landed and no longer merges, close it as an abandoned submission instead: \`sidequest groom-close ${ticket.ref} --abandon-submission --reason "<evidence it never landed>"\` (MCP \`abandonSubmission: true\`).`,
+          message: `${String(deliveredSubmission.message || `${ticket.ref} submission could not be recorded as delivered.`)} Its candidate is not reachable from ${integrationRefs.join(' or ') || target?.branch || 'the integration branch'}, so if it never landed and no longer merges, close it as an abandoned submission instead: \`sidequest groom-close ${ticket.ref} --abandon-submission --reason "<evidence it never landed>"\` (MCP \`abandonSubmission: true\`).`,
         });
       }
     }

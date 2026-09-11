@@ -649,6 +649,31 @@ ${verify.outputTail}` : null
     if (Array.isArray(submission.changedPaths) && submission.changedPaths.length) return submission.changedPaths.slice();
     return integrationGit(repo, ["diff", "--name-only", submission.base, submission.commit]).split(/\r?\n/).filter(Boolean);
   }
+  function integrationRefContains(repo, ref, commit) {
+    try {
+      integrationGit(repo, ["merge-base", "--is-ancestor", commit, `${ref}^{commit}`]);
+      return true;
+    } catch (error) {
+      if (error?.status === 1) return false;
+      throw error;
+    }
+  }
+  function integrationTargetBehindLandedCandidate(ticket, target, evidence) {
+    const landedRef = String(evidence?.reconciledRef || "");
+    if (!evidence?.reconciled || !commitScope.isRemoteIntegrationRef(landedRef)) return null;
+    const landedCommit = String(evidence.reconciledCommit || "");
+    const candidate = String(evidence.candidate || ticket.submission?.commit || "");
+    const label = commitScope.integrationRefLabel(landedRef);
+    return {
+      ok: false,
+      reason: "integration_target_behind_landed_candidate",
+      ticket,
+      landedRef,
+      landedCommit,
+      candidate,
+      message: `${ticket.ref} integration refused; ${candidate} is already contained in ${landedRef} at ${landedCommit}, but the registered checkout's ${target?.branch || "integration branch"} is not. The merged-tree gate only certifies the tree it runs in, and the board never fetches or pushes: bring ${target?.branch || "the integration branch"} to a commit containing it deliberately (your own fetch, then \`git merge --ff-only ${label}\`), then re-run this closure.`
+    };
+  }
   function validateIntegrationSubmission(slug, idOrRef, opts) {
     const ticket = getTicket(slug, idOrRef);
     if (!ticket) return { ok: false, reason: "not_found" };
@@ -694,20 +719,29 @@ ${verify.outputTail}` : null
       };
     }
     const project = readMeta(slug);
-    let integrationBranch;
-    try {
-      integrationBranch = String(ticketIntegrationTarget(slug, ticket)?.branch || "").trim() || void 0;
-    } catch {
-      integrationBranch = void 0;
+    let target = null;
+    let integrationRefs;
+    if (submissionUsesGit(ticket)) {
+      try {
+        target = ticketIntegrationTarget(slug, ticket);
+        integrationRefs = commitScope.integrationTargetRefs(target);
+      } catch (error) {
+        return {
+          ok: false,
+          reason: "integration_target_unavailable",
+          ticket,
+          message: `${ticket.ref} integration refused; ${integrationGitError(error)} Fetch or recreate this ticket's frozen integration ref, then retry.`
+        };
+      }
     }
-    let scopeValidation = isArtifactSubmission(ticket.submission) ? { ok: true, changedPaths: ticket.submission.changedPaths || [] } : commitScope.validateStoredSubmissionRange(project?.path, ticket.submission, ticket.ref, integrationBranch);
+    let scopeValidation = isArtifactSubmission(ticket.submission) ? { ok: true, changedPaths: ticket.submission.changedPaths || [] } : commitScope.validateStoredSubmissionRange(project?.path, ticket.submission, ticket.ref, integrationRefs);
     if (!scopeValidation.ok && opts?.deliveryInteractionCommit && scopeValidation.reason === "reconciled_path_diverged") {
       scopeValidation = Object.assign({}, scopeValidation, { ok: true, reviewedMergedTreeInteraction: true });
     }
     if (!scopeValidation.ok) {
       const outside = Array.isArray(scopeValidation.outside) ? scopeValidation.outside : [];
       if (scopeValidation.reason === "expected_upstream_diverged") {
-        const targetBranch = integrationBranch || scopeValidation.upstream || "the configured target";
+        const targetBranch = String(target?.branch || "").trim() || scopeValidation.upstream || "the configured target";
         return {
           ok: false,
           reason: scopeValidation.reason,
@@ -727,6 +761,8 @@ ${verify.outputTail}` : null
         message: `${scopeFailure} Preserve this candidate with rework and submit a fresh candidate against the admitted scope, or close it with supersede_submission after an integrated reviewed replacement.`
       };
     }
+    const behind = integrationTargetBehindLandedCandidate(ticket, target, scopeValidation);
+    if (behind) return behind;
     if (opts?.requireAssembledWave) {
       const waveGate = assembledWaveForDelivery(slug, ticket);
       if (!waveGate.ok) return Object.assign({ ticket }, waveGate);
@@ -1075,7 +1111,7 @@ ${verify.outputTail}` : null
       const deliveryCommit = integrationGit(repo, ["rev-parse", "--verify", `${requestedCommit}^{commit}`]).toLowerCase();
       const resultingHead = integrationGit(repo, ["rev-parse", "HEAD"]).toLowerCase();
       const deliveryRevision = {
-        source: `git:${target.upstream}`,
+        source: `git:${target.branch}`,
         value: resultingHead,
         observedAt: (/* @__PURE__ */ new Date()).toISOString()
       };
@@ -1098,6 +1134,15 @@ ${verify.outputTail}` : null
       }
       const workingTreeDelivery = deliveryMethod !== null && !reachable;
       if (!reachable && !workingTreeDelivery) {
+        const remoteRef = commitScope.integrationTargetRefs(target).find((ref) => commitScope.isRemoteIntegrationRef(ref) && integrationRefContains(repo, ref, deliveryCommit));
+        if (remoteRef) {
+          return integrationTargetBehindLandedCandidate(ticket, target, {
+            reconciled: true,
+            reconciledRef: remoteRef,
+            reconciledCommit: integrationGit(repo, ["rev-parse", "--verify", `${remoteRef}^{commit}`]).toLowerCase(),
+            candidate: deliveryCommit
+          });
+        }
         return {
           ok: false,
           reason: "delivery_not_reachable",
@@ -1168,11 +1213,12 @@ ${verify.outputTail}` : null
       return { ok: false, reason: "delivery_evidence_unavailable", ticket, message: `${ticket.ref} reconciliation refused because delivery evidence could not be inspected: ${integrationGitError(error)}` };
     }
   }
-  function recordAlreadyLandedSubmission(slug, found, target, candidate, reason, repo) {
-    const resultingHead = integrationGit(repo, ["rev-parse", `refs/heads/${target.branch}`]).toLowerCase();
+  function recordAlreadyLandedSubmission(slug, found, target, landed, reason, repo) {
+    const candidate = landed.commit;
+    const resultingHead = integrationGit(repo, ["rev-parse", "--verify", `${landed.ref}^{commit}`]).toLowerCase();
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const deliveryRevision = {
-      source: `git:${target.upstream || target.branch}`,
+      source: `git:${commitScope.integrationRefLabel(landed.ref) || target.upstream || target.branch}`,
       value: resultingHead,
       observedAt: now
     };
@@ -1196,6 +1242,7 @@ ${verify.outputTail}` : null
           kind: "already-landed-candidate",
           pinnedRef: submissionGitRef(ticket),
           candidate,
+          landedRef: landed.ref,
           sourceRevision: deliveryRevision
         },
         targetBranch: target.branch,
@@ -1230,14 +1277,26 @@ ${verify.outputTail}` : null
     if (submissionUsesGit(found) && candidate) {
       try {
         const resolved = integrationGit(repo, ["rev-parse", "--verify", `${candidate}^{commit}`]).toLowerCase();
+        candidateState = "unreachable";
+        const requiredRef = commitScope.integrationTargetRef(target);
         try {
-          integrationGit(repo, ["merge-base", "--is-ancestor", resolved, `refs/heads/${target.branch}`]);
-          landedCandidate = resolved;
+          if (integrationRefContains(repo, requiredRef, resolved)) landedCandidate = { commit: resolved, ref: requiredRef };
         } catch (error) {
-          if (error?.status !== 1) throw error;
-          candidateState = "unreachable";
+          return { ok: false, reason: "integration_target_unavailable", ticket: found, message: `${found.ref} abandonment refused because its frozen integration ref could not be inspected: ${integrationGitError(error)}` };
         }
-      } catch (error) {
+        if (!landedCandidate) {
+          for (const ref of commitScope.integrationTargetRefs(target)) {
+            if (ref === requiredRef) continue;
+            try {
+              if (integrationRefContains(repo, ref, resolved)) {
+                landedCandidate = { commit: resolved, ref };
+                break;
+              }
+            } catch (_) {
+            }
+          }
+        }
+      } catch (_) {
         candidateState = "unresolvable";
       }
     }
@@ -2594,6 +2653,20 @@ ${verify.outputTail}` : null
         target = resolvedTargets.target;
       } catch (error) {
         return { ok: false, reason: "integration_target_unavailable", message: integrationGitError(error) };
+      }
+    }
+    if (target) {
+      const integrationRefs = commitScope.integrationTargetRefs(target);
+      const repo = String(readMeta(slug)?.path || "");
+      for (const ticket of tickets) {
+        if (!submissionUsesGit(ticket)) continue;
+        const landed = commitScope.submissionLandedIntegrationRef(repo, ticket.submission || {}, integrationRefs);
+        const behind = landed && integrationTargetBehindLandedCandidate(ticket, target, {
+          reconciled: true,
+          reconciledRef: landed.ref,
+          reconciledCommit: landed.commit
+        });
+        if (behind) return behind;
       }
     }
     const waveId = String(opts?.waveId || `wave-${crypto.randomBytes(8).toString("hex")}`);
