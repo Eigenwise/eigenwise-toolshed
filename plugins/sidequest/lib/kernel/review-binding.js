@@ -96,12 +96,15 @@ function terminalAttempts(ticket) {
 function latestAttempt(attempts) {
   return attempts.slice().sort((left, right) => String(left.terminalAt).localeCompare(String(right.terminalAt))).pop() || null;
 }
+function boundThroughClaimToken(attempt) {
+  if (attempt && "bindSource" in attempt) return String(attempt.bindSource || "").trim() === "claim_token";
+  return Boolean(String(attempt?.boundAt || "").trim());
+}
 function identifiedAttempt(attempt, claimTokenStandsAsIdentity) {
   const agentId = String(attempt?.agentId || "").trim();
   const agentName = String(attempt?.agentName || "").trim();
   const tokenPrefix = String(attempt?.tokenPrefix || "").trim();
-  const boundThroughClaimToken = String(attempt?.bindSource || "").trim() === "claim_token";
-  if (!agentId && !(claimTokenStandsAsIdentity && boundThroughClaimToken && agentName && tokenPrefix)) return null;
+  if (!agentId && !(claimTokenStandsAsIdentity && boundThroughClaimToken(attempt) && agentName && tokenPrefix)) return null;
   return Object.freeze({
     agentId,
     agentName,

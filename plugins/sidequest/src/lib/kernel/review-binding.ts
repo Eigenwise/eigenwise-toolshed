@@ -138,6 +138,19 @@ function latestAttempt(attempts: readonly any[]): any {
     .pop() || null;
 }
 
+// Attempts appended before SQ-2772 carry no bindSource key at all, so reading
+// the field alone cannot tell their claim-token binds from never binding, and
+// they would refuse forever with no recovery (SQ-2773). boundAt is the older
+// record of the same fact: only recordDispatchRuntimeIdentity and
+// bindDispatchClaimToken write it, and the first one always writes an agentId
+// with it, so a legacy attempt carrying boundAt and no agentId bound through
+// its claim token. Every attempt the current writer appends carries the key,
+// null included, so this resolves history without widening a live dispatch.
+function boundThroughClaimToken(attempt?: any): boolean {
+  if (attempt && 'bindSource' in attempt) return String(attempt.bindSource || '').trim() === 'claim_token';
+  return Boolean(String(attempt?.boundAt || '').trim());
+}
+
 // Asymmetric on purpose. A dispatch token plus the name its own launch stamped
 // authenticate a DISPATCH; only the hook-bound agentId authenticates a RUNTIME
 // (store.ts claimRuntimeIdentity). So one parent runtime can hold two distinct
@@ -151,8 +164,7 @@ function identifiedAttempt(attempt?: any, claimTokenStandsAsIdentity?: boolean):
   const agentId = String(attempt?.agentId || '').trim();
   const agentName = String(attempt?.agentName || '').trim();
   const tokenPrefix = String(attempt?.tokenPrefix || '').trim();
-  const boundThroughClaimToken = String(attempt?.bindSource || '').trim() === 'claim_token';
-  if (!agentId && !(claimTokenStandsAsIdentity && boundThroughClaimToken && agentName && tokenPrefix)) return null;
+  if (!agentId && !(claimTokenStandsAsIdentity && boundThroughClaimToken(attempt) && agentName && tokenPrefix)) return null;
   return Object.freeze({
     agentId,
     agentName,
