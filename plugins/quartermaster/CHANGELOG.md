@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.4 (2026-09-11)
+
+Released in v3.557.0, up from 0.9.3.
+
+### Fixes
+
+- Ignore harness messages in correction signals (SQ-2494)
+  Quartermaster no longer treats leading harness task notifications or system reminders as user corrections.
+- Refresh plugin versions after reload (SQ-2536)
+  Reloading plugins now refreshes their loaded-version records, so stale reload warnings stop after a successful reload.
+
 ## 0.9.3 (2026-09-11)
 
 Released in v3.556.0, up from 0.9.2.
