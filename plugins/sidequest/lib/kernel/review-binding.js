@@ -96,11 +96,12 @@ function terminalAttempts(ticket) {
 function latestAttempt(attempts) {
   return attempts.slice().sort((left, right) => String(left.terminalAt).localeCompare(String(right.terminalAt))).pop() || null;
 }
-function identifiedAttempt(attempt) {
+function identifiedAttempt(attempt, claimTokenStandsAsIdentity) {
   const agentId = String(attempt?.agentId || "").trim();
   const agentName = String(attempt?.agentName || "").trim();
   const tokenPrefix = String(attempt?.tokenPrefix || "").trim();
-  if (!agentId && !(agentName && tokenPrefix)) return null;
+  const boundThroughClaimToken = String(attempt?.bindSource || "").trim() === "claim_token";
+  if (!agentId && !(claimTokenStandsAsIdentity && boundThroughClaimToken && agentName && tokenPrefix)) return null;
   return Object.freeze({
     agentId,
     agentName,
@@ -127,8 +128,8 @@ function reviewProvenance(sourceTicket, reviewTicket) {
   if (!sourceAttempt) return Object.freeze({ source: null, reviewer: null, reason: "source_attempt_missing" });
   const reviewerAttempt = completedReviewAttempt(reviewTicket);
   if (!reviewerAttempt) return Object.freeze({ source: null, reviewer: null, reason: "review_attempt_missing" });
-  const source = identifiedAttempt(sourceAttempt);
-  const reviewer = identifiedAttempt(reviewerAttempt);
+  const source = identifiedAttempt(sourceAttempt, true);
+  const reviewer = identifiedAttempt(reviewerAttempt, false);
   if (!source || !reviewer) return Object.freeze({ source, reviewer, reason: "agent_identity_missing" });
   if (sameRuntimeIdentity(source, reviewer)) return Object.freeze({ source, reviewer, reason: "shared_agent_identity" });
   return Object.freeze({ source, reviewer, reason: "ok" });

@@ -138,15 +138,21 @@ function latestAttempt(attempts: readonly any[]): any {
     .pop() || null;
 }
 
-// A hook binding records an agent id; a claim-token binding never does
-// (dispatch.ts bindDispatchClaimToken), so its dispatch token prefix and agent
-// name, both stamped on the attempt at bind time, ARE its runtime identity.
-// Only an attempt carrying neither is genuinely unidentified.
-function identifiedAttempt(attempt?: any): ReviewProvenanceAttempt | null {
+// Asymmetric on purpose. A dispatch token plus the name its own launch stamped
+// authenticate a DISPATCH; only the hook-bound agentId authenticates a RUNTIME
+// (store.ts claimRuntimeIdentity). So one parent runtime can hold two distinct
+// token/name pairs, which is exactly the self-review the gate exists to refuse.
+// The claim-token pair therefore stands as a fallback identity only on the side
+// that submitted the candidate, where demanding an agentId a claim-token bind
+// never records deadlocked every continuation-submitted candidate (SQ-2763).
+// A reviewer that never bound a runtime has proven nothing about being a
+// different one, so it stays unidentified.
+function identifiedAttempt(attempt?: any, claimTokenStandsAsIdentity?: boolean): ReviewProvenanceAttempt | null {
   const agentId = String(attempt?.agentId || '').trim();
   const agentName = String(attempt?.agentName || '').trim();
   const tokenPrefix = String(attempt?.tokenPrefix || '').trim();
-  if (!agentId && !(agentName && tokenPrefix)) return null;
+  const boundThroughClaimToken = String(attempt?.bindSource || '').trim() === 'claim_token';
+  if (!agentId && !(claimTokenStandsAsIdentity && boundThroughClaimToken && agentName && tokenPrefix)) return null;
   return Object.freeze({
     agentId,
     agentName,
@@ -188,8 +194,8 @@ export function reviewProvenance(sourceTicket?: any, reviewTicket?: any): Review
   if (!sourceAttempt) return Object.freeze({ source: null, reviewer: null, reason: 'source_attempt_missing' as ReviewProvenanceReason });
   const reviewerAttempt = completedReviewAttempt(reviewTicket);
   if (!reviewerAttempt) return Object.freeze({ source: null, reviewer: null, reason: 'review_attempt_missing' as ReviewProvenanceReason });
-  const source = identifiedAttempt(sourceAttempt);
-  const reviewer = identifiedAttempt(reviewerAttempt);
+  const source = identifiedAttempt(sourceAttempt, true);
+  const reviewer = identifiedAttempt(reviewerAttempt, false);
   if (!source || !reviewer) return Object.freeze({ source, reviewer, reason: 'agent_identity_missing' as ReviewProvenanceReason });
   if (sameRuntimeIdentity(source, reviewer)) return Object.freeze({ source, reviewer, reason: 'shared_agent_identity' as ReviewProvenanceReason });
   return Object.freeze({ source, reviewer, reason: 'ok' as ReviewProvenanceReason });

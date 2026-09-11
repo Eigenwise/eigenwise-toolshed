@@ -92,11 +92,13 @@ export function manualCandidateDeliveryGuidance(): string {
 
 export function candidateReviewRequiredGuidance(): string {
   return 'A bound review must terminally complete on this exact candidate, from a runtime identity that is not the one that submitted it.'
-    + ' An identity is the attempt\'s hook-bound agent id, or the dispatch token prefix and agent name a claim-token binding records instead;'
-    + ' only an attempt carrying neither counts as unidentified. Run `sidequest pulse <ref>` and read `dispatch.attempts` on both tickets to see which half is missing.'
+    + ' The two sides are held to different proof. The submitting side may identify itself by the attempt\'s hook-bound agent id, or by the token prefix and agent name recorded against a proven claim-token binding.'
+    + ' The reviewing side needs the hook-bound agent id and nothing else stands in: a dispatch token and agent name authenticate a dispatch, not the runtime that ran it, and one runtime can hold several of those.'
+    + ' Run `sidequest pulse <ref>` and read `dispatch.attempts` on both tickets to see which half is missing.'
     + ' If the review never ran to a terminal done attempt, dispatch it and let it close normally.'
     + ' If it reviewed a different candidate, that candidate needs its own bound review.'
-    + ' If an attempt genuinely recorded no identity, its executor never bound: re-dispatch that ticket so the replacement attempt binds, then review the resubmitted candidate.'
+    + ' If the review attempt carries no hook-bound agent id, its executor never bound a runtime: re-dispatch the review on a host whose PreToolUse hook reports agent_id, and let that attempt close normally.'
+    + ' If the submitting attempt recorded no identity at all, re-dispatch that ticket so the replacement attempt binds, then review the resubmitted candidate.'
     + ' Do not assert an identity, hand-edit the attempt, or route around this with a manual delivery: the manual and groomClose routes enforce the same check.';
 }
 

@@ -3308,21 +3308,26 @@ function completeIsolatedReview(review: { review: any; sessionId: string; execut
     });
   }
   const dispatched = store.getTicket(slug, review.review.ref);
+  // requireBoundAgent is what MCP always passes, and it is the only path that
+  // records bindSource, so the fixture has to take it for the claim-token
+  // binding under test to be the authentic one.
   assert.strictEqual(store.claimTicket(slug, review.review.ref, `${review.agentId}-worker`, {
     token: dispatched.dispatchNonce,
     executor: review.executor,
+    sessionId: review.sessionId,
+    requireBoundAgent: true,
   }).ok, true);
   const done = store.completeTicket(slug, review.review.ref, `${review.agentId}-worker`, { model: 'sonnet', effort: 'medium' });
   assert.strictEqual(done.ok, true, done.message);
   return (store.getTicket(slug, review.review.ref).dispatch.attempts || []).at(-1);
 }
 
-// SQ-2763 narrowed this: a raced read-only review that never reached the
-// identity hook still carries the dispatch token and agent name its own launch
-// stamped on the attempt, which is a runtime identity the board can tell apart
-// from the submitter's. Only an attempt recording neither is unidentified, and
-// the hook binding is still what upgrades the attempt to a harness-observed id.
-test('a read-only isolated review carries a runtime identity its board call upgrades to the hook-bound one', () => {
+// SQ-2772 restored this refusal after SQ-2763 briefly inverted it. A raced
+// read-only review that never reached the identity hook does carry the dispatch
+// token and agent name its own launch stamped, but those authenticate the
+// dispatch, not the runtime that ran it, and one runtime can hold several. Only
+// the hook binding proves the reviewer is somebody other than the submitter.
+test('a read-only isolated review satisfies the candidate gate only once its board call bound its runtime identity', () => {
   const unrepaired = submittedGateSource('gate source without review identity', 'gate-unrepaired.js', 'gate-source-unrepaired');
   const unrepairedReview = dispatchedIsolatedReview('gate review unrepaired', unrepaired.ticket.ref, unrepaired.commit, 'gate-review-unrepaired');
   const unrepairedAttempt = completeIsolatedReview(unrepairedReview, false);
@@ -3330,21 +3335,13 @@ test('a read-only isolated review carries a runtime identity its board call upgr
   assert.strictEqual(unrepairedAttempt.agentId, null, 'the raced read-only review completes with no hook-bound identity');
   assert.strictEqual(unrepairedAttempt.agentName, 'gate-review-unrepaired');
   assert.ok(unrepairedAttempt.tokenPrefix, 'its own dispatch token is still recorded on the attempt');
+  assert.strictEqual(unrepairedAttempt.bindSource, 'claim_token', 'the attempt records how it bound');
 
-  const raced = store.validateIntegrationSubmission(slug, unrepaired.ticket.ref, {});
-  assert.notStrictEqual(raced.reason, 'candidate_review_required', 'its claim-token identity is distinct from the submitter agent id');
-
-  // The refusal an attempt recording no identity of any kind still earns.
-  const nameless = store.getTicket(slug, unrepaired.ticket.ref);
-  const namelessReview = store.getTicket(slug, unrepairedReview.review.ref);
-  namelessReview.dispatch.attempts = [{ ...unrepairedAttempt, agentName: null, tokenPrefix: null }];
-  persist(namelessReview);
-  const blocked = store.validateIntegrationSubmission(slug, nameless.ref, {});
+  const blocked = store.validateIntegrationSubmission(slug, unrepaired.ticket.ref, {});
   assert.strictEqual(blocked.ok, false);
   assert.strictEqual(blocked.reason, 'candidate_review_required');
-  assert.match(blocked.message, /recorded no runtime identity on the terminal attempt/);
-  namelessReview.dispatch.attempts = [unrepairedAttempt];
-  persist(namelessReview);
+  assert.match(blocked.message, /recorded no hook-bound agent id on its terminal review attempt/);
+  assert.match(blocked.message, /authenticate a dispatch, not the runtime that ran it/);
 
   const repaired = submittedGateSource('gate source with review identity', 'gate-repaired.js', 'gate-source-repaired');
   const repairedReview = dispatchedIsolatedReview('gate review repaired', repaired.ticket.ref, repaired.commit, 'gate-review-repaired');
