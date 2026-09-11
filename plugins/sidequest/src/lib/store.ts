@@ -742,6 +742,13 @@ function negativeControlDeclaredFailureKind(markerLine: string) {
   return (markerLine.match(/\bfailure-kind=(assertion|import|collection)\b/i)?.[1] ?? '').toLowerCase();
 }
 
+function capturedTestName(match?: RegExpMatchArray | null) {
+  const name = match?.[2] || match?.[1];
+  if (!name || name.includes('${')) return null;
+  // ponytail: source-name decoding stops at quote and backslash escapes; add \n and \uXXXX if runtime names need them.
+  return name.replace(/\\(['"`\\])/g, '$1');
+}
+
 function changedTestNames(delta?: any, changedPaths?: any[]) {
   if (!delta?.workspace) return [];
   const names = new Set<string>();
@@ -765,7 +772,8 @@ function changedTestNames(delta?: any, changedPaths?: any[]) {
     }
     const definitions = source.split(/\r?\n/).map((line: string, index: number) => {
       const match = line.match(/\b(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
-      return match ? { line: index + 1, name: match[2] || match[1] } : null;
+      const name = capturedTestName(match);
+      return name ? { line: index + 1, name } : null;
     }).filter(Boolean) as Array<{ line: number; name: string }>;
     try {
       execFileSync('git', ['cat-file', '-e', `${delta.workspace.base}:${file}`], {
@@ -794,7 +802,7 @@ function changedTestNames(delta?: any, changedPaths?: any[]) {
       if (line.startsWith('+') && !line.startsWith('+++')) {
         changedInHunk = true;
         const addedDefinition = line.match(/\b(?:test|it|specify)(?:\.(?:only|skip|todo))?\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
-        const addedName = addedDefinition?.[2] || addedDefinition?.[1];
+        const addedName = capturedTestName(addedDefinition);
         if (addedName) names.add(addedName);
         addNearestDefinition(newLine);
         newLine += 1;

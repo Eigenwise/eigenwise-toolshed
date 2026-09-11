@@ -831,6 +831,60 @@ test('negative controls account for every added named test', () => {
   git(['commit', '-m', 'negative control per test fixture']);
 });
 
+test('negative controls decode escaped source test names', () => {
+  const by = 'negative-control-escaped-name-executor';
+  const ticket = addNegativeControlTicket('negative control decodes escaped test names', by);
+  const testNames = [
+    "the reviewer's prose",
+    'a "quoted" test name',
+    'a `backticked` test name',
+    'a \\ backslash test name',
+  ];
+  const testInvocation = 'test';
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), [
+    `${testInvocation}('the reviewer\\'s prose', () => {});`,
+    `${testInvocation}("a \\"quoted\\" test name", () => {});`,
+    `${testInvocation}(` + '`a \\`backticked\\` test name`, () => {});',
+    `${testInvocation}('a \\\\ backslash test name', () => {});`,
+  ].join('\n'));
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: `[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=4 failure-kind=assertion\n${testNames.map((testName) => `[sidequest:negative-control-test] failed ${testName}`).join('\n')}`,
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  }).ok, true);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control escaped names fixture']);
+});
+
+test('negative controls skip template source test names with substitutions', () => {
+  const by = 'negative-control-template-name-executor';
+  const ticket = addNegativeControlTicket('negative control skips template test names with substitutions', by);
+  const testInvocation = 'test';
+  const templateName = '`renders ${label} in the header`';
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), `const label = "header";\n${testInvocation}(${templateName}, () => {});\n`);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  }).ok, true);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control template names fixture']);
+});
+
 test('negative controls account for tests in added files', () => {
   const by = 'negative-control-added-file-executor';
   const testName = 'a test in a newly added file catches the revert';
