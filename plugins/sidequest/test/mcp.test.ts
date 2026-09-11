@@ -95,14 +95,28 @@ function committedRepo(prefix?: any) {
 // Call a tool through the JSON-RPC surface and return the parsed result object
 // (the text content decoded back to JSON), asserting it wasn't an error.
 let idc = 0;
+// An isolated dispatch is refused when the spawning checkout is a different repository than the
+// board's (SQ-2570). Tests dispatch boards in temp repositories, so run the call from the board's
+// own checkout like a session rooted there would; a test that chdir'd itself keeps its own cwd.
+async function fromBoardCheckout(name?: any, args?: any, call?: () => Promise<any>) {
+  const boardPath = name !== 'dispatch' ? null : args?.project ? store.findProject(args.project)?.meta?.path : PROJ;
+  if (!boardPath || !fs.existsSync(boardPath) || process.cwd() !== ORIGINAL_CWD) return call!();
+  process.chdir(boardPath);
+  try {
+    return await call!();
+  } finally {
+    process.chdir(ORIGINAL_CWD);
+  }
+}
+const ORIGINAL_CWD = process.cwd();
 async function callTool(name?: any, args?: any) {
-  const resp = await mcp.handleRequest({ jsonrpc: '2.0', id: ++idc, method: 'tools/call', params: { name, arguments: args || {} } });
+  const resp = await fromBoardCheckout(name, args, () => mcp.handleRequest({ jsonrpc: '2.0', id: ++idc, method: 'tools/call', params: { name, arguments: args || {} } }));
   assert.ok(resp && resp.result, `tool ${name} returned a result`);
   assert.ok(!resp.result.isError, `tool ${name} errored: ${resp.result.content && resp.result.content[0] && resp.result.content[0].text}`);
   return JSON.parse(resp.result.content[0].text);
 }
 async function callToolRaw(name?: any, args?: any) {
-  const resp = await mcp.handleRequest({ jsonrpc: '2.0', id: ++idc, method: 'tools/call', params: { name, arguments: args || {} } });
+  const resp = await fromBoardCheckout(name, args, () => mcp.handleRequest({ jsonrpc: '2.0', id: ++idc, method: 'tools/call', params: { name, arguments: args || {} } }));
   return resp.result;
 }
 async function callToolAsSession(sessionId: string, name?: any, args?: any) {
@@ -216,7 +230,7 @@ function persistTicket(project: string, ticket: any) {
   });
 }
 
-function runCli(args?: any, cwd?: any) {
+function runCli(args?: any, cwd: any = PROJ) {
   const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
   const output = execFileSync(process.execPath, [cli, ...args], {
     cwd,
