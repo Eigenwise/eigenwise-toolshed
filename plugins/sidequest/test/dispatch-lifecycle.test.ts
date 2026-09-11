@@ -228,6 +228,11 @@ test('preparing a Git ticket does not capture a filesystem snapshot', () => {
     const prepared = snapshotStore.prepareDispatch(slug, ticket.ref);
 
     assert.equal(prepared.ticket.dispatch.lifecycleAttempt.baseline.revision.source, 'git');
+    // This is the one snapshot test that needs the shared Git-backed project, so its prepared
+    // dispatch would otherwise survive to the TTL sweep further down and expire alongside it.
+    assert.equal(snapshotStore.releaseTicket(slug, ticket.ref, 'git-baseline-snapshot-cleanup', {
+      status: 'todo', source: 'test', force: true,
+    }).ok, true);
   });
 });
 
