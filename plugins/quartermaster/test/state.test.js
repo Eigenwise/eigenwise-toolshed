@@ -23,6 +23,7 @@ const {
 } = require('../lib/state.js');
 
 const DAY_MS = 86400000;
+const HOUR_MS = 3600000;
 // A platform-native path: the transcript counter re-resolves the canonical project directory, and a
 // Windows-literal path resolves to a different slug on Linux runners.
 const PROJECT = path.resolve(os.tmpdir(), 'example-project');
@@ -164,6 +165,88 @@ test('statusFor keeps Stop offers independent from SessionStart nudges and recor
   const status = statusFor(PROJECT, environment, now);
   assert.equal(status.shouldOffer, false);
   assert.equal(status.lastDeclinedAt, new Date(now).toISOString());
+});
+
+test('strong evidence reopens an accepted resupply cooldown after its floor', () => {
+  const now = Date.now();
+  markResupply(PROJECT, environment, now);
+  for (let index = 0; index < 8; index += 1) {
+    recordSessionTally(PROJECT, `strong-${index}`, tallyWith(), environment, now + index + 1);
+  }
+  assert.equal(statusFor(PROJECT, environment, now + 5 * HOUR_MS).shouldOffer, true, 'eight sessions clear the default 2x escalation bar');
+
+  const weakProject = path.join(PROJECT, 'weak-evidence');
+  markResupply(weakProject, environment, now);
+  for (let index = 0; index < 4; index += 1) {
+    recordSessionTally(weakProject, `weak-${index}`, tallyWith(), environment, now + index + 1);
+  }
+  assert.equal(statusFor(weakProject, environment, now + 5 * HOUR_MS).shouldOffer, false, 'normal-threshold evidence stays inside the accepted resupply cooldown');
+});
+
+test('the resupply floor blocks an immediate second Stop offer', () => {
+  const now = Date.now();
+  markOffered(PROJECT, 'first-stop-session', environment, now);
+  markResupply(PROJECT, environment, now + 1);
+  for (let index = 0; index < 8; index += 1) {
+    recordSessionTally(PROJECT, `immediate-${index}`, tallyWith(), environment, now + index + 2);
+  }
+
+  assert.equal(statusFor(PROJECT, environment, now + 3).shouldOffer, false, 'the four-hour floor wins over escalated evidence');
+});
+
+test('declines preserve evidence and increase the offer backoff', () => {
+  const now = Date.now();
+  for (let index = 0; index < 4; index += 1) {
+    recordSessionTally(PROJECT, `declined-${index}`, tallyWith(), environment, now - DAY_MS + index);
+  }
+
+  declineResupply(PROJECT, environment, now);
+  let state = readProjectState(PROJECT, environment);
+  assert.equal(state.lastResupplyAt, null, 'declining does not move the evidence cutoff');
+  assert.equal(state.sessions.length, 4, 'declining retains the accumulated evidence');
+  assert.equal(state.consecutiveDeclines, 1);
+  assert.equal(statusFor(PROJECT, environment, now + HOUR_MS).shouldOffer, false, 'the first decline suppresses the base offer window');
+
+  const secondDeclineAt = now + 24 * HOUR_MS + 1;
+  assert.equal(statusFor(PROJECT, environment, secondDeclineAt).shouldOffer, true, 'the first decline backoff expires after the base window');
+  declineResupply(PROJECT, environment, secondDeclineAt);
+  state = readProjectState(PROJECT, environment);
+  assert.equal(state.consecutiveDeclines, 2);
+  assert.equal(statusFor(PROJECT, environment, secondDeclineAt + 24 * HOUR_MS).shouldOffer, false, 'the second decline doubles the backoff');
+  assert.equal(statusFor(PROJECT, environment, secondDeclineAt + 48 * HOUR_MS + 1).shouldOffer, true, 'the doubled backoff eventually expires');
+});
+
+test('an accepted resupply resets decline backoff and moves the evidence cutoff', () => {
+  const now = Date.now();
+  for (let index = 0; index < 4; index += 1) {
+    recordSessionTally(PROJECT, `accepted-${index}`, tallyWith(), environment, now - DAY_MS + index);
+  }
+  declineResupply(PROJECT, environment, now);
+  declineResupply(PROJECT, environment, now + DAY_MS);
+
+  const acceptedAt = now + 2 * DAY_MS;
+  markResupply(PROJECT, environment, acceptedAt);
+  let state = readProjectState(PROJECT, environment);
+  assert.equal(state.lastResupplyAt, new Date(acceptedAt).toISOString());
+  assert.equal(state.lastDeclinedAt, null);
+  assert.equal(state.consecutiveDeclines, 0);
+  assert.equal(statusFor(PROJECT, environment, acceptedAt + 1).unanalyzedSessions, 0, 'the accepted pass moves the evidence cutoff');
+
+  declineResupply(PROJECT, environment, acceptedAt + 2);
+  state = readProjectState(PROJECT, environment);
+  assert.equal(state.consecutiveDeclines, 1, 'the next decline starts at the base backoff');
+});
+
+test('the resupply cooldown has its own environment knob', () => {
+  const now = Date.now();
+  const projectDir = path.join(PROJECT, 'resupply-cooldown');
+  markResupply(projectDir, environment, now);
+  for (let index = 0; index < 4; index += 1) {
+    recordSessionTally(projectDir, `cooldown-${index}`, tallyWith(), environment, now + index + 1);
+  }
+
+  assert.equal(statusFor(projectDir, { ...environment, QUARTERMASTER_NUDGE_HOURS: '1' }, now + 5 * HOUR_MS).shouldOffer, false, 'nudge cadence does not shorten the resupply cooldown');
+  assert.equal(statusFor(projectDir, { ...environment, QUARTERMASTER_RESUPPLY_HOURS: '1' }, now + 5 * HOUR_MS).shouldOffer, true, 'the resupply cadence can be configured independently');
 });
 
 test('state written before the rename keeps its history under the new key', () => {

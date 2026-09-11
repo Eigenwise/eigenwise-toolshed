@@ -22,22 +22,36 @@ const OFFER_DEFAULTS = {
   cooldownHours: 24,
 };
 
+const RESUPPLY_DEFAULTS = {
+  cooldownHours: 24,
+  escalationMultiplier: 2,
+  minimumCooldownHours: 4,
+};
+
+function positiveNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function nudgeThresholds(env = process.env) {
-  const number = (value, fallback) => {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-  };
   return {
-    minSessions: number(env.QUARTERMASTER_MIN_SESSIONS, NUDGE_DEFAULTS.minSessions),
-    minFriction: number(env.QUARTERMASTER_MIN_FRICTION, NUDGE_DEFAULTS.minFriction),
-    cooldownHours: number(env.QUARTERMASTER_NUDGE_HOURS, NUDGE_DEFAULTS.cooldownHours),
+    minSessions: positiveNumber(env.QUARTERMASTER_MIN_SESSIONS, NUDGE_DEFAULTS.minSessions),
+    minFriction: positiveNumber(env.QUARTMASTER_MIN_FRICTION, NUDGE_DEFAULTS.minFriction),
+    cooldownHours: positiveNumber(env.QUARTERMASTER_NUDGE_HOURS, NUDGE_DEFAULTS.cooldownHours),
   };
 }
 
 function offerThresholds(env = process.env) {
-  const parsed = Number(env.QUARTERMASTER_OFFER_HOURS);
   return {
-    cooldownHours: Number.isFinite(parsed) && parsed > 0 ? parsed : OFFER_DEFAULTS.cooldownHours,
+    cooldownHours: positiveNumber(env.QUARTERMASTER_OFFER_HOURS, OFFER_DEFAULTS.cooldownHours),
+  };
+}
+
+function resupplyThresholds(env = process.env) {
+  return {
+    cooldownHours: positiveNumber(env.QUARTERMASTER_RESUPPLY_HOURS, RESUPPLY_DEFAULTS.cooldownHours),
+    escalationMultiplier: positiveNumber(env.QUARTERMASTER_RESUPPLY_MULTIPLIER, RESUPPLY_DEFAULTS.escalationMultiplier),
+    minimumCooldownHours: RESUPPLY_DEFAULTS.minimumCooldownHours,
   };
 }
 
@@ -100,6 +114,7 @@ function emptyProjectState(projectDir) {
     lastOfferSessionId: null,
     offeredSessionIds: [],
     lastDeclinedAt: null,
+    consecutiveDeclines: 0,
   };
 }
 
@@ -178,6 +193,9 @@ function readProjectState(projectDir, env = process.env) {
     state.offeredSessionIds = state.lastOfferSessionId ? [state.lastOfferSessionId] : [];
   }
   if (state.lastDeclinedAt === undefined) state.lastDeclinedAt = null;
+  if (!Number.isSafeInteger(state.consecutiveDeclines) || state.consecutiveDeclines < 0) {
+    state.consecutiveDeclines = 0;
+  }
   if (!Array.isArray(state.sessions)) state.sessions = [];
   delete state.lastRetroAt;
   return state;
@@ -207,6 +225,7 @@ function statusFor(projectDir, env = process.env, now = Date.now()) {
   const state = readProjectState(projectDir, env);
   const thresholds = nudgeThresholds(env);
   const offer = offerThresholds(env);
+  const resupply = resupplyThresholds(env);
   const talliedUnanalyzed = sessionsSince(state, state.lastResupplyAt);
   const transcriptCutoffMs = state.lastResupplyAt
     ? Date.parse(state.lastResupplyAt)
@@ -216,10 +235,18 @@ function statusFor(projectDir, env = process.env, now = Date.now()) {
   const friction = talliedUnanalyzed.reduce((total, session) => total + frictionOf(session.tally), 0);
 
   const nudgedRecently = state.lastNudgeAt && now - Date.parse(state.lastNudgeAt) < thresholds.cooldownHours * HOUR_MS;
-  const resuppliedRecently = state.lastResupplyAt && now - Date.parse(state.lastResupplyAt) < thresholds.cooldownHours * HOUR_MS;
+  const resuppliedRecently = state.lastResupplyAt && now - Date.parse(state.lastResupplyAt) < resupply.cooldownHours * HOUR_MS;
   const offerRecently = state.lastOfferAt && now - Date.parse(state.lastOfferAt) < offer.cooldownHours * HOUR_MS;
+  const offerFloorAt = latestTimestamp(state.lastResupplyAt, state.lastOfferAt);
+  const offerFloorActive = offerFloorAt && now - Date.parse(offerFloorAt) < resupply.minimumCooldownHours * HOUR_MS;
+  const declineCooldownHours = offer.cooldownHours * 2 ** Math.max(0, state.consecutiveDeclines - 1);
+  const declinedRecently = state.lastDeclinedAt && now - Date.parse(state.lastDeclinedAt) < declineCooldownHours * HOUR_MS;
   const overThreshold = unanalyzedSessions >= thresholds.minSessions || friction >= thresholds.minFriction;
-  const resupplyDue = Boolean(overThreshold && !resuppliedRecently);
+  const escalatedEvidence = unanalyzedSessions >= thresholds.minSessions * resupply.escalationMultiplier
+    || friction >= thresholds.minFriction * resupply.escalationMultiplier;
+  const offerDue = Boolean(overThreshold && (!resuppliedRecently || (escalatedEvidence && !offerFloorActive)));
+  const resupplyFollowUp = state.lastResupplyAt
+    && (!state.lastOfferAt || Date.parse(state.lastResupplyAt) >= Date.parse(state.lastOfferAt));
 
   return {
     projectDir: state.projectDir,
@@ -232,10 +259,12 @@ function statusFor(projectDir, env = process.env, now = Date.now()) {
     lastOfferSessionId: state.lastOfferSessionId,
     offeredSessionIds: state.offeredSessionIds,
     lastDeclinedAt: state.lastDeclinedAt,
+    consecutiveDeclines: state.consecutiveDeclines,
     thresholds,
     offer,
-    shouldNudge: Boolean(resupplyDue && !nudgedRecently),
-    shouldOffer: Boolean(resupplyDue && !offerRecently),
+    resupply,
+    shouldNudge: Boolean(overThreshold && !resuppliedRecently && !nudgedRecently),
+    shouldOffer: Boolean(offerDue && !declinedRecently && (!offerRecently || (resupplyFollowUp && escalatedEvidence))),
   };
 }
 
@@ -258,6 +287,7 @@ function markResupply(projectDir, env = process.env, now = Date.now()) {
   const state = readProjectState(projectDir, env);
   state.lastResupplyAt = new Date(now).toISOString();
   state.lastDeclinedAt = null;
+  state.consecutiveDeclines = 0;
   writeJsonAtomic(projectStateFile(projectDir, env), state);
   return state;
 }
@@ -265,8 +295,8 @@ function markResupply(projectDir, env = process.env, now = Date.now()) {
 function declineResupply(projectDir, env = process.env, now = Date.now()) {
   const state = readProjectState(projectDir, env);
   const timestamp = new Date(now).toISOString();
-  state.lastResupplyAt = timestamp;
   state.lastDeclinedAt = timestamp;
+  state.consecutiveDeclines += 1;
   writeJsonAtomic(projectStateFile(projectDir, env), state);
   return state;
 }
@@ -371,6 +401,7 @@ module.exports = {
   readProjectState,
   recordSessionTally,
   rejectedFingerprints,
+  resupplyThresholds,
   statusFor,
   verifyDecisions,
 };

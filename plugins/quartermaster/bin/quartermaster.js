@@ -234,7 +234,12 @@ async function main(argv = process.argv.slice(2)) {
     }
     case 'decline-resupply': {
       const state = declineResupply(options.projectPath);
-      printJson({ ok: true, lastDeclinedAt: state.lastDeclinedAt, lastResupplyAt: state.lastResupplyAt });
+      printJson({
+        ok: true,
+        lastDeclinedAt: state.lastDeclinedAt,
+        consecutiveDeclines: state.consecutiveDeclines,
+        lastResupplyAt: state.lastResupplyAt,
+      });
       return;
     }
     default:
