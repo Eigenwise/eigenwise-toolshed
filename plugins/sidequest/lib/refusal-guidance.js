@@ -20,6 +20,7 @@ var refusal_guidance_exports = {};
 __export(refusal_guidance_exports, {
   CLAIM_REFUSAL_MESSAGES: () => CLAIM_REFUSAL_MESSAGES,
   claimRefusalMessage: () => claimRefusalMessage,
+  manualCandidateDeliveryGuidance: () => manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance: () => negativeControlRecoveryGuidance,
   routingDisabledMessage: () => routingDisabledMessage
 });
@@ -76,6 +77,9 @@ function claimRefusalMessage(reason, ref, claim = {}, projectPath) {
 function routingDisabledMessage(ref) {
   return `Routing is disabled on this board, so ${ref} cannot be dispatched. Run \`sidequest routing enabled\` then \`sidequest dispatch ${ref}\`; direct work is limited to the inline-safe allowlist: \`sidequest claim ${ref} --direct --reason "why this is inline-safe"\`.`;
 }
+function manualCandidateDeliveryGuidance() {
+  return 'For refs with different pinned verifier requirements, keep those requirements and candidate identities unchanged. Compose the exact accepted candidate refs in the registered target, run every pinned verifier plus the full composed gate, then groomClose each with its immutable deliveryCommit and deliveryMethod:"manual"; omit integration:true.';
+}
 function negativeControlRecoveryGuidance() {
   return "Revert the non-test changes, run the changed tests, and keep them importable. Only an assertion failure in the changed tests proves they catch wrong behavior; an ImportError or collection error only proves a symbol vanished. Post [sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> with n greater than zero. The target and assertion must be the changed behavior this ticket is about. Then restore the change and run the declared verify. You may add context after failed=<n>. For every added or modified named test, add [sidequest:negative-control-test] failed <test name>. If a named test does not cover the reverted change, add [sidequest:negative-control-test] unaffected <test name> because <reason> instead. If the control cannot run, post a line beginning [sidequest:negative-control] waived <reason of at least 20 characters>.";
 }
@@ -83,6 +87,7 @@ function negativeControlRecoveryGuidance() {
 0 && (module.exports = {
   CLAIM_REFUSAL_MESSAGES,
   claimRefusalMessage,
+  manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance,
   routingDisabledMessage
 });

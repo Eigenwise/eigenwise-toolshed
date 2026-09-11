@@ -7,6 +7,7 @@ const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require('../sou
 const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require('../kernel/review-binding');
 const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require('../kernel/wave');
 const { isInScope, scopedPaths } = require('../scope-match');
+const { manualCandidateDeliveryGuidance } = require('../refusal-guidance.js');
 import type { VerificationResult } from '../kernel/verification.js';
 
 function createSubmissions(dependencies: any) {
@@ -2814,7 +2815,7 @@ function waveVerificationRequirement(tickets: any[]) {
     return {
       ok: false,
       reason: 'wave_verifier_mismatch',
-      message: 'Wave assembly requires one project-defined verification gate. Its participants pin different verifier requirements, so split the wave or refresh and reverify them against the same gate.',
+      message: `Wave assembly requires one project-defined verification gate. Its participants pin different verifier requirements, so this assembly cannot choose or rewrite one. ${manualCandidateDeliveryGuidance()}`,
     };
   }
   return { ok: true, requirement: first };
@@ -3006,7 +3007,7 @@ function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
       ok: false,
       reason: 'candidate_overlap',
       conflicts: scopeConflicts,
-      message: `Wave assembly paused because submitted candidates overlap: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(', ')})`).join('; ')}. These refs each hold a pending candidate that remains eligible for delivery, not merely a live declared scope; review-rejected candidates stay parked without blocking the wave. Assemble the named candidates in one wave so the delivery merge can check their actual content, or resolve one candidate before assembling a singleton.`,
+      message: `Wave assembly paused because submitted candidates overlap: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(', ')})`).join('; ')}. These refs each hold a pending candidate that remains eligible for delivery, not merely a live declared scope; review-rejected candidates stay parked without blocking the wave. Assemble the named candidates in one wave so the delivery merge can check their actual content, or resolve one candidate before assembling a singleton. ${manualCandidateDeliveryGuidance()}`,
     };
   }
   const firstCandidate = waveCandidates[0];

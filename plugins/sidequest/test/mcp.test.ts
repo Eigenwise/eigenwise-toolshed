@@ -420,6 +420,9 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.match(doneDescriptor.description, /commandless working-tree needs verify/);
   const groomClose = resp.result.tools.find((tool: any) => tool.name === 'groomClose');
   assert.ok(groomClose.inputSchema.properties.deliveryCommit, 'groomClose records hand-delivered commits');
+  assert.match(groomClose.description, /manual: pinned candidate/i);
+  assert.match(groomClose.description, /all checks/i);
+  assert.match(groomClose.description, /no integration:true/i);
   assert.ok(groomClose.inputSchema.properties.recoveryEvidence, 'groomClose requires terminal-agent evidence before clearing an unclaimed dispatch');
   const release = resp.result.tools.find((tool: any) => tool.name === 'release');
   assert.ok(release.inputSchema.properties.oracle, 'release exposes an oracle ask');
@@ -458,6 +461,19 @@ test('CLI verdict missing --outcome and its --help subject clarify the outcome i
   assert.equal(commandHelp.status, 0);
   assert.match(commandHelp.stdout, /candidate-addressed/i);
   assert.match(commandHelp.stdout, /reviewer's prose/i);
+});
+
+test('CLI groom-close help distinguishes manual composed delivery from integration waves', () => {
+  const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
+  const commandHelp = spawnSync(process.execPath, [cli, 'groom-close', '--help'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    env: { ...process.env, SIDEQUEST_HOME },
+  });
+  assert.equal(commandHelp.status, 0);
+  assert.match(commandHelp.stdout, /different pinned verifiers/i);
+  assert.match(commandHelp.stdout, /full composed gate/i);
+  assert.match(commandHelp.stdout, /without --integration/i);
 });
 
 test('context_page resumes Unicode bodies and rows with stable revision-safe cursors', async () => {
