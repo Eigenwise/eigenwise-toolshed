@@ -995,7 +995,8 @@
             "accepted",
             "rejected",
             "inconclusive"
-          ]
+          ],
+          "description": "Candidate, not reviewer prose."
         },
         "why": {
           "type": "string"

@@ -436,6 +436,28 @@ test('tools/list advertises the board tools with input schemas', async () => {
   const verdict = resp.result.tools.find((tool: any) => tool.name === 'verdict');
   assert.deepEqual(verdict.inputSchema.required, ['ref', 'text', 'outcome']);
   assert.deepEqual(verdict.inputSchema.properties.outcome.enum, ['accepted', 'rejected', 'inconclusive']);
+  assert.match(verdict.inputSchema.properties.outcome.description, /candidate.*not reviewer prose/i, 'outcome is candidate-addressed, not agreement with the reviewer\'s prose (GitHub #54 / SQ-2722)');
+});
+
+test('CLI verdict missing --outcome and its --help subject clarify the outcome is candidate-addressed, not the reviewer\'s prose', () => {
+  const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
+  const missingOutcome = spawnSync(process.execPath, [cli, 'verdict', 'SQ-1', '--text', 'placeholder'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    env: { ...process.env, SIDEQUEST_HOME },
+  });
+  assert.equal(missingOutcome.status, 1);
+  assert.match(missingOutcome.stderr, /candidate-addressed/i);
+  assert.match(missingOutcome.stderr, /reviewer/i);
+
+  const commandHelp = spawnSync(process.execPath, [cli, 'verdict', '--help'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    env: { ...process.env, SIDEQUEST_HOME },
+  });
+  assert.equal(commandHelp.status, 0);
+  assert.match(commandHelp.stdout, /candidate-addressed/i);
+  assert.match(commandHelp.stdout, /reviewer's prose/i);
 });
 
 test('context_page resumes Unicode bodies and rows with stable revision-safe cursors', async () => {

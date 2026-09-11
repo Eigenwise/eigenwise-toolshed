@@ -650,14 +650,18 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'verdict',
-    description: 'Record an oracle verdict. An accepted verdict for a readonly bound review released with kind oracle closes that review as done and stores the verdict as its completion comment.',
+    description: 'Record an oracle verdict. Outcome is candidate-addressed, not agreement with the reviewer’s prose; see outcome. An accepted verdict for a readonly bound review released with kind oracle closes that review as done and stores the verdict as its completion comment.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: { type: 'string' },
         project: PROJECT_PROP,
         text: { type: 'string' },
-        outcome: { type: 'string', enum: ['accepted', 'rejected', 'inconclusive'] },
+        outcome: {
+          type: 'string',
+          enum: ['accepted', 'rejected', 'inconclusive'],
+          description: 'Candidate-addressed. For a bound candidate review: rejected confirms the candidate must not ship; accepted approves the candidate, not the reviewer’s prose; inconclusive approves nothing. Text does not override outcome, and a finalized accepted cannot be reversed by another verdict; do not guess. For a non-review experiment round, outcome instead records which candidate approach won.',
+        },
         why: { type: 'string' },
         constraint: { type: 'string' },
       },
