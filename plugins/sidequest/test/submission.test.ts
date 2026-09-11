@@ -3317,17 +3317,34 @@ function completeIsolatedReview(review: { review: any; sessionId: string; execut
   return (store.getTicket(slug, review.review.ref).dispatch.attempts || []).at(-1);
 }
 
-test('a read-only isolated review satisfies the candidate gate only once its board call bound its runtime identity', () => {
+// SQ-2763 narrowed this: a raced read-only review that never reached the
+// identity hook still carries the dispatch token and agent name its own launch
+// stamped on the attempt, which is a runtime identity the board can tell apart
+// from the submitter's. Only an attempt recording neither is unidentified, and
+// the hook binding is still what upgrades the attempt to a harness-observed id.
+test('a read-only isolated review carries a runtime identity its board call upgrades to the hook-bound one', () => {
   const unrepaired = submittedGateSource('gate source without review identity', 'gate-unrepaired.js', 'gate-source-unrepaired');
   const unrepairedReview = dispatchedIsolatedReview('gate review unrepaired', unrepaired.ticket.ref, unrepaired.commit, 'gate-review-unrepaired');
   const unrepairedAttempt = completeIsolatedReview(unrepairedReview, false);
   assert.strictEqual(unrepairedAttempt.outcome, 'done');
   assert.strictEqual(unrepairedAttempt.agentId, null, 'the raced read-only review completes with no hook-bound identity');
+  assert.strictEqual(unrepairedAttempt.agentName, 'gate-review-unrepaired');
+  assert.ok(unrepairedAttempt.tokenPrefix, 'its own dispatch token is still recorded on the attempt');
 
-  const blocked = store.validateIntegrationSubmission(slug, unrepaired.ticket.ref, {});
+  const raced = store.validateIntegrationSubmission(slug, unrepaired.ticket.ref, {});
+  assert.notStrictEqual(raced.reason, 'candidate_review_required', 'its claim-token identity is distinct from the submitter agent id');
+
+  // The refusal an attempt recording no identity of any kind still earns.
+  const nameless = store.getTicket(slug, unrepaired.ticket.ref);
+  const namelessReview = store.getTicket(slug, unrepairedReview.review.ref);
+  namelessReview.dispatch.attempts = [{ ...unrepairedAttempt, agentName: null, tokenPrefix: null }];
+  persist(namelessReview);
+  const blocked = store.validateIntegrationSubmission(slug, nameless.ref, {});
   assert.strictEqual(blocked.ok, false);
   assert.strictEqual(blocked.reason, 'candidate_review_required');
-  assert.match(blocked.message, /do not both carry a hook-bound runtime agent identity/);
+  assert.match(blocked.message, /recorded no runtime identity on the terminal attempt/);
+  namelessReview.dispatch.attempts = [unrepairedAttempt];
+  persist(namelessReview);
 
   const repaired = submittedGateSource('gate source with review identity', 'gate-repaired.js', 'gate-source-repaired');
   const repairedReview = dispatchedIsolatedReview('gate review repaired', repaired.ticket.ref, repaired.commit, 'gate-review-repaired');

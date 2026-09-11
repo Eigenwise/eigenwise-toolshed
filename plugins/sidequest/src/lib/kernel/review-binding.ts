@@ -104,7 +104,14 @@ export function reviewRelationFor(
   });
 }
 
-export type ReviewProvenanceAttempt = Readonly<{ agentId: string; terminalAt: string; outcome: string }>;
+export type ReviewProvenanceAttempt = Readonly<{
+  agentId: string;
+  agentName: string;
+  tokenPrefix: string;
+  identity: string;
+  terminalAt: string;
+  outcome: string;
+}>;
 
 export type ReviewProvenanceReason =
   | 'ok'
@@ -131,10 +138,32 @@ function latestAttempt(attempts: readonly any[]): any {
     .pop() || null;
 }
 
+// A hook binding records an agent id; a claim-token binding never does
+// (dispatch.ts bindDispatchClaimToken), so its dispatch token prefix and agent
+// name, both stamped on the attempt at bind time, ARE its runtime identity.
+// Only an attempt carrying neither is genuinely unidentified.
 function identifiedAttempt(attempt?: any): ReviewProvenanceAttempt | null {
   const agentId = String(attempt?.agentId || '').trim();
-  if (!agentId) return null;
-  return Object.freeze({ agentId, terminalAt: String(attempt.terminalAt), outcome: String(attempt.outcome || '') });
+  const agentName = String(attempt?.agentName || '').trim();
+  const tokenPrefix = String(attempt?.tokenPrefix || '').trim();
+  if (!agentId && !(agentName && tokenPrefix)) return null;
+  return Object.freeze({
+    agentId,
+    agentName,
+    tokenPrefix,
+    identity: agentId ? `agent:${agentId}` : `claim:${tokenPrefix}/${agentName}`,
+    terminalAt: String(attempt.terminalAt),
+    outcome: String(attempt.outcome || ''),
+  });
+}
+
+// Fails closed: any identity component the two attempts have in common means one
+// runtime, whichever bind source each side came from. sessionId is deliberately
+// not compared, because fan-out siblings legitimately share one.
+function sameRuntimeIdentity(source: ReviewProvenanceAttempt, reviewer: ReviewProvenanceAttempt): boolean {
+  return (Boolean(source.agentId) && source.agentId === reviewer.agentId)
+    || (Boolean(source.agentName) && source.agentName === reviewer.agentName)
+    || (Boolean(source.tokenPrefix) && source.tokenPrefix === reviewer.tokenPrefix);
 }
 
 // The live dispatch record is mutable: preparing a later attempt overwrites its
@@ -162,7 +191,7 @@ export function reviewProvenance(sourceTicket?: any, reviewTicket?: any): Review
   const source = identifiedAttempt(sourceAttempt);
   const reviewer = identifiedAttempt(reviewerAttempt);
   if (!source || !reviewer) return Object.freeze({ source, reviewer, reason: 'agent_identity_missing' as ReviewProvenanceReason });
-  if (source.agentId === reviewer.agentId) return Object.freeze({ source, reviewer, reason: 'shared_agent_identity' as ReviewProvenanceReason });
+  if (sameRuntimeIdentity(source, reviewer)) return Object.freeze({ source, reviewer, reason: 'shared_agent_identity' as ReviewProvenanceReason });
   return Object.freeze({ source, reviewer, reason: 'ok' as ReviewProvenanceReason });
 }
 

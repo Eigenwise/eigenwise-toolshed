@@ -1011,6 +1011,86 @@ test('review provenance comes from immutable terminal attempts, not the mutable 
   assert.notEqual(accepted.reason, 'candidate_rejected');
 });
 
+// SQ-2763. A continuation that binds through its claim token never records an
+// agentId, so demanding one deadlocked every such candidate: integrate, manual
+// delivery, groomClose and supersession all refused with no escape.
+function claimTokenCandidate(label: string, reviewAttempt: any) {
+  const { slug, commit } = board(label);
+  const source = submittedSource(slug, commit, label);
+  const review = store.createTicket(slug, { title: `${label} review`, category: 'review-audit' }, { ref: source.ref, commit });
+  const withAttempts = store.getTicket(slug, source.ref);
+  withAttempts.dispatch = {
+    attempts: [{
+      outcome: 'submitted',
+      commit,
+      agentId: null,
+      agentName: `sq-${label}-continuation-2`,
+      tokenPrefix: 'candidate-tk',
+      terminalAt: '2026-01-01T00:00:00.000Z',
+    }],
+    outcome: 'submitted',
+    terminalAt: '2026-01-01T00:00:00.000Z',
+    bindSource: 'claim_token',
+    agentId: null,
+  };
+  persist(slug, withAttempts);
+  const done = store.getTicket(slug, review.ref);
+  done.status = 'done';
+  done.dispatch = { attempts: [reviewAttempt], outcome: 'done', terminalAt: '2026-01-02T00:00:00.000Z' };
+  persist(slug, done);
+  return { slug, commit, sourceRef: source.ref, reviewRef: review.ref };
+}
+
+test('a claim-token-bound candidate integrates under a distinct reviewer and still refuses a shared identity', () => {
+  const integrable = claimTokenCandidate('claim-token-distinct', {
+    outcome: 'done',
+    agentId: 'hook-bound-reviewer',
+    agentName: 'sq-review-distinct',
+    terminalAt: '2026-01-02T00:00:00.000Z',
+  });
+  const provenance = reviewBinding.reviewProvenance(
+    store.getTicket(integrable.slug, integrable.sourceRef),
+    store.getTicket(integrable.slug, integrable.reviewRef),
+  );
+  assert.equal(provenance.reason, 'ok', 'a claim-token binding carries a first-class identity');
+  assert.equal(provenance.source.identity, 'claim:candidate-tk/sq-claim-token-distinct-continuation-2');
+  assert.equal(provenance.reviewer.identity, 'agent:hook-bound-reviewer');
+  const accepted = store.validateIntegrationSubmission(integrable.slug, integrable.sourceRef, {});
+  assert.notEqual(accepted.reason, 'candidate_review_required', 'the claim-token candidate is no longer unintegrable');
+
+  // Negative control: the same claim-token identity on both sides is still one runtime.
+  const shared = claimTokenCandidate('claim-token-shared', {
+    outcome: 'done',
+    agentId: null,
+    agentName: 'sq-claim-token-shared-continuation-2',
+    tokenPrefix: 'candidate-tk',
+    terminalAt: '2026-01-02T00:00:00.000Z',
+  });
+  assert.equal(
+    reviewBinding.reviewProvenance(store.getTicket(shared.slug, shared.sourceRef), store.getTicket(shared.slug, shared.reviewRef)).reason,
+    'shared_agent_identity',
+  );
+  const refused = store.validateIntegrationSubmission(shared.slug, shared.sourceRef, {});
+  assert.equal(refused.reason, 'candidate_review_required');
+  assert.match(refused.message, /same runtime identity that submitted .* \(claim:candidate-tk\/sq-claim-token-shared-continuation-2\)/);
+
+  // Negative control: an attempt carrying neither an agent id nor a token/name pair.
+  const unidentified = claimTokenCandidate('claim-token-unidentified', {
+    outcome: 'done',
+    agentId: null,
+    agentName: 'sq-review-nameless',
+    terminalAt: '2026-01-02T00:00:00.000Z',
+  });
+  assert.equal(
+    reviewBinding.reviewProvenance(store.getTicket(unidentified.slug, unidentified.sourceRef), store.getTicket(unidentified.slug, unidentified.reviewRef)).reason,
+    'agent_identity_missing',
+  );
+  const missing = store.validateIntegrationSubmission(unidentified.slug, unidentified.sourceRef, {});
+  assert.equal(missing.reason, 'candidate_review_required');
+  assert.match(missing.message, /recorded no runtime identity on the terminal attempt/);
+  assert.match(missing.message, /re-dispatch that ticket so the replacement attempt binds/, 'the refusal names the recourse');
+});
+
 test('integration stays blocked when a matching attempt, an identity, or a distinct reviewer is missing', () => {
   const cases: Array<[string, any, any]> = [
     ['source attempt for another commit', [{ outcome: 'submitted', commit: 'f'.repeat(40), agentId: 'source-a', terminalAt: '2026-01-01T00:00:00.000Z' }], [{ outcome: 'done', agentId: 'review-b', terminalAt: '2026-01-02T00:00:00.000Z' }]],

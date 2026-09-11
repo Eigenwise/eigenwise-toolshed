@@ -8,7 +8,7 @@ const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require('../sou
 const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require('../kernel/review-binding');
 const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require('../kernel/wave');
 const { isInScope, scopedPaths } = require('../scope-match');
-const { manualCandidateDeliveryGuidance } = require('../refusal-guidance.js');
+const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance } = require('../refusal-guidance.js');
 import type { VerificationResult } from '../kernel/verification.js';
 
 function createSubmissions(dependencies: any) {
@@ -223,10 +223,11 @@ function terminalReviewFailure(ticket: any, relation: any) {
     return `${reviewRelationRef(relation)} has no terminal done dispatch attempt for its bound review of ${ticket.ref}`;
   }
   if (provenance.reason === 'agent_identity_missing') {
-    return `${reviewRelationRef(relation)} and ${ticket.ref} do not both carry a hook-bound runtime agent identity`;
+    const unidentified = [!provenance.source && ticket.ref, !provenance.reviewer && reviewRelationRef(relation)].filter(Boolean).join(' and ');
+    return `${unidentified} recorded no runtime identity on the terminal attempt: neither a hook-bound agent id nor the dispatch token and agent name a claim-token binding records`;
   }
   if (provenance.reason === 'shared_agent_identity') {
-    return `${reviewRelationRef(relation)} was completed by the same runtime identity that submitted ${ticket.ref}`;
+    return `${reviewRelationRef(relation)} was completed by the same runtime identity that submitted ${ticket.ref} (${provenance.source?.identity})`;
   }
   return null;
 }
@@ -833,7 +834,12 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
     }
     const reviewFailure = terminalReviewFailure(ticket, candidateReview);
     if (reviewFailure) {
-      return { ok: false, reason: 'candidate_review_required', ticket, message: `${ticket.ref} integration refused; ${reviewFailure}.` };
+      return {
+        ok: false,
+        reason: 'candidate_review_required',
+        ticket,
+        message: `${ticket.ref} integration refused; ${reviewFailure}. ${candidateReviewRequiredGuidance()}`,
+      };
     }
   }
   const requiredVerification = pinnedVerificationRequirement(ticket);

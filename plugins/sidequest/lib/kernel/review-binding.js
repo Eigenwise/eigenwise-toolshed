@@ -98,8 +98,20 @@ function latestAttempt(attempts) {
 }
 function identifiedAttempt(attempt) {
   const agentId = String(attempt?.agentId || "").trim();
-  if (!agentId) return null;
-  return Object.freeze({ agentId, terminalAt: String(attempt.terminalAt), outcome: String(attempt.outcome || "") });
+  const agentName = String(attempt?.agentName || "").trim();
+  const tokenPrefix = String(attempt?.tokenPrefix || "").trim();
+  if (!agentId && !(agentName && tokenPrefix)) return null;
+  return Object.freeze({
+    agentId,
+    agentName,
+    tokenPrefix,
+    identity: agentId ? `agent:${agentId}` : `claim:${tokenPrefix}/${agentName}`,
+    terminalAt: String(attempt.terminalAt),
+    outcome: String(attempt.outcome || "")
+  });
+}
+function sameRuntimeIdentity(source, reviewer) {
+  return Boolean(source.agentId) && source.agentId === reviewer.agentId || Boolean(source.agentName) && source.agentName === reviewer.agentName || Boolean(source.tokenPrefix) && source.tokenPrefix === reviewer.tokenPrefix;
 }
 function submittedCandidateAttempt(sourceTicket) {
   const commit = String(sourceTicket?.submission?.commit || "").trim().toLowerCase();
@@ -118,7 +130,7 @@ function reviewProvenance(sourceTicket, reviewTicket) {
   const source = identifiedAttempt(sourceAttempt);
   const reviewer = identifiedAttempt(reviewerAttempt);
   if (!source || !reviewer) return Object.freeze({ source, reviewer, reason: "agent_identity_missing" });
-  if (source.agentId === reviewer.agentId) return Object.freeze({ source, reviewer, reason: "shared_agent_identity" });
+  if (sameRuntimeIdentity(source, reviewer)) return Object.freeze({ source, reviewer, reason: "shared_agent_identity" });
   return Object.freeze({ source, reviewer, reason: "ok" });
 }
 function reviewRelationRef(relation) {
