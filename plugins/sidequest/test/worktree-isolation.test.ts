@@ -2181,7 +2181,10 @@ test('an isolation field added to a continuation spawn is refused before the har
 
     const denied = runHook(FORCE_EXEC_BYPASS, spawnInput({ isolation: 'worktree' }), { CLAUDE_PROJECT_DIR: PROJECT });
     assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
-    assert.match(denied.hookSpecificOutput.permissionDecisionReason, new RegExp(worktree.replace(/[\\^$*+?.()|[\]{}]/g, '\\$&'), 'i'));
+    // The refusal names the checkout as the board canonicalized it, so an 8.3 short tmpdir
+    // (C:\Users\RUNNER~1 on CI) only matches once the fixture path goes through the same expansion.
+    const named = worktrees.canonicalPath(worktree).replace(/[\\^$*+?.()|[\]{}]/g, '\\$&');
+    assert.match(denied.hookSpecificOutput.permissionDecisionReason, new RegExp(named, 'i'));
     assert.equal(store.getTicket(slug, ticket.ref).dispatch.launchedAt, null, 'a refused spawn must not burn the attempt');
 
     // The same spawn passed unchanged is the one the board prepared, so it still launches.
