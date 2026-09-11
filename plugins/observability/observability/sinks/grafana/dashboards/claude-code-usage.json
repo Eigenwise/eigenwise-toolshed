@@ -533,7 +533,7 @@
     {
       "id": 210,
       "title": "Gateway errors and throttles",
-      "description": "Gateway log records containing an error, failure, throttle, rate-limit, or HTTP 429 signal.",
+      "description": "Gateway usage records the observer exported with a throttled, client-error, or server-error status.",
       "type": "timeseries",
       "datasource": {
         "type": "loki",
@@ -578,7 +578,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({service_name=\"codex-gateway\"} |~ \"(?i)(error|fail|throttl|rate.?limit|429)\" [$bucket])) or vector(0)",
+          "expr": "sum(count_over_time({service_name=\"workbench-observer\"} |~ \"gateway.token.usage|gateway.tool_result.usage|gateway.mcp.footprint\" | workbench_attribute_status =~ \"throttled|client_error|server_error\" [$bucket])) or vector(0)",
           "legendFormat": "errors / throttles"
         }
       ],
@@ -717,7 +717,7 @@
     {
       "id": 222,
       "title": "Gateway records, 5m",
-      "description": "Recent gateway log records. Zero can mean the gateway is idle or unavailable.",
+      "description": "Recent gateway usage records exported by the observer. Zero can mean the gateway is idle, unavailable, or that no opted-in repository produced gateway usage.",
       "type": "stat",
       "datasource": {
         "type": "loki",
@@ -773,7 +773,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({service_name=\"codex-gateway\"}[5m]))",
+          "expr": "sum(count_over_time({service_name=\"workbench-observer\"} |~ \"gateway.token.usage|gateway.tool_result.usage|gateway.mcp.footprint\" [5m]))",
           "legendFormat": "Gateway records, 5m",
           "instant": true
         }

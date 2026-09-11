@@ -262,10 +262,10 @@ test('a per-project dashboard says so when its project has no samples in the ran
   assert.equal(global.dashboard.panels.some(({ title }) => title === EMPTY_STATE_TITLE), false);
 });
 
-test('native Sidequest identity joins the canonical project after ingest', () => {
+test('native Sidequest fixtures remain accepted through a consented store', () => {
   const projectId = projectMetadata(PROJECT_DIR).project_id;
   const [{ observation: adapter }, { observation: native }] = sidequestFixtures(projectId);
-  const store = openObservabilityStore(':memory:', { outboxEnabled: false });
+  const store = openObservabilityStore(':memory:', { consent: (id) => id === projectId, outboxEnabled: false });
   try {
     assert.equal(store.ingest(adapter).accepted, true);
     assert.equal(store.ingest(native).accepted, true);

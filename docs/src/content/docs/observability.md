@@ -5,7 +5,7 @@ description: See local Claude Code usage for the repositories you choose.
 
 Observability records local Claude Code usage metadata such as token totals, tool activity, models, sessions, and estimated costs. The intended policy is per-repository opt-in. Shared service setup consent and project opt-in are separate decisions. The shared observer and Collector are machine-wide, while project settings decide which repository should participate.
 
-The telemetry schema is designed to exclude prompt or response text, code or file contents, tool inputs or results, credentials, and environment values. Sink configuration stays in the private local observability config. Current limitation: the hook and ingest path does not enforce the repository opt-in at its collection boundary. Hook events can enter the shared spool and ingest path before the repository check. Treat per-repository opt-in as intended policy, not a hard runtime privacy guarantee, until runtime enforcement is fixed. This documentation does not claim that fix or offer a workaround.
+The telemetry schema is designed to exclude prompt or response text, code or file contents, tool inputs or results, credentials, and environment values. Sink configuration stays in the private local observability config. Repository opt-in is enforced on the local capture path and on the single export path. Hook capture is gated before the spool write, ingest is gated before persistence, and the observer's outbox is the only route by which a log record reaches a configured sink. Disabling a repository stops future capture and withholds still-queued rows from export while local history is preserved. Traces and metrics still reach a configured sink through the Collector without this gate.
 
 ## Start here
 

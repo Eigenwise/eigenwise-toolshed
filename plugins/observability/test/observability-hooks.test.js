@@ -156,6 +156,52 @@ test('a linked worktree or submodule reports as its main worktree, never as agen
   assert.deepEqual(projectMetadata(submodule), projectMetadata(root));
 });
 
+test('spools only a repository in the opt-in registry', (t) => {
+  const directory = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-hook-consent-')));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const hook = path.join(__dirname, '..', 'hooks', 'observability.js');
+  const configFile = path.join(directory, 'observability.json');
+  const spoolPath = path.join(directory, 'hook-spool.jsonl');
+  const opted = path.join(directory, 'opted');
+  const unopted = path.join(directory, 'unopted');
+  for (const root of [opted, unopted]) fs.mkdirSync(path.join(root, '.git'), { recursive: true });
+  const linkedWorktree = (root, name) => {
+    const gitDirectory = path.join(root, '.git', 'worktrees', name);
+    const worktree = path.join(root, name);
+    fs.mkdirSync(gitDirectory, { recursive: true });
+    fs.writeFileSync(path.join(gitDirectory, 'commondir'), '../..\n');
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(worktree, '.git'), `gitdir: ${gitDirectory.replaceAll('\\', '/')}\n`);
+    return worktree;
+  };
+  const optedWorktree = linkedWorktree(opted, 'opted-worktree');
+  const unoptedWorktree = linkedWorktree(unopted, 'unopted-worktree');
+  const optedId = projectMetadata(opted).project_id;
+  const env = { ...process.env, WORKBENCH_HOOK_SPOOL: spoolPath, WORKBENCH_OBSERVABILITY_CONFIG: configFile };
+  const emit = (cwd, sessionId) => childProcess.execFileSync(process.execPath, [hook], {
+    input: JSON.stringify({ hook_event_name: 'SessionStart', cwd, session_id: sessionId }), encoding: 'utf8', env,
+  });
+
+  fs.writeFileSync(configFile, JSON.stringify({ observability: { optedInProjects: [{ project_id: optedId }] } }));
+  assert.equal(emit(opted, 'opted-root'), '');
+  assert.equal(emit(optedWorktree, 'opted-worktree'), '');
+  assert.equal(emit(unopted, 'unopted-root'), '');
+  assert.equal(emit(unoptedWorktree, 'unopted-worktree'), '');
+  const projectIds = fs.readFileSync(spoolPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line).project_id);
+  assert.deepEqual(projectIds, [optedId, optedId]);
+
+  fs.rmSync(spoolPath);
+  fs.rmSync(configFile);
+  assert.equal(emit(opted, 'missing-config'), '');
+  assert.equal(fs.existsSync(spoolPath), false);
+  fs.writeFileSync(configFile, JSON.stringify({ observability: { optedInProjects: {} } }));
+  assert.equal(emit(opted, 'malformed-config'), '');
+  assert.equal(fs.existsSync(spoolPath), false);
+  fs.writeFileSync(configFile, JSON.stringify({ observability: { optedInProjects: [{}] } }));
+  assert.equal(emit(opted, 'missing-project-id'), '');
+  assert.equal(fs.existsSync(spoolPath), false);
+});
+
 test('project identity falls back to the directory itself outside a readable repository', (t) => {
   const loose = temporaryTree(t, 'loose-project');
   fs.mkdirSync(loose, { recursive: true });
@@ -342,7 +388,10 @@ test('Stop hook flushes once, stays silent on re-entry, and fails open', (t) => 
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const hook = path.join(__dirname, '..', 'hooks', 'observability.js');
   const spoolPath = path.join(dir, 'hook-spool.jsonl');
-  const env = { ...process.env, WORKBENCH_HOOK_SPOOL: spoolPath };
+  const configFile = path.join(dir, 'observability.json');
+  fs.mkdirSync(path.join(dir, '.git'));
+  fs.writeFileSync(configFile, JSON.stringify({ observability: { optedInProjects: [{ project_id: projectMetadata(dir).project_id }] } }));
+  const env = { ...process.env, WORKBENCH_HOOK_SPOOL: spoolPath, WORKBENCH_OBSERVABILITY_CONFIG: configFile };
   const input = { hook_event_name: 'Stop', session_id: 'stop-session', cwd: dir, stop_hook_active: false };
 
   assert.equal(childProcess.execFileSync(process.execPath, [hook], {
@@ -392,6 +441,40 @@ test('hook spool drains into the observer store and replays idempotently', async
   assert.equal(tool.mcp_tool, 'list');
   assert.equal(tool.duration_ms, 42);
   assert.equal(store.database.prepare('SELECT project_id FROM observation').get().project_id, projectId);
+});
+
+test('a denied preexisting spool row stays eligible after re-opt-in', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-hook-retained-consent-'));
+  const spoolPath = path.join(dir, 'hook-spool.jsonl');
+  let optedIn = false;
+  const projectId = 'a'.repeat(64);
+  const store = openObservabilityStore(path.join(dir, 'observability.db'), {
+    consent: (candidateProjectId) => optedIn && candidateProjectId === projectId,
+    outboxEnabled: false,
+  });
+  t.after(() => {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const observation = {
+    ...buildObservation({
+      hook_event_name: 'PostToolUse', session_id: 'session-retained', tool_name: 'Read', tool_use_id: 'tool-retained',
+    }, NOW),
+    project_id: projectId,
+  };
+  spool(spoolPath, observation);
+
+  assert.deepEqual(await drainHookSpool({ spoolPath, store, batchSize: 1 }), {
+    drained: 0, duplicates: 0, rejected: 1, malformed: 0, droppedBytes: 0,
+  });
+  assert.deepEqual(fs.readFileSync(`${spoolPath}.draining`, 'utf8').trim(), JSON.stringify(observation));
+
+  optedIn = true;
+  assert.deepEqual(await drainHookSpool({ spoolPath, store, batchSize: 1 }), {
+    drained: 1, duplicates: 0, rejected: 0, malformed: 0, droppedBytes: 0,
+  });
+  assert.equal(fs.existsSync(`${spoolPath}.draining`), false);
+  assert.equal(store.database.prepare('SELECT COUNT(*) AS count FROM observation').get().count, 1);
 });
 
 test('hook wake signals annotate only the first subsequent orchestrator request', (t) => {

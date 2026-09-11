@@ -25,6 +25,7 @@ const {
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'request-body-transcript.jsonl');
 const NOW = new Date('2026-07-19T10:00:00.000Z');
+const SEEDED_PROJECT_ID = 'd'.repeat(64);
 
 function runStatusline(payload, environment) {
   const child = spawn(process.execPath, [path.join(__dirname, '..', 'bin', 'statusline.js')], { env: environment });
@@ -48,7 +49,7 @@ function seedStalledObserverOutbox(databasePath) {
     model: { id: 'claude-test' },
     context_window: { total_input_tokens: 100, context_window_size: 1000 },
   }, new Date(), null);
-  const result = store.ingest(observation);
+  const result = store.ingest({ ...observation, project_id: SEEDED_PROJECT_ID });
   store.close();
   assert.equal(result.accepted, true);
 }
@@ -68,7 +69,14 @@ async function waitForObserverError(port, expectedError) {
 
 async function startTemporaryObserver(directory, databasePath, seedOutbox) {
   if (seedOutbox) seedStalledObserverOutbox(databasePath);
+  // The observer gates its outbox on the opt-in registry, so give it a temporary one instead
+  // of letting it read whatever the machine running the suite has opted in.
+  const configFile = path.join(directory, 'observability.json');
+  fs.writeFileSync(configFile, JSON.stringify({
+    observability: { optedInProjects: [{ project_id: SEEDED_PROJECT_ID }] },
+  }));
   const observer = createObserver({
+    configFile,
     databaseFile: databasePath,
     host: '127.0.0.1',
     port: 0,

@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
+const { CANONICAL_PROJECT_ID } = require('./consent.js');
 const { normalizeObservation, stableStringify, validIdentifier } = require('./ingest.js');
 const { RESOLVED_VIEWS, RETENTION_PRUNE_TRIGGER_SQL, SCHEMA_VERSION, TABLE_SQL } = require('./schema.js');
 const { VIEW_SQL } = require('./resolve.js');
@@ -244,6 +245,7 @@ function openObservabilityStore(databaseFile, options = {}) {
   if (!readOnly && databaseFile !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(databaseFile)), { recursive: true });
 
   const now = options.now || (() => new Date());
+  const consent = typeof options.consent === 'function' ? options.consent : null;
   const createId = options.randomUUID || randomUUID;
   const outboxEnabled = options.outboxEnabled !== false;
   const busyTimeoutMs = Number(options.busyTimeoutMs || 5000);
@@ -277,6 +279,19 @@ function openObservabilityStore(databaseFile, options = {}) {
   }
 
   const statements = createStatements(database);
+  // A read-only open of a database no writer has touched since this table was added has no
+  // consent_denial; every statement below is then skipped rather than prepared.
+  const consentDenialTable = database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'consent_denial'")
+    .get() !== undefined;
+  const denialStatements = consentDenialTable ? {
+    record: database.prepare(`
+      INSERT INTO consent_denial (session_id, denied_at) VALUES (?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET denied_at = excluded.denied_at
+    `),
+    forget: database.prepare('DELETE FROM consent_denial WHERE session_id = ?'),
+    prune: database.prepare('DELETE FROM consent_denial WHERE denied_at < ?'),
+  } : null;
   let closed = false;
   let inTransaction = false;
   const sessionProjects = new Map();
@@ -294,6 +309,16 @@ function openObservabilityStore(databaseFile, options = {}) {
     while (sessionProjects.size > SESSION_PROJECT_CAP) sessionProjects.delete(sessionProjects.keys().next().value);
   }
 
+  // Deliberately not folded into rememberProject: warm-up replays that, and a replay must never
+  // lift the tombstone that is the reason warm-up skipped the session in the first place.
+  function forgetDenial(observation) {
+    if (!denialStatements || !observation.session_id) return;
+    if (!observation.event_name.startsWith('hook.')) return;
+    const projectName = observation.attributes && observation.attributes.project_name;
+    if (!observation.project_id && !projectName) return;
+    denialStatements.forget.run(observation.session_id);
+  }
+
   function warmProjectMap() {
     const rows = database.prepare(`
       SELECT session_id, project_id, project_name
@@ -308,6 +333,7 @@ function openObservabilityStore(databaseFile, options = {}) {
         WHERE event_name LIKE 'hook.%'
           AND session_id IS NOT NULL
           AND (project_id IS NOT NULL OR json_extract(attributes_json, '$.project_name') IS NOT NULL)
+          ${consentDenialTable ? 'AND session_id NOT IN (SELECT session_id FROM consent_denial)' : ''}
         ORDER BY observed_at DESC, event_id DESC
         LIMIT ?
       )
@@ -326,14 +352,21 @@ function openObservabilityStore(databaseFile, options = {}) {
 
   function enrichGateway(input) {
     if (!input || !['gateway.token.usage', 'gateway.tool_result.usage', 'gateway.mcp.footprint'].includes(input.event_name)) return input;
-    const project = input.session_id ? sessionProjects.get(input.session_id) : null;
+    // A gateway record names its project (usage-observability.js resolveProjectId is a cwd
+    // basename); only a session's hook history carries the canonical id. So a raw value is
+    // identity only when it is already canonical, and a name is identity only when it matches
+    // the session it claims. Anything else stays unattributed and consent denies it.
+    const rawProjectId = typeof input.project_id === 'string' && input.project_id.length > 0 ? input.project_id : null;
+    const canonicalProjectId = rawProjectId && CANONICAL_PROJECT_ID.test(rawProjectId) ? rawProjectId : null;
+    const mapped = !canonicalProjectId && input.session_id ? sessionProjects.get(input.session_id) : null;
+    const project = mapped && (!rawProjectId || rawProjectId === mapped.project_name) ? mapped : null;
     if (project) {
       sessionProjects.delete(input.session_id);
       sessionProjects.set(input.session_id, project);
     }
     return {
       ...input,
-      project_id: project ? project.project_id : (input.project_id || null),
+      project_id: canonicalProjectId || (project ? project.project_id : null),
       attributes: {
         ...(input.attributes || {}),
         ...(project && project.project_name ? { project_name: project.project_name } : {}),
@@ -654,6 +687,7 @@ function openObservabilityStore(databaseFile, options = {}) {
 
     insertRows(normalized.observation, normalized.measurements, normalized.links, fingerprint);
     rememberProject(normalized.observation);
+    forgetDenial(normalized.observation);
     const conflictEventIds = [
       ...recordRequestUsageConflicts(normalized.observation),
       ...recordAggregateCheckConflicts(normalized.observation),
@@ -671,19 +705,26 @@ function openObservabilityStore(databaseFile, options = {}) {
     };
   }
 
+  function ingestInput(input) {
+    const enriched = enrichWake(enrichGateway(input));
+    if (consent && !consent(enriched?.project_id)) {
+      const sessionId = typeof input?.session_id === 'string' && input.session_id.length > 0 ? input.session_id : null;
+      if (sessionId) {
+        sessionProjects.delete(sessionId);
+        if (denialStatements) denialStatements.record.run(sessionId, isoNow(now));
+      }
+      return { accepted: false, committed: true, duplicate: false, event_id: null, consent_denied: true };
+    }
+    return ingestNormalized(normalizeObservation(enriched, { now, randomUUID: createId }));
+  }
+
   function ingest(input) {
-    return transaction(() => {
-      const normalized = normalizeObservation(enrichWake(enrichGateway(input)), { now, randomUUID: createId });
-      return ingestNormalized(normalized);
-    });
+    return transaction(() => ingestInput(input));
   }
 
   function ingestBatch(inputs) {
     if (!Array.isArray(inputs) || inputs.length === 0) throw new TypeError('A non-empty observation array is required.');
-    return transaction(() => inputs.map((input) => {
-      const normalized = normalizeObservation(enrichWake(enrichGateway(input)), { now, randomUUID: createId });
-      return ingestNormalized(normalized);
-    }));
+    return transaction(() => inputs.map(ingestInput));
   }
 
   function getObservation(eventId) {
@@ -830,6 +871,7 @@ function openObservabilityStore(databaseFile, options = {}) {
       database.prepare('DELETE FROM otlp_outbox WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
       database.prepare('DELETE FROM observation_dedupe WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
       database.prepare('DELETE FROM observation WHERE observed_at < ?').run(cutoff);
+      if (denialStatements) denialStatements.prune.run(cutoff);
       database.prepare("DELETE FROM observability_meta WHERE key = 'retention_prune_active'").run();
     });
   }
@@ -980,13 +1022,17 @@ function openObservabilityStore(databaseFile, options = {}) {
     assertOpen();
     const limit = Math.max(1, Math.min(Number(options.limit) || 100, 1000));
     const at = options.at || isoNow(now);
-    return database.prepare(`
-      SELECT id, event_id, payload_json, attempts, available_at, created_at
+    const rows = database.prepare(`
+      SELECT otlp_outbox.id, otlp_outbox.event_id, otlp_outbox.payload_json, otlp_outbox.attempts, otlp_outbox.available_at, otlp_outbox.created_at, observation.project_id
       FROM otlp_outbox
-      WHERE available_at IS NOT NULL AND available_at <= ?
-      ORDER BY id
+      JOIN observation ON observation.event_id = otlp_outbox.event_id
+      WHERE otlp_outbox.available_at IS NOT NULL AND otlp_outbox.available_at <= ?
+      ORDER BY otlp_outbox.id
       LIMIT ?
     `).all(at, limit);
+    return rows
+      .filter((row) => !consent || consent(row.project_id))
+      .map(({ project_id: projectId, ...row }) => row);
   }
 
   function acknowledgeOutbox(ids) {
