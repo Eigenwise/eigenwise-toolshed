@@ -118,15 +118,19 @@ function resolveWindow(options = {}) {
 }
 
 /** Cheap first-install probe: how many transcripts exist for this project, without opening any. */
-function countRecentTranscripts(projectPath, days, env = process.env) {
+function countRecentTranscripts(projectPath, days, env = process.env, now = Date.now()) {
+  return countTranscriptsSince(projectPath, now - days * 86400000, env);
+}
+
+function countTranscriptsSince(projectPath, cutoffMs, env = process.env) {
   const root = projectsRoot(env);
-  const cutoffMs = Date.now() - days * 86400000;
   return sessionsInSlug(root, resolveSlug(projectPath, root))
-    .filter((session) => session.modifiedMs >= cutoffMs).length;
+    .filter((session) => session.modifiedMs > cutoffMs).length;
 }
 
 module.exports = {
   countRecentTranscripts,
+  countTranscriptsSince,
   DEFAULT_DAYS,
   DEFAULT_SESSIONS,
   resolveSlug,

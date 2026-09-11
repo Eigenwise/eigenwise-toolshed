@@ -5,9 +5,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { stateRoot } = require('./paths.js');
+const { countTranscriptsSince } = require('./scan.js');
 
 const MAX_TRACKED_SESSIONS = 200;
 const HOUR_MS = 3600000;
+const DAY_MS = 86400000;
+const INITIAL_TRANSCRIPT_LOOKBACK_DAYS = 14;
 
 const NUDGE_DEFAULTS = {
   minSessions: 4,
@@ -204,19 +207,24 @@ function statusFor(projectDir, env = process.env, now = Date.now()) {
   const state = readProjectState(projectDir, env);
   const thresholds = nudgeThresholds(env);
   const offer = offerThresholds(env);
-  const unanalyzed = sessionsSince(state, state.lastResupplyAt);
-  const friction = unanalyzed.reduce((total, session) => total + frictionOf(session.tally), 0);
+  const talliedUnanalyzed = sessionsSince(state, state.lastResupplyAt);
+  const transcriptCutoffMs = state.lastResupplyAt
+    ? Date.parse(state.lastResupplyAt)
+    : now - INITIAL_TRANSCRIPT_LOOKBACK_DAYS * DAY_MS;
+  const transcriptSessions = countTranscriptsSince(state.projectDir, transcriptCutoffMs, env);
+  const unanalyzedSessions = Math.max(talliedUnanalyzed.length, transcriptSessions);
+  const friction = talliedUnanalyzed.reduce((total, session) => total + frictionOf(session.tally), 0);
 
   const nudgedRecently = state.lastNudgeAt && now - Date.parse(state.lastNudgeAt) < thresholds.cooldownHours * HOUR_MS;
   const resuppliedRecently = state.lastResupplyAt && now - Date.parse(state.lastResupplyAt) < thresholds.cooldownHours * HOUR_MS;
   const offerRecently = state.lastOfferAt && now - Date.parse(state.lastOfferAt) < offer.cooldownHours * HOUR_MS;
-  const overThreshold = unanalyzed.length >= thresholds.minSessions || friction >= thresholds.minFriction;
+  const overThreshold = unanalyzedSessions >= thresholds.minSessions || friction >= thresholds.minFriction;
   const resupplyDue = Boolean(overThreshold && !resuppliedRecently);
 
   return {
     projectDir: state.projectDir,
     trackedSessions: state.sessions.length,
-    unanalyzedSessions: unanalyzed.length,
+    unanalyzedSessions,
     frictionEvents: friction,
     lastResupplyAt: state.lastResupplyAt,
     lastNudgeAt: state.lastNudgeAt,

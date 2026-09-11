@@ -46,7 +46,7 @@ The aggregate is more than counts. It can include:
 - repeated command names, plugin, skill, and MCP attribution, and fetched hostnames; and
 - short clipped correction or denial evidence, up to 300 characters per quote.
 
-Setup explicitly requests the all-projects aggregate. Resupply reads the current project by default and only uses `--all-projects` for a global pass. A host policy label alone never justifies a permission allowlist or hook change; existing approval requirements still apply. The state directory stores local tallies and the decision ledger, not raw conversation transcripts.
+Setup explicitly requests the all-projects aggregate. Resupply reads the current project by default and only uses `--all-projects` for a global pass. A host policy label alone never justifies a permission allowlist or hook change; existing approval requirements still apply. The state directory stores local tallies and the decision ledger, not raw conversation transcripts. Resupply due checks also stat current-project transcript files, using only their modification time to count activity since a reset; they never open transcript content.
 
 ## The setup handoff
 
@@ -75,7 +75,7 @@ Environment variables are optional:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `QUARTERMASTER_MIN_SESSIONS` | 4 | Unreviewed sessions before a nudge |
+| `QUARTERMASTER_MIN_SESSIONS` | 4 | Unreviewed session activity before a nudge |
 | `QUARTERMASTER_MIN_FRICTION` | 6 | Friction events before a nudge |
 | `QUARTERMASTER_NUDGE_HOURS` | 24 | Cooldown between SessionStart nudges and after a resupply pass |
 | `QUARTERMASTER_OFFER_HOURS` | 24 | Cross-session cooldown between Stop-time offers |

@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { test, beforeEach } = require('node:test');
 
+const { slugForProject } = require('../lib/paths.js');
 const {
   appendDecision,
   declineResupply,
@@ -43,6 +44,13 @@ function alternateProjectSpelling(projectDir) {
 function legacyProjectStateFile(projectDir) {
   const legacyKey = crypto.createHash('sha256').update(String(projectDir).replace(/\r/g, '')).digest('hex').slice(0, 16);
   return path.join(environment.QUARTERMASTER_STATE_DIR, 'projects', `${legacyKey}.json`);
+}
+
+function writeTranscript(projectDir, configDir, sessionId, modifiedAt) {
+  const file = path.join(configDir, 'projects', slugForProject(projectDir), `${sessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '', 'utf8');
+  fs.utimesSync(file, modifiedAt / 1000, modifiedAt / 1000);
 }
 
 test('recordSessionTally persists and replaces by session id', () => {
@@ -88,12 +96,12 @@ test('a legacy raw-keyed state migrates to the canonical project key', () => {
   assert.equal(stored.projectDir, state.projectDir, 'canonical state stores the canonical project directory');
 });
 
-test('statusFor nudges on friction threshold and respects cooldown', () => {
+test('statusFor preserves the tally-only friction threshold and cooldown', () => {
   const now = Date.now();
-  for (let index = 0; index < 4; index += 1) {
+  for (let index = 0; index < 2; index += 1) {
     recordSessionTally(PROJECT, `session-${index}`, tallyWith({ denials: 3, interrupts: 1 }), environment, now - index * DAY_MS);
   }
-  assert.equal(statusFor(PROJECT, environment, now).shouldNudge, true, 'friction 16 over default 6');
+  assert.equal(statusFor(PROJECT, environment, now).shouldNudge, true, 'friction 8 over default 6');
 
   markNudged(PROJECT, environment, now);
   assert.equal(statusFor(PROJECT, environment, now).shouldNudge, false, 'cooldown after nudge');
@@ -110,6 +118,30 @@ test('statusFor nudges on session count and resets after a resupply pass', () =>
   const status = statusFor(PROJECT, environment, now);
   assert.equal(status.unanalyzedSessions, 0);
   assert.equal(status.shouldNudge, false);
+});
+
+test('statusFor counts recent transcript activity without double-counting tallies', () => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-config-'));
+  const transcriptEnvironment = { CLAUDE_CONFIG_DIR: configDir };
+  const now = Date.now();
+
+  for (let index = 0; index < 4; index += 1) {
+    writeTranscript(PROJECT, configDir, `active-${index}`, now - (index + 1) * 1000);
+  }
+
+  const activeStatus = statusFor(PROJECT, transcriptEnvironment, now);
+  assert.equal(activeStatus.unanalyzedSessions, 4, 'four active transcripts satisfy the session threshold without tallies');
+  assert.equal(activeStatus.shouldNudge, true, 'four active transcripts satisfy the session threshold');
+
+  for (let index = 0; index < 4; index += 1) {
+    recordSessionTally(PROJECT, `active-${index}`, tallyWith(), transcriptEnvironment, now - (index + 1) * 1000);
+  }
+
+  const overlapStatus = statusFor(PROJECT, transcriptEnvironment, now);
+  assert.equal(overlapStatus.unanalyzedSessions, 4, 'overlapping transcript and tally activity uses the larger count');
+
+  markResupply(PROJECT, transcriptEnvironment, now);
+  assert.equal(statusFor(PROJECT, transcriptEnvironment, now).unanalyzedSessions, 0, 'the reset excludes transcripts from before it');
 });
 
 test('statusFor keeps Stop offers independent from SessionStart nudges and records a decline', () => {
