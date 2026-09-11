@@ -68,6 +68,12 @@ gate covers the newer target content. An assembly refusal leaves every submitted
   the pinned candidate with the observed integration revision. A missing or different path refuses.
 - When a working-tree delivery cannot record its initial dirty baseline, it still dispatches without an inherited-path exemption, so every dirty path is attributed to the executor at closeout.
 
+### Overlapping candidates with different pinned verifiers
+
+A wave refuses when participants pin different verifier requirements. Keep those frozen records intact. When reviewed candidates overlap, compose their exact accepted candidate refs in the registered target, run every participant's pinned verifier and the full composed gate against that tree, then record each delivery through `groomClose` with its own immutable candidate as `deliveryCommit` and `deliveryMethod: "manual"`. Omit `integration: true`: that field selects the assembled-wave route and requires a matching delivered wave.
+
+This route still fails closed. Do not skip a verifier or review, substitute current `HEAD` for the pinned candidate, claim an unverified target, or close when the candidate's submitted paths are missing or differ. `groomClose` compares the pinned candidate to the registered target working tree and reruns delivery verification before it records delivery.
+
 Set the board default with `sidequest board-config --delivery merge|replay|apply`. Consumer boards
 usually want `apply` or `replay`; use `merge` where the repository's release flow owns integration.
 

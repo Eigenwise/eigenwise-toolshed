@@ -3415,7 +3415,7 @@ test('SQ-2369: reachable manual delivery survives a later folder rename while no
   }
 });
 
-test('SQ-2254: MCP records a reset delivery from its pinned candidate and refuses absent working-tree content', async () => {
+test('SQ-2254: MCP groomClose records a manual delivery from its pinned candidate and refuses absent working-tree content', async () => {
   const originalConfig = store.boardConfig(slug);
   try {
   cleanBranch();
@@ -3459,8 +3459,8 @@ test('SQ-2254: MCP records a reset delivery from its pinned candidate and refuse
     ref: deliveredTicket.ref,
     by: 'reset-delivery-integrator',
     deliveryCommit: deliveredCandidate,
-    deliveryMethod: 'reset',
-    reason: 'The integration branch was reset for editor review and retains the pinned candidate in its working tree.',
+    deliveryMethod: 'manual',
+    reason: 'The integration branch was manually composed and retains the pinned candidate in its working tree.',
   });
   assert.strictEqual(delivered.ok, true, delivered.message);
   const recordedDelivery = store.getTicket(slug, deliveredTicket.ref);
@@ -3471,7 +3471,7 @@ test('SQ-2254: MCP records a reset delivery from its pinned candidate and refuse
     pinnedRef: `refs/sidequest/${deliveredTicket.ref}`,
     candidate: deliveredCandidate,
     sourceRevision: recordedDelivery.submission.integration.deliveryRevision,
-    method: 'reset',
+    method: 'manual',
   }, 'the supersession-facing delivery identity retains the immutable candidate and observed integration revision');
   assert.deepStrictEqual(recordedDelivery.submission.integration.deliveredFiles, ['lib/reset-delivery.js']);
 
@@ -4109,7 +4109,24 @@ test('SQ-2429: pending candidates block a singleton without invalidation while a
     assert.strictEqual(store.getTicket(slug, sibling.ref).status, 'doing');
     assert.strictEqual(store.pendingSubmission(store.getTicket(slug, primary.ref)), true);
     assert.strictEqual(store.pendingSubmission(store.getTicket(slug, sibling.ref)), true);
+    assert.match(singleton.message, /exact accepted candidate refs/i);
+    assert.match(singleton.message, /deliveryMethod:"manual"/);
 
+    const primaryVerifier = store.getTicket(slug, primary.ref).executorVerify;
+    const mismatchedSibling = store.getTicket(slug, sibling.ref);
+    mismatchedSibling.executorVerify = 'node -e "process.exit(0);"';
+    persist(mismatchedSibling);
+    const verifierMismatch = store.assembleSubmissionWave(slug, [primary.ref, sibling.ref]);
+    assert.strictEqual(verifierMismatch.ok, false);
+    assert.strictEqual(verifierMismatch.reason, 'wave_verifier_mismatch');
+    assert.match(verifierMismatch.message, /cannot choose or rewrite one/i);
+    assert.match(verifierMismatch.message, /every pinned verifier/i);
+    assert.match(verifierMismatch.message, /full composed gate/i);
+    assert.match(verifierMismatch.message, /deliveryMethod:"manual"/);
+    assert.match(verifierMismatch.message, /omit integration:true/i);
+
+    mismatchedSibling.executorVerify = primaryVerifier;
+    persist(mismatchedSibling);
     const assembled = store.assembleSubmissionWave(slug, [primary.ref, sibling.ref]);
     assert.strictEqual(assembled.ok, true, assembled.message);
     assert.deepStrictEqual(assembled.wave.participants, [primary.ref, sibling.ref]);

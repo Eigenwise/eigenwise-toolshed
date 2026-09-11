@@ -6,6 +6,7 @@ const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require("../sou
 const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require("../kernel/review-binding");
 const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require("../kernel/wave");
 const { isInScope, scopedPaths } = require("../scope-match");
+const { manualCandidateDeliveryGuidance } = require("../refusal-guidance.js");
 function createSubmissions(dependencies) {
   const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
@@ -2505,7 +2506,7 @@ ${verify.outputTail}` : null
       return {
         ok: false,
         reason: "wave_verifier_mismatch",
-        message: "Wave assembly requires one project-defined verification gate. Its participants pin different verifier requirements, so split the wave or refresh and reverify them against the same gate."
+        message: `Wave assembly requires one project-defined verification gate. Its participants pin different verifier requirements, so this assembly cannot choose or rewrite one. ${manualCandidateDeliveryGuidance()}`
       };
     }
     return { ok: true, requirement: first };
@@ -2682,7 +2683,7 @@ ${verify.outputTail}` : null
         ok: false,
         reason: "candidate_overlap",
         conflicts: scopeConflicts,
-        message: `Wave assembly paused because submitted candidates overlap: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(", ")})`).join("; ")}. These refs each hold a pending candidate that remains eligible for delivery, not merely a live declared scope; review-rejected candidates stay parked without blocking the wave. Assemble the named candidates in one wave so the delivery merge can check their actual content, or resolve one candidate before assembling a singleton.`
+        message: `Wave assembly paused because submitted candidates overlap: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(", ")})`).join("; ")}. These refs each hold a pending candidate that remains eligible for delivery, not merely a live declared scope; review-rejected candidates stay parked without blocking the wave. Assemble the named candidates in one wave so the delivery merge can check their actual content, or resolve one candidate before assembling a singleton. ${manualCandidateDeliveryGuidance()}`
       };
     }
     const firstCandidate = waveCandidates[0];

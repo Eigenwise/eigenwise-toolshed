@@ -14,9 +14,10 @@ interface ClaimContext extends ClaimIdentity {
 
 type RefusalMessage = (ref: string, claim: ClaimContext) => string;
 
-const { CLAIM_REFUSAL_MESSAGES, claimRefusalMessage, routingDisabledMessage } = require('../lib/refusal-guidance.js') as {
+const { CLAIM_REFUSAL_MESSAGES, claimRefusalMessage, manualCandidateDeliveryGuidance, routingDisabledMessage } = require('../lib/refusal-guidance.js') as {
   CLAIM_REFUSAL_MESSAGES: Record<string, RefusalMessage>;
   claimRefusalMessage(reason: string, ref: string, claim?: ClaimContext): string;
+  manualCandidateDeliveryGuidance(): string;
   routingDisabledMessage(ref: string): string;
 };
 
@@ -78,6 +79,17 @@ test('submitted guidance separates unbound rework from a locked bound candidate'
   assert.match(message, /While it is UNBOUND/);
   assert.match(message, /rework, clear, reclaim, and amendment all refuse without writing/i);
   assert.match(message, /kind `oracle`/);
+});
+
+test('manual candidate delivery guidance preserves every pinned authority', () => {
+  const message = manualCandidateDeliveryGuidance();
+  assert.match(message, /different pinned verifier requirements/i);
+  assert.match(message, /exact accepted candidate refs/i);
+  assert.match(message, /every pinned verifier/i);
+  assert.match(message, /full composed gate/i);
+  assert.match(message, /immutable deliveryCommit/i);
+  assert.match(message, /deliveryMethod:"manual"/);
+  assert.match(message, /omit integration:true/i);
 });
 
 test('routing-disabled guidance names the enabled and direct paths', () => {
