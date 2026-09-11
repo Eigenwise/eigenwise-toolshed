@@ -447,6 +447,41 @@ test('watch emits a red GitHub run once across polls', () => {
   assert.deepEqual(lines, ['CI abcdef failed test 2', 'CI abcdef unchecked - -']);
 });
 
+test('watch suppresses skipped and neutral runs when the head is otherwise green', () => {
+  const ci = {
+    headSha: 'mixed-green',
+    lastGreenHeadSha: 'mixed-green',
+    hasCompletedGreenRun: true,
+    runs: [
+      { id: 20, headSha: 'mixed-green', status: 'completed', conclusion: 'success', workflowName: 'Test', failingJobCount: 0 },
+      { id: 21, headSha: 'mixed-green', status: 'completed', conclusion: 'skipped', workflowName: 'Docs', failingJobCount: 0 },
+      { id: 22, headSha: 'mixed-green', status: 'completed', conclusion: 'neutral', workflowName: 'Lint', failingJobCount: 0 },
+    ],
+  };
+  const { boardWatch, lines } = watch([{ serverTime: '2026-08-13T00:00:01.000Z', tickets: [] }], 'orchestrator', [ci]);
+
+  boardWatch.poll();
+
+  assert.deepEqual(lines, []);
+});
+
+test('watch treats skipped and neutral runs as not proof of success', () => {
+  const ci = {
+    headSha: 'skipped-only',
+    lastGreenHeadSha: 'previous-green',
+    hasCompletedGreenRun: false,
+    runs: [
+      { id: 30, headSha: 'skipped-only', status: 'completed', conclusion: 'skipped', workflowName: 'Test', failingJobCount: 0 },
+      { id: 31, headSha: 'skipped-only', status: 'completed', conclusion: 'neutral', workflowName: 'Lint', failingJobCount: 0 },
+    ],
+  };
+  const { boardWatch, lines } = watch([{ serverTime: '2026-08-13T00:00:01.000Z', tickets: [] }], 'orchestrator', [ci]);
+
+  boardWatch.poll();
+
+  assert.deepEqual(lines, ['CI skipped-only unchecked - -']);
+});
+
 test('provider keeps an origin main success green when a local release branch is ahead', () => {
   const headSha = '528ce317a5e587571047a14482952104a1d16169';
   const provider = ciProvider(headSha, [
