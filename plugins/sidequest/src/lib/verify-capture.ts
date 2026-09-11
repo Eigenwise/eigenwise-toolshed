@@ -26,6 +26,7 @@ type CaptureTarget = Readonly<{ project: string; ticket: string }>;
 type CaptureRecordResult = Readonly<{
   ok: boolean;
   reason?: string;
+  message?: string;
   capture?: Readonly<{ id: string; candidate: Readonly<{ source: string; value: string }> }>;
 }>;
 type VerificationCaptureStore = Readonly<{
@@ -333,7 +334,11 @@ function report(capture: VerifyCapture, recorded?: CaptureRecordResult | null) {
   if (recorded?.ok && recorded.capture) {
     process.stdout.write(`capture=${recorded.capture.id} candidate=${recorded.capture.candidate.source}:${recorded.capture.candidate.value}\n`);
   } else if (recorded) {
+    // SQ-2713: the reason alone is undiagnosable. The store's message is the only
+    // place the pinned and captured commands are printed side by side, and a
+    // reviewer that cannot see them can only retry blind.
     process.stdout.write(`capture=unrecorded reason=${recorded.reason || 'unknown'}\n`);
+    if (recorded.message) process.stdout.write(`${recorded.message}\n`);
   }
 }
 
