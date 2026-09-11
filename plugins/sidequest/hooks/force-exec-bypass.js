@@ -568,7 +568,7 @@ function dispatchAdmission(input) {
     return { status: "no-project" };
   }
 }
-var ROUTE_MARKER_RE = /^\[sidequest-route model=([a-z0-9][a-z0-9.-]{0,63}) effort=(low|medium|high|xhigh|max)\]$/gm;
+var ROUTE_MARKER_RE = /^\[sidequest-route model=([a-z0-9][a-z0-9.-]{0,63}) effort=(low|medium|high|xhigh|max)(?: ticket=[A-Za-z][A-Za-z0-9_-]{0,63})?\]$/gm;
 function dispatchRouteMarkers(input) {
   const prompt = toolInputOf(input)?.prompt;
   if (typeof prompt !== "string" || !prompt) return [];

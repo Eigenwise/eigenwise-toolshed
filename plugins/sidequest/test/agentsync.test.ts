@@ -582,7 +582,7 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
     const dispatch = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch.md'), 'utf8');
     assert.match(dispatch, /^model: claude-codex-auto$/m);
     assert.match(dispatch, /^effort: high$/m);
-    assert.match(dispatch, /\[sidequest-route model=\.\.\. effort=\.\.\.\]/);
+    assert.match(dispatch, /\[sidequest-route model=\.\.\. effort=\.\.\. ticket=\.\.\.\]/);
     assert.doesNotMatch(dispatch, new RegExp('\\[switch' + 'board-route'));
     for (const file of STABLE_EXECUTORS.filter((file) => file !== 'sidequest-diagnostic-probe.md')) {
       const body = fs.readFileSync(path.join(dir, file), 'utf8');
@@ -925,10 +925,10 @@ test('SQ-677: fetched briefings and dispatch orientation retain their supplied t
   assert.match(briefing, /space file\.png/);
   assert.match(briefing, /画像\.png/);
   assert.match(briefing, /missing file\.png.*missing or unreadable/s);
-  assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
+  assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high ticket=SQ-334]'));
   assert.ok(stub.startsWith('GPT-5.6 Terra, high · Instant dispatch\n'), stub);
   assert.doesNotMatch(stub.split('\n', 1)[0]!, /\[sidequest-route/);
-  assert.ok(stub.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
+  assert.ok(stub.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high ticket=SQ-334]'));
   assert.equal(stub.match(/\[sidequest-route /g)!.length, 1);
   assert.ok(stub.includes(stubDescription));
   assert.doesNotMatch(stub, /excerpt capped|orientation capped/);
@@ -1335,15 +1335,19 @@ test('workflow recipes reject an invalid Codex marker before spawning', () => {
   }), /model id is not marker-safe/);
 });
 
-test('routeMarker rejects ids and efforts outside the gateway grammar', () => {
+test('routeMarker rejects values outside the gateway grammar', () => {
   for (const effort of EFFORTS) {
     assert.equal(agentsync.routeMarker('gpt-5.6-sol', effort), `[sidequest-route model=gpt-5.6-sol effort=${effort}]`);
   }
+  assert.equal(agentsync.routeMarker('gpt-5.6-sol', 'high', 'SQ-1234'), '[sidequest-route model=gpt-5.6-sol effort=high ticket=SQ-1234]');
   for (const bad of ['', 'UPPER', 'has space', 'has]bracket', '-leading', 'x'.repeat(70)]) {
     assert.throws(() => agentsync.routeMarker(bad, 'high'), /model id is not marker-safe/);
   }
   for (const bad of ['', 'highest', 'HIGH', ' has-space', 'high\nlow']) {
     assert.throws(() => agentsync.routeMarker('gpt-5.6-sol', bad), /effort is not marker-safe/);
+  }
+  for (const bad of ['', '1234', 'SQ 1234', 'SQ-1234\nnext', 'x'.repeat(65)]) {
+    assert.throws(() => agentsync.routeMarker('gpt-5.6-sol', 'high', bad), /ticket ref is not marker-safe/);
   }
 });
 

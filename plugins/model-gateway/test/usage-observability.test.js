@@ -6,6 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+const { otlpToObservations } = require('../../observability/lib/observability/otlp.js');
+
 const {
   allocateLargestRemainder,
   buildOtlpLogPayload,
@@ -51,14 +53,14 @@ const payload = {
   ],
 };
 
-function finishEmitterRequest(emitter, requestPayload, contextTokens, sessionId, agentId) {
+function finishEmitterRequest(emitter, requestPayload, contextTokens, sessionId, agentId, ticketRef = null) {
   const capture = emitter.start({
     payload: requestPayload,
     requestHeaders: {
       'x-claude-code-session-id': sessionId,
       'x-claude-code-agent-id': agentId,
     },
-    route: { backend: 'codex', effectiveModel: 'gpt-5.6-sol', requestedModel: 'claude-codex-auto' },
+    route: { backend: 'codex', effectiveModel: 'gpt-5.6-sol', requestedModel: 'claude-codex-auto', ticketRef },
   });
   capture.setResponse(200, {});
   capture.observeJson(JSON.stringify({ usage: { input_tokens: contextTokens, output_tokens: 1 } }));
@@ -140,8 +142,8 @@ test('derives one tool result exactly from consecutive request context totals', 
     }],
   };
 
-  finishEmitterRequest(emitter, baseline, 100, 'session-exact', 'agent-exact');
-  finishEmitterRequest(emitter, next, 137, 'session-exact', 'agent-exact');
+  finishEmitterRequest(emitter, baseline, 100, 'session-exact', 'agent-exact', 'SQ-1234');
+  finishEmitterRequest(emitter, next, 137, 'session-exact', 'agent-exact', 'SQ-1234');
 
   const toolRecords = emitted.filter((record) => record.eventName === 'gateway.tool_result.usage');
   assert.equal(toolRecords.length, 1);
@@ -150,6 +152,7 @@ test('derives one tool result exactly from consecutive request context totals', 
   assert.equal(toolRecords[0].attributes.tool_result_tokens_quality, 'derived_exact');
   assert.equal(toolRecords[0].attributes.tool_use_id, 'tool-exact');
   assert.equal(toolRecords[0].attributes.tool_name, 'mcp__sidequest__claim');
+  assert.equal(toolRecords[0].attributes.ticket_ref, 'SQ-1234');
   assert.equal(JSON.stringify(toolRecords[0]).includes('private exact result'), false);
 });
 
@@ -355,6 +358,7 @@ test('JSON capture emits exact identities, resolved route, measurements, and no 
       backend: 'codex',
       effort: 'xhigh',
       via: 'dispatch',
+      ticketRef: 'SQ-1234',
     },
     sequence: 3,
     emit(record) { emitted = record; },
@@ -386,8 +390,10 @@ test('JSON capture emits exact identities, resolved route, measurements, and no 
   assert.equal(record.attributes.context_tokens, 35);
   assert.equal(record.attributes.rate_limit_input_tokens_remaining, 999);
   assert.equal(record.attributes.request_sequence, 3);
+  assert.equal(record.attributes.ticket_ref, 'SQ-1234');
 
   const otlp = buildOtlpLogPayload(record);
+  assert.equal(otlpToObservations('logs', otlp)[0].ticket_ref, 'SQ-1234');
   const flat = attributeMap(otlp);
   assert.equal(flat.input_tokens, 10);
   assert.equal(flat.output_tokens, 4);
@@ -395,6 +401,15 @@ test('JSON capture emits exact identities, resolved route, measurements, and no 
   const serialized = JSON.stringify(otlp);
   for (const forbidden of ['private system', 'private native schema', 'private MCP schema', 'private response content', 'private-credential', 'private-header-value', 'authorization', 'x-private-header']) {
     assert.equal(serialized.includes(forbidden), false, `usage telemetry leaked ${forbidden}`);
+  }
+  for (const route of [
+    { backend: 'codex', effectiveModel: 'gpt-5.6-terra', via: 'dispatch' },
+    { backend: 'codex', effectiveModel: 'gpt-5.6-terra', via: 'dispatch-inherited', ticketRef: null },
+  ]) {
+    const withoutTicket = createUsageCapture({ payload, route });
+    withoutTicket.setResponse(200, {});
+    withoutTicket.observeJson(JSON.stringify({ usage: { input_tokens: 1, output_tokens: 1 } }));
+    assert.equal(withoutTicket.finish().attributes.ticket_ref, null);
   }
 });
 
@@ -409,7 +424,7 @@ test('emits normalized MCP footprint records per server', () => {
       { name: 'mcp__alpha__one', description: 'alpha schema' },
       { name: 'mcp__beta__two', description: 'beta schema' },
     ],
-  }, 1000, 'session-footprint', 'agent-footprint');
+  }, 1000, 'session-footprint', 'agent-footprint', 'SQ-1234');
 
   const request = emitted.find((record) => record.eventName === 'gateway.token.usage');
   const footprints = emitted.filter((record) => record.eventName === 'gateway.mcp.footprint');
@@ -420,6 +435,7 @@ test('emits normalized MCP footprint records per server', () => {
     request.attributes.input_mcp_tools_tokens,
   );
   assert.ok(footprints.every((record) => record.attributes.session_id === 'session-footprint'));
+  assert.ok(footprints.every((record) => record.attributes.ticket_ref === 'SQ-1234'));
 });
 
 test('emits bounded per-server MCP tool token measurements', () => {

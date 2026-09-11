@@ -19,7 +19,7 @@
  * advertise `model: null`. Codex routes share TWO executors total
  * (sidequest-exec-dispatch.md and sidequest-exec-dispatch-readonly.md, pinned
  * to the virtual claude-codex-auto): the real model AND effort ride each
- * dispatch briefing as a [sidequest-route model=... effort=...] marker the
+ * dispatch briefing as a [sidequest-route model=... effort=... ticket=...] marker the
  * codex-gateway shim resolves per request (SQ-347/SQ-348), overwriting
  * output_config.effort, so per-effort dispatch defs carried dead frontmatter.
  * The Claude ladder stays per-effort: the Agent tool has no effort parameter,
@@ -92,19 +92,22 @@ function defaultAgentsDir() {
 // from the route marker below. Must match the gateway's advertised id.
 const DISPATCH_MODEL_ID = 'claude-codex-auto';
 const ROUTE_MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/;
-const EMITTED_ROUTE_MARKER_RE = /^\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(low|medium|high|xhigh|max)\]$/;
+const ROUTE_TICKET_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const EMITTED_ROUTE_MARKER_RE = /^\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(low|medium|high|xhigh|max)(?: ticket=[A-Za-z][A-Za-z0-9_-]{0,63})?\]$/;
 // Unanchored: a marker EMBEDDED in a label (leading whitespace, trailing title
 // text) must still be caught, or the raw tag leaks into the agent-list row.
-const EMBEDDED_ROUTE_MARKER_RE = /\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(?:low|medium|high|xhigh|max)\]/gi;
+const EMBEDDED_ROUTE_MARKER_RE = /\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(?:low|medium|high|xhigh|max)(?: ticket=[A-Za-z][A-Za-z0-9_-]{0,63})?\]/gi;
 
 // The exact marker grammar the shim scans for. Throws rather than emitting a
 // marker the gateway would silently ignore (which would 400 the whole run).
-function routeMarker(dispatchModel?: any, effort?: any) {
+function routeMarker(dispatchModel?: any, effort?: any, ticketRef?: any) {
   const model = String(dispatchModel || '');
   const markerEffort = String(effort || '');
+  const ticket = ticketRef == null ? null : String(ticketRef);
   if (!ROUTE_MODEL_RE.test(model)) throw new Error(`dispatch model id is not marker-safe: ${dispatchModel}`);
   if (!EXEC_EFFORTS.includes(markerEffort)) throw new Error(`dispatch effort is not marker-safe: ${effort}`);
-  const marker = `[sidequest-route model=${model} effort=${markerEffort}]`;
+  if (ticket !== null && !ROUTE_TICKET_RE.test(ticket)) throw new Error(`dispatch ticket ref is not marker-safe: ${ticketRef}`);
+  const marker = `[sidequest-route model=${model} effort=${markerEffort}${ticket ? ` ticket=${ticket}` : ''}]`;
   if (!EMITTED_ROUTE_MARKER_RE.test(marker)) throw new Error('dispatch route marker does not match the gateway grammar.');
   return marker;
 }
@@ -233,7 +236,7 @@ function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief
 // on this path. The note bans writing marker-shaped text anywhere else (the gateway
 // takes the last occurrence in the conversation).
 function dispatchNote() {
-  return `\n\n_This agent is the shared Sidequest executor for every Codex-backed route at every effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual: the codex-gateway shim resolves the real Codex model AND the reasoning effort from the \`[sidequest-route model=... effort=...]\` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models or efforts: one spawn carries exactly one route marker._`;
+  return `\n\n_This agent is the shared Sidequest executor for every Codex-backed route at every effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual. The codex-gateway shim resolves the real Codex model, reasoning effort, and ticket ref from the \`[sidequest-route model=... effort=... ticket=...]\` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it. The orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models or efforts: one spawn carries exactly one route marker._`;
 }
 
 // The dispatch defs use a safe frontmatter effort for internal non-marker calls.
@@ -458,7 +461,7 @@ function experimentLogPacket(ticket?: any, slug?: any) {
 function ticketRouteMarker(ticket?: any) {
   const resolved = store.resolveExec(ticket.model, ticket.effort);
   return resolved && resolved.backend === 'codex' && resolved.dispatchModel
-    ? routeMarker(resolved.dispatchModel, ticket.effort)
+    ? routeMarker(resolved.dispatchModel, ticket.effort, ticket.ref)
     : null;
 }
 

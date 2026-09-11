@@ -492,7 +492,7 @@ function dispatchAdmission(input: HookInput): DispatchAdmission {
   }
 }
 
-const ROUTE_MARKER_RE = /^\[sidequest-route model=([a-z0-9][a-z0-9.-]{0,63}) effort=(low|medium|high|xhigh|max)\]$/gm;
+const ROUTE_MARKER_RE = /^\[sidequest-route model=([a-z0-9][a-z0-9.-]{0,63}) effort=(low|medium|high|xhigh|max)(?: ticket=[A-Za-z][A-Za-z0-9_-]{0,63})?\]$/gm;
 
 function dispatchRouteMarkers(input: HookInput): Array<{ model: string; effort: string }> {
   const prompt = toolInputOf(input)?.prompt;

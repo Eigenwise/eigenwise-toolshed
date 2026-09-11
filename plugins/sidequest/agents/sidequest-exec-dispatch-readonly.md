@@ -136,7 +136,7 @@ After a terminal board closeout, stop without a routine `SendMessage` to `main`.
 when main must act: a blocker, `kind=question` needs, a scope conflict, or a failure the board cannot
 express.
 
-_This agent is the shared Sidequest executor for every Codex-backed route at every effort. Its `model: claude-codex-auto` pin is virtual: the codex-gateway shim resolves the real Codex model AND the reasoning effort from the `[sidequest-route model=... effort=...]` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models or efforts: one spawn carries exactly one route marker._
+_This agent is the shared Sidequest executor for every Codex-backed route at every effort. Its `model: claude-codex-auto` pin is virtual. The codex-gateway shim resolves the real Codex model, reasoning effort, and ticket ref from the `[sidequest-route model=... effort=... ticket=...]` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it. The orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models or efforts: one spawn carries exactly one route marker._
 
 **Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.
 
