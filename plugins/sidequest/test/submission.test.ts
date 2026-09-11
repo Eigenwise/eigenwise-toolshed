@@ -3357,6 +3357,80 @@ test('a read-only isolated review satisfies the candidate gate only once its boa
   }
 });
 
+// SQ-2773. appendDispatchAttempt only began snapshotting bindSource in SQ-2772,
+// so a candidate submitted before that reads as one that never bound a runtime
+// at all: SQ-2756's work was merged to main and integrate, manual delivery and
+// groomClose all refused it forever, blocking two more tickets behind it. The
+// binding was recorded all along, as boundAt.
+function preBindSourceCandidate(title: string, filename: string, agentName: string) {
+  const commit = createCandidateCommit(filename, `${filename} pre-bindSource candidate\n`);
+  const ticket = addTicket(title, { files: [`lib/${filename}`] });
+  pin(ticket, commit);
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, agentName, {
+    direct: true,
+    reason: 'The submission fixture requires a local direct claim.',
+  }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, ticket.ref, agentName, {
+    commit,
+    verify: 'node -e "process.exit(0)"',
+  }).ok, true);
+  const submitted = store.getTicket(slug, ticket.ref);
+  const base = git(['rev-parse', `${commit}^`]);
+  Object.assign(submitted.submission, {
+    base,
+    upstream: 'origin/main',
+    upstreamCommit: base,
+    commits: [commit],
+    changedPaths: [`lib/${filename}`],
+  });
+  const at = new Date(Date.now() - 60_000).toISOString();
+  // SQ-2756's exact row: a claim-token bind, no agentId, and no bindSource key.
+  submitted.dispatch = {
+    attempts: [{ outcome: 'submitted', commit, agentId: null, agentName, tokenPrefix: 'udck-p7rj-ky', boundAt: at, claimedAt: at, terminalAt: at }],
+  };
+  persist(submitted);
+  return { ticket: submitted, commit };
+}
+
+test('SQ-2773: a pre-bindSource candidate records its landed delivery under a hook-bound reviewer and still refuses an unhooked one', () => {
+  const worktrees: string[] = [];
+  try {
+    const unhooked = preBindSourceCandidate('pre-bindSource candidate with an unhooked review', 'pre-bindsource-unhooked.js', 'sq-2756-repair-repository-opus-high-2');
+    const unhookedReview = dispatchedIsolatedReview('pre-bindSource unhooked review', unhooked.ticket.ref, unhooked.commit, 'pre-bindsource-review-unhooked');
+    worktrees.push(unhookedReview.worktree);
+    completeIsolatedReview(unhookedReview, false);
+    const refused = store.recordDeliveredSubmission(slug, unhooked.ticket.ref, {
+      target: Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) }),
+      deliveryCommit: unhooked.commit,
+      reason: 'The candidate already reached the integration branch.',
+    });
+    assert.strictEqual(refused.ok, false, 'the recovery is not a general bypass');
+    assert.strictEqual(refused.reason, 'candidate_review_required');
+    assert.match(refused.message, /recorded no hook-bound agent id on its terminal review attempt/);
+
+    const recovered = preBindSourceCandidate('pre-bindSource candidate with a hook-bound review', 'pre-bindsource-hooked.js', 'sq-2756-repair-repository-opus-high-3');
+    const hookedReview = dispatchedIsolatedReview('pre-bindSource hook-bound review', recovered.ticket.ref, recovered.commit, 'pre-bindsource-review-hooked');
+    worktrees.push(hookedReview.worktree);
+    const reviewerAttempt = completeIsolatedReview(hookedReview, true);
+    assert.strictEqual(reviewerAttempt.agentId, hookedReview.agentId, 'only the hook binding identifies the reviewer');
+    const recorded = store.recordDeliveredSubmission(slug, recovered.ticket.ref, {
+      target: Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) }),
+      deliveryCommit: recovered.commit,
+      reason: 'The candidate already reached the integration branch.',
+    });
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.integration.deliveryCommit, recovered.commit);
+    // What integratedRepairTicket reads before a rejected candidate may be
+    // superseded by this repair, which is what SQ-2753 and SQ-2511 waited on.
+    assert.strictEqual(recorded.integration.outcome, 'verified');
+    assert.ok(recorded.integration.resultingHead, 'the recorded delivery names the resulting head');
+  } finally {
+    for (const worktree of worktrees) {
+      if (fs.existsSync(worktree)) execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT_DIR, windowsHide: true });
+    }
+  }
+});
+
 test('SQ-2169: integrate records an already delivered reviewed candidate or a resolved equivalent patch', () => {
   cleanBranch();
   const ticket = addTicket('record delivered reviewed candidate', { files: ['README.md'] });

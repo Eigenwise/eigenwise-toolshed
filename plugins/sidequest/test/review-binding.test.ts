@@ -1127,6 +1127,93 @@ test('a claim-token-bound sibling cannot review its own runtime under a second d
   assert.match(refused.message, /authenticate a dispatch, not the runtime that ran it/);
 });
 
+// SQ-2773. appendDispatchAttempt only started snapshotting bindSource in
+// SQ-2772, so every earlier claim-token candidate reads as one that never bound
+// and refused forever with no recovery. boundAt is the older record of the same
+// binding, and only attempts written before the key existed fall back to it.
+function preBindSourceCandidate(label: string, reviewAttempt: any) {
+  const built = claimTokenCandidate(label, reviewAttempt);
+  const source = store.getTicket(built.slug, built.sourceRef);
+  const attempt = source.dispatch.attempts[0];
+  delete attempt.bindSource;
+  delete source.dispatch.bindSource;
+  attempt.boundAt = '2026-01-01T00:00:00.000Z';
+  attempt.claimedAt = '2026-01-01T00:00:00.000Z';
+  persist(built.slug, source);
+  return built;
+}
+
+test('a candidate whose attempt predates bindSource resolves through its recorded bind time and still needs a hook-bound reviewer', () => {
+  const recovered = preBindSourceCandidate('pre-bindsource-distinct', {
+    outcome: 'done',
+    agentId: 'hook-bound-reviewer',
+    agentName: 'sq-review-pre-bindsource',
+    terminalAt: '2026-01-02T00:00:00.000Z',
+  });
+  const provenance = reviewBinding.reviewProvenance(
+    store.getTicket(recovered.slug, recovered.sourceRef),
+    store.getTicket(recovered.slug, recovered.reviewRef),
+  );
+  assert.equal(provenance.reason, 'ok', 'boundAt records the claim-token binding the attempt never labelled');
+  assert.equal(provenance.source.identity, 'claim:candidate-tk/sq-pre-bindsource-distinct-continuation-2');
+  const accepted = store.validateIntegrationSubmission(recovered.slug, recovered.sourceRef, {});
+  assert.notEqual(accepted.reason, 'candidate_review_required', 'the pre-bindSource candidate is integrable again');
+
+  // The recovery is not a general bypass: the reviewing side still needs the
+  // hook-bound agent id SQ-2772 made non-negotiable.
+  const unhooked = preBindSourceCandidate('pre-bindsource-unhooked', {
+    outcome: 'done',
+    agentId: null,
+    agentName: 'sq-review-unhooked',
+    tokenPrefix: 'review-tk',
+    boundAt: '2026-01-02T00:00:00.000Z',
+    terminalAt: '2026-01-02T00:00:00.000Z',
+  });
+  assert.equal(
+    reviewBinding.reviewProvenance(store.getTicket(unhooked.slug, unhooked.sourceRef), store.getTicket(unhooked.slug, unhooked.reviewRef)).reason,
+    'agent_identity_missing',
+  );
+  const refused = store.validateIntegrationSubmission(unhooked.slug, unhooked.sourceRef, {});
+  assert.equal(refused.reason, 'candidate_review_required');
+  assert.match(refused.message, /recorded no hook-bound agent id on its terminal review attempt/);
+});
+
+test('a submitting attempt that bound nothing refuses with the reason it cannot be recovered', () => {
+  const unbound = preBindSourceCandidate('pre-bindsource-unbound', {
+    outcome: 'done',
+    agentId: 'hook-bound-reviewer',
+    agentName: 'sq-review-unbound-source',
+    terminalAt: '2026-01-02T00:00:00.000Z',
+  });
+  const source = store.getTicket(unbound.slug, unbound.sourceRef);
+  delete source.dispatch.attempts[0].boundAt;
+  persist(unbound.slug, source);
+  const refused = store.validateIntegrationSubmission(unbound.slug, unbound.sourceRef, {});
+  assert.equal(refused.reason, 'candidate_review_required');
+  assert.match(refused.message, /recorded no runtime binding on the terminal attempt that submitted the candidate/);
+  assert.match(refused.message, /older than bind-source recording still resolves through that bind time/, 'the refusal names why no recovery applies');
+  assert.match(refused.message, /re-dispatch the ticket so the replacement attempt binds/);
+});
+
+test('a live attempt that records bindSource never falls back to its bind time', () => {
+  const live = claimTokenCandidate('bindsource-recorded-null', {
+    outcome: 'done',
+    agentId: 'hook-bound-reviewer',
+    agentName: 'sq-review-live',
+    terminalAt: '2026-01-02T00:00:00.000Z',
+  });
+  const source = store.getTicket(live.slug, live.sourceRef);
+  // What the current writer appends for an attempt that never bound: the key is
+  // present and null, so the pre-SQ-2772 fallback must not see it.
+  source.dispatch.attempts[0].bindSource = null;
+  source.dispatch.attempts[0].boundAt = '2026-01-01T00:00:00.000Z';
+  persist(live.slug, source);
+  assert.equal(
+    reviewBinding.reviewProvenance(store.getTicket(live.slug, live.sourceRef), store.getTicket(live.slug, live.reviewRef)).reason,
+    'agent_identity_missing',
+  );
+});
+
 test('integration stays blocked when a matching attempt, an identity, or a distinct reviewer is missing', () => {
   const cases: Array<[string, any, any]> = [
     ['source attempt for another commit', [{ outcome: 'submitted', commit: 'f'.repeat(40), agentId: 'source-a', terminalAt: '2026-01-01T00:00:00.000Z' }], [{ outcome: 'done', agentId: 'review-b', terminalAt: '2026-01-02T00:00:00.000Z' }]],

@@ -144,7 +144,7 @@ function createSubmissions(dependencies) {
     }
     if (provenance.reason === "agent_identity_missing") {
       return [
-        !provenance.source && `${ticket.ref} recorded no runtime identity on the terminal attempt that submitted the candidate: neither a hook-bound agent id nor the token prefix and agent name a proven claim-token binding records`,
+        !provenance.source && `${ticket.ref} recorded no runtime binding on the terminal attempt that submitted the candidate: no hook-bound agent id, and no recorded bind time carrying the token prefix and agent name to stand in for one. An attempt older than bind-source recording still resolves through that bind time, so this one bound nothing at all and no retry changes it: re-dispatch the ticket so the replacement attempt binds, then review the resubmitted candidate`,
         !provenance.reviewer && `${reviewRelationRef(relation)} recorded no hook-bound agent id on its terminal review attempt: a dispatch token and agent name authenticate a dispatch, not the runtime that ran it, so they cannot establish a reviewer independent of the submitter`
       ].filter(Boolean).join("; ");
     }
