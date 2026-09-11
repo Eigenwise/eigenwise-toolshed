@@ -235,14 +235,28 @@ export async function sweepWorktrees(data: HookInput, includeKnownProjects: bool
     const keptByReason: Record<string, number> = {};
     let planned = 0;
     let removed = 0;
+    let candidates = 0;
+    let observed = 0;
+    let phase: SweepProgress['phase'] = 'complete';
+    let current: string | null = null;
+    let reason: string | null = null;
     for (const currentProgress of projectProgress.values()) {
       planned += currentProgress.planned;
       removed += currentProgress.removed;
+      candidates += currentProgress.candidates;
+      observed += currentProgress.observed;
+      if (currentProgress.phase === 'classifying') {
+        phase = 'classifying';
+        current = currentProgress.current;
+        reason = currentProgress.reason;
+      } else if (phase !== 'classifying' && currentProgress.phase === 'sweeping') {
+        phase = 'sweeping';
+      }
       for (const [reason, count] of Object.entries(currentProgress.keptByReason)) {
         keptByReason[reason] = (keptByReason[reason] || 0) + count;
       }
     }
-    writeSweepProgress(progressCwd, { planned, removed, keptByReason });
+    writeSweepProgress(progressCwd, { phase, candidates, observed, current, reason, planned, removed, keptByReason });
   };
 
   for (const project of projects) {

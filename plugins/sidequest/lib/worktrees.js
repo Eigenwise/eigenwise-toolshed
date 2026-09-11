@@ -1445,7 +1445,7 @@ async function recoveryStoreSizes(recovery, options) {
     quarantine: { path: recovery.quarantine.path, bytes: recovery.quarantine.bytes }
   };
 }
-function sweepProgress(entries, removed) {
+function sweepProgress(entries, removed, status) {
   const keptByReason = {};
   for (const entry of entries) {
     if (entry.action !== "keep") continue;
@@ -1453,13 +1453,14 @@ function sweepProgress(entries, removed) {
     keptByReason[reason] = (keptByReason[reason] || 0) + 1;
   }
   return {
+    ...status,
     planned: entries.filter((entry) => entry.action === "remove" || entry.action === "salvage").length,
     removed: removed.length,
     keptByReason
   };
 }
-function reportSweepProgress(options, entries, removed) {
-  if (typeof options.onProgress === "function") options.onProgress(sweepProgress(entries, removed));
+function reportSweepProgress(options, entries, removed, status) {
+  if (typeof options.onProgress === "function") options.onProgress(sweepProgress(entries, removed, status));
 }
 async function sweep(repo, tickets, options = {}) {
   const minAgeMs = Number.isFinite(Number(options.minAgeMs)) && Number(options.minAgeMs) >= 0 ? Number(options.minAgeMs) : DEFAULT_MIN_AGE_MS;
@@ -1512,10 +1513,32 @@ async function sweep(repo, tickets, options = {}) {
   const maxCandidates = Number.isFinite(Number(options.maxCandidates)) && Number(options.maxCandidates) > 0 ? Math.floor(Number(options.maxCandidates)) : allCandidates.length;
   const boundedCandidates = allCandidates.slice(0, maxCandidates);
   const livePaths = Array.isArray(options.livePaths) ? options.livePaths.map((pathname) => String(pathname)) : [];
-  const entries = await Promise.all(boundedCandidates.map((entry) => entry.orphanDirectory ? classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs) : classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, upstream, livePaths, notIntegratedSalvageAgeMs, [...registered])));
-  const execute = !!options.execute;
   const removed = [];
-  reportSweepProgress(options, entries, removed);
+  const classified = [];
+  const classificationStatus = (entry, reason) => ({
+    phase: "classifying",
+    candidates: boundedCandidates.length,
+    observed: classified.length,
+    current: entry.worktree,
+    reason
+  });
+  const entries = await Promise.all(boundedCandidates.map(async (entry) => {
+    reportSweepProgress(options, classified, removed, classificationStatus(entry, null));
+    const classifiedEntry = entry.orphanDirectory ? await classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs) : await classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, upstream, livePaths, notIntegratedSalvageAgeMs, [...registered]);
+    classified.push(classifiedEntry);
+    reportSweepProgress(options, classified, removed, classificationStatus(entry, classifiedEntry.reason));
+    return classifiedEntry;
+  }));
+  const sweepingStatus = {
+    phase: "sweeping",
+    candidates: boundedCandidates.length,
+    observed: entries.length,
+    current: null,
+    reason: null
+  };
+  const completeStatus = { ...sweepingStatus, phase: "complete" };
+  const execute = !!options.execute;
+  reportSweepProgress(options, entries, removed, sweepingStatus);
   const backups = [];
   const salvaged = [];
   const deletedBranches = [];
@@ -1527,7 +1550,7 @@ async function sweep(repo, tickets, options = {}) {
       if (shouldSkipKnownFailure(entry.path)) {
         entry.action = "keep";
         entry.reason = "known_permanent_failure";
-        reportSweepProgress(options, entries, removed);
+        reportSweepProgress(options, entries, removed, sweepingStatus);
         continue;
       }
       const ticket = ticketForWorktree(tickets, { worktree: entry.path });
@@ -1535,7 +1558,7 @@ async function sweep(repo, tickets, options = {}) {
       if (!initialLinkSafety.safe) {
         entry.action = "keep";
         entry.reason = "dependency_link_untrusted";
-        reportSweepProgress(options, entries, removed);
+        reportSweepProgress(options, entries, removed, sweepingStatus);
         continue;
       }
       if (entry.action === "salvage") {
@@ -1546,7 +1569,7 @@ async function sweep(repo, tickets, options = {}) {
           entry.action = "keep";
           entry.reason = "salvage_failed";
           failures.push({ path: entry.path, message: `salvage failed: ${error && error.message || error}` });
-          reportSweepProgress(options, entries, removed);
+          reportSweepProgress(options, entries, removed, sweepingStatus);
           continue;
         }
       }
@@ -1563,7 +1586,7 @@ async function sweep(repo, tickets, options = {}) {
       if (!dependencyLinksReleased.ok) {
         entry.action = "keep";
         entry.reason = dependencyLinksReleased.reason;
-        reportSweepProgress(options, entries, removed);
+        reportSweepProgress(options, entries, removed, sweepingStatus);
         continue;
       }
       const result = await removeCandidate(repo, entry);
@@ -1575,7 +1598,7 @@ async function sweep(repo, tickets, options = {}) {
           entry.action = "keep";
           entry.reason = "quarantine_failed";
           failures.push({ path: entry.path, message: `${message}; quarantine failed: ${quarantine.stderr}` });
-          reportSweepProgress(options, entries, removed);
+          reportSweepProgress(options, entries, removed, sweepingStatus);
           continue;
         }
         entry.action = "quarantine";
@@ -1585,12 +1608,12 @@ async function sweep(repo, tickets, options = {}) {
         if (quarantine.stripFailure) {
           failures.push({ path: quarantine.destination, message: `quarantine cleanup failed: ${quarantine.stripFailure}` });
         }
-        reportSweepProgress(options, entries, removed);
+        reportSweepProgress(options, entries, removed, sweepingStatus);
         continue;
       }
       clearFailure(entry.path);
       removed.push(entry.path);
-      reportSweepProgress(options, entries, removed);
+      reportSweepProgress(options, entries, removed, sweepingStatus);
       if (entry.orphanDirectory) continue;
       const branch = localBranchName(entry.branch);
       if (!branch) continue;
@@ -1615,7 +1638,7 @@ async function sweep(repo, tickets, options = {}) {
       else failures.push({ path: entry.branch, message: deleted.stderr || "git branch delete failed" });
     }
   }
-  reportSweepProgress(options, entries, removed);
+  reportSweepProgress(options, entries, removed, completeStatus);
   return {
     dryRun: !execute,
     minAgeMs,

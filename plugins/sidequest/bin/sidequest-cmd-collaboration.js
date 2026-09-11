@@ -28,6 +28,12 @@ async function cmdSweepClaims(opts) {
   const detail = kinds.length ? `: ${kinds.join(", ")}` : "";
   console.log(`✓ swept ${res.released.length} dead claim(s) from ${meta.name}${detail} (idle backstop ${Math.round(res.idleMs / 6e4)}m, abandoned ${Math.round(res.abandonMs / 6e4)}m)`);
 }
+function worktreeSweepProgressLine(progress) {
+  const candidate = progress.current ? `: ${progress.current}` : "";
+  const reason = progress.reason ? ` (${progress.reason})` : "";
+  const count = progress.phase === "classifying" ? ` ${progress.observed}/${progress.candidates}${candidate}${reason}` : "";
+  return `worktrees sweep: ${progress.phase}${count}; planned ${progress.planned}, removed ${progress.removed}`;
+}
 function worktreeSweepEntryLine(entry) {
   const ticket = entry.ticket ? ` ${entry.ticket}` : "";
   const cleanliness = entry.clean === true ? "clean" : entry.clean === false ? "dirty" : "cleanliness unavailable";
@@ -88,7 +94,12 @@ async function cmdWorktrees(opts, positional) {
       minAgeMs: minAgeHours * 60 * 60 * 1e3,
       recoveryRetentionAgeMs: recoveryRetentionAgeHours * 60 * 60 * 1e3,
       recoveryRetentionMaxPerAgent,
-      includeStoreUsage: true
+      includeStoreUsage: true,
+      onProgress: (progress) => {
+        const output = `${worktreeSweepProgressLine(progress)}
+`;
+        (opts.json ? process.stderr : process.stdout).write(output);
+      }
     });
   } catch (error) {
     fail(`worktrees: ${error && error.message || error}`);
@@ -442,4 +453,4 @@ async function cmdUnarchive(opts, positional) {
     console.log(`✗ unarchive: no ticket "${idOrRef}" in ${meta.name}`);
   }
 }
-module.exports = { cmdSweepClaims, cmdWorktrees, worktreeSweepEntryLine, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive };
+module.exports = { cmdSweepClaims, cmdWorktrees, worktreeSweepEntryLine, worktreeSweepProgressLine, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive };
