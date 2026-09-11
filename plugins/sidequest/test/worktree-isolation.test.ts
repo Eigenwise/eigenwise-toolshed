@@ -31,7 +31,9 @@ const GUARD_SHARED_CHECKOUT_GIT = path.join(HOOKS, 'guard-shared-checkout-git.js
 const GUARD_DESTRUCTIVE = path.join(HOOKS, 'guard-destructive-git.js');
 
 function initRepo(prefix: string) {
-  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  // native realpath expands 8.3 short names (CI's RUNNERA~1 temp dir) the way git's
+  // show-toplevel does, so refusal text can be compared against the fixture path.
+  const repo = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true });
   git(['init', '-b', 'main']);
   git(['config', 'user.name', 'Sidequest Test']);
@@ -245,7 +247,7 @@ test('a cross-project worktree creation refuses with the board it actually searc
     assert.equal(hubSession.ok, false, 'a session rooted in another project cannot place this dispatch');
     assert.match(hubSession.output, /dispatch_binding_unavailable/);
     assert.match(hubSession.output, /sharedTree:true/);
-    assert.ok(hubSession.output.includes(PROJECT), 'the refusal names the board it searched');
+    assert.ok(hubSession.output.includes(PROJECT), `the refusal names the board it searched: ${hubSession.output}`);
     assert.equal(ownSession.ok, true, 'a session rooted in the ticket project still places it');
     assert.equal(store.getTicket(otherSlug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(ownSession.output));
   } finally {
