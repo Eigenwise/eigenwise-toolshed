@@ -157,7 +157,7 @@ function assertNoStaleTags(git, plan, { remote, force }) {
   );
 }
 
-function releaseRecoveryInstructions(plan, originalHead, remote, marketplacePublished) {
+function releaseRecoveryInstructions(plan, originalHead, remote, marketplacePublished, { rolledBack = false } = {}) {
   if (marketplacePublished) {
     return [
       `The marketplace commit and tag ${plan.tag} are already published.`,
@@ -165,12 +165,19 @@ function releaseRecoveryInstructions(plan, originalHead, remote, marketplacePubl
       `  ${pushCommand(remote, pluginTagRefspecs(plan))}`,
     ].join('\n');
   }
+  if (rolledBack) {
+    return `The local release window was rolled back to ${originalHead} and its tags were deleted.`;
+  }
   return [
     'The release commit and tags are local only. To undo this local window:',
     `  git reset --hard ${originalHead}`,
-    `  git tag -d ${plan.tags.join(' ')}`,
-    'A reset does not delete local tags, so run both commands before retrying.',
+    ...plan.tags.map((tag) => `  git update-ref -d refs/tags/${tag}`),
   ].join('\n');
+}
+
+function rollBackLocalReleaseWindow(git, plan, originalHead) {
+  git.resetHard(originalHead);
+  for (const tag of plan.tags) git.deleteTag(tag);
 }
 
 function marketplaceRefspecs(plan, commit) {
@@ -575,7 +582,20 @@ export async function cut(options = {}) {
         pushCommands, touched, consumed, ci, githubRelease,
       };
     } catch (error) {
-      throw new Error(`${error.message}\n${releaseRecoveryInstructions(plan, basePin, remote, marketplacePublished)}`, { cause: error });
+      if (!marketplacePublished) {
+        try {
+          rollBackLocalReleaseWindow(git, plan, basePin);
+        } catch (rollbackError) {
+          throw new Error(
+            `${error.message}\nAutomatic rollback failed: ${rollbackError.message}\n${releaseRecoveryInstructions(plan, basePin, remote, marketplacePublished)}`,
+            { cause: error },
+          );
+        }
+      }
+      throw new Error(
+        `${error.message}\n${releaseRecoveryInstructions(plan, basePin, remote, marketplacePublished, { rolledBack: !marketplacePublished })}`,
+        { cause: error },
+      );
     }
   } finally {
     if (publishLockAcquired) {

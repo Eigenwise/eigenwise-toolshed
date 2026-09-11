@@ -247,19 +247,24 @@ test('the cut refuses a dirty tree and the wrong branch', async (t) => {
   await assert.rejects(() => cut({ repoRoot: wrongBranch.root, skipTests: true, log: () => {} }), /cutting from "dev"/);
 });
 
-test('a failing suite leaves the release local and prints recovery commands', async (t) => {
+test('a failing suite rolls the release window back and preserves its log', async (t) => {
   const context = setup(t);
   context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
   const originalHead = context.commit('integrate');
   const before = context.remoteRefs();
+  const runner = defaultSuiteRunner(context.root, { log: () => {}, tag: 'v-test' });
   let failure;
 
   await assert.rejects(
     () => cut({
       repoRoot: context.root,
-      push: true,
       log: () => {},
-      runSuite: (suite) => ({ code: 1, command: suite.command }),
+      runSuite: (suite) => runner({
+        ...suite,
+        cwd: 'plugins/sidequest',
+        setup: null,
+        command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('suite output'); process.exit(1)"`,
+      }),
     }),
     (error) => {
       failure = error;
@@ -267,9 +272,13 @@ test('a failing suite leaves the release local and prints recovery commands', as
     },
   );
 
-  assert.match(failure.message, new RegExp(`git reset --hard ${originalHead}`));
-  assert.match(failure.message, /git tag -d v3\.208\.0 sidequest-v3\.6\.18/);
-  assert.match(failure.message, /A reset does not delete local tags/);
+  assert.equal(context.git('rev-parse', 'HEAD'), originalHead);
+  assert.deepEqual(context.git('tag', '--list').split('\n').filter(Boolean), []);
+  assert.equal(context.exists('.release/unreleased/SQ-1.md'), true);
+  const match = failure.message.match(/log: (\.release.*\.log)/);
+  assert.ok(match, `the failure names the suite log: ${failure.message}`);
+  assert.equal(context.read(match[1]), 'suite output');
+  assert.match(failure.message, /The local release window was rolled back/);
   assert.deepEqual(context.remoteRefs(), before);
 });
 
