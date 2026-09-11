@@ -544,8 +544,7 @@ test('provisions global and active per-project Grafana dashboards', (t) => {
   const globalExpressions = global.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
   assert.ok(globalExpressions.every((expression) => !expression.includes('$project')));
   for (const expression of globalExpressions.filter((expression) => expression.includes('claude_code_'))) {
-    assert.match(expression, /project_id=~"atlas\|beacon"/);
-    assert.doesNotMatch(expression, /[0-9a-f]{64}/);
+    assert.match(expression, /project_id=~"a{64}\|atlas\|b{64}\|beacon"/);
   }
 
   const atlas = dashboards.find(({ dashboard }) => dashboard.title === 'Claude Code — atlas').dashboard;
@@ -558,7 +557,7 @@ test('provisions global and active per-project Grafana dashboards', (t) => {
   assert.equal(atlasTitles.has('Unpriced model token usage'), true);
   const atlasExpressions = atlas.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
   for (const expression of atlasExpressions.filter((expression) => expression.includes('claude_code_'))) {
-    assert.match(expression, /project_id="atlas"/);
+    assert.match(expression, /project_id=~"a{64}\|atlas"/);
   }
   for (const expression of atlasExpressions.filter((expression) => expression.includes('service_name="workbench-observer"'))) {
     assert.match(expression, /workbench_attribute_project_name="atlas"/);

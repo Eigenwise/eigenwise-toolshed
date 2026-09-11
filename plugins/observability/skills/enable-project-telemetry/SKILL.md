@@ -34,9 +34,10 @@ Gateway wiring is per-scope. If the gateway is unwired for the current project, 
    ```
 
    This creates or merges the `env` object without dropping unrelated keys. It adds the Claude Code telemetry
-   settings, including `OTEL_RESOURCE_ATTRIBUTES` with the sanitized repository basename and
-   `service.name=claude-code`. The registry stores the same sanitized name plus the SHA-256 repository ID used
-   by this plugin's hooks. Session-hosting subdirectories are found by encoding each real subdirectory the way
+   settings, including `OTEL_RESOURCE_ATTRIBUTES` with the SHA-256 repository ID as `project.id`, the sanitized
+   repository basename as `project.name`, and `service.name=claude-code`. The registry stores the same sanitized
+   name plus the SHA-256 repository ID used by this plugin's hooks. Re-running enable rewrites this repository's
+   env with those values; it never rewrites any other project's settings. Session-hosting subdirectories are found by encoding each real subdirectory the way
    Claude Code encodes `~/.claude/projects/` names and keeping the ones that exist there; `.claude/worktrees`,
    `.git`, `node_modules`, dot-directories, and nested repositories are skipped.
 3. Report every directory the command printed, and tell the user settings environment changes apply only to

@@ -192,8 +192,10 @@ function restoreResourceAttributes(current, previous, added) {
 }
 
 function telemetryEnvironment(projectDir, ports) {
+  const project = projectMetadata(path.resolve(projectDir));
   const attributes = parseResourceAttributes();
-  attributes.set('project.id', projectName(projectDir));
+  attributes.set('project.id', project.project_id);
+  attributes.set('project.name', project.project_name);
   attributes.set('service.name', 'claude-code');
   return {
     ...observabilityEnvironment(ports),
@@ -208,8 +210,10 @@ function mergeTelemetrySettings(settings, projectDir, options = {}) {
     name,
     Object.hasOwn(existingEnvironment, name) ? existingEnvironment[name] : null,
   ]));
+  const project = projectMetadata(path.resolve(projectDir));
   const attributes = parseResourceAttributes(existingEnvironment.OTEL_RESOURCE_ATTRIBUTES);
-  attributes.set('project.id', projectName(projectDir));
+  attributes.set('project.id', project.project_id);
+  attributes.set('project.name', project.project_name);
   attributes.set('service.name', 'claude-code');
   addedEnvironment.OTEL_RESOURCE_ATTRIBUTES = serializeResourceAttributes(attributes);
   const next = mergeProjectEnvironment(settings, addedEnvironment);

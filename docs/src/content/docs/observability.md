@@ -16,7 +16,7 @@ The telemetry schema is designed to exclude prompt or response text, code or fil
 5. Restart every Claude Code session already running in the affected repository directories. A plugin reload alone does not apply the new environment.
 6. Create fresh activity, then open the [dashboard](./dashboard/) and verify the result.
 
-The skill handles the observer, dashboard setup, project wiring, and verification. It reports whether the local observer, Collector, downstream sink, and dashboard are healthy as separate planes. A linked worktree's hook events can resolve to the main repository identity, while native Claude Code metrics still require the exact session-start directory to be wired.
+The skill handles the observer, dashboard setup, project wiring, and verification. Its project command writes the repository SHA-256 identity as `OTEL_RESOURCE_ATTRIBUTES` `project.id` and its sanitized basename as `project.name`, matching the local opt-in registry. Re-running it rewrites only that repository's env. It reports whether the local observer, Collector, downstream sink, and dashboard are healthy as separate planes. A linked worktree's hook events can resolve to the main repository identity, while native Claude Code metrics still require the exact session-start directory to be wired.
 
 ## Daily use
 
