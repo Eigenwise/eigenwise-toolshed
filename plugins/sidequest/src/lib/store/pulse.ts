@@ -426,12 +426,14 @@ function createBoardWatch(dependencies: any) {
     return { type: 'comment', author: String(comment.by || ''), excerpt: excerpt(body) };
   }
 
+  const nonFailingConclusions = new Set(['success', 'skipped', 'neutral']);
+
   function pollCi(): void {
     if (!ciRunsProvider) return;
     const ci = ciRunsProvider();
     if (!ci) return;
     for (const run of ci.runs || []) {
-      if (run.headSha !== ci.headSha || run.status !== 'completed' || run.conclusion === 'success') continue;
+      if (run.headSha !== ci.headSha || run.status !== 'completed' || nonFailingConclusions.has(run.conclusion)) continue;
       const key = `${run.headSha}|${run.id}`;
       if (seenCiRuns.has(key)) continue;
       seenCiRuns.add(key);
