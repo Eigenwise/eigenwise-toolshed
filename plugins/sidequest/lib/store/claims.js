@@ -162,6 +162,7 @@ ${evidence.outputTail}`;
   function verificationCompletionCheck(slug, ticket, comment) {
     const event = verificationComment(comment?.body);
     if (!event || event.kind !== "complete") return { ok: true };
+    if (ticket?.claim?.by === comment?.by && (event.status === "failed_suite" || event.status === "could_not_run")) return { ok: true };
     return completionTreeCheck(slug, ticket, { explicitNoOp: event.noOp });
   }
   function recordClaimVerification(ticket, comment) {

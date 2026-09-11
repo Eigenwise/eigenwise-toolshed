@@ -370,6 +370,45 @@ test('a shared-tree write dispatch refuses an empty verification completion unle
   assert.equal(submitRefused.ok, false);
   assert.equal(submitRefused.reason, 'empty_declared_scope');
 
+  const evidenceMarkers = [
+    '[sidequest:verify-complete] could_not_run: shell unavailable before editing.',
+    '[sidequest:verify-complete] failed: focused regression failed before editing.',
+  ];
+  for (const body of evidenceMarkers) {
+    const recorded = store.addComment(slug, ticket.ref, {
+      by: 'tree-check-executor',
+      body,
+      source: 'mcp',
+    });
+    assert.equal(recorded.ok, true, body);
+    assert.equal(recorded.comment.body, body);
+  }
+  assert.equal(store.claimMaySubmit(store.getTicket(slug, ticket.ref)), false);
+
+  const wrongAuthor = store.addComment(slug, ticket.ref, {
+    by: 'another-executor',
+    body: '[sidequest:verify-complete] could_not_run: a different executor cannot clear this guard.',
+    source: 'mcp',
+  });
+  assert.equal(wrongAuthor.ok, false);
+  assert.equal(wrongAuthor.reason, 'empty_declared_scope');
+
+  const unclaimed = store.createTicket(slug, {
+    title: 'unclaimed failure evidence guard',
+    description: 'Where: completion fixture. Contract: require a valid claim before accepting pre-edit failure evidence. Verify: inspect the refusal.',
+    category: 'coding.normal',
+    files: ['lib/fixture.js'],
+    source: 'cli',
+  });
+  store.prepareDispatch(slug, unclaimed.ref, { sharedTree: true, sessionId: 'session-unclaimed-failure-evidence' });
+  const unclaimedRefusal = store.addComment(slug, unclaimed.ref, {
+    by: 'unclaimed-executor',
+    body: '[sidequest:verify-complete] failed: no claim exists.',
+    source: 'mcp',
+  });
+  assert.equal(unclaimedRefusal.ok, false);
+  assert.equal(unclaimedRefusal.reason, 'empty_declared_scope');
+
   const noOp = store.addComment(slug, ticket.ref, {
     by: 'tree-check-executor',
     body: '[sidequest:verify-complete] no-op',
