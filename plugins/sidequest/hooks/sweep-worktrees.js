@@ -78,7 +78,16 @@ var import_node_crypto = __toESM(require("node:crypto"));
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path2 = __toESM(require("node:path"));
-var EMPTY_SWEEP_PROGRESS = { planned: 0, removed: 0, keptByReason: {} };
+var EMPTY_SWEEP_PROGRESS = {
+  phase: "idle",
+  candidates: 0,
+  observed: 0,
+  current: null,
+  reason: null,
+  planned: 0,
+  removed: 0,
+  keptByReason: {}
+};
 function stateDirectory() {
   const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path2.default.join(import_node_os.default.homedir(), ".claude", "sidequest");
   return import_node_path2.default.join(home, "sweep-reports");
@@ -94,8 +103,19 @@ function normalizedProgress(value) {
   if (!value || typeof value !== "object") return EMPTY_SWEEP_PROGRESS;
   const record = value;
   const count = (candidate) => Number.isFinite(Number(candidate)) && Number(candidate) >= 0 ? Math.floor(Number(candidate)) : 0;
+  const phase = ["idle", "classifying", "sweeping", "complete"].includes(String(record.phase)) ? String(record.phase) : "idle";
+  const text = (candidate) => typeof candidate === "string" && candidate.trim() ? candidate : null;
   const keptByReason = Object.fromEntries(Object.entries(record.keptByReason || {}).map(([reason, amount]) => [reason, count(amount)]).filter(([, amount]) => amount > 0));
-  return { planned: count(record.planned), removed: count(record.removed), keptByReason };
+  return {
+    phase,
+    candidates: count(record.candidates),
+    observed: count(record.observed),
+    current: text(record.current),
+    reason: text(record.reason),
+    planned: count(record.planned),
+    removed: count(record.removed),
+    keptByReason
+  };
 }
 function writeSweepProgress(cwd, progress) {
   try {
@@ -249,14 +269,28 @@ async function sweepWorktrees(data, includeKnownProjects) {
     const keptByReason = {};
     let planned = 0;
     let removed = 0;
+    let candidates = 0;
+    let observed = 0;
+    let phase = "complete";
+    let current2 = null;
+    let reason = null;
     for (const currentProgress of projectProgress.values()) {
       planned += currentProgress.planned;
       removed += currentProgress.removed;
-      for (const [reason, count] of Object.entries(currentProgress.keptByReason)) {
-        keptByReason[reason] = (keptByReason[reason] || 0) + count;
+      candidates += currentProgress.candidates;
+      observed += currentProgress.observed;
+      if (currentProgress.phase === "classifying") {
+        phase = "classifying";
+        current2 = currentProgress.current;
+        reason = currentProgress.reason;
+      } else if (phase !== "classifying" && currentProgress.phase === "sweeping") {
+        phase = "sweeping";
+      }
+      for (const [reason2, count] of Object.entries(currentProgress.keptByReason)) {
+        keptByReason[reason2] = (keptByReason[reason2] || 0) + count;
       }
     }
-    writeSweepProgress(progressCwd, { planned, removed, keptByReason });
+    writeSweepProgress(progressCwd, { phase, candidates, observed, current: current2, reason, planned, removed, keptByReason });
   };
   for (const project of projects) {
     const isCurrentProject = project.slug === current.slug;

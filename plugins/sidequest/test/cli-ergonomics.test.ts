@@ -69,6 +69,32 @@ test('CLI command help stays focused on the requested command', () => {
   }
 });
 
+test('worktree sweep sends live classification progress to stderr for JSON output', () => {
+  const env = isolatedEnv();
+  const project = String(env.CLAUDE_PROJECT_DIR);
+  const worktree = path.join(project, '.claude', 'worktrees', 'agent-json-progress');
+  runGit(project, ['init', '-b', 'main']);
+  runGit(project, ['config', 'user.name', 'Sidequest Test']);
+  runGit(project, ['config', 'user.email', 'sidequest-test@example.invalid']);
+  fs.writeFileSync(path.join(project, 'README.md'), 'fixture\n');
+  runGit(project, ['add', 'README.md']);
+  runGit(project, ['commit', '-m', 'fixture']);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  runGit(project, ['worktree', 'add', '-b', 'worktree-agent-json-progress', worktree, 'HEAD']);
+  try {
+    const configured = run(['board-config', '--project', project, '--integration-branch', 'main', '--json'], env);
+    assert.equal(configured.status, 0, configured.stderr);
+
+    const result = run(['worktrees', 'sweep', '--project', project, '--json'], env);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).entries.length, 1);
+    assert.match(result.stderr, /worktrees sweep: classifying 0\/1: .*agent-json-progress; planned 0, removed 0/);
+    assert.match(result.stderr, /worktrees sweep: classifying 1\/1: .*agent-json-progress \(legacy_unreclaimed\); planned 0, removed 0/);
+  } finally {
+    if (fs.existsSync(worktree)) runGit(project, ['worktree', 'remove', '--force', worktree]);
+  }
+});
+
 test('groom-close records a delivered commit through the shared store transition', () => {
   const env = isolatedEnv();
   const project = String(env.CLAUDE_PROJECT_DIR);

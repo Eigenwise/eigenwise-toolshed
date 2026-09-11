@@ -106,6 +106,36 @@ function dependencyTarget(repository: string, name: string): string {
 
 const integrationTarget = { upstream: 'HEAD', branch: 'main' };
 
+test('sweep reports an observed classification before its final result', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'progress');
+  const ticket = integratedTicket('SQ-PROGRESS', 'progress', worktree, baseCommit);
+  const progress: any[] = [];
+  let completed = false;
+  try {
+    const result = await worktrees.sweep(repository, [ticket], {
+      execute: false,
+      minAgeMs: 0,
+      integrationTarget,
+      onProgress: (update: any) => {
+        assert.equal(completed, false);
+        progress.push(update);
+      },
+    });
+    completed = true;
+
+    assert.equal(result.entries.length, 1);
+    assert.deepEqual(progress.filter((update) => update.phase === 'classifying').map((update) => update.observed), [0, 1]);
+    const observed = progress.find((update) => update.phase === 'classifying' && update.observed === 1);
+    assert.equal(worktrees.canonicalPath(observed.current), worktrees.canonicalPath(worktree));
+    assert.equal(observed.reason, 'ticket_done');
+    assert.equal(progress.at(-1).phase, 'complete');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test('sweep removes a recorded dependency link without following its target', async () => {
   const { repository, baseCommit, worktreeRoot } = repositoryFixture();
   const target = dependencyTarget(repository, 'owned');

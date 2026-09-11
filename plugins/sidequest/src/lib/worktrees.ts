@@ -1745,9 +1745,20 @@ async function recoveryStoreSizes(recovery: Awaited<ReturnType<typeof sweepRecov
 }
 
 type SweepProgressEntry = { action: string; reason?: unknown };
-type SweepProgressOptions = { onProgress?: (progress: { planned: number; removed: number; keptByReason: Record<string, number> }) => void };
+type SweepProgress = {
+  phase: 'classifying' | 'sweeping' | 'complete';
+  candidates: number;
+  observed: number;
+  current: string | null;
+  reason: string | null;
+  planned: number;
+  removed: number;
+  keptByReason: Record<string, number>;
+};
+type SweepProgressOptions = { onProgress?: (progress: SweepProgress) => void };
+type SweepProgressStatus = Pick<SweepProgress, 'phase' | 'candidates' | 'observed' | 'current' | 'reason'>;
 
-function sweepProgress(entries: readonly SweepProgressEntry[], removed: readonly string[]): { planned: number; removed: number; keptByReason: Record<string, number> } {
+function sweepProgress(entries: readonly SweepProgressEntry[], removed: readonly string[], status: SweepProgressStatus): SweepProgress {
   const keptByReason: Record<string, number> = {};
   for (const entry of entries) {
     if (entry.action !== 'keep') continue;
@@ -1755,14 +1766,15 @@ function sweepProgress(entries: readonly SweepProgressEntry[], removed: readonly
     keptByReason[reason] = (keptByReason[reason] || 0) + 1;
   }
   return {
+    ...status,
     planned: entries.filter((entry) => entry.action === 'remove' || entry.action === 'salvage').length,
     removed: removed.length,
     keptByReason,
   };
 }
 
-function reportSweepProgress(options: SweepProgressOptions, entries: readonly SweepProgressEntry[], removed: readonly string[]): void {
-  if (typeof options.onProgress === 'function') options.onProgress(sweepProgress(entries, removed));
+function reportSweepProgress(options: SweepProgressOptions, entries: readonly SweepProgressEntry[], removed: readonly string[], status: SweepProgressStatus): void {
+  if (typeof options.onProgress === 'function') options.onProgress(sweepProgress(entries, removed, status));
 }
 
 async function sweep(repo: string, tickets: any[], options: any = {}): Promise<any> {
@@ -1827,14 +1839,34 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
     : allCandidates.length;
   const boundedCandidates = allCandidates.slice(0, maxCandidates);
   const livePaths = Array.isArray(options.livePaths) ? options.livePaths.map((pathname: unknown) => String(pathname)) : [];
-  const entries = await Promise.all(boundedCandidates.map((entry) => (
-    entry.orphanDirectory
-      ? classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs)
-      : classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, upstream, livePaths, notIntegratedSalvageAgeMs, [...registered])
-  )));
-  const execute = !!options.execute;
   const removed: string[] = [];
-  reportSweepProgress(options, entries, removed);
+  const classified: any[] = [];
+  const classificationStatus = (entry: any, reason: string | null): SweepProgressStatus => ({
+    phase: 'classifying',
+    candidates: boundedCandidates.length,
+    observed: classified.length,
+    current: entry.worktree,
+    reason,
+  });
+  const entries = await Promise.all(boundedCandidates.map(async (entry) => {
+    reportSweepProgress(options, classified, removed, classificationStatus(entry, null));
+    const classifiedEntry = entry.orphanDirectory
+      ? await classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs)
+      : await classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, upstream, livePaths, notIntegratedSalvageAgeMs, [...registered]);
+    classified.push(classifiedEntry);
+    reportSweepProgress(options, classified, removed, classificationStatus(entry, classifiedEntry.reason));
+    return classifiedEntry;
+  }));
+  const sweepingStatus: SweepProgressStatus = {
+    phase: 'sweeping',
+    candidates: boundedCandidates.length,
+    observed: entries.length,
+    current: null,
+    reason: null,
+  };
+  const completeStatus: SweepProgressStatus = { ...sweepingStatus, phase: 'complete' };
+  const execute = !!options.execute;
+  reportSweepProgress(options, entries, removed, sweepingStatus);
   const backups: string[] = [];
   const salvaged: Array<{ path: string; ref: string; uncommittedRef: string | null; recovery: string }> = [];
   const deletedBranches: string[] = [];
@@ -1847,7 +1879,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       if (shouldSkipKnownFailure(entry.path)) {
         entry.action = 'keep';
         entry.reason = 'known_permanent_failure';
-        reportSweepProgress(options, entries, removed);
+        reportSweepProgress(options, entries, removed, sweepingStatus);
         continue;
       }
       const ticket = ticketForWorktree(tickets, { worktree: entry.path });
@@ -1855,7 +1887,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       if (!initialLinkSafety.safe) {
         entry.action = 'keep';
         entry.reason = 'dependency_link_untrusted';
-        reportSweepProgress(options, entries, removed);
+        reportSweepProgress(options, entries, removed, sweepingStatus);
         continue;
       }
       if (entry.action === 'salvage') {
@@ -1866,7 +1898,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
           entry.action = 'keep';
           entry.reason = 'salvage_failed';
           failures.push({ path: entry.path, message: `salvage failed: ${(error && error.message) || error}` });
-          reportSweepProgress(options, entries, removed);
+          reportSweepProgress(options, entries, removed, sweepingStatus);
           continue;
         }
       }
@@ -1885,7 +1917,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       if (!dependencyLinksReleased.ok) {
         entry.action = 'keep';
         entry.reason = dependencyLinksReleased.reason;
-        reportSweepProgress(options, entries, removed);
+        reportSweepProgress(options, entries, removed, sweepingStatus);
         continue;
       }
       const result = await removeCandidate(repo, entry);
@@ -1897,7 +1929,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
           entry.action = 'keep';
           entry.reason = 'quarantine_failed';
           failures.push({ path: entry.path, message: `${message}; quarantine failed: ${quarantine.stderr}` });
-          reportSweepProgress(options, entries, removed);
+          reportSweepProgress(options, entries, removed, sweepingStatus);
           continue;
         }
         entry.action = 'quarantine';
@@ -1907,12 +1939,12 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
         if (quarantine.stripFailure) {
           failures.push({ path: quarantine.destination, message: `quarantine cleanup failed: ${quarantine.stripFailure}` });
         }
-        reportSweepProgress(options, entries, removed);
+        reportSweepProgress(options, entries, removed, sweepingStatus);
         continue;
       }
       clearFailure(entry.path);
       removed.push(entry.path);
-      reportSweepProgress(options, entries, removed);
+      reportSweepProgress(options, entries, removed, sweepingStatus);
       if (entry.orphanDirectory) continue;
       const branch = localBranchName(entry.branch);
       if (!branch) continue;
@@ -1941,7 +1973,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
     }
   }
 
-  reportSweepProgress(options, entries, removed);
+  reportSweepProgress(options, entries, removed, completeStatus);
   return {
     dryRun: !execute,
     minAgeMs,

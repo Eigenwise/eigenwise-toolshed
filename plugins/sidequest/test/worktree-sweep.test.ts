@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { worktreeRemovalFailureNotice } from '../src/hooks/shared/worktree-sweep.js';
 import { deferralNotice } from '../src/hooks/shared/sweep-handoff.js';
-const { worktreeSweepEntryLine } = require('../src/bin/sidequest-cmd-collaboration.ts');
+const { worktreeSweepEntryLine, worktreeSweepProgressLine } = require('../src/bin/sidequest-cmd-collaboration.ts');
 
 const removalFailure = { path: 'C:\\worktrees\\agent-locked', message: 'Invalid argument' };
 
@@ -72,13 +72,34 @@ test('worktree sweep rows print known facts without placeholder values', () => {
 });
 
 
-test('deferred SessionStart sweep reports reached counts and the finishing command', () => {
+test('deferred SessionStart sweep reports active classification and the finishing command', () => {
   const notice = deferralNotice('C:/repo', {
+    phase: 'classifying',
+    candidates: 8,
+    observed: 3,
+    current: 'C:/worktrees/agent-slow',
+    reason: 'legacy_unreclaimed',
     planned: 4,
     removed: 2,
     keptByReason: { legacy_unreclaimed: 1, active_ticket: 3 },
   });
 
+  assert.match(notice, /Classifying 3\/8: C:\/worktrees\/agent-slow \(legacy_unreclaimed\)/);
   assert.match(notice, /Reached planned 4, removed 2, skipped 4 \(legacy_unreclaimed 1, active_ticket 3\)/);
   assert.match(notice, /worktrees sweep --yes --project/);
+});
+
+test('manual worktree sweep progress names the classification candidate and reason', () => {
+  const line = worktreeSweepProgressLine({
+    phase: 'classifying',
+    candidates: 8,
+    observed: 3,
+    current: 'C:/worktrees/agent-slow',
+    reason: 'legacy_unreclaimed',
+    planned: 0,
+    removed: 0,
+    keptByReason: {},
+  });
+
+  assert.equal(line, 'worktrees sweep: classifying 3/8: C:/worktrees/agent-slow (legacy_unreclaimed); planned 0, removed 0');
 });

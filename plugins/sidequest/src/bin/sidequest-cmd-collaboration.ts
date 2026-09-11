@@ -39,6 +39,24 @@ type WorktreeSweepOutputEntry = {
   ageMs: number | null;
 };
 
+type WorktreeSweepProgress = {
+  phase: 'classifying' | 'sweeping' | 'complete';
+  candidates: number;
+  observed: number;
+  current: string | null;
+  reason: string | null;
+  planned: number;
+  removed: number;
+  keptByReason: Record<string, number>;
+};
+
+function worktreeSweepProgressLine(progress: WorktreeSweepProgress): string {
+  const candidate = progress.current ? `: ${progress.current}` : '';
+  const reason = progress.reason ? ` (${progress.reason})` : '';
+  const count = progress.phase === 'classifying' ? ` ${progress.observed}/${progress.candidates}${candidate}${reason}` : '';
+  return `worktrees sweep: ${progress.phase}${count}; planned ${progress.planned}, removed ${progress.removed}`;
+}
+
 function worktreeSweepEntryLine(entry: WorktreeSweepOutputEntry): string {
   const ticket = entry.ticket ? ` ${entry.ticket}` : '';
   const cleanliness = entry.clean === true ? 'clean' : entry.clean === false ? 'dirty' : 'cleanliness unavailable';
@@ -107,6 +125,10 @@ async function cmdWorktrees(opts: any, positional: any) {
       recoveryRetentionAgeMs: recoveryRetentionAgeHours * 60 * 60 * 1000,
       recoveryRetentionMaxPerAgent,
       includeStoreUsage: true,
+      onProgress: (progress: WorktreeSweepProgress) => {
+        const output = `${worktreeSweepProgressLine(progress)}\n`;
+        (opts.json ? process.stderr : process.stdout).write(output);
+      },
     });
   } catch (error: any) {
     fail(`worktrees: ${(error && error.message) || error}`);
@@ -500,4 +522,4 @@ async function cmdUnarchive(opts: any, positional: any) {
 }
 
 
-module.exports = { cmdSweepClaims, cmdWorktrees, worktreeSweepEntryLine, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive };
+module.exports = { cmdSweepClaims, cmdWorktrees, worktreeSweepEntryLine, worktreeSweepProgressLine, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive };

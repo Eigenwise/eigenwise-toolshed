@@ -17,12 +17,26 @@ export const DEFERRAL_NOTICE =
   'sidequest: worktree sweep exceeded its SessionStart budget and is still running in the background.';
 
 export type SweepProgress = Readonly<{
+  phase: 'idle' | 'classifying' | 'sweeping' | 'complete';
+  candidates: number;
+  observed: number;
+  current: string | null;
+  reason: string | null;
   planned: number;
   removed: number;
   keptByReason: Readonly<Record<string, number>>;
 }>;
 
-const EMPTY_SWEEP_PROGRESS: SweepProgress = { planned: 0, removed: 0, keptByReason: {} };
+const EMPTY_SWEEP_PROGRESS: SweepProgress = {
+  phase: 'idle',
+  candidates: 0,
+  observed: 0,
+  current: null,
+  reason: null,
+  planned: 0,
+  removed: 0,
+  keptByReason: {},
+};
 
 export const HANDOFF_FAILED_NOTICE =
   'sidequest: worktree sweep could not run, so stale agent worktrees were not collected this session.';
@@ -48,12 +62,34 @@ function progressFile(cwd: string): string {
 
 function normalizedProgress(value: unknown): SweepProgress {
   if (!value || typeof value !== 'object') return EMPTY_SWEEP_PROGRESS;
-  const record = value as { planned?: unknown; removed?: unknown; keptByReason?: unknown };
+  const record = value as {
+    phase?: unknown;
+    candidates?: unknown;
+    observed?: unknown;
+    current?: unknown;
+    reason?: unknown;
+    planned?: unknown;
+    removed?: unknown;
+    keptByReason?: unknown;
+  };
   const count = (candidate: unknown) => Number.isFinite(Number(candidate)) && Number(candidate) >= 0 ? Math.floor(Number(candidate)) : 0;
+  const phase = ['idle', 'classifying', 'sweeping', 'complete'].includes(String(record.phase))
+    ? String(record.phase) as SweepProgress['phase']
+    : 'idle';
+  const text = (candidate: unknown) => typeof candidate === 'string' && candidate.trim() ? candidate : null;
   const keptByReason = Object.fromEntries(Object.entries(record.keptByReason || {})
     .map(([reason, amount]): [string, number] => [reason, count(amount)])
     .filter(([, amount]) => amount > 0));
-  return { planned: count(record.planned), removed: count(record.removed), keptByReason };
+  return {
+    phase,
+    candidates: count(record.candidates),
+    observed: count(record.observed),
+    current: text(record.current),
+    reason: text(record.reason),
+    planned: count(record.planned),
+    removed: count(record.removed),
+    keptByReason,
+  };
 }
 
 export function writeSweepProgress(cwd: string, progress: SweepProgress): void {
@@ -82,8 +118,11 @@ function clearSweepProgress(cwd: string): void {
 export function deferralNotice(cwd: string, progress: SweepProgress): string {
   const kept = Object.values(progress.keptByReason).reduce((total, count) => total + count, 0);
   const reasons = Object.entries(progress.keptByReason).map(([reason, count]) => `${reason} ${count}`).join(', ') || 'none';
+  const classification = progress.phase === 'classifying'
+    ? ` Classifying ${progress.observed}/${progress.candidates}${progress.current ? `: ${progress.current}` : ''}${progress.reason ? ` (${progress.reason})` : ''}.`
+    : '';
   const command = `node "${pluginRoot()}/bin/sidequest.js" worktrees sweep --yes --project "${path.resolve(cwd || '.')}"`;
-  return `${DEFERRAL_NOTICE} Reached planned ${progress.planned}, removed ${progress.removed}, skipped ${kept} (${reasons}). Finish with ${command}.`;
+  return `${DEFERRAL_NOTICE}${classification} Reached planned ${progress.planned}, removed ${progress.removed}, skipped ${kept} (${reasons}). Finish with ${command}.`;
 }
 
 export function writeReport(cwd: string, notices: string[]): void {
