@@ -16,6 +16,8 @@ const CORRECTION_PHRASES = /\b(?:i (?:already )?(?:told|said|asked)|you keep|aga
 // wrapper, piped command output, a hook's injected line. Taking one of these as the opening ask
 // reports "/clear" back as what the user wanted.
 const HARNESS_PROMPT = /^\s*<[a-z][a-z-]*>/i;
+const HARNESS_BLOCK_START = /^\s*<(?:agent-message|command-message|command-name|local-command(?:-caveat|-stdout)?|system-reminder|task-(?:notification|progress|result))\b/i;
+const HARNESS_BLOCK_OPEN = /^\s*<(agent-message|command-message|command-name|local-command(?:-caveat|-stdout)?|system-reminder|task-(?:notification|progress|result))\b[^>]*>/i;
 
 const CORRECTION_THEMES = [
   ['commit/git', /\b(?:commit(?:s|ted|ting)?|push(?:es|ed|ing)?|branch(?:es|ed|ing)?|merg(?:e|es|ed|ing)|rebas(?:e|es|ed|ing)|git)\b/],
@@ -41,6 +43,20 @@ function themeOf(text) {
   const value = String(text).toLowerCase();
   for (const [name, pattern] of CORRECTION_THEMES) if (pattern.test(value)) return name;
   return 'general';
+}
+
+function textAfterLeadingHarnessBlocks(text) {
+  const prompt = String(text ?? '');
+  let remainder = prompt;
+  let removedBlock = false;
+  for (;;) {
+    const opening = HARNESS_BLOCK_OPEN.exec(remainder);
+    if (!opening) return HARNESS_BLOCK_START.test(remainder) ? null : (removedBlock ? remainder : prompt);
+    const closing = new RegExp(`</${opening[1]}\\s*>`, 'i').exec(remainder.slice(opening[0].length));
+    if (!closing) return null;
+    remainder = remainder.slice(opening[0].length + closing.index + closing[0].length);
+    removedBlock = true;
+  }
 }
 
 function basenameOf(token) {
@@ -240,12 +256,13 @@ function createSignalCollector() {
           // The opening ask is the fallback when a session has no title: it is what the user came
           // in wanting, before any of the work reshaped it.
           if (!tally.openingAsk && !HARNESS_PROMPT.test(text)) tally.openingAsk = clip(text, ASK_CHARS);
-          if (!CORRECTION_OPENERS.test(text) && !CORRECTION_PHRASES.test(text)) return;
+          const correctionText = textAfterLeadingHarnessBlocks(text);
+          if (!correctionText || (!CORRECTION_OPENERS.test(correctionText) && !CORRECTION_PHRASES.test(correctionText))) return;
           tally.corrections += 1;
           if (corrections.length < MAX_SAMPLES * 3) {
             corrections.push({
-              quote: clip(text),
-              theme: themeOf(text),
+              quote: clip(correctionText),
+              theme: themeOf(correctionText),
               after: lastAction ? clip(`${lastAction.name} ${lastAction.target ?? ''}`, 120) : null,
               sessionId: event.sessionId,
             });

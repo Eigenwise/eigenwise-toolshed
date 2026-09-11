@@ -70,7 +70,7 @@ The miner reads local transcript files and emits a bounded aggregate. The active
 - a denial meaning that identifies `permission-rule` as a host-reported policy block, not proof of
   whether a permission rule or PreToolUse hook blocked the call;
 - repeated command names, plugin, skill, and MCP attribution, and fetched hostnames; and
-- short correction or denial evidence quotes clipped to 300 characters.
+- short user-correction or denial evidence quotes clipped to 300 characters; leading harness blocks are excluded from correction evidence.
 
 Raw transcript files are never loaded into model context, and the resupply skill is forbidden from opening them. The default pass mines the current project. Setup explicitly requests the all-projects summary, while resupply only uses `--all-projects` for a global pass. A host policy label alone never justifies a permission allowlist or hook change; existing approval requirements still apply.
 
