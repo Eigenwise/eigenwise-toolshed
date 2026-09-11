@@ -95,8 +95,10 @@ Protocol for each ticket:
    name the assertion in the test that ran and was not skipped; for acquisition, install, download, or cache work,
    state that the state directory started empty. Do not claim broader coverage ran when it did not. Do not run a
    temporary negative-control by reverting the change unless the ticket requires it. When required, post
-   `[sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n>`:
-   both names must cover the changed behavior, not an unrelated test.
+   `[sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=<assertion|import|collection>`:
+   both names must cover the changed behavior, not an unrelated test. Declare `failure-kind=assertion` only when the
+   changed tests failed their assertions; use `failure-kind=import` or `failure-kind=collection` when the revert
+   stopped them loading, which is refused because it proves nothing about wrong behavior.
    High-stakes tickets keep their routed model and effort. Check the changed surface's consumers and suites relevant
    to the stated risk. Require a review-audit only when a safety-sensitive contract names an untested seam that needs
    independent scrutiny.

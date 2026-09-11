@@ -5,6 +5,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const agentsync = require('../lib/agentsync.js');
+const { negativeControlRecoveryGuidance } = require('../lib/refusal-guidance.js');
 
 const ROOT = path.join(__dirname, '..');
 const skill = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
@@ -62,6 +63,13 @@ test('published guidance excludes retired instructions', () => {
     assert.doesNotMatch(source, new RegExp('native' + '_agent', 'i'));
     assert.doesNotMatch(source, new RegExp(['MCP `dispatch`', ' are disabled'].join(''), 'i'));
   }
+});
+
+test('SQ-2731: the negative-control grammar an executor is told matches the guard recovery guidance', () => {
+  const grammar = /failed=<n> failure-kind=<assertion\|import\|collection>/;
+  assert.match(executorTemplate, grammar);
+  assert.match(negativeControlRecoveryGuidance(), grammar);
+  assert.doesNotMatch(executorTemplate, /an ImportError or collection error only proves a symbol vanished/);
 });
 
 test('sidequest listing description covers board use and inline exceptions', () => {
