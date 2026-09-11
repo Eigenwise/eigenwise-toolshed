@@ -33,6 +33,8 @@ The cut also runs tests itself. It writes the release commit and every tag local
 
 A failing suite publishes nothing, but the local release commit and its tags are already written by that point. The cut prints the two commands that undo them, a `git reset --hard` back to the previous head and a `git tag -d` naming every tag it created. Run both. A reset alone leaves the tags behind, and a later cut for the same version will not be able to create them.
 
+Until you do, Sidequest refuses to prepare a dispatch, because the baseline it would hand an executor is a commit `main` is about to rewind past. The refusal names the tags it found. The same refusal fires while a cut is still running its suites, which is correct: wait for it to finish.
+
 Deleting those tags needs the publish lock, because Sidequest refuses a manual `git tag` on this repository without one. Acquire it with `sidequest publish lock`, delete the tags, then `sidequest publish unlock`. The refusal blocks the whole shell invocation, so run the lock, the deletion, and the unlock as three separate commands rather than chaining them.
 
 This gate is local and it runs on your machine, so a test that reads your own environment can fail here while CI is green on the same commit. That is a bug in the test, not a reason to skip the gate.
