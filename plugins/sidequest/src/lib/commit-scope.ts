@@ -521,6 +521,43 @@ export function headCommit(cwd: string): string | null {
   return head.ok ? head.value : null;
 }
 
+const MARKETPLACE_RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
+const PLUGIN_RELEASE_TAG = /^[A-Za-z0-9][A-Za-z0-9._-]*-v\d+\.\d+\.\d+$/;
+
+// A release cut commits and annotates its tags BEFORE it runs the release suites,
+// and only pushes once they pass (scripts/release/cut.mjs). So a local commit that
+// already carries the whole annotated release tag set — the marketplace `v<version>`
+// tag plus at least one `<plugin>-v<version>` tag — while still absent from the
+// remote branch is a release tip that is either in flight or failed and left live.
+// Forking anything from it produces work descended from a commit the branch rewinds
+// past. The set is matched by shape, never by count: how many plugin tags a release
+// carries depends on how many plugins moved.
+//
+// Every other candidate signal was measured and rejected as unsound (SQ-2776): the
+// commit message shape, an empty `.release/unreleased/`, author or committer
+// identity, parent count, and reflog state are all user-controlled, ambiguous, or
+// absent. Reachability from the remote branch is what makes this narrow — an
+// ordinary unpushed local commit carries no release tags and is never matched, and a
+// published release tip is reachable from the remote the push updated.
+export function unpublishedReleaseTip(cwd: string, commit: unknown, remoteBranchRef: unknown): { commit: string; tags: string[] } | null {
+  const remoteRef = String(remoteBranchRef || '').trim();
+  if (!remoteRef) return null;
+  const tip = resolvedCommit(cwd, commit);
+  const published = resolvedCommit(cwd, remoteRef);
+  if (!tip.ok || !published.ok) return null;
+  if (isAncestor(cwd, tip.value, published.value)) return null;
+  const listed = gitResult(cwd, ['for-each-ref', '--points-at', tip.value, '--format=%(refname:strip=2) %(objecttype)', 'refs/tags']);
+  if (!listed.ok) return null;
+  const annotated = listed.value.split(/\r?\n/)
+    .map((line) => line.trim().split(/\s+/))
+    .filter((fields) => fields.length === 2 && fields[1] === 'tag')
+    .map((fields) => fields[0]!);
+  const marketplace = annotated.filter((name) => MARKETPLACE_RELEASE_TAG.test(name));
+  const plugins = annotated.filter((name) => PLUGIN_RELEASE_TAG.test(name));
+  if (!marketplace.length || !plugins.length) return null;
+  return { commit: tip.value, tags: [...marketplace, ...plugins].sort() };
+}
+
 export function preserveCommitRef(cwd: string, commit: unknown, gitRef: unknown, options?: { noOverwrite?: boolean }) {
   const ref = String(gitRef || '').trim();
   if (!ref) return { ok: false as const, reason: 'missing_git_ref' };

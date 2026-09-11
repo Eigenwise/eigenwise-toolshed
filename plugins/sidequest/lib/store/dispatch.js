@@ -1344,6 +1344,14 @@ function createDispatch(dependencies) {
         const evidenceDirectory = ticketEvidenceDirectory(slug, t.ref, projectPath);
         fs.mkdirSync(evidenceDirectory, { recursive: true, mode: 448 });
         const baseCommit = reviewTargetState?.candidate.source === "git" ? reviewTargetState.candidate.value : integrationTargetState ? integrationTargetCommit(readMeta(slug)?.path || "", integrationTargetState) : commitScope.headCommit(readMeta(slug)?.path || "");
+        const releaseTip = projectPath ? commitScope.unpublishedReleaseTip(
+          projectPath,
+          baseCommit,
+          `refs/remotes/origin/${integrationTargetState?.branch || boardConfig(slug)?.integrationBranch || "main"}`
+        ) : null;
+        if (releaseTip) {
+          throw new Error(`prepare dispatch: ${t.ref} refused; baseline ${releaseTip.commit} is an unpublished release commit, tagged ${releaseTip.tags.join(", ")} and not yet on the remote branch. A release cut tags its commit before running its suites, so this is either a cut still in flight or one that failed and left its commit live. Wait for the cut to finish and push, or tear it down (delete those tags and reset the branch), then dispatch again.`);
+        }
         const dispatchBaseline = dispatchBaselineForProject(slug, t, now, baseCommit, nonRepoOutput, snapshotPreflight);
         t.dispatchNonce = mintDispatchToken();
         t.dispatch = {

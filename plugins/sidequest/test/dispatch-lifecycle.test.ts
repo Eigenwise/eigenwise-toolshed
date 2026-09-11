@@ -2980,6 +2980,132 @@ test('configured worktree bases apply to readonly isolated dispatches without ch
   }
 });
 
+test('SQ-2777: a dispatch refuses to baseline on an unpublished release tip, and the teardown it names restores a clean submission range', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-'));
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-remote-'));
+  const executorParent = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-executor-'));
+  const git = (args: string[], cwd: string = repository) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+  try {
+    git(['init', '--quiet', '-b', 'main']);
+    git(['config', 'user.email', 'test@example.invalid']);
+    git(['config', 'user.name', 'Dispatch Lifecycle Test']);
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "base";\n');
+    git(['add', 'tracked.js']);
+    git(['commit', '--quiet', '-m', 'pushed base']);
+    execFileSync('git', ['init', '-b', 'main', '--bare', remote], { windowsHide: true });
+    git(['remote', 'add', 'origin', remote]);
+    git(['push', '--quiet', '-u', 'origin', 'main']);
+    const pushedBase = git(['rev-parse', 'origin/main']);
+
+    // What `cut.mjs` has done by the time it starts the release suites: the version
+    // and changelog commit, then its annotated tag set. Nothing is pushed yet.
+    fs.writeFileSync(path.join(repository, 'release.txt'), 'sidequest 9.9.9\n');
+    git(['add', 'release.txt']);
+    git(['commit', '--quiet', '-m', 'release v9.9.9: sidequest 9.9.9 (SQ-0001)']);
+    const releaseTip = git(['rev-parse', 'main']);
+    git(['tag', '-a', 'v9.9.9', '-m', 'release v9.9.9: sidequest 9.9.9 (SQ-0001)']);
+    git(['tag', '-a', 'sidequest-v9.9.9', '-m', 'sidequest 9.9.9 (v9.9.9)']);
+
+    const tipSlug = store.ensureProject(repository, 'unpublished release tip').slug;
+    const refused = store.createTicket(tipSlug, { title: 'dispatched while a cut is in flight', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    assert.throws(
+      () => store.prepareDispatch(tipSlug, refused.ref, { sessionId: 'release-tip-refused' }),
+      /unpublished release commit, tagged sidequest-v9\.9\.9, v9\.9\.9 and not yet on the remote branch/,
+    );
+    assert.equal(store.getTicket(tipSlug, refused.ref).dispatch, undefined);
+
+    // What the refusal averts, measured through the wire it would have used:
+    // WorktreeCreate forks the executor checkout from dispatch.baseCommit, which
+    // here would have been the release tip, so the candidate stays descended from a
+    // commit the branch rewinds past and the range picks up the release commit too.
+    const forked = path.join(executorParent, 'forked-from-release-tip');
+    git(['worktree', 'add', '--quiet', '-b', 'forked-candidate', forked, releaseTip]);
+    fs.writeFileSync(path.join(forked, 'tracked.js'), 'module.exports = "candidate";\n');
+    git(['commit', '--quiet', '-am', 'candidate sentinel'], forked);
+    const forkedCandidate = git(['rev-parse', 'HEAD'], forked);
+    git(['update-ref', `refs/sidequest/${refused.ref}`, forkedCandidate], forked);
+
+    // The teardown the refusal names: delete those tags, reset the branch.
+    git(['tag', '-d', 'v9.9.9']);
+    git(['tag', '-d', 'sidequest-v9.9.9']);
+    git(['reset', '--hard', '--quiet', pushedBase]);
+
+    const avertedFacts = collectGitSubmissionFacts({
+      slug: tipSlug,
+      ticket: store.getTicket(tipSlug, refused.ref),
+      root: forked,
+      commit: forkedCandidate,
+      gitRef: `refs/sidequest/${refused.ref}`,
+    });
+    assert.equal(avertedFacts.range.ok, true);
+    assert.deepEqual(avertedFacts.range.commits, [releaseTip, forkedCandidate]);
+    assert.ok(avertedFacts.range.changedPaths.includes('release.txt'));
+    git(['worktree', 'remove', '--force', forked]);
+
+    // After the teardown the same dispatch prepares, and the same WorktreeCreate-shaped
+    // fork of the recorded baseline submits a range holding only its own commit.
+    const recovered = store.createTicket(tipSlug, { title: 'dispatched after the teardown', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    const prepared = store.prepareDispatch(tipSlug, recovered.ref, { sessionId: 'release-tip-recovered' });
+    assert.equal(prepared.ticket.dispatch.baseCommit, pushedBase);
+    const recoveredWorktree = path.join(executorParent, 'forked-after-teardown');
+    git(['worktree', 'add', '--quiet', '-b', 'recovered-candidate', recoveredWorktree, prepared.ticket.dispatch.baseCommit]);
+    fs.writeFileSync(path.join(recoveredWorktree, 'tracked.js'), 'module.exports = "recovered";\n');
+    git(['commit', '--quiet', '-am', 'recovered candidate sentinel'], recoveredWorktree);
+    const recoveredCandidate = git(['rev-parse', 'HEAD'], recoveredWorktree);
+    git(['update-ref', `refs/sidequest/${recovered.ref}`, recoveredCandidate], recoveredWorktree);
+    const recoveredFacts = collectGitSubmissionFacts({
+      slug: tipSlug,
+      ticket: prepared.ticket,
+      root: recoveredWorktree,
+      commit: recoveredCandidate,
+      gitRef: `refs/sidequest/${recovered.ref}`,
+    });
+    assert.equal(recoveredFacts.range.ok, true);
+    assert.equal(recoveredFacts.range.base, pushedBase);
+    assert.deepEqual(recoveredFacts.range.commits, [recoveredCandidate]);
+    assert.deepEqual(recoveredFacts.range.changedPaths, ['tracked.js']);
+    git(['worktree', 'remove', '--force', recoveredWorktree]);
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(executorParent, { recursive: true, force: true });
+  }
+});
+
+test('an unpushed local commit without a release tag set keeps its local baseline', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-ordinary-'));
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-ordinary-remote-'));
+  const git = (args: string[], cwd: string = repository) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+  try {
+    git(['init', '--quiet', '-b', 'main']);
+    git(['config', 'user.email', 'test@example.invalid']);
+    git(['config', 'user.name', 'Dispatch Lifecycle Test']);
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "base";\n');
+    git(['add', 'tracked.js']);
+    git(['commit', '--quiet', '-m', 'pushed base']);
+    execFileSync('git', ['init', '-b', 'main', '--bare', remote], { windowsHide: true });
+    git(['remote', 'add', 'origin', remote]);
+    git(['push', '--quiet', '-u', 'origin', 'main']);
+
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "local";\n');
+    git(['commit', '--quiet', '-am', 'ordinary unpushed commit']);
+    // A lone marketplace-shaped tag is not a release tag set, and a lightweight tag
+    // is not what a cut writes. Neither may narrow a dispatch away from local main.
+    git(['tag', '-a', 'v9.9.9', '-m', 'hand-made version tag']);
+    git(['tag', 'sidequest-v9.9.9']);
+    const localMain = git(['rev-parse', 'main']);
+
+    const ordinarySlug = store.ensureProject(repository, 'ordinary unpushed commit').slug;
+    const ticket = store.createTicket(ordinarySlug, { title: 'dispatched over an ordinary unpushed commit', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    const prepared = store.prepareDispatch(ordinarySlug, ticket.ref, { sessionId: 'ordinary-unpushed-baseline' });
+    assert.equal(prepared.ticket.dispatch.baseCommit, localMain);
+    assert.deepEqual(prepared.ticket.dispatch.integrationTarget, { mode: 'local', upstream: 'main', branch: 'main' });
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
 test('an explicit missing integration branch refuses with its exact ref', () => {
   const branch = `missing-target-${Date.now()}`;
   const ticket = createFixture('missing feature integration target');

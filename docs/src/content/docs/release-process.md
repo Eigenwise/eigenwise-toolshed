@@ -33,9 +33,13 @@ The cut also runs tests itself. It writes the release commit and every tag local
 
 A failing suite publishes nothing. The cut automatically resets the local release window to the previous head and deletes every tag it created, while preserving the suite log under `.release/logs/`. A marketplace tag that has already been published keeps its existing roll-forward recovery path.
 
+While that window is open, Sidequest refuses to prepare a dispatch, because the baseline it would hand an executor is a commit `main` is about to rewind past. The refusal names the tags it found. Normally you see it only while a cut is still running its suites, and waiting for the cut to finish is the whole fix. It also fires when the automatic rollback itself failed, and there it is doing real work: that commit stays until someone clears it.
+
+Clearing it by hand needs the publish lock, because Sidequest refuses a manual tag deletion on this repository without one. Acquire it with `sidequest publish lock`, run the `git reset --hard` and the `git update-ref -d refs/tags/<tag>` commands the cut printed, then `sidequest publish unlock`. The refusal blocks the whole shell invocation, so run the lock, the deletion, and the unlock as three separate commands rather than chaining them.
+
 This gate is local and it runs on your machine, so a test that reads your own environment can fail here while CI is green on the same commit. That is a bug in the test, not a reason to skip the gate.
 
-A failure that disappears when you rerun the failing file on its own is a different problem: a concurrency flake, usually two test files sharing a fixture, or a reader parsing a file another test is still writing. It is still worth stopping for, because an intermittent that can fail a cut can fail CI later. Undo the window, run the failing file alone to confirm, cut again, and file the flake as its own ticket so the next cut does not pay for it twice.
+A failure that disappears when you rerun the failing file on its own is a different problem: a concurrency flake, usually two test files sharing a fixture, or a reader parsing a file another test is still writing. It is still worth stopping for, because an intermittent that can fail a cut can fail CI later. Run the failing file alone to confirm, cut again, and file the flake as its own ticket so the next cut does not pay for it twice.
 
 GitHub Releases publish at most once per UTC day. When several marketplace tags land before the daily publish, the workflow releases the newest unreleased tag and generated notes cover the intermediate versions from the previous published Release. A cut whose release workflow succeeds under that cap reports the deferral as successful, and the scheduled publish catches it up.
 
