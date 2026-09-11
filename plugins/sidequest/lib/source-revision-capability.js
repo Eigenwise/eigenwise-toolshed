@@ -18,8 +18,13 @@ var __copyProps = (to, from, except, desc) => {
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var source_revision_capability_exports = {};
 __export(source_revision_capability_exports, {
+  FILESYSTEM_SNAPSHOT_MAX_BYTES: () => FILESYSTEM_SNAPSHOT_MAX_BYTES,
+  FILESYSTEM_SNAPSHOT_MAX_ELAPSED_MS: () => FILESYSTEM_SNAPSHOT_MAX_ELAPSED_MS,
+  FILESYSTEM_SNAPSHOT_MAX_PATHS: () => FILESYSTEM_SNAPSHOT_MAX_PATHS,
+  FilesystemSnapshotLimitError: () => FilesystemSnapshotLimitError,
   filesystemSnapshotCapability: () => filesystemSnapshotCapability,
   filesystemSnapshotRevision: () => filesystemSnapshotRevision,
+  isFilesystemSnapshotLimitError: () => isFilesystemSnapshotLimitError,
   isSourceRevisionAdapterFacts: () => isSourceRevisionAdapterFacts,
   registerSourceRevisionCapability: () => registerSourceRevisionCapability,
   sourceRevision: () => sourceRevision,
@@ -31,6 +36,24 @@ var import_node_crypto = require("node:crypto");
 var import_node_fs = require("node:fs");
 var import_node_path = require("node:path");
 const FILESYSTEM_SNAPSHOT_SOURCE = "filesystem-snapshot";
+const FILESYSTEM_SNAPSHOT_MAX_PATHS = 500;
+const FILESYSTEM_SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024;
+const FILESYSTEM_SNAPSHOT_MAX_ELAPSED_MS = 1e4;
+class FilesystemSnapshotLimitError extends Error {
+  bound;
+  observed;
+  cap;
+  constructor(bound, observed, cap) {
+    super(`filesystem snapshot ${bound} exceeded: observed ${observed}, cap ${cap}`);
+    this.name = "FilesystemSnapshotLimitError";
+    this.bound = bound;
+    this.observed = observed;
+    this.cap = cap;
+  }
+}
+function isFilesystemSnapshotLimitError(error) {
+  return error instanceof FilesystemSnapshotLimitError;
+}
 const registrationsByProject = /* @__PURE__ */ new Map();
 const resolvedAdapterFacts = /* @__PURE__ */ new WeakSet();
 function projectKey(project) {
@@ -43,43 +66,92 @@ function baselinePurpose(value) {
 function snapshotPath(projectPath, entryPath) {
   return (0, import_node_path.relative)(projectPath, entryPath).split(import_node_path.sep).join("/");
 }
-function updateFilesystemSnapshot(hash, projectPath, entryPath) {
+function snapshotLimit(value, defaultLimit) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : defaultLimit;
+}
+function filesystemSnapshotState(options) {
+  const now = options?.now || performance.now.bind(performance);
+  return {
+    pathCount: 0,
+    bytesRead: 0,
+    maxPaths: snapshotLimit(options?.maxPaths, FILESYSTEM_SNAPSHOT_MAX_PATHS),
+    maxBytes: snapshotLimit(options?.maxBytes, FILESYSTEM_SNAPSHOT_MAX_BYTES),
+    maxElapsedMs: snapshotLimit(options?.maxElapsedMs, FILESYSTEM_SNAPSHOT_MAX_ELAPSED_MS),
+    startedAt: now(),
+    now,
+    readFile: options?.readFile || ((entryPath) => (0, import_node_fs.readFileSync)(entryPath))
+  };
+}
+function assertSnapshotDeadline(state) {
+  const elapsedMs = Math.max(0, state.now() - state.startedAt);
+  if (elapsedMs > state.maxElapsedMs) {
+    throw new FilesystemSnapshotLimitError("deadline", elapsedMs, state.maxElapsedMs);
+  }
+}
+function countSnapshotPath(state) {
+  state.pathCount += 1;
+  if (state.pathCount > state.maxPaths) {
+    throw new FilesystemSnapshotLimitError("path cap", state.pathCount, state.maxPaths);
+  }
+}
+function reserveSnapshotBytes(state, byteCount) {
+  const observedBytes = state.bytesRead + byteCount;
+  if (observedBytes > state.maxBytes) {
+    throw new FilesystemSnapshotLimitError("byte cap", observedBytes, state.maxBytes);
+  }
+}
+function updateFilesystemSnapshot(hash, projectPath, entryPath, state) {
+  assertSnapshotDeadline(state);
   const entry = (0, import_node_fs.lstatSync)(entryPath);
+  assertSnapshotDeadline(state);
+  countSnapshotPath(state);
   const relativePath = snapshotPath(projectPath, entryPath);
   if (entry.isDirectory()) {
     hash.update(`directory\0${relativePath}\0`);
     const children = (0, import_node_fs.readdirSync)(entryPath).sort((left, right) => left.localeCompare(right));
-    for (const child of children) updateFilesystemSnapshot(hash, projectPath, (0, import_node_path.resolve)(entryPath, child));
+    assertSnapshotDeadline(state);
+    for (const child of children) updateFilesystemSnapshot(hash, projectPath, (0, import_node_path.resolve)(entryPath, child), state);
     return;
   }
   if (entry.isSymbolicLink()) {
-    hash.update(`symlink\0${relativePath}\0${(0, import_node_fs.readlinkSync)(entryPath)}\0`);
+    const target = (0, import_node_fs.readlinkSync)(entryPath);
+    assertSnapshotDeadline(state);
+    hash.update(`symlink\0${relativePath}\0${target}\0`);
     return;
   }
   if (entry.isFile()) {
     hash.update(`file\0${relativePath}\0`);
-    hash.update((0, import_node_fs.readFileSync)(entryPath));
+    reserveSnapshotBytes(state, entry.size);
+    const contents = state.readFile(entryPath);
+    assertSnapshotDeadline(state);
+    reserveSnapshotBytes(state, contents.byteLength);
+    state.bytesRead += contents.byteLength;
+    hash.update(contents);
     hash.update("\0");
     return;
   }
   hash.update(`other\0${relativePath}\0${entry.mode}\0${entry.size}\0`);
 }
-function filesystemSnapshotRevision(projectPath, observedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+function filesystemSnapshotRevision(projectPath, observedAt = (/* @__PURE__ */ new Date()).toISOString(), options) {
   const root = (0, import_node_path.resolve)(String(projectPath || "").trim());
   if (!root || !Number.isFinite(Date.parse(observedAt))) return null;
+  const state = filesystemSnapshotState(options);
   let rootExists = false;
   try {
     if (!(0, import_node_fs.lstatSync)(root).isDirectory()) return null;
+    assertSnapshotDeadline(state);
     rootExists = true;
   } catch (error) {
+    if (isFilesystemSnapshotLimitError(error)) throw error;
     if (error.code !== "ENOENT") return null;
   }
   const hash = (0, import_node_crypto.createHash)("sha256");
   hash.update("sidequest-filesystem-snapshot-v1\0");
   try {
-    if (rootExists) updateFilesystemSnapshot(hash, root, root);
+    if (rootExists) updateFilesystemSnapshot(hash, root, root, state);
     else hash.update("missing-project-root\0");
-  } catch {
+  } catch (error) {
+    if (isFilesystemSnapshotLimitError(error)) throw error;
     return null;
   }
   return Object.freeze({
@@ -158,8 +230,13 @@ function isSourceRevisionAdapterFacts(value) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  FILESYSTEM_SNAPSHOT_MAX_BYTES,
+  FILESYSTEM_SNAPSHOT_MAX_ELAPSED_MS,
+  FILESYSTEM_SNAPSHOT_MAX_PATHS,
+  FilesystemSnapshotLimitError,
   filesystemSnapshotCapability,
   filesystemSnapshotRevision,
+  isFilesystemSnapshotLimitError,
   isSourceRevisionAdapterFacts,
   registerSourceRevisionCapability,
   sourceRevision,
