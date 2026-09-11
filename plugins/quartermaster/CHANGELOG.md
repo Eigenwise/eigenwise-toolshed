@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.0 (2026-09-11)
+
+Released in v3.558.0, up from 0.9.4.
+
+### Features
+
+- Reopen resupply offers on strong new evidence (SQ-2762)
+  Preserve evidence after declined rounds and back off consecutive declines.
+
 ## 0.9.4 (2026-09-11)
 
 Released in v3.557.0, up from 0.9.3.

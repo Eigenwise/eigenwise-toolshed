@@ -8,6 +8,95 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.558.0 (2026-09-11)
+
+### model-gateway 0.50.18 → 0.50.19
+
+#### Fixes
+
+- Enforce repository consent before telemetry capture and export (SQ-2511) [`4e97b71`](https://github.com/Eigenwise/eigenwise-toolshed/commit/4e97b719442209d2d175f36aed56c96ccddfbac1)
+- Repair telemetry consent boundaries (SQ-2753)
+  Keep denied repository telemetry out of gateway attribution and retain denied hook rows until their repository opts in again.
+- Make the observer outbox the only gated log export (SQ-2756)
+  The Collector no longer has a `logs/sink` pipeline, so a log record reaches a configured sink only through the observer's outbox, where the repository opt-in gate lives. `traces/sink` and `metrics/sink` are unchanged and stay outside that gate. The two dashboard panels that read the raw `service_name="codex-gateway"` stream, "Gateway errors and throttles" and "Gateway records, 5m", are re-pointed at `service_name="workbench-observer"` filtered on the gateway event names rather than dropped; the error panel now counts the observer's `throttled`, `client_error`, and `server_error` statuses instead of matching error text.
+
+  A denied session now leaves a `consent_denial` row (session id and timestamp, nothing else) so the denial survives an observer restart instead of being undone when the session map is warmed from stored hook history. It clears when the same session next produces an accepted hook observation carrying identity, and it is pruned with the existing retention delete.
+
+  A gateway record names its project by directory name, never by canonical ID, so the observer now treats a raw `project_id` as identity only when it is already a canonical hex ID, and otherwise accepts it only when it matches the name mapped to that session. Accepted cost: a session whose working directory is a subdirectory of the repository root resolves a different name than the hook's repository-root name, so its gateway usage is denied rather than attributed. That is the fail-closed direction.
+- Keep proxy updates under supervisor ownership (SQ-2765)
+  Proxy version updates now let the running shim supervisor restart the proxy.
+
+### observability 0.7.29 → 0.7.30
+
+#### Fixes
+
+- Enforce repository consent before telemetry capture and export (SQ-2511) [`4e97b71`](https://github.com/Eigenwise/eigenwise-toolshed/commit/4e97b719442209d2d175f36aed56c96ccddfbac1)
+- Repair telemetry consent boundaries (SQ-2753)
+  Keep denied repository telemetry out of gateway attribution and retain denied hook rows until their repository opts in again.
+- Make the observer outbox the only gated log export (SQ-2756)
+  The Collector no longer has a `logs/sink` pipeline, so a log record reaches a configured sink only through the observer's outbox, where the repository opt-in gate lives. `traces/sink` and `metrics/sink` are unchanged and stay outside that gate. The two dashboard panels that read the raw `service_name="codex-gateway"` stream, "Gateway errors and throttles" and "Gateway records, 5m", are re-pointed at `service_name="workbench-observer"` filtered on the gateway event names rather than dropped; the error panel now counts the observer's `throttled`, `client_error`, and `server_error` statuses instead of matching error text.
+
+  A denied session now leaves a `consent_denial` row (session id and timestamp, nothing else) so the denial survives an observer restart instead of being undone when the session map is warmed from stored hook history. It clears when the same session next produces an accepted hook observation carrying identity, and it is pruned with the existing retention delete.
+
+  A gateway record names its project by directory name, never by canonical ID, so the observer now treats a raw `project_id` as identity only when it is already a canonical hex ID, and otherwise accepts it only when it matches the name mapped to that session. Accepted cost: a session whose working directory is a subdirectory of the repository root resolves a different name than the hook's repository-root name, so its gateway usage is denied rather than attributed. That is the fail-closed direction.
+
+### quartermaster 0.9.4 → 0.10.0
+
+#### Features
+
+- Reopen resupply offers on strong new evidence (SQ-2762)
+  Preserve evidence after declined rounds and back off consecutive declines.
+
+### sidequest 5.1.9 → 5.1.10
+
+#### Fixes
+
+- Provision candidate wave gates (SQ-2527)
+  Wave verification now provisions configured dependency paths and worktree setup in a candidate worktree before the gate runs.
+- Redispatch after a failed continuation spawn no longer locks the ticket (SQ-2537)
+  A continuation dispatch resumes the checkout an earlier attempt retained, so it never
+  creates one of its own. When such a spawn died in the WorktreeCreate hook before any
+  executor ran, `dispatch --recovery-evidence` refused the exact retirement the previous
+  refusal had prescribed, and the ticket sat until the one-hour claim-idle backstop. The
+  retry gate now ignores a cleanup refusal about a checkout this attempt never created;
+  the retained checkout and its commits stay untouched. A checkout the attempt reserved
+  itself still blocks the retry. Repeating the evidence command on an already-retired
+  attempt now says so and points at plain `dispatch`, and the PreToolUse Agent hook
+  refuses an `isolation` field added to a continuation spawn, naming the retained
+  checkout, before the harness can fail on it.
+- A claim-token-bound candidate can pass its bound review again (SQ-2763)
+  A dispatch that binds through its claim token, which is what a continuation does, never records a harness agent id. Review provenance demanded one on both sides, so any candidate submitted by such an executor became permanently unintegrable the moment it carried a bound review: `integrate`, manual delivery with `deliveryCommit`, `groomClose` with `integration:true`, and `supersede_submission` all refused, and the refusal named no way out.
+
+  Provenance now resolves an identity from what the terminal attempt already recorded, and it treats the two sides differently. On the candidate side, the hook-bound agent id when there is one, otherwise the dispatch token prefix and agent name that a proven claim-token binding stamps at bind time. On the review side, only the hook-bound agent id: a token plus a launch-stamped name authenticates a dispatch, and one runtime can hold several of those, so it cannot show that a reviewer is a different runtime. A review that never bound a runtime still refuses with `agent_identity_missing`.
+
+  The independence check still fails closed, refusing with `shared_agent_identity` whenever the candidate and its review have any identity component in common; session id is deliberately not compared, because fan-out siblings legitimately share one.
+
+  The `candidate_review_required` refusal now says which side recorded no identity, what an identity is, how to inspect both attempts, the three real recoveries, and that the manual and `groomClose` routes enforce the same check rather than escaping it.
+- Bound non-Git dispatch snapshots (SQ-2764)
+  Non-Git projects now refuse an oversized or slow filesystem snapshot instead of leaving dispatch stuck. The refusal names the exceeded path, byte, or time cap and tells you to initialize a git repository or point the board at a smaller directory. Snapshots that stay within the caps keep their existing baseline digest.
+- Shorten SQLite lock diagnostic test (SQ-2766)
+  Reduce the SQLite lock diagnostic test timeout while preserving retry diagnostics coverage.
+- Fix the always-red four-concurrent-Stop-hooks test (SQ-2771)
+  The Stop-cascade hook test read an observability spool file that was never
+  written. Observability capture has been consent-gated for a while now, and the
+  test's fixture board was never opted in, so the hook correctly wrote nothing and
+  the read blew up with ENOENT on every run, on every platform. The fixture now
+  opts itself in, so the test measures what it claims to measure.
+- A reviewer has to bind a runtime, not just hold a second dispatch token (SQ-2772)
+  Review provenance treated a dispatch token prefix plus the agent name a launch stamps as a runtime identity on both sides of the candidate gate. It is not one. A token and a launch name authenticate a DISPATCH, and one parent runtime can hold several: dispatch the source, let it claim through its own token without ever binding, submit, then dispatch a differently named sibling that binds the same way and closes as the review. Two distinct token/name pairs, one physical process, and the gate returned `ok`.
+
+  The rule is now asymmetric, matching what each credential actually proves. Terminal attempts record their `bindSource`, so provenance can tell a real claim-token binding from an attempt that merely never bound. The side that submitted the candidate may still fall back to a proven claim-token binding's token prefix and agent name, which is what keeps continuation-submitted candidates integrable. The reviewing side needs the hook-bound agent id and nothing else stands in, because only the harness-reported `agent_id` names a runtime.
+
+  Consequence worth knowing: a review that raced past the identity hook is refused again with `agent_identity_missing`, and any candidate whose bound review closed that way stays blocked until the review is re-dispatched on a host whose PreToolUse hook reports `agent_id`. A missing lifecycle record is cheaper than a gate that admits self-review. The `candidate_review_required` refusal now names which side failed, what that side's proof has to be, and the recovery for each.
+- Candidates submitted before bind sources were recorded can integrate again (SQ-2773)
+  Terminal attempts only started recording `bindSource` in SQ-2772, so every candidate submitted before that reads as one that never bound a runtime at all. Review provenance returned `agent_identity_missing` for those rows forever, and integrate, manual delivery and groomClose all refused work that was already merged and green on main, with two more tickets stuck behind it waiting to supersede.
+
+  Nothing was actually missing. `boundAt` has always recorded that a bind happened, and the only writer that sets it without an agent id is the claim token, so a pre-SQ-2772 attempt carrying `boundAt` and no `agentId` bound through its dispatch token. Provenance now reads that record when, and only when, the attempt carries no `bindSource` key at all. Every attempt the current writer appends carries the key, null included, so a live dispatch can never take this path and nothing on the board is rewritten.
+
+  The reviewing side is untouched: it still needs the hook-bound agent id, so a same-session sibling pair holding two claim tokens refuses exactly as SQ-2772 made it. What changed on the refusal is the wording. `agent_identity_missing` on the submitting side now says the attempt recorded no binding at all, that an older attempt would have resolved through its recorded bind time, and that re-dispatching is the only route, instead of reading like something a retry would fix.
+- Continuation isolation refusal test matches the checkout path the board canonicalized (SQ-2774)
+  Fixed a Windows CI test failure in the continuation isolation refusal check. The test built its expectation from the raw temp path, but on a runner whose temp directory carries an 8.3 short name (`C:\Users\RUNNER~1\...`) that never matches the refusal message, which names the checkout as the board canonicalized it (`c:\users\runneradmin\...`). Case-insensitive matching covered the case difference and not the short-versus-long form. The test now canonicalizes the fixture path the same way the board does before matching.
+
 ## v3.557.0 (2026-09-11)
 
 ### model-gateway 0.50.17 → 0.50.18
