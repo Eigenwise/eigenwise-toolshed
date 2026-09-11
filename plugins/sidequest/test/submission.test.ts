@@ -1613,11 +1613,12 @@ test('integration refuses delivery when the assembled-wave gate fails', () => {
   assert.match(missingWaiver.message, /human waiver with authority, reason, affectedGate/);
 });
 
-test('a missing assembled-wave command reports the gate environment and its setup', () => {
+test('a missing assembled-wave command reports skipped candidate provisioning', () => {
   cleanBranch();
   const missingCommand = `sidequest-missing-gate-command-${process.pid}-${Date.now()}`;
+  const setup = 'node -e "process.exit(0)"';
   const originalConfig = store.boardConfig(slug);
-  store.setBoardConfig(slug, { worktreeSetup: 'cd plugins/sidequest && npm ci' });
+  store.setBoardConfig(slug, { worktreeSetup: setup });
   try {
     const ticket = addTicket('missing assembled-wave command', { files: ['lib/missing-gate-command.js'] });
     assert.strictEqual(store.claimTicket(slug, ticket.ref, 'missing-command-worker', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
@@ -1639,10 +1640,67 @@ test('a missing assembled-wave command reports the gate environment and its setu
     assert.strictEqual(refused.reason, 'assembled_wave_environment_problem');
     assert.strictEqual(refused.gate.verification.status, 'toolchain_missing');
     assert.match(refused.message, new RegExp(missingCommand));
-    assert.match(refused.message, /cd plugins\/sidequest && npm ci/);
+    assert.match(refused.message, /used the project root, so isolated-worktree provisioning was skipped/);
+    assert.doesNotMatch(refused.message, /ran successfully/);
     assert.doesNotMatch(refused.message, /Refresh and reverify/);
   } finally {
     store.setBoardConfig(slug, { worktreeSetup: originalConfig.worktreeSetup });
+  }
+});
+
+test('SQ-2527: wave gates provision linked dependencies in the candidate worktree', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const dependencyName = `wave-gate-dependency-${process.pid}-${Date.now()}`;
+  const dependencyDirectory = path.join(PROJECT_DIR, dependencyName);
+  const candidateWorktree = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-wave-gate-worktree-'));
+  const candidateFile = 'wave-gate-linked-dependency.js';
+  const setupMarker = 'wave-gate-setup-marker';
+  const verify = `node -e ${JSON.stringify("const fs = require('node:fs'); fs.accessSync(process.argv[1]); fs.accessSync(process.argv[2]);")} ${JSON.stringify(`${dependencyName}/sentinel`)} ${JSON.stringify(setupMarker)}`;
+  const setup = `node -e ${JSON.stringify("const fs = require('node:fs'); fs.accessSync(process.argv[1]); fs.writeFileSync(process.argv[2], 'ready');")} ${JSON.stringify(`${dependencyName}/sentinel`)} ${JSON.stringify(setupMarker)}`;
+  try {
+    fs.mkdirSync(dependencyDirectory, { recursive: true });
+    fs.writeFileSync(path.join(dependencyDirectory, 'sentinel'), 'ready\n');
+    store.setBoardConfig(slug, {
+      integrationMode: 'local',
+      integrationBranch: git(['branch', '--show-current']),
+      worktreeDependencyPaths: [{ path: dependencyName, mode: 'link' }],
+      worktreeSetup: setup,
+    });
+    const baseline = git(['rev-parse', 'HEAD']);
+    const ticket = addTicket('linked dependency wave gate', { files: [`lib/${candidateFile}`] });
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'linked-dependency-worker', { direct: true, reason: 'The linked dependency fixture requires a local direct claim.' }).ok, true);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', candidateFile), 'candidate\n');
+    git(['add', `lib/${candidateFile}`]);
+    git(['commit', '-m', 'linked dependency wave candidate']);
+    const commit = git(['rev-parse', 'HEAD']);
+    pin(ticket, commit);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'linked-dependency-worker', { commit, verify, worktree: candidateWorktree }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    Object.assign(submitted.submission, {
+      baseline: { revision: { source: 'git', value: baseline, observedAt: new Date().toISOString() }, purpose: 'dispatch' },
+      changedPaths: [`lib/${candidateFile}`],
+    });
+    persist(submitted);
+
+    assert.strictEqual(fs.existsSync(path.join(candidateWorktree, dependencyName)), false);
+    const assembled = store.assembleSubmissionWave(slug, [ticket.ref]);
+
+    assert.strictEqual(assembled.ok, true, assembled.message);
+    assert.strictEqual(assembled.gate.verification.status, 'passed');
+    assert.strictEqual(fs.readFileSync(path.join(candidateWorktree, dependencyName, 'sentinel'), 'utf8'), 'ready\n');
+    assert.strictEqual(fs.readFileSync(path.join(candidateWorktree, setupMarker), 'utf8'), 'ready');
+  } finally {
+    store.setBoardConfig(slug, {
+      integrationMode: originalConfig.integrationMode,
+      integrationBranch: originalConfig.integrationBranch,
+      worktreeDependencyPaths: originalConfig.worktreeDependencyPaths,
+      worktreeSetup: originalConfig.worktreeSetup,
+    });
+    fs.rmSync(candidateWorktree, { recursive: true, force: true });
+    fs.rmSync(dependencyDirectory, { recursive: true, force: true });
+    cleanBranch();
   }
 });
 
