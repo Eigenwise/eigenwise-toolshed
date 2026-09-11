@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.553.0",
+  "version": "3.554.0",
   "plugins": [
     {
       "name": "observability",
@@ -57,7 +57,7 @@
       "name": "sidequest",
       "source": "./plugins/sidequest",
       "description": "The Toolshed's core work board and orchestration loop for Claude Code. Tickets are classified into categories that route each one to a concrete model and effort, then dispatched to token-gated executors; side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in.",
-      "version": "5.1.7",
+      "version": "5.1.8",
       "author": {
         "name": "Eigenwise"
       },
@@ -103,7 +103,7 @@
       "name": "quartermaster",
       "source": "./plugins/quartermaster",
       "description": "Set up a project from your existing Claude Code habits, keep Toolshed installs healthy, and find missing capabilities after real work accumulates. Local scripts reduce session history to a bounded summary before the active model sees it; setup, resupply, updates, and config changes happen only with your approval.",
-      "version": "0.9.0",
+      "version": "0.9.1",
       "author": {
         "name": "Eigenwise"
       },

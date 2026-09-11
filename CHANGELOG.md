@@ -8,6 +8,24 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.554.0 (2026-09-11)
+
+### quartermaster 0.9.0 → 0.9.1
+
+#### Fixes
+
+- Block bare PowerShell suggestions (SQ-2727)
+  Quartermaster no longer automatically suggests or writes bare PowerShell permissions.
+
+### sidequest 5.1.7 → 5.1.8
+
+#### Fixes
+
+- Exclude skipped and neutral runs from CI failure alerts (SQ-2726)
+  The board watch's CI alert no longer reports a `skipped` or `neutral` GitHub Actions run as a failure. A head with only skipped/neutral runs can still surface as unchecked, since only a completed success run proves the head is checked.
+- Clarify verdict outcome as candidate-addressed (SQ-2728)
+  The `verdict` tool schema, CLI `--outcome` guidance, and orchestration reference now state plainly that a bound candidate review's outcome describes the CANDIDATE, not agreement with the reviewer's prose: `rejected` confirms the candidate must not ship, `accepted` approves the candidate, and `inconclusive` approves nothing. A finalized `accepted` cannot be reversed by another verdict. This clarifies the contract (GitHub #54 / SQ-2722); it does not add a correction path for a mistaken `accepted`.
+
 ## v3.553.0 (2026-09-11)
 
 ### sidequest 5.1.6 → 5.1.7

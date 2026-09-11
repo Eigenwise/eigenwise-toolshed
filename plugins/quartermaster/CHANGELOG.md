@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.1 (2026-09-11)
+
+Released in v3.554.0, up from 0.9.0.
+
+### Fixes
+
+- Block bare PowerShell suggestions (SQ-2727)
+  Quartermaster no longer automatically suggests or writes bare PowerShell permissions.
+
 ## 0.9.0 (2026-09-10)
 
 Released in v3.552.0, up from 0.8.1.
