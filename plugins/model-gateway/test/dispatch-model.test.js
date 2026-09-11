@@ -24,14 +24,14 @@ function freePort() {
   });
 }
 
-function request(port, pathname, body) {
+function request(port, pathname, body, headers = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request({
       host: '127.0.0.1',
       port,
       method: body ? 'POST' : 'GET',
       path: pathname,
-      headers: body ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {},
+      headers: body ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), ...headers } : headers,
     }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
@@ -53,6 +53,16 @@ async function waitForHealthz(port) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw lastError || new Error('shim did not become healthy');
+}
+
+async function waitFor(predicate) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const value = predicate();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error('condition did not become true');
 }
 
 test('dispatch model stays routable when omitted from the default model listing', async (t) => {
@@ -123,6 +133,75 @@ test('dispatch model stays routable when omitted from the default model listing'
   assert.deepEqual({ backend: routes[0].backend, model: routes[0].model, via: routes[0].via, effort: routes[0].effort }, {
     backend: 'codex', model: 'gpt-5.6-terra', via: 'dispatch', effort: 'xhigh',
   });
+});
+
+test('dispatch usage records a marker ticket only for its originating agent', async (t) => {
+  const shimPort = await freePort();
+  const proxyPort = await freePort();
+  const collectorPort = await freePort();
+  const payloads = [];
+  const collector = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      payloads.push(JSON.parse(Buffer.concat(chunks).toString()));
+      res.end();
+    });
+  });
+  const proxy = http.createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        type: 'message',
+        model: 'gpt-5.6-terra',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }));
+    });
+  });
+  await new Promise((resolve) => collector.listen(collectorPort, '127.0.0.1', resolve));
+  await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
+  t.after(() => collector.close());
+  t.after(() => proxy.close());
+
+  const child = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
+    env: {
+      ...process.env,
+      CODEX_GATEWAY_PORT: String(shimPort),
+      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+      CODEX_GATEWAY_USAGE_ENDPOINT: `http://127.0.0.1:${collectorPort}/v1/logs`,
+      CODEX_GATEWAY_SENTRY: '0',
+    },
+    stdio: 'ignore',
+  });
+  t.after(() => child.kill());
+  await waitForHealthz(shimPort);
+
+  const parentHeaders = {
+    'x-claude-code-session-id': 'ticket-session',
+    'x-claude-code-agent-id': 'parent-agent',
+  };
+  const parentResponse = await request(shimPort, '/v1/messages', JSON.stringify({
+    model: 'claude-codex-auto',
+    messages: [{ role: 'user', content: '[sidequest-route model=gpt-5.6-terra effort=high ticket=SQ-1234] work' }],
+  }), parentHeaders);
+  assert.equal(parentResponse.status, 200);
+
+  const childResponse = await request(shimPort, '/v1/messages', JSON.stringify({
+    model: 'claude-codex-auto',
+    messages: [{ role: 'user', content: 'continue' }],
+  }), {
+    'x-claude-code-session-id': 'ticket-session',
+    'x-claude-code-agent-id': 'child-agent',
+    'x-claude-code-parent-agent-id': 'parent-agent',
+  });
+  assert.equal(childResponse.status, 200);
+
+  const attributes = await waitFor(() => payloads.length >= 2 ? payloads.map((payload) => Object.fromEntries(
+    payload.resourceLogs[0].scopeLogs[0].logRecords[0].attributes.map(({ key, value }) => [key, value.stringValue]),
+  )) : null);
+  assert.equal(attributes.find((entry) => entry.agent_id === 'parent-agent').ticket_ref, 'SQ-1234');
+  assert.equal(Object.hasOwn(attributes.find((entry) => entry.agent_id === 'child-agent'), 'ticket_ref'), false);
 });
 
 test('dispatch model is listed with the explicit rollback flag and stays routable', async (t) => {
@@ -202,7 +281,7 @@ test('dispatch model rejects missing and malformed route markers', async (t) => 
       type: 'error',
       error: {
         type: 'invalid_request_error',
-        message: 'model-gateway: dispatch model requires exactly one [sidequest-route model=...] marker in the conversation; redispatch the ticket',
+        message: 'model-gateway: dispatch model requires exactly one [sidequest-route model=... effort=... ticket=...] marker in the conversation; redispatch the ticket',
       },
     });
   }
@@ -223,20 +302,21 @@ test('dispatch model rejects missing and malformed route markers', async (t) => 
 });
 
 test('dispatchRouteFromMessages scans only user-authored text blocks', () => {
-  // Canonical marker in a plain-string user message resolves.
-  assert.deepEqual(
-    gw.dispatchRouteFromMessages([
-      { role: 'user', content: '[sidequest-route model=gpt-5.6-terra effort=high] work the ticket' },
-    ]),
-    { model: 'gpt-5.6-terra', effort: 'high' },
-  );
+  const routeWithoutTicket = gw.dispatchRouteFromMessages([
+    { role: 'user', content: '[sidequest-route model=gpt-5.6-terra effort=high] work the ticket' },
+  ]);
+  const routeWithTicket = gw.dispatchRouteFromMessages([
+    { role: 'user', content: '[sidequest-route model=gpt-5.6-terra effort=high ticket=SQ-1234] work the ticket' },
+  ]);
+  assert.deepEqual(routeWithoutTicket, { model: 'gpt-5.6-terra', effort: 'high', ticket: null });
+  assert.deepEqual(routeWithTicket, { ...routeWithoutTicket, ticket: 'SQ-1234' });
 
   // Briefing marker in a type:"text" block resolves.
   assert.deepEqual(
     gw.dispatchRouteFromMessages([
       { role: 'user', content: [{ type: 'text', text: '[sidequest-route model=gpt-5.6-sol]' }] },
     ]),
-    { model: 'gpt-5.6-sol', effort: null },
+    { model: 'gpt-5.6-sol', effort: null, ticket: null },
   );
 
   // A LATER valid marker inside a tool_result block is ignored — briefing wins.
@@ -248,7 +328,7 @@ test('dispatchRouteFromMessages scans only user-authored text blocks', () => {
         { type: 'tool_result', tool_use_id: 't1', content: 'echoed [sidequest-route model=codex-gpt-5-6-terra] fixture' },
       ] },
     ]),
-    { model: 'gpt-5.6-terra', effort: null },
+    { model: 'gpt-5.6-terra', effort: null, ticket: null },
   );
 
   // A tool_result whose content is a nested block array is also skipped whole.
@@ -259,7 +339,7 @@ test('dispatchRouteFromMessages scans only user-authored text blocks', () => {
         { type: 'tool_result', tool_use_id: 't2', content: [{ type: 'text', text: '[sidequest-route model=codex-gpt-5-6-luna]' }] },
       ] },
     ]),
-    { model: 'gpt-5.6-terra', effort: null },
+    { model: 'gpt-5.6-terra', effort: null, ticket: null },
   );
 
   // A valid marker in assistant message text never counts.
@@ -357,7 +437,7 @@ test('dispatch route ignores markers echoed through tool_result blocks end-to-en
     type: 'error',
     error: {
       type: 'invalid_request_error',
-      message: 'model-gateway: dispatch model requires exactly one [sidequest-route model=...] marker in the conversation; redispatch the ticket',
+      message: 'model-gateway: dispatch model requires exactly one [sidequest-route model=... effort=... ticket=...] marker in the conversation; redispatch the ticket',
     },
   });
   assert.equal(forwarded.length, 1);

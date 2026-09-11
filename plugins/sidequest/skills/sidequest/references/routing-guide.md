@@ -74,7 +74,7 @@ Claude workflow effort follows the session. For a Codex route, the recipe puts t
 {"route":{"model":"codex-gpt-5-6-terra","effort":"medium"},"agent":{"model":"claude-codex-auto","promptPrefix":"[sidequest-route model=gpt-5.6-terra effort=medium]\\n\\n"}}
 ```
 
-`route` is display and provenance data. `agent` is the caller wiring surface. Use exactly one gateway marker, unchanged. Never quote it in the prompt or append another marker. Codex effort rides only in that marker; Claude effort follows the session. A Codex gateway authentication failure remains a spawn-time error, so report the failed spawn instead of translating the recipe by hand.
+`route` is display and provenance data. `agent` is the caller wiring surface. Use exactly one gateway marker, unchanged. A prepared ticket dispatch adds ` ticket=<ref>` before the closing bracket, and the gateway records that ref with its usage. Never quote it in the prompt or append another marker. Codex effort rides only in that marker; Claude effort follows the session. A Codex gateway authentication failure remains a spawn-time error, so report the failed spawn instead of translating the recipe by hand.
 
 ## Sources
 

@@ -426,9 +426,9 @@ Stable executors are
 ready from session start. Claude routes pass `model: exec.model`; Codex routes
 omit `model`: the shared `sidequest-exec-dispatch` def, or `sidequest-exec-dispatch-readonly` for a readonly
 category, pins the virtual `claude-codex-auto`,
-and `spawn.prompt` ends with `[sidequest-route model=... effort=...]`, which tells the codex-gateway shim which real
-model and effort to run, so pass the prompt verbatim, never write another such line, and never batch tickets
-stamped with different models into one spawn. The gateway route log records both values per dispatch; a marker effort that differs from the board stamp in an audit means the prompt was hand-edited. Claude builtins are provisioned at all five effort
+and `spawn.prompt` ends with `[sidequest-route model=... effort=... ticket=...]`, which tells the codex-gateway shim which real
+model, effort, and ticket ref to record, so pass the prompt verbatim, never write another such line, and never batch tickets
+stamped with different models into one spawn. The gateway route log records the route and ticket ref per dispatch; a marker effort that differs from the board stamp in an audit means the prompt was hand-edited. Claude builtins are provisioned at all five effort
 levels; Codex dispatch is one read-write def and one readonly def, because the route marker carries the
 effort. Route edits change only board data; the executor def set
 is fixed, so nothing is written or registered when a route changes. The executor claims with the

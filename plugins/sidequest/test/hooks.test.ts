@@ -1343,7 +1343,7 @@ test('pre-tool hook keeps builtin models and rejects an unprepared dispatch exec
     tool_name: 'Agent',
     tool_input: {
       subagent_type: 'sidequest-exec-dispatch', model: 'fable', name: 'sq210-dispatch',
-      prompt: 'work SQ-210\n[sidequest-route model=codex-gpt-5-6-terra effort=high]',
+      prompt: 'work SQ-210\n[sidequest-route model=codex-gpt-5-6-terra effort=high ticket=SQ-210]',
     },
   });
   assert.equal(dispatch.hookSpecificOutput.permissionDecision, 'deny');

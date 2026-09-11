@@ -39,7 +39,7 @@ The endpoint order is `CODEX_GATEWAY_USAGE_ENDPOINT`, `OTEL_EXPORTER_OTLP_LOGS_E
 
 - `request_id`, from the upstream `request-id` or `x-request-id` response header when present
 - `client_request_id`, from a safe incoming request ID when present
-- `session_id`, `agent_id`, `parent_agent_id`
+- `session_id`, `agent_id`, `parent_agent_id`, and dispatch `ticket_ref` when the marker carries one
 - resolved `model`, advertised `requested_model`, `backend`, `effort`, and dispatch `via`
 - `request.sequence`, a process-local monotonic request number for stable ordering when a provider request ID is absent
 

@@ -1388,7 +1388,7 @@ function gatewayModel(id, backend = 'codex') {
   };
 }
 
-const ROUTE_MARKER_RE = /\[(sidequest-route) model=([a-z0-9][a-z0-9.-]{0,63})(?: effort=(low|medium|high|xhigh|max))?\]/g;
+const ROUTE_MARKER_RE = /\[(sidequest-route) model=([a-z0-9][a-z0-9.-]{0,63})(?: effort=(low|medium|high|xhigh|max))?(?: ticket=([A-Za-z][A-Za-z0-9_-]{0,63}))?\]/g;
 const configuredDispatchCacheTtlMs = Number(process.env.CODEX_GATEWAY_DISPATCH_CACHE_TTL_MS);
 const DISPATCH_CACHE_TTL_MS = Number.isFinite(configuredDispatchCacheTtlMs) && configuredDispatchCacheTtlMs > 0
   ? configuredDispatchCacheTtlMs
@@ -1510,7 +1510,7 @@ function dispatchRequestIdentity(req, payload) {
 function routeMarkersInText(text, markers = []) {
   const matcher = new RegExp(ROUTE_MARKER_RE);
   let match;
-  while ((match = matcher.exec(text))) markers.push({ model: match[2], effort: match[3] || null });
+  while ((match = matcher.exec(text))) markers.push({ model: match[2], effort: match[3] || null, ticket: match[4] || null });
   return markers;
 }
 

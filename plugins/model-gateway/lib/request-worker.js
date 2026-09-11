@@ -323,7 +323,7 @@ function gatewayModel(id, backend = 'codex') {
   };
 }
 
-const ROUTE_MARKER_RE = /\[(sidequest-route) model=([a-z0-9][a-z0-9.-]{0,63})(?: effort=(low|medium|high|xhigh|max))?\]/g;
+const ROUTE_MARKER_RE = /\[(sidequest-route) model=([a-z0-9][a-z0-9.-]{0,63})(?: effort=(low|medium|high|xhigh|max))?(?: ticket=([A-Za-z][A-Za-z0-9_-]{0,63}))?\]/g;
 const configuredDispatchCacheTtlMs = Number(process.env.CODEX_GATEWAY_DISPATCH_CACHE_TTL_MS);
 const DISPATCH_CACHE_TTL_MS = Number.isFinite(configuredDispatchCacheTtlMs) && configuredDispatchCacheTtlMs > 0
   ? configuredDispatchCacheTtlMs
@@ -362,7 +362,7 @@ class DispatchSessionRouteCache {
     this.routes.delete(requestIdentity);
     this.routes.set(requestIdentity, entry);
     this.persist();
-    return { model: entry.model, effort: entry.effort };
+    return { model: entry.model, effort: entry.effort, ticket: entry.ticket };
   }
 
   set(requestIdentity, route) {
@@ -370,7 +370,7 @@ class DispatchSessionRouteCache {
     const now = this.now();
     this.prune(now);
     this.routes.delete(requestIdentity);
-    this.routes.set(requestIdentity, { model: route.model, effort: route.effort, lastUsedAt: now });
+    this.routes.set(requestIdentity, { model: route.model, effort: route.effort, ticket: route.ticket ?? null, lastUsedAt: now });
     this.prune(now);
     this.persist();
   }
@@ -383,7 +383,7 @@ class DispatchSessionRouteCache {
       for (const entry of stored.routes) {
         const [key, route] = Array.isArray(entry) ? entry : [];
         if (typeof key !== 'string' || !Number.isFinite(route?.lastUsedAt) || !validDispatchRoute(route)) continue;
-        this.routes.set(key, { model: route.model, effort: route.effort, lastUsedAt: route.lastUsedAt });
+        this.routes.set(key, { model: route.model, effort: route.effort, ticket: route.ticket ?? null, lastUsedAt: route.lastUsedAt });
       }
       this.prune(this.now());
       this.persist();
@@ -409,7 +409,8 @@ class DispatchSessionRouteCache {
 function validDispatchRoute(route) {
   return typeof route?.model === 'string'
     && /^[a-z0-9][a-z0-9.-]{0,63}$/.test(route.model)
-    && (route.effort == null || ['low', 'medium', 'high', 'xhigh', 'max'].includes(route.effort));
+    && (route.effort == null || ['low', 'medium', 'high', 'xhigh', 'max'].includes(route.effort))
+    && (route.ticket == null || /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(route.ticket));
 }
 
 function sessionIdFromMetadata(metadata) {
@@ -445,7 +446,7 @@ function dispatchRequestIdentity(req, payload) {
 function routeMarkersInText(text, markers = []) {
   const matcher = new RegExp(ROUTE_MARKER_RE);
   let match;
-  while ((match = matcher.exec(text))) markers.push({ model: match[2], effort: match[3] || null });
+  while ((match = matcher.exec(text))) markers.push({ model: match[2], effort: match[3] || null, ticket: match[4] || null });
   return markers;
 }
 
@@ -2006,7 +2007,7 @@ function runWorker() {
                   type: 'error',
                   error: {
                     type: 'invalid_request_error',
-                    message: 'model-gateway: dispatch model requires exactly one [sidequest-route model=...] marker in the conversation; redispatch the ticket',
+                    message: 'model-gateway: dispatch model requires exactly one [sidequest-route model=... effort=... ticket=...] marker in the conversation; redispatch the ticket',
                   },
                 });
                 routeTelemetry.setRoute({
@@ -2096,6 +2097,7 @@ function runWorker() {
                   backend: 'codex',
                   effort: effectiveEffort,
                   via: dispatchVia || 'direct',
+                  ticketRef: dispatchVia === 'dispatch-inherited' ? null : dispatchRoute?.ticket || null,
                 },
               })
               : null;
