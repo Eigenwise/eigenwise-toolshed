@@ -1531,19 +1531,9 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
           ? hasOriginRemote(readMeta(slug)?.path || '')
             ? remoteIntegrationTarget()
             : null
-          : (() => {
-            const projectPath = readMeta(slug)?.path || '';
-            if (!hasOriginRemote(projectPath)) return null;
-            let localTarget;
-            try {
-              localTarget = integrationTarget(slug, { mode: 'local' });
-            } catch (_: unknown) {
-              return remoteIntegrationTarget();
-            }
-            return localAheadOfUpstreamWarning(projectPath, localTarget.branch)
-              ? localTarget
-              : remoteIntegrationTarget();
-          })()
+          : hasOriginRemote(readMeta(slug)?.path || '')
+            ? remoteIntegrationTarget()
+            : null
       : null;
     const useIntegrationTarget = explicitIntegrationTarget
       || (isolatedRepositoryDispatch && configuredIntegrationMode !== 'auto')

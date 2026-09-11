@@ -77,7 +77,9 @@ test('wave assembly invalidates a candidate when its source revision moved', () 
   assert.equal(decision.ok, false);
   if (decision.ok) throw new Error('Expected a moved source revision to be invalidated.');
   assert.equal(decision.invalidated[0]?.reason, 'baseline_moved');
-  assert.match(decision.invalidated[0]?.message || '', /redispatch a candidate against the current base/);
+  assert.match(decision.invalidated[0]?.message || '', /baseline is no longer reachable from the wave target/);
+  assert.match(decision.invalidated[0]?.message || '', /manually merge the verified candidate onto the current target, re-gate it/);
+  assert.match(decision.invalidated[0]?.message || '', /groomClose using deliveryCommit/);
 });
 
 test('a failed assembled-wave gate blocks delivery', () => {

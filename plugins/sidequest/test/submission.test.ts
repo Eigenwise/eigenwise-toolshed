@@ -1577,11 +1577,60 @@ test('SQ-2355: integration reports a diverged expected upstream without an empty
     assert.strictEqual(refused.reason, 'expected_upstream_diverged');
     assert.match(refused.message, new RegExp(`recorded expected upstream ${expectedUpstream}`));
     assert.match(refused.message, new RegExp(`no longer reachable from target branch ${divergenceBranch}`));
-    assert.match(refused.message, /Rework and submit a fresh candidate against current main/);
-    assert.match(refused.message, /groomClose with deliveryCommit/);
+    assert.match(refused.message, /manually merge the verified candidate onto the current target, re-gate it/);
+    assert.match(refused.message, /groomClose using deliveryCommit/);
     assert.doesNotMatch(refused.message, /outside its admitted scope:/);
   } finally {
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+test('SQ-2528: an automatic dispatch keeps the pushed baseline after a transient local release commit is reset', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  try {
+    store.setBoardConfig(slug, { integrationMode: 'auto', integrationBranch: 'main', worktreeBase: 'auto' });
+    const pushedBase = git(['rev-parse', 'origin/main']);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'transient release commit\n');
+    git(['add', 'README.md']);
+    git(['commit', '-m', 'transient failed release']);
+    const transientCommit = git(['rev-parse', 'HEAD']);
+
+    const ticket = addTicket('transient release baseline', {
+      category: 'submission.fixture',
+      files: ['lib/transient-release.js'],
+    });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'transient-release-baseline' });
+    assert.deepStrictEqual(prepared.ticket.dispatch.integrationTarget, { mode: 'remote', upstream: 'origin/main', branch: 'main' });
+    assert.strictEqual(prepared.ticket.dispatch.baseCommit, pushedBase);
+    assert.strictEqual(prepared.ticket.dispatch.lifecycleAttempt.baseline.revision.value, pushedBase);
+
+    git(['reset', '--hard', 'origin/main']);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'transient-release.js'), 'candidate\n');
+    git(['add', 'lib/transient-release.js']);
+    git(['commit', '-m', 'candidate after failed release']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'transient-release-worker', {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId: 'transient-release-baseline',
+    }).ok, true);
+
+    const submitted = runCli(['submit', ticket.ref, '--by', 'transient-release-worker', '--commit', candidate]);
+    assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+    const after = store.getTicket(slug, ticket.ref);
+    assert.strictEqual(after.submission.base, pushedBase);
+    assert.strictEqual(after.submission.upstream, 'origin/main');
+    assert.notStrictEqual(after.submission.base, transientCommit);
+  } finally {
+    store.setBoardConfig(slug, {
+      integrationMode: originalConfig.integrationMode,
+      integrationBranch: originalConfig.integrationBranch,
+      worktreeBase: originalConfig.worktreeBase,
+    });
     cleanBranch();
   }
 });

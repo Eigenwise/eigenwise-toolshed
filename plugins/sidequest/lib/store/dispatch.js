@@ -1311,17 +1311,7 @@ function createDispatch(dependencies) {
             throw new Error(`${message} The configured worktreeBase is "${configuredWorktreeBase}"; use --worktree-base local-main to dispatch from the local integration branch.`);
           }
         };
-        const automaticWorktreeBase = automaticWorktreeBaseEligible && !explicitIntegrationTarget && configuredIntegrationMode === "auto" ? configuredWorktreeBase === "local-main" ? integrationTarget(slug, { mode: "local" }) : configuredWorktreeBase === "origin-main" ? hasOriginRemote(readMeta(slug)?.path || "") ? remoteIntegrationTarget() : null : (() => {
-          const projectPath2 = readMeta(slug)?.path || "";
-          if (!hasOriginRemote(projectPath2)) return null;
-          let localTarget;
-          try {
-            localTarget = integrationTarget(slug, { mode: "local" });
-          } catch (_) {
-            return remoteIntegrationTarget();
-          }
-          return localAheadOfUpstreamWarning(projectPath2, localTarget.branch) ? localTarget : remoteIntegrationTarget();
-        })() : null;
+        const automaticWorktreeBase = automaticWorktreeBaseEligible && !explicitIntegrationTarget && configuredIntegrationMode === "auto" ? configuredWorktreeBase === "local-main" ? integrationTarget(slug, { mode: "local" }) : configuredWorktreeBase === "origin-main" ? hasOriginRemote(readMeta(slug)?.path || "") ? remoteIntegrationTarget() : null : hasOriginRemote(readMeta(slug)?.path || "") ? remoteIntegrationTarget() : null : null;
         const useIntegrationTarget = explicitIntegrationTarget || isolatedRepositoryDispatch && configuredIntegrationMode !== "auto" || Boolean(automaticWorktreeBase);
         const integrationTargetState = explicitIntegrationTarget ? integrationTarget(slug, {
           ...opts.integrationBranch != null ? { branch: opts.integrationBranch } : {},

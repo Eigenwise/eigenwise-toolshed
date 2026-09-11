@@ -2860,8 +2860,8 @@ test('configured worktree bases apply to readonly isolated dispatches without ch
     assert.deepEqual(readonlyRemote.ticket.dispatch.integrationTarget, remoteTarget);
 
     store.setBoardConfig(baseSlug, { worktreeBase: 'auto' });
-    const writerAuto = prepare('writer auto worktree base', 'dispatch.lifecycle', localMain);
-    assert.deepEqual(writerAuto.ticket.dispatch.integrationTarget, localTarget);
+    const writerAuto = prepare('writer auto worktree base', 'dispatch.lifecycle', originMain);
+    assert.deepEqual(writerAuto.ticket.dispatch.integrationTarget, remoteTarget);
     const readonlyAuto = prepare('readonly auto worktree base', 'research', featureHead);
     assert.equal(readonlyAuto.ticket.dispatch.integrationTarget, undefined);
 
