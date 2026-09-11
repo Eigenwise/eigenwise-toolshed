@@ -100,6 +100,7 @@ test('Stop offer blocks once with the resupply skill and decline escape hatch', 
   assert.equal(output.decision, 'block');
   assert.match(output.reason, /\/quartermaster:resupply/);
   assert.match(output.reason, /decline-resupply/);
+  assert.match(output.reason, /without clearing the evidence window/);
   assert.match(output.reason, /4 sessions/);
   assert.ok(Buffer.byteLength(JSON.stringify(output)) <= 512, 'Stop guidance stays inside the hook output budget');
 });
@@ -164,7 +165,7 @@ test('a SessionStart nudge does not suppress its first Stop offer', () => {
   assert.equal(JSON.parse(runHook(projectDir, stateDir)).decision, 'block');
 });
 
-test('declining a resupply round resets the offer accumulation window', () => {
+test('declining a resupply round suppresses the next Stop offer', () => {
   const { projectDir, stateDir } = overdueProject();
   recordOverdueTallies(projectDir, stateDir);
 

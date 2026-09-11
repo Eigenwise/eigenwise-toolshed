@@ -77,8 +77,10 @@ Environment variables are optional:
 | --- | --- | --- |
 | `QUARTERMASTER_MIN_SESSIONS` | 4 | Unreviewed session activity before a nudge |
 | `QUARTERMASTER_MIN_FRICTION` | 6 | Friction events before a nudge |
-| `QUARTERMASTER_NUDGE_HOURS` | 24 | Cooldown between SessionStart nudges and after a resupply pass |
-| `QUARTERMASTER_OFFER_HOURS` | 24 | Cross-session cooldown between Stop-time offers |
+| `QUARTERMASTER_NUDGE_HOURS` | 24 | Cooldown between SessionStart nudges |
+| `QUARTERMASTER_RESUPPLY_HOURS` | 24 | Wall-clock cooldown after an accepted resupply pass |
+| `QUARTERMASTER_RESUPPLY_MULTIPLIER` | 2 | Evidence multiplier that can reopen an accepted resupply cooldown after its four-hour floor |
+| `QUARTERMASTER_OFFER_HOURS` | 24 | Base cross-session Stop-time offer cooldown; each consecutive decline doubles it |
 | `QUARTERMASTER_STATE_DIR` | `~/.claude/quartermaster-state` | Where tallies and the decision ledger live |
 
 ## Links

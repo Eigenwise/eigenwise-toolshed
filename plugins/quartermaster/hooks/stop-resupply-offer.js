@@ -15,7 +15,7 @@ function readStdin() {
 }
 
 function offerReason(status) {
-  return `quartermaster: ${status.unanalyzedSessions} sessions and ${status.frictionEvents} friction events since the last resupply. Finish your reply, then offer a focused optimization round for the user's development system, setup, tooling, or workflow. If they say yes or gave standing permission, run /quartermaster:resupply. If they decline, run node "${'${CLAUDE_PLUGIN_ROOT}'}/bin/quartermaster.js" decline-resupply --project "${'${CLAUDE_PROJECT_DIR}'}" to reset the evidence window.`;
+  return `quartermaster: ${status.unanalyzedSessions} sessions and ${status.frictionEvents} friction events since the last resupply. Finish your reply, then offer a focused optimization round for the user's development system, setup, tooling, or workflow. If they say yes or gave standing permission, run /quartermaster:resupply. If they decline, run node "${'${CLAUDE_PLUGIN_ROOT}'}/bin/quartermaster.js" decline-resupply --project "${'${CLAUDE_PROJECT_DIR}'}" to back off this offer without clearing the evidence window.`;
 }
 
 function main() {

@@ -65,7 +65,7 @@ test('the retired mark-retro command stays unavailable', () => {
   assert.equal(JSON.parse(current.stdout).ok, true);
 });
 
-test('decline-resupply records the decline and clears the current accumulation', () => {
+test('decline-resupply records the decline without clearing the current accumulation', () => {
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-test-'));
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-state-test-'));
   const environment = { QUARTERMASTER_STATE_DIR: stateDir };
@@ -75,12 +75,15 @@ test('decline-resupply records the decline and clears the current accumulation',
 
   const declined = run('decline-resupply', projectPath, environment);
   assert.equal(declined.status, 0, declined.stderr);
-  assert.ok(JSON.parse(declined.stdout).lastDeclinedAt);
+  const declinedReport = JSON.parse(declined.stdout);
+  assert.ok(declinedReport.lastDeclinedAt);
+  assert.equal(declinedReport.consecutiveDeclines, 1);
 
   const status = run('status', projectPath, environment);
   assert.equal(status.status, 0, status.stderr);
   const parsedStatus = JSON.parse(status.stdout);
-  assert.equal(parsedStatus.unanalyzedSessions, 0);
+  assert.equal(parsedStatus.unanalyzedSessions, 4);
+  assert.equal(parsedStatus.lastResupplyAt, null);
   assert.ok(parsedStatus.lastDeclinedAt);
 });
 
