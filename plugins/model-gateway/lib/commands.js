@@ -448,21 +448,30 @@ async function waitForProxyExit({ listening = portListening, attempts = 7, delay
   return false;
 }
 
-async function restartProxyForVersionChange({ previousVersion, currentVersion = currentProxyVersion(), listening = portListening, stop = stopProcess, start = spawnDetached } = {}) {
+async function restartProxyForVersionChange({
+  previousVersion,
+  listening = portListening,
+  stop = stopProcess,
+  supervisorRunning = async () => (await resolvePortOwner(PUBLIC_SHIM_PORT)).state === 'same-install',
+} = {}) {
   if (previousVersion) writeProxyServingVersion(previousVersion);
   if (await listening(PROXY_PORT)) stop('proxy');
   if (!(await waitForProxyExit({ listening }))) return false;
-  start('proxy', PROXY_BIN, ['serve', '--no-monitor'], { PORT: String(PROXY_PORT) });
-  writeProxyServingVersion(currentVersion);
-  return true;
+  return supervisorRunning();
 }
 
-async function restartProxyIfOutdated({ quiet = false } = {}) {
-  const onDisk = currentProxyVersion();
-  const serving = readProxyServingVersion() || onDisk;
+async function restartProxyIfOutdated({
+  quiet = false,
+  currentVersion = currentProxyVersion,
+  readServingVersion = readProxyServingVersion,
+  restart = restartProxyForVersionChange,
+  report = log,
+} = {}) {
+  const onDisk = currentVersion();
+  const serving = readServingVersion() || onDisk;
   if (!onDisk || !serving || onDisk === serving) return { restarted: false, onDisk, serving };
-  const restarted = await restartProxyForVersionChange({ previousVersion: serving, currentVersion: onDisk });
-  if (!restarted && !quiet) log(`proxy on disk: ${onDisk}   serving: ${serving}   restarts on next \`ensure\``);
+  const restarted = await restart({ previousVersion: serving });
+  if (!restarted && !quiet) report(`proxy on disk: ${onDisk}   serving: ${serving}   restarts on next \`ensure\``);
   return { restarted, onDisk, serving };
 }
 
@@ -511,18 +520,19 @@ async function setup() {
   const stagedVersion = parseSemver((spawnSync(stagedProxy, ['--version'], { encoding: 'utf8', windowsHide: true }).stdout || '').trim());
   const proxyChanged = !currentVersion || !stagedVersion || currentVersion.join('.') !== stagedVersion.join('.');
 
+  let proxyRecoveryHandoff = false;
   if (proxyChanged) {
     const previousVersion = proxyVersion(currentVersion);
     const installedVersion = proxyVersion(stagedVersion);
     replaceProxyBinary({ stagedPath: stagedProxy, currentVersion });
-    const restarted = await restartProxyForVersionChange({ previousVersion, currentVersion: installedVersion });
-    if (!restarted) log(`proxy on disk: ${installedVersion || 'unknown'}   serving: ${previousVersion || 'unknown'}   restarts on next \`ensure\``);
+    proxyRecoveryHandoff = await restartProxyForVersionChange({ previousVersion });
+    if (!proxyRecoveryHandoff) log(`proxy on disk: ${installedVersion || 'unknown'}   serving: ${previousVersion || 'unknown'}   restarts on next \`ensure\``);
   } else {
     log('model-gateway: proxy unchanged; keeping its authenticated process running.');
   }
-  const supervisorRestart = await restartShimIfOutdated({ operation: 'setup' });
+  const supervisorRestart = proxyRecoveryHandoff ? null : await restartShimIfOutdated({ operation: 'setup' });
   if (supervisorRestart && !supervisorRestart.ok) die(`could not restart shim supervisor: ${supervisorRestart.reason}`);
-  if (!supervisorRestart) {
+  if (!supervisorRestart && !proxyRecoveryHandoff) {
     const restarting = await restartWorkerWithDrain();
     if (!restarting.ok) die(`could not restart shim worker: ${restarting.reason}`);
   }
@@ -532,7 +542,7 @@ async function setup() {
   log(`installed: ${(v.stdout || v.stderr || '').trim() || PROXY_BIN}`);
 
   // one-shot: start everything, and finish the wiring when auth already works
-  const r = await startAll({ lifecycleOperation: 'setup' });
+  const r = await startAll({ lifecycleOperation: 'setup', preserveRunningSupervisor: proxyRecoveryHandoff });
   if (!r.ok) die(r.reason);
   clearUpstreamBlocked();
   clearUpstreamUnavailable();
@@ -655,6 +665,7 @@ async function startAll({
   reapOrphans = reapGatewayOrphans,
   stopSupervisor = stopRunningSupervisor,
   spawnSupervisor = spawnDetached,
+  preserveRunningSupervisor = false,
 } = {}) {
   if (!proxyExists()) return { ok: false, reason: 'proxy binary missing (run setup)' };
   let recoveryAttempted = false;
@@ -693,6 +704,7 @@ async function startAll({
   }
   const portOwner = owner.pid;
   const started = [];
+  let waitingForRunningSupervisor = false;
   const health = await fetchShimHealth();
   const staleSessionNotice = staleSessionReloadNotice(PLUGIN_VERSION, health);
   if (staleSessionNotice) noticeForUser(staleSessionNotice, { toStderr: true });
@@ -704,14 +716,18 @@ async function startAll({
   } else if (health) {
     reapOrphans(portOwner);
   } else if (await portListening(PUBLIC_SHIM_PORT)) {
-    beginRecovery();
-    const stopped = await stopSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
-    if (!stopped.ok) return finishRecovery(stopped);
-    reportSiblingSupervisorReplacement(stopped, quiet);
+    if (preserveRunningSupervisor) {
+      waitingForRunningSupervisor = true;
+    } else {
+      beginRecovery();
+      const stopped = await stopSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
+      if (!stopped.ok) return finishRecovery(stopped);
+      reportSiblingSupervisorReplacement(stopped, quiet);
+    }
   } else {
     reapOrphans(null);
   }
-  if (!(await shimHealthy())) {
+  if (!(await shimHealthy()) && !waitingForRunningSupervisor) {
     beginRecovery();
     try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
     spawnSupervisor('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], {});
@@ -2467,8 +2483,8 @@ const commands = {
       noticeForUser('model-gateway is installed but not set up. Offer to run its setup (one command; needs a ChatGPT browser sign-in) to put the user\'s ChatGPT/Codex models in the /model picker. See the model-gateway skill.');
       finish(0);
     }
-    await restartProxyIfOutdated({ quiet });
-    const result = await startAll({ quiet, lifecycleOperation: 'ensure' });
+    const proxyRestart = await restartProxyIfOutdated({ quiet });
+    const result = await startAll({ quiet, lifecycleOperation: 'ensure', preserveRunningSupervisor: proxyRestart.restarted });
     if (!result.ok) {
       if (quiet && result.waitCutShort) {
         if (result.started?.includes('shim')) {
