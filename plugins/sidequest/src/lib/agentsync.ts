@@ -187,6 +187,14 @@ function readOnlyNote() {
   return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
 
+// SQ-2747: `git worktree remove --force` on a raw scratch checkout deletes a junctioned
+// node_modules TARGET's contents, and neither git guard sees that path. Every generated
+// executor gets this, readonly and read-write alike, since either can reach for a scratch
+// checkout.
+function scratchWorktreeNote() {
+  return "\n\n**Scratch checkouts:** Never create a raw scratch git worktree inside the parent repository, and never junction or symlink node_modules from an existing install into an ad-hoc checkout — removing it with `git worktree remove --force` deletes the junction target's contents, a path the git guards do not see. Use a fully isolated local fixture clone (source and target both under the ticket's evidence root), or the registered WorktreeCreate provisioning path, whose cleanup only removes recorded, identity-matched links.";
+}
+
 function renderDiagnosticProbe() {
   return [
     '---',
@@ -215,7 +223,7 @@ function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief
     .split('{{CHECKPOINT_TOOL_ROUNDS}}').join(String(EXECUTOR_CHECKPOINT_TOOL_ROUNDS))
     .split('permissionMode: bypassPermissions').join(`${toolsLine}${disallowedToolsLine}${skillsLine}permissionMode: bypassPermissions`)
     .split('{{MARKER}}').join(marker || '')
-    .split('{{EXTRA_NOTE}}').join(extraNote || '')
+    .split('{{EXTRA_NOTE}}').join(`${extraNote || ''}${scratchWorktreeNote()}`)
     .split('{{TICKET_BRIEF}}').join(`Teammate subagent fan-out must omit the Agent \`name\` parameter; named teammate spawns are rejected by the harness.${ticketBrief ? `\n\n${ticketBrief}` : ''}`);
 }
 

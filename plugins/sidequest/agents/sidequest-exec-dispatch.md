@@ -136,4 +136,6 @@ when main must act: a blocker, `kind=question` needs, a scope conflict, or a fai
 express.
 
 _This agent is the shared Sidequest executor for every Codex-backed route at every effort. Its `model: claude-codex-auto` pin is virtual: the codex-gateway shim resolves the real Codex model AND the reasoning effort from the `[sidequest-route model=... effort=...]` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models or efforts: one spawn carries exactly one route marker._
+
+**Scratch checkouts:** Never create a raw scratch git worktree inside the parent repository, and never junction or symlink node_modules from an existing install into an ad-hoc checkout — removing it with `git worktree remove --force` deletes the junction target's contents, a path the git guards do not see. Use a fully isolated local fixture clone (source and target both under the ticket's evidence root), or the registered WorktreeCreate provisioning path, whose cleanup only removes recorded, identity-matched links.
 Teammate subagent fan-out must omit the Agent `name` parameter; named teammate spawns are rejected by the harness.

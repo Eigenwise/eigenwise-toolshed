@@ -202,6 +202,22 @@ test('read-only report guidance preserves Sidequest review authority', () => {
   assert.match(readonlyGuidance, /routed report capability is unavailable/);
 });
 
+test('SQ-2747: every generated executor, readonly and read-write, forbids raw scratch worktrees and node_modules junctions', () => {
+  const bundled = agentsync.bundledExecutorSources() as Map<string, string>;
+  assert.ok(bundled.size > 0);
+  const sentence = /Never create a raw scratch git worktree inside the parent repository, and never junction or symlink node_modules from an existing install into an ad-hoc checkout/;
+  const readonlySources = [...bundled.entries()].filter(([filename]) => /readonly/i.test(filename));
+  const readWriteSources = [...agentsync.implementationExecutorSources().entries()];
+  assert.ok(readonlySources.length > 0);
+  assert.ok(readWriteSources.length > 0);
+  for (const [filename, source] of readonlySources) {
+    assert.match(source, sentence, filename);
+  }
+  for (const [filename, source] of readWriteSources) {
+    assert.match(source, sentence, filename);
+  }
+});
+
 test('every implementation executor leaves candidate reviews to the orchestrator', () => {
   const implementationExecutors = agentsync.implementationExecutorSources();
   assert.ok(implementationExecutors.size > 0);
