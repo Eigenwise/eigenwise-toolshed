@@ -241,7 +241,8 @@ test('txn does not retry genuine constraint errors', () => {
 
 test('txn reports a timed-out SQLite lock with retry diagnostics', async () => {
   const { db, homeRoot } = makeDb();
-  const childProcess = await holdWriteLock(homeRoot, SQLITE_BUSY_TIMEOUT_MS * 4);
+  db.exec('PRAGMA busy_timeout=50');
+  const childProcess = await holdWriteLock(homeRoot, 50 * 10);
 
   try {
     assert.throws(
