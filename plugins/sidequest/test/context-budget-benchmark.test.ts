@@ -117,7 +117,16 @@ test('end-to-end context budgets preserve real storage, retrieval, and model sea
     title: 'Bounded orientation', description: 'Where: fixture.ts. Contract: preserve the board and keep the bounded executor orientation stable. Verify: run the benchmark command and inspect the byte count.',
     category: 'benchmark', files: ['fixture.ts'], executorVerify: 'node --test fixture.ts', source: 'context-budget-benchmark',
   });
-  const dispatch = await callToolRaw('dispatch', { project, ref: orientationTicket.ref });
+  // An isolated dispatch is refused when the spawning checkout is a different repository than the
+  // board's (SQ-2570), so dispatch from the board's own checkout like a session rooted there would.
+  const originalWorkingDirectory = process.cwd();
+  let dispatch;
+  try {
+    process.chdir(projectPath);
+    dispatch = await callToolRaw('dispatch', { project, ref: orientationTicket.ref });
+  } finally {
+    process.chdir(originalWorkingDirectory);
+  }
   assert.ok(!dispatch.isError, dispatch.content?.[0]?.text);
   assert.ok(Buffer.byteLength(dispatch.content[0].text, 'utf8') <= 1320, `dispatch is ${Buffer.byteLength(dispatch.content[0].text)} bytes`);
 
