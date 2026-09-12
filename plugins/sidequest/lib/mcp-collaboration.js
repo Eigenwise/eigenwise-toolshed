@@ -256,7 +256,7 @@ const tools = [
   },
   {
     name: "dispatch",
-    description: "Prepare a token-gated dispatch. It returns a stable executor spawn spec and token. Each returned subagent_type is bundled in Sidequest and discoverable when the plugin loads, before SessionStart maintenance. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor.",
+    description: "Prepare a token-gated dispatch. It returns a stable executor spawn spec and token. Each returned subagent_type is bundled in Sidequest and discoverable when the plugin loads, before SessionStart maintenance. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor. retireOnly retires without a replacement.",
     inputSchema: {
       type: "object",
       properties: {
@@ -267,7 +267,8 @@ const tools = [
         allowRepeatFailure: { type: "boolean" },
         allowUnscoped: { type: "boolean", description: "Explicitly allow a write ticket with no declared file scope." },
         integrationBranch: { type: "string", description: "Ticket delivery target branch. Dispatch records it for submit, wave assembly, and integration even if the board target later changes." },
-        recoveryEvidence: { type: "string", description: "Observed failure evidence. With claimHolder, executor, and worktree, recover that live isolated claim without releasing it." },
+        recoveryEvidence: { type: "string", description: "Observed failure evidence. With claimHolder, executor, and worktree, recover that live isolated claim without releasing it. With retireOnly:true, retire an unclaimed prepared or launched attempt without preparing a replacement." },
+        retireOnly: { type: "boolean" },
         claimHolder: { type: "string", description: "The exact by identity holding the live claim being recovered." },
         worktree: { type: "string", description: "The resumed executor's linked worktree path for live-claim recovery." },
         full: { type: "boolean", description: "Include token, executor, warnings, and recovery details." }
@@ -297,6 +298,7 @@ const tools = [
         allowUnscoped: args.allowUnscoped === true,
         integrationBranch: args.integrationBranch,
         recoveryEvidence: args.recoveryEvidence,
+        retireOnly: args.retireOnly === true,
         ...freshness.skew ? { dispatchSkew: freshness.skew } : {},
         // Reaching this handler is itself proof the board MCP is connected
         // in this session (SQ-1017); CLI transport carries no such proof.
@@ -304,6 +306,7 @@ const tools = [
         transport: "mcp"
       });
       if (!prepared.ok) throw new Error(`dispatch: ${prepared.message || prepared.reason || "live-claim recovery failed"}`);
+      if (prepared.retired) return mutationAck(slug, prepared, { retired: true });
       const isolation = agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch && prepared.ticket.dispatch.sharedTree);
       const prompt = agentsync.renderDispatchStub(prepared.ticket, meta.path);
       const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
