@@ -39,7 +39,7 @@ state; act on it. The user sees that same line in the transcript, because a stat
 reach the model alone. Anything routine stays out of it, and the hook always exits 0 so the line survives:
 run `ensure` yourself when you need an exit code. SessionStart waits at most 12 seconds for a newly started
 gateway, then leaves its supervisor to finish in the background so it stays inside Claude Code's hook budget. `setup` is one-shot and idempotent: it downloads the claude-code-proxy binary
-(sha256-verified) and starts everything. Re-running it later is also the upgrade path. A newer cached Model Gateway version replaces an older sibling version from the same marketplace and plugin name. A different marketplace, plugin name, or non-cache install stays foreign and is refused.
+(sha256-verified) and starts everything. Re-running it later is also the upgrade path. Worker hot-replacement accepts the current CLI or a non-older version-shaped sibling under the same lexical and resolved parent directory. This checks filesystem layout, not marketplace registration; a development layout with the same structure can also satisfy it.
 
 Setup fails before extraction when the required checksum asset is absent, its download fails, its contents are invalid or name a different archive, or the archive digest does not match. Report the verification failure; never skip the checksum check or run the unverified download.
 

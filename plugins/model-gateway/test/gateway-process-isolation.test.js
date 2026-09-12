@@ -826,10 +826,16 @@ test('version-change restart leaves the replacement proxy under its live supervi
   await waitForProcessesToExit([supervisor.pid, replacementProxyPid], 5000);
 });
 
-test('older cache version cannot replace a newer sibling shim', () => {
-  const cacheRoot = path.join('cache', 'eigenwise-toolshed', 'model-gateway');
+test('older cache version cannot replace a newer sibling shim', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-version-order-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const cacheRoot = path.join(home, 'cache', 'eigenwise-toolshed', 'model-gateway');
   const olderCli = path.join(cacheRoot, '0.49.0', 'bin', 'model-gateway.js');
   const newerCli = path.join(cacheRoot, '0.50.0', 'bin', 'model-gateway.js');
+  for (const cli of [olderCli, newerCli]) {
+    fs.mkdirSync(path.dirname(cli), { recursive: true });
+    fs.writeFileSync(cli, '// Version-order fixture; never executed.\n');
+  }
 
   assert.equal(canReplaceInstalledCliPath(newerCli, olderCli), false);
   assert.equal(canReplaceInstalledCliPath(olderCli, newerCli), true);
