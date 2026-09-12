@@ -4518,10 +4518,10 @@ test('SQ-2767: a singleton gate reuses the exact-candidate capture, and delivery
     assert.strictEqual(assembled.gate.state, 'gate_passed');
     assert.strictEqual(assembled.gate.verification.status, 'passed');
     assert.strictEqual(assembled.gate.verification.command, gate.command);
-    assert.strictEqual(assembled.gate.verification.reusedCapture.id, recorded.capture.id);
-    assert.strictEqual(assembled.gate.verification.reusedCapture.candidate.value, candidate);
-    assert.match(assembled.gate.verification.evidence, /Reused the authoritative verification capture/);
     assert.strictEqual(gate.runs(), 1, 'assembly admitted the candidate without re-running its verifier');
+    assert.strictEqual(assembled.gate.verification.reusedCapture?.id, recorded.capture.id);
+    assert.strictEqual(assembled.gate.verification.reusedCapture?.candidate.value, candidate);
+    assert.match(assembled.gate.verification.evidence, /Reused the authoritative verification capture/);
 
     const delivered = integrateOnCurrentTestBranch(ticket.ref);
     assert.strictEqual(delivered.ok, true, delivered.message);
