@@ -675,6 +675,9 @@ function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
       command,
       status,
       candidate: { source: candidateSource, value: candidateValue },
+      // SQ-2789: only a proven-clean capture carries the flag. A capture whose cwd was dirty, or
+      // one recorded before the wrapper proved it, stays unmarked and can never be reused.
+      ...(capture?.cleanWorktree === true ? { cleanWorktree: true } : {}),
       dispatchNonce: String(ticket.dispatchNonce || ''),
       completedAt: new Date(completedAt).toISOString(),
       ...(capture?.worktree ? { worktree: String(capture.worktree) } : {}),
@@ -2906,6 +2909,9 @@ function provisionWaveGateWorktree(slug: any, candidateWorktree: string) {
 // re-checked when submit admitted the candidate. Re-running the command in that same retained
 // worktree observes whatever state the worktree is in now, so it proves less than the capture it
 // duplicates. The merged-tree gate at delivery is the run that observes the tree that ships.
+// SQ-2789: matching the candidate revision alone matched a capture taken over uncommitted edits,
+// which certified content nothing ran. Only a capture the wrapper proved clean stands in for the
+// committed candidate, and an unmarked capture is never assumed clean.
 function reusedSingletonGateVerification(ticket: any, requirement: any) {
   const candidate = submissionCandidateRevision(ticket?.submission);
   const source = String(candidate?.source || '').trim();
@@ -2914,6 +2920,7 @@ function reusedSingletonGateVerification(ticket: any, requirement: any) {
   const capture = recordedVerificationCaptures(ticket).find((entry: any) => entry?.ticket === ticket.ref
     && entry?.command === requirement.command
     && entry?.status === 'passed'
+    && entry?.cleanWorktree === true
     && String(entry?.candidate?.source || '') === source
     && String(entry?.candidate?.value || '') === value);
   if (!capture) return null;
@@ -2921,7 +2928,7 @@ function reusedSingletonGateVerification(ticket: any, requirement: any) {
     kind: requirement.kind,
     status: 'passed',
     command: requirement.command,
-    evidence: `Reused the authoritative verification capture ${capture.id} recorded for ${source}:${value}, the exact assembled candidate, so the gate did not re-run the command against the candidate worktree. The merged tree is still gated at delivery.`,
+    evidence: `Reused the authoritative verification capture ${capture.id}, recorded against ${source}:${value} with no uncommitted changes in the verified worktree, so it proves the exact assembled candidate and the gate did not re-run the command. The merged tree is still gated at delivery.`,
     logPath: capture.logPath || null,
     exitCode: capture.exitCode ?? null,
     reusedCapture: { id: capture.id, candidate: { source, value }, completedAt: capture.completedAt },

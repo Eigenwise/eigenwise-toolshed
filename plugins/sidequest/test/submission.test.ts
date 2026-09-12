@@ -4504,6 +4504,8 @@ test('SQ-2767: a singleton gate reuses the exact-candidate capture, and delivery
     const recorded = recordCapture({ project: PROJECT_DIR, ticket: ticket.ref }, capture, PROJECT_DIR);
     assert.strictEqual(recorded.ok, true, recorded.message);
     assert.strictEqual(recorded.capture.candidate.value, candidate);
+    // SQ-2789: reuse depends on this proof, so the clean-worktree capture has to carry it.
+    assert.strictEqual(recorded.capture.cleanWorktree, true);
     assert.strictEqual(store.submitTicket(slug, ticket.ref, 'reused-capture-worker', { commit: candidate, verify: gate.command }).ok, true);
     const submitted = store.getTicket(slug, ticket.ref);
     Object.assign(submitted.submission, {
@@ -4619,6 +4621,130 @@ test('SQ-2767: a capture for another commit and an absent capture both still re-
     for (const logPath of captureLogs) fs.rmSync(logPath, { force: true });
     mismatchGate.remove();
     absentGate.remove();
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+// SQ-2789: reusing a capture is only safe if the capture read the committed content, so the
+// fixture gate has to follow one file on disk instead of passing unconditionally.
+function fileContentGate(label: string, filePath: string, passingContent: string) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `sq-content-gate-${label}-`));
+  const scriptPath = path.join(directory, 'check-content.cjs');
+  const logPath = path.join(directory, 'runs.log');
+  fs.writeFileSync(scriptPath, [
+    "const fs = require('node:fs');",
+    `fs.appendFileSync(${JSON.stringify(logPath)}, 'run\\n');`,
+    `const content = fs.existsSync(${JSON.stringify(filePath)}) ? fs.readFileSync(${JSON.stringify(filePath)}, 'utf8').trim() : '';`,
+    `process.exit(content === ${JSON.stringify(passingContent)} ? 0 : 1);`,
+    '',
+  ].join('\n'));
+  return {
+    command: `node ${JSON.stringify(scriptPath)}`,
+    runs: () => (fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').split('run\n').length - 1 : 0),
+    remove: () => fs.rmSync(directory, { recursive: true, force: true }),
+  };
+}
+
+test('SQ-2789: a capture taken over uncommitted edits is not reused, and the singleton gate reruns against the committed candidate', async () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  const gatedFile = path.join(PROJECT_DIR, 'lib', 'dirty-capture.js');
+  const gate = fileContentGate('dirty', gatedFile, 'dirty-pass');
+  const captureLogs: string[] = [];
+  try {
+    const baseline = git(['rev-parse', 'HEAD']);
+    const ticket = addTicket('capture taken over uncommitted edits', { executorVerify: gate.command, files: ['lib/dirty-capture.js'] });
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'dirty-capture-worker', { direct: true, reason: 'The dirty capture fixture requires a local direct claim.' }).ok, true);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(gatedFile, 'clean-fail\n');
+    git(['add', 'lib/dirty-capture.js']);
+    git(['commit', '-m', 'committed content the command fails on']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+
+    // The reviewer's reproduction: the command passes only over an edit that was never committed.
+    fs.writeFileSync(gatedFile, 'dirty-pass\n');
+    const capture = await runVerifyCapture(gate.command, PROJECT_DIR);
+    if (capture.logPath) captureLogs.push(capture.logPath);
+    assert.strictEqual(capture.status, 'passed');
+    const recorded = recordCapture({ project: PROJECT_DIR, ticket: ticket.ref }, capture, PROJECT_DIR);
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.capture.candidate.value, candidate, 'the capture still binds to the committed HEAD it never read');
+    assert.strictEqual(recorded.capture.cleanWorktree, undefined, 'a dirty capture is never marked as proving the committed content');
+
+    git(['checkout', '--', 'lib/dirty-capture.js']);
+    assert.strictEqual(fs.readFileSync(gatedFile, 'utf8').trim(), 'clean-fail');
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'dirty-capture-worker', { commit: candidate, verify: gate.command }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    Object.assign(submitted.submission, {
+      baseline: { revision: { source: 'git', value: baseline, observedAt: new Date().toISOString() }, purpose: 'dispatch' },
+      changedPaths: ['lib/dirty-capture.js'],
+    });
+    persist(submitted);
+    assert.strictEqual(gate.runs(), 1, 'only the executor capture has run the command so far');
+
+    const refused = store.assembleSubmissionWave(slug, [ticket.ref]);
+    assert.strictEqual(refused.ok, false, 'the gate must not certify content the capture never read');
+    assert.strictEqual(refused.reason, 'assembled_wave_gate_failed');
+    assert.strictEqual(refused.gate.verification.status, 'failed_suite');
+    assert.strictEqual(refused.gate.verification.reusedCapture, undefined);
+    assert.strictEqual(gate.runs(), 2, 'assembly reran the command against the committed candidate');
+    assert.strictEqual(store.pendingSubmission(store.getTicket(slug, ticket.ref)), true);
+  } finally {
+    for (const logPath of captureLogs) fs.rmSync(logPath, { force: true });
+    gate.remove();
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+test('SQ-2789: a capture recorded without the clean-worktree proof is not reused', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  const gatedFile = path.join(PROJECT_DIR, 'lib', 'unproven-capture.js');
+  const gate = fileContentGate('unproven', gatedFile, 'candidate');
+  try {
+    const baseline = git(['rev-parse', 'HEAD']);
+    const ticket = addTicket('capture predating the clean-worktree proof', { executorVerify: gate.command, files: ['lib/unproven-capture.js'] });
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'unproven-capture-worker', { direct: true, reason: 'The unproven capture fixture requires a local direct claim.' }).ok, true);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(gatedFile, 'candidate\n');
+    git(['add', 'lib/unproven-capture.js']);
+    git(['commit', '-m', 'unproven capture candidate']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+
+    // Exactly the shape captures recorded before SQ-2789 carry: passing, bound to the candidate,
+    // and silent about whether the worktree it ran in was clean.
+    const recorded = store.recordVerificationCapture(slug, ticket.ref, {
+      command: gate.command,
+      status: 'passed',
+      candidate: { source: 'git', value: candidate },
+      completedAt: new Date().toISOString(),
+    });
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.capture.cleanWorktree, undefined);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'unproven-capture-worker', { commit: candidate, verify: gate.command }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    Object.assign(submitted.submission, {
+      baseline: { revision: { source: 'git', value: baseline, observedAt: new Date().toISOString() }, purpose: 'dispatch' },
+      changedPaths: ['lib/unproven-capture.js'],
+    });
+    persist(submitted);
+    assert.strictEqual(gate.runs(), 0, 'the unproven capture was recorded without running anything');
+
+    const assembled = store.assembleSubmissionWave(slug, [ticket.ref]);
+    assert.strictEqual(assembled.ok, true, assembled.message);
+    assert.strictEqual(assembled.gate.state, 'gate_passed');
+    assert.strictEqual(assembled.gate.verification.reusedCapture, undefined, 'an unmarked capture is not assumed clean');
+    assert.strictEqual(gate.runs(), 1, 'the gate ran the command itself instead of reusing the unproven capture');
+  } finally {
+    gate.remove();
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
     cleanBranch();
   }
