@@ -27,7 +27,7 @@ Each plugin has its own install path and guide. None requires the others. Sidequ
 
 ## Start with Quartermaster
 
-Use Quartermaster when you want Claude to look at a project and recommend what fits from the plugins available on the machine, Toolshed and otherwise, installing only what you approve. Install a plugin directly when you already know which job you want.
+Use Quartermaster when you want Claude to look at a project and recommend what fits from the plugins available on the machine, Toolshed and otherwise, installing only what you approve. Before it names a plugin, it can check current sources for whether that plugin is still maintained, whether its cached description is stale, and whether something better fits, including from a marketplace you have not added yet. Those lookups use generic capability terms; nothing mined from your sessions goes into a search. Install a plugin directly when you already know which job you want.
 
 From the project directory:
 
