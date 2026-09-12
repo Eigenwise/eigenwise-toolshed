@@ -11,8 +11,8 @@ import { DEFAULT_DATE, DEFAULT_SHA, makeRepo } from './helpers.mjs';
 
 const PLUGINS = { 'codebase-mapper': '2.11.1', 'codex-gateway': '0.33.4', sidequest: '3.6.17', workbench: '0.63.6' };
 
-function planFor(t, { fragments = {}, changelog = null, plugins = PLUGINS, suites = {}, ...options } = {}) {
-  const repo = makeRepo({ plugins, fragments, changelog, suites });
+function planFor(t, { fragments = {}, rawFragments = {}, changelog = null, plugins = PLUGINS, suites = {}, ...options } = {}) {
+  const repo = makeRepo({ plugins, fragments, rawFragments, changelog, suites });
   t.after(repo.cleanup);
   const source = diskSource(repo.root);
   const manifest = readManifest(source, repo.root);
@@ -87,6 +87,22 @@ test('a window with nothing but held fragments releases nothing', (t) => {
   assert.deepEqual(plan.tags, []);
   assert.equal(plan.marketplace.to, '3.207.0', 'the counter does not move when nothing ships');
   assert.match(formatPlan(plan), /nothing to release/);
+});
+
+test('a repo-only window moves the marketplace without selecting a plugin', (t) => {
+  const plan = planFor(t, {
+    rawFragments: {
+      'SQ-1.md': '---\nref: SQ-1\ntitle: Release script fix\nscope: repo\n---\n',
+    },
+  });
+
+  assert.equal(plan.releasable, true);
+  assert.deepEqual(plan.plugins, []);
+  assert.deepEqual(plan.repositoryEntries.map((entry) => entry.ref), ['SQ-1']);
+  assert.deepEqual(plan.tags, ['v3.208.0']);
+  assert.equal(plan.marketplace.to, '3.208.0');
+  assert.equal(planCommitMessage(plan), 'release v3.208.0: repository (SQ-1)');
+  assert.match(formatPlan(plan), /SQ-1  repo  Release script fix/);
 });
 
 test('an exact fragment already in the changelog never ships twice', (t) => {

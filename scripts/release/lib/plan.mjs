@@ -95,6 +95,15 @@ export function buildPlan({
       };
     });
 
+  const repositoryEntries = selected
+    .filter((fragment) => fragment.scope === 'repo')
+    .map((fragment) => ({
+      ref: fragment.ref,
+      title: fragment.title,
+      commit: fragment.commit,
+      body: fragment.body,
+    }));
+
   const releasable = selected.length > 0;
   const marketplaceLevel = MARKETPLACE_LEVEL[mode];
   const marketplaceTo = releasable
@@ -120,6 +129,7 @@ export function buildPlan({
     selected,
     skipped,
     plugins,
+    repositoryEntries,
     marketplace: { from: manifest.version, to: marketplaceTo, level: marketplaceLevel },
     tag,
     pluginTags,
@@ -129,10 +139,11 @@ export function buildPlan({
 }
 
 export function planCommitMessage(plan) {
-  const summary = plan.plugins.map((plugin) => `${plugin.name} ${plugin.to}`).join(', ');
+  const summaries = plan.plugins.map((plugin) => `${plugin.name} ${plugin.to}`);
+  if (plan.repositoryEntries.length > 0) summaries.push('repository');
   const refs = plan.selected.map((fragment) => fragment.ref).join(', ');
   const kind = plan.mode === 'hotfix' ? 'hotfix ' : '';
-  return `release ${kind}${plan.tag}: ${summary} (${refs})`;
+  return `release ${kind}${plan.tag}: ${summaries.join(', ')} (${refs})`;
 }
 
 /**
@@ -171,7 +182,9 @@ export function formatPlan(plan) {
 
   lines.push('', `fragments (${plan.selected.length}):`);
   for (const fragment of plan.selected) {
-    const targets = fragment.plugins.map((entry) => `${entry.name}:${entry.level}`).join(' ');
+    const targets = fragment.scope === 'repo'
+      ? 'repo'
+      : fragment.plugins.map((entry) => `${entry.name}:${entry.level}`).join(' ');
     lines.push(`  ${fragment.ref}  ${targets}  ${fragment.title}`);
   }
   if (plan.skipped.length > 0) {
