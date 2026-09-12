@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.561.0 (2026-09-12)
+
+### sidequest 5.1.12 → 5.1.13
+
+#### Fixes
+
+- End the non-Git snapshot hang on cloud-synced files (SQ-2799)
+  A non-Git project whose files live under OneDrive or another sync client could still hang dispatch forever: the snapshot's ten-second clock was only checked between files, and a single read of a files-on-demand placeholder never returns. The snapshot now runs in a separate process that gets killed when the clock runs out, so the refusal always arrives, and it names the file the read hung on plus the recourse (initialize a git repository, or point the board at a local directory no sync client mirrors). Baseline digests are unchanged.
+- Speed up sidequest full-suite Windows tests (SQ-2800)
+  Reduce oversized fixture populations and report full-suite phase timing in GitHub Actions summaries.
+
 ## v3.560.0 (2026-09-12)
 
 ### model-gateway 0.50.20 → 0.50.21
