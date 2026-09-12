@@ -5839,8 +5839,12 @@ test('SQ-228: a large board pages under the cap; cursors iterate the full set ex
   // A dedicated board so seeding this fixture cannot perturb the shared-board
   // tests above. Every call passes project explicitly.
   const big = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-bigboard-228'), 'SQ-228 Big Board');
-  // 500 -> 407: 407 is the smallest board that still forces both compact all:true and default list through continuation pages; cursor assertions still cover every row exactly once.
-  const N = 407;
+  // 500 -> 450. 407 was measured as the smallest board that still forces both
+  // compact all:true and default list through continuation pages, and a fixture
+  // pinned to its own boundary breaks on any unrelated change to row
+  // serialization. 450 keeps about a tenth of headroom over that floor and still
+  // drops a tenth of the seeding cost (SQ-2800 review).
+  const N = 450;
   for (let i = 0; i < N; i++) {
     store.createTicket(big.slug, { title: `bulk todo ticket number ${i} on the oversized board`, files: [`lib/mod-${i}.js`] });
   }

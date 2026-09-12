@@ -18,6 +18,19 @@ const pluginRoot = path.resolve(__dirname, '..');
 const planningWarningsTest = path.join(pluginRoot, 'test', 'planning-depth-warnings.test.ts');
 const testHomePreload = pathToFileURL(path.join(pluginRoot, 'test', '_sidequest-test-home.ts')).href;
 const fixtureBoardPath = path.join(planningDepthWarningsFixtureParent, 'board');
+// The nested suite reaches the registry two different ways, and the preload has to
+// redirect both, so the pattern covers both rather than whichever one is cheapest.
+// `complexity 4+ add warns` registers through a CLI subprocess (cliJson), which
+// inherits SIDEQUEST_HOME from the environment; the other three call
+// store.ensureProject in-process, where the preload has to have rewritten the home
+// before the module loaded. A pattern naming only the subprocess case leaves the
+// in-process surface untested (SQ-2800 review).
+const REGISTRY_WRITING_PLANNING_TESTS = [
+  'complexity 4\\+ add warns',
+  'rejects unrunnable npm verifies',
+  'warning presentation deduplicates',
+  'SQ-2200: verify preflight',
+].join('|');
 
 function runPlanningWarningsSuite(sidequestHome: string, preloads: string[] = [], testNamePattern?: string) {
   return spawnSync(process.execPath, [
@@ -85,10 +98,17 @@ test('a test process without test-home preload registers a planning fixture, whi
 
     registerProject(liveHome, sentinelProject, 'sentinel');
     const before = registryBytes(liveHome);
-    // The nested planning suite's 42 tests run separately; this isolation check needs only its fixture-writing test.
-    const isolatedRun = runPlanningWarningsSuite(liveHome, [testHomePreload], 'complexity 4\\+ add warns');
+    // Run the four tests in the nested suite that register a project, not all 42 and
+    // not just one. The invariant here is that the preload redirects every project
+    // write, so the evidence has to include every test that can write: the other
+    // three call store.ensureProject too. Narrowing to one of four writers would
+    // leave a test that bypasses the preload undetected (SQ-2800 review).
+    const isolatedRun = runPlanningWarningsSuite(liveHome, [testHomePreload], REGISTRY_WRITING_PLANNING_TESTS);
     assert.strictEqual(isolatedRun.status, 0, isolatedRun.stderr || isolatedRun.stdout);
     assert.match(isolatedRun.stdout + isolatedRun.stderr, /complexity 4\+ add warns for empty executor context and file scope/);
+    assert.match(isolatedRun.stdout + isolatedRun.stderr, /rejects unrunnable npm verifies when tickets are added or updated/);
+    assert.match(isolatedRun.stdout + isolatedRun.stderr, /warning presentation deduplicates by ticket and session/);
+    assert.match(isolatedRun.stdout + isolatedRun.stderr, /SQ-2200: verify preflight looks up each npm script/);
     assert.deepStrictEqual(registryBytes(liveHome), before);
   } finally {
     for (const directory of [legacyHome, liveHome, sentinelProject]) {
