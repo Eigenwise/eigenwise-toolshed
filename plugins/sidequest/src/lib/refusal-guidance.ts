@@ -38,7 +38,8 @@ function recordedWorktree(value?: string): string {
 }
 
 function worktreeBindingComparison(failure?: WorktreeCreationBindingFailure): string {
-  const candidates = Number.isInteger(failure?.candidatesConsidered) ? failure.candidatesConsidered : 0;
+  const candidatesConsidered = failure?.candidatesConsidered ?? 0;
+  const candidates = Number.isInteger(candidatesConsidered) ? candidatesConsidered : 0;
   const count = `${candidates} dispatch record${candidates === 1 ? '' : 's'}`;
   const comparison = `hook session id ${abbreviatedSessionId(failure?.suppliedSessionId)} against recorded session id ${abbreviatedSessionId(failure?.recordedSessionId)}; hook canonical worktree ${recordedWorktree(failure?.suppliedWorktree)} against recorded canonical worktree ${recordedWorktree(failure?.recordedWorktree)}`;
   if (failure?.crossProject) {
