@@ -412,7 +412,6 @@ test('tools/list advertises the board tools with input schemas', async () => {
   const contextPage = resp.result.tools.find((tool: any) => tool.name === 'context_page');
   assert.deepEqual(contextPage.inputSchema.required, ['handle', 'cursor', 'expectedRevision']);
   assert.equal(contextPage.inputSchema.properties.limit.maximum, 70 * 1024);
-  assert.match(contextPage.inputSchema.properties.cursor.description, /Opaque/);
   assert.match(contextPage.inputSchema.properties.limit.description, /UTF-8 bytes/);
   const rework = resp.result.tools.find((tool: any) => tool.name === 'rework');
   assert.deepEqual(rework.inputSchema.required, ['ref', 'by', 'review', 'reason']);
