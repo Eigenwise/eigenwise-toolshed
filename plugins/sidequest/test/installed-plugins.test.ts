@@ -114,7 +114,7 @@ test('dispatch preflight retries transient plugin registry read errors', () => {
 
   const originalReadFileSyncDescriptor = Object.getOwnPropertyDescriptor(fs, 'readFileSync')!;
   const originalReadFileSync = fs.readFileSync;
-  const transientRegistryReadErrors = ['EPERM', 'ENOENT'];
+  const transientRegistryReadErrors = ['EPERM', 'EACCES'];
   let registryReadAttempts = 0;
   Object.defineProperty(fs, 'readFileSync', {
     ...originalReadFileSyncDescriptor,

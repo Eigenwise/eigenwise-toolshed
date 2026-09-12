@@ -54,7 +54,7 @@ const { catalogStateFingerprint, configuredExternalModelProvider, discoverExtern
 const telemetry = require('./telemetry.js');
 const { negativeControlRecoveryGuidance, routingDisabledMessage, filesystemSnapshotLimitGuidance, filesystemSnapshotChildFailureGuidance } = require('./refusal-guidance.js');
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require('./prepared-dispatch.js');
-const { assertSidequestInstall, checkSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require('./dispatch-preflight.js');
+const { assertSidequestInstall, checkSidequestInstall, servingSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require('./dispatch-preflight.js');
 const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic, VERIFICATION_KINDS } = require('./kernel/index.js');
 const { createAssets } = require('./store/assets.js');
 const { createNotifications } = require('./store/notifications.js');
@@ -77,6 +77,16 @@ const { createSweeps } = require('./store/sweeps.js');
 const { createServer } = require('./store/server.js');
 const { createProjects } = require('./store/projects.js');
 const { createWarnings } = require('./store/warnings.js');
+
+let servingInstallResolved = false;
+let resolvedServingInstall: any;
+function servingInstall() {
+  if (!servingInstallResolved) {
+    resolvedServingInstall = servingSidequestInstall(__filename);
+    servingInstallResolved = true;
+  }
+  return resolvedServingInstall;
+}
 
 let cacheLayer: any;
 function sqliteDataVersion(...args: any[]) { return cacheLayer.sqliteDataVersion(...args); }
@@ -534,6 +544,7 @@ const {
   syncLiveDispatchVerification,
   retirePreparedCompatibilityStaleAttempt,
   preparedCompatibilityHasProvenMismatch,
+  preparedCompatibilityWarning,
   supersedeUnboundAttempt,
   readDispatchBriefing,
   recoverLiveClaimDispatch,
@@ -582,6 +593,7 @@ const {
   assertDispatchTransport,
   assertSidequestInstall,
   checkSidequestInstall,
+  servingInstall,
   prepareAttempt,
   transitionAttempt,
   attemptDiagnostic,
@@ -1976,6 +1988,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (opts.direct && t.dispatchNonce && !terminalDispatch) return { ok: false, reason: 'direct_conflict', ticket: t };
     if (opts.direct && t.dispatchNonce && terminalDispatch && !opts.force) return { ok: false, reason: 'terminal_claim_takeover_required', ticket: t };
     if (!opts.direct && isRoutedTicket(t) && !t.dispatchNonce) return { ok: false, reason: 'dispatch_required', ticket: t };
+    let compatibilityAdvisory = null;
     if (currentDispatch?.preparedCompatibility?.pluginInstall && t.dispatchNonce) {
       const currentInstall = checkSidequestInstall(readMeta(slug)?.path || '');
       if (preparedCompatibilityHasProvenMismatch(currentDispatch, currentInstall)) {
@@ -1987,6 +2000,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
           message: `claim: refused ${t.ref}; its prepared Sidequest install snapshot is stale, so this dispatch attempt was retired. Stop without claiming; the orchestrator can dispatch a fresh token.`,
         };
       }
+      compatibilityAdvisory = preparedCompatibilityWarning(currentDispatch, currentInstall);
     }
     if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
     const now = new Date().toISOString();
@@ -2125,7 +2139,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     // release it immediately instead of waiting out the TTL. No-op without a session id.
     if (opts.sessionId) registerWorker(opts.sessionId, slug, t.id, by);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
-    return { ok: true, ticket: t };
+    return { ok: true, ticket: t, ...(compatibilityAdvisory ? { advisory: compatibilityAdvisory } : {}) };
   });
   if (result.reason !== 'busy' || opts.force) return result;
   const t = getTicket(slug, found.id);

@@ -4,6 +4,7 @@ const { canonicalPreparedDispatchExecutor } = require('../prepared-dispatch.js')
 const { classifyVerificationKind, verificationRequirement } = require('../kernel/verification.js');
 const { resolveSuite } = require('../suite-resolver.js');
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationOutcome } = require('../kernel/review-binding');
+const { compareSemver } = require('../plugin-freshness.js');
 
 function unscopedWriteCannotAutoApprove(ticket?: any, options?: any) {
   const { dispatchReadOnly, normalizeFiles, autoApproveScope } = options;
@@ -48,7 +49,7 @@ function requirementsMatch(left: any, right: any) {
 }
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
 
   function syncLiveDispatchVerification(slug?: any, ticket?: any, amendment?: any) {
     const state = dispatchState(ticket);
@@ -650,6 +651,7 @@ function retirePreparedCompatibilityStaleAttempt(slug?: any, ticket?: any, sourc
 type PreparedPluginInstall = {
   pluginInstall: unknown;
   identity: unknown;
+  version?: unknown;
 };
 
 type PreparedCompatibilityState = {
@@ -662,10 +664,33 @@ type CurrentPluginInstall = {
   identity?: unknown;
 };
 
+type PreparedCompatibilityDecision = {
+  refusal?: boolean;
+  warning?: string;
+};
+
+function preparedCompatibilityDecision(state: PreparedCompatibilityState, currentInstall: CurrentPluginInstall): PreparedCompatibilityDecision | null {
+  if (currentInstall.ok === true && (
+    currentInstall.installPath !== state.preparedCompatibility.pluginInstall
+    || currentInstall.identity !== state.preparedCompatibility.identity
+  )) return { refusal: true };
+  const preparedVersion = typeof state.preparedCompatibility.version === 'string' ? state.preparedCompatibility.version : '';
+  const servingSnapshot = servingInstall();
+  const servingVersion = typeof servingSnapshot?.version === 'string' ? servingSnapshot.version : '';
+  if (!preparedVersion || !servingVersion) return null;
+  const comparison = compareSemver(servingVersion, preparedVersion);
+  // An older server can apply obsolete dispatch semantics; a newer one only needs a visible advisory.
+  if (comparison === -1) return { refusal: true };
+  if (comparison === 1) return { warning: `Sidequest serving ${servingVersion} is newer than prepared ${preparedVersion}; dispatch continues.` };
+  return null;
+}
+
 function preparedCompatibilityHasProvenMismatch(state: PreparedCompatibilityState, currentInstall: CurrentPluginInstall) {
-  return currentInstall.ok === true
-    && (currentInstall.installPath !== state.preparedCompatibility.pluginInstall
-      || currentInstall.identity !== state.preparedCompatibility.identity);
+  return preparedCompatibilityDecision(state, currentInstall)?.refusal === true;
+}
+
+function preparedCompatibilityWarning(state: PreparedCompatibilityState, currentInstall: CurrentPluginInstall) {
+  return preparedCompatibilityDecision(state, currentInstall)?.warning || null;
 }
 
 function supersedeUnboundAttempt(slug?: any, idOrRef?: any, opts?: any) {
@@ -1328,6 +1353,24 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   const installCheck = projectPath ? assertSidequestInstall(projectPath) : null;
   const preparedPluginInstall = installCheck?.installPath || null;
   const preparedPluginIdentity = installCheck?.identity || null;
+  const preparedPluginVersion = installCheck?.version || null;
+  const servingSnapshot = servingInstall();
+  const preparedServingInstall = servingSnapshot?.installPath || null;
+  const preparedServingVersion = servingSnapshot?.version || null;
+  const preparedCompatibility = preparedPluginInstall && preparedPluginIdentity
+    ? Object.freeze({
+      pluginInstall: preparedPluginInstall,
+      identity: preparedPluginIdentity,
+      version: preparedPluginVersion,
+      ...(preparedServingInstall && preparedServingVersion ? { servingInstall: preparedServingInstall, servingVersion: preparedServingVersion } : {}),
+    })
+    : null;
+  if (preparedCompatibility && preparedCompatibilityHasProvenMismatch({ preparedCompatibility }, installCheck)) {
+    throw new Error(`prepare dispatch: ${found.ref} refused; serving Sidequest ${preparedServingVersion || 'unknown'} is older than prepared ${preparedPluginVersion || 'unknown'}. Restart Claude Code so the board serves the prepared build, then dispatch again.`);
+  }
+  const servingCompatibilityWarning = preparedCompatibility
+    ? preparedCompatibilityWarning({ preparedCompatibility }, installCheck)
+    : null;
   if (opts.recoveryEvidence) {
     const superseded = supersedeUnboundAttempt(slug, found.id, {
       evidence: opts.recoveryEvidence,
@@ -1622,8 +1665,8 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       lifecycleAttempt: prepareAttempt(
         dispatchBaseline,
         Object.freeze({ actor: dispatchPreparationAttribution(opts), operation: 'prepare', sessionId: opts.sessionId ? String(opts.sessionId) : null }),
-        preparedPluginInstall && preparedPluginIdentity
-          ? Object.freeze({ pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity })
+        preparedCompatibility
+          ? Object.freeze({ pluginInstall: preparedCompatibility.pluginInstall, identity: preparedCompatibility.identity })
           : undefined,
         verificationRequirement,
       ),
@@ -1631,7 +1674,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       evidenceDirectory,
       sessionId: opts.sessionId ? String(opts.sessionId) : null,
       preparedBy: dispatchPreparationAttribution(opts),
-      ...(preparedPluginInstall && preparedPluginIdentity ? { preparedCompatibility: { pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity } } : {}),
+      ...(preparedCompatibility ? { preparedCompatibility } : {}),
       sharedTree,
       ...(reducedAgentSchema ? { reducedAgentSchema: true } : {}),
       ...(worktreeWarning ? { worktreeWarning } : {}),
@@ -1706,7 +1749,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     stampDispatchEvent(t, 'dispatch', now);
     writeDispatchTokenFile(t);
     putTicket(slug, t);
-    const warnings = [localAheadWarning?.message, dirtyBaselineCapture?.warning].filter(Boolean);
+    const warnings = [localAheadWarning?.message, dirtyBaselineCapture?.warning, servingCompatibilityWarning].filter(Boolean);
     return { ok: true, ticket: t, token: t.dispatchNonce, recovery, ...(warnings.length ? { warnings } : {}) };
     });
     if (priorTokenFile && stagedTokenFile && priorTokenFile !== stagedTokenFile) {
@@ -1804,6 +1847,7 @@ function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {
     }
     const state = dispatchState(t);
     if (!state) return { ok: false, reason: 'missing_state' };
+    let compatibilityWarning = null;
     if (state.preparedCompatibility?.pluginInstall) {
       const currentInstall = checkSidequestInstall(readMeta(slug)?.path || '');
       if (preparedCompatibilityHasProvenMismatch(state, currentInstall)) {
@@ -1815,6 +1859,7 @@ function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {
           message: `${t.ref}'s prepared dispatch was retired because its Sidequest install snapshot is stale. Stop this launch; the orchestrator can dispatch a fresh token.`,
         };
       }
+      compatibilityWarning = preparedCompatibilityWarning(state, currentInstall);
     }
     const now = new Date().toISOString();
     state.sessionId = opts.sessionId ? String(opts.sessionId) : state.sessionId || null;
@@ -1830,7 +1875,7 @@ function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {
     }
     stampDispatchEvent(t, opts.source || 'dispatch', now);
     putTicket(slug, t);
-    return { ok: true, ticket: t };
+    return { ok: true, ticket: t, ...(compatibilityWarning ? { advisory: compatibilityWarning } : {}) };
   });
 }
 
@@ -2908,6 +2953,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     supersedableUnboundAttempt,
     retirePreparedCompatibilityStaleAttempt,
     preparedCompatibilityHasProvenMismatch,
+    preparedCompatibilityWarning,
     supersedeUnboundAttempt,
     isolatedDispatchWorktreeMissing,
     isolatedDispatchWithMissingWorktree,
