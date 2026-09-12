@@ -4463,6 +4463,167 @@ test('SQ-2752: a pending candidate blocks a singleton only where their recorded 
   }
 });
 
+// SQ-2767: the gate script and its run log live outside the repository on purpose. Integration
+// refuses a dirty target including untracked files, so a counter inside PROJECT_DIR would block
+// the delivery half of this fixture.
+function gateRunCounter(label: string) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `sq-gate-runs-${label}-`));
+  const scriptPath = path.join(directory, 'count-gate-runs.cjs');
+  const logPath = path.join(directory, 'runs.log');
+  const append = `require('node:fs').appendFileSync(${JSON.stringify(logPath)}, 'run\\n');\n`;
+  fs.writeFileSync(scriptPath, append);
+  return {
+    command: `node ${JSON.stringify(scriptPath)}`,
+    runs: () => (fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').split('run\n').length - 1 : 0),
+    startFailing: () => fs.writeFileSync(scriptPath, `${append}process.exit(1);\n`),
+    remove: () => fs.rmSync(directory, { recursive: true, force: true }),
+  };
+}
+
+test('SQ-2767: a singleton gate reuses the exact-candidate capture, and delivery still gates the merged tree', async () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  const gate = gateRunCounter('reuse');
+  const captureLogs: string[] = [];
+  try {
+    const baseline = git(['rev-parse', 'HEAD']);
+    const ticket = addTicket('reused capture singleton', { executorVerify: gate.command, files: ['lib/reused-capture.js'] });
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'reused-capture-worker', { direct: true, reason: 'The capture reuse fixture requires a local direct claim.' }).ok, true);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'reused-capture.js'), 'candidate\n');
+    git(['add', 'lib/reused-capture.js']);
+    git(['commit', '-m', 'reused capture candidate']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+
+    const capture = await runVerifyCapture(gate.command, PROJECT_DIR);
+    if (capture.logPath) captureLogs.push(capture.logPath);
+    assert.strictEqual(capture.status, 'passed');
+    const recorded = recordCapture({ project: PROJECT_DIR, ticket: ticket.ref }, capture, PROJECT_DIR);
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.capture.candidate.value, candidate);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'reused-capture-worker', { commit: candidate, verify: gate.command }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    Object.assign(submitted.submission, {
+      baseline: { revision: { source: 'git', value: baseline, observedAt: new Date().toISOString() }, purpose: 'dispatch' },
+      changedPaths: ['lib/reused-capture.js'],
+    });
+    persist(submitted);
+    assert.strictEqual(gate.runs(), 1, 'only the executor capture has run the command so far');
+
+    const assembled = store.assembleSubmissionWave(slug, [ticket.ref]);
+    assert.strictEqual(assembled.ok, true, assembled.message);
+    assert.strictEqual(assembled.gate.state, 'gate_passed');
+    assert.strictEqual(assembled.gate.verification.status, 'passed');
+    assert.strictEqual(assembled.gate.verification.command, gate.command);
+    assert.strictEqual(assembled.gate.verification.reusedCapture.id, recorded.capture.id);
+    assert.strictEqual(assembled.gate.verification.reusedCapture.candidate.value, candidate);
+    assert.match(assembled.gate.verification.evidence, /Reused the authoritative verification capture/);
+    assert.strictEqual(gate.runs(), 1, 'assembly admitted the candidate without re-running its verifier');
+
+    const delivered = integrateOnCurrentTestBranch(ticket.ref);
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.strictEqual(gate.runs(), 2, 'delivery still gates the merged tree');
+    assert.strictEqual(delivered.integration.verify.status, 'passed');
+    assert.strictEqual(delivered.integration.verify.command, gate.command);
+    assert.ok(fs.existsSync(delivered.integration.verify.logPath), 'the merged-tree gate records its own capture log');
+    assert.strictEqual(store.getTicket(slug, ticket.ref).submission.wave.delivery.state, 'delivered');
+
+    const mismatched = store.recordVerificationCapture(slug, ticket.ref, {
+      command: 'node -e "process.exit(0)"',
+      status: 'passed',
+      candidate: { source: 'git', value: candidate },
+      completedAt: new Date().toISOString(),
+    });
+    assert.strictEqual(mismatched.ok, false);
+    assert.strictEqual(mismatched.reason, 'verification_capture_command_mismatch');
+  } finally {
+    for (const logPath of captureLogs) fs.rmSync(logPath, { force: true });
+    gate.remove();
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+test('SQ-2767: a capture for another commit and an absent capture both still re-run the singleton gate', async () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  const mismatchGate = gateRunCounter('mismatch');
+  const absentGate = gateRunCounter('absent');
+  const captureLogs: string[] = [];
+  try {
+    const baseline = git(['rev-parse', 'HEAD']);
+    const dispatchBaseline = { revision: { source: 'git', value: baseline, observedAt: new Date().toISOString() }, purpose: 'dispatch' };
+
+    const mismatch = addTicket('capture bound to a superseded commit', { executorVerify: mismatchGate.command, files: ['lib/mismatched-capture.js'] });
+    assert.strictEqual(store.claimTicket(slug, mismatch.ref, 'mismatched-capture-worker', { direct: true, reason: 'The capture mismatch fixture requires a local direct claim.' }).ok, true);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'mismatched-capture.js'), 'captured candidate\n');
+    git(['add', 'lib/mismatched-capture.js']);
+    git(['commit', '-m', 'captured mismatch candidate']);
+    const capturedCommit = git(['rev-parse', 'HEAD']);
+    pin(mismatch, capturedCommit);
+    const capture = await runVerifyCapture(mismatchGate.command, PROJECT_DIR);
+    if (capture.logPath) captureLogs.push(capture.logPath);
+    const recorded = recordCapture({ project: PROJECT_DIR, ticket: mismatch.ref }, capture, PROJECT_DIR);
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(store.submitTicket(slug, mismatch.ref, 'mismatched-capture-worker', { commit: capturedCommit, verify: mismatchGate.command }).ok, true);
+    // The candidate moves past the commit its capture was taken against, exactly the
+    // state a reused capture must not be allowed to certify.
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'mismatched-capture.js'), 'uncaptured candidate\n');
+    git(['add', 'lib/mismatched-capture.js']);
+    git(['commit', '-m', 'uncaptured mismatch candidate']);
+    const uncapturedCommit = git(['rev-parse', 'HEAD']);
+    pin(mismatch, uncapturedCommit);
+    const mismatchSubmission = store.getTicket(slug, mismatch.ref);
+    Object.assign(mismatchSubmission.submission, {
+      commit: uncapturedCommit,
+      commits: [uncapturedCommit],
+      baseline: dispatchBaseline,
+      changedPaths: ['lib/mismatched-capture.js'],
+    });
+    persist(mismatchSubmission);
+    assert.notStrictEqual(recorded.capture.candidate.value, uncapturedCommit);
+
+    const absent = addTicket('candidate without any capture', { files: ['lib/absent-capture.js'] });
+    assert.strictEqual(store.claimTicket(slug, absent.ref, 'absent-capture-worker', { direct: true, reason: 'The absent capture fixture requires a local direct claim.' }).ok, true);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'absent-capture.js'), 'candidate\n');
+    git(['add', 'lib/absent-capture.js']);
+    git(['commit', '-m', 'absent capture candidate']);
+    const absentCommit = git(['rev-parse', 'HEAD']);
+    pin(absent, absentCommit);
+    assert.strictEqual(store.submitTicket(slug, absent.ref, 'absent-capture-worker', { commit: absentCommit, verify: absentGate.command }).ok, true);
+    const absentSubmission = store.getTicket(slug, absent.ref);
+    Object.assign(absentSubmission.submission, { baseline: dispatchBaseline, changedPaths: ['lib/absent-capture.js'] });
+    persist(absentSubmission);
+    assert.deepStrictEqual(store.getTicket(slug, absent.ref).verificationCaptures, undefined);
+
+    const runsBeforeMismatch = mismatchGate.runs();
+    mismatchGate.startFailing();
+    const refused = store.assembleSubmissionWave(slug, [mismatch.ref]);
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'assembled_wave_gate_failed');
+    assert.strictEqual(refused.gate.verification.status, 'failed_suite');
+    assert.strictEqual(mismatchGate.runs(), runsBeforeMismatch + 1, 'a capture for another commit is not reused');
+    assert.strictEqual(store.pendingSubmission(store.getTicket(slug, mismatch.ref)), true);
+
+    const assembled = store.assembleSubmissionWave(slug, [absent.ref]);
+    assert.strictEqual(assembled.ok, true, assembled.message);
+    assert.strictEqual(absentGate.runs(), 1, 'an absent capture is not a passing capture');
+    assert.strictEqual(assembled.gate.verification.reusedCapture, undefined);
+  } finally {
+    for (const logPath of captureLogs) fs.rmSync(logPath, { force: true });
+    mismatchGate.remove();
+    absentGate.remove();
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
 test('SQ-2463: wave assembly replaces a stale wave baseline with the current target and gates ancestor candidates once', () => {
   cleanBranch();
   const originalConfig = store.boardConfig(slug);
