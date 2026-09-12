@@ -3098,7 +3098,7 @@ test('configured worktree bases apply to readonly isolated dispatches without ch
   }
 });
 
-test('SQ-2777: a dispatch refuses to baseline on an unpublished marketplace-only release tip, and the teardown it names restores a clean submission range', () => {
+test('SQ-2777: a dispatch refuses to baseline on an unpublished release tip, and the teardown it names restores a clean submission range', () => {
   const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-'));
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-remote-'));
   const executorParent = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-executor-'));
@@ -3116,18 +3116,23 @@ test('SQ-2777: a dispatch refuses to baseline on an unpublished marketplace-only
     const pushedBase = git(['rev-parse', 'origin/main']);
 
     // What `cut.mjs` has done by the time it starts the release suites: the version
-    // and changelog commit, then its annotated marketplace tag. Nothing is pushed yet.
+    // and changelog commit, then its annotated tag set. Nothing is pushed yet. This is
+    // the ordinary shape, where a plugin moved and so carries its own tag too.
     fs.writeFileSync(path.join(repository, 'release.txt'), 'sidequest 9.9.9\n');
     git(['add', 'release.txt']);
     git(['commit', '--quiet', '-m', 'release v9.9.9: sidequest 9.9.9 (SQ-0001)']);
     const releaseTip = git(['rev-parse', 'main']);
     git(['tag', '-a', 'v9.9.9', '-m', 'release v9.9.9: sidequest 9.9.9 (SQ-0001)']);
+    git(['tag', '-a', 'sidequest-v9.9.9', '-m', 'sidequest 9.9.9 (v9.9.9)']);
 
     const tipSlug = store.ensureProject(repository, 'unpublished release tip').slug;
     const refused = store.createTicket(tipSlug, { title: 'dispatched while a cut is in flight', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    // Every tag on the tip is named, not just the one that decided the match: the
+    // refusal tells the reader to delete "those tags", so an incomplete list leaves
+    // `sidequest-v9.9.9` behind to collide with the retry cut (SQ-2787).
     assert.throws(
       () => store.prepareDispatch(tipSlug, refused.ref, { sessionId: 'release-tip-refused' }),
-      /unpublished release commit, tagged v9\.9\.9 and not yet on the remote branch/,
+      /unpublished release commit, tagged sidequest-v9\.9\.9, v9\.9\.9 and not yet on the remote branch/,
     );
     assert.equal(store.getTicket(tipSlug, refused.ref).dispatch, undefined);
 
@@ -3212,6 +3217,44 @@ test('an unpushed local commit without an annotated marketplace release tag keep
     const prepared = store.prepareDispatch(ordinarySlug, ticket.ref, { sessionId: 'ordinary-unpushed-baseline' });
     assert.equal(prepared.ticket.dispatch.baseCommit, localMain);
     assert.deepEqual(prepared.ticket.dispatch.integrationTarget, { mode: 'local', upstream: 'main', branch: 'main' });
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+// SQ-2779 added repo-scoped fragments, so a window carrying only those releases no
+// published plugin and `cut.mjs` creates the marketplace tag alone. That window was
+// the one shape the guard did not cover (SQ-2787).
+test('SQ-2787: a repo-only release tip carrying just the marketplace tag still refuses the dispatch baseline', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-repo-only-'));
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-repo-only-remote-'));
+  const git = (args: string[], cwd: string = repository) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+  try {
+    git(['init', '--quiet', '-b', 'main']);
+    git(['config', 'user.email', 'test@example.invalid']);
+    git(['config', 'user.name', 'Dispatch Lifecycle Test']);
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "base";\n');
+    git(['add', 'tracked.js']);
+    git(['commit', '--quiet', '-m', 'pushed base']);
+    execFileSync('git', ['init', '-b', 'main', '--bare', remote], { windowsHide: true });
+    git(['remote', 'add', 'origin', remote]);
+    git(['push', '--quiet', '-u', 'origin', 'main']);
+
+    fs.writeFileSync(path.join(repository, 'release.txt'), 'repo-only release\n');
+    git(['add', 'release.txt']);
+    git(['commit', '--quiet', '-m', 'release v9.9.9 (SQ-0002)']);
+    const releaseTip = git(['rev-parse', 'main']);
+    git(['tag', '-a', 'v9.9.9', '-m', 'release v9.9.9 (SQ-0002)']);
+
+    const repoOnlySlug = store.ensureProject(repository, 'repo-only release tip').slug;
+    const refused = store.createTicket(repoOnlySlug, { title: 'dispatched during a repo-only cut', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    assert.throws(
+      () => store.prepareDispatch(repoOnlySlug, refused.ref, { sessionId: 'repo-only-release-tip' }),
+      /unpublished release commit, tagged v9\.9\.9 and not yet on the remote branch/,
+    );
+    assert.equal(store.getTicket(repoOnlySlug, refused.ref).dispatch, undefined);
+    assert.equal(git(['rev-parse', 'main']), releaseTip);
   } finally {
     fs.rmSync(repository, { recursive: true, force: true });
     fs.rmSync(remote, { recursive: true, force: true });
