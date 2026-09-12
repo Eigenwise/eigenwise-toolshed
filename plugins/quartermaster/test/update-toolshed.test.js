@@ -122,6 +122,76 @@ test('stops before update mutations when the Claude executable is unavailable', 
   assert.equal(lines.filter((line) => line.includes('Claude Code executable')).length, 1);
 }));
 
+test('uses the newest Windows desktop-app Claude executable after PATH fails', { skip: process.platform !== 'win32' }, () => {
+  const localAppData = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-desktop-claude-'));
+  const older = path.join(localAppData, 'Packages', 'Claude_old-channel', 'LocalCache', 'Roaming', 'Claude', 'claude-code', '1.2.0', 'claude.exe');
+  const newest = path.join(localAppData, 'Packages', 'Claude_new-channel', 'LocalCache', 'Roaming', 'Claude', 'claude-code', '1.10.0', 'claude.exe');
+  fs.mkdirSync(path.dirname(older), { recursive: true });
+  fs.mkdirSync(path.dirname(newest), { recursive: true });
+  fs.writeFileSync(older, '');
+  fs.writeFileSync(newest, '');
+
+  try {
+    withRegistry(registry, (registryFile) => {
+      const preflightCommands = [];
+      const result = runUpdate({
+        registryFile,
+        options: { claude: 'claude', claudeExplicit: false, dryRun: false, check: false },
+        platform: process.platform,
+        environment: { LOCALAPPDATA: localAppData },
+        run: (command) => {
+          if (command.args[0] === '--version') {
+            preflightCommands.push(command.command);
+            return command.command === newest
+              ? { ok: true }
+              : { ok: false, error: 'spawnSync claude ENOENT' };
+          }
+          return { ok: true };
+        },
+        report: () => {},
+      });
+
+      assert.equal(result.ok, true);
+      assert.deepEqual(preflightCommands, ['claude', newest]);
+    });
+  } finally {
+    fs.rmSync(localAppData, { recursive: true, force: true });
+  }
+});
+
+test('does not discover a replacement after an explicit Claude path fails', { skip: process.platform !== 'win32' }, () => {
+  const localAppData = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-explicit-claude-'));
+  const discovered = path.join(localAppData, 'Packages', 'Claude_channel', 'LocalCache', 'Roaming', 'Claude', 'claude-code', '1.0.0', 'claude.exe');
+  fs.mkdirSync(path.dirname(discovered), { recursive: true });
+  fs.writeFileSync(discovered, '');
+
+  try {
+    withRegistry(registry, (registryFile) => {
+      const calls = [];
+      const lines = [];
+      const result = runUpdate({
+        registryFile,
+        options: { claude: 'C:/missing/claude.exe', claudeExplicit: true, dryRun: false, check: false },
+        platform: process.platform,
+        environment: { LOCALAPPDATA: localAppData },
+        run: (command) => {
+          calls.push(command.command);
+          return command.command === discovered
+            ? { ok: true }
+            : { ok: false, error: 'spawnSync C:/missing/claude.exe ENOENT' };
+        },
+        report: (line) => lines.push(line),
+      });
+
+      assert.equal(result.ok, false);
+      assert.deepEqual(calls, ['C:/missing/claude.exe']);
+      assert.match(lines.join('\n'), /spawnSync C:\/missing\/claude\.exe ENOENT/);
+    });
+  } finally {
+    fs.rmSync(localAppData, { recursive: true, force: true });
+  }
+});
+
 test('dry-run scopes the update plan to Toolshed and does not enumerate third-party plugins', () => withRegistry(registry, (registryFile) => {
   const originalRegistry = fs.readFileSync(registryFile, 'utf8');
   const calls = [];
@@ -490,12 +560,13 @@ test('heals stale managed status-line shim pins after updating', () => {
   }
 });
 
-test('continues after failures and returns every failed operation', () => withRegistry(registry, (registryFile) => {
+test('reports one failure detail and no reload advice when every update fails', () => withRegistry(registry, (registryFile) => {
+  const lines = [];
   const failed = runUpdate({
     registryFile,
     options: { claude: 'claude', dryRun: false, check: false },
-    run: (command) => ({ ok: command.args[0] === '--version', error: 'unreachable' }),
-    report: () => {},
+    run: (command) => ({ ok: command.args[0] === '--version', error: 'spawnSync claude ENOENT' }),
+    report: (line) => lines.push(line),
   });
 
   assert.equal(failed.ok, false);
@@ -503,6 +574,9 @@ test('continues after failures and returns every failed operation', () => withRe
   assert.match(failed.failures.join('\n'), /eigenwise-toolshed marketplace/);
   assert.doesNotMatch(failed.failures.join('\n'), /another-marketplace|other@another-marketplace/);
   assert.match(failed.failures.join('\n'), /model-gateway update/);
+  assert.equal(lines.filter((line) => line.includes('spawnSync claude ENOENT')).length, 1);
+  assert.doesNotMatch(lines.join('\n'), /Reload required:/);
+  assert.doesNotMatch(lines.join('\n'), /Toolshed version transitions:/);
 }));
 
 test('reports version transitions and gateway interruption before setup', () => withRegistry(registry, (registryFile) => {
@@ -534,11 +608,13 @@ test('parses check and dry-run options and rejects the retired wiring-mode flag'
     check: true,
     dryRun: true,
     claude: 'claude-dev',
+    claudeExplicit: true,
   });
   assert.deepEqual(parseArgs(['--migrate-model-gateway', '--confirm-sessions-closed']), {
     check: false,
     dryRun: false,
     claude: 'claude',
+    claudeExplicit: false,
     migrateModelGateway: true,
     confirmSessionsClosed: true,
   });

@@ -26,11 +26,12 @@ preserves per-project `.claude/settings.local.json` or user-level `~/.claude/set
 never escalates scope. Remote Control compatibility points the base URL at `api.anthropic.com`, so the
 Codex/Grok rows disappear from `/model`; an explicit id such as `/model claude-gpt-5.6-terra` still works.
 Gateway wiring changes apply to new Claude Code sessions, so restart affected sessions. Before any
-mutation, the updater runs the configured Claude Code command once. If it is unavailable, the updater
-stops before refreshing marketplaces, updating plugins, or invoking the gateway updater. The default uses
-`claude` from `PATH`; when Claude Code is installed elsewhere, retry with `--claude <absolute claude.exe
-path>`. Check and dry-run stay non-mutating. It continues after individual update failures and prints the
-failing commands.
+mutation, the updater runs a discovered Claude Code command once. It tries `claude` from `PATH`, then
+known desktop-app locations, including the Windows MSIX package cache and `~/.local/bin/claude` on macOS.
+If none work, the updater stops before refreshing marketplaces, updating plugins, or invoking the gateway
+updater. Use `--claude <absolute claude.exe path>` to override discovery; an explicit path that fails stops
+the run rather than guessing past it. Check and dry-run stay non-mutating. It continues after individual
+update failures and prints the failing commands with one failure detail in the summary.
 
 ## Gateway rename migration
 
