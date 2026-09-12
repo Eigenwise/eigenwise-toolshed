@@ -2901,11 +2901,46 @@ function provisionWaveGateWorktree(slug: any, candidateWorktree: string) {
   return { ok: true, evidence: `${dependenciesEvidence} Configured worktree setup ${JSON.stringify(setup)} ran successfully.` };
 }
 
+// SQ-2767: the submitted candidate already carries an authoritative capture of this exact
+// pinned command against this exact commit, taken by the dispatched verify-capture wrapper and
+// re-checked when submit admitted the candidate. Re-running the command in that same retained
+// worktree observes whatever state the worktree is in now, so it proves less than the capture it
+// duplicates. The merged-tree gate at delivery is the run that observes the tree that ships.
+function reusedSingletonGateVerification(ticket: any, requirement: any) {
+  const candidate = submissionCandidateRevision(ticket?.submission);
+  const source = String(candidate?.source || '').trim();
+  const value = String(candidate?.value || '').trim().toLowerCase();
+  if (!source || !value) return null;
+  const capture = recordedVerificationCaptures(ticket).find((entry: any) => entry?.ticket === ticket.ref
+    && entry?.command === requirement.command
+    && entry?.status === 'passed'
+    && String(entry?.candidate?.source || '') === source
+    && String(entry?.candidate?.value || '') === value);
+  if (!capture) return null;
+  return {
+    kind: requirement.kind,
+    status: 'passed',
+    command: requirement.command,
+    evidence: `Reused the authoritative verification capture ${capture.id} recorded for ${source}:${value}, the exact assembled candidate, so the gate did not re-run the command against the candidate worktree. The merged tree is still gated at delivery.`,
+    logPath: capture.logPath || null,
+    exitCode: capture.exitCode ?? null,
+    reusedCapture: { id: capture.id, candidate: { source, value }, completedAt: capture.completedAt },
+  };
+}
+
 function authoritativeWaveVerification(slug: any, tickets: any[], waveId: string, supplied: any, opts?: any) {
   const requirement = waveVerificationRequirement(tickets);
   if (!requirement.ok) return requirement;
   if (opts?.skipVerify === true) return { ok: true, verification: skippedVerification(requirement.requirement, opts.verificationWaiver) };
   if (requirement.requirement.command) {
+    const reused = tickets.length === 1 ? reusedSingletonGateVerification(tickets[0], requirement.requirement) : null;
+    if (reused) {
+      return {
+        ok: true,
+        provisioning: 'The gate reused the candidate\'s authoritative verification capture, so nothing ran and worktree provisioning was skipped.',
+        verification: reused,
+      };
+    }
     const timeoutMilliseconds = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
     const candidateWorktree = tickets.length === 1 ? String(tickets[0]?.submission?.worktree || '').trim() : '';
     const provisioning = provisionWaveGateWorktree(slug, candidateWorktree);
@@ -2995,12 +3030,16 @@ function recordTicketWaveDelivery(slug: any, ticket: any, revision: any, verific
   return { ok: true, delivery: delivery.delivery };
 }
 
+function submissionCandidateRevision(submission: any) {
+  if (submission?.sourceRevision) return submission.sourceRevision;
+  const commit = String(submission?.commit || '').trim().toLowerCase();
+  return commit ? { source: 'git', value: commit, observedAt: String(submission.at || new Date().toISOString()) } : null;
+}
+
 function submissionWaveCandidate(ticket: any) {
   const submission = ticket?.submission;
   if (!submission) return null;
-  const revision = submission.sourceRevision || (submission.commit
-    ? { source: 'git', value: String(submission.commit).trim().toLowerCase(), observedAt: String(submission.at || new Date().toISOString()) }
-    : null);
+  const revision = submissionCandidateRevision(submission);
   const baseline = submission.baseline || sourceRevisionBaseline(ticket);
   if (!revision || !baseline || !submission.verificationResult) return null;
   return {
