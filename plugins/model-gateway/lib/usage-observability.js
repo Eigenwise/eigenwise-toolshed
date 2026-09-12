@@ -47,6 +47,28 @@ function entryStat(target) {
   return fs.statSync(target, { throwIfNoEntry: false });
 }
 
+function realpath(target) {
+  return fs.realpathSync.native ? fs.realpathSync.native(target) : fs.realpathSync(target);
+}
+
+// Keep aligned with plugins/observability/lib/observability/path-identity.js.
+function resolvedPath(value) {
+  const resolved = path.resolve(String(value || '.'));
+  const missingSegments = [];
+  let existingPath = resolved;
+
+  for (;;) {
+    try {
+      return path.join(realpath(existingPath), ...missingSegments);
+    } catch {
+      const parent = path.dirname(existingPath);
+      if (parent === existingPath) return resolved;
+      missingSegments.unshift(path.basename(existingPath));
+      existingPath = parent;
+    }
+  }
+}
+
 function pointedWorktreeRoot(marker) {
   const pointer = fs.readFileSync(marker, 'utf8').trim();
   if (!pointer.startsWith('gitdir:')) return null;
@@ -69,7 +91,7 @@ function pointedWorktreeRoot(marker) {
 function repositoryRoot(cwd) {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null;
   try {
-    for (let directory = path.resolve(cwd); ;) {
+    for (let directory = resolvedPath(cwd); ;) {
       const marker = path.join(directory, '.git');
       const markerStat = entryStat(marker);
       if (markerStat && markerStat.isDirectory()) return directory;
@@ -85,7 +107,7 @@ function repositoryRoot(cwd) {
 
 function projectNameFromCwd(cwd) {
   if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null;
-  const root = repositoryRoot(cwd) || path.resolve(cwd);
+  const root = repositoryRoot(cwd) || resolvedPath(cwd);
   const name = path.basename(root).replace(/[^A-Za-z0-9_.:@-]/g, '-').slice(0, 64);
   return safeIdentifier(name);
 }
