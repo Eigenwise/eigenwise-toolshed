@@ -473,7 +473,6 @@ function headCommit(cwd) {
   return head.ok ? head.value : null;
 }
 const MARKETPLACE_RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
-const PLUGIN_RELEASE_TAG = /^[A-Za-z0-9][A-Za-z0-9._-]*-v\d+\.\d+\.\d+$/;
 function unpublishedReleaseTip(cwd, commit, remoteBranchRef) {
   const remoteRef = String(remoteBranchRef || "").trim();
   if (!remoteRef) return null;
@@ -483,11 +482,9 @@ function unpublishedReleaseTip(cwd, commit, remoteBranchRef) {
   if (isAncestor(cwd, tip.value, published.value)) return null;
   const listed = gitResult(cwd, ["for-each-ref", "--points-at", tip.value, "--format=%(refname:strip=2) %(objecttype)", "refs/tags"]);
   if (!listed.ok) return null;
-  const annotated = listed.value.split(/\r?\n/).map((line) => line.trim().split(/\s+/)).filter((fields) => fields.length === 2 && fields[1] === "tag").map((fields) => fields[0]);
-  const marketplace = annotated.filter((name) => MARKETPLACE_RELEASE_TAG.test(name));
-  const plugins = annotated.filter((name) => PLUGIN_RELEASE_TAG.test(name));
-  if (!marketplace.length || !plugins.length) return null;
-  return { commit: tip.value, tags: [...marketplace, ...plugins].sort() };
+  const marketplace = listed.value.split(/\r?\n/).map((line) => line.trim().split(/\s+/)).filter((fields) => fields.length === 2 && fields[1] === "tag").map((fields) => fields[0]).filter((name) => MARKETPLACE_RELEASE_TAG.test(name));
+  if (!marketplace.length) return null;
+  return { commit: tip.value, tags: marketplace.sort() };
 }
 function preserveCommitRef(cwd, commit, gitRef, options) {
   const ref = String(gitRef || "").trim();
