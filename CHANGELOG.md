@@ -8,6 +8,60 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.560.0 (2026-09-12)
+
+### model-gateway 0.50.20 → 0.50.21
+
+#### Fixes
+
+- Stabilize the discovery-cache auth test (SQ-2794)
+  Make the discovery-cache auth test deterministic when a loaded Windows runner slows port-ownership probes.
+- Name the port-ownership probe budget failure (SQ-2796)
+  Tell users when a bounded port-ownership probe ran out of time and where to override its budget.
+- Pin the Windows detached launch against job-object close-kill (SQ-2798)
+  Measured whether the gateway's Windows detached launch survives its caller being
+  killed inside a job object. It does: the WMI-created supervisor outlives a job
+  armed with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, while a plain
+  `spawn({detached:true})` child dies with it. The regression test now reproduces
+  that close-kill instead of calling `TerminateJobObject`, so it fails if the
+  launch path ever drops WMI.
+
+### quartermaster 0.10.0 → 0.10.1
+
+#### Fixes
+
+- Find desktop-installed Claude Code (SQ-2791)
+  Toolshed updates now find Claude Code installed by the Windows desktop app when it is not on PATH, and report failed updates without false reload advice.
+
+### sidequest 5.1.11 → 5.1.12
+
+#### Fixes
+
+- Guard marketplace-only release windows (SQ-2787)
+  Sidequest now blocks dispatches from local release commits that carry only the marketplace tag.
+- A reused singleton gate capture has to prove the committed content (SQ-2789)
+  Assembling a single-ticket wave used to re-run the ticket's pinned verifier against the
+  candidate's own worktree, even though that candidate already carries an authoritative
+  verify-capture from submit. Across the last 12 delivered tickets that duplicated 688.9s of
+  1350.6s of total gate time, averaging 55s per ticket. Singleton admission now reuses that
+  capture, and the gate says so in its evidence.
+
+  The capture only stands in for the candidate when it proves the candidate's committed content.
+  A capture used to bind to nothing but the verify cwd's HEAD, so one taken over uncommitted edits
+  was indistinguishable from one taken at the committed content: a run over a passing edit that was
+  never committed could admit a failing candidate. The wrapper now records whether that cwd had any
+  uncommitted changes, and reuse requires the recorded proof. A capture from a dirty worktree, and
+  any capture recorded before this change, is never reused: the gate provisions a worktree and runs
+  the command as before.
+
+  A capture for another commit, a candidate with no capture, and every multi-ticket wave still run
+  the command. The merged-tree gate at delivery is unchanged: it is the only run that observes the
+  tree that ships.
+- Recover dead pre-runtime dispatches (SQ-2793)
+  Recover abandoned pre-runtime dispatch attempts without weakening protections for bound or claimed work.
+- Explain unavailable dispatch bindings (SQ-2797)
+  Explain whether a worktree binding failed on session, worktree, or project facts.
+
 ## v3.559.0 (2026-09-12)
 
 ### Repository

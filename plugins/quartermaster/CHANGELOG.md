@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.1 (2026-09-12)
+
+Released in v3.560.0, up from 0.10.0.
+
+### Fixes
+
+- Find desktop-installed Claude Code (SQ-2791)
+  Toolshed updates now find Claude Code installed by the Windows desktop app when it is not on PATH, and report failed updates without false reload advice.
+
 ## 0.10.0 (2026-09-11)
 
 Released in v3.558.0, up from 0.9.4.
