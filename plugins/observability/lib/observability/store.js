@@ -301,10 +301,11 @@ function openObservabilityStore(databaseFile, options = {}) {
     if (!observation.session_id) return;
     const projectName = observation.attributes && observation.attributes.project_name;
     if (!observation.project_id && !projectName) return;
+    const previous = sessionProjects.get(observation.session_id);
     sessionProjects.delete(observation.session_id);
     sessionProjects.set(observation.session_id, {
-      project_id: observation.project_id || null,
-      project_name: projectName || null,
+      project_id: observation.project_id || previous?.project_id || null,
+      project_name: projectName || previous?.project_name || null,
     });
     while (sessionProjects.size > SESSION_PROJECT_CAP) sessionProjects.delete(sessionProjects.keys().next().value);
   }
@@ -352,24 +353,22 @@ function openObservabilityStore(databaseFile, options = {}) {
 
   function enrichGateway(input) {
     if (!input || !['gateway.token.usage', 'gateway.tool_result.usage', 'gateway.mcp.footprint'].includes(input.event_name)) return input;
-    // A gateway record names its project (usage-observability.js resolveProjectId is a cwd
-    // basename); only a session's hook history carries the canonical id. So a raw value is
-    // identity only when it is already canonical, and a name is identity only when it matches
-    // the session it claims. Anything else stays unattributed and consent denies it.
     const rawProjectId = typeof input.project_id === 'string' && input.project_id.length > 0 ? input.project_id : null;
     const canonicalProjectId = rawProjectId && CANONICAL_PROJECT_ID.test(rawProjectId) ? rawProjectId : null;
+    // Keep this legacy name comparison until a gateway version floor lets the dashboard's ID/name transition shim go too.
     const mapped = !canonicalProjectId && input.session_id ? sessionProjects.get(input.session_id) : null;
     const project = mapped && (!rawProjectId || rawProjectId === mapped.project_name) ? mapped : null;
     if (project) {
       sessionProjects.delete(input.session_id);
       sessionProjects.set(input.session_id, project);
     }
+    const projectName = input.attributes?.project_name || project?.project_name || null;
     return {
       ...input,
       project_id: canonicalProjectId || (project ? project.project_id : null),
       attributes: {
         ...(input.attributes || {}),
-        ...(project && project.project_name ? { project_name: project.project_name } : {}),
+        ...(projectName ? { project_name: projectName } : {}),
       },
     };
   }
