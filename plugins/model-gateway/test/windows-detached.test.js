@@ -12,7 +12,10 @@ const { spawnWindowsDetached } = require('../lib/windows-detached.js');
 const windows = process.platform === 'win32';
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
-test('Windows detached service survives caller Job Object termination; ordinary detached child does not', { skip: !windows, timeout: 30000 }, async (t) => {
+// A harness (Claude Code, Claude Desktop, Windows Terminal) ends a tool call by
+// closing a job armed with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, not by calling
+// TerminateJobObject, so this reproduces the close-kill (SQ-2798).
+test('Windows detached service survives KILL_ON_JOB_CLOSE on the caller job; ordinary detached child does not', { skip: !windows, timeout: 30000 }, async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway job é '));
   const env = gatewayTestEnvironment(t, { HOME: directory, USERPROFILE: directory });
   const fixture = path.join(directory, 'caller.js');
@@ -38,24 +41,46 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public static class GatewayJobTest {
- [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern IntPtr CreateJobObject(IntPtr a, string n);
- [DllImport("kernel32.dll", SetLastError=true)] public static extern bool AssignProcessToJobObject(IntPtr j, IntPtr p);
- [DllImport("kernel32.dll")] public static extern IntPtr GetCurrentProcess();
- [DllImport("kernel32.dll", SetLastError=true)] public static extern bool TerminateJobObject(IntPtr j, uint c);
+ [StructLayout(LayoutKind.Sequential)] public struct IoCounters { public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount, ReadTransferCount, WriteTransferCount, OtherTransferCount; }
+ [StructLayout(LayoutKind.Sequential)] public struct BasicLimits {
+  public long PerProcessUserTimeLimit; public long PerJobUserTimeLimit; public uint LimitFlags;
+  public UIntPtr MinimumWorkingSetSize; public UIntPtr MaximumWorkingSetSize;
+  public uint ActiveProcessLimit; public UIntPtr Affinity; public uint PriorityClass; public uint SchedulingClass; }
+ [StructLayout(LayoutKind.Sequential)] public struct ExtendedLimits {
+  public BasicLimits BasicLimitInformation; public IoCounters IoInfo;
+  public UIntPtr ProcessMemoryLimit; public UIntPtr JobMemoryLimit; public UIntPtr PeakProcessMemoryUsed; public UIntPtr PeakJobMemoryUsed; }
+ [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateJobObject(IntPtr a, string n);
+ [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetInformationJobObject(IntPtr j, int infoClass, IntPtr info, uint length);
+ [DllImport("kernel32.dll", SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr j, IntPtr p);
+ [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+ public static void ArmKillOnJobClose() {
+  IntPtr job = CreateJobObject(IntPtr.Zero, null);
+  if (job == IntPtr.Zero) throw new Exception("CreateJobObject failed " + Marshal.GetLastWin32Error());
+  ExtendedLimits limits = new ExtendedLimits();
+  limits.BasicLimitInformation.LimitFlags = 0x2000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+  int size = Marshal.SizeOf(typeof(ExtendedLimits));
+  IntPtr buffer = Marshal.AllocHGlobal(size);
+  Marshal.StructureToPtr(limits, buffer, false);
+  bool armed = SetInformationJobObject(job, 9, buffer, (uint)size); // JobObjectExtendedLimitInformation
+  int armedError = Marshal.GetLastWin32Error();
+  Marshal.FreeHGlobal(buffer);
+  if (!armed) throw new Exception("SetInformationJobObject failed " + armedError);
+  if (!AssignProcessToJobObject(job, GetCurrentProcess())) throw new Exception("AssignProcessToJobObject failed " + Marshal.GetLastWin32Error());
+ }
 }
 '@
-$job = [GatewayJobTest]::CreateJobObject([IntPtr]::Zero, $null)
-if (-not [GatewayJobTest]::AssignProcessToJobObject($job, [GatewayJobTest]::GetCurrentProcess())) { throw 'Job assignment failed' }
+[GatewayJobTest]::ArmKillOnJobClose()
 & '${process.execPath.replace(/'/g, "''")}' '${fixture.replace(/'/g, "''")}'
 if ($LASTEXITCODE -ne 0) { throw 'Fixture failed' }
-[GatewayJobTest]::TerminateJobObject($job, 73)
+# Exiting closes the only handle to the job, and KILL_ON_JOB_CLOSE reaps every
+# process still a member of it. The negative control below proves that happened.
 `;
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
     env, encoding: 'utf8', windowsHide: true, timeout: 20000,
   });
   assert.ok(fs.existsSync(resultPath), result.stderr || String(result.error));
   pids = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
-  assert.equal(result.status, 73, result.stderr);
+  assert.equal(result.status, 0, result.stderr);
   for (let attempt = 0; attempt < 40 && alive(pids.control); attempt++) await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(alive(pids.control), false, 'negative control must die with the caller job');
   assert.equal(alive(pids.service), true, 'gateway launch must survive caller job termination');
