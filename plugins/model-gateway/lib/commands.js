@@ -115,7 +115,7 @@ const {
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, readPinOverrides, refreshDetectedPins, writePinOverrides,
+  isValidPin, ourBaseUrls, ownedPinValues, pinProvenance, readPinOverrides, refreshDetectedPins, writePinOverrides,
 } = require('./pins.js');
 
 // Versions through 0.4.1 wrote this unsafe global override. Remove it during
@@ -878,7 +878,7 @@ async function statusReport({ readiness = null } = {}) {
 function pinCommand() {
   if (args.length === 0) {
     for (const [alias, pin] of Object.entries(effectivePins())) {
-      log(`${alias}: ${pin.value} (${pin.override ? `overridden; shipped default: ${pin.default}` : 'default'})`);
+      log(`${alias}: ${pin.value} (${pinProvenance(pin)})`);
     }
     return;
   }
@@ -1200,7 +1200,7 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
     : 'catalog: not written yet');
   await reportGatewayDiscoveryCache();
   for (const [alias, pin] of Object.entries(effectivePins())) {
-    log(`Claude ${alias} pin: ${pin.value}${pin.override ? ` (overridden; shipped default: ${pin.default})` : ' (default)'}`);
+    log(`Claude ${alias} pin: ${pin.value} (${pinProvenance(pin)})`);
   }
   await reportLiveShimModelPolicy();
   const activeScope = selectedWiringScope();

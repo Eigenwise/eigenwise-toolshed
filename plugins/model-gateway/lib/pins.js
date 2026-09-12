@@ -234,14 +234,28 @@ function writePinOverrides(overrides) {
   fs.writeFileSync(PIN_OVERRIDE_PATH, JSON.stringify(overrides, null, 2) + '\n');
 }
 
+// `source` exists because a probed pin and the shipped fallback used to print
+// identically as "(default)", so a stale guess was indistinguishable from a
+// value measured against the user's own CLI. An alias whose detectedFor no
+// longer matches the cached cliVersion silently falls back to KNOWN_GOOD_PINS,
+// and that is exactly the case a reader has to be able to see.
 function effectivePins() {
   const overrides = readPinOverrides();
+  const detected = currentDetectedPins(readDetectedPinCache());
   const defaults = detectedPinDefaults();
   return Object.fromEntries(Object.entries(PIN_ALIASES).map(([alias]) => [alias, {
     default: defaults[alias],
+    shipped: KNOWN_GOOD_PINS[alias],
     override: overrides[alias] || null,
     value: overrides[alias] || defaults[alias],
+    source: overrides[alias] ? 'override' : detected[alias] ? 'detected' : 'shipped',
   }]));
+}
+
+function pinProvenance(pin) {
+  if (pin.source === 'override') return `overridden; without it ${pin.default}`;
+  if (pin.source === 'detected') return 'detected for this CLI';
+  return `shipped fallback, not detected for this CLI`;
 }
 
 function pinEnvBlock() {
@@ -274,6 +288,6 @@ function ourBaseUrls() { return [DEFAULT_BASE_URL, COMPAT_BASE_URL]; }
 
 module.exports = {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, probeClaudeAlias, readPinOverrides,
+  isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, pinProvenance, probeClaudeAlias, readPinOverrides,
   refreshDetectedPins, writePinOverrides,
 };
