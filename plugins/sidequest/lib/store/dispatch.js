@@ -540,12 +540,14 @@ function createDispatch(dependencies) {
     return ticket;
   }
   function preparedCompatibilityDecision(state, currentInstall) {
-    if (currentInstall.ok === true && (currentInstall.installPath !== state.preparedCompatibility.pluginInstall || currentInstall.identity !== state.preparedCompatibility.identity)) return { refusal: true };
+    if (currentInstall.ok !== true) return { refusal: true };
+    if (currentInstall.installPath !== state.preparedCompatibility.pluginInstall || currentInstall.identity !== state.preparedCompatibility.identity) return { refusal: true };
     const preparedVersion = typeof state.preparedCompatibility.version === "string" ? state.preparedCompatibility.version : "";
     const servingSnapshot = servingInstall();
     const servingVersion = typeof servingSnapshot?.version === "string" ? servingSnapshot.version : "";
     if (!preparedVersion || !servingVersion) return null;
     const comparison = compareSemver(servingVersion, preparedVersion);
+    if (comparison === 0 && servingVersion !== preparedVersion) return { refusal: true };
     if (comparison === -1) return { refusal: true };
     if (comparison === 1) return { warning: `Sidequest serving ${servingVersion} is newer than prepared ${preparedVersion}; dispatch continues.` };
     return null;

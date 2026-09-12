@@ -817,6 +817,67 @@ test('serving install snapshots refuse older builds and warn on newer ones', () 
   }
 });
 
+test('serving install lookup retries after a transient miss', () => {
+  const activeRegistry = checkSidequestInstall(PROJECT);
+  assert.equal(activeRegistry.ok, true);
+  const servingSnapshot = { installPath: path.join(PROJECT, 'serving-install'), version: activeRegistry.version };
+  let lookupAvailable = false;
+  let lookupCalls = 0;
+
+  withReloadedStore('../lib/dispatch-preflight.js', () => ({
+    servingSidequestInstall: () => {
+      lookupCalls += 1;
+      return lookupAvailable ? servingSnapshot : null;
+    },
+  }), (snapshotStore: any) => {
+    const missedTicket = createFixture('transient serving install lookup fixture');
+    const resolvedTicket = createFixture('resolved serving install lookup fixture');
+    try {
+      const missed = snapshotStore.prepareDispatch(slug, missedTicket.ref, { sessionId: `transient-serving-install-${Date.now()}`, sharedTree: true });
+      assert.equal(missed.ticket.dispatch.preparedCompatibility.servingVersion, undefined);
+
+      lookupAvailable = true;
+      const resolved = snapshotStore.prepareDispatch(slug, resolvedTicket.ref, { sessionId: `resolved-serving-install-${Date.now()}`, sharedTree: true });
+      assert.equal(resolved.ticket.dispatch.preparedCompatibility.servingVersion, servingSnapshot.version);
+      assert.ok(lookupCalls >= 3);
+    } finally {
+      snapshotStore.releaseTicket(slug, missedTicket.ref, 'transient-serving-install-cleanup', { status: 'todo', source: 'test', force: true });
+      snapshotStore.releaseTicket(slug, resolvedTicket.ref, 'resolved-serving-install-cleanup', { status: 'todo', source: 'test', force: true });
+    }
+  });
+});
+
+test('serving build metadata drift refuses matching-precedence prepared versions', () => {
+  const isolatedClaudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-build-metadata-home-'));
+  const isolatedInstallPath = path.join(isolatedClaudeHome, 'sidequest-test-install');
+  const sharedClaudeHome = process.env.SIDEQUEST_CLAUDE_HOME;
+  fs.mkdirSync(path.join(isolatedClaudeHome, 'plugins'), { recursive: true });
+  fs.mkdirSync(path.join(isolatedInstallPath, 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(isolatedInstallPath, '.mcp.json'), JSON.stringify({ mcpServers: { board: {} } }));
+  fs.writeFileSync(path.join(isolatedInstallPath, 'hooks', 'hooks.json'), JSON.stringify({ hooks: {} }));
+  fs.writeFileSync(path.join(isolatedClaudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'user', installPath: isolatedInstallPath, version: '5.1.14+new' }] },
+  }));
+  process.env.SIDEQUEST_CLAUDE_HOME = isolatedClaudeHome;
+
+  try {
+    withReloadedStore('../lib/dispatch-preflight.js', () => ({
+      servingSidequestInstall: () => ({ installPath: isolatedInstallPath, version: '5.1.14+old' }),
+    }), (snapshotStore: any) => {
+      const ticket = createFixture('build metadata drift fixture');
+      try {
+        assert.throws(() => snapshotStore.prepareDispatch(slug, ticket.ref, { sessionId: `build-metadata-drift-${Date.now()}`, sharedTree: true }));
+      } finally {
+        snapshotStore.releaseTicket(slug, ticket.ref, 'build-metadata-drift-cleanup', { status: 'todo', source: 'test', force: true });
+      }
+    });
+  } finally {
+    if (sharedClaudeHome === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
+    else process.env.SIDEQUEST_CLAUDE_HOME = sharedClaudeHome;
+    fs.rmSync(isolatedClaudeHome, { recursive: true, force: true });
+  }
+});
+
 test('tokened stale compatibility refusals retire only proven mismatches', () => {
   // This test flips the install identity that checkSidequestInstall hashes. The full suite
   // shares one SIDEQUEST_CLAUDE_HOME across every test process (scripts/test-full.mjs), so
@@ -841,34 +902,71 @@ test('tokened stale compatibility refusals retire only proven mismatches', () =>
 
   const claimTicket = createFixture('stale compatibility claim fixture');
   const launchTicket = createFixture('stale compatibility launch fixture');
-  const transientLaunchTicket = createFixture('unreadable compatibility launch fixture');
-  const transientClaimTicket = createFixture('unreadable compatibility claim fixture');
+  const transientLaunchTicket = createFixture('transient registry compatibility launch fixture');
+  const transientClaimTicket = createFixture('transient registry compatibility claim fixture');
+  const unreadableCurrentTicket = createFixture('unreadable current install fixture');
   const claimPrepared = store.prepareDispatch(slug, claimTicket.ref, { sessionId: `stale-compatibility-claim-${Date.now()}` });
   const launchPrepared = store.prepareDispatch(slug, launchTicket.ref, { sessionId: `stale-compatibility-launch-${Date.now()}` });
-  const transientLaunchPrepared = store.prepareDispatch(slug, transientLaunchTicket.ref, { sessionId: `unreadable-compatibility-launch-${Date.now()}` });
-  const transientClaimPrepared = store.prepareDispatch(slug, transientClaimTicket.ref, { sessionId: `unreadable-compatibility-claim-${Date.now()}` });
+  const transientLaunchPrepared = store.prepareDispatch(slug, transientLaunchTicket.ref, { sessionId: `transient-registry-launch-${Date.now()}` });
+  const transientClaimPrepared = store.prepareDispatch(slug, transientClaimTicket.ref, { sessionId: `transient-registry-claim-${Date.now()}` });
+  const unreadableCurrentPrepared = store.prepareDispatch(slug, unreadableCurrentTicket.ref, { sessionId: `unreadable-current-install-${Date.now()}` });
   const preparedIdentity = claimPrepared.ticket.dispatch.preparedCompatibility.identity;
 
   try {
-    fs.writeFileSync(manifestPath, '');
-    assert.equal(checkSidequestInstall(PROJECT).ok, false);
-    assert.equal(store.recordDispatchLaunch(slug, transientLaunchTicket.ref, {
-      token: transientLaunchPrepared.token,
-      executor: transientLaunchPrepared.ticket.dispatchExecutor,
-      sessionId: `unreadable-compatibility-launch-${Date.now()}`,
-      agentName: 'unreadable-compatibility-launch-worker',
-    }).ok, true);
-    assert.equal(store.getTicket(slug, transientLaunchTicket.ref).dispatchNonce, transientLaunchPrepared.ticket.dispatchNonce);
-    assert.equal(store.claimTicket(slug, transientClaimTicket.ref, 'unreadable-compatibility-claim-worker', {
-      token: transientClaimPrepared.token,
-      executor: transientClaimPrepared.ticket.dispatchExecutor,
-    }).ok, true);
+    fs.writeFileSync(manifestPath, JSON.stringify({ mcpServers: { board: { command: 'replacement-board' } } }));
+    const replacementInstall = checkSidequestInstall(PROJECT);
+    assert.equal(replacementInstall.ok, true);
+    assert.notEqual(replacementInstall.identity, preparedIdentity);
+
+    const originalReadFileSyncDescriptor = Object.getOwnPropertyDescriptor(fs, 'readFileSync');
+    const originalReadFileSync = fs.readFileSync;
+    const registryPath = path.join(isolatedClaudeHome, 'plugins', 'installed_plugins.json');
+    let registryReadAttempts = 0;
+    let transientReadPending = true;
+    Object.defineProperty(fs, 'readFileSync', {
+      ...originalReadFileSyncDescriptor,
+      value: function (...arguments_: unknown[]) {
+        if (arguments_[0] === registryPath) {
+          registryReadAttempts += 1;
+          if (transientReadPending) {
+            transientReadPending = false;
+            throw Object.assign(new Error('simulated transient registry replacement'), { code: 'ENOENT' });
+          }
+        }
+        return Reflect.apply(originalReadFileSync, fs, arguments_);
+      },
+    });
+
+    try {
+      const launchRefusal = store.recordDispatchLaunch(slug, transientLaunchTicket.ref, {
+        token: transientLaunchPrepared.token,
+        executor: transientLaunchPrepared.ticket.dispatchExecutor,
+        sessionId: `unreadable-compatibility-launch-${Date.now()}`,
+        agentName: 'unreadable-compatibility-launch-worker',
+      });
+      assert.equal(launchRefusal.reason, 'prepared_compatibility_stale');
+
+      transientReadPending = true;
+      const claimRefusal = store.claimTicket(slug, transientClaimTicket.ref, 'unreadable-compatibility-claim-worker', {
+        token: transientClaimPrepared.token,
+        executor: transientClaimPrepared.ticket.dispatchExecutor,
+      });
+      assert.equal(claimRefusal.reason, 'prepared_compatibility_stale');
+      assert.equal(registryReadAttempts, 4);
+    } finally {
+      Object.defineProperty(fs, 'readFileSync', originalReadFileSyncDescriptor!);
+    }
 
     fs.writeFileSync(manifestPath, originalManifest);
-    assert.equal(store.claimTicket(slug, transientLaunchTicket.ref, 'unreadable-compatibility-launch-worker', {
-      token: transientLaunchPrepared.token,
-      executor: transientLaunchPrepared.ticket.dispatchExecutor,
-    }).ok, true);
+
+    fs.writeFileSync(manifestPath, '');
+    assert.equal(checkSidequestInstall(PROJECT).ok, false);
+    const unreadableRefusal = store.claimTicket(slug, unreadableCurrentTicket.ref, 'unreadable-current-install-worker', {
+      token: unreadableCurrentPrepared.token,
+      executor: unreadableCurrentPrepared.ticket.dispatchExecutor,
+    });
+    assert.equal(unreadableRefusal.reason, 'prepared_compatibility_stale');
+    fs.writeFileSync(manifestPath, originalManifest);
 
     const mcpBeforeVersionChange = fs.readFileSync(manifestPath, 'utf8');
     const registry = JSON.parse(fs.readFileSync(path.join(isolatedClaudeHome, 'plugins', 'installed_plugins.json'), 'utf8'));
@@ -914,7 +1012,7 @@ test('tokened stale compatibility refusals retire only proven mismatches', () =>
   } finally {
     if (sharedClaudeHome === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
     else process.env.SIDEQUEST_CLAUDE_HOME = sharedClaudeHome;
-    for (const ticket of [claimTicket, launchTicket, transientLaunchTicket, transientClaimTicket]) {
+    for (const ticket of [claimTicket, launchTicket, transientLaunchTicket, transientClaimTicket, unreadableCurrentTicket]) {
       store.releaseTicket(slug, ticket.ref, 'stale-compatibility-cleanup', { status: 'todo', source: 'test', force: true });
     }
     fs.rmSync(isolatedClaudeHome, { recursive: true, force: true });

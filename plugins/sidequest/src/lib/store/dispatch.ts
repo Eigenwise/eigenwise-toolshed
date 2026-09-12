@@ -670,15 +670,20 @@ type PreparedCompatibilityDecision = {
 };
 
 function preparedCompatibilityDecision(state: PreparedCompatibilityState, currentInstall: CurrentPluginInstall): PreparedCompatibilityDecision | null {
-  if (currentInstall.ok === true && (
+  // Current-install reads retry transient replacement races; exhausting that retry
+  // cannot prove the prepared snapshot still names the running install, so refuse.
+  if (currentInstall.ok !== true) return { refusal: true };
+  if (
     currentInstall.installPath !== state.preparedCompatibility.pluginInstall
     || currentInstall.identity !== state.preparedCompatibility.identity
-  )) return { refusal: true };
+  ) return { refusal: true };
   const preparedVersion = typeof state.preparedCompatibility.version === 'string' ? state.preparedCompatibility.version : '';
   const servingSnapshot = servingInstall();
   const servingVersion = typeof servingSnapshot?.version === 'string' ? servingSnapshot.version : '';
   if (!preparedVersion || !servingVersion) return null;
   const comparison = compareSemver(servingVersion, preparedVersion);
+  // Equal precedence with distinct text may identify different builds, so refuse.
+  if (comparison === 0 && servingVersion !== preparedVersion) return { refusal: true };
   // An older server can apply obsolete dispatch semantics; a newer one only needs a visible advisory.
   if (comparison === -1) return { refusal: true };
   if (comparison === 1) return { warning: `Sidequest serving ${servingVersion} is newer than prepared ${preparedVersion}; dispatch continues.` };
