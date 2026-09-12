@@ -1733,6 +1733,47 @@ function createDispatch(dependencies) {
       return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && state.outcome === "prepared" && !state.terminalAt && !state.worktree);
     });
   }
+  function bindingFailurePredicate(state, sessionId, worktree) {
+    if (state?.sessionId !== sessionId) return "session_id";
+    if (state.sharedTree !== false) return "shared_tree";
+    if (state.outcome !== "launched") return "outcome";
+    if (state.terminalAt) return "terminal_at";
+    if (state.worktreeBindingSource !== "worktree-create") return "worktree_binding_source";
+    if (!state.worktree || canonicalPath(state.worktree) !== worktree) return "canonical_worktree";
+    return "dispatch_binding_unavailable";
+  }
+  function launchedIsolatedDispatchOnAnotherProject(slug, sessionId) {
+    for (const project of listProjects({ all: true })) {
+      if (project.slug === slug) continue;
+      for (const candidate of listTickets(project.slug)) {
+        const state = dispatchState(candidate);
+        if (state?.sessionId === sessionId && state.sharedTree === false && state.outcome === "launched" && !state.terminalAt) {
+          return state;
+        }
+      }
+    }
+    return null;
+  }
+  function unavailableWorktreeBinding(slug, candidates = [], sessionId, worktree) {
+    const nearest = candidates.find(({ state: state2 }) => state2.sessionId === sessionId) || candidates.find(({ state: state2 }) => state2.worktree && canonicalPath(state2.worktree) === worktree);
+    const crossProject = nearest ? null : launchedIsolatedDispatchOnAnotherProject(slug, sessionId);
+    const state = nearest?.state || crossProject;
+    return {
+      ok: false,
+      reason: "dispatch_binding_unavailable",
+      binding: {
+        candidatesConsidered: candidates.length,
+        ...state ? {
+          predicate: crossProject ? "different_project" : bindingFailurePredicate(state, sessionId, worktree),
+          recordedSessionId: state.sessionId,
+          recordedWorktree: state.worktree ? canonicalPath(state.worktree) : ""
+        } : {},
+        suppliedSessionId: sessionId,
+        suppliedWorktree: worktree,
+        crossProject: Boolean(crossProject)
+      }
+    };
+  }
   function bindDispatchWorktreeCreation(slug, sessionId, worktree) {
     const normalizedSessionId = String(sessionId || "").trim();
     const target = String(worktree || "").trim();
@@ -1740,6 +1781,7 @@ function createDispatch(dependencies) {
     if (!normalizedSessionId || !target || !meta?.path) return { ok: false, reason: "missing_binding_facts" };
     const repository = canonicalPath(meta.path);
     const boundWorktree = canonicalPath(target);
+    const bindingCandidates = listTickets(slug).map((candidate) => ({ candidate, state: dispatchState(candidate) })).filter(({ state }) => Boolean(state));
     for (const candidate of listTickets(slug)) {
       const state = dispatchState(candidate);
       if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false || state.outcome !== "launched" || state.terminalAt || state.worktreeBindingSource !== "worktree-create" || !state.worktree || canonicalPath(state.worktree) !== boundWorktree) continue;
@@ -1774,10 +1816,10 @@ function createDispatch(dependencies) {
       });
       if (result?.ok) return result;
     }
-    return {
-      ok: false,
-      reason: unlaunchedSessionDispatch(slug, normalizedSessionId) ? "dispatch_launch_unrecorded" : "dispatch_binding_unavailable"
-    };
+    if (unlaunchedSessionDispatch(slug, normalizedSessionId)) {
+      return { ok: false, reason: "dispatch_launch_unrecorded" };
+    }
+    return unavailableWorktreeBinding(slug, bindingCandidates, normalizedSessionId, boundWorktree);
   }
   function completeDispatchWorktreeCreation(slug, sessionId, worktree) {
     const normalizedSessionId = String(sessionId || "").trim();

@@ -17,6 +17,39 @@ export interface ClaimContext extends ClaimIdentity {
 
 type RefusalMessage = (ref: string, claim: ClaimContext, projectPath?: string) => string;
 
+export interface WorktreeCreationBindingFailure {
+  candidatesConsidered?: number;
+  predicate?: string;
+  suppliedSessionId?: string;
+  recordedSessionId?: string;
+  suppliedWorktree?: string;
+  recordedWorktree?: string;
+  crossProject?: boolean;
+}
+
+function abbreviatedSessionId(value?: string): string {
+  const sessionId = String(value || '').trim();
+  return sessionId ? `\`${sessionId.slice(0, 12)}\`` : '<not recorded>';
+}
+
+function recordedWorktree(value?: string): string {
+  const worktree = String(value || '').trim();
+  return worktree ? `\`${worktree}\`` : '<not recorded>';
+}
+
+function worktreeBindingComparison(failure?: WorktreeCreationBindingFailure): string {
+  const candidates = Number.isInteger(failure?.candidatesConsidered) ? failure.candidatesConsidered : 0;
+  const count = `${candidates} dispatch record${candidates === 1 ? '' : 's'}`;
+  const comparison = `hook session id ${abbreviatedSessionId(failure?.suppliedSessionId)} against recorded session id ${abbreviatedSessionId(failure?.recordedSessionId)}; hook canonical worktree ${recordedWorktree(failure?.suppliedWorktree)} against recorded canonical worktree ${recordedWorktree(failure?.recordedWorktree)}`;
+  if (failure?.crossProject) {
+    return `Considered ${count} on this board. The nearest dispatch failed predicate \`different_project\`: ${comparison}. The matching launched isolated dispatch is recorded for a different project, so WorktreeCreate cannot bind it here: dispatch it with sharedTree:true, or from a session rooted in that project.`;
+  }
+  if (failure?.predicate) {
+    return `Considered ${count}. The nearest dispatch failed predicate \`${failure.predicate}\`: ${comparison}. Run \`sidequest pulse <ref>\` and re-dispatch with recovery evidence.`;
+  }
+  return `Considered ${count}. No launched isolated dispatch exists on this board for the hook-supplied session or canonical worktree. Run \`sidequest pulse <ref>\` and re-dispatch with recovery evidence.`;
+}
+
 function correctedMcpClaim(ref: string, ticket: ClaimContext = {}, projectPath?: string): string {
   const executor = canonicalPreparedDispatchExecutor(ticket) || '<prepared executor>';
   const effort = ticket.effort || '<prepared effort>';
@@ -70,16 +103,16 @@ export function claimRefusalMessage(reason: string, ref: string, claim: ClaimCon
   return message ? message(ref, claim, projectPath) : `${ref} could not be claimed because ${reason}. Run \`sidequest pulse ${ref}\` and follow its current status.`;
 }
 
-const WORKTREE_CREATION_REFUSALS: Readonly<Record<string, (repository: string) => string>> = Object.freeze({
+const WORKTREE_CREATION_REFUSALS: Readonly<Record<string, (repository: string, failure?: WorktreeCreationBindingFailure) => string>> = Object.freeze({
   project_unavailable: (repository) => `${repository} is not a registered Sidequest board, so this session cannot create a dispatch worktree in it. Register the project, or dispatch with sharedTree:true.`,
-  dispatch_binding_unavailable: (repository) => `This session has no launched isolated dispatch on the board for ${repository}. WorktreeCreate resolves the board from this checkout alone, so a dispatch prepared for a different project can never bind here: dispatch it with sharedTree:true, or from a session rooted in that project. Otherwise run \`sidequest pulse <ref>\` and re-dispatch with recovery evidence.`,
+  dispatch_binding_unavailable: (_repository, failure) => worktreeBindingComparison(failure),
   dispatch_launch_unrecorded: (repository) => `The board for ${repository} holds a prepared dispatch for this session but no recorded launch, so no launched attempt exists to reserve this checkout, and a prepared attempt never supplies creation authority. Run \`sidequest pulse <ref>\`, then \`sidequest dispatch <ref> --recovery-evidence "WorktreeCreate refused: the dispatch launch was never recorded"\`.`,
   baseline_unavailable: () => 'The launched dispatch recorded no base commit, so its worktree has no revision to check out. Re-dispatch the ticket for a fresh baseline.',
 });
 
-export function worktreeCreationRefusalMessage(reason: string, repository: string): string {
+export function worktreeCreationRefusalMessage(reason: string, repository: string, failure?: WorktreeCreationBindingFailure): string {
   const guidance = WORKTREE_CREATION_REFUSALS[reason];
-  return `worktree lease refused creation: ${reason || 'dispatch binding is incomplete'}${guidance ? `. ${guidance(repository)}` : ''}`;
+  return `worktree lease refused creation: ${reason || 'dispatch binding is incomplete'}${guidance ? `. ${guidance(repository, failure)}` : ''}`;
 }
 
 export function routingDisabledMessage(ref: string): string {

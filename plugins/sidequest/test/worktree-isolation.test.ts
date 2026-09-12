@@ -70,6 +70,23 @@ function runHook(script: string, payload: unknown, env: Record<string, string | 
   return out.trim() ? JSON.parse(out) : null;
 }
 
+function createWorktree(sessionId: string, name: string, cwd: string = PROJECT) {
+  try {
+    return {
+      ok: true,
+      output: execFileSync(process.execPath, [path.join(HOOKS, 'worktree-create.js')], {
+        input: JSON.stringify({ hook_event_name: 'WorktreeCreate', name, session_id: sessionId, cwd }),
+        encoding: 'utf8',
+        env: { ...process.env, SIDEQUEST_HOME },
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim(),
+    };
+  } catch (error: any) {
+    return { ok: false, output: String(error?.stderr || error?.message || error).trim() };
+  }
+}
+
 // The commit command reads its checkout from the working directory, so a test that drives it has to say
 // which worktree it is standing in rather than inheriting the runner's.
 function runCli(args: string[], cwd?: string) {
@@ -208,7 +225,7 @@ test('the assigned linked worktree remains allowed', () => {
 // the executor dies before it starts. The hook cannot reach across boards -- the
 // worktree it is asked to place belongs to THIS checkout -- so what it owes the
 // orchestrator is a refusal that names the cause instead of a bare reason code.
-test('a cross-project worktree creation refuses with the board it actually searched', () => {
+test('a cross-project worktree creation identifies the matching dispatch', () => {
   const other = initRepo('sq-isolation-other-project-');
   const otherSlug = store.ensureProject(other).slug;
   const sessionId = `cross-project-create-${Date.now()}`;
@@ -225,35 +242,75 @@ test('a cross-project worktree creation refuses with the board it actually searc
     agentName: 'crossproject',
   }).ok, true);
 
-  const createWorktree = (cwd: string) => {
-    try {
-      return {
-        ok: true,
-        output: execFileSync(process.execPath, [path.join(HOOKS, 'worktree-create.js')], {
-          input: JSON.stringify({ hook_event_name: 'WorktreeCreate', name: 'crossproject', session_id: sessionId, cwd }),
-          encoding: 'utf8',
-          env: { ...process.env, SIDEQUEST_HOME },
-          windowsHide: true,
-          stdio: ['pipe', 'pipe', 'pipe'],
-        }).trim(),
-      };
-    } catch (error: any) {
-      return { ok: false, output: String(error?.stderr || error?.message || error).trim() };
-    }
-  };
-
-  const hubSession = createWorktree(PROJECT);
-  const ownSession = createWorktree(other);
+  const hubSession = createWorktree(sessionId, 'crossproject', PROJECT);
+  const ownSession = createWorktree(sessionId, 'crossproject', other);
   try {
     assert.equal(hubSession.ok, false, 'a session rooted in another project cannot place this dispatch');
     assert.match(hubSession.output, /dispatch_binding_unavailable/);
     assert.match(hubSession.output, /sharedTree:true/);
-    assert.ok(hubSession.output.includes(PROJECT), `the refusal names the board it searched: ${hubSession.output}`);
+    assert.match(hubSession.output, /predicate `different_project`/);
     assert.equal(ownSession.ok, true, 'a session rooted in the ticket project still places it');
     assert.equal(store.getTicket(otherSlug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(ownSession.output));
   } finally {
     if (ownSession.ok) execFileSync('git', ['worktree', 'remove', '--force', ownSession.output], { cwd: other, windowsHide: true });
   }
+});
+
+test('a same-project session mismatch names the predicate without shared-tree advice', () => {
+  const name = `session-mismatch-${Date.now()}`;
+  const recordedSessionId = `recorded-session-${Date.now()}-${'r'.repeat(40)}`;
+  const suppliedSessionId = `supplied-session-${Date.now()}-${'s'.repeat(40)}`;
+  const ticket = store.createTicket(slug, {
+    title: 'session mismatch creation fixture',
+    category: 'codebase-exploration',
+    files: ['README.md'],
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: recordedSessionId });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId: recordedSessionId,
+    agentName: name,
+  }).ok, true);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, recordedSessionId, worktrees.namedWorktreePath(PROJECT, name)).ok, true);
+
+  const refusal = createWorktree(suppliedSessionId, name);
+  assert.equal(refusal.ok, false);
+  assert.match(refusal.output, /predicate `session_id`/);
+  assert.ok(refusal.output.includes('hook session id `' + suppliedSessionId.slice(0, 12) + '` against recorded session id `' + recordedSessionId.slice(0, 12) + '`'), 'compares bounded hook and recorded session ids');
+  assert.doesNotMatch(refusal.output, /sharedTree:true/);
+});
+
+test('a same-project worktree mismatch names the canonical-worktree predicate', () => {
+  const name = `worktree-mismatch-${Date.now()}`;
+  const sessionId = `worktree-session-${Date.now()}`;
+  const ticket = store.createTicket(slug, {
+    title: 'worktree mismatch creation fixture',
+    category: 'codebase-exploration',
+    files: ['README.md'],
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+    agentName: name,
+  }).ok, true);
+  const recordedWorktree = worktrees.namedWorktreePath(PROJECT, `${name}-recorded`);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, recordedWorktree).ok, true);
+
+  const refusal = createWorktree(sessionId, name);
+  assert.equal(refusal.ok, false);
+  assert.match(refusal.output, /predicate `canonical_worktree`/);
+  assert.ok(refusal.output.includes(worktrees.canonicalPath(recordedWorktree)), 'names the recorded canonical worktree');
+  assert.doesNotMatch(refusal.output, /sharedTree:true/);
+});
+
+test('a board with no matching launched isolated dispatch says so without shared-tree advice', () => {
+  const refusal = createWorktree(`unmatched-session-${Date.now()}`, `unmatched-worktree-${Date.now()}`);
+  assert.equal(refusal.ok, false);
+  assert.match(refusal.output, /No launched isolated dispatch exists on this board/);
+  assert.doesNotMatch(refusal.output, /sharedTree:true/);
 });
 
 // SQ-1546. Claude Code's own `isolation: worktree` provisions under
