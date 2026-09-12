@@ -8,6 +8,42 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.562.0 (2026-09-12)
+
+### model-gateway 0.50.21 → 0.50.22
+
+#### Fixes
+
+- Preserve verified gateway PID records across Windows elevation boundaries (SQ-2810)
+  Model Gateway now recognizes a recorded process by its matching start time when Windows hides its command line, retains that record, and reports failed cross-elevation stops instead of claiming they worked.
+- Say whether a Claude alias pin was detected or is the shipped fallback (SQ-2811)
+  `doctor` and `pin` now name where each Claude alias pin came from, so a value probed against your CLI no longer looks identical to a shipped fallback that was never detected for it.
+
+### quartermaster 0.10.1 → 0.10.2
+
+#### Fixes
+
+- Check plugin recommendations against current reality (SQ-2803)
+  Quartermaster checks current plugin status and reported experience before it proposes an install.
+- Stop retiring proposals the user never rejected (SQ-2812)
+  A recorded rejection now only silences the project it was recorded in, instead of every project on the machine, and the skills say plainly that `rejected` records the user saying no to something they were actually shown, never Quartermaster's own decision not to raise it. A plugin from a marketplace you have not added yet is proposed with its `marketplace add` command rather than dropped as uninspectable.
+
+### sidequest 5.1.13 → 5.1.14
+
+#### Fixes
+
+- Snapshot child failures no longer get told to retry as if the project were unreadable (SQ-2801)
+  A dispatch that could not snapshot a project because the filesystem-snapshot
+  child process failed to run, exited non-zero, or printed a result that could
+  not be parsed used to get the same "could not snapshot ... Retry dispatch
+  after the project is readable" message as a genuinely unreadable project.
+  That advice was wrong for all three child-failure cases, since retrying
+  reproduces the identical refusal. The refusal now names which of the four
+  cases actually happened (child could not run, exited non-zero, printed an
+  unparseable result, or the project is genuinely unreadable), including the
+  exit status and a bounded stderr excerpt when the child ran and failed. The
+  genuinely-unreadable-project wording is unchanged.
+
 ## v3.561.0 (2026-09-12)
 
 ### sidequest 5.1.12 → 5.1.13
