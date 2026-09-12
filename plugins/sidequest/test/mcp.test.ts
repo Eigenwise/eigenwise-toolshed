@@ -663,20 +663,22 @@ test('context_page row continuations retain their revision when claim liveness c
 });
 
 test('every oversized read carries a universal continuation handle', async () => {
+  // 750 -> 110: 110 rows with 500-byte titles still exceed the MCP result cap and prove continuation recovery.
+  const ticketCount = 110;
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-universal-page-'))).slug;
-  for (let index = 0; index < 750; index += 1) {
+  for (let index = 0; index < ticketCount; index += 1) {
     store.createTicket(project, { title: `Oversized change ${index} ${'x'.repeat(500)}`, source: 'test' });
   }
 
   const changes = await callTool('changes', { project, since: '2000-01-01T00:00:00.000Z' });
   assert.ok(Buffer.byteLength(JSON.stringify(changes), 'utf8') <= 70 * 1024);
   assert.equal(changes.ticketsRetrieval.tool, 'context_page');
-  assert.equal(changes.ticketsTotal, 750);
+  assert.equal(changes.ticketsTotal, ticketCount);
 
   const resumed = await callTool('context_page', { ...changes.ticketsRetrieval.arguments, limit: 4096 });
   assert.equal(resumed.source, 'changes');
   assert.ok(resumed.returned > 0);
-  assert.ok(resumed.totalRows === 750);
+  assert.ok(resumed.totalRows === ticketCount);
 });
 
 test('context_page row continuations project oversized detail bodies into nested pages', async () => {
@@ -5834,10 +5836,11 @@ async function resultChars(name?: any, args?: any) {
 }
 
 test('SQ-228: a large board pages under the cap; cursors iterate the full set exactly once', async () => {
-  // A dedicated board so seeding 500 tickets can't perturb the shared-board
+  // A dedicated board so seeding this fixture cannot perturb the shared-board
   // tests above. Every call passes project explicitly.
   const big = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-bigboard-228'), 'SQ-228 Big Board');
-  const N = 500;
+  // 500 -> 407: 407 is the smallest board that still forces both compact all:true and default list through continuation pages; cursor assertions still cover every row exactly once.
+  const N = 407;
   for (let i = 0; i < N; i++) {
     store.createTicket(big.slug, { title: `bulk todo ticket number ${i} on the oversized board`, files: [`lib/mod-${i}.js`] });
   }
@@ -5854,7 +5857,7 @@ test('SQ-228: a large board pages under the cap; cursors iterate the full set ex
     allRows.push(...page.rows);
     allCursor = page.nextCursor;
   }
-  assert.strictEqual(allRows.length, N, 'all 500 remain retrievable through the continuation');
+  assert.strictEqual(allRows.length, N, 'all rows remain retrievable through the continuation');
   const allChars = await resultChars('list', { project: big.slug, all: true });
   assert.ok(allChars <= 70 * 1024, `compact all:true stays under the result ceiling (${allChars} chars)`);
 
@@ -5869,7 +5872,7 @@ test('SQ-228: a large board pages under the cap; cursors iterate the full set ex
   const p1Chars = await resultChars('list', { project: big.slug });
   assert.ok(p1Chars <= 70 * 1024, `page 1 stays under the ceiling (${p1Chars} chars vs unbounded ${allChars})`);
 
-  // Iterate the cursor to exhaustion: collect every ref, assert we saw all 500
+  // Iterate the cursor to exhaustion: collect every row, assert we saw all N
   // exactly once, every page fit under the ceiling, and paging terminates.
   const seen = [];
   let cursor = undefined;
@@ -5888,7 +5891,7 @@ test('SQ-228: a large board pages under the cap; cursors iterate the full set ex
   assert.ok(maxPageChars <= 70 * 1024, `every page stayed under the ceiling (max ${maxPageChars} chars)`);
   assert.strictEqual(seen.length, N, 'iterating cursors yielded exactly N rows');
   assert.strictEqual(new Set(seen).size, N, 'every ticket appears exactly once (no dupes, no gaps)');
-  assert.ok(pages >= 2, `a 500-ticket board takes several pages (took ${pages})`);
+  assert.ok(pages >= 2, `${N}-ticket board takes several pages (took ${pages})`);
 
   // limit:N is an exact page size and its own cursor advances correctly.
   const capped = await callTool('list', { project: big.slug, limit: 10 });

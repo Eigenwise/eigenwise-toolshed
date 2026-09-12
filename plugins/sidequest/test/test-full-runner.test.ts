@@ -664,7 +664,7 @@ test('an exact deadline starts after the owner reports its phase root', { ...pos
   }
 });
 
-test('100 exact-deadline races leave no descendant behind and spare an unrelated process', { timeout: 300_000 }, async () => {
+test('20 exact-deadline races leave no descendant behind and spare an unrelated process', { timeout: 300_000 }, async () => {
   const sentinel = spawn(process.execPath, [sleepScript, '180000'], {
     stdio: 'ignore',
     detached: true,
@@ -673,6 +673,8 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
   sentinel.unref();
   const sentinelPid = requireProcessId(sentinel.pid, 'the unrelated sentinel');
 
+  const raceCount = 20;
+  // 100 -> 20: twenty independent deadline races still exercise repeated cleanup ordering while avoiding the Windows process-spawn cost of eighty redundant rows.
   const rows: Array<{ timedOut: boolean; descendantPid: number | null; markerWritten: () => boolean }> = [];
   const terminationGraceMilliseconds = 400;
   // `runOwnedPhase` reports a live root after its grace and drain windows together. Align that
@@ -680,7 +682,7 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
   // a reaped tree into a failure, while an unreaped root still fails within a finite deadline.
   const cleanupDrainMilliseconds = SETTLED_BUDGET_MILLISECONDS - terminationGraceMilliseconds;
   try {
-    for (let row = 0; row < 100; row += 1) {
+    for (let row = 0; row < raceCount; row += 1) {
       const deadlineMilliseconds = 500;
       const fixture = descendantFixture(2000, false, 'spin');
       assert.equal(fixture.rootLifetime, 'spin', `row ${row} let its root exit before cleanup could prove descendant terminality`);
@@ -703,7 +705,7 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
       // loop is what stops this degrading into a test that proves nothing (SQ-2197).
       if (descendantPid !== null) {
         // Prove terminality now, while this pid still unambiguously names this row's
-        // descendant. Collecting all 100 pids and probing them afterwards left a ~50s
+        // descendant. Collecting all raceCount pids and probing them afterwards left a ~50s
         // window in which the OS could recycle an exited descendant's pid onto an
         // unrelated live process, which then read as a leaked descendant and failed the
         // gate on unchanged code (SQ-2179).
@@ -715,14 +717,15 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
     for (const [index, row] of rows.entries()) {
       assert.equal(row.markerWritten(), false, `row ${index} let its descendant act after the phase ended`);
     }
-    assert.equal(rows.length, 100);
+    assert.equal(rows.length, raceCount);
     // The strong per-row check needs a pid, and rows that lost the startup race do not have one. Requiring
     // most of them to have one keeps this a termination test: if the runner is so loaded that the majority of
     // roots never even record a descendant, this should say so rather than pass on the marker checks alone.
     const provenTerminal = rows.filter((row) => row.descendantPid !== null).length;
+    const minimumProvenTerminal = Math.ceil(raceCount * 0.6);
     assert.ok(
-      provenTerminal >= 60,
-      `only ${provenTerminal} of 100 roots recorded a descendant before the deadline, too few to call this a termination test`,
+      provenTerminal >= minimumProvenTerminal,
+      `only ${provenTerminal} of ${raceCount} roots recorded a descendant before the deadline, too few to call this a termination test`,
     );
     assert.equal(classifyProcessState(sentinelPid), 'live');
   } finally {

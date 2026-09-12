@@ -64,6 +64,23 @@ export function formatTestPhaseWarning(
   return `WARNING: Sidequest ${phase} tests completed in ${Math.round(phaseDurationMilliseconds)}ms, over the ${testPhaseWarningMilliseconds}ms warning threshold for their ${testPhaseTimeoutMilliseconds}ms phase budget at concurrency ${testConcurrency} on ${availableParallelism} available cores.`;
 }
 
+export function formatTestPhaseSummary(
+  phase,
+  phaseDurationMilliseconds,
+  testPhaseWarningMilliseconds,
+  testPhaseTimeoutMilliseconds,
+  testConcurrency,
+  availableParallelism,
+) {
+  return [
+    `### Sidequest ${phase} test phase`,
+    `- Duration: ${Math.round(phaseDurationMilliseconds)} ms`,
+    `- Warning threshold: ${Math.round(testPhaseWarningMilliseconds)} ms`,
+    `- Phase budget: ${testPhaseTimeoutMilliseconds} ms`,
+    `- Concurrency: ${testConcurrency} on ${availableParallelism} available cores`,
+  ].join('\n');
+}
+
 function siblingFullSuiteCaptureCount() {
   const siblingCount = Number(process.env.SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT || '0');
   return Number.isInteger(siblingCount) && siblingCount > 0 ? siblingCount : 0;
@@ -110,6 +127,13 @@ async function runTests(phase, files, environment) {
     timeoutMilliseconds: testPhaseTimeoutMilliseconds,
   });
   const phaseDurationMilliseconds = performance.now() - phaseStartTime;
+  const githubStepSummaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (githubStepSummaryPath) {
+    await fs.appendFile(
+      githubStepSummaryPath,
+      `${formatTestPhaseSummary(phase, phaseDurationMilliseconds, testPhaseWarningMilliseconds, testPhaseTimeoutMilliseconds, testConcurrency, availableParallelism)}\n\n`,
+    );
+  }
   if (result.error) throw result.error;
   const failure = describePhaseFailure(
     phase,
