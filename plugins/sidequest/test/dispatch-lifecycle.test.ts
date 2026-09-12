@@ -3098,7 +3098,7 @@ test('configured worktree bases apply to readonly isolated dispatches without ch
   }
 });
 
-test('SQ-2777: a dispatch refuses to baseline on an unpublished release tip, and the teardown it names restores a clean submission range', () => {
+test('SQ-2777: a dispatch refuses to baseline on an unpublished marketplace-only release tip, and the teardown it names restores a clean submission range', () => {
   const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-'));
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-remote-'));
   const executorParent = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-executor-'));
@@ -3116,19 +3116,18 @@ test('SQ-2777: a dispatch refuses to baseline on an unpublished release tip, and
     const pushedBase = git(['rev-parse', 'origin/main']);
 
     // What `cut.mjs` has done by the time it starts the release suites: the version
-    // and changelog commit, then its annotated tag set. Nothing is pushed yet.
+    // and changelog commit, then its annotated marketplace tag. Nothing is pushed yet.
     fs.writeFileSync(path.join(repository, 'release.txt'), 'sidequest 9.9.9\n');
     git(['add', 'release.txt']);
     git(['commit', '--quiet', '-m', 'release v9.9.9: sidequest 9.9.9 (SQ-0001)']);
     const releaseTip = git(['rev-parse', 'main']);
     git(['tag', '-a', 'v9.9.9', '-m', 'release v9.9.9: sidequest 9.9.9 (SQ-0001)']);
-    git(['tag', '-a', 'sidequest-v9.9.9', '-m', 'sidequest 9.9.9 (v9.9.9)']);
 
     const tipSlug = store.ensureProject(repository, 'unpublished release tip').slug;
     const refused = store.createTicket(tipSlug, { title: 'dispatched while a cut is in flight', category: 'dispatch.lifecycle', files: ['tracked.js'] });
     assert.throws(
       () => store.prepareDispatch(tipSlug, refused.ref, { sessionId: 'release-tip-refused' }),
-      /unpublished release commit, tagged sidequest-v9\.9\.9, v9\.9\.9 and not yet on the remote branch/,
+      /unpublished release commit, tagged v9\.9\.9 and not yet on the remote branch/,
     );
     assert.equal(store.getTicket(tipSlug, refused.ref).dispatch, undefined);
 
@@ -3143,9 +3142,8 @@ test('SQ-2777: a dispatch refuses to baseline on an unpublished release tip, and
     const forkedCandidate = git(['rev-parse', 'HEAD'], forked);
     git(['update-ref', `refs/sidequest/${refused.ref}`, forkedCandidate], forked);
 
-    // The teardown the refusal names: delete those tags, reset the branch.
+    // The teardown the refusal names: delete the tag, reset the branch.
     git(['tag', '-d', 'v9.9.9']);
-    git(['tag', '-d', 'sidequest-v9.9.9']);
     git(['reset', '--hard', '--quiet', pushedBase]);
 
     const avertedFacts = collectGitSubmissionFacts({
@@ -3190,7 +3188,7 @@ test('SQ-2777: a dispatch refuses to baseline on an unpublished release tip, and
   }
 });
 
-test('an unpushed local commit without a release tag set keeps its local baseline', () => {
+test('an unpushed local commit without an annotated marketplace release tag keeps its local baseline', () => {
   const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-ordinary-'));
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-ordinary-remote-'));
   const git = (args: string[], cwd: string = repository) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
@@ -3207,10 +3205,6 @@ test('an unpushed local commit without a release tag set keeps its local baselin
 
     fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "local";\n');
     git(['commit', '--quiet', '-am', 'ordinary unpushed commit']);
-    // A lone marketplace-shaped tag is not a release tag set, and a lightweight tag
-    // is not what a cut writes. Neither may narrow a dispatch away from local main.
-    git(['tag', '-a', 'v9.9.9', '-m', 'hand-made version tag']);
-    git(['tag', 'sidequest-v9.9.9']);
     const localMain = git(['rev-parse', 'main']);
 
     const ordinarySlug = store.ensureProject(repository, 'ordinary unpushed commit').slug;
@@ -3218,6 +3212,70 @@ test('an unpushed local commit without a release tag set keeps its local baselin
     const prepared = store.prepareDispatch(ordinarySlug, ticket.ref, { sessionId: 'ordinary-unpushed-baseline' });
     assert.equal(prepared.ticket.dispatch.baseCommit, localMain);
     assert.deepEqual(prepared.ticket.dispatch.integrationTarget, { mode: 'local', upstream: 'main', branch: 'main' });
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+test('a lightweight marketplace release tag does not narrow an unpushed local baseline', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-lightweight-'));
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-lightweight-remote-'));
+  const git = (args: string[], cwd: string = repository) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+  try {
+    git(['init', '--quiet', '-b', 'main']);
+    git(['config', 'user.email', 'test@example.invalid']);
+    git(['config', 'user.name', 'Dispatch Lifecycle Test']);
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "base";\n');
+    git(['add', 'tracked.js']);
+    git(['commit', '--quiet', '-m', 'pushed base']);
+    execFileSync('git', ['init', '-b', 'main', '--bare', remote], { windowsHide: true });
+    git(['remote', 'add', 'origin', remote]);
+    git(['push', '--quiet', '-u', 'origin', 'main']);
+
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "local";\n');
+    git(['commit', '--quiet', '-am', 'lightweight tag sentinel']);
+    git(['tag', 'v9.9.9']);
+    const localMain = git(['rev-parse', 'main']);
+
+    const lightweightSlug = store.ensureProject(repository, 'lightweight marketplace tag').slug;
+    const ticket = store.createTicket(lightweightSlug, { title: 'dispatched over a lightweight marketplace tag', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    const prepared = store.prepareDispatch(lightweightSlug, ticket.ref, { sessionId: 'lightweight-marketplace-tag' });
+    assert.equal(prepared.ticket.dispatch.baseCommit, localMain);
+    assert.deepEqual(prepared.ticket.dispatch.integrationTarget, { mode: 'local', upstream: 'main', branch: 'main' });
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+test('a published marketplace-only release tip keeps its local baseline', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-published-'));
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-published-remote-'));
+  const git = (args: string[], cwd: string = repository) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+  try {
+    git(['init', '--quiet', '-b', 'main']);
+    git(['config', 'user.email', 'test@example.invalid']);
+    git(['config', 'user.name', 'Dispatch Lifecycle Test']);
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "base";\n');
+    git(['add', 'tracked.js']);
+    git(['commit', '--quiet', '-m', 'pushed base']);
+    execFileSync('git', ['init', '-b', 'main', '--bare', remote], { windowsHide: true });
+    git(['remote', 'add', 'origin', remote]);
+    git(['push', '--quiet', '-u', 'origin', 'main']);
+
+    fs.writeFileSync(path.join(repository, 'release.txt'), 'release\n');
+    git(['add', 'release.txt']);
+    git(['commit', '--quiet', '-m', 'published release']);
+    git(['tag', '-a', 'v9.9.9', '-m', 'release v9.9.9']);
+    git(['push', '--quiet', 'origin', 'main', 'v9.9.9']);
+    const publishedTip = git(['rev-parse', 'main']);
+
+    const publishedSlug = store.ensureProject(repository, 'published marketplace release tip').slug;
+    const ticket = store.createTicket(publishedSlug, { title: 'dispatched after marketplace release publish', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    const prepared = store.prepareDispatch(publishedSlug, ticket.ref, { sessionId: 'published-marketplace-release-tip' });
+    assert.equal(prepared.ticket.dispatch.baseCommit, publishedTip);
+    assert.deepEqual(prepared.ticket.dispatch.integrationTarget, { mode: 'remote', upstream: 'origin/main', branch: 'main' });
   } finally {
     fs.rmSync(repository, { recursive: true, force: true });
     fs.rmSync(remote, { recursive: true, force: true });
