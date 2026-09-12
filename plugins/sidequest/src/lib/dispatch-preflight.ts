@@ -43,7 +43,7 @@ export function localAheadOfUpstreamWarning(projectPath: string, branch: string,
 const PLUGIN_ID = 'sidequest@eigenwise-toolshed';
 const REPAIR_COMMAND = 'claude plugin install sidequest@eigenwise-toolshed --scope project';
 const FILE_READ_RETRY_DELAYS_MS = [20, 60, 140, 300] as const;
-const RETRYABLE_FILE_READ_CODES = new Set(['ENOENT', 'EPERM', 'EACCES', 'EBUSY']);
+const RETRYABLE_FILE_READ_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
 
 function isRetryableFileReadError(error: unknown): boolean {
   if (!error || typeof error !== 'object' || !('code' in error)) return false;
@@ -86,8 +86,14 @@ export interface InstallCheckResult {
   reason?: InstallCheckReason;
   registryPath: string;
   installPath?: string;
+  version?: string;
   identity?: string;
   detail?: string;
+}
+
+export interface ServingInstallSnapshot {
+  installPath: string;
+  version: string;
 }
 
 function claudeHomeDir(opts: InstallCheckOptions = {}): string {
@@ -176,6 +182,26 @@ function canonicalJsonFile(filePath: string): unknown {
   }
 }
 
+export function servingSidequestInstall(modulePath = __filename): ServingInstallSnapshot | null {
+  let installPath: string;
+  try {
+    installPath = path.dirname(fs.realpathSync(modulePath));
+  } catch {
+    return null;
+  }
+  while (true) {
+    try {
+      const manifest = jsonRecord(JSON.parse(fs.readFileSync(path.join(installPath, '.claude-plugin', 'plugin.json'), 'utf8')));
+      const version = typeof manifest?.version === 'string' ? manifest.version.trim() : '';
+      if (version) return { installPath, version };
+    } catch {
+    }
+    const parent = path.dirname(installPath);
+    if (parent === installPath) return null;
+    installPath = parent;
+  }
+}
+
 function installRuntimeSnapshot(installPath: unknown, version: unknown): InstallRuntimeSnapshot {
   if (typeof installPath !== 'string' || !installPath.trim()) return { detail: 'the registry entry has no installPath' };
   if (typeof version !== 'string' || !version.trim()) return { detail: `the registry entry for ${installPath} has no plugin version` };
@@ -237,7 +263,7 @@ export function checkSidequestInstall(projectPath: string, opts: InstallCheckOpt
       };
     }
     if (snapshot.advertisesBoardMcp) {
-      return { ok: true, registryPath, installPath: install.installPath, identity: snapshot.identity };
+      return { ok: true, registryPath, installPath: install.installPath, version: install.version.trim(), identity: snapshot.identity };
     }
   }
   return { ok: false, reason: 'stale', registryPath, detail: 'the .mcp.json snapshot declares no MCP server' };

@@ -40,7 +40,7 @@ const worktrees = require('../lib/worktrees.js');
 const worktreeLease = require('../lib/kernel/worktree.js');
 const agentsync = require('../lib/agentsync.js');
 const { claimRefusalMessage } = require('../lib/refusal-guidance.js');
-const { checkSidequestInstall } = require('../lib/dispatch-preflight.js');
+const { checkSidequestInstall, servingSidequestInstall } = require('../lib/dispatch-preflight.js');
 const { collectGitSubmissionFacts } = require('../lib/mcp-lifecycle.js');
 const sourceRevisionCapability = require('../lib/source-revision-capability.js');
 const database = require('../lib/db.js');
@@ -750,6 +750,71 @@ test('claim-token binding accepts prepared and launched attempts', () => {
   assert.equal(dispatch.bindSource, 'claim_token');
   assert.ok(dispatch.boundAt);
   assert.equal(store.getTicket(slug, fixture.ref).lifecycleAttempt.state, 'claimed');
+});
+
+test('serving install snapshots refuse older builds and warn on newer ones', () => {
+  const servingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-serving-install-'));
+  const storeModulePath = path.join(servingRoot, 'lib', 'store.js');
+  const servingVersion = '0.0.0';
+  fs.mkdirSync(path.dirname(storeModulePath), { recursive: true });
+  fs.mkdirSync(path.join(servingRoot, '.claude-plugin'), { recursive: true });
+  fs.writeFileSync(storeModulePath, '');
+  fs.writeFileSync(path.join(servingRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: servingVersion }));
+  const servingSnapshot = servingSidequestInstall(storeModulePath);
+  const activeRegistry = checkSidequestInstall(PROJECT);
+  assert.deepEqual(servingSnapshot, { installPath: servingRoot, version: servingVersion });
+  assert.equal(activeRegistry.ok, true);
+  assert.notEqual(servingSnapshot?.version, activeRegistry.version);
+
+  try {
+    withReloadedStore('../lib/dispatch-preflight.js', () => ({
+      servingSidequestInstall: () => servingSnapshot,
+    }), (snapshotStore: any) => {
+      const ticket = createFixture('older serving build fixture');
+      const launchTicket = createFixture('older serving launch fixture');
+      const preparedLaunch = store.prepareDispatch(slug, launchTicket.ref, { sessionId: `older-serving-launch-${Date.now()}`, sharedTree: true });
+      try {
+        assert.throws(() => snapshotStore.prepareDispatch(slug, ticket.ref, { sessionId: `older-serving-${Date.now()}`, sharedTree: true }));
+        const launchRefusal = snapshotStore.recordDispatchLaunch(slug, launchTicket.ref, {
+          token: preparedLaunch.token,
+          executor: preparedLaunch.ticket.dispatchExecutor,
+          sessionId: `older-serving-launch-${Date.now()}`,
+          agentName: 'older-serving-launch-worker',
+        });
+        assert.equal(launchRefusal.reason, 'prepared_compatibility_stale');
+      } finally {
+        snapshotStore.releaseTicket(slug, ticket.ref, 'older-serving-cleanup', { status: 'todo', source: 'test', force: true });
+        snapshotStore.releaseTicket(slug, launchTicket.ref, 'older-serving-launch-cleanup', { status: 'todo', source: 'test', force: true });
+      }
+    });
+
+    withReloadedStore('../lib/dispatch-preflight.js', () => ({
+      servingSidequestInstall: () => ({ installPath: servingRoot, version: '999.0.0' }),
+    }), (snapshotStore: any) => {
+      const ticket = createFixture('newer serving build fixture');
+      const launchTicket = createFixture('newer serving launch fixture');
+      const preparedLaunch = store.prepareDispatch(slug, launchTicket.ref, { sessionId: `newer-serving-launch-${Date.now()}`, sharedTree: true });
+      try {
+        const prepared = snapshotStore.prepareDispatch(slug, ticket.ref, { sessionId: `newer-serving-${Date.now()}`, sharedTree: true });
+        assert.equal(prepared.ok, true);
+        assert.equal(prepared.ticket.dispatch.preparedCompatibility.servingVersion, '999.0.0');
+        assert.equal(prepared.warnings.length, 1);
+        const launch = snapshotStore.recordDispatchLaunch(slug, launchTicket.ref, {
+          token: preparedLaunch.token,
+          executor: preparedLaunch.ticket.dispatchExecutor,
+          sessionId: `newer-serving-launch-${Date.now()}`,
+          agentName: 'newer-serving-launch-worker',
+        });
+        assert.equal(launch.ok, true);
+        assert.ok(launch.advisory);
+      } finally {
+        snapshotStore.releaseTicket(slug, ticket.ref, 'newer-serving-cleanup', { status: 'todo', source: 'test', force: true });
+        snapshotStore.releaseTicket(slug, launchTicket.ref, 'newer-serving-launch-cleanup', { status: 'todo', source: 'test', force: true });
+      }
+    });
+  } finally {
+    fs.rmSync(servingRoot, { recursive: true, force: true });
+  }
 });
 
 test('tokened stale compatibility refusals retire only proven mismatches', () => {

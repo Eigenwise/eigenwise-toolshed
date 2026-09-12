@@ -27,6 +27,7 @@ process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY_ROOT;
 
 const store = require('../lib/store.js');
+const SERVING_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version;
 const dispatchPreflight = require('../lib/dispatch-preflight.js');
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const PROJ = path.join(os.tmpdir(), 'sq-claim-effort-fixtures', 'board');
@@ -61,7 +62,7 @@ function fakeInstall(withBoardMcp = true) {
 
 // A valid project-scoped install for PROJ, so the pre-existing dispatch
 // tests below (which predate SQ-1017) keep exercising the happy path.
-writeRegistry([{ scope: 'project', projectPath: PROJ, installPath: fakeInstall(), version: '9.9.9' }]);
+writeRegistry([{ scope: 'project', projectPath: PROJ, installPath: fakeInstall(), version: SERVING_VERSION }]);
 
 store.setCategory({
   id: 'guard.codex', name: 'Codex guard',
@@ -744,7 +745,7 @@ test('SQ-1017: dispatch succeeds once an exact-project install advertising the b
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-ok-project-'));
   fs.mkdirSync(path.join(claudeHome, 'plugins'), { recursive: true });
   fs.writeFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
-    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: fakeInstall(), version: '9.9.9' }] },
+    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: fakeInstall(), version: SERVING_VERSION }] },
   }));
   process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
   try {
@@ -812,7 +813,7 @@ test('SQ-1017: dispatch refuses a stale registry entry whose install path no lon
   fs.rmSync(goneInstall, { recursive: true, force: true });
   fs.mkdirSync(path.join(claudeHome, 'plugins'), { recursive: true });
   fs.writeFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
-    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: goneInstall, version: '9.9.9' }] },
+    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: goneInstall, version: SERVING_VERSION }] },
   }));
   process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
   try {
@@ -829,7 +830,7 @@ test('SQ-1017: dispatch refuses an install whose manifest no longer declares the
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-nomcp-project-'));
   fs.mkdirSync(path.join(claudeHome, 'plugins'), { recursive: true });
   fs.writeFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
-    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: fakeInstall(false), version: '9.9.9' }] },
+    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: fakeInstall(false), version: SERVING_VERSION }] },
   }));
   process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
   try {
@@ -891,7 +892,7 @@ function goodTransportRegistry(project?: any) {
   const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-transport-claude-home-'));
   fs.mkdirSync(path.join(claudeHome, 'plugins'), { recursive: true });
   fs.writeFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
-    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: fakeInstall(), version: '9.9.9' }] },
+    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: project, installPath: fakeInstall(), version: SERVING_VERSION }] },
   }));
   return claudeHome;
 }
