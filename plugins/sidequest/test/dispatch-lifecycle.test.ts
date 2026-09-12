@@ -40,7 +40,7 @@ const worktrees = require('../lib/worktrees.js');
 const worktreeLease = require('../lib/kernel/worktree.js');
 const agentsync = require('../lib/agentsync.js');
 const { claimRefusalMessage } = require('../lib/refusal-guidance.js');
-const { checkSidequestInstall } = require('../lib/dispatch-preflight.js');
+const { checkSidequestInstall, servingSidequestInstall } = require('../lib/dispatch-preflight.js');
 const { collectGitSubmissionFacts } = require('../lib/mcp-lifecycle.js');
 const sourceRevisionCapability = require('../lib/source-revision-capability.js');
 const database = require('../lib/db.js');
@@ -196,6 +196,44 @@ test('preparing a non-Git ticket uses its persisted dispatch snapshot', () => {
   assert.equal(baseline.revision.source, 'filesystem-snapshot');
   assert.equal(baseline.revision.value, sourceRevisionCapability.filesystemSnapshotRevision(snapshotProject, baseline.revision.observedAt)?.value);
   assert.equal(persistedSnapshots.filter((snapshot: any) => snapshot.value === baseline.revision.value).length, 1);
+});
+
+for (const limit of [
+  { bound: 'path cap', observed: 501, cap: 500, unit: 'paths' },
+  { bound: 'byte cap', observed: 65, cap: 64, unit: 'bytes' },
+  { bound: 'deadline', observed: 11, cap: 10, unit: 'ms' },
+]) {
+  test(`preparing a non-Git ticket reports a ${limit.bound} refusal`, () => {
+    withSnapshotRevision(() => () => {
+      throw new sourceRevisionCapability.FilesystemSnapshotLimitError(limit.bound, limit.observed, limit.cap);
+    }, (snapshotStore: any) => {
+      const { projectSlug, ticket } = snapshotProjectFixture(snapshotStore, `snapshot-${limit.bound}`, `refuse ${limit.bound}`);
+
+      assert.throws(
+        () => snapshotStore.prepareDispatch(projectSlug, ticket.ref),
+        new RegExp(`${limit.bound} reached ${limit.observed} ${limit.unit}; cap ${limit.cap} ${limit.unit}`),
+      );
+    });
+  });
+}
+
+test('preparing a Git ticket does not capture a filesystem snapshot', () => {
+  withSnapshotRevision(() => () => {
+    throw new Error('Git-backed dispatch must not capture a filesystem snapshot');
+  }, (snapshotStore: any) => {
+    const ticket = snapshotStore.createTicket(slug, {
+      title: 'prepare a Git dispatch without a filesystem snapshot', category: 'dispatch.lifecycle', files: ['tracked.js'], source: 'test',
+    });
+
+    const prepared = snapshotStore.prepareDispatch(slug, ticket.ref);
+
+    assert.equal(prepared.ticket.dispatch.lifecycleAttempt.baseline.revision.source, 'git');
+    // This is the one snapshot test that needs the shared Git-backed project, so its prepared
+    // dispatch would otherwise survive to the TTL sweep further down and expire alongside it.
+    assert.equal(snapshotStore.releaseTicket(slug, ticket.ref, 'git-baseline-snapshot-cleanup', {
+      status: 'todo', source: 'test', force: true,
+    }).ok, true);
+  });
 });
 
 test('preparing a non-Git ticket hashes once before persisting its dispatch snapshot', () => {
@@ -714,6 +752,132 @@ test('claim-token binding accepts prepared and launched attempts', () => {
   assert.equal(store.getTicket(slug, fixture.ref).lifecycleAttempt.state, 'claimed');
 });
 
+test('serving install snapshots refuse older builds and warn on newer ones', () => {
+  const servingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-serving-install-'));
+  const storeModulePath = path.join(servingRoot, 'lib', 'store.js');
+  const servingVersion = '0.0.0';
+  fs.mkdirSync(path.dirname(storeModulePath), { recursive: true });
+  fs.mkdirSync(path.join(servingRoot, '.claude-plugin'), { recursive: true });
+  fs.writeFileSync(storeModulePath, '');
+  fs.writeFileSync(path.join(servingRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: servingVersion }));
+  const servingSnapshot = servingSidequestInstall(storeModulePath);
+  const activeRegistry = checkSidequestInstall(PROJECT);
+  assert.deepEqual(servingSnapshot, { installPath: servingRoot, version: servingVersion });
+  assert.equal(activeRegistry.ok, true);
+  assert.notEqual(servingSnapshot?.version, activeRegistry.version);
+
+  try {
+    withReloadedStore('../lib/dispatch-preflight.js', () => ({
+      servingSidequestInstall: () => servingSnapshot,
+    }), (snapshotStore: any) => {
+      const ticket = createFixture('older serving build fixture');
+      const launchTicket = createFixture('older serving launch fixture');
+      const preparedLaunch = store.prepareDispatch(slug, launchTicket.ref, { sessionId: `older-serving-launch-${Date.now()}`, sharedTree: true });
+      try {
+        assert.throws(() => snapshotStore.prepareDispatch(slug, ticket.ref, { sessionId: `older-serving-${Date.now()}`, sharedTree: true }));
+        const launchRefusal = snapshotStore.recordDispatchLaunch(slug, launchTicket.ref, {
+          token: preparedLaunch.token,
+          executor: preparedLaunch.ticket.dispatchExecutor,
+          sessionId: `older-serving-launch-${Date.now()}`,
+          agentName: 'older-serving-launch-worker',
+        });
+        assert.equal(launchRefusal.reason, 'prepared_compatibility_stale');
+      } finally {
+        snapshotStore.releaseTicket(slug, ticket.ref, 'older-serving-cleanup', { status: 'todo', source: 'test', force: true });
+        snapshotStore.releaseTicket(slug, launchTicket.ref, 'older-serving-launch-cleanup', { status: 'todo', source: 'test', force: true });
+      }
+    });
+
+    withReloadedStore('../lib/dispatch-preflight.js', () => ({
+      servingSidequestInstall: () => ({ installPath: servingRoot, version: '999.0.0' }),
+    }), (snapshotStore: any) => {
+      const ticket = createFixture('newer serving build fixture');
+      const launchTicket = createFixture('newer serving launch fixture');
+      const preparedLaunch = store.prepareDispatch(slug, launchTicket.ref, { sessionId: `newer-serving-launch-${Date.now()}`, sharedTree: true });
+      try {
+        const prepared = snapshotStore.prepareDispatch(slug, ticket.ref, { sessionId: `newer-serving-${Date.now()}`, sharedTree: true });
+        assert.equal(prepared.ok, true);
+        assert.equal(prepared.ticket.dispatch.preparedCompatibility.servingVersion, '999.0.0');
+        assert.equal(prepared.warnings.length, 1);
+        const launch = snapshotStore.recordDispatchLaunch(slug, launchTicket.ref, {
+          token: preparedLaunch.token,
+          executor: preparedLaunch.ticket.dispatchExecutor,
+          sessionId: `newer-serving-launch-${Date.now()}`,
+          agentName: 'newer-serving-launch-worker',
+        });
+        assert.equal(launch.ok, true);
+        assert.ok(launch.advisory);
+      } finally {
+        snapshotStore.releaseTicket(slug, ticket.ref, 'newer-serving-cleanup', { status: 'todo', source: 'test', force: true });
+        snapshotStore.releaseTicket(slug, launchTicket.ref, 'newer-serving-launch-cleanup', { status: 'todo', source: 'test', force: true });
+      }
+    });
+  } finally {
+    fs.rmSync(servingRoot, { recursive: true, force: true });
+  }
+});
+
+test('serving install lookup retries after a transient miss', () => {
+  const activeRegistry = checkSidequestInstall(PROJECT);
+  assert.equal(activeRegistry.ok, true);
+  const servingSnapshot = { installPath: path.join(PROJECT, 'serving-install'), version: activeRegistry.version };
+  let lookupAvailable = false;
+  let lookupCalls = 0;
+
+  withReloadedStore('../lib/dispatch-preflight.js', () => ({
+    servingSidequestInstall: () => {
+      lookupCalls += 1;
+      return lookupAvailable ? servingSnapshot : null;
+    },
+  }), (snapshotStore: any) => {
+    const missedTicket = createFixture('transient serving install lookup fixture');
+    const resolvedTicket = createFixture('resolved serving install lookup fixture');
+    try {
+      const missed = snapshotStore.prepareDispatch(slug, missedTicket.ref, { sessionId: `transient-serving-install-${Date.now()}`, sharedTree: true });
+      assert.equal(missed.ticket.dispatch.preparedCompatibility.servingVersion, undefined);
+
+      lookupAvailable = true;
+      const resolved = snapshotStore.prepareDispatch(slug, resolvedTicket.ref, { sessionId: `resolved-serving-install-${Date.now()}`, sharedTree: true });
+      assert.equal(resolved.ticket.dispatch.preparedCompatibility.servingVersion, servingSnapshot.version);
+      assert.ok(lookupCalls >= 3);
+    } finally {
+      snapshotStore.releaseTicket(slug, missedTicket.ref, 'transient-serving-install-cleanup', { status: 'todo', source: 'test', force: true });
+      snapshotStore.releaseTicket(slug, resolvedTicket.ref, 'resolved-serving-install-cleanup', { status: 'todo', source: 'test', force: true });
+    }
+  });
+});
+
+test('serving build metadata drift refuses matching-precedence prepared versions', () => {
+  const isolatedClaudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-build-metadata-home-'));
+  const isolatedInstallPath = path.join(isolatedClaudeHome, 'sidequest-test-install');
+  const sharedClaudeHome = process.env.SIDEQUEST_CLAUDE_HOME;
+  fs.mkdirSync(path.join(isolatedClaudeHome, 'plugins'), { recursive: true });
+  fs.mkdirSync(path.join(isolatedInstallPath, 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(isolatedInstallPath, '.mcp.json'), JSON.stringify({ mcpServers: { board: {} } }));
+  fs.writeFileSync(path.join(isolatedInstallPath, 'hooks', 'hooks.json'), JSON.stringify({ hooks: {} }));
+  fs.writeFileSync(path.join(isolatedClaudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'user', installPath: isolatedInstallPath, version: '5.1.14+new' }] },
+  }));
+  process.env.SIDEQUEST_CLAUDE_HOME = isolatedClaudeHome;
+
+  try {
+    withReloadedStore('../lib/dispatch-preflight.js', () => ({
+      servingSidequestInstall: () => ({ installPath: isolatedInstallPath, version: '5.1.14+old' }),
+    }), (snapshotStore: any) => {
+      const ticket = createFixture('build metadata drift fixture');
+      try {
+        assert.throws(() => snapshotStore.prepareDispatch(slug, ticket.ref, { sessionId: `build-metadata-drift-${Date.now()}`, sharedTree: true }));
+      } finally {
+        snapshotStore.releaseTicket(slug, ticket.ref, 'build-metadata-drift-cleanup', { status: 'todo', source: 'test', force: true });
+      }
+    });
+  } finally {
+    if (sharedClaudeHome === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
+    else process.env.SIDEQUEST_CLAUDE_HOME = sharedClaudeHome;
+    fs.rmSync(isolatedClaudeHome, { recursive: true, force: true });
+  }
+});
+
 test('tokened stale compatibility refusals retire only proven mismatches', () => {
   // This test flips the install identity that checkSidequestInstall hashes. The full suite
   // shares one SIDEQUEST_CLAUDE_HOME across every test process (scripts/test-full.mjs), so
@@ -738,34 +902,71 @@ test('tokened stale compatibility refusals retire only proven mismatches', () =>
 
   const claimTicket = createFixture('stale compatibility claim fixture');
   const launchTicket = createFixture('stale compatibility launch fixture');
-  const transientLaunchTicket = createFixture('unreadable compatibility launch fixture');
-  const transientClaimTicket = createFixture('unreadable compatibility claim fixture');
+  const transientLaunchTicket = createFixture('transient registry compatibility launch fixture');
+  const transientClaimTicket = createFixture('transient registry compatibility claim fixture');
+  const unreadableCurrentTicket = createFixture('unreadable current install fixture');
   const claimPrepared = store.prepareDispatch(slug, claimTicket.ref, { sessionId: `stale-compatibility-claim-${Date.now()}` });
   const launchPrepared = store.prepareDispatch(slug, launchTicket.ref, { sessionId: `stale-compatibility-launch-${Date.now()}` });
-  const transientLaunchPrepared = store.prepareDispatch(slug, transientLaunchTicket.ref, { sessionId: `unreadable-compatibility-launch-${Date.now()}` });
-  const transientClaimPrepared = store.prepareDispatch(slug, transientClaimTicket.ref, { sessionId: `unreadable-compatibility-claim-${Date.now()}` });
+  const transientLaunchPrepared = store.prepareDispatch(slug, transientLaunchTicket.ref, { sessionId: `transient-registry-launch-${Date.now()}` });
+  const transientClaimPrepared = store.prepareDispatch(slug, transientClaimTicket.ref, { sessionId: `transient-registry-claim-${Date.now()}` });
+  const unreadableCurrentPrepared = store.prepareDispatch(slug, unreadableCurrentTicket.ref, { sessionId: `unreadable-current-install-${Date.now()}` });
   const preparedIdentity = claimPrepared.ticket.dispatch.preparedCompatibility.identity;
 
   try {
-    fs.writeFileSync(manifestPath, '');
-    assert.equal(checkSidequestInstall(PROJECT).ok, false);
-    assert.equal(store.recordDispatchLaunch(slug, transientLaunchTicket.ref, {
-      token: transientLaunchPrepared.token,
-      executor: transientLaunchPrepared.ticket.dispatchExecutor,
-      sessionId: `unreadable-compatibility-launch-${Date.now()}`,
-      agentName: 'unreadable-compatibility-launch-worker',
-    }).ok, true);
-    assert.equal(store.getTicket(slug, transientLaunchTicket.ref).dispatchNonce, transientLaunchPrepared.ticket.dispatchNonce);
-    assert.equal(store.claimTicket(slug, transientClaimTicket.ref, 'unreadable-compatibility-claim-worker', {
-      token: transientClaimPrepared.token,
-      executor: transientClaimPrepared.ticket.dispatchExecutor,
-    }).ok, true);
+    fs.writeFileSync(manifestPath, JSON.stringify({ mcpServers: { board: { command: 'replacement-board' } } }));
+    const replacementInstall = checkSidequestInstall(PROJECT);
+    assert.equal(replacementInstall.ok, true);
+    assert.notEqual(replacementInstall.identity, preparedIdentity);
+
+    const originalReadFileSyncDescriptor = Object.getOwnPropertyDescriptor(fs, 'readFileSync');
+    const originalReadFileSync = fs.readFileSync;
+    const registryPath = path.join(isolatedClaudeHome, 'plugins', 'installed_plugins.json');
+    let registryReadAttempts = 0;
+    let transientReadPending = true;
+    Object.defineProperty(fs, 'readFileSync', {
+      ...originalReadFileSyncDescriptor,
+      value: function (...arguments_: unknown[]) {
+        if (arguments_[0] === registryPath) {
+          registryReadAttempts += 1;
+          if (transientReadPending) {
+            transientReadPending = false;
+            throw Object.assign(new Error('simulated transient registry replacement'), { code: 'ENOENT' });
+          }
+        }
+        return Reflect.apply(originalReadFileSync, fs, arguments_);
+      },
+    });
+
+    try {
+      const launchRefusal = store.recordDispatchLaunch(slug, transientLaunchTicket.ref, {
+        token: transientLaunchPrepared.token,
+        executor: transientLaunchPrepared.ticket.dispatchExecutor,
+        sessionId: `unreadable-compatibility-launch-${Date.now()}`,
+        agentName: 'unreadable-compatibility-launch-worker',
+      });
+      assert.equal(launchRefusal.reason, 'prepared_compatibility_stale');
+
+      transientReadPending = true;
+      const claimRefusal = store.claimTicket(slug, transientClaimTicket.ref, 'unreadable-compatibility-claim-worker', {
+        token: transientClaimPrepared.token,
+        executor: transientClaimPrepared.ticket.dispatchExecutor,
+      });
+      assert.equal(claimRefusal.reason, 'prepared_compatibility_stale');
+      assert.equal(registryReadAttempts, 4);
+    } finally {
+      Object.defineProperty(fs, 'readFileSync', originalReadFileSyncDescriptor!);
+    }
 
     fs.writeFileSync(manifestPath, originalManifest);
-    assert.equal(store.claimTicket(slug, transientLaunchTicket.ref, 'unreadable-compatibility-launch-worker', {
-      token: transientLaunchPrepared.token,
-      executor: transientLaunchPrepared.ticket.dispatchExecutor,
-    }).ok, true);
+
+    fs.writeFileSync(manifestPath, '');
+    assert.equal(checkSidequestInstall(PROJECT).ok, false);
+    const unreadableRefusal = store.claimTicket(slug, unreadableCurrentTicket.ref, 'unreadable-current-install-worker', {
+      token: unreadableCurrentPrepared.token,
+      executor: unreadableCurrentPrepared.ticket.dispatchExecutor,
+    });
+    assert.equal(unreadableRefusal.reason, 'prepared_compatibility_stale');
+    fs.writeFileSync(manifestPath, originalManifest);
 
     const mcpBeforeVersionChange = fs.readFileSync(manifestPath, 'utf8');
     const registry = JSON.parse(fs.readFileSync(path.join(isolatedClaudeHome, 'plugins', 'installed_plugins.json'), 'utf8'));
@@ -811,7 +1012,7 @@ test('tokened stale compatibility refusals retire only proven mismatches', () =>
   } finally {
     if (sharedClaudeHome === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
     else process.env.SIDEQUEST_CLAUDE_HOME = sharedClaudeHome;
-    for (const ticket of [claimTicket, launchTicket, transientLaunchTicket, transientClaimTicket]) {
+    for (const ticket of [claimTicket, launchTicket, transientLaunchTicket, transientClaimTicket, unreadableCurrentTicket]) {
       store.releaseTicket(slug, ticket.ref, 'stale-compatibility-cleanup', { status: 'todo', source: 'test', force: true });
     }
     fs.rmSync(isolatedClaudeHome, { recursive: true, force: true });
@@ -2417,7 +2618,6 @@ test('control plane records an abandoned candidate after recovering the dead unc
     executor: dead.ticket.dispatchExecutor,
     agentName,
   }).ok, true);
-  assert.equal(store.bindDispatchAgent(deadSession, dead.ticket.dispatchExecutor, agentName, agentName).ok, true);
   assert.equal(store.releaseTicket(slug, ticket.ref, 'orchestrator', { source: 'test' }).reason, 'unclaimed_active_dispatch');
   assert.equal(store.clearUnclaimedDispatch(slug, ticket.ref, {
     by: 'orchestrator',
@@ -2451,6 +2651,125 @@ test('control plane records an abandoned candidate after recovering the dead unc
   assert.equal(closed.ticket.submission.integration.outcome, 'abandoned');
   assert.equal(closed.ticket.submission.integration.candidateState, 'unresolvable');
   assert.equal(closed.ticket.completion.delivery, undefined);
+});
+
+test('unclaimed pre-runtime delivery names and preserves its manual recovery path', () => {
+  const ticket = createFixture('manual pre-runtime delivery fixture');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `manual-pre-runtime-${Date.now()}` });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId: `manual-pre-runtime-${Date.now()}`,
+    agentName: `manual-pre-runtime-${ticket.id}`,
+  }).ok, true);
+  commitFixtureChange();
+  const deliveredCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+
+  const bareGroomClose = store.completeTicketAsControlPlane(slug, ticket.ref, {
+    purpose: 'delivery',
+    by: 'control-plane',
+    reason: 'The executor ended before its first claim.',
+    deliveryCommit: deliveredCommit,
+  });
+  assert.equal(bareGroomClose.reason, 'active_dispatch');
+  assert.match(bareGroomClose.message, /deliveryMethod manual/);
+  assert.match(bareGroomClose.message, /recoveryEvidence/);
+  assert.match(bareGroomClose.message, /reachable from the recorded integration branch/);
+  assert.throws(
+    () => store.updateTicket(slug, ticket.ref, { status: 'done' }),
+    /deliveryMethod manual[\s\S]*recoveryEvidence/,
+  );
+
+  const release = store.releaseTicket(slug, ticket.ref, 'control-plane', { source: 'test' });
+  assert.equal(release.reason, 'unclaimed_active_dispatch');
+  assert.match(release.message, /deliveryMethod manual/);
+  assert.match(release.message, /recoveryEvidence/);
+  assert.match(release.message, /reachable from the recorded integration branch/);
+
+  assert.equal(store.clearUnclaimedDispatch(slug, ticket.ref, {
+    by: 'control-plane',
+    evidence: 'The dispatched executor exited before its first claim.',
+  }).ok, true);
+  const closed = store.completeTicketAsControlPlane(slug, ticket.ref, {
+    purpose: 'delivery',
+    by: 'control-plane',
+    reason: 'The executor ended before its first claim.',
+    deliveryCommit: deliveredCommit,
+    deliveryMethod: 'manual',
+  });
+  assert.equal(closed.ok, true);
+  assert.equal(closed.ticket.status, 'done');
+
+  const retireOnly = createFixture('retire-only pre-runtime delivery fixture');
+  const retirePrepared = store.prepareDispatch(slug, retireOnly.ref, { sessionId: `retire-only-${Date.now()}` });
+  assert.equal(store.recordDispatchLaunch(slug, retireOnly.ref, {
+    token: retirePrepared.token,
+    executor: retirePrepared.ticket.dispatchExecutor,
+    agentName: `retire-only-${retireOnly.id}`,
+  }).ok, true);
+  const retired = store.prepareDispatch(slug, retireOnly.ref, {
+    recoveryEvidence: 'The executor exited before its first claim.',
+    retireOnly: true,
+  });
+  assert.equal(retired.ok, true);
+  assert.equal(retired.retired, true);
+  assert.equal(retired.ticket.dispatchNonce, null);
+  assert.equal(retired.ticket.dispatch.failureShape, 'unclaimed_launch_superseded');
+  const retireClosed = store.completeTicketAsControlPlane(slug, retireOnly.ref, {
+    purpose: 'delivery',
+    by: 'control-plane',
+    reason: 'The executor ended before its first claim.',
+    deliveryCommit: deliveredCommit,
+    deliveryMethod: 'manual',
+  });
+  assert.equal(retireClosed.ok, true);
+
+  const bound = createFixture('bound manual delivery guard fixture');
+  const boundSession = `bound-manual-delivery-${Date.now()}`;
+  const boundPrepared = store.prepareDispatch(slug, bound.ref, { sessionId: boundSession, sharedTree: true });
+  const boundAgent = `bound-manual-delivery-${bound.id}`;
+  assert.equal(store.recordDispatchLaunch(slug, bound.ref, {
+    token: boundPrepared.token,
+    executor: boundPrepared.ticket.dispatchExecutor,
+    sessionId: boundSession,
+    agentName: boundAgent,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(boundSession, boundPrepared.ticket.dispatchExecutor, boundAgent, boundAgent).ok, true);
+  const boundGroomClose = store.completeTicketAsControlPlane(slug, bound.ref, {
+    purpose: 'delivery',
+    by: 'control-plane',
+    reason: 'The executor is still live.',
+    deliveryCommit: deliveredCommit,
+    deliveryMethod: 'manual',
+  });
+  assert.equal(boundGroomClose.reason, 'active_dispatch');
+  assert.doesNotMatch(boundGroomClose.message, /deliveryMethod manual/);
+  assert.equal(store.clearUnclaimedDispatch(slug, bound.ref, {
+    by: 'control-plane',
+    evidence: 'A live bound executor must not be retired by grooming.',
+  }).reason, 'active_dispatch');
+  assert.equal(store.releaseTicket(slug, bound.ref, 'control-plane', { force: true, source: 'test' }).ok, true);
+
+  const unreachable = createFixture('unreachable manual delivery fixture');
+  const unreachablePrepared = store.prepareDispatch(slug, unreachable.ref, { sessionId: `unreachable-manual-${Date.now()}` });
+  assert.equal(store.recordDispatchLaunch(slug, unreachable.ref, {
+    token: unreachablePrepared.token,
+    executor: unreachablePrepared.ticket.dispatchExecutor,
+    agentName: `unreachable-manual-${unreachable.id}`,
+  }).ok, true);
+  assert.equal(store.clearUnclaimedDispatch(slug, unreachable.ref, {
+    by: 'control-plane',
+    evidence: 'The executor ended before its first claim.',
+  }).ok, true);
+  const unreachableGroomClose = store.completeTicketAsControlPlane(slug, unreachable.ref, {
+    purpose: 'delivery',
+    by: 'control-plane',
+    reason: 'The delivery has not reached the integration branch.',
+    deliveryCommit: 'deadbeef',
+    deliveryMethod: 'manual',
+  });
+  assert.equal(unreachableGroomClose.reason, 'delivery_not_reachable');
+  assert.match(unreachableGroomClose.message, /not reachable from this ticket's recorded local integration branch/);
 });
 
 test('SQ-2117: a pending submission refuses preparation instead of minting an unclaimable attempt', () => {
@@ -2939,6 +3258,233 @@ test('configured worktree bases apply to readonly isolated dispatches without ch
     fs.rmSync(repository, { recursive: true, force: true });
     fs.rmSync(remote, { recursive: true, force: true });
     fs.rmSync(executorParent, { recursive: true, force: true });
+  }
+});
+
+test('SQ-2777: a dispatch refuses to baseline on an unpublished release tip, and the teardown it names restores a clean submission range', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-'));
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-remote-'));
+  const executorParent = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-executor-'));
+  const git = (args: string[], cwd: string = repository) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+  try {
+    git(['init', '--quiet', '-b', 'main']);
+    git(['config', 'user.email', 'test@example.invalid']);
+    git(['config', 'user.name', 'Dispatch Lifecycle Test']);
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "base";\n');
+    git(['add', 'tracked.js']);
+    git(['commit', '--quiet', '-m', 'pushed base']);
+    execFileSync('git', ['init', '-b', 'main', '--bare', remote], { windowsHide: true });
+    git(['remote', 'add', 'origin', remote]);
+    git(['push', '--quiet', '-u', 'origin', 'main']);
+    const pushedBase = git(['rev-parse', 'origin/main']);
+
+    // What `cut.mjs` has done by the time it starts the release suites: the version
+    // and changelog commit, then its annotated tag set. Nothing is pushed yet. This is
+    // the ordinary shape, where a plugin moved and so carries its own tag too.
+    fs.writeFileSync(path.join(repository, 'release.txt'), 'sidequest 9.9.9\n');
+    git(['add', 'release.txt']);
+    git(['commit', '--quiet', '-m', 'release v9.9.9: sidequest 9.9.9 (SQ-0001)']);
+    const releaseTip = git(['rev-parse', 'main']);
+    git(['tag', '-a', 'v9.9.9', '-m', 'release v9.9.9: sidequest 9.9.9 (SQ-0001)']);
+    git(['tag', '-a', 'sidequest-v9.9.9', '-m', 'sidequest 9.9.9 (v9.9.9)']);
+
+    const tipSlug = store.ensureProject(repository, 'unpublished release tip').slug;
+    const refused = store.createTicket(tipSlug, { title: 'dispatched while a cut is in flight', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    // Every tag on the tip is named, not just the one that decided the match: the
+    // refusal tells the reader to delete "those tags", so an incomplete list leaves
+    // `sidequest-v9.9.9` behind to collide with the retry cut (SQ-2787).
+    assert.throws(
+      () => store.prepareDispatch(tipSlug, refused.ref, { sessionId: 'release-tip-refused' }),
+      /unpublished release commit, tagged sidequest-v9\.9\.9, v9\.9\.9 and not yet on the remote branch/,
+    );
+    assert.equal(store.getTicket(tipSlug, refused.ref).dispatch, undefined);
+
+    // What the refusal averts, measured through the wire it would have used:
+    // WorktreeCreate forks the executor checkout from dispatch.baseCommit, which
+    // here would have been the release tip, so the candidate stays descended from a
+    // commit the branch rewinds past and the range picks up the release commit too.
+    const forked = path.join(executorParent, 'forked-from-release-tip');
+    git(['worktree', 'add', '--quiet', '-b', 'forked-candidate', forked, releaseTip]);
+    fs.writeFileSync(path.join(forked, 'tracked.js'), 'module.exports = "candidate";\n');
+    git(['commit', '--quiet', '-am', 'candidate sentinel'], forked);
+    const forkedCandidate = git(['rev-parse', 'HEAD'], forked);
+    git(['update-ref', `refs/sidequest/${refused.ref}`, forkedCandidate], forked);
+
+    // The teardown the refusal names: delete the tag, reset the branch.
+    git(['tag', '-d', 'v9.9.9']);
+    git(['reset', '--hard', '--quiet', pushedBase]);
+
+    const avertedFacts = collectGitSubmissionFacts({
+      slug: tipSlug,
+      ticket: store.getTicket(tipSlug, refused.ref),
+      root: forked,
+      commit: forkedCandidate,
+      gitRef: `refs/sidequest/${refused.ref}`,
+    });
+    assert.equal(avertedFacts.range.ok, true);
+    assert.deepEqual(avertedFacts.range.commits, [releaseTip, forkedCandidate]);
+    assert.ok(avertedFacts.range.changedPaths.includes('release.txt'));
+    git(['worktree', 'remove', '--force', forked]);
+
+    // After the teardown the same dispatch prepares, and the same WorktreeCreate-shaped
+    // fork of the recorded baseline submits a range holding only its own commit.
+    const recovered = store.createTicket(tipSlug, { title: 'dispatched after the teardown', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    const prepared = store.prepareDispatch(tipSlug, recovered.ref, { sessionId: 'release-tip-recovered' });
+    assert.equal(prepared.ticket.dispatch.baseCommit, pushedBase);
+    const recoveredWorktree = path.join(executorParent, 'forked-after-teardown');
+    git(['worktree', 'add', '--quiet', '-b', 'recovered-candidate', recoveredWorktree, prepared.ticket.dispatch.baseCommit]);
+    fs.writeFileSync(path.join(recoveredWorktree, 'tracked.js'), 'module.exports = "recovered";\n');
+    git(['commit', '--quiet', '-am', 'recovered candidate sentinel'], recoveredWorktree);
+    const recoveredCandidate = git(['rev-parse', 'HEAD'], recoveredWorktree);
+    git(['update-ref', `refs/sidequest/${recovered.ref}`, recoveredCandidate], recoveredWorktree);
+    const recoveredFacts = collectGitSubmissionFacts({
+      slug: tipSlug,
+      ticket: prepared.ticket,
+      root: recoveredWorktree,
+      commit: recoveredCandidate,
+      gitRef: `refs/sidequest/${recovered.ref}`,
+    });
+    assert.equal(recoveredFacts.range.ok, true);
+    assert.equal(recoveredFacts.range.base, pushedBase);
+    assert.deepEqual(recoveredFacts.range.commits, [recoveredCandidate]);
+    assert.deepEqual(recoveredFacts.range.changedPaths, ['tracked.js']);
+    git(['worktree', 'remove', '--force', recoveredWorktree]);
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(executorParent, { recursive: true, force: true });
+  }
+});
+
+test('an unpushed local commit without an annotated marketplace release tag keeps its local baseline', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-ordinary-'));
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-ordinary-remote-'));
+  const git = (args: string[], cwd: string = repository) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+  try {
+    git(['init', '--quiet', '-b', 'main']);
+    git(['config', 'user.email', 'test@example.invalid']);
+    git(['config', 'user.name', 'Dispatch Lifecycle Test']);
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "base";\n');
+    git(['add', 'tracked.js']);
+    git(['commit', '--quiet', '-m', 'pushed base']);
+    execFileSync('git', ['init', '-b', 'main', '--bare', remote], { windowsHide: true });
+    git(['remote', 'add', 'origin', remote]);
+    git(['push', '--quiet', '-u', 'origin', 'main']);
+
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "local";\n');
+    git(['commit', '--quiet', '-am', 'ordinary unpushed commit']);
+    const localMain = git(['rev-parse', 'main']);
+
+    const ordinarySlug = store.ensureProject(repository, 'ordinary unpushed commit').slug;
+    const ticket = store.createTicket(ordinarySlug, { title: 'dispatched over an ordinary unpushed commit', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    const prepared = store.prepareDispatch(ordinarySlug, ticket.ref, { sessionId: 'ordinary-unpushed-baseline' });
+    assert.equal(prepared.ticket.dispatch.baseCommit, localMain);
+    assert.deepEqual(prepared.ticket.dispatch.integrationTarget, { mode: 'local', upstream: 'main', branch: 'main' });
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+// SQ-2779 added repo-scoped fragments, so a window carrying only those releases no
+// published plugin and `cut.mjs` creates the marketplace tag alone. That window was
+// the one shape the guard did not cover (SQ-2787).
+test('SQ-2787: a repo-only release tip carrying just the marketplace tag still refuses the dispatch baseline', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-repo-only-'));
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-repo-only-remote-'));
+  const git = (args: string[], cwd: string = repository) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+  try {
+    git(['init', '--quiet', '-b', 'main']);
+    git(['config', 'user.email', 'test@example.invalid']);
+    git(['config', 'user.name', 'Dispatch Lifecycle Test']);
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "base";\n');
+    git(['add', 'tracked.js']);
+    git(['commit', '--quiet', '-m', 'pushed base']);
+    execFileSync('git', ['init', '-b', 'main', '--bare', remote], { windowsHide: true });
+    git(['remote', 'add', 'origin', remote]);
+    git(['push', '--quiet', '-u', 'origin', 'main']);
+
+    fs.writeFileSync(path.join(repository, 'release.txt'), 'repo-only release\n');
+    git(['add', 'release.txt']);
+    git(['commit', '--quiet', '-m', 'release v9.9.9 (SQ-0002)']);
+    const releaseTip = git(['rev-parse', 'main']);
+    git(['tag', '-a', 'v9.9.9', '-m', 'release v9.9.9 (SQ-0002)']);
+
+    const repoOnlySlug = store.ensureProject(repository, 'repo-only release tip').slug;
+    const refused = store.createTicket(repoOnlySlug, { title: 'dispatched during a repo-only cut', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    assert.throws(
+      () => store.prepareDispatch(repoOnlySlug, refused.ref, { sessionId: 'repo-only-release-tip' }),
+      /unpublished release commit, tagged v9\.9\.9 and not yet on the remote branch/,
+    );
+    assert.equal(store.getTicket(repoOnlySlug, refused.ref).dispatch, undefined);
+    assert.equal(git(['rev-parse', 'main']), releaseTip);
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+test('a lightweight marketplace release tag does not narrow an unpushed local baseline', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-lightweight-'));
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-lightweight-remote-'));
+  const git = (args: string[], cwd: string = repository) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+  try {
+    git(['init', '--quiet', '-b', 'main']);
+    git(['config', 'user.email', 'test@example.invalid']);
+    git(['config', 'user.name', 'Dispatch Lifecycle Test']);
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "base";\n');
+    git(['add', 'tracked.js']);
+    git(['commit', '--quiet', '-m', 'pushed base']);
+    execFileSync('git', ['init', '-b', 'main', '--bare', remote], { windowsHide: true });
+    git(['remote', 'add', 'origin', remote]);
+    git(['push', '--quiet', '-u', 'origin', 'main']);
+
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "local";\n');
+    git(['commit', '--quiet', '-am', 'lightweight tag sentinel']);
+    git(['tag', 'v9.9.9']);
+    const localMain = git(['rev-parse', 'main']);
+
+    const lightweightSlug = store.ensureProject(repository, 'lightweight marketplace tag').slug;
+    const ticket = store.createTicket(lightweightSlug, { title: 'dispatched over a lightweight marketplace tag', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    const prepared = store.prepareDispatch(lightweightSlug, ticket.ref, { sessionId: 'lightweight-marketplace-tag' });
+    assert.equal(prepared.ticket.dispatch.baseCommit, localMain);
+    assert.deepEqual(prepared.ticket.dispatch.integrationTarget, { mode: 'local', upstream: 'main', branch: 'main' });
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
+test('a published marketplace-only release tip keeps its local baseline', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-published-'));
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-release-tip-published-remote-'));
+  const git = (args: string[], cwd: string = repository) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+  try {
+    git(['init', '--quiet', '-b', 'main']);
+    git(['config', 'user.email', 'test@example.invalid']);
+    git(['config', 'user.name', 'Dispatch Lifecycle Test']);
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = "base";\n');
+    git(['add', 'tracked.js']);
+    git(['commit', '--quiet', '-m', 'pushed base']);
+    execFileSync('git', ['init', '-b', 'main', '--bare', remote], { windowsHide: true });
+    git(['remote', 'add', 'origin', remote]);
+    git(['push', '--quiet', '-u', 'origin', 'main']);
+
+    fs.writeFileSync(path.join(repository, 'release.txt'), 'release\n');
+    git(['add', 'release.txt']);
+    git(['commit', '--quiet', '-m', 'published release']);
+    git(['tag', '-a', 'v9.9.9', '-m', 'release v9.9.9']);
+    git(['push', '--quiet', 'origin', 'main', 'v9.9.9']);
+    const publishedTip = git(['rev-parse', 'main']);
+
+    const publishedSlug = store.ensureProject(repository, 'published marketplace release tip').slug;
+    const ticket = store.createTicket(publishedSlug, { title: 'dispatched after marketplace release publish', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    const prepared = store.prepareDispatch(publishedSlug, ticket.ref, { sessionId: 'published-marketplace-release-tip' });
+    assert.equal(prepared.ticket.dispatch.baseCommit, publishedTip);
+    assert.deepEqual(prepared.ticket.dispatch.integrationTarget, { mode: 'remote', upstream: 'origin/main', branch: 'main' });
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(remote, { recursive: true, force: true });
   }
 });
 

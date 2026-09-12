@@ -471,7 +471,7 @@ test('continues setup when the dashboard activity probe fails', async (t) => {
   const globalExpressions = JSON.parse(globalDashboard).panels
     .flatMap((panel) => panel.targets || [])
     .map(({ expr }) => expr);
-  assert.ok(globalExpressions.some((expression) => expression.includes('project_id=~"atlas|beacon"')));
+  assert.ok(globalExpressions.some((expression) => expression.includes(`project_id=~"${'a'.repeat(64)}|atlas|${'b'.repeat(64)}|beacon"`)));
   assert.ok(globalExpressions.some((expression) => expression.includes('workbench_attribute_project_name=~"atlas|beacon"')));
   for (const fileName of dashboardFiles) {
     assert.doesNotMatch(fs.readFileSync(path.join(dashboardDir, fileName), 'utf8'), /\$\^/);

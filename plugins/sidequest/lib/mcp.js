@@ -204,7 +204,6 @@ async function runTool(tool, rawArgs) {
 const ATTESTATION_VERIFY_CONTRACT = "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.";
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   context_page: {
-    cursor: "Opaque.",
     limit: "UTF-8 bytes.",
     expectedRevision: "Revision."
   },
@@ -228,7 +227,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   category_edit: { fallbackModel: "null clears fallback." },
   dispatch: {
     sharedTree: "Tree.",
-    reducedAgentSchema: "Only when caller schema lacks name/mode; hook needs agent_id + bypassPermissions mode.",
+    reducedAgentSchema: "Only when caller schema lacks name/mode; hook needs agent_id+bypassPermissions.",
     recoveryEvidence: "Proof.",
     worktree: "Checkout."
   },

@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway } = require('./support.js');
-const { commandIncludesFile, commandResultAsync, createProxyRecovery, installBelongsToThisPlugin, isDescendantOfAsync, probeTimeoutMs, resolvePortOwner } = require('../lib/process-supervision.js');
+const { commandIncludesFile, commandResultAsync, createProxyRecovery, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, processIsOwnedByThisInstall, probeTimeoutMs, recordedGatewayPid, resolvePortOwner, unknownPortOwnerReason } = require('../lib/process-supervision.js');
 const { startAll } = require('../lib/commands.js');
 const { canReplaceInstalledCliPath } = require('../lib/runtime.js');
 
@@ -86,6 +86,12 @@ function processIsRunning(pid) {
   } catch { return false; }
 }
 
+function killProcessTree(pid) {
+  if (!pid || !processIsRunning(pid)) return;
+  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+  else { try { process.kill(pid, 'SIGTERM'); } catch {} }
+}
+
 async function waitForPidRecord(filePath) {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
@@ -114,6 +120,17 @@ async function waitForReplacementPidRecord(filePath, retiredPid) {
     await pause(25);
   }
   throw new Error(`replacement pid record was not written: ${filePath}`);
+}
+
+async function waitForFileText(filePath, expectedText) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      if (fs.readFileSync(filePath, 'utf8').trim() === expectedText) return;
+    } catch {}
+    await pause(25);
+  }
+  assert.equal(fs.readFileSync(filePath, 'utf8').trim(), expectedText);
 }
 
 function descendantPids(parentPid) {
@@ -147,6 +164,21 @@ async function waitForProcessesToExit(processIds, timeout = 1000) {
     await pause(20);
   }
   assert.deepEqual(processIds.filter(processIsRunning), [], 'probe child survived its supervisor');
+}
+
+async function waitForFileToUnlock(filePath, timeout = 5000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    try {
+      const handle = fs.openSync(filePath, 'r+');
+      fs.closeSync(handle);
+      return;
+    } catch (error) {
+      if (error.code === 'ENOENT') return;
+    }
+    await pause(20);
+  }
+  throw new Error(`file remained locked: ${filePath}`);
 }
 
 function installNodeProxy(home) {
@@ -334,13 +366,83 @@ test('startup ownership resolves bounded same-install, unowned, foreign, and unk
     state: 'same-install', pid: 701, installRoot: path.join(__dirname, '..'),
   });
   assert.deepEqual(await resolve([701, null], [null], [true, false]), { state: 'unowned', pid: null });
-  assert.deepEqual(await resolve([701, 702], [null, sameInstallProcess]), { state: 'unknown', pid: 702 });
-  assert.deepEqual(await resolve([701, 701], [undefined, undefined], [true, true]), { state: 'unknown', pid: 701 });
-  assert.deepEqual(await resolve([null, null], [], [true, true]), { state: 'unknown', pid: null });
-  assert.deepEqual(await resolve([701, 701], [{ command: 'unrecognized command' }, { command: 'unrecognized command' }]), { state: 'unknown', pid: 701 });
+  assert.deepEqual(await resolve([701, 702], [null, sameInstallProcess]), { state: 'unknown', pid: 702, reason: 'unidentified' });
+  assert.deepEqual(await resolve([701, 701], [undefined, undefined], [true, true]), { state: 'unknown', pid: 701, reason: 'timeout', timeout: 20 });
+  assert.deepEqual(await resolve([null, null], [], [true, true]), { state: 'unknown', pid: null, reason: 'unidentified' });
+  assert.deepEqual(await resolve([701, 701], [{ command: 'unrecognized command' }, { command: 'unrecognized command' }]), { state: 'unknown', pid: 701, reason: 'unidentified' });
   assert.deepEqual(await resolve([701], [{ command: `${process.execPath} "${foreignGatewayScript}" serve-shim` }]), {
     state: 'foreign-install', pid: 701, installRoot: path.join(os.tmpdir(), 'foreign-model-gateway'),
   });
+});
+
+test('a matching start-time record identifies a command-hidden process without retiring it', async () => {
+  const pid = 701;
+  const startedAt = '2026-09-12T08:03:16.73938+02:00';
+  const record = { pid, startedAt };
+  const hiddenProcess = { command: '', pid, startedAt };
+  const retired = [];
+
+  assert.equal(processIsOwnedByThisInstall(pid, { record, inspectProcess: () => hiddenProcess }), true);
+  assert.equal(recordedGatewayPid('shim', {
+    inspectProcess: () => hiddenProcess,
+    readPidFile: () => pid,
+    readRecord: () => record,
+    retireRecord: (...retirementArguments) => retired.push(retirementArguments),
+  }), pid);
+  assert.deepEqual(retired, [], 'a matching start-time record stays available when Windows hides the command line');
+
+  const resolved = await resolvePortOwner(18764, {
+    owner: async () => pid,
+    inspectProcess: async () => hiddenProcess,
+    recordedPids: () => [pid],
+    timeout: 20,
+  });
+  assert.deepEqual(resolved, {
+    state: 'same-install', identity: 'pid-record', installRoot: gatewayInstallRoot(), pid,
+  });
+
+  const foreignProcess = { command: `${process.execPath} "${path.join(os.tmpdir(), 'foreign-model-gateway', 'bin', 'model-gateway.js')}" serve-shim`, pid, startedAt };
+  assert.equal(processIsOwnedByThisInstall(pid, { record, inspectProcess: () => foreignProcess }), false);
+});
+
+test('a failed termination is reported after a matching start-time ownership check', () => {
+  const pid = 701;
+  const record = { pid, startedAt: '2026-09-12T08:03:16.73938+02:00' };
+  const hiddenProcess = { command: '', pid, startedAt: record.startedAt };
+  const terminated = [];
+
+  assert.equal(killPid(pid, {
+    inspectProcess: () => hiddenProcess,
+    record,
+    terminate: (targetPid) => { terminated.push(targetPid); return false; },
+  }), false);
+  assert.deepEqual(terminated, [pid], 'a taskkill failure remains a failed stop');
+});
+
+test('startup ownership names a probe budget exhaustion separately from an unrecognized owner', async () => {
+  let elapsed = 0;
+  const exhaustedOwner = await resolvePortOwner(18764, {
+    owner: async () => { elapsed = 20; return 701; },
+    inspectProcess: async () => ({ command: 'unrecognized command' }),
+    timeout: 20,
+    now: () => elapsed,
+  });
+  const unrecognizedOwner = await resolvePortOwner(18764, {
+    owner: async () => 701,
+    inspectProcess: async () => ({ command: 'unrecognized command' }),
+    timeout: 20,
+    now: () => 0,
+  });
+
+  const exhaustionReason = unknownPortOwnerReason(exhaustedOwner, 18764);
+  const unrecognizedReason = unknownPortOwnerReason(unrecognizedOwner, 18764);
+  assert.equal(exhaustedOwner.reason, 'timeout');
+  assert.equal(unrecognizedOwner.reason, 'unidentified');
+  assert.match(exhaustionReason, /20ms budget/);
+  assert.match(exhaustionReason, /CODEX_GATEWAY_PROBE_TIMEOUT_MS/);
+  assert.notEqual(exhaustionReason, unrecognizedReason);
+  assert.match(unrecognizedReason, /could not be identified as this model-gateway install/);
+  assert.doesNotMatch(unrecognizedReason, /CODEX_GATEWAY_PROBE_TIMEOUT_MS/);
 });
 
 test('startup ownership keeps unknown and expired absence evidence unknown', async () => {
@@ -352,7 +454,7 @@ test('startup ownership keeps unknown and expired absence evidence unknown', asy
     timeout: 20,
     now: () => 0,
   });
-  assert.deepEqual(unknownInspection, { state: 'unknown', pid: 701 });
+  assert.deepEqual(unknownInspection, { state: 'unknown', pid: 701, reason: 'timeout', timeout: 20 });
   assert.equal(listeningCalls, 0);
 
   let currentTime = 0;
@@ -365,7 +467,7 @@ test('startup ownership keeps unknown and expired absence evidence unknown', asy
     timeout: 20,
     now: () => currentTime,
   });
-  assert.deepEqual(expiredBeforeFallback, { state: 'unknown', pid: null });
+  assert.deepEqual(expiredBeforeFallback, { state: 'unknown', pid: null, reason: 'timeout', timeout: 20 });
   assert.equal(ownerCalls, 1);
   assert.equal(listeningCalls, 0);
 
@@ -379,7 +481,7 @@ test('startup ownership keeps unknown and expired absence evidence unknown', asy
     timeout: 20,
     now: () => currentTime,
   });
-  assert.deepEqual(expiredBeforeRetry, { state: 'unknown', pid: null });
+  assert.deepEqual(expiredBeforeRetry, { state: 'unknown', pid: null, reason: 'timeout', timeout: 20 });
   assert.equal(ownerCalls, 1);
   assert.equal(listeningCalls, 1);
 
@@ -411,13 +513,14 @@ test('startup ownership leaves unknown and confirmed foreign listeners untouched
     recordLifecycle: (event, details) => lifecycle.push({ event, details }),
     resolveOwner: async () => owner,
     reapOrphans: () => calls.push('cleanup'),
+    shimReady: async () => false,
     stopSupervisor: async () => calls.push('stop'),
     spawnSupervisor: () => calls.push('start'),
   });
 
   const unknown = await run({ state: 'unknown', pid: 701 });
   assert.equal(unknown.ok, false);
-  assert.match(unknown.reason, /could not confirm the owner of :18764 \(last observed PID 701\); left the listener untouched/);
+  assert.match(unknown.reason, /could not confirm the owner of :18764 \(last observed PID 701\); .*left the listener untouched/);
   assert.deepEqual(calls, []);
   assert.deepEqual(lifecycle, [{ event: 'start-owner-unknown', details: { component: 'start', pid: process.pid, outcome: 'owner-unknown' } }]);
 
@@ -425,6 +528,22 @@ test('startup ownership leaves unknown and confirmed foreign listeners untouched
   assert.equal(foreign.ok, false);
   assert.match(foreign.reason, /PID 702 owns :18764 from a different install root/);
   assert.deepEqual(calls, []);
+});
+
+test('startup leaves a healthy command-hidden listener running', async () => {
+  const calls = [];
+  const result = await startAll({
+    ensureState: () => calls.push('state'),
+    proxyExists: () => true,
+    reapOrphans: () => calls.push('cleanup'),
+    resolveOwner: async () => ({ state: 'unknown', pid: 701, reason: 'unreadable-command' }),
+    shimReady: async () => true,
+    spawnSupervisor: () => calls.push('start'),
+    stopSupervisor: async () => calls.push('stop'),
+  });
+
+  assert.deepEqual(result, { ok: true, started: [], recoveryAttempted: false });
+  assert.deepEqual(calls, ['state'], 'a healthy listener does not become a failed-start report');
 });
 
 test('cache ownership resolves physical install roots before accepting sibling versions', (t) => {
@@ -587,12 +706,16 @@ test('sibling ensure retires dead records without deleting replacement worker an
   const olderShim = spawn(process.execPath, [olderCli, 'serve-shim'], { cwd: home, env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
   let ensuring = null;
   let replacementGuardianPid = null;
+  let replacementWorkerPid = null;
+  let replacementProxyPid = null;
   t.after(async () => {
     if (ensuring?.exitCode == null) ensuring.kill();
+    for (const pid of [replacementGuardianPid, replacementWorkerPid, replacementProxyPid]) killProcessTree(pid);
     await runGatewayCli(newerCli, 'stop', environment, { cwd: home });
     if (processIsRunning(olderShim.pid)) olderShim.kill();
-    if (replacementGuardianPid && processIsRunning(replacementGuardianPid)) spawnSync('taskkill', ['/pid', String(replacementGuardianPid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     await waitForExit(olderShim);
+    await waitForProcessesToExit([replacementGuardianPid, replacementWorkerPid, replacementProxyPid].filter(Boolean), 5000);
+    await waitForFileToUnlock(proxyBinary);
     fs.rmSync(home, { recursive: true, force: true });
   });
   await waitForReady(olderShim);
@@ -619,8 +742,8 @@ test('sibling ensure retires dead records without deleting replacement worker an
   const ensured = await ensuredResult;
   assert.equal(ensured.status, 0, `ensure exited with status ${ensured.status}\nstdout:\n${ensured.stdout}\nstderr:\n${ensured.stderr}`);
   replacementGuardianPid = await waitForReplacementPidRecord(path.join(state, 'guardian.pid'), retiredGuardianPid);
-  const replacementWorkerPid = await waitForReplacementPidRecord(path.join(state, 'shim.pid'), retiredWorkerPid);
-  const replacementProxyPid = await waitForReplacementPidRecord(path.join(state, 'proxy.pid'), retiredProxyPid);
+  replacementWorkerPid = await waitForReplacementPidRecord(path.join(state, 'shim.pid'), retiredWorkerPid);
+  replacementProxyPid = await waitForReplacementPidRecord(path.join(state, 'proxy.pid'), retiredProxyPid);
   await waitForPidRecordDetails(path.join(state, 'shim.pid.json'), replacementWorkerPid);
   await waitForPidRecordDetails(path.join(state, 'proxy.pid.json'), replacementProxyPid);
   fs.writeFileSync(path.join(state, 'shim.pid.json'), JSON.stringify({ pid: replacementWorkerPid, command: 'replaced worker' }));
@@ -655,28 +778,61 @@ test('sibling ensure retires dead records without deleting replacement worker an
   await waitForProcessesToExit([replacementGuardianPid, replacementWorkerPid, replacementProxyPid], 5000);
 });
 
-test('older cache version leaves a newer sibling shim running', async (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-sibling-downgrade-'));
-  const { olderCli, newerCli } = installCachedGatewayCliVersions(home);
+test('version-change restart leaves the replacement proxy under its live supervisor', async (t) => {
   const shimReservation = net.createServer();
   const shimPort = await listen(shimReservation);
   await new Promise((resolve) => shimReservation.close(resolve));
-  const environment = gatewayTestEnvironment(null, { HOME: home, USERPROFILE: home }, {
-    CODEX_GATEWAY_PORT: String(shimPort),
-    CODEX_GATEWAY_WORKER_PORT: '0',
-    CODEX_GATEWAY_PROXY_PORT: '0',
-  });
-  const newerShim = spawn(process.execPath, [newerCli, 'serve-shim'], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
+  const proxyReservation = net.createServer();
+  const proxyPort = await listen(proxyReservation);
+  await new Promise((resolve) => proxyReservation.close(resolve));
+  let replacementProxyPid = null;
+  let supervisor = null;
   t.after(async () => {
-    await runGatewayCli(newerCli, 'stop', environment);
-    if (processIsRunning(newerShim.pid)) newerShim.kill();
-    await waitForExit(newerShim);
-    fs.rmSync(home, { recursive: true, force: true });
+    killProcessTree(supervisor?.pid);
+    killProcessTree(replacementProxyPid);
+    await waitForProcessesToExit([supervisor?.pid, replacementProxyPid].filter(Boolean), 5000);
   });
-  await waitForReady(newerShim);
+  const environment = gatewayTestEnvironment(t, {}, {
+    CODEX_GATEWAY_PORT: String(shimPort),
+    CODEX_GATEWAY_WORKER_PORT: '',
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    CODEX_GATEWAY_PROXY_RECOVERY_INTERVAL_MS: '1000',
+  });
+  const home = environment.HOME;
+  const proxyBinary = path.join(home, '.claude', 'model-gateway', 'bin', process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy');
+  installNodeProxy(home);
+  fs.writeFileSync(path.join(home, 'serve'), "require('node:http').createServer((request, response) => request.url === '/v1/models' ? response.end(JSON.stringify({ data: [] })) : response.end('{}')).listen(process.env.PORT, '127.0.0.1'); setInterval(() => {}, 1000);\n");
+  supervisor = spawnGatewayProcess(t, process.execPath, [CLI, 'serve-shim'], {
+    cwd: home,
+    env: environment,
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+  });
+  supervisor.fixtureShutdown = true;
+  await waitForReady(supervisor);
+  const state = path.join(home, '.claude', 'model-gateway');
+  const originalProxyPid = await waitForPidRecord(path.join(state, 'proxy.pid'));
+  const proxyVersion = (spawnSync(proxyBinary, ['--version'], { encoding: 'utf8', windowsHide: true }).stdout.match(/\d+\.\d+\.\d+/) || [])[0];
+  assert.ok(proxyVersion, 'fixture proxy reports a semver version');
+  fs.writeFileSync(path.join(state, 'proxy-serving-version.txt'), '0.0.0\n');
+
+  const updated = await runGatewayCli(CLI, 'ensure', environment, { arguments: ['--quiet'], cwd: home });
+  assert.equal(updated.status, 0, updated.stderr);
+  replacementProxyPid = await waitForReplacementPidRecord(path.join(state, 'proxy.pid'), originalProxyPid);
+  assert.equal(await isDescendantOfAsync(replacementProxyPid, supervisor.pid), true, 'recovery starts the replacement as a supervisor descendant');
+  await waitForFileText(path.join(state, 'proxy-serving-version.txt'), proxyVersion);
+
+  supervisor.send({ type: 'fixture-shutdown' });
+  await waitForExit(supervisor);
+  await waitForProcessesToExit([supervisor.pid, replacementProxyPid], 5000);
+});
+
+test('older cache version cannot replace a newer sibling shim', () => {
+  const cacheRoot = path.join('cache', 'eigenwise-toolshed', 'model-gateway');
+  const olderCli = path.join(cacheRoot, '0.49.0', 'bin', 'model-gateway.js');
+  const newerCli = path.join(cacheRoot, '0.50.0', 'bin', 'model-gateway.js');
 
   assert.equal(canReplaceInstalledCliPath(newerCli, olderCli), false);
-  assert.equal(processIsRunning(newerShim.pid), true, 'older CLI leaves the newer sibling shim running');
+  assert.equal(canReplaceInstalledCliPath(olderCli, newerCli), true);
 });
 
 test('foreign configured-port supervisor is preserved and reported', async (t) => {

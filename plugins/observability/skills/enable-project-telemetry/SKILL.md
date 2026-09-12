@@ -7,9 +7,7 @@ description: >-
 
 # Enable Project Telemetry
 
-Telemetry is intended to be opt-in per repository. A machine-shared observer, Collector, and optional dashboard are a separate setup consent; installing this plugin at user, project, or local scope does not itself choose every repository. This skill asks for the shared service choice, then writes the current repository's opt-in wiring.
-
-Current privacy limitation: the hook and ingest path does not enforce the per-repository opt-in at its collection boundary. Hook events can enter the shared spool and ingestion path before the repository check. Keep the per-repository opt-in as the intended policy, but do not present it as a hard runtime guarantee or invent a documentation workaround. This limitation is not fixed by this skill.
+Telemetry capture and log export are gated on the canonical repository ID in the local opt-in registry. Installing this plugin at user, project, or local scope does not itself choose every repository. Disabling this repository stops future capture and future export of still-queued log rows while local history is retained. Collector traces and metrics are not covered by this gate. This skill asks for the shared service choice, then writes the current repository's opt-in wiring.
 
 Claude Code reads `OTEL_RESOURCE_ATTRIBUTES` from the settings of the directory a session started in and does
 not walk up to the repository root. That is why the enable command writes the env into the repository root
@@ -28,7 +26,7 @@ Gateway wiring is per-scope. If the gateway is unwired for the current project, 
 
 1. Confirm the user wants the shared local observer and Collector, then separately confirm that the current repository should opt in. Say the repository opt-in writes only this repository's `.claude/settings.local.json` files and adds it to the local project registry. The shared service can send local metadata through the loopback observer and Collector to local Grafana, or to a remote sink only when the user chooses one. Bare setup is SQLite-only with no dashboard; `--dashboard` explicitly requests the Docker-backed dashboard. Explain that API-equivalent cost estimates are not subscription charges, and models without a published API price remain visible without an invented USD total. The intended telemetry schema excludes prompt or response text, code or file contents, tool inputs or results, raw request bodies, credentials, and environment values.
 
-   Disclose the current opt-in enforcement limitation before proceeding: hook events can enter the shared spool and ingest path before the repository opt-in check. Do not describe per-repository opt-in as a hard runtime privacy guarantee, and do not claim this skill fixes that gap.
+   Telemetry capture and log export are gated on the canonical repository ID in the local opt-in registry. Installing this plugin at user, project, or local scope does not itself choose every repository. Disabling this repository stops future capture and future export of still-queued log rows while local history is retained. Collector traces and metrics are not covered by this gate.
 2. Run it from anywhere inside the repository; it resolves the repository root itself:
 
    ```sh
@@ -36,9 +34,10 @@ Gateway wiring is per-scope. If the gateway is unwired for the current project, 
    ```
 
    This creates or merges the `env` object without dropping unrelated keys. It adds the Claude Code telemetry
-   settings, including `OTEL_RESOURCE_ATTRIBUTES` with the sanitized repository basename and
-   `service.name=claude-code`. The registry stores the same sanitized name plus the SHA-256 repository ID used
-   by this plugin's hooks. Session-hosting subdirectories are found by encoding each real subdirectory the way
+   settings, including `OTEL_RESOURCE_ATTRIBUTES` with the SHA-256 repository ID as `project.id`, the sanitized
+   repository basename as `project.name`, and `service.name=claude-code`. The registry stores the same sanitized
+   name plus the SHA-256 repository ID used by this plugin's hooks. Re-running enable rewrites this repository's
+   env with those values; it never rewrites any other project's settings. Session-hosting subdirectories are found by encoding each real subdirectory the way
    Claude Code encodes `~/.claude/projects/` names and keeping the ones that exist there; `.claude/worktrees`,
    `.git`, `node_modules`, dot-directories, and nested repositories are skipped.
 3. Report every directory the command printed, and tell the user settings environment changes apply only to

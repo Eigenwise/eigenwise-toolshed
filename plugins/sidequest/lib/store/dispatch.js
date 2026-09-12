@@ -3,6 +3,7 @@ const { canonicalPreparedDispatchExecutor } = require("../prepared-dispatch.js")
 const { classifyVerificationKind, verificationRequirement } = require("../kernel/verification.js");
 const { resolveSuite } = require("../suite-resolver.js");
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationOutcome } = require("../kernel/review-binding");
+const { compareSemver } = require("../plugin-freshness.js");
 function unscopedWriteCannotAutoApprove(ticket, options) {
   const { dispatchReadOnly, normalizeFiles, autoApproveScope } = options;
   return !dispatchReadOnly(ticket) && !normalizeFiles(ticket?.files).length && (!Array.isArray(autoApproveScope) || !autoApproveScope.length);
@@ -36,7 +37,7 @@ function requirementsMatch(left, right) {
   return JSON.stringify(left || null) === JSON.stringify(right || null);
 }
 function createDispatch(dependencies) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
   function syncLiveDispatchVerification(slug, ticket, amendment) {
     const state = dispatchState(ticket);
     if (!state || state.terminalAt) return null;
@@ -493,6 +494,7 @@ function createDispatch(dependencies) {
     const boundMs = Date.parse(state.boundAt);
     return Number.isFinite(boundMs) && Date.now() - boundMs >= claimIdleMs();
   }
+  const EVIDENCE_SUPERSEDED_FAILURE_SHAPES = /* @__PURE__ */ new Set(["unclaimed_launch_superseded", "stranded_bound_launch_superseded"]);
   function evidenceRetirableAttempt(ticket, state) {
     return supersedableUnboundAttempt(ticket, state) || strandedBoundAttempt(ticket, state);
   }
@@ -510,6 +512,9 @@ function createDispatch(dependencies) {
     return `bound to a runtime ${describeMinutes(waited)} ago and still unclaimed, which becomes retirable on evidence in ${describeMinutes(claimIdleMs() - waited)} unless its terminal hook fires first`;
   }
   function evidenceSupersessionBlocker(ticket, state) {
+    if (state?.terminalAt && EVIDENCE_SUPERSEDED_FAILURE_SHAPES.has(state.failureShape)) {
+      return `already retired on recovery evidence at ${state.terminalAt}, so dispatch again without recoveryEvidence to prepare the replacement`;
+    }
     if (!state || !ticket?.dispatchNonce) return "not an active attempt";
     if (state.terminalAt) return `already terminal (${state.outcome || "terminal"})`;
     if (ticket.claim?.by) return `claimed by ${ticket.claim.by}`;
@@ -534,8 +539,24 @@ function createDispatch(dependencies) {
     putTicket(slug, ticket);
     return ticket;
   }
+  function preparedCompatibilityDecision(state, currentInstall) {
+    if (currentInstall.ok !== true) return { refusal: true };
+    if (currentInstall.installPath !== state.preparedCompatibility.pluginInstall || currentInstall.identity !== state.preparedCompatibility.identity) return { refusal: true };
+    const preparedVersion = typeof state.preparedCompatibility.version === "string" ? state.preparedCompatibility.version : "";
+    const servingSnapshot = servingInstall();
+    const servingVersion = typeof servingSnapshot?.version === "string" ? servingSnapshot.version : "";
+    if (!preparedVersion || !servingVersion) return null;
+    const comparison = compareSemver(servingVersion, preparedVersion);
+    if (comparison === 0 && servingVersion !== preparedVersion) return { refusal: true };
+    if (comparison === -1) return { refusal: true };
+    if (comparison === 1) return { warning: `Sidequest serving ${servingVersion} is newer than prepared ${preparedVersion}; dispatch continues.` };
+    return null;
+  }
   function preparedCompatibilityHasProvenMismatch(state, currentInstall) {
-    return currentInstall.ok === true && (currentInstall.installPath !== state.preparedCompatibility.pluginInstall || currentInstall.identity !== state.preparedCompatibility.identity);
+    return preparedCompatibilityDecision(state, currentInstall)?.refusal === true;
+  }
+  function preparedCompatibilityWarning(state, currentInstall) {
+    return preparedCompatibilityDecision(state, currentInstall)?.warning || null;
   }
   function supersedeUnboundAttempt(slug, idOrRef, opts) {
     const evidence = String(opts?.evidence || "").trim();
@@ -645,6 +666,10 @@ function createDispatch(dependencies) {
       agentId: state.agentId || null,
       agentName: state.agentName || null,
       tokenPrefix: state.tokenPrefix || null,
+      // Without this an attempt that bound through its dispatch token is
+      // indistinguishable from one that never bound at all: both carry a null
+      // agentId. Review provenance needs to tell those apart.
+      bindSource: state.bindSource || null,
       preparedAt: state.preparedAt || null,
       launchedAt: state.launchedAt || null,
       boundAt: state.boundAt || null,
@@ -1110,6 +1135,19 @@ function createDispatch(dependencies) {
   }
   function prepareDispatch(slug, idOrRef, opts) {
     opts = opts || {};
+    if (opts.retireOnly === true) {
+      const ticket = getTicket(slug, idOrRef);
+      const state = dispatchState(ticket);
+      if (!supersedableUnboundAttempt(ticket, state)) {
+        throw new Error(`prepare dispatch: ${idOrRef} cannot retire only because its dispatch is ${evidenceSupersessionBlocker(ticket, state)}. retireOnly accepts only an unclaimed prepared or launched dispatch before runtime binding.`);
+      }
+      const superseded = supersedeUnboundAttempt(slug, idOrRef, {
+        evidence: opts.recoveryEvidence,
+        source: opts.source || opts.transport || "dispatch"
+      });
+      if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${idOrRef} has no unbound dispatch attempt to retire (${superseded.reason}).`}`);
+      return Object.assign(superseded, { retired: true });
+    }
     if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
     const projectPath = readMeta(slug)?.path;
     const found = getTicket(slug, idOrRef);
@@ -1129,6 +1167,20 @@ function createDispatch(dependencies) {
     const installCheck = projectPath ? assertSidequestInstall(projectPath) : null;
     const preparedPluginInstall = installCheck?.installPath || null;
     const preparedPluginIdentity = installCheck?.identity || null;
+    const preparedPluginVersion = installCheck?.version || null;
+    const servingSnapshot = servingInstall();
+    const preparedServingInstall = servingSnapshot?.installPath || null;
+    const preparedServingVersion = servingSnapshot?.version || null;
+    const preparedCompatibility = preparedPluginInstall && preparedPluginIdentity ? Object.freeze({
+      pluginInstall: preparedPluginInstall,
+      identity: preparedPluginIdentity,
+      version: preparedPluginVersion,
+      ...preparedServingInstall && preparedServingVersion ? { servingInstall: preparedServingInstall, servingVersion: preparedServingVersion } : {}
+    }) : null;
+    if (preparedCompatibility && preparedCompatibilityHasProvenMismatch({ preparedCompatibility }, installCheck)) {
+      throw new Error(`prepare dispatch: ${found.ref} refused; serving Sidequest ${preparedServingVersion || "unknown"} is older than prepared ${preparedPluginVersion || "unknown"}. Restart Claude Code so the board serves the prepared build, then dispatch again.`);
+    }
+    const servingCompatibilityWarning = preparedCompatibility ? preparedCompatibilityWarning({ preparedCompatibility }, installCheck) : null;
     if (opts.recoveryEvidence) {
       const superseded = supersedeUnboundAttempt(slug, found.id, {
         evidence: opts.recoveryEvidence,
@@ -1160,7 +1212,7 @@ function createDispatch(dependencies) {
           const recovery2 = reclaimUnclaimedDispatchWorktree(projectPath, recoveryFacts.state, {
             checkpointCommit: recoveryFacts.checkpointCommit
           });
-          if (recovery2 && recovery2.reclaimed === false && recovery2.discardable !== true) {
+          if (recovery2 && recovery2.reclaimed === false && recovery2.discardable !== true && recovery2.retainedCheckout !== true) {
             const retainedContinuation = retainedWorktreeContinuationState(slug, t, current);
             if (!retainedContinuation?.continuation) {
               const checkpointCommit = String(t.checkpoint?.commit || "").trim();
@@ -1336,20 +1388,28 @@ function createDispatch(dependencies) {
         const evidenceDirectory = ticketEvidenceDirectory(slug, t.ref, projectPath);
         fs.mkdirSync(evidenceDirectory, { recursive: true, mode: 448 });
         const baseCommit = reviewTargetState?.candidate.source === "git" ? reviewTargetState.candidate.value : integrationTargetState ? integrationTargetCommit(readMeta(slug)?.path || "", integrationTargetState) : commitScope.headCommit(readMeta(slug)?.path || "");
+        const releaseTip = projectPath ? commitScope.unpublishedReleaseTip(
+          projectPath,
+          baseCommit,
+          `refs/remotes/origin/${integrationTargetState?.branch || boardConfig(slug)?.integrationBranch || "main"}`
+        ) : null;
+        if (releaseTip) {
+          throw new Error(`prepare dispatch: ${t.ref} refused; baseline ${releaseTip.commit} is an unpublished release commit, tagged ${releaseTip.tags.join(", ")} and not yet on the remote branch. A release cut tags its commit before running its suites, so this is either a cut still in flight or one that failed and left its commit live. Wait for the cut to finish and push, or tear it down (delete those tags and reset the branch), then dispatch again.`);
+        }
         const dispatchBaseline = dispatchBaselineForProject(slug, t, now, baseCommit, nonRepoOutput, snapshotPreflight);
         t.dispatchNonce = mintDispatchToken();
         t.dispatch = {
           lifecycleAttempt: prepareAttempt(
             dispatchBaseline,
             Object.freeze({ actor: dispatchPreparationAttribution(opts), operation: "prepare", sessionId: opts.sessionId ? String(opts.sessionId) : null }),
-            preparedPluginInstall && preparedPluginIdentity ? Object.freeze({ pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity }) : void 0,
+            preparedCompatibility ? Object.freeze({ pluginInstall: preparedCompatibility.pluginInstall, identity: preparedCompatibility.identity }) : void 0,
             verificationRequirement2
           ),
           verificationRequirement: verificationRequirement2,
           evidenceDirectory,
           sessionId: opts.sessionId ? String(opts.sessionId) : null,
           preparedBy: dispatchPreparationAttribution(opts),
-          ...preparedPluginInstall && preparedPluginIdentity ? { preparedCompatibility: { pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity } } : {},
+          ...preparedCompatibility ? { preparedCompatibility } : {},
           sharedTree,
           ...reducedAgentSchema ? { reducedAgentSchema: true } : {},
           ...worktreeWarning ? { worktreeWarning } : {},
@@ -1422,7 +1482,7 @@ function createDispatch(dependencies) {
         stampDispatchEvent(t, "dispatch", now);
         writeDispatchTokenFile(t);
         putTicket(slug, t);
-        const warnings = [localAheadWarning?.message, dirtyBaselineCapture?.warning].filter(Boolean);
+        const warnings = [localAheadWarning?.message, dirtyBaselineCapture?.warning, servingCompatibilityWarning].filter(Boolean);
         return { ok: true, ticket: t, token: t.dispatchNonce, recovery, ...warnings.length ? { warnings } : {} };
       });
       if (priorTokenFile && stagedTokenFile && priorTokenFile !== stagedTokenFile) {
@@ -1521,6 +1581,7 @@ function createDispatch(dependencies) {
       }
       const state = dispatchState(t);
       if (!state) return { ok: false, reason: "missing_state" };
+      let compatibilityWarning = null;
       if (state.preparedCompatibility?.pluginInstall) {
         const currentInstall = checkSidequestInstall(readMeta(slug)?.path || "");
         if (preparedCompatibilityHasProvenMismatch(state, currentInstall)) {
@@ -1532,6 +1593,7 @@ function createDispatch(dependencies) {
             message: `${t.ref}'s prepared dispatch was retired because its Sidequest install snapshot is stale. Stop this launch; the orchestrator can dispatch a fresh token.`
           };
         }
+        compatibilityWarning = preparedCompatibilityWarning(state, currentInstall);
       }
       const now = (/* @__PURE__ */ new Date()).toISOString();
       state.sessionId = opts.sessionId ? String(opts.sessionId) : state.sessionId || null;
@@ -1547,7 +1609,7 @@ function createDispatch(dependencies) {
       }
       stampDispatchEvent(t, opts.source || "dispatch", now);
       putTicket(slug, t);
-      return { ok: true, ticket: t };
+      return { ok: true, ticket: t, ...compatibilityWarning ? { advisory: compatibilityWarning } : {} };
     });
   }
   function terminalRuntimeMatches(state, claim, opts) {
@@ -1704,6 +1766,47 @@ function createDispatch(dependencies) {
       return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && state.outcome === "prepared" && !state.terminalAt && !state.worktree);
     });
   }
+  function bindingFailurePredicate(state, sessionId, worktree) {
+    if (state?.sessionId !== sessionId) return "session_id";
+    if (state.sharedTree !== false) return "shared_tree";
+    if (state.outcome !== "launched") return "outcome";
+    if (state.terminalAt) return "terminal_at";
+    if (state.worktreeBindingSource !== "worktree-create") return "worktree_binding_source";
+    if (!state.worktree || canonicalPath(state.worktree) !== worktree) return "canonical_worktree";
+    return "dispatch_binding_unavailable";
+  }
+  function launchedIsolatedDispatchOnAnotherProject(slug, sessionId) {
+    for (const project of listProjects({ all: true })) {
+      if (project.slug === slug) continue;
+      for (const candidate of listTickets(project.slug)) {
+        const state = dispatchState(candidate);
+        if (state?.sessionId === sessionId && state.sharedTree === false && state.outcome === "launched" && !state.terminalAt) {
+          return state;
+        }
+      }
+    }
+    return null;
+  }
+  function unavailableWorktreeBinding(slug, candidates = [], sessionId, worktree) {
+    const nearest = candidates.find(({ state: state2 }) => state2.sessionId === sessionId) || candidates.find(({ state: state2 }) => state2.worktree && canonicalPath(state2.worktree) === worktree);
+    const crossProject = nearest ? null : launchedIsolatedDispatchOnAnotherProject(slug, sessionId);
+    const state = nearest?.state || crossProject;
+    return {
+      ok: false,
+      reason: "dispatch_binding_unavailable",
+      binding: {
+        candidatesConsidered: candidates.length,
+        ...state ? {
+          predicate: crossProject ? "different_project" : bindingFailurePredicate(state, sessionId, worktree),
+          recordedSessionId: state.sessionId,
+          recordedWorktree: state.worktree ? canonicalPath(state.worktree) : ""
+        } : {},
+        suppliedSessionId: sessionId,
+        suppliedWorktree: worktree,
+        crossProject: Boolean(crossProject)
+      }
+    };
+  }
   function bindDispatchWorktreeCreation(slug, sessionId, worktree) {
     const normalizedSessionId = String(sessionId || "").trim();
     const target = String(worktree || "").trim();
@@ -1711,6 +1814,7 @@ function createDispatch(dependencies) {
     if (!normalizedSessionId || !target || !meta?.path) return { ok: false, reason: "missing_binding_facts" };
     const repository = canonicalPath(meta.path);
     const boundWorktree = canonicalPath(target);
+    const bindingCandidates = listTickets(slug).map((candidate) => ({ candidate, state: dispatchState(candidate) })).filter(({ state }) => Boolean(state));
     for (const candidate of listTickets(slug)) {
       const state = dispatchState(candidate);
       if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false || state.outcome !== "launched" || state.terminalAt || state.worktreeBindingSource !== "worktree-create" || !state.worktree || canonicalPath(state.worktree) !== boundWorktree) continue;
@@ -1745,10 +1849,10 @@ function createDispatch(dependencies) {
       });
       if (result?.ok) return result;
     }
-    return {
-      ok: false,
-      reason: unlaunchedSessionDispatch(slug, normalizedSessionId) ? "dispatch_launch_unrecorded" : "dispatch_binding_unavailable"
-    };
+    if (unlaunchedSessionDispatch(slug, normalizedSessionId)) {
+      return { ok: false, reason: "dispatch_launch_unrecorded" };
+    }
+    return unavailableWorktreeBinding(slug, bindingCandidates, normalizedSessionId, boundWorktree);
   }
   function completeDispatchWorktreeCreation(slug, sessionId, worktree) {
     const normalizedSessionId = String(sessionId || "").trim();
@@ -2426,6 +2530,7 @@ function createDispatch(dependencies) {
     supersedableUnboundAttempt,
     retirePreparedCompatibilityStaleAttempt,
     preparedCompatibilityHasProvenMismatch,
+    preparedCompatibilityWarning,
     supersedeUnboundAttempt,
     isolatedDispatchWorktreeMissing,
     isolatedDispatchWithMissingWorktree,

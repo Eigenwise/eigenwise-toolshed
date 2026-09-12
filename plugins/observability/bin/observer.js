@@ -8,6 +8,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { Worker } = require('node:worker_threads');
 const { DEFAULT_RETENTION_DAYS, openObservabilityStore } = require('../lib/observability/store.js');
+const { consentedProjectIds, createConsentGate } = require('../lib/observability/consent.js');
 const { DEFAULT_DRAIN_BUDGET_MS, drainHookSpool } = require('../lib/observability/hook-spool.js');
 const { defaultSpoolPath } = require('../hooks/observability.js');
 const { createOutboxDrainer } = require('../lib/observability/outbox.js');
@@ -234,6 +235,7 @@ function createObserver(options = {}) {
   const processRecordDataDir = options.processRecordDataDir || observerDataDir;
   const managesProcessRecord = options.manageProcessRecord ?? (!options.store && port !== 0);
   const observerConfigFile = options.configFile || defaultConfigPath(observerDataDir);
+  const consent = createConsentGate({ configFile: observerConfigFile });
   const successor = () => {
     const installation = getInstalledPluginInstallation();
     const versionError = observerVersionError(pluginVersion, installation?.version);
@@ -263,6 +265,7 @@ function createObserver(options = {}) {
   if (!outbox || typeof outbox.enabled !== 'boolean') throw new Error('The observer requires a valid sink outbox contract.');
   const ownsStore = !options.store;
   const store = options.store || openObservabilityStore(options.databaseFile || defaultDatabaseFile(), {
+    consent,
     outboxEnabled: outbox.enabled,
   });
   const outboxDrainer = createOutboxDrainer(store, {
@@ -315,6 +318,7 @@ function createObserver(options = {}) {
           pid: process.pid,
           pluginVersion,
           sink: { id: sink.id, egress: sink.egress, enabled: outbox.enabled },
+          consent: { projects: consentedProjectIds(observerConfigFile).size, configFile: observerConfigFile },
           outbox: outboxHealth,
           spool: spoolStatus,
           storage: { ...storage, pressure: storagePressure },

@@ -1011,6 +1011,209 @@ test('review provenance comes from immutable terminal attempts, not the mutable 
   assert.notEqual(accepted.reason, 'candidate_rejected');
 });
 
+// SQ-2763. A continuation that binds through its claim token never records an
+// agentId, so demanding one deadlocked every such candidate: integrate, manual
+// delivery, groomClose and supersession all refused with no escape. SQ-2772
+// kept that escape on the submitting side only, and the attempt has to record
+// the claim-token binding it is claiming credit for.
+function claimTokenCandidate(label: string, reviewAttempt: any) {
+  const { slug, commit } = board(label);
+  const source = submittedSource(slug, commit, label);
+  const review = store.createTicket(slug, { title: `${label} review`, category: 'review-audit' }, { ref: source.ref, commit });
+  const withAttempts = store.getTicket(slug, source.ref);
+  withAttempts.dispatch = {
+    attempts: [{
+      outcome: 'submitted',
+      commit,
+      agentId: null,
+      agentName: `sq-${label}-continuation-2`,
+      tokenPrefix: 'candidate-tk',
+      bindSource: 'claim_token',
+      terminalAt: '2026-01-01T00:00:00.000Z',
+    }],
+    outcome: 'submitted',
+    terminalAt: '2026-01-01T00:00:00.000Z',
+    bindSource: 'claim_token',
+    agentId: null,
+  };
+  persist(slug, withAttempts);
+  const done = store.getTicket(slug, review.ref);
+  done.status = 'done';
+  done.dispatch = { attempts: [reviewAttempt], outcome: 'done', terminalAt: '2026-01-02T00:00:00.000Z' };
+  persist(slug, done);
+  return { slug, commit, sourceRef: source.ref, reviewRef: review.ref };
+}
+
+test('a claim-token-bound candidate integrates under a distinct reviewer and still refuses a shared identity', () => {
+  const integrable = claimTokenCandidate('claim-token-distinct', {
+    outcome: 'done',
+    agentId: 'hook-bound-reviewer',
+    agentName: 'sq-review-distinct',
+    terminalAt: '2026-01-02T00:00:00.000Z',
+  });
+  const provenance = reviewBinding.reviewProvenance(
+    store.getTicket(integrable.slug, integrable.sourceRef),
+    store.getTicket(integrable.slug, integrable.reviewRef),
+  );
+  assert.equal(provenance.reason, 'ok', 'a claim-token binding carries a first-class identity');
+  assert.equal(provenance.source.identity, 'claim:candidate-tk/sq-claim-token-distinct-continuation-2');
+  assert.equal(provenance.reviewer.identity, 'agent:hook-bound-reviewer');
+  const accepted = store.validateIntegrationSubmission(integrable.slug, integrable.sourceRef, {});
+  assert.notEqual(accepted.reason, 'candidate_review_required', 'the claim-token candidate is no longer unintegrable');
+
+  // Negative control: a hook-bound reviewer reusing the submitter's launch name
+  // is still one runtime, whichever side each identity came from.
+  const shared = claimTokenCandidate('claim-token-shared', {
+    outcome: 'done',
+    agentId: 'hook-bound-under-the-submitter-name',
+    agentName: 'sq-claim-token-shared-continuation-2',
+    terminalAt: '2026-01-02T00:00:00.000Z',
+  });
+  assert.equal(
+    reviewBinding.reviewProvenance(store.getTicket(shared.slug, shared.sourceRef), store.getTicket(shared.slug, shared.reviewRef)).reason,
+    'shared_agent_identity',
+  );
+  const refused = store.validateIntegrationSubmission(shared.slug, shared.sourceRef, {});
+  assert.equal(refused.reason, 'candidate_review_required');
+  assert.match(refused.message, /same runtime identity that submitted .* \(claim:candidate-tk\/sq-claim-token-shared-continuation-2\)/);
+
+  // Negative control: a reviewer that never bound a runtime.
+  const unidentified = claimTokenCandidate('claim-token-unidentified', {
+    outcome: 'done',
+    agentId: null,
+    agentName: 'sq-review-nameless',
+    terminalAt: '2026-01-02T00:00:00.000Z',
+  });
+  assert.equal(
+    reviewBinding.reviewProvenance(store.getTicket(unidentified.slug, unidentified.sourceRef), store.getTicket(unidentified.slug, unidentified.reviewRef)).reason,
+    'agent_identity_missing',
+  );
+  const missing = store.validateIntegrationSubmission(unidentified.slug, unidentified.sourceRef, {});
+  assert.equal(missing.reason, 'candidate_review_required');
+  assert.match(missing.message, /recorded no hook-bound agent id on its terminal review attempt/);
+  assert.match(missing.message, /re-dispatch the review on a host whose PreToolUse hook reports agent_id/, 'the refusal names the recourse');
+});
+
+// SQ-2772. The claim-token pair authenticates a dispatch, so one parent runtime
+// can hold two of them: dispatch the source, let it claim through its own token
+// without ever binding a runtime, submit, then dispatch a differently named
+// sibling that binds the same way and closes as the review. Distinct names and
+// token prefixes, one physical process, and before this the gate said ok.
+test('a claim-token-bound sibling cannot review its own runtime under a second dispatch identity', () => {
+  const sibling = claimTokenCandidate('claim-token-sibling', {
+    outcome: 'done',
+    agentId: null,
+    agentName: 'sq-claim-token-sibling-review',
+    tokenPrefix: 'review-tk',
+    bindSource: 'claim_token',
+    sessionId: 'one-parent-runtime',
+    terminalAt: '2026-01-02T00:00:00.000Z',
+  });
+  const source = store.getTicket(sibling.slug, sibling.sourceRef);
+  source.dispatch.attempts[0].sessionId = 'one-parent-runtime';
+  persist(sibling.slug, source);
+
+  const provenance = reviewBinding.reviewProvenance(
+    store.getTicket(sibling.slug, sibling.sourceRef),
+    store.getTicket(sibling.slug, sibling.reviewRef),
+  );
+  assert.equal(provenance.reason, 'agent_identity_missing', 'a second dispatch identity is not a second runtime');
+  assert.equal(provenance.reviewer, null);
+  assert.ok(provenance.source, 'the submitting side keeps its claim-token fallback');
+
+  const refused = store.validateIntegrationSubmission(sibling.slug, sibling.sourceRef, {});
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'candidate_review_required');
+  assert.match(refused.message, /authenticate a dispatch, not the runtime that ran it/);
+});
+
+// SQ-2773. appendDispatchAttempt only started snapshotting bindSource in
+// SQ-2772, so every earlier claim-token candidate reads as one that never bound
+// and refused forever with no recovery. boundAt is the older record of the same
+// binding, and only attempts written before the key existed fall back to it.
+function preBindSourceCandidate(label: string, reviewAttempt: any) {
+  const built = claimTokenCandidate(label, reviewAttempt);
+  const source = store.getTicket(built.slug, built.sourceRef);
+  const attempt = source.dispatch.attempts[0];
+  delete attempt.bindSource;
+  delete source.dispatch.bindSource;
+  attempt.boundAt = '2026-01-01T00:00:00.000Z';
+  attempt.claimedAt = '2026-01-01T00:00:00.000Z';
+  persist(built.slug, source);
+  return built;
+}
+
+test('a candidate whose attempt predates bindSource resolves through its recorded bind time and still needs a hook-bound reviewer', () => {
+  const recovered = preBindSourceCandidate('pre-bindsource-distinct', {
+    outcome: 'done',
+    agentId: 'hook-bound-reviewer',
+    agentName: 'sq-review-pre-bindsource',
+    terminalAt: '2026-01-02T00:00:00.000Z',
+  });
+  const provenance = reviewBinding.reviewProvenance(
+    store.getTicket(recovered.slug, recovered.sourceRef),
+    store.getTicket(recovered.slug, recovered.reviewRef),
+  );
+  assert.equal(provenance.reason, 'ok', 'boundAt records the claim-token binding the attempt never labelled');
+  assert.equal(provenance.source.identity, 'claim:candidate-tk/sq-pre-bindsource-distinct-continuation-2');
+  const accepted = store.validateIntegrationSubmission(recovered.slug, recovered.sourceRef, {});
+  assert.notEqual(accepted.reason, 'candidate_review_required', 'the pre-bindSource candidate is integrable again');
+
+  // The recovery is not a general bypass: the reviewing side still needs the
+  // hook-bound agent id SQ-2772 made non-negotiable.
+  const unhooked = preBindSourceCandidate('pre-bindsource-unhooked', {
+    outcome: 'done',
+    agentId: null,
+    agentName: 'sq-review-unhooked',
+    tokenPrefix: 'review-tk',
+    boundAt: '2026-01-02T00:00:00.000Z',
+    terminalAt: '2026-01-02T00:00:00.000Z',
+  });
+  assert.equal(
+    reviewBinding.reviewProvenance(store.getTicket(unhooked.slug, unhooked.sourceRef), store.getTicket(unhooked.slug, unhooked.reviewRef)).reason,
+    'agent_identity_missing',
+  );
+  const refused = store.validateIntegrationSubmission(unhooked.slug, unhooked.sourceRef, {});
+  assert.equal(refused.reason, 'candidate_review_required');
+  assert.match(refused.message, /recorded no hook-bound agent id on its terminal review attempt/);
+});
+
+test('a submitting attempt that bound nothing refuses with the reason it cannot be recovered', () => {
+  const unbound = preBindSourceCandidate('pre-bindsource-unbound', {
+    outcome: 'done',
+    agentId: 'hook-bound-reviewer',
+    agentName: 'sq-review-unbound-source',
+    terminalAt: '2026-01-02T00:00:00.000Z',
+  });
+  const source = store.getTicket(unbound.slug, unbound.sourceRef);
+  delete source.dispatch.attempts[0].boundAt;
+  persist(unbound.slug, source);
+  const refused = store.validateIntegrationSubmission(unbound.slug, unbound.sourceRef, {});
+  assert.equal(refused.reason, 'candidate_review_required');
+  assert.match(refused.message, /recorded no runtime binding on the terminal attempt that submitted the candidate/);
+  assert.match(refused.message, /older than bind-source recording still resolves through that bind time/, 'the refusal names why no recovery applies');
+  assert.match(refused.message, /re-dispatch the ticket so the replacement attempt binds/);
+});
+
+test('a live attempt that records bindSource never falls back to its bind time', () => {
+  const live = claimTokenCandidate('bindsource-recorded-null', {
+    outcome: 'done',
+    agentId: 'hook-bound-reviewer',
+    agentName: 'sq-review-live',
+    terminalAt: '2026-01-02T00:00:00.000Z',
+  });
+  const source = store.getTicket(live.slug, live.sourceRef);
+  // What the current writer appends for an attempt that never bound: the key is
+  // present and null, so the pre-SQ-2772 fallback must not see it.
+  source.dispatch.attempts[0].bindSource = null;
+  source.dispatch.attempts[0].boundAt = '2026-01-01T00:00:00.000Z';
+  persist(live.slug, source);
+  assert.equal(
+    reviewBinding.reviewProvenance(store.getTicket(live.slug, live.sourceRef), store.getTicket(live.slug, live.reviewRef)).reason,
+    'agent_identity_missing',
+  );
+});
+
 test('integration stays blocked when a matching attempt, an identity, or a distinct reviewer is missing', () => {
   const cases: Array<[string, any, any]> = [
     ['source attempt for another commit', [{ outcome: 'submitted', commit: 'f'.repeat(40), agentId: 'source-a', terminalAt: '2026-01-01T00:00:00.000Z' }], [{ outcome: 'done', agentId: 'review-b', terminalAt: '2026-01-02T00:00:00.000Z' }]],

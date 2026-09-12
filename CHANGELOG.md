@@ -8,6 +8,324 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.563.0 (2026-09-12)
+
+### model-gateway 0.50.22 → 0.50.23
+
+#### Fixes
+
+- Correct the README's account of gateway ownership checks (SQ-2813)
+  The plugin README described the pre-elevation ownership rule and a `stale pid file` diagnostic that is never printed. It now matches what cleanup actually does, including the Windows case where a hidden command line means the process is probably elevated.
+- Stop the shim leaking a listener per keep-alive request (SQ-2814)
+  The shim registered a telemetry cancel listener on the connection socket once per request. Claude Code keeps that connection open and sends many requests down it, so the listeners piled up for the life of the connection, flooded `shim.log` with `MaxListenersExceededWarning`, and held every request's telemetry closure in memory until the client disconnected. The per-response listener already covers a connection dropped mid-response, so the socket registration is gone.
+
+### sidequest 5.1.14 → 5.1.15
+
+#### Fixes
+
+- Detect stale Sidequest servers (SQ-2807)
+  Dispatch now refuses stale serving builds, warns when the server is newer, and includes the serving version in refusal results.
+- Close serving-build guard gaps (SQ-2817)
+  Dispatch compatibility now retries transient install reads and refuses unreadable or build-metadata-drifted serving builds.
+
+## v3.562.0 (2026-09-12)
+
+### model-gateway 0.50.21 → 0.50.22
+
+#### Fixes
+
+- Preserve verified gateway PID records across Windows elevation boundaries (SQ-2810)
+  Model Gateway now recognizes a recorded process by its matching start time when Windows hides its command line, retains that record, and reports failed cross-elevation stops instead of claiming they worked.
+- Say whether a Claude alias pin was detected or is the shipped fallback (SQ-2811)
+  `doctor` and `pin` now name where each Claude alias pin came from, so a value probed against your CLI no longer looks identical to a shipped fallback that was never detected for it.
+
+### quartermaster 0.10.1 → 0.10.2
+
+#### Fixes
+
+- Check plugin recommendations against current reality (SQ-2803)
+  Quartermaster checks current plugin status and reported experience before it proposes an install.
+- Stop retiring proposals the user never rejected (SQ-2812)
+  A recorded rejection now only silences the project it was recorded in, instead of every project on the machine, and the skills say plainly that `rejected` records the user saying no to something they were actually shown, never Quartermaster's own decision not to raise it. A plugin from a marketplace you have not added yet is proposed with its `marketplace add` command rather than dropped as uninspectable.
+
+### sidequest 5.1.13 → 5.1.14
+
+#### Fixes
+
+- Snapshot child failures no longer get told to retry as if the project were unreadable (SQ-2801)
+  A dispatch that could not snapshot a project because the filesystem-snapshot
+  child process failed to run, exited non-zero, or printed a result that could
+  not be parsed used to get the same "could not snapshot ... Retry dispatch
+  after the project is readable" message as a genuinely unreadable project.
+  That advice was wrong for all three child-failure cases, since retrying
+  reproduces the identical refusal. The refusal now names which of the four
+  cases actually happened (child could not run, exited non-zero, printed an
+  unparseable result, or the project is genuinely unreadable), including the
+  exit status and a bounded stderr excerpt when the child ran and failed. The
+  genuinely-unreadable-project wording is unchanged.
+
+## v3.561.0 (2026-09-12)
+
+### sidequest 5.1.12 → 5.1.13
+
+#### Fixes
+
+- End the non-Git snapshot hang on cloud-synced files (SQ-2799)
+  A non-Git project whose files live under OneDrive or another sync client could still hang dispatch forever: the snapshot's ten-second clock was only checked between files, and a single read of a files-on-demand placeholder never returns. The snapshot now runs in a separate process that gets killed when the clock runs out, so the refusal always arrives, and it names the file the read hung on plus the recourse (initialize a git repository, or point the board at a local directory no sync client mirrors). Baseline digests are unchanged.
+- Speed up sidequest full-suite Windows tests (SQ-2800)
+  Reduce oversized fixture populations and report full-suite phase timing in GitHub Actions summaries.
+
+## v3.560.0 (2026-09-12)
+
+### model-gateway 0.50.20 → 0.50.21
+
+#### Fixes
+
+- Stabilize the discovery-cache auth test (SQ-2794)
+  Make the discovery-cache auth test deterministic when a loaded Windows runner slows port-ownership probes.
+- Name the port-ownership probe budget failure (SQ-2796)
+  Tell users when a bounded port-ownership probe ran out of time and where to override its budget.
+- Pin the Windows detached launch against job-object close-kill (SQ-2798)
+  Measured whether the gateway's Windows detached launch survives its caller being
+  killed inside a job object. It does: the WMI-created supervisor outlives a job
+  armed with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, while a plain
+  `spawn({detached:true})` child dies with it. The regression test now reproduces
+  that close-kill instead of calling `TerminateJobObject`, so it fails if the
+  launch path ever drops WMI.
+
+### quartermaster 0.10.0 → 0.10.1
+
+#### Fixes
+
+- Find desktop-installed Claude Code (SQ-2791)
+  Toolshed updates now find Claude Code installed by the Windows desktop app when it is not on PATH, and report failed updates without false reload advice.
+
+### sidequest 5.1.11 → 5.1.12
+
+#### Fixes
+
+- Guard marketplace-only release windows (SQ-2787)
+  Sidequest now blocks dispatches from local release commits that carry only the marketplace tag.
+- A reused singleton gate capture has to prove the committed content (SQ-2789)
+  Assembling a single-ticket wave used to re-run the ticket's pinned verifier against the
+  candidate's own worktree, even though that candidate already carries an authoritative
+  verify-capture from submit. Across the last 12 delivered tickets that duplicated 688.9s of
+  1350.6s of total gate time, averaging 55s per ticket. Singleton admission now reuses that
+  capture, and the gate says so in its evidence.
+
+  The capture only stands in for the candidate when it proves the candidate's committed content.
+  A capture used to bind to nothing but the verify cwd's HEAD, so one taken over uncommitted edits
+  was indistinguishable from one taken at the committed content: a run over a passing edit that was
+  never committed could admit a failing candidate. The wrapper now records whether that cwd had any
+  uncommitted changes, and reuse requires the recorded proof. A capture from a dirty worktree, and
+  any capture recorded before this change, is never reused: the gate provisions a worktree and runs
+  the command as before.
+
+  A capture for another commit, a candidate with no capture, and every multi-ticket wave still run
+  the command. The merged-tree gate at delivery is unchanged: it is the only run that observes the
+  tree that ships.
+- Recover dead pre-runtime dispatches (SQ-2793)
+  Recover abandoned pre-runtime dispatch attempts without weakening protections for bound or claimed work.
+- Explain unavailable dispatch bindings (SQ-2797)
+  Explain whether a worktree binding failed on session, worktree, or project facts.
+
+## v3.559.0 (2026-09-12)
+
+### Repository
+
+- Roll back failed local release cuts (SQ-2775)
+  A failed pre-push cut now resets its release commit and removes its local tags,
+  so a doomed release window cannot remain in the checkout. Manual fallback uses
+  `git update-ref -d refs/tags/<tag>` when automatic rollback itself fails.
+- Let release fragments declare repository-only work (SQ-2779)
+
+### model-gateway 0.50.19 → 0.50.20
+
+#### Fixes
+
+- Reap model-gateway test proxy fixtures before cleanup (SQ-2760)
+  Model-gateway isolation tests now reap observed proxy and worker processes before removing temporary homes.
+- Use pure sibling version checks (SQ-2768)
+  Use the pure sibling version comparison without spawning a shim or copying plugin trees.
+- Repair gateway project identity attribution (SQ-2783)
+  Gateway usage keeps compatibility with older project-name IDs while resolving transcript labels from the repository root for dashboard attribution.
+- Canonicalize gateway repository labels (SQ-2785)
+  Gateway usage now canonicalizes repository roots so labels agree with Observability hooks through links and Windows path-casing variants.
+
+### observability 0.7.30 → 0.7.31
+
+#### Fixes
+
+- Use canonical IDs for native telemetry (SQ-2750)
+  Project telemetry now sends the repository SHA-256 identity as `project.id` and its sanitized name as `project.name`; dashboards keep matching legacy name-labelled samples until telemetry is re-enabled.
+- Repair gateway project identity attribution (SQ-2783)
+  Gateway usage keeps compatibility with older project-name IDs while resolving transcript labels from the repository root for dashboard attribution.
+
+### sidequest 5.1.10 → 5.1.11
+
+#### Fixes
+
+- Wave and integration refusals now name the recovery for a rewound baseline (SQ-2770)
+  When a candidate's recorded baseline is no longer reachable from the integration
+  target, redispatching cannot recover it: the work is already verified against a
+  revision the branch rewound past. Both refusal surfaces said "redispatch against
+  the current base" anyway. They now say what actually works, which is a hand merge
+  onto the current target, a re-gate, and `groomClose` with `deliveryCommit`.
+- Dispatch refuses to baseline on an unpublished release tip (SQ-2777)
+  A release cut tags its commit before it runs the release suites and only pushes
+  once they pass, so for the length of that run local main sits on a tip that may
+  still be rewound. A dispatch prepared there handed the executor a checkout forked
+  from that commit, and after the rewind the candidate's submission range came back
+  as [release commit, candidate] and failed `outside_scope`. Preparation now refuses
+  while the baseline carries the annotated release tag set (the marketplace
+  `v<version>` tag plus at least one `<plugin>-v<version>` tag) and is not yet on the
+  remote branch, naming the tags and the teardown. An ordinary unpushed local commit
+  carries no such tags and still baselines local main exactly as before.
+
+## v3.558.0 (2026-09-11)
+
+### model-gateway 0.50.18 → 0.50.19
+
+#### Fixes
+
+- Enforce repository consent before telemetry capture and export (SQ-2511) [`4e97b71`](https://github.com/Eigenwise/eigenwise-toolshed/commit/4e97b719442209d2d175f36aed56c96ccddfbac1)
+- Repair telemetry consent boundaries (SQ-2753)
+  Keep denied repository telemetry out of gateway attribution and retain denied hook rows until their repository opts in again.
+- Make the observer outbox the only gated log export (SQ-2756)
+  The Collector no longer has a `logs/sink` pipeline, so a log record reaches a configured sink only through the observer's outbox, where the repository opt-in gate lives. `traces/sink` and `metrics/sink` are unchanged and stay outside that gate. The two dashboard panels that read the raw `service_name="codex-gateway"` stream, "Gateway errors and throttles" and "Gateway records, 5m", are re-pointed at `service_name="workbench-observer"` filtered on the gateway event names rather than dropped; the error panel now counts the observer's `throttled`, `client_error`, and `server_error` statuses instead of matching error text.
+
+  A denied session now leaves a `consent_denial` row (session id and timestamp, nothing else) so the denial survives an observer restart instead of being undone when the session map is warmed from stored hook history. It clears when the same session next produces an accepted hook observation carrying identity, and it is pruned with the existing retention delete.
+
+  A gateway record names its project by directory name, never by canonical ID, so the observer now treats a raw `project_id` as identity only when it is already a canonical hex ID, and otherwise accepts it only when it matches the name mapped to that session. Accepted cost: a session whose working directory is a subdirectory of the repository root resolves a different name than the hook's repository-root name, so its gateway usage is denied rather than attributed. That is the fail-closed direction.
+- Keep proxy updates under supervisor ownership (SQ-2765)
+  Proxy version updates now let the running shim supervisor restart the proxy.
+
+### observability 0.7.29 → 0.7.30
+
+#### Fixes
+
+- Enforce repository consent before telemetry capture and export (SQ-2511) [`4e97b71`](https://github.com/Eigenwise/eigenwise-toolshed/commit/4e97b719442209d2d175f36aed56c96ccddfbac1)
+- Repair telemetry consent boundaries (SQ-2753)
+  Keep denied repository telemetry out of gateway attribution and retain denied hook rows until their repository opts in again.
+- Make the observer outbox the only gated log export (SQ-2756)
+  The Collector no longer has a `logs/sink` pipeline, so a log record reaches a configured sink only through the observer's outbox, where the repository opt-in gate lives. `traces/sink` and `metrics/sink` are unchanged and stay outside that gate. The two dashboard panels that read the raw `service_name="codex-gateway"` stream, "Gateway errors and throttles" and "Gateway records, 5m", are re-pointed at `service_name="workbench-observer"` filtered on the gateway event names rather than dropped; the error panel now counts the observer's `throttled`, `client_error`, and `server_error` statuses instead of matching error text.
+
+  A denied session now leaves a `consent_denial` row (session id and timestamp, nothing else) so the denial survives an observer restart instead of being undone when the session map is warmed from stored hook history. It clears when the same session next produces an accepted hook observation carrying identity, and it is pruned with the existing retention delete.
+
+  A gateway record names its project by directory name, never by canonical ID, so the observer now treats a raw `project_id` as identity only when it is already a canonical hex ID, and otherwise accepts it only when it matches the name mapped to that session. Accepted cost: a session whose working directory is a subdirectory of the repository root resolves a different name than the hook's repository-root name, so its gateway usage is denied rather than attributed. That is the fail-closed direction.
+
+### quartermaster 0.9.4 → 0.10.0
+
+#### Features
+
+- Reopen resupply offers on strong new evidence (SQ-2762)
+  Preserve evidence after declined rounds and back off consecutive declines.
+
+### sidequest 5.1.9 → 5.1.10
+
+#### Fixes
+
+- Provision candidate wave gates (SQ-2527)
+  Wave verification now provisions configured dependency paths and worktree setup in a candidate worktree before the gate runs.
+- Redispatch after a failed continuation spawn no longer locks the ticket (SQ-2537)
+  A continuation dispatch resumes the checkout an earlier attempt retained, so it never
+  creates one of its own. When such a spawn died in the WorktreeCreate hook before any
+  executor ran, `dispatch --recovery-evidence` refused the exact retirement the previous
+  refusal had prescribed, and the ticket sat until the one-hour claim-idle backstop. The
+  retry gate now ignores a cleanup refusal about a checkout this attempt never created;
+  the retained checkout and its commits stay untouched. A checkout the attempt reserved
+  itself still blocks the retry. Repeating the evidence command on an already-retired
+  attempt now says so and points at plain `dispatch`, and the PreToolUse Agent hook
+  refuses an `isolation` field added to a continuation spawn, naming the retained
+  checkout, before the harness can fail on it.
+- A claim-token-bound candidate can pass its bound review again (SQ-2763)
+  A dispatch that binds through its claim token, which is what a continuation does, never records a harness agent id. Review provenance demanded one on both sides, so any candidate submitted by such an executor became permanently unintegrable the moment it carried a bound review: `integrate`, manual delivery with `deliveryCommit`, `groomClose` with `integration:true`, and `supersede_submission` all refused, and the refusal named no way out.
+
+  Provenance now resolves an identity from what the terminal attempt already recorded, and it treats the two sides differently. On the candidate side, the hook-bound agent id when there is one, otherwise the dispatch token prefix and agent name that a proven claim-token binding stamps at bind time. On the review side, only the hook-bound agent id: a token plus a launch-stamped name authenticates a dispatch, and one runtime can hold several of those, so it cannot show that a reviewer is a different runtime. A review that never bound a runtime still refuses with `agent_identity_missing`.
+
+  The independence check still fails closed, refusing with `shared_agent_identity` whenever the candidate and its review have any identity component in common; session id is deliberately not compared, because fan-out siblings legitimately share one.
+
+  The `candidate_review_required` refusal now says which side recorded no identity, what an identity is, how to inspect both attempts, the three real recoveries, and that the manual and `groomClose` routes enforce the same check rather than escaping it.
+- Bound non-Git dispatch snapshots (SQ-2764)
+  Non-Git projects now refuse an oversized or slow filesystem snapshot instead of leaving dispatch stuck. The refusal names the exceeded path, byte, or time cap and tells you to initialize a git repository or point the board at a smaller directory. Snapshots that stay within the caps keep their existing baseline digest.
+- Shorten SQLite lock diagnostic test (SQ-2766)
+  Reduce the SQLite lock diagnostic test timeout while preserving retry diagnostics coverage.
+- Fix the always-red four-concurrent-Stop-hooks test (SQ-2771)
+  The Stop-cascade hook test read an observability spool file that was never
+  written. Observability capture has been consent-gated for a while now, and the
+  test's fixture board was never opted in, so the hook correctly wrote nothing and
+  the read blew up with ENOENT on every run, on every platform. The fixture now
+  opts itself in, so the test measures what it claims to measure.
+- A reviewer has to bind a runtime, not just hold a second dispatch token (SQ-2772)
+  Review provenance treated a dispatch token prefix plus the agent name a launch stamps as a runtime identity on both sides of the candidate gate. It is not one. A token and a launch name authenticate a DISPATCH, and one parent runtime can hold several: dispatch the source, let it claim through its own token without ever binding, submit, then dispatch a differently named sibling that binds the same way and closes as the review. Two distinct token/name pairs, one physical process, and the gate returned `ok`.
+
+  The rule is now asymmetric, matching what each credential actually proves. Terminal attempts record their `bindSource`, so provenance can tell a real claim-token binding from an attempt that merely never bound. The side that submitted the candidate may still fall back to a proven claim-token binding's token prefix and agent name, which is what keeps continuation-submitted candidates integrable. The reviewing side needs the hook-bound agent id and nothing else stands in, because only the harness-reported `agent_id` names a runtime.
+
+  Consequence worth knowing: a review that raced past the identity hook is refused again with `agent_identity_missing`, and any candidate whose bound review closed that way stays blocked until the review is re-dispatched on a host whose PreToolUse hook reports `agent_id`. A missing lifecycle record is cheaper than a gate that admits self-review. The `candidate_review_required` refusal now names which side failed, what that side's proof has to be, and the recovery for each.
+- Candidates submitted before bind sources were recorded can integrate again (SQ-2773)
+  Terminal attempts only started recording `bindSource` in SQ-2772, so every candidate submitted before that reads as one that never bound a runtime at all. Review provenance returned `agent_identity_missing` for those rows forever, and integrate, manual delivery and groomClose all refused work that was already merged and green on main, with two more tickets stuck behind it waiting to supersede.
+
+  Nothing was actually missing. `boundAt` has always recorded that a bind happened, and the only writer that sets it without an agent id is the claim token, so a pre-SQ-2772 attempt carrying `boundAt` and no `agentId` bound through its dispatch token. Provenance now reads that record when, and only when, the attempt carries no `bindSource` key at all. Every attempt the current writer appends carries the key, null included, so a live dispatch can never take this path and nothing on the board is rewritten.
+
+  The reviewing side is untouched: it still needs the hook-bound agent id, so a same-session sibling pair holding two claim tokens refuses exactly as SQ-2772 made it. What changed on the refusal is the wording. `agent_identity_missing` on the submitting side now says the attempt recorded no binding at all, that an older attempt would have resolved through its recorded bind time, and that re-dispatching is the only route, instead of reading like something a retry would fix.
+- Continuation isolation refusal test matches the checkout path the board canonicalized (SQ-2774)
+  Fixed a Windows CI test failure in the continuation isolation refusal check. The test built its expectation from the raw temp path, but on a runner whose temp directory carries an 8.3 short name (`C:\Users\RUNNER~1\...`) that never matches the refusal message, which names the checkout as the board canonicalized it (`c:\users\runneradmin\...`). Case-insensitive matching covered the case difference and not the short-versus-long form. The test now canonicalizes the fixture path the same way the board does before matching.
+
+## v3.557.0 (2026-09-11)
+
+### model-gateway 0.50.17 → 0.50.18
+
+#### Fixes
+
+- Avoid concurrent gateway telemetry fixture port races (SQ-2539)
+  Bind gateway telemetry fixtures on OS-assigned ports so concurrent suites cannot race on a closed probe port.
+- Attribute gateway usage to Sidequest tickets (SQ-2749)
+  Sidequest dispatch markers now carry their ticket ref so gateway usage and derived records can be attributed to the originating ticket.
+
+### quartermaster 0.9.3 → 0.9.4
+
+#### Fixes
+
+- Ignore harness messages in correction signals (SQ-2494)
+  Quartermaster no longer treats leading harness task notifications or system reminders as user corrections.
+- Refresh plugin versions after reload (SQ-2536)
+  Reloading plugins now refreshes their loaded-version records, so stale reload warnings stop after a successful reload.
+
+### sidequest 5.1.8 → 5.1.9
+
+#### Fixes
+
+- TaskStop guidance covers already-exited background executors (SQ-2535)
+  TaskStop guidance in SKILL.md, the SessionStart orchestrator context, and references/orchestration.md
+  now says TaskStop only applies to a still-registered teammate; a `No task found` or `not running
+  (status: completed)` reply means it already exited and needs no retry or investigation.
+- Refresh plugin versions after reload (SQ-2536)
+  Reloading plugins now refreshes their loaded-version records, so stale reload warnings stop after a successful reload.
+- Refuse a cross-project isolated dispatch instead of handing back an unusable spawn (SQ-2570)
+  An isolated worktree is created by the spawning session's WorktreeCreate hook, and that hook resolves the board from its own checkout. Dispatching a worktree ticket for a different registered project therefore returned a normal spawn spec whose lease refused creation with `dispatch_binding_unavailable`, and the executor died before it started. Dispatch now refuses that up front and names sharedTree:true as the way through. The hook's own refusals say which board they searched and what to do next, and a creation that finds only a prepared dispatch for its session reports `dispatch_launch_unrecorded` instead of looking like a missing dispatch.
+- Preserve pre-edit verification failure evidence (SQ-2577)
+- Report worktree sweep classification progress (SQ-2674)
+  Show live worktree classification progress without changing safe cleanup eligibility.
+- Resolve overlapping candidates with different pinned verifiers (SQ-2688)
+  Guide verified manual delivery when overlapping candidates use different pinned verifiers.
+- Verify capture says which command it refused (SQ-2713)
+  A refused verification capture printed only `capture=unrecorded reason=...`, so an executor could not see whether its command or the pinned one differed and could only retry the same run. The wrapper now prints the store's refusal message, which names the pinned and captured commands side by side.
+- Negative controls declare their failure kind (SQ-2731)
+  The negative-control guard no longer guesses the failure class from comment prose, which refused truthful evidence that merely mentioned an ImportError or a collection error. The marker line now carries `failure-kind=assertion`, `failure-kind=import`, or `failure-kind=collection`; a missing or unknown value refuses with `negative_control_failure_kind_required`.
+- Changed test names match runtime reports (SQ-2746)
+  Sidequest now decodes quoted test-name escapes before checking negative-control reports, so names containing apostrophes, quotes, backticks, or backslashes match the runtime result. Template-literal names with substitutions are skipped because no fixed runtime name exists.
+- Forbid raw parent-repo scratch worktrees and node_modules junctions in executor guidance (SQ-2747)
+  Every generated executor now tells agents never to create a raw scratch git worktree inside the parent repo, and never to junction or symlink node_modules from an existing install into an ad-hoc checkout — removing such a checkout with `git worktree remove --force` can delete the junction target's contents. Use an isolated local fixture clone or the registered WorktreeCreate provisioning path instead.
+- Attribute gateway usage to Sidequest tickets (SQ-2749)
+  Sidequest dispatch markers now carry their ticket ref so gateway usage and derived records can be attributed to the originating ticket.
+- Candidate overlap refuses on real changed paths, not shared declared directories (SQ-2752)
+  Wave assembly refused `candidate_overlap` whenever another pending candidate merely
+  DECLARED a directory the participant had changed a file in. Two tickets declaring
+  `plugins/sidequest/lib` and `plugins/sidequest/test` blocked each other even when they
+  changed completely different files, so every pending candidate blocked every other one.
+  The check now intersects both candidates' recorded changed paths, and the refusal lists
+  only the files they both actually changed.
+
 ## v3.556.0 (2026-09-11)
 
 ### model-gateway 0.50.16 → 0.50.17

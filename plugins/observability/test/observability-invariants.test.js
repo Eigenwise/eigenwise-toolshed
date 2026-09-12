@@ -243,8 +243,9 @@ test('canonical project identity stays aligned across Observability emitters and
   assert.equal(gateway.agent_id, 'agent-canonical');
   assert.equal(registry.project_id, identity.project_id);
   assert.equal(registry.project_name, identity.project_name);
-  assert.equal(resourceAttributes.get('project.id'), identity.project_name);
-  assert.ok(selectors.some((selector) => selector.includes(`project_id="${identity.project_name}"`)));
+  assert.equal(resourceAttributes.get('project.id'), identity.project_id);
+  assert.equal(resourceAttributes.get('project.name'), identity.project_name);
+  assert.ok(selectors.some((selector) => selector.includes(`project_id=~"${identity.project_id}|${identity.project_name}"`)));
 });
 
 test('a per-project dashboard says so when its project has no samples in the range', () => {
@@ -255,17 +256,17 @@ test('a per-project dashboard says so when its project has no samples in the ran
   assert.equal(panel.gridPos.y, 0, 'the empty state has to be the first thing on the board');
   assert.match(panel.fieldConfig.defaults.noValue, /No Claude Code metrics in this range/);
   assert.match(panel.fieldConfig.defaults.noValue, /enable-project-telemetry/);
-  assert.match(panel.targets[0].expr, /project_id="atlas"/);
+  assert.match(panel.targets[0].expr, /project_id=~"a{64}\|atlas"/);
   assert.doesNotMatch(panel.targets[0].expr, /\$project/);
   // The global dashboard already shows which projects reported; an empty state there
   // would only ever mean "no projects at all".
   assert.equal(global.dashboard.panels.some(({ title }) => title === EMPTY_STATE_TITLE), false);
 });
 
-test('native Sidequest identity joins the canonical project after ingest', () => {
+test('native Sidequest fixtures remain accepted through a consented store', () => {
   const projectId = projectMetadata(PROJECT_DIR).project_id;
   const [{ observation: adapter }, { observation: native }] = sidequestFixtures(projectId);
-  const store = openObservabilityStore(':memory:', { outboxEnabled: false });
+  const store = openObservabilityStore(':memory:', { consent: (id) => id === projectId, outboxEnabled: false });
   try {
     assert.equal(store.ingest(adapter).accepted, true);
     assert.equal(store.ingest(native).accepted, true);

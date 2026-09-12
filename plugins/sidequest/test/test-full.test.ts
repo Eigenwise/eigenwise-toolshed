@@ -14,6 +14,7 @@ function loadBudgetHelpers() {
       describePhaseFailure,
       formatTestPhaseTimeoutError,
       formatTestPhaseWarning,
+      formatTestPhaseSummary,
       fullSuiteGatewayCatalog,
     } from ${JSON.stringify(runnerModuleUrl)};
     const describe = (result) => describePhaseFailure('functional', result, 960000, 4, 4);
@@ -22,6 +23,7 @@ function loadBudgetHelpers() {
       timeouts: [calculateTestPhaseTimeoutMilliseconds(8), calculateTestPhaseTimeoutMilliseconds(4), calculateTestPhaseTimeoutMilliseconds(2)],
       timeoutError: formatTestPhaseTimeoutError('functional', 960000, 4, 4),
       warning: formatTestPhaseWarning('functional', 800000, 720000, 960000, 4, 4),
+      summary: formatTestPhaseSummary('functional', 800000, 720000, 960000, 4, 4),
       gatewayCatalog: fullSuiteGatewayCatalog(),
       phaseFailures: {
         timedOutWithStatusZero: describe({ timedOut: true, status: 0, signal: null, cleanupError: null }),
@@ -39,6 +41,7 @@ function loadBudgetHelpers() {
     timeouts: number[];
     timeoutError: string;
     warning: string;
+    summary: string;
     phaseFailures: Record<string, string | null>;
     gatewayCatalog: {
       schemaVersion: number;
@@ -99,5 +102,9 @@ test('full-suite budget keeps actionable timeout and warning copy', () => {
   assert.equal(
     helpers.warning,
     'WARNING: Sidequest functional tests completed in 800000ms, over the 720000ms warning threshold for their 960000ms phase budget at concurrency 4 on 4 available cores.',
+  );
+  assert.equal(
+    helpers.summary,
+    '### Sidequest functional test phase\n- Duration: 800000 ms\n- Warning threshold: 720000 ms\n- Phase budget: 960000 ms\n- Concurrency: 4 on 4 available cores',
   );
 });

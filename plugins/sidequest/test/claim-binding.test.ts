@@ -478,7 +478,7 @@ test('exact completed binding without terminal lifecycle preserves the checkout'
   }
 });
 
-test('terminal lifecycle without a completed marker binding preserves the checkout', () => {
+test('terminal lifecycle on an attempt that never bound a runtime preserves the inherited checkout', () => {
   const candidate = recoveryFixture('terminal-markerless');
   try {
     const result = worktrees.reclaimUnclaimedDispatchWorktree(candidate.repository, {
@@ -488,6 +488,26 @@ test('terminal lifecycle without a completed marker binding preserves the checko
       ...terminalLifecycleState(),
     });
     assert.equal(result.reclaimed, false);
+    assert.equal(result.retainedCheckout, true);
+    assert.match(result.message, /never created a checkout of its own, so the retained checkout/);
+    assert.equal(fs.existsSync(candidate.worktree), true);
+  } finally {
+    fs.rmSync(candidate.repository, { recursive: true, force: true });
+  }
+});
+
+test('terminal lifecycle on a bound attempt without a completed marker preserves the checkout as unmatched', () => {
+  const candidate = recoveryFixture('terminal-bound-markerless');
+  try {
+    const result = worktrees.reclaimUnclaimedDispatchWorktree(candidate.repository, {
+      sharedTree: false,
+      worktree: candidate.worktree,
+      baseCommit: candidate.baseCommit,
+      boundAt: new Date().toISOString(),
+      ...terminalLifecycleState(),
+    });
+    assert.equal(result.reclaimed, false);
+    assert.equal(result.retainedCheckout, undefined);
     assert.match(result.message, /WorktreeCreate binding was incomplete and could not be matched/);
     assert.equal(fs.existsSync(candidate.worktree), true);
   } finally {

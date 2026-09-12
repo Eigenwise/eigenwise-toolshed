@@ -412,7 +412,6 @@ test('tools/list advertises the board tools with input schemas', async () => {
   const contextPage = resp.result.tools.find((tool: any) => tool.name === 'context_page');
   assert.deepEqual(contextPage.inputSchema.required, ['handle', 'cursor', 'expectedRevision']);
   assert.equal(contextPage.inputSchema.properties.limit.maximum, 70 * 1024);
-  assert.match(contextPage.inputSchema.properties.cursor.description, /Opaque/);
   assert.match(contextPage.inputSchema.properties.limit.description, /UTF-8 bytes/);
   const rework = resp.result.tools.find((tool: any) => tool.name === 'rework');
   assert.deepEqual(rework.inputSchema.required, ['ref', 'by', 'review', 'reason']);
@@ -664,20 +663,22 @@ test('context_page row continuations retain their revision when claim liveness c
 });
 
 test('every oversized read carries a universal continuation handle', async () => {
+  // 750 -> 110: 110 rows with 500-byte titles still exceed the MCP result cap and prove continuation recovery.
+  const ticketCount = 110;
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-universal-page-'))).slug;
-  for (let index = 0; index < 750; index += 1) {
+  for (let index = 0; index < ticketCount; index += 1) {
     store.createTicket(project, { title: `Oversized change ${index} ${'x'.repeat(500)}`, source: 'test' });
   }
 
   const changes = await callTool('changes', { project, since: '2000-01-01T00:00:00.000Z' });
   assert.ok(Buffer.byteLength(JSON.stringify(changes), 'utf8') <= 70 * 1024);
   assert.equal(changes.ticketsRetrieval.tool, 'context_page');
-  assert.equal(changes.ticketsTotal, 750);
+  assert.equal(changes.ticketsTotal, ticketCount);
 
   const resumed = await callTool('context_page', { ...changes.ticketsRetrieval.arguments, limit: 4096 });
   assert.equal(resumed.source, 'changes');
   assert.ok(resumed.returned > 0);
-  assert.ok(resumed.totalRows === 750);
+  assert.ok(resumed.totalRows === ticketCount);
 });
 
 test('context_page row continuations project oversized detail bodies into nested pages', async () => {
@@ -1724,7 +1725,7 @@ test('verify commands reject direct multi-plugin directory chaining', () => {
   }));
 });
 
-test('dispatch records a heal-capable loaded-version skew and returns its warning', async () => {
+test('dispatch refuses when the serving build is older than the prepared registry build', async () => {
   const projectPath = committedRepo('sq-mcp-dispatch-freshness-');
   const project = store.ensureProject(projectPath).slug;
   const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-dispatch-freshness-home-'));
@@ -1751,14 +1752,10 @@ test('dispatch records a heal-capable loaded-version skew and returns its warnin
       category: 'general',
       files: ['src'],
     });
-    const dispatched = await callTool('dispatch', { allowUnscoped: true, project, ref: ticket.ref, full: true });
-    assert.match(dispatched.warnings.join('\n'), /Sidequest dispatch skew: loaded \d+\.\d+\.\d+, installed 99\.99\.99/);
-    const prepared = store.getTicket(project, ticket.ref);
-    assert.deepEqual(prepared.dispatch?.dispatchSkew, {
-      loadedVersion: JSON.parse(fs.readFileSync(path.join(loadedPluginRoot, '.claude-plugin', 'plugin.json'), 'utf8')).version,
-      installedVersion: '99.99.99',
-      schemaVersion: 1,
-    });
+    const dispatched = await callToolRaw('dispatch', { allowUnscoped: true, project, ref: ticket.ref, full: true });
+    assert.equal(dispatched.isError, true);
+    assert.match(dispatched.content[0].text, /serving Sidequest/);
+    assert.equal(store.getTicket(project, ticket.ref).dispatch, undefined);
   } finally {
     if (originalClaudeHome === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
     else process.env.SIDEQUEST_CLAUDE_HOME = originalClaudeHome;
@@ -4155,7 +4152,7 @@ test('MCP board archive tools match the CLI archive-board lifecycle', async () =
 test('dispatch returns a stable executor, one spawn prompt, and a token', async () => {
   const d = mcp.toolDescriptors().find((t: any) => t.name === 'dispatch');
   assert.ok(d);
-  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['allowRepeatFailure', 'allowUnscoped', 'claimHolder', 'full', 'integrationBranch', 'project', 'recoveryEvidence', 'reducedAgentSchema', 'ref', 'sharedTree', 'worktree']);
+  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['allowRepeatFailure', 'allowUnscoped', 'claimHolder', 'full', 'integrationBranch', 'project', 'recoveryEvidence', 'reducedAgentSchema', 'ref', 'retireOnly', 'sharedTree', 'worktree']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
 
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' }]);
@@ -5835,10 +5832,15 @@ async function resultChars(name?: any, args?: any) {
 }
 
 test('SQ-228: a large board pages under the cap; cursors iterate the full set exactly once', async () => {
-  // A dedicated board so seeding 500 tickets can't perturb the shared-board
+  // A dedicated board so seeding this fixture cannot perturb the shared-board
   // tests above. Every call passes project explicitly.
   const big = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-bigboard-228'), 'SQ-228 Big Board');
-  const N = 500;
+  // 500 -> 450. 407 was measured as the smallest board that still forces both
+  // compact all:true and default list through continuation pages, and a fixture
+  // pinned to its own boundary breaks on any unrelated change to row
+  // serialization. 450 keeps about a tenth of headroom over that floor and still
+  // drops a tenth of the seeding cost (SQ-2800 review).
+  const N = 450;
   for (let i = 0; i < N; i++) {
     store.createTicket(big.slug, { title: `bulk todo ticket number ${i} on the oversized board`, files: [`lib/mod-${i}.js`] });
   }
@@ -5855,7 +5857,7 @@ test('SQ-228: a large board pages under the cap; cursors iterate the full set ex
     allRows.push(...page.rows);
     allCursor = page.nextCursor;
   }
-  assert.strictEqual(allRows.length, N, 'all 500 remain retrievable through the continuation');
+  assert.strictEqual(allRows.length, N, 'all rows remain retrievable through the continuation');
   const allChars = await resultChars('list', { project: big.slug, all: true });
   assert.ok(allChars <= 70 * 1024, `compact all:true stays under the result ceiling (${allChars} chars)`);
 
@@ -5870,7 +5872,7 @@ test('SQ-228: a large board pages under the cap; cursors iterate the full set ex
   const p1Chars = await resultChars('list', { project: big.slug });
   assert.ok(p1Chars <= 70 * 1024, `page 1 stays under the ceiling (${p1Chars} chars vs unbounded ${allChars})`);
 
-  // Iterate the cursor to exhaustion: collect every ref, assert we saw all 500
+  // Iterate the cursor to exhaustion: collect every row, assert we saw all N
   // exactly once, every page fit under the ceiling, and paging terminates.
   const seen = [];
   let cursor = undefined;
@@ -5889,7 +5891,7 @@ test('SQ-228: a large board pages under the cap; cursors iterate the full set ex
   assert.ok(maxPageChars <= 70 * 1024, `every page stayed under the ceiling (max ${maxPageChars} chars)`);
   assert.strictEqual(seen.length, N, 'iterating cursors yielded exactly N rows');
   assert.strictEqual(new Set(seen).size, N, 'every ticket appears exactly once (no dupes, no gaps)');
-  assert.ok(pages >= 2, `a 500-ticket board takes several pages (took ${pages})`);
+  assert.ok(pages >= 2, `${N}-ticket board takes several pages (took ${pages})`);
 
   // limit:N is an exact page size and its own cursor advances correctly.
   const capped = await callTool('list', { project: big.slug, limit: 10 });

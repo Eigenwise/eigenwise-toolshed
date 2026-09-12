@@ -19,7 +19,10 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var refusal_guidance_exports = {};
 __export(refusal_guidance_exports, {
   CLAIM_REFUSAL_MESSAGES: () => CLAIM_REFUSAL_MESSAGES,
+  candidateReviewRequiredGuidance: () => candidateReviewRequiredGuidance,
   claimRefusalMessage: () => claimRefusalMessage,
+  filesystemSnapshotChildFailureGuidance: () => filesystemSnapshotChildFailureGuidance,
+  filesystemSnapshotLimitGuidance: () => filesystemSnapshotLimitGuidance,
   manualCandidateDeliveryGuidance: () => manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance: () => negativeControlRecoveryGuidance,
   routingDisabledMessage: () => routingDisabledMessage,
@@ -27,6 +30,27 @@ __export(refusal_guidance_exports, {
 });
 module.exports = __toCommonJS(refusal_guidance_exports);
 var import_prepared_dispatch = require("./prepared-dispatch.js");
+function abbreviatedSessionId(value) {
+  const sessionId = String(value || "").trim();
+  return sessionId ? `\`${sessionId.slice(0, 12)}\`` : "<not recorded>";
+}
+function recordedWorktree(value) {
+  const worktree = String(value || "").trim();
+  return worktree ? `\`${worktree}\`` : "<not recorded>";
+}
+function worktreeBindingComparison(failure) {
+  const candidatesConsidered = failure?.candidatesConsidered ?? 0;
+  const candidates = Number.isInteger(candidatesConsidered) ? candidatesConsidered : 0;
+  const count = `${candidates} dispatch record${candidates === 1 ? "" : "s"}`;
+  const comparison = `hook session id ${abbreviatedSessionId(failure?.suppliedSessionId)} against recorded session id ${abbreviatedSessionId(failure?.recordedSessionId)}; hook canonical worktree ${recordedWorktree(failure?.suppliedWorktree)} against recorded canonical worktree ${recordedWorktree(failure?.recordedWorktree)}`;
+  if (failure?.crossProject) {
+    return `Considered ${count} on this board. The nearest dispatch failed predicate \`different_project\`: ${comparison}. The matching launched isolated dispatch is recorded for a different project, so WorktreeCreate cannot bind it here: dispatch it with sharedTree:true, or from a session rooted in that project.`;
+  }
+  if (failure?.predicate) {
+    return `Considered ${count}. The nearest dispatch failed predicate \`${failure.predicate}\`: ${comparison}. Run \`sidequest pulse <ref>\` and re-dispatch with recovery evidence.`;
+  }
+  return `Considered ${count}. No launched isolated dispatch exists on this board for the hook-supplied session or canonical worktree. Run \`sidequest pulse <ref>\` and re-dispatch with recovery evidence.`;
+}
 function correctedMcpClaim(ref, ticket = {}, projectPath) {
   const executor = (0, import_prepared_dispatch.canonicalPreparedDispatchExecutor)(ticket) || "<prepared executor>";
   const effort = ticket.effort || "<prepared effort>";
@@ -77,13 +101,13 @@ function claimRefusalMessage(reason, ref, claim = {}, projectPath) {
 }
 const WORKTREE_CREATION_REFUSALS = Object.freeze({
   project_unavailable: (repository) => `${repository} is not a registered Sidequest board, so this session cannot create a dispatch worktree in it. Register the project, or dispatch with sharedTree:true.`,
-  dispatch_binding_unavailable: (repository) => `This session has no launched isolated dispatch on the board for ${repository}. WorktreeCreate resolves the board from this checkout alone, so a dispatch prepared for a different project can never bind here: dispatch it with sharedTree:true, or from a session rooted in that project. Otherwise run \`sidequest pulse <ref>\` and re-dispatch with recovery evidence.`,
+  dispatch_binding_unavailable: (_repository, failure) => worktreeBindingComparison(failure),
   dispatch_launch_unrecorded: (repository) => `The board for ${repository} holds a prepared dispatch for this session but no recorded launch, so no launched attempt exists to reserve this checkout, and a prepared attempt never supplies creation authority. Run \`sidequest pulse <ref>\`, then \`sidequest dispatch <ref> --recovery-evidence "WorktreeCreate refused: the dispatch launch was never recorded"\`.`,
   baseline_unavailable: () => "The launched dispatch recorded no base commit, so its worktree has no revision to check out. Re-dispatch the ticket for a fresh baseline."
 });
-function worktreeCreationRefusalMessage(reason, repository) {
+function worktreeCreationRefusalMessage(reason, repository, failure) {
   const guidance = WORKTREE_CREATION_REFUSALS[reason];
-  return `worktree lease refused creation: ${reason || "dispatch binding is incomplete"}${guidance ? `. ${guidance(repository)}` : ""}`;
+  return `worktree lease refused creation: ${reason || "dispatch binding is incomplete"}${guidance ? `. ${guidance(repository, failure)}` : ""}`;
 }
 function routingDisabledMessage(ref) {
   return `Routing is disabled on this board, so ${ref} cannot be dispatched. Run \`sidequest routing enabled\` then \`sidequest dispatch ${ref}\`; direct work is limited to the inline-safe allowlist: \`sidequest claim ${ref} --direct --reason "why this is inline-safe"\`.`;
@@ -91,13 +115,35 @@ function routingDisabledMessage(ref) {
 function manualCandidateDeliveryGuidance() {
   return 'For refs with different pinned verifier requirements, keep those requirements and candidate identities unchanged. Compose the exact accepted candidate refs in the registered target, run every pinned verifier plus the full composed gate, then groomClose each with its immutable deliveryCommit and deliveryMethod:"manual"; omit integration:true.';
 }
+function candidateReviewRequiredGuidance() {
+  return "A bound review must terminally complete on this exact candidate, from a runtime identity that is not the one that submitted it. The two sides are held to different proof. The submitting side may identify itself by the attempt's hook-bound agent id, or by the token prefix and agent name recorded against a proven claim-token binding; an attempt older than bind-source recording proves that binding through its recorded bind time instead. The reviewing side needs the hook-bound agent id and nothing else stands in: a dispatch token and agent name authenticate a dispatch, not the runtime that ran it, and one runtime can hold several of those. Run `sidequest pulse <ref>` and read `dispatch.attempts` on both tickets to see which half is missing. If the review never ran to a terminal done attempt, dispatch it and let it close normally. If it reviewed a different candidate, that candidate needs its own bound review. If the review attempt carries no hook-bound agent id, its executor never bound a runtime: re-dispatch the review on a host whose PreToolUse hook reports agent_id, and let that attempt close normally. If the submitting attempt recorded no identity and no bind time at all, it bound nothing and nothing recovers it: re-dispatch that ticket so the replacement attempt binds, then review the resubmitted candidate. Do not assert an identity, hand-edit the attempt, or route around this with a manual delivery: the manual and groomClose routes enforce the same check.";
+}
 function negativeControlRecoveryGuidance() {
   return "Revert the non-test changes, run the changed tests, and keep them importable. Say which one happened: failure-kind=assertion when the changed tests failed their assertions, failure-kind=import or failure-kind=collection when the revert stopped them loading, because only an assertion failure proves they catch wrong behavior. Post [sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=<assertion|import|collection> with n greater than zero. The target and assertion must be the changed behavior this ticket is about. Then restore the change and run the declared verify. You may add context after failed=<n>. For every added or modified named test, add [sidequest:negative-control-test] failed <test name>. If a named test does not cover the reverted change, add [sidequest:negative-control-test] unaffected <test name> because <reason> instead. If the control cannot run, post a line beginning [sidequest:negative-control] waived <reason of at least 20 characters>.";
+}
+function filesystemSnapshotLimitGuidance(projectPath, limit) {
+  const unit = limit.bound === "path cap" ? "paths" : limit.bound === "byte cap" ? "bytes" : "ms";
+  const blockingFile = limit.path ? ` The snapshot was reading ${limit.path} when the clock ran out; a cloud-sync placeholder read cannot be interrupted, so the snapshot process was killed.` : "";
+  const recourse = limit.bound === "deadline" ? "point the board at a local directory no sync client mirrors" : "point the board at a smaller directory";
+  return `filesystem snapshot refused for ${projectPath}: ${limit.bound} reached ${limit.observed} ${unit}; cap ${limit.cap} ${unit}.${blockingFile} Initialize a git repository at the project root so dispatch uses the cheaper git adapter, or ${recourse}.`;
+}
+function filesystemSnapshotChildFailureGuidance(failure) {
+  if (failure.kind === "spawn-error") {
+    return `the filesystem snapshot child process could not run${failure.code ? ` (${failure.code})` : ""}.`;
+  }
+  if (failure.kind === "unparseable") {
+    return "the filesystem snapshot child printed a result that could not be parsed.";
+  }
+  const stderrSuffix = failure.stderr ? ` stderr: ${failure.stderr}` : "";
+  return `the filesystem snapshot child exited with status ${failure.status}.${stderrSuffix}`;
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   CLAIM_REFUSAL_MESSAGES,
+  candidateReviewRequiredGuidance,
   claimRefusalMessage,
+  filesystemSnapshotChildFailureGuidance,
+  filesystemSnapshotLimitGuidance,
   manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance,
   routingDisabledMessage,

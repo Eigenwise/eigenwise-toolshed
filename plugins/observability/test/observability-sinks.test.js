@@ -544,8 +544,7 @@ test('provisions global and active per-project Grafana dashboards', (t) => {
   const globalExpressions = global.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
   assert.ok(globalExpressions.every((expression) => !expression.includes('$project')));
   for (const expression of globalExpressions.filter((expression) => expression.includes('claude_code_'))) {
-    assert.match(expression, /project_id=~"atlas\|beacon"/);
-    assert.doesNotMatch(expression, /[0-9a-f]{64}/);
+    assert.match(expression, /project_id=~"a{64}\|atlas\|b{64}\|beacon"/);
   }
 
   const atlas = dashboards.find(({ dashboard }) => dashboard.title === 'Claude Code — atlas').dashboard;
@@ -558,7 +557,7 @@ test('provisions global and active per-project Grafana dashboards', (t) => {
   assert.equal(atlasTitles.has('Unpriced model token usage'), true);
   const atlasExpressions = atlas.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
   for (const expression of atlasExpressions.filter((expression) => expression.includes('claude_code_'))) {
-    assert.match(expression, /project_id="atlas"/);
+    assert.match(expression, /project_id=~"a{64}\|atlas"/);
   }
   for (const expression of atlasExpressions.filter((expression) => expression.includes('service_name="workbench-observer"'))) {
     assert.match(expression, /workbench_attribute_project_name="atlas"/);
@@ -738,7 +737,7 @@ test('Grafana dashboard answers cost, attribution, role, and reliability questio
   assert.equal(byTitle.has('Claude cost by model'), false);
   assert.match(byTitle.get('Context by orchestrator vs executor').targets[0].expr, /workbench_attribute_agent_role/);
   assert.match(byTitle.get('Hook failures over time').targets[0].expr, /workbench_attribute_status =~ \"error\|failed\"/);
-  assert.match(byTitle.get('Gateway errors and throttles').targets[0].expr, /throttl\|rate\.\?limit\|429/);
+  assert.match(byTitle.get('Gateway errors and throttles').targets[0].expr, /workbench_attribute_status =~ \"throttled\|client_error\|server_error\"/);
   for (const title of ['Assistant turns by project', 'Tool-result bytes by tool', 'Recharge-weighted result bytes by tool']) {
     const expression = byTitle.get(title).targets[0].expr;
     assert.match(expression, /workbench\.recharge_rollup/);
@@ -752,6 +751,9 @@ test('Grafana dashboard answers cost, attribution, role, and reliability questio
   for (const expression of lokiExpressions) {
     assert.doesNotMatch(expression, /\| json/);
     assert.doesNotMatch(expression, /\$__rate_interval/);
+    // The collector no longer exports raw gateway logs to a sink; only the observer's
+    // canonical payload gets there, so no panel may read the raw stream.
+    assert.doesNotMatch(expression, /service_name="codex-gateway"/);
   }
 });
 

@@ -114,7 +114,7 @@ test('dispatch preflight retries transient plugin registry read errors', () => {
 
   const originalReadFileSyncDescriptor = Object.getOwnPropertyDescriptor(fs, 'readFileSync')!;
   const originalReadFileSync = fs.readFileSync;
-  const transientRegistryReadErrors = ['EPERM', 'ENOENT'];
+  const transientRegistryReadErrors = ['EPERM', 'EACCES', 'ENOENT'];
   let registryReadAttempts = 0;
   Object.defineProperty(fs, 'readFileSync', {
     ...originalReadFileSyncDescriptor,
@@ -132,7 +132,7 @@ test('dispatch preflight retries transient plugin registry read errors', () => {
   try {
     const check = checkSidequestInstall(projectPath, { claudeHome });
     assert.equal(check.ok, true);
-    assert.equal(registryReadAttempts, 3);
+    assert.equal(registryReadAttempts, 4);
   } finally {
     Object.defineProperty(fs, 'readFileSync', originalReadFileSyncDescriptor);
     fs.rmSync(temporaryDirectory, { recursive: true, force: true });

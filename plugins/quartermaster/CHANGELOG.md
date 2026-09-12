@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.10.2 (2026-09-12)
+
+Released in v3.562.0, up from 0.10.1.
+
+### Fixes
+
+- Check plugin recommendations against current reality (SQ-2803)
+  Quartermaster checks current plugin status and reported experience before it proposes an install.
+- Stop retiring proposals the user never rejected (SQ-2812)
+  A recorded rejection now only silences the project it was recorded in, instead of every project on the machine, and the skills say plainly that `rejected` records the user saying no to something they were actually shown, never Quartermaster's own decision not to raise it. A plugin from a marketplace you have not added yet is proposed with its `marketplace add` command rather than dropped as uninspectable.
+
+## 0.10.1 (2026-09-12)
+
+Released in v3.560.0, up from 0.10.0.
+
+### Fixes
+
+- Find desktop-installed Claude Code (SQ-2791)
+  Toolshed updates now find Claude Code installed by the Windows desktop app when it is not on PATH, and report failed updates without false reload advice.
+
+## 0.10.0 (2026-09-11)
+
+Released in v3.558.0, up from 0.9.4.
+
+### Features
+
+- Reopen resupply offers on strong new evidence (SQ-2762)
+  Preserve evidence after declined rounds and back off consecutive declines.
+
+## 0.9.4 (2026-09-11)
+
+Released in v3.557.0, up from 0.9.3.
+
+### Fixes
+
+- Ignore harness messages in correction signals (SQ-2494)
+  Quartermaster no longer treats leading harness task notifications or system reminders as user corrections.
+- Refresh plugin versions after reload (SQ-2536)
+  Reloading plugins now refreshes their loaded-version records, so stale reload warnings stop after a successful reload.
+
 ## 0.9.3 (2026-09-11)
 
 Released in v3.556.0, up from 0.9.2.

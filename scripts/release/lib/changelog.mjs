@@ -50,27 +50,39 @@ function commitLink(entry, repository) {
   return ` [\`${short}\`](${repository}/commit/${entry.commit})`;
 }
 
+function renderEntry(entry, repository) {
+  const bullet = `- ${entry.title} (${entry.ref})${commitLink(entry, repository)}`;
+  const parsed = RENDERED_ENTRY.exec(bullet);
+  if (parsed?.[1] !== entry.ref) {
+    throw new Error(`the changelog line for ${entry.ref} does not read back as ${entry.ref}; refusing to write an entry the ledger cannot parse: ${bullet}`);
+  }
+
+  const lines = [bullet];
+  const body = (entry.body ?? '').trim();
+  // Two spaces on every body line keeps it out of column zero, where the ledger reads.
+  if (body) {
+    for (const line of body.split('\n')) lines.push(line.trim() === '' ? '' : `  ${line.trimEnd()}`);
+  }
+  return lines;
+}
+
 function renderEntries(entries, repository, heading) {
   const lines = [];
   for (const [level, label] of GROUPS) {
     const matching = entries.filter((entry) => entry.level === level);
     if (matching.length === 0) continue;
     lines.push(`${heading} ${label}`, '');
-    for (const entry of matching) {
-      const bullet = `- ${entry.title} (${entry.ref})${commitLink(entry, repository)}`;
-      const parsed = RENDERED_ENTRY.exec(bullet);
-      if (parsed?.[1] !== entry.ref) {
-        throw new Error(`the changelog line for ${entry.ref} does not read back as ${entry.ref}; refusing to write an entry the ledger cannot parse: ${bullet}`);
-      }
-      lines.push(bullet);
-      const body = (entry.body ?? '').trim();
-      // Two spaces on every body line keeps it out of column zero, where the ledger reads.
-      if (body) {
-        for (const line of body.split('\n')) lines.push(line.trim() === '' ? '' : `  ${line.trimEnd()}`);
-      }
-    }
+    for (const entry of matching) lines.push(...renderEntry(entry, repository));
     lines.push('');
   }
+  return lines;
+}
+
+function renderRepositoryEntries(entries, repository) {
+  if (entries.length === 0) return [];
+  const lines = ['### Repository', ''];
+  for (const entry of entries) lines.push(...renderEntry(entry, repository));
+  lines.push('');
   return lines;
 }
 
@@ -83,6 +95,7 @@ export function renderRepoSection(plan) {
   if (plan.mode === 'hotfix') {
     lines.push(`Hotfix release cut from \`${plan.publishBranch}\`.`, '');
   }
+  lines.push(...renderRepositoryEntries(plan.repositoryEntries ?? [], plan.repository));
   for (const plugin of plan.plugins) {
     lines.push(`### ${plugin.name} ${plugin.from} → ${plugin.to}`, '');
     lines.push(...renderEntries(plugin.entries, plan.repository, '####'));

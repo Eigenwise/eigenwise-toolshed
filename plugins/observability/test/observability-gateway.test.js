@@ -8,16 +8,19 @@ const test = require('node:test');
 
 const { createObserver } = require('../bin/observer.js');
 const { buildTokenUsageReport } = require('../lib/observability/report.js');
+const { otlpToObservations } = require('../lib/observability/otlp.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
+const { gatewayProjectCostTargets } = require('../observability/sinks/grafana/model-prices.js');
 const { startFakeOtlpReceiver, testSink } = require('./observability-test-support.js');
 const {
   buildOtlpLogPayload,
   createUsageCapture,
+  SessionProjectResolver,
 } = require('../../model-gateway/lib/usage-observability.js');
 
 const PROJECT_ID = 'a'.repeat(64);
 
-function gatewayPayload() {
+function gatewayPayload({ sessionId = 'session-gateway', projectId = null, resolveProjectId = () => projectId } = {}) {
   const request = {
     model: 'claude-fable-5-1[1m]',
     system: [{ type: 'text', text: 'private system prompt' }],
@@ -35,7 +38,7 @@ function gatewayPayload() {
     payload: request,
     requestBodyBytes: Buffer.byteLength(JSON.stringify(request)),
     requestHeaders: {
-      'x-claude-code-session-id': 'session-gateway',
+      'x-claude-code-session-id': sessionId,
       'x-claude-code-agent-id': 'agent-gateway',
       'x-claude-code-parent-agent-id': 'parent-gateway',
       'x-claude-code-request-id': 'client-gateway',
@@ -50,6 +53,7 @@ function gatewayPayload() {
     },
     sequence: 7,
     now: () => new Date('2026-07-19T20:00:00.000Z'),
+    resolveProjectId,
     emit(value) { record = value; },
   });
   capture.setResponse(200, {
@@ -74,6 +78,230 @@ function gatewayPayload() {
   capture.finish();
   return buildOtlpLogPayload(record);
 }
+
+test('a gateway usage event is denied unless its session correlates to a consented repository', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-consent-'));
+  const store = openObservabilityStore(path.join(directory, 'observability.db'), { consent: (projectId) => projectId === PROJECT_ID });
+  t.after(() => {
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const hook = {
+    source: 'hook', source_event_id: 'hook-consent', source_schema: 'hook-v1', observed_at: '2026-07-19T20:00:00.000Z',
+    event_name: 'hook.session_start', project_id: PROJECT_ID, session_id: 'session-gateway', attributes: { project_name: 'opted' },
+  };
+  assert.equal(store.ingest(hook).accepted, true);
+  const [gateway] = otlpToObservations('logs', gatewayPayload());
+  const accepted = store.ingest(gateway);
+  assert.equal(accepted.accepted, true);
+  assert.equal(store.getObservation(accepted.event_id).project_id, PROJECT_ID);
+  assert.equal(store.pendingOutbox().length, 2);
+
+  const [namedGateway] = otlpToObservations('logs', gatewayPayload({ projectId: 'unopted-repo' }));
+  assert.equal(namedGateway.project_id, undefined);
+  assert.equal(namedGateway.attributes.project_name, 'unopted-repo');
+  const rawGateway = { ...namedGateway, source_event_id: 'gateway-noncanonical-project-id', project_id: 'unopted-repo' };
+  assert.deepEqual(store.ingest(rawGateway), { accepted: false, committed: true, duplicate: false, event_id: null, consent_denied: true });
+  assert.equal(store.pendingOutbox().length, 2);
+
+  const denied = store.ingest({ ...gateway, source_event_id: 'gateway-uncorrelated', session_id: 'session-uncorrelated', project_id: null });
+  assert.deepEqual(denied, { accepted: false, committed: true, duplicate: false, event_id: null, consent_denied: true });
+  assert.equal(store.pendingOutbox().length, 2);
+  assert.equal(store.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE event_name = 'schema_drop'").get().count, 0);
+});
+
+test('a denied session handoff cannot relabel raw gateway OTLP project identity', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-stale-consent-'));
+  const store = openObservabilityStore(path.join(directory, 'observability.db'), { consent: (projectId) => projectId === PROJECT_ID });
+  t.after(() => {
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const sessionId = 'shared-session';
+  assert.equal(store.ingest({
+    source: 'hook', source_event_id: 'hook-opted', source_schema: 'hook-v1', observed_at: '2026-07-19T20:00:00.000Z',
+    event_name: 'hook.session_start', project_id: PROJECT_ID, session_id: sessionId, attributes: { project_name: 'opted' },
+  }).accepted, true);
+  assert.deepEqual(store.ingest({
+    source: 'hook', source_event_id: 'hook-unopted', source_schema: 'hook-v1', observed_at: '2026-07-19T20:01:00.000Z',
+    event_name: 'hook.post_tool_use', project_id: 'b'.repeat(64), session_id: sessionId, attributes: { project_name: 'unopted' },
+  }), { accepted: false, committed: true, duplicate: false, event_id: null, consent_denied: true });
+
+  const [unattributedGateway] = otlpToObservations('logs', gatewayPayload({ sessionId }));
+  assert.deepEqual(store.ingest(unattributedGateway), { accepted: false, committed: true, duplicate: false, event_id: null, consent_denied: true });
+
+  const [gateway] = otlpToObservations('logs', gatewayPayload({ sessionId, projectId: 'unopted-repo' }));
+  assert.equal(gateway.project_id, undefined);
+  assert.equal(gateway.attributes.project_name, 'unopted-repo');
+  assert.deepEqual(store.ingest(gateway), { accepted: false, committed: true, duplicate: false, event_id: null, consent_denied: true });
+  assert.equal(store.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE source = 'codex_gateway'").get().count, 0);
+  assert.equal(store.database.prepare("SELECT COUNT(*) AS count FROM otlp_outbox JOIN observation USING (event_id) WHERE source = 'codex_gateway'").get().count, 0);
+});
+
+test('a denied session stays denied after the store is reopened', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-denial-restart-'));
+  const databaseFile = path.join(directory, 'observability.db');
+  const sessionId = 'shared-session';
+  const consent = (projectId) => projectId === PROJECT_ID;
+  const open = () => openObservabilityStore(databaseFile, { consent });
+  let store = open();
+  t.after(() => {
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  assert.equal(store.ingest({
+    source: 'hook', source_event_id: 'hook-opted', source_schema: 'hook-v1', observed_at: '2026-07-19T20:00:00.000Z',
+    event_name: 'hook.session_start', project_id: PROJECT_ID, session_id: sessionId, attributes: { project_name: 'opted' },
+  }).accepted, true);
+  store.close();
+
+  store = open();
+  assert.equal(store.ingest({
+    source: 'hook', source_event_id: 'hook-unopted', source_schema: 'hook-v1', observed_at: '2026-07-19T20:01:00.000Z',
+    event_name: 'hook.post_tool_use', project_id: 'b'.repeat(64), session_id: sessionId, attributes: { project_name: 'unopted' },
+  }).consent_denied, true);
+  store.close();
+
+  store = open();
+  const observations = () => store.database.prepare('SELECT COUNT(*) AS count FROM observation').get().count;
+  const before = observations();
+  const outboxBefore = store.pendingOutbox().length;
+  const [gateway] = otlpToObservations('logs', gatewayPayload({ sessionId }));
+  assert.ok(!gateway.project_id, 'the gateway record carries no raw project id');
+  assert.equal(store.ingest(gateway).accepted, false);
+  assert.equal(observations(), before);
+  assert.equal(store.pendingOutbox().length, outboxBefore);
+
+  assert.equal(store.ingest({
+    source: 'hook', source_event_id: 'hook-reopted', source_schema: 'hook-v1', observed_at: '2026-07-19T20:03:00.000Z',
+    event_name: 'hook.session_start', project_id: PROJECT_ID, session_id: sessionId, attributes: { project_name: 'opted' },
+  }).accepted, true);
+  store.close();
+
+  store = open();
+  const [afterReopt] = otlpToObservations('logs', gatewayPayload({ sessionId }));
+  const accepted = store.ingest({ ...afterReopt, source_event_id: 'gateway-after-reopt' });
+  assert.equal(accepted.accepted, true);
+  assert.equal(store.getObservation(accepted.event_id).project_id, PROJECT_ID);
+});
+
+test('a noncanonical gateway project id is rejected instead of treated as a name', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-project-name-'));
+  const store = openObservabilityStore(path.join(directory, 'observability.db'), { consent: (projectId) => projectId === PROJECT_ID });
+  t.after(() => {
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const sessionId = 'session-named-project';
+  assert.equal(store.ingest({
+    source: 'hook', source_event_id: 'hook-named', source_schema: 'hook-v1', observed_at: '2026-07-19T20:00:00.000Z',
+    event_name: 'hook.session_start', project_id: PROJECT_ID, session_id: sessionId, attributes: { project_name: 'eigenwise-toolshed' },
+  }).accepted, true);
+
+  const [gateway] = otlpToObservations('logs', gatewayPayload({ sessionId, projectId: 'eigenwise-toolshed' }));
+  assert.equal(gateway.project_id, undefined);
+  assert.equal(gateway.attributes.project_name, 'eigenwise-toolshed');
+  assert.equal(store.ingest({ ...gateway, project_id: 'some-other-repo' }).consent_denied, true);
+});
+
+test('an unseen gateway session is accepted without an observer project id', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-unseen-'));
+  const store = openObservabilityStore(path.join(directory, 'observability.db'));
+  const receiver = await startFakeOtlpReceiver();
+  const observer = createObserver({
+    port: 0,
+    store,
+    hookSpoolFile: path.join(directory, 'hook-spool.jsonl'),
+    sink: testSink(receiver.endpoint),
+  });
+  const address = await observer.start();
+  t.after(async () => {
+    await observer.close();
+    await receiver.close();
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  const response = await fetch(`http://127.0.0.1:${address.port}/v1/logs`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(gatewayPayload({ sessionId: 'session-unseen', projectId: 'unseen-project' })),
+  });
+  assert.equal(response.status, 200);
+  const gateway = store.database.prepare("SELECT project_id, attributes_json FROM observation WHERE event_name = 'gateway.token.usage'").get();
+  assert.ok(gateway);
+  assert.equal(gateway.project_id, null);
+  assert.equal(JSON.parse(gateway.attributes_json).project_name, 'unseen-project');
+  assert.equal(store.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE event_name = 'schema_drop'").get().count, 0);
+});
+
+test('an old gateway project.id basename maps to its consented session without observer projectId', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-old-project-id-'));
+  const store = openObservabilityStore(path.join(directory, 'observability.db'), { consent: (projectId) => projectId === PROJECT_ID });
+  const observer = createObserver({
+    port: 0,
+    store,
+    hookSpoolFile: path.join(directory, 'hook-spool.jsonl'),
+  });
+  const address = await observer.start();
+  t.after(async () => {
+    await observer.close();
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  const sessionId = 'session-old-project-id';
+  assert.equal(store.ingest({
+    source: 'hook', source_event_id: 'hook-old-project-id', source_schema: 'hook-v1', observed_at: '2026-07-19T20:00:00.000Z',
+    event_name: 'hook.session_start', project_id: PROJECT_ID, session_id: sessionId, attributes: { project_name: 'eigenwise-toolshed' },
+  }).accepted, true);
+  const payload = gatewayPayload({ sessionId });
+  payload.resourceLogs[0].resource.attributes.push({ key: 'project.id', value: { stringValue: 'eigenwise-toolshed' } });
+
+  const response = await fetch(`http://127.0.0.1:${address.port}/v1/logs`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  assert.equal(response.status, 200);
+  const gateway = store.database.prepare("SELECT project_id, attributes_json FROM observation WHERE event_name = 'gateway.token.usage'").get();
+  assert.equal(gateway.project_id, PROJECT_ID);
+  assert.equal(JSON.parse(gateway.attributes_json).project_name, 'eigenwise-toolshed');
+  assert.equal(store.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE event_name = 'schema_drop'").get().count, 0);
+});
+
+test('gateway transcript subdirectories use their repository root project name', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-project-root-'));
+  const projectsDirectory = path.join(directory, 'projects');
+  const repositoryRoot = path.join(directory, 'repo');
+  const subdirectory = path.join(repositoryRoot, 'packages', 'api');
+  const sessionId = 'session-subdirectory';
+  fs.mkdirSync(path.join(subdirectory), { recursive: true });
+  fs.mkdirSync(path.join(repositoryRoot, '.git'));
+  fs.mkdirSync(path.join(projectsDirectory, 'C--work-repo'), { recursive: true });
+  fs.writeFileSync(path.join(projectsDirectory, 'C--work-repo', `${sessionId}.jsonl`), JSON.stringify({ cwd: subdirectory }) + '\n');
+  const store = openObservabilityStore(path.join(directory, 'observability.db'), { consent: (projectId) => projectId === PROJECT_ID });
+  t.after(() => {
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  assert.equal(store.ingest({
+    source: 'hook', source_event_id: 'hook-subdirectory', source_schema: 'hook-v1', observed_at: '2026-07-19T20:00:00.000Z',
+    event_name: 'hook.session_start', project_id: PROJECT_ID, session_id: sessionId, attributes: { project_name: 'repo' },
+  }).accepted, true);
+  const projectResolver = new SessionProjectResolver({ projectsDirectory });
+  const [gateway] = otlpToObservations('logs', gatewayPayload({
+    sessionId,
+    resolveProjectId: (resolvedSessionId) => projectResolver.resolve(resolvedSessionId),
+  }));
+  assert.equal(gateway.attributes.project_name, 'repo');
+  const accepted = store.ingest(gateway);
+  assert.equal(accepted.accepted, true);
+  assert.equal(store.getObservation(accepted.event_id).attributes.project_name, 'repo');
+  assert.match(gatewayProjectCostTargets([{ project_id: PROJECT_ID, project_name: 'repo' }])[0].expr, /workbench_attribute_project_name = "repo"/);
+});
 
 test('gateway OTLP becomes authoritative first-class usage across observer views and reports', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-observer-'));
@@ -426,6 +654,39 @@ test('gateway mcp-footprint records keep their server label and drop nothing', a
   assert.equal(byServer.plugin_sidequest_board, 1800);
   assert.equal(byServer.plugin_playwright_playwright, 1650);
   assert.equal(store.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE event_name = 'schema_drop'").get().count, 0);
+});
+
+test('gateway project names survive unnamed ticket rows and use the gateway value when present', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-gateway-project-name-'));
+  const store = openObservabilityStore(path.join(directory, 'observability.db'));
+  t.after(() => {
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const sessionId = 'session-with-project';
+  assert.equal(store.ingest({
+    source: 'hook', source_event_id: 'hook-project-name', source_schema: 'hook-v1', observed_at: '2026-07-20T08:00:00.000Z',
+    event_name: 'hook.session_start', project_id: PROJECT_ID, session_id: sessionId, attributes: { project_name: 'hook-project' },
+  }).accepted, true);
+  assert.equal(store.ingest({
+    source: 'sidequest', source_event_id: 'ticket-without-project-name', source_schema: 'sidequest-v1', observed_at: '2026-07-20T08:00:01.000Z',
+    event_name: 'sidequest.ticket', project_id: PROJECT_ID, session_id: sessionId, attributes: {},
+  }).accepted, true);
+  const fallback = store.ingest({
+    source: 'codex_gateway', source_event_id: 'gateway-project-fallback', source_schema: 'gateway-usage-v1', observed_at: '2026-07-20T08:00:02.000Z',
+    event_name: 'gateway.token.usage', session_id: sessionId, request_id: 'gateway-project-fallback',
+    attributes: { model: 'claude-opus-4-8', backend: 'anthropic', agent_role: 'orchestrator' },
+  });
+  assert.equal(store.getObservation(fallback.event_id).attributes.project_name, 'hook-project');
+
+  const [namedGateway] = otlpToObservations('logs', gatewayPayload({ sessionId, projectId: 'gateway-project' }));
+  const named = store.ingest({ ...namedGateway, source_event_id: 'gateway-project-own-name' });
+  assert.equal(named.accepted, true);
+  assert.equal(store.getObservation(named.event_id).attributes.project_name, 'gateway-project');
+
+  const [hooklessGateway] = otlpToObservations('logs', gatewayPayload({ sessionId: 'session-without-project', projectId: 'gateway-only-project' }));
+  const hookless = store.ingest(hooklessGateway);
+  assert.equal(store.getObservation(hookless.event_id).attributes.project_name, 'gateway-only-project');
 });
 
 test('gateway records inherit projects from post-tool hooks after an observer restart', (t) => {

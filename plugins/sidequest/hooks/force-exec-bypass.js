@@ -612,6 +612,7 @@ function preparedDispatchValidation(input) {
       status: "valid",
       spawn: {
         briefingCommand,
+        continuationWorktree: String(ticket.dispatch.continuation?.sourceWorktree || "").trim() || null,
         description: typeof description === "string" && description ? description : null,
         executor: typeof ticket.dispatchExecutor === "string" ? ticket.dispatchExecutor : "",
         name: ticket.dispatch.launchName || dispatchLaunchName(ticket.ref || ref, ticket.title, resolvedExec, route?.effort, ticket.dispatch.launchSeq),
@@ -1045,6 +1046,13 @@ function main() {
     writeDeny(
       "PreToolUse",
       `sidequest: CLAUDE_CODE_SUBAGENT_MODEL="${subagentOverride}" is set — it overrides every sidequest executor's routed model (a Codex route would silently run on a Claude model; builtins collapse to one route), defeating routing. Unset it before spawning sidequest executors.`
+    );
+    return;
+  }
+  if (preparedSpawn?.continuationWorktree && Object.hasOwn(toolInput, "isolation") && !isSubagentCaller(input)) {
+    writeDeny(
+      "PreToolUse",
+      `sidequest: ${preparedSpawn.ref} continues the retained checkout ${preparedSpawn.continuationWorktree}, so its prepared spawn carries no isolation field. Spawn it unchanged: an added isolation asks the harness to create a checkout the board cannot bind, and the Agent call fails before the executor starts.`
     );
     return;
   }

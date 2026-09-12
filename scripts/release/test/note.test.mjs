@@ -65,6 +65,20 @@ test('a per-plugin level beats the fragment default', (t) => {
   ]);
 });
 
+test('repo scope writes a fragment without plugin fields', (t) => {
+  const { manifest } = setup(t);
+  const { text, fragment } = buildFragment({
+    manifest,
+    input: { ref: 'SQ-1', title: 'Release script fix', scope: 'repo', changed: ['scripts/release/cut.mjs'] },
+  });
+
+  assert.equal(fragment.scope, 'repo');
+  assert.deepEqual(fragment.plugins, []);
+  assert.match(text, /^scope: repo$/m);
+  assert.doesNotMatch(text, /^plugins:/m);
+  assert.doesNotMatch(text, /^bump:/m);
+});
+
 test('a fragment with nothing to release is refused, not invented', (t) => {
   const { manifest } = setup(t);
   const cases = [
@@ -118,6 +132,16 @@ test('a dry run prints the fragment and writes nothing', async (t) => {
 
   assert.equal(existsSync(path.join(context.root, '.release/unreleased/SQ-9.md')), false);
   assert.match(printed.join('\n'), /^ref: SQ-9$/m);
+});
+
+test('the CLI accepts --scope repo', async (t) => {
+  const context = setup(t);
+  const printed = [];
+  t.mock.method(console, 'log', (line) => printed.push(line));
+
+  await main(['SQ-9', '--title', 'Release script fix', '--scope', 'repo', '--dry-run', '--repo', context.root]);
+
+  assert.match(printed.join('\n'), /^scope: repo$/m);
 });
 
 test('a held fragment records that it is held', (t) => {

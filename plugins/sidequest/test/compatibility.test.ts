@@ -12,6 +12,7 @@ const ROOT = path.resolve(__dirname, '..');
 const CLI = path.join(ROOT, 'bin', 'sidequest.js');
 const FIXTURES = path.join(__dirname, 'fixtures');
 const mcp = require('../lib/mcp.js') as { toolDescriptors(): unknown[]; MCP_TOOLS_LIST_MAX_BYTES: number; MCP_TOOLS_LIST_HEADROOM_BYTES: number };
+const mcpShared = require('../lib/mcp-shared.js') as { mutationAck(project: string, result: Record<string, unknown>): Record<string, unknown> };
 const MCP_DESCRIPTOR_GOLDEN = path.join(FIXTURES, 'mcp-tool-descriptors.json');
 
 type RunResult = { status: number | null; stdout: string; stderr: string };
@@ -133,6 +134,7 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.match(byName.get('dispatch')?.inputSchema.properties?.reducedAgentSchema?.description ?? '', /Only when caller schema lacks name\/mode/);
   assert.match(byName.get('dispatch')?.inputSchema.properties?.reducedAgentSchema?.description ?? '', /hook needs agent_id/);
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description, 'Proof.');
+  assert.equal(byName.get('dispatch')?.inputSchema.properties?.retireOnly?.type, 'boolean');
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.worktree?.description, 'Checkout.');
   const addVerify = byName.get('add')?.inputSchema.properties?.verify?.description ?? '';
   assert.ok(addVerify.includes('`attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`'), addVerify);
@@ -161,6 +163,16 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(`${JSON.stringify(descriptors, null, 2)}\n`, fs.readFileSync(MCP_DESCRIPTOR_GOLDEN, 'utf8'));
   assert.ok(payloadBytes <= mcp.MCP_TOOLS_LIST_MAX_BYTES, `tools/list payload is ${payloadBytes} bytes, over the ${mcp.MCP_TOOLS_LIST_MAX_BYTES}-byte budget`);
   assert.ok(headroom >= mcp.MCP_TOOLS_LIST_HEADROOM_BYTES, `tools/list headroom is ${headroom} bytes, below ${mcp.MCP_TOOLS_LIST_HEADROOM_BYTES}`);
+});
+
+test('refusal payloads name the serving build within the result budget', () => {
+  const refusal = mcpShared.mutationAck('compatibility', { ok: false, reason: 'test_refusal' });
+  const servingVersion = JSON.parse(fs.readFileSync(path.join(ROOT, '.claude-plugin', 'plugin.json'), 'utf8')).version;
+  assert.equal(refusal.servingVersion, servingVersion);
+  const withoutVersion = { ...refusal };
+  delete withoutVersion.servingVersion;
+  const addedBytes = Buffer.byteLength(JSON.stringify(refusal), 'utf8') - Buffer.byteLength(JSON.stringify(withoutVersion), 'utf8');
+  assert.ok(addedBytes <= 40, `serving version adds ${addedBytes} bytes to a refusal payload`);
 });
 
 test('CLI representative bytes, statuses, and removed commands match goldens', () => {

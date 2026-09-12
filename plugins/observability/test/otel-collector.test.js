@@ -54,8 +54,10 @@ test('isolates every sink exporter in its own pipelines', () => {
   assert.equal(config.exporters[SINK_EXPORTER].headers.Authorization, 'Bearer private');
   for (const signal of ['logs', 'traces', 'metrics']) {
     assert.deepEqual(config.service.pipelines[`${signal}/observer`].exporters, ['otlphttp/observer']);
-    assert.deepEqual(config.service.pipelines[`${signal}/sink`].exporters, [SINK_EXPORTER]);
     assert.ok(config.service.pipelines[`${signal}/observer`].processors.includes('batch/observer'));
+  }
+  for (const signal of ['traces', 'metrics']) {
+    assert.deepEqual(config.service.pipelines[`${signal}/sink`].exporters, [SINK_EXPORTER]);
     assert.ok(config.service.pipelines[`${signal}/sink`].processors.includes('batch/sink'));
   }
   assert.equal(config.service.pipelines.logs, undefined);
@@ -67,6 +69,19 @@ test('isolates every sink exporter in its own pipelines', () => {
   const errors = validateCollectorConfig(config, { sinkExporter });
   assert.ok(errors.some((error) => error.includes('must not end with a slash')));
   assert.ok(errors.some((error) => error.includes('declared sink endpoint')));
+});
+
+test('a configured sink never receives log records straight from the collector', () => {
+  const sinkExporter = { endpoint: 'https://sink.example.test', allowRemote: true };
+  const config = buildCollectorConfig({ sinkExporter });
+
+  assert.deepEqual(validateCollectorConfig(config, { sinkExporter }), []);
+  assert.ok(!Object.keys(config.service.pipelines).includes('logs/sink'));
+  const sinkPipelines = Object.entries(config.service.pipelines)
+    .filter(([, pipeline]) => pipeline.exporters.includes(SINK_EXPORTER))
+    .map(([name]) => name)
+    .sort();
+  assert.deepEqual(sinkPipelines, ['metrics/sink', 'traces/sink']);
 });
 
 test('normalizes sink endpoints without trailing slashes', () => {

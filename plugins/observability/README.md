@@ -6,7 +6,7 @@ Local, metadata-only usage telemetry for Claude Code. Choose the repositories yo
 
 The intended policy is per-repository opt-in. A separate machine-level setup consent starts the shared local observer and Collector, and can add a dashboard or remote sink. The project command then opts the current repository into that shared service. Telemetry records are designed to contain metadata such as session IDs, prompt IDs, agent IDs, task IDs, tool-use IDs, and SendMessage recipient IDs, with no prompt or response text, code or file contents, tool inputs or results, credentials, or environment values. Sink configuration you provide stays in the private observability config file so the exporter can authenticate.
 
-Known limitation: the current hook and ingest path does not enforce the per-repository opt-in at its collection boundary. Hook events can enter the shared spool and ingestion path before a repository opt-in check. Treat repository opt-in as the intended policy, not as a hard runtime privacy guarantee, until that enforcement is fixed. There is no documentation-only workaround, and this plugin does not claim the limitation is fixed.
+Repository opt-in is enforced on the local capture path and on the single export path. Hook capture is gated before the spool write, ingest is gated before persistence, and the observer's outbox is the only route by which a log record reaches a configured sink. Disabling a repository stops future capture and withholds still-queued rows from export while local history is preserved. Traces and metrics still reach a configured sink through the Collector without this gate.
 
 ## Install
 
@@ -27,7 +27,7 @@ Reload plugins or start a new Claude Code session. Then, from the repository you
 
 Claude first gets consent for the machine-shared observer and Collector, then handles this repository's opt-in and the optional dashboard. A bare setup keeps data in local SQLite with no dashboard. The `--dashboard` choice explicitly requests the Docker-backed loopback dashboard. You choose whether to keep the data local or configure a remote sink. Any external endpoint or sign-in stays your call.
 
-Settings and environment wiring apply only to new Claude Code sessions. Restart every affected session in the listed repository directories before creating activity or running verification. `/reload-plugins` alone is not enough for environment changes.
+Settings and environment wiring apply only to new Claude Code sessions. The project command writes the repository SHA-256 identity as `OTEL_RESOURCE_ATTRIBUTES` `project.id` and its sanitized basename as `project.name`, matching the local opt-in registry. Re-run the command to rewrite this repository's env after an update; it never changes another repository's settings. Restart every affected session in the listed repository directories before creating activity or running verification. `/reload-plugins` alone is not enough for environment changes.
 
 ## Use the dashboard
 

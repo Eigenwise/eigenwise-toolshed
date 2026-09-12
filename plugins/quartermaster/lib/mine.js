@@ -20,7 +20,7 @@ async function mine(options = {}) {
   }
 
   const signals = collector.finish();
-  const decisions = rejectedFingerprints(env);
+  const decisions = rejectedFingerprints(env, window.allProjects ? null : (options.projectPath ?? process.cwd()));
 
   return {
     window: {

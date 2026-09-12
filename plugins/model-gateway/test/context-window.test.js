@@ -1216,7 +1216,9 @@ test('Claude pin overrides persist outside the plugin and are applied by rewirin
 
     const pins = spawnGatewayProcessSync(process.execPath, [CLI, 'pin'], { env, encoding: 'utf8' });
     assert.equal(pins.status, 0, pins.stderr);
-    assert.match(pins.stdout, /opus: claude-opus-4-8\[1m\] \(overridden; shipped default: claude-opus-9\[1m\]\)/);
+    // claude-opus-9[1m] is what the fake CLI reports, so it is the detected value, not the shipped
+    // constant. The old wording called it the shipped default and hid the distinction this line checks.
+    assert.match(pins.stdout, /opus: claude-opus-4-8\[1m\] \(overridden; without it claude-opus-9\[1m\]\)/);
 
     const cleared = spawnGatewayProcessSync(process.execPath, [CLI, 'pin', '--opus', 'default'], { env, encoding: 'utf8' });
     assert.equal(cleared.status, 0, cleared.stderr);
@@ -1326,7 +1328,10 @@ test('doctor describes project-local wiring as the default', () => {
     assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 920000 \| 1000000 \| 967000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
     assert.match(result.stdout, /default wiring target: this project's \.claude\/settings\.local\.json/);
-    assert.match(result.stdout, /Claude opus pin: claude-opus-5\[1m\] \(default\)/);
+    // Fresh HOME means an empty detected-pin cache, so this value is the shipped constant rather than
+    // anything measured against the user's CLI. Doctor used to print it as a bare "(default)", which is
+    // what made a stale guess look identical to a probed pin.
+    assert.match(result.stdout, /Claude opus pin: claude-opus-5\[1m\] \(shipped fallback, not detected for this CLI\)/);
     assert.match(result.stdout, /project settings\.local\.json: not wired .*\[default write target\]/);
     assert.doesNotMatch(result.stdout, /wiring mode: local/);
   } finally {
@@ -1408,10 +1413,20 @@ test('doctor policy table includes gateway and native model rows', () => {
   const rows = modelWindowPolicyRows();
 
   assert.equal(rows.some((row) => row.backendId === 'grok-4.5' && row.pickerId === 'claude-grok-4.5[1m]'), true);
-  assert.equal(rows.some((row) => row.backendId === 'claude-opus-5' && row.sentry === 'none'), true);
-  assert.equal(rows.some((row) => row.backendId === 'claude-sonnet-5' && row.sentry === 'none'), true);
-  assert.equal(rows.some((row) => row.backendId === 'claude-fable-5-1' && row.sentry === 'none'), true);
   assert.equal(rows.some((row) => row.backendId === 'claude-haiku-4-5' && row.sentry === 'none'), true);
+
+  // Hardcoding the alias ids here read the developer's own ~/.claude detected-pin cache: a machine that
+  // had probed its CLI resolved fable to claude-fable-5 while the shipped constant says claude-fable-5-1,
+  // so this passed in CI and failed locally. Assert the row exists for whatever each alias resolves to.
+  const { effectivePins } = require(path.join(path.dirname(COMMANDS), 'pins.js'));
+  for (const [alias, pin] of Object.entries(effectivePins())) {
+    const backendId = pin.value.replace(/\[1m\]$/, '');
+    assert.equal(
+      rows.some((row) => row.backendId === backendId && row.sentry === 'none'),
+      true,
+      `no sentry-free policy row for the ${alias} pin ${pin.value}`,
+    );
+  }
 });
 
 test('doctor detects live shim ids that differ from the policy aliases', () => {

@@ -2,12 +2,13 @@
 
 const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require('../kernel/verification.js');
 const { runProcessVerification } = require('../ports/process.js');
+const { worktreeSetupDeadlineMs } = require('../hook-timeouts.js');
 const { decideSubmissionAdmission } = require('../kernel/submission');
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require('../source-revision-capability.js');
 const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require('../kernel/review-binding');
 const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require('../kernel/wave');
 const { isInScope, scopedPaths } = require('../scope-match');
-const { manualCandidateDeliveryGuidance } = require('../refusal-guidance.js');
+const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance } = require('../refusal-guidance.js');
 import type { VerificationResult } from '../kernel/verification.js';
 
 function createSubmissions(dependencies: any) {
@@ -222,10 +223,17 @@ function terminalReviewFailure(ticket: any, relation: any) {
     return `${reviewRelationRef(relation)} has no terminal done dispatch attempt for its bound review of ${ticket.ref}`;
   }
   if (provenance.reason === 'agent_identity_missing') {
-    return `${reviewRelationRef(relation)} and ${ticket.ref} do not both carry a hook-bound runtime agent identity`;
+    return [
+      !provenance.source && `${ticket.ref} recorded no runtime binding on the terminal attempt that submitted the candidate:`
+        + ' no hook-bound agent id, and no recorded bind time carrying the token prefix and agent name to stand in for one.'
+        + ' An attempt older than bind-source recording still resolves through that bind time, so this one bound nothing at all and no retry changes it:'
+        + ' re-dispatch the ticket so the replacement attempt binds, then review the resubmitted candidate',
+      !provenance.reviewer && `${reviewRelationRef(relation)} recorded no hook-bound agent id on its terminal review attempt:`
+        + ' a dispatch token and agent name authenticate a dispatch, not the runtime that ran it, so they cannot establish a reviewer independent of the submitter',
+    ].filter(Boolean).join('; ');
   }
   if (provenance.reason === 'shared_agent_identity') {
-    return `${reviewRelationRef(relation)} was completed by the same runtime identity that submitted ${ticket.ref}`;
+    return `${reviewRelationRef(relation)} was completed by the same runtime identity that submitted ${ticket.ref} (${provenance.source?.identity})`;
   }
   return null;
 }
@@ -667,6 +675,9 @@ function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
       command,
       status,
       candidate: { source: candidateSource, value: candidateValue },
+      // SQ-2789: only a proven-clean capture carries the flag. A capture whose cwd was dirty, or
+      // one recorded before the wrapper proved it, stays unmarked and can never be reused.
+      ...(capture?.cleanWorktree === true ? { cleanWorktree: true } : {}),
       dispatchNonce: String(ticket.dispatchNonce || ''),
       completedAt: new Date(completedAt).toISOString(),
       ...(capture?.worktree ? { worktree: String(capture.worktree) } : {}),
@@ -832,7 +843,12 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
     }
     const reviewFailure = terminalReviewFailure(ticket, candidateReview);
     if (reviewFailure) {
-      return { ok: false, reason: 'candidate_review_required', ticket, message: `${ticket.ref} integration refused; ${reviewFailure}.` };
+      return {
+        ok: false,
+        reason: 'candidate_review_required',
+        ticket,
+        message: `${ticket.ref} integration refused; ${reviewFailure}. ${candidateReviewRequiredGuidance()}`,
+      };
     }
   }
   const requiredVerification = pinnedVerificationRequirement(ticket);
@@ -895,7 +911,7 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
         outside,
         ticket,
         scopeValidation,
-        message: `${ticket.ref} integration refused; recorded expected upstream ${scopeValidation.upstreamCommit} is no longer reachable from target branch ${targetBranch}. Rework and submit a fresh candidate against current main, or when the work is verified, have the orchestrator record delivery through groomClose with deliveryCommit.`,
+        message: `${ticket.ref} integration refused; recorded expected upstream ${scopeValidation.upstreamCommit} is no longer reachable from target branch ${targetBranch}. Recovery: manually merge the verified candidate onto the current target, re-gate it, then record delivery with groomClose using deliveryCommit.`,
       };
     }
     const scopeFailure = scopeValidation.message || (scopeValidation.reason === 'missing_scope_snapshot'
@@ -2826,15 +2842,125 @@ function waveVerificationRequirement(tickets: any[]) {
   return { ok: true, requirement: first };
 }
 
+function pathIsInside(root: string, candidate: string) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function provisionWaveGateWorktree(slug: any, candidateWorktree: string) {
+  if (!candidateWorktree) {
+    return { ok: true, evidence: 'The gate used the project root, so isolated-worktree provisioning was skipped.' };
+  }
+  if (!fs.existsSync(candidateWorktree) || !fs.statSync(candidateWorktree).isDirectory()) {
+    return { ok: false, message: `The candidate worktree ${JSON.stringify(candidateWorktree)} is unavailable for gate provisioning.` };
+  }
+  const repository = String(readMeta(slug)?.path || '').trim();
+  if (!repository) return { ok: false, message: 'The board repository is unavailable for gate provisioning.' };
+  const config = boardConfig(slug) || {};
+  const dependencies = Array.isArray(config.worktreeDependencyPaths) ? config.worktreeDependencyPaths : [];
+  let created = 0;
+  let existing = 0;
+  try {
+    for (const dependency of dependencies) {
+      const dependencyPath = String(dependency?.path || '').trim();
+      const source = path.resolve(repository, dependencyPath);
+      const target = path.resolve(candidateWorktree, dependencyPath);
+      if (!dependencyPath || !pathIsInside(repository, source) || !pathIsInside(candidateWorktree, target)) {
+        return { ok: false, message: `Configured worktree dependency path ${JSON.stringify(dependencyPath)} is outside the gate worktree.` };
+      }
+      if (fs.existsSync(target)) {
+        existing += 1;
+        continue;
+      }
+      if (!fs.existsSync(source) || !fs.statSync(source).isDirectory()) {
+        return { ok: false, message: `Configured worktree dependency path ${JSON.stringify(dependencyPath)} is unavailable in the board repository.` };
+      }
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      if (dependency.mode === 'copy') fs.cpSync(source, target, { recursive: true });
+      else if (dependency.mode === 'link') fs.symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
+      else return { ok: false, message: `Configured worktree dependency path ${JSON.stringify(dependencyPath)} has an unsupported mode.` };
+      created += 1;
+    }
+  } catch (error: any) {
+    return { ok: false, message: `Could not provision gate worktree dependencies: ${error.message || String(error)}` };
+  }
+  const dependenciesEvidence = dependencies.length
+    ? `Worktree dependency provisioning created ${created} path${created === 1 ? '' : 's'} and retained ${existing} existing path${existing === 1 ? '' : 's'}.`
+    : 'Worktree dependency provisioning was skipped because no paths are configured.';
+  const setup = String(config.worktreeSetup || '').trim();
+  if (!setup) return { ok: true, evidence: `${dependenciesEvidence} Worktree setup was skipped because none is configured.` };
+  const setupResult = spawnSync(setup, {
+    cwd: candidateWorktree,
+    shell: true,
+    windowsHide: true,
+    timeout: worktreeSetupDeadlineMs(),
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  if (setupResult.error || setupResult.status !== 0) {
+    const error = setupResult.error ? String(setupResult.error.message || setupResult.error) : `exited with status ${setupResult.status ?? 'unknown'}`;
+    const stderr = String(setupResult.stderr || '').trim();
+    return { ok: false, message: `${dependenciesEvidence} Configured worktree setup ${JSON.stringify(setup)} ran but ${error}${stderr ? `: ${stderr.slice(-1_000)}` : ''}.` };
+  }
+  return { ok: true, evidence: `${dependenciesEvidence} Configured worktree setup ${JSON.stringify(setup)} ran successfully.` };
+}
+
+// SQ-2767: the submitted candidate already carries an authoritative capture of this exact
+// pinned command against this exact commit, taken by the dispatched verify-capture wrapper and
+// re-checked when submit admitted the candidate. Re-running the command in that same retained
+// worktree observes whatever state the worktree is in now, so it proves less than the capture it
+// duplicates. The merged-tree gate at delivery is the run that observes the tree that ships.
+// SQ-2789: matching the candidate revision alone matched a capture taken over uncommitted edits,
+// which certified content nothing ran. Only a capture the wrapper proved clean stands in for the
+// committed candidate, and an unmarked capture is never assumed clean.
+function reusedSingletonGateVerification(ticket: any, requirement: any) {
+  const candidate = submissionCandidateRevision(ticket?.submission);
+  const source = String(candidate?.source || '').trim();
+  const value = String(candidate?.value || '').trim().toLowerCase();
+  if (!source || !value) return null;
+  const capture = recordedVerificationCaptures(ticket).find((entry: any) => entry?.ticket === ticket.ref
+    && entry?.command === requirement.command
+    && entry?.status === 'passed'
+    && entry?.cleanWorktree === true
+    && String(entry?.candidate?.source || '') === source
+    && String(entry?.candidate?.value || '') === value);
+  if (!capture) return null;
+  return {
+    kind: requirement.kind,
+    status: 'passed',
+    command: requirement.command,
+    evidence: `Reused the authoritative verification capture ${capture.id}, recorded against ${source}:${value} with no uncommitted changes in the verified worktree, so it proves the exact assembled candidate and the gate did not re-run the command. The merged tree is still gated at delivery.`,
+    logPath: capture.logPath || null,
+    exitCode: capture.exitCode ?? null,
+    reusedCapture: { id: capture.id, candidate: { source, value }, completedAt: capture.completedAt },
+  };
+}
+
 function authoritativeWaveVerification(slug: any, tickets: any[], waveId: string, supplied: any, opts?: any) {
   const requirement = waveVerificationRequirement(tickets);
   if (!requirement.ok) return requirement;
   if (opts?.skipVerify === true) return { ok: true, verification: skippedVerification(requirement.requirement, opts.verificationWaiver) };
   if (requirement.requirement.command) {
+    const reused = tickets.length === 1 ? reusedSingletonGateVerification(tickets[0], requirement.requirement) : null;
+    if (reused) {
+      return {
+        ok: true,
+        provisioning: 'The gate reused the candidate\'s authoritative verification capture, so nothing ran and worktree provisioning was skipped.',
+        verification: reused,
+      };
+    }
     const timeoutMilliseconds = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
     const candidateWorktree = tickets.length === 1 ? String(tickets[0]?.submission?.worktree || '').trim() : '';
+    const provisioning = provisionWaveGateWorktree(slug, candidateWorktree);
+    if (!provisioning.ok) {
+      return {
+        ok: false,
+        reason: 'assembled_wave_environment_problem',
+        message: `Wave ${waveId} gate could not prepare its verification environment. ${provisioning.message} No candidate was rejected.`,
+      };
+    }
     return {
       ok: true,
+      provisioning: provisioning.evidence,
       verification: runProcessVerification(requirement.requirement, {
         cwd: candidateWorktree || readMeta(slug)?.path,
         timeoutMilliseconds,
@@ -2911,12 +3037,16 @@ function recordTicketWaveDelivery(slug: any, ticket: any, revision: any, verific
   return { ok: true, delivery: delivery.delivery };
 }
 
+function submissionCandidateRevision(submission: any) {
+  if (submission?.sourceRevision) return submission.sourceRevision;
+  const commit = String(submission?.commit || '').trim().toLowerCase();
+  return commit ? { source: 'git', value: commit, observedAt: String(submission.at || new Date().toISOString()) } : null;
+}
+
 function submissionWaveCandidate(ticket: any) {
   const submission = ticket?.submission;
   if (!submission) return null;
-  const revision = submission.sourceRevision || (submission.commit
-    ? { source: 'git', value: String(submission.commit).trim().toLowerCase(), observedAt: String(submission.at || new Date().toISOString()) }
-    : null);
+  const revision = submissionCandidateRevision(submission);
   const baseline = submission.baseline || sourceRevisionBaseline(ticket);
   if (!revision || !baseline || !submission.verificationResult) return null;
   return {
@@ -3064,14 +3194,11 @@ function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
   if (gate.state === 'gate_failed') {
     const wave = { id: waveId, baseline: opened.baseline, participants: participantRefs };
     if (gate.verification.status === 'toolchain_missing') {
-      const worktreeSetup = String(boardConfig(slug)?.worktreeSetup || '').trim();
-      const setupEvidence = worktreeSetup
-        ? `Configured worktree setup ${JSON.stringify(worktreeSetup)} should provide that command before the gate runs.`
-        : 'No worktree setup is configured to provide the missing command.';
+      const provisioningEvidence = verification.provisioning || 'The gate did not use an isolated candidate worktree, so worktree provisioning was skipped.';
       return {
         ok: false,
         reason: 'assembled_wave_environment_problem',
-        message: `Wave ${waveId} gate could not run because its verification environment is incomplete. ${gate.verification.evidence} ${setupEvidence} Provision the gate environment and retry; no candidate was rejected.`,
+        message: `Wave ${waveId} gate could not run because its verification environment is incomplete. ${gate.verification.evidence} ${provisioningEvidence} Provision the missing toolchain and retry; no candidate was rejected.`,
         wave,
         assembly: decision.assembly,
         gate,

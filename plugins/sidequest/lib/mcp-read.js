@@ -82,7 +82,7 @@ const tools = [
       type: "object",
       properties: {
         handle: { type: "string", description: "Typed handle from a source read retrieval." },
-        cursor: { type: "string", description: "Opaque cursor from the retrieval or prior page." },
+        cursor: { type: "string" },
         limit: { type: "integer", minimum: 4, maximum: MAX_CONTEXT_PAGE_BYTES, description: "Optional UTF-8 byte limit." },
         expectedRevision: { type: "string", description: "Revision from the retrieval handle." }
       },

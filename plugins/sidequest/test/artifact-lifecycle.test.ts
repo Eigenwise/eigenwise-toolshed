@@ -898,7 +898,17 @@ test('update status done cannot bypass claimed, dispatched, or submitted lifecyc
   store.prepareDispatch(slug, dispatched.ref, { sharedTree: false });
   assert.throws(
     () => store.updateTicket(slug, dispatched.ref, { status: 'done' }),
-    /active dispatch.*done\/completeTicket or commit and submit/
+    /unclaimed pre-runtime dispatch.*cannot bypass that lifecycle/
+  );
+  assert.throws(
+    () => store.updateTicket(slug, dispatched.ref, { status: 'done' }),
+    /groomClose .*--deliveryMethod manual --recoveryEvidence/,
+    'the refusal names the grooming route that actually closes it'
+  );
+  assert.throws(
+    () => store.updateTicket(slug, dispatched.ref, { status: 'done' }),
+    /retireOnly:true/,
+    'the refusal names the retire-without-replacement route'
   );
 
   const submitted = ticket('submitted scoped work', 'Submitted work waits for integration.');

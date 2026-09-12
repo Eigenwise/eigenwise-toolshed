@@ -12,7 +12,9 @@ const {
   filesystemSnapshotRevision,
   registerSourceRevisionCapability,
   sourceRevision,
-  sourceRevisionAdapterFacts: resolveSourceRevisionAdapterFacts
+  sourceRevisionAdapterFacts: resolveSourceRevisionAdapterFacts,
+  isFilesystemSnapshotLimitError,
+  isFilesystemSnapshotChildError
 } = sourceRevisionCapability;
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } = require("./category-defaults.js");
 const commitScope = require("./commit-scope.js");
@@ -23,9 +25,9 @@ const { reviewLockMessage } = require("./kernel/review-binding.js");
 const { migrateIfNeeded } = require("./migrate.js");
 const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, providerReadiness } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
-const { negativeControlRecoveryGuidance, routingDisabledMessage } = require("./refusal-guidance.js");
+const { negativeControlRecoveryGuidance, routingDisabledMessage, filesystemSnapshotLimitGuidance, filesystemSnapshotChildFailureGuidance } = require("./refusal-guidance.js");
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require("./prepared-dispatch.js");
-const { assertSidequestInstall, checkSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require("./dispatch-preflight.js");
+const { assertSidequestInstall, checkSidequestInstall, servingSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require("./dispatch-preflight.js");
 const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic, VERIFICATION_KINDS } = require("./kernel/index.js");
 const { createAssets } = require("./store/assets.js");
 const { createNotifications } = require("./store/notifications.js");
@@ -48,6 +50,18 @@ const { createSweeps } = require("./store/sweeps.js");
 const { createServer } = require("./store/server.js");
 const { createProjects } = require("./store/projects.js");
 const { createWarnings } = require("./store/warnings.js");
+let servingInstallResolved = false;
+let resolvedServingInstall;
+function servingInstall() {
+  if (!servingInstallResolved) {
+    const snapshot = servingSidequestInstall(__filename);
+    if (snapshot) {
+      resolvedServingInstall = snapshot;
+      servingInstallResolved = true;
+    }
+  }
+  return resolvedServingInstall;
+}
 let cacheLayer;
 function sqliteDataVersion(...args) {
   return cacheLayer.sqliteDataVersion(...args);
@@ -234,7 +248,18 @@ function persistFilesystemSnapshot(slug, revision, expected) {
 function filesystemSnapshotBaseline(slug, observedAt) {
   const meta = readMeta(slug);
   const projectPath = path.resolve(String(meta?.path || ""));
-  const revision = filesystemSnapshotRevision(projectPath, observedAt);
+  let revision;
+  try {
+    revision = filesystemSnapshotRevision(projectPath, observedAt);
+  } catch (error) {
+    if (isFilesystemSnapshotLimitError(error)) {
+      throw new Error(`project registration refused: ${filesystemSnapshotLimitGuidance(projectPath, error)}`);
+    }
+    if (isFilesystemSnapshotChildError(error)) {
+      throw new Error(`project registration refused: ${filesystemSnapshotChildFailureGuidance(error)}`);
+    }
+    throw error;
+  }
   if (!revision) {
     throw new Error(`project registration refused: the configured ${FILESYSTEM_SNAPSHOT_ADAPTER} adapter cannot snapshot ${String(meta?.path || slug)}.`);
   }
@@ -244,7 +269,18 @@ function dispatchFilesystemSnapshotPreflight(slug, ticket, observedAt) {
   const project = readMeta(slug);
   if (project?.sourceRevisionAdapter !== FILESYSTEM_SNAPSHOT_ADAPTER) return null;
   const projectPath = path.resolve(String(project.path || ""));
-  const revision = filesystemSnapshotRevision(projectPath, observedAt);
+  let revision;
+  try {
+    revision = filesystemSnapshotRevision(projectPath, observedAt);
+  } catch (error) {
+    if (isFilesystemSnapshotLimitError(error)) {
+      throw new Error(`prepare dispatch: ${ticket.ref} ${filesystemSnapshotLimitGuidance(projectPath, error)}`);
+    }
+    if (isFilesystemSnapshotChildError(error)) {
+      throw new Error(`prepare dispatch: ${ticket.ref} ${filesystemSnapshotChildFailureGuidance(error)}`);
+    }
+    throw error;
+  }
   if (!revision) {
     throw new Error(`prepare dispatch: ${ticket.ref} could not snapshot ${projectPath || slug}. Retry dispatch after the project is readable.`);
   }
@@ -602,6 +638,7 @@ const {
   syncLiveDispatchVerification,
   retirePreparedCompatibilityStaleAttempt,
   preparedCompatibilityHasProvenMismatch,
+  preparedCompatibilityWarning,
   supersedeUnboundAttempt,
   readDispatchBriefing,
   recoverLiveClaimDispatch,
@@ -650,6 +687,7 @@ const {
   assertDispatchTransport,
   assertSidequestInstall,
   checkSidequestInstall,
+  servingInstall,
   prepareAttempt,
   transitionAttempt,
   attemptDiagnostic,
@@ -1870,6 +1908,7 @@ function claimTicket(slug, idOrRef, by, opts) {
     if (opts.direct && t2.dispatchNonce && !terminalDispatch) return { ok: false, reason: "direct_conflict", ticket: t2 };
     if (opts.direct && t2.dispatchNonce && terminalDispatch && !opts.force) return { ok: false, reason: "terminal_claim_takeover_required", ticket: t2 };
     if (!opts.direct && isRoutedTicket(t2) && !t2.dispatchNonce) return { ok: false, reason: "dispatch_required", ticket: t2 };
+    let compatibilityAdvisory = null;
     if (currentDispatch?.preparedCompatibility?.pluginInstall && t2.dispatchNonce) {
       const currentInstall = checkSidequestInstall(readMeta(slug)?.path || "");
       if (preparedCompatibilityHasProvenMismatch(currentDispatch, currentInstall)) {
@@ -1881,6 +1920,7 @@ function claimTicket(slug, idOrRef, by, opts) {
           message: `claim: refused ${t2.ref}; its prepared Sidequest install snapshot is stale, so this dispatch attempt was retired. Stop without claiming; the orchestrator can dispatch a fresh token.`
         };
       }
+      compatibilityAdvisory = preparedCompatibilityWarning(currentDispatch, currentInstall);
     }
     if (t2.status === "done") return { ok: false, reason: "done", ticket: t2 };
     const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -2008,7 +2048,7 @@ function claimTicket(slug, idOrRef, by, opts) {
     putTicket(slug, t2);
     if (opts.sessionId) registerWorker(opts.sessionId, slug, t2.id, by);
     queueEventNotification(slug, t2, t2.lastEventType, t2.lastEventSource);
-    return { ok: true, ticket: t2 };
+    return { ok: true, ticket: t2, ...compatibilityAdvisory ? { advisory: compatibilityAdvisory } : {} };
   });
   if (result.reason !== "busy" || opts.force) return result;
   const t = getTicket(slug, found.id);
@@ -2103,7 +2143,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
       return {
         ok: false,
         reason: "unclaimed_active_dispatch",
-        message: `${t.ref} has an active ${foundState} dispatch but no claim owned by ${by}. Do not release another runtime's attempt. A claimant whose current token and executor were accepted but whose runtime could not bind receives an unbound_dispatch refusal that authorizes the same claimant to release with kind technical_blocker. Otherwise wait for the current attempt's terminal hook, then have the orchestrator dispatch once from todo. recoveryEvidence applies only when a prepared, launched, or bound dispatch never claimed and terminal-agent evidence confirms that runtime ended. After a terminal dispatch, deliver verified landed work through \`sidequest groomClose ${t.ref} --by <integrator> --deliveryCommit <sha>\`.`,
+        message: `${t.ref} has an active ${foundState} dispatch but no claim owned by ${by}. ${unclaimedPreRuntimeDeliveryGuidance(t, dispatch2) || `Do not release another runtime's attempt. A claimant whose current token and executor were accepted but whose runtime could not bind receives an unbound_dispatch refusal that authorizes the same claimant to release with kind technical_blocker. Otherwise wait for the current attempt's terminal hook, then have the orchestrator dispatch once from todo. recoveryEvidence applies only when a prepared, launched, or bound dispatch never claimed and terminal-agent evidence confirms that runtime ended. After a terminal dispatch, deliver verified landed work through \`sidequest groomClose ${t.ref} --by <integrator> --deliveryCommit <sha>\`.`}`,
         ticket: t
       };
     }
@@ -2758,6 +2798,15 @@ function pendingSubmissionDeliveryRefusal(ticket, result) {
     message: `${String(result?.message || `${ticket.ref} submission could not be recorded as delivered.`)} To discard this pending candidate instead, use groomClose with \`abandonSubmission: true\`; the board records it as abandoned.`
   });
 }
+function unclaimedPreRuntimeDispatch(ticket, state) {
+  return Boolean(
+    ticket?.dispatchNonce && state && ["prepared", "launched"].includes(state.outcome) && !state.terminalAt && !state.boundAt && !state.claimedAt && !ticket.claim?.by
+  );
+}
+function unclaimedPreRuntimeDeliveryGuidance(ticket, state) {
+  if (!unclaimedPreRuntimeDispatch(ticket, state)) return "";
+  return ` This attempt is unclaimed and unbound. Once the delivery commit is reachable from the recorded integration branch, close it with \`groomClose ${ticket.ref} --deliveryCommit <sha> --deliveryMethod manual --recoveryEvidence "<why the attempt is dead>"\` (include by and reason). If the commit is not reachable from that branch, grooming still refuses until delivery reaches it. To retire without preparing a replacement first, dispatch with recoveryEvidence and retireOnly:true.`;
+}
 function clearUnclaimedDispatch(slug, idOrRef, opts) {
   const by = String(opts?.by || "").trim();
   const agentId = String(opts?.agentId || "").trim();
@@ -2780,7 +2829,14 @@ function clearUnclaimedDispatch(slug, idOrRef, opts) {
         message: `${ticket?.ref || String(idOrRef)} has a terminal dispatch with observed outcome "${outcome}". recoveryEvidence does not apply to a terminal dispatch.${pendingSubmissionGuidance}`
       };
     }
-    if (ticket.claim?.by) return { ok: false, reason: "claimed", ticket, claim: ticket.claim };
+    if (!unclaimedPreRuntimeDispatch(ticket, state)) {
+      return {
+        ok: false,
+        reason: "active_dispatch",
+        ticket,
+        message: `${ticket.ref} cannot apply recovery evidence because its dispatch is live, bound, claimed, or already terminal. Recovery evidence clears only an unclaimed prepared or launched dispatch before runtime binding.`
+      };
+    }
     if (agentId && String(state.agentId || "") !== agentId) return { ok: false, reason: "dispatch_identity_mismatch", ticket };
     if (agentName && String(state.agentName || "") !== agentName) return { ok: false, reason: "dispatch_identity_mismatch", ticket };
     const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -2853,7 +2909,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
       return {
         ok: false,
         reason: "active_dispatch",
-        message: `${ticket.ref} still has a live claim or an open dispatch, so hand delivery cannot close it. Release it first: \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : "<claim holder>"}\`, then re-run this closure with the same evidence. Releasing does not discard work already committed.`,
+        message: `${ticket.ref} still has a live claim or an open dispatch, so hand delivery cannot close it.${unclaimedPreRuntimeDeliveryGuidance(ticket, state) || ` Release it first: \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : "<claim holder>"}\`, then re-run this closure with the same evidence. Releasing does not discard work already committed.`}`,
         ticket
       };
     }

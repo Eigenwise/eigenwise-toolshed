@@ -88,10 +88,7 @@ alone. Recovery output remains in `~/.claude/model-gateway/logs/guardian.log`; b
 `~/.claude/model-gateway/logs/lifecycle.jsonl` identify supervisor, worker, and proxy PIDs, orderly
 stop/restart requests, observed exits, and recovery outcomes. Use `doctor` to print the evidence path and
 the last observed exit. An OS termination or force-killed supervisor may leave no final record, so treat an
-absent exit record as absence of evidence, not a clean shutdown. Cleanup kills recorded PIDs only when the
-live command still identifies this install and the record matches its command or start time. A stale record is
-deleted without stopping its reused PID; `doctor` prints `stale pid
-file guardian: PID <pid> is now <command>`. Proxy recovery stops a listener using the shared proxy binary only
+absent exit record as absence of evidence, not a clean shutdown. Cleanup accepts a PID record whose start time matches even when the live command line is unavailable, and deletes a record only when a readable command line contradicts it; it never stops a reused PID. On Windows, an unavailable command line can mean the process is elevated, so `doctor` names the condition and `stop` or `setup` must run from a session with the same privileges. Proxy recovery stops a listener using the shared proxy binary only
 when the live process tree proves it descends from the recovering supervisor. A matching shared binary alone
 never proves ownership. A failed `/v1/models` check gets one fresh-connection confirmation before recovery can stop an owned listener; a healthy confirmation resets recovery without stopping or starting the proxy. This matters when an agent is mid-orchestration
 (e.g. dispatching Codex subagents through the gateway): do not tell the user to restart Claude Code just to
@@ -261,12 +258,13 @@ agree).
   evidence, not that Codex is live. An `upstream-blocked` OpenAI/auth rejection stays separate
   and does not expire; `setup` deliberately clears either record. Sidequest consumes a cached
   catalog and can lag this state by up to five minutes.
-- **Startup, recovery, restart, or drain refuses to touch a listener**: each ownership probe is bounded by
-  `CODEX_GATEWAY_PROBE_TIMEOUT_MS` (2 seconds by default, 8 seconds on Windows, where the Win32_Process
-  lookup itself typically takes 1.8-2.4 seconds). A timeout, malformed process result, or
-  unrecognized command leaves ownership unknown. Startup records `owner-unknown` and leaves that
-  listener untouched; recovery leaves it for the next tick. A confirmed foreign owner gets the same
-  refusal. Probe children are stopped with the supervisor, so they cannot keep a test fixture home open.
+- **Startup, recovery, restart, or drain refuses to touch a listener**: each ownership probe shares one
+  `CODEX_GATEWAY_PROBE_TIMEOUT_MS` budget (2 seconds by default, 8 seconds on Windows, where the Win32_Process
+  lookup itself typically takes 1.8-2.4 seconds). When that budget expires, the refusal says so, names the elapsed
+  budget, and points to `CODEX_GATEWAY_PROBE_TIMEOUT_MS` as the override. A malformed process result or
+  unrecognized command remains an ownership-unknown refusal without the timeout guidance. Startup records
+  `owner-unknown` and leaves that listener untouched; recovery leaves it for the next tick. A confirmed foreign
+  owner is also left untouched. Probe children are stopped with the supervisor, so they cannot keep a test fixture home open.
 - **`doctor` shows `Not authenticated` right after an upgrade**: bumping the proxy binary (e.g.
   0.1.10 → 0.1.17 via `setup`) can invalidate the credential the old version accepted — the new
   binary reads it as not authenticated and `setup` stops before wiring. Fix: re-run `login`, then

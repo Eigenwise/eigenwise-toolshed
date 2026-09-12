@@ -34,6 +34,7 @@ __export(dispatch_preflight_exports, {
   ensurePythonIoEncoding: () => ensurePythonIoEncoding,
   installRefusalMessage: () => installRefusalMessage,
   localAheadOfUpstreamWarning: () => localAheadOfUpstreamWarning,
+  servingSidequestInstall: () => servingSidequestInstall,
   transportRefusalMessage: () => transportRefusalMessage
 });
 module.exports = __toCommonJS(dispatch_preflight_exports);
@@ -75,7 +76,7 @@ function localAheadOfUpstreamWarning(projectPath, branch, worktreeFork) {
 const PLUGIN_ID = "sidequest@eigenwise-toolshed";
 const REPAIR_COMMAND = "claude plugin install sidequest@eigenwise-toolshed --scope project";
 const FILE_READ_RETRY_DELAYS_MS = [20, 60, 140, 300];
-const RETRYABLE_FILE_READ_CODES = /* @__PURE__ */ new Set(["ENOENT", "EPERM", "EACCES", "EBUSY"]);
+const RETRYABLE_FILE_READ_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY", "ENOENT"]);
 function isRetryableFileReadError(error) {
   if (!error || typeof error !== "object" || !("code" in error)) return false;
   const code = error.code;
@@ -164,6 +165,25 @@ function canonicalJsonFile(filePath) {
     throw new Error(`could not parse ${filePath}: ${detail}`);
   }
 }
+function servingSidequestInstall(modulePath = __filename) {
+  let installPath;
+  try {
+    installPath = import_node_path.default.dirname(import_node_fs.default.realpathSync(modulePath));
+  } catch {
+    return null;
+  }
+  while (true) {
+    try {
+      const manifest = jsonRecord(JSON.parse(import_node_fs.default.readFileSync(import_node_path.default.join(installPath, ".claude-plugin", "plugin.json"), "utf8")));
+      const version = typeof manifest?.version === "string" ? manifest.version.trim() : "";
+      if (version) return { installPath, version };
+    } catch {
+    }
+    const parent = import_node_path.default.dirname(installPath);
+    if (parent === installPath) return null;
+    installPath = parent;
+  }
+}
 function installRuntimeSnapshot(installPath, version) {
   if (typeof installPath !== "string" || !installPath.trim()) return { detail: "the registry entry has no installPath" };
   if (typeof version !== "string" || !version.trim()) return { detail: `the registry entry for ${installPath} has no plugin version` };
@@ -215,7 +235,7 @@ function checkSidequestInstall(projectPath, opts = {}) {
       };
     }
     if (snapshot.advertisesBoardMcp) {
-      return { ok: true, registryPath, installPath: install.installPath, identity: snapshot.identity };
+      return { ok: true, registryPath, installPath: install.installPath, version: install.version.trim(), identity: snapshot.identity };
     }
   }
   return { ok: false, reason: "stale", registryPath, detail: "the .mcp.json snapshot declares no MCP server" };
@@ -256,5 +276,6 @@ function assertDispatchTransport(transport, opts = {}) {
   ensurePythonIoEncoding,
   installRefusalMessage,
   localAheadOfUpstreamWarning,
+  servingSidequestInstall,
   transportRefusalMessage
 });

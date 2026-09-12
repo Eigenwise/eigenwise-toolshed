@@ -31,7 +31,8 @@ reader needs that the title cannot carry.
 | --- | --- | --- |
 | `ref` | yes | Board ref, matching the filename. `SQ-843`, not `sq-843`. |
 | `title` | yes | The changelog line. One line, no control characters. Write it for someone who did not work the ticket. |
-| `plugins` | yes | Which published plugins this releases. A list, or a map of plugin to bump level. |
+| `plugins` | yes, unless `scope: repo` | Which published plugins this releases. A list, or a map of plugin to bump level. |
+| `scope` | no | Set to `repo` for repository-only work. It must omit `plugins` and `bump`, writes only the repository changelog, and never bumps a plugin. |
 | `bump` | when `plugins` is a list | `patch`, `minor`, or `major`, applied to every plugin in the list. |
 | `commit` | no | Integration sha, 7 to 40 hex characters. Becomes the commit link in the changelog. |
 | `hold` | no | `true` keeps this fragment out of normal windows and survives the cut. Default `false`. |
@@ -58,6 +59,18 @@ plugins:
 ```
 
 A `bump` value is still allowed alongside it and acts as the default for any entry left empty.
+
+### Repository-only changes
+
+Use `--scope repo` for changes to release scripts, CI, docs tooling, or other repository work that
+ships on `main` without changing a published plugin:
+
+```bash
+node scripts/release/note.mjs SQ-843 --title "Fix release rollback" --scope repo --commit "$(git rev-parse HEAD)"
+```
+
+A repository-only fragment still produces a marketplace release and repository changelog entry. It
+never changes a plugin version or a plugin changelog.
 
 ### Choosing a level
 

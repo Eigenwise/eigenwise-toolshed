@@ -117,7 +117,7 @@ const {
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, readPinOverrides, refreshDetectedPins, writePinOverrides,
+  isValidPin, ourBaseUrls, ownedPinValues, pinProvenance, readPinOverrides, refreshDetectedPins, writePinOverrides,
 } = require('./pins.js');
 
 // Versions through 0.4.1 wrote this unsafe global override. Remove it during
@@ -205,7 +205,7 @@ function readPluginVersion() {
 function mkdirs() { for (const d of [STATE, LOGS, BIN_DIR]) fs.mkdirSync(d, { recursive: true }); }
 
 const {
-  createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, killPidAsync, portListening, postJson, processOwningPortAsync, recordedGatewayPids, reapGatewayOrphans, resolvePortOwner,
+  createProbeChildRegistry, createProxyRecovery, fetchUrl, killPidAsync, portListening, postJson, processOwningPortAsync, recordedGatewayPids, reapGatewayOrphans, resolvePortOwner, unknownPortOwnerReason,
   removePid, restartWorkerWithDrain, shimHealthy, spawnDetached, stopAll, stopProcess, stopRunningSupervisor,
   stopShimWithDrain, waitForShimExit, writePidRecordAsync,
 } = require('./process-supervision.js');
@@ -450,21 +450,30 @@ async function waitForProxyExit({ listening = portListening, attempts = 7, delay
   return false;
 }
 
-async function restartProxyForVersionChange({ previousVersion, currentVersion = currentProxyVersion(), listening = portListening, stop = stopProcess, start = spawnDetached } = {}) {
+async function restartProxyForVersionChange({
+  previousVersion,
+  listening = portListening,
+  stop = stopProcess,
+  supervisorRunning = async () => (await resolvePortOwner(PUBLIC_SHIM_PORT)).state === 'same-install',
+} = {}) {
   if (previousVersion) writeProxyServingVersion(previousVersion);
   if (await listening(PROXY_PORT)) stop('proxy');
   if (!(await waitForProxyExit({ listening }))) return false;
-  start('proxy', PROXY_BIN, ['serve', '--no-monitor'], { PORT: String(PROXY_PORT) });
-  writeProxyServingVersion(currentVersion);
-  return true;
+  return supervisorRunning();
 }
 
-async function restartProxyIfOutdated({ quiet = false } = {}) {
-  const onDisk = currentProxyVersion();
-  const serving = readProxyServingVersion() || onDisk;
+async function restartProxyIfOutdated({
+  quiet = false,
+  currentVersion = currentProxyVersion,
+  readServingVersion = readProxyServingVersion,
+  restart = restartProxyForVersionChange,
+  report = log,
+} = {}) {
+  const onDisk = currentVersion();
+  const serving = readServingVersion() || onDisk;
   if (!onDisk || !serving || onDisk === serving) return { restarted: false, onDisk, serving };
-  const restarted = await restartProxyForVersionChange({ previousVersion: serving, currentVersion: onDisk });
-  if (!restarted && !quiet) log(`proxy on disk: ${onDisk}   serving: ${serving}   restarts on next \`ensure\``);
+  const restarted = await restart({ previousVersion: serving });
+  if (!restarted && !quiet) report(`proxy on disk: ${onDisk}   serving: ${serving}   restarts on next \`ensure\``);
   return { restarted, onDisk, serving };
 }
 
@@ -501,18 +510,19 @@ async function setup() {
   const stagedVersion = parseSemver((spawnSync(stagedProxy, ['--version'], { encoding: 'utf8', windowsHide: true }).stdout || '').trim());
   const proxyChanged = !currentVersion || !stagedVersion || currentVersion.join('.') !== stagedVersion.join('.');
 
+  let proxyRecoveryHandoff = false;
   if (proxyChanged) {
     const previousVersion = proxyVersion(currentVersion);
     const installedVersion = proxyVersion(stagedVersion);
     replaceProxyBinary({ stagedPath: stagedProxy, currentVersion });
-    const restarted = await restartProxyForVersionChange({ previousVersion, currentVersion: installedVersion });
-    if (!restarted) log(`proxy on disk: ${installedVersion || 'unknown'}   serving: ${previousVersion || 'unknown'}   restarts on next \`ensure\``);
+    proxyRecoveryHandoff = await restartProxyForVersionChange({ previousVersion });
+    if (!proxyRecoveryHandoff) log(`proxy on disk: ${installedVersion || 'unknown'}   serving: ${previousVersion || 'unknown'}   restarts on next \`ensure\``);
   } else {
     log('model-gateway: proxy unchanged; keeping its authenticated process running.');
   }
-  const supervisorRestart = await restartShimIfOutdated({ operation: 'setup' });
+  const supervisorRestart = proxyRecoveryHandoff ? null : await restartShimIfOutdated({ operation: 'setup' });
   if (supervisorRestart && !supervisorRestart.ok) die(`could not restart shim supervisor: ${supervisorRestart.reason}`);
-  if (!supervisorRestart) {
+  if (!supervisorRestart && !proxyRecoveryHandoff) {
     const restarting = await restartWorkerWithDrain();
     if (!restarting.ok) die(`could not restart shim worker: ${restarting.reason}`);
   }
@@ -522,7 +532,7 @@ async function setup() {
   log(`installed: ${(v.stdout || v.stderr || '').trim() || PROXY_BIN}`);
 
   // one-shot: start everything, and finish the wiring when auth already works
-  const r = await startAll({ lifecycleOperation: 'setup' });
+  const r = await startAll({ lifecycleOperation: 'setup', preserveRunningSupervisor: proxyRecoveryHandoff });
   if (!r.ok) die(r.reason);
   clearUpstreamBlocked();
   clearUpstreamUnavailable();
@@ -643,8 +653,10 @@ async function startAll({
   recordLifecycle = recordGatewayLifecycle,
   resolveOwner = resolvePortOwner,
   reapOrphans = reapGatewayOrphans,
+  shimReady = shimHealthy,
   stopSupervisor = stopRunningSupervisor,
   spawnSupervisor = spawnDetached,
+  preserveRunningSupervisor = false,
 } = {}) {
   if (!proxyExists()) return { ok: false, reason: 'proxy binary missing (run setup)' };
   let recoveryAttempted = false;
@@ -673,16 +685,18 @@ async function startAll({
     return { ok: false, reason: `PID ${owner.pid} owns :${PUBLIC_SHIM_PORT} from a different install root (${owner.installRoot})` };
   }
   if (owner.state === 'unknown') {
+    if (await shimReady()) return finishRecovery({ ok: true, started: [] });
     const operation = lifecycleOperation || 'start';
     recordLifecycle(`${operation}-owner-unknown`, {
       component: operation,
       pid: process.pid,
       outcome: 'owner-unknown',
     });
-    return { ok: false, reason: `could not confirm the owner of :${PUBLIC_SHIM_PORT} (last observed PID ${owner.pid || 'unknown'}); left the listener untouched` };
+    return { ok: false, reason: unknownPortOwnerReason(owner, PUBLIC_SHIM_PORT) };
   }
   const portOwner = owner.pid;
   const started = [];
+  let waitingForRunningSupervisor = false;
   const health = await fetchShimHealth();
   const staleSessionNotice = staleSessionReloadNotice(PLUGIN_VERSION, health);
   if (staleSessionNotice) noticeForUser(staleSessionNotice, { toStderr: true });
@@ -694,14 +708,18 @@ async function startAll({
   } else if (health) {
     reapOrphans(portOwner);
   } else if (await portListening(PUBLIC_SHIM_PORT)) {
-    beginRecovery();
-    const stopped = await stopSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
-    if (!stopped.ok) return finishRecovery(stopped);
-    reportSiblingSupervisorReplacement(stopped, quiet);
+    if (preserveRunningSupervisor) {
+      waitingForRunningSupervisor = true;
+    } else {
+      beginRecovery();
+      const stopped = await stopSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
+      if (!stopped.ok) return finishRecovery(stopped);
+      reportSiblingSupervisorReplacement(stopped, quiet);
+    }
   } else {
     reapOrphans(null);
   }
-  if (!(await shimHealthy())) {
+  if (!(await shimReady()) && !waitingForRunningSupervisor) {
     beginRecovery();
     try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
     spawnSupervisor('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], {});
@@ -832,8 +850,10 @@ async function statusReport({ readiness = null } = {}) {
       : 'proxy recovery: unavailable until the shim supervisor is refreshed');
   }
   log(`shim (model router) on :${SHIM_PORT}: ${checks.shimRunning ? `running${checks.servingVersion ? ` (serving ${checks.servingVersion})` : ' (serving version unavailable)'}` : 'DOWN'}`);
-  const foreignOwner = foreignPortOwner(PUBLIC_SHIM_PORT);
-  if (foreignOwner) log(`shim supervisor conflict: PID ${foreignOwner.pid} owns :${PUBLIC_SHIM_PORT} from a different install root (${foreignOwner.installRoot || 'unknown'}).`);
+  const owner = await resolvePortOwner(PUBLIC_SHIM_PORT).catch(() => ({ state: 'unknown', pid: null }));
+  if (owner.state === 'foreign-install') log(`shim supervisor conflict: PID ${owner.pid} owns :${PUBLIC_SHIM_PORT} from a different install root (${owner.installRoot || 'unknown'}).`);
+  if (owner.identity === 'pid-record') log(`shim supervisor ownership: PID ${owner.pid} matches its recorded start time, but its command line is unavailable. It may be elevated; stop or setup must run from a session with the same privileges.`);
+  if (owner.reason === 'unreadable-command') log(`shim supervisor ownership: ${unknownPortOwnerReason(owner, PUBLIC_SHIM_PORT)}.`);
   const compat = health?.compat;
   if (compat?.hostsDetected) {
     log(`RC-compatibility hosts entry: detected (${compat.hostsLine})`);
@@ -852,7 +872,7 @@ async function statusReport({ readiness = null } = {}) {
 function pinCommand() {
   if (args.length === 0) {
     for (const [alias, pin] of Object.entries(effectivePins())) {
-      log(`${alias}: ${pin.value} (${pin.override ? `overridden; shipped default: ${pin.default}` : 'default'})`);
+      log(`${alias}: ${pin.value} (${pinProvenance(pin)})`);
     }
     return;
   }
@@ -1174,7 +1194,7 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
     : 'catalog: not written yet');
   await reportGatewayDiscoveryCache();
   for (const [alias, pin] of Object.entries(effectivePins())) {
-    log(`Claude ${alias} pin: ${pin.value}${pin.override ? ` (overridden; shipped default: ${pin.default})` : ' (default)'}`);
+    log(`Claude ${alias} pin: ${pin.value} (${pinProvenance(pin)})`);
   }
   await reportLiveShimModelPolicy();
   const activeScope = selectedWiringScope();
@@ -2481,8 +2501,8 @@ const commands = {
       noticeForUser('model-gateway is installed but not set up. Offer to run its setup (one command; needs a ChatGPT browser sign-in) to put the user\'s ChatGPT/Codex models in the /model picker. See the model-gateway skill.');
       finish(0);
     }
-    await restartProxyIfOutdated({ quiet });
-    const result = await startAll({ quiet, lifecycleOperation: 'ensure' });
+    const proxyRestart = await restartProxyIfOutdated({ quiet });
+    const result = await startAll({ quiet, lifecycleOperation: 'ensure', preserveRunningSupervisor: proxyRestart.restarted });
     if (!result.ok) {
       if (quiet && result.waitCutShort) {
         if (result.started?.includes('shim')) {

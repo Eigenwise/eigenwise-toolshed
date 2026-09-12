@@ -96,10 +96,26 @@ function terminalAttempts(ticket) {
 function latestAttempt(attempts) {
   return attempts.slice().sort((left, right) => String(left.terminalAt).localeCompare(String(right.terminalAt))).pop() || null;
 }
-function identifiedAttempt(attempt) {
+function boundThroughClaimToken(attempt) {
+  if (attempt && "bindSource" in attempt) return String(attempt.bindSource || "").trim() === "claim_token";
+  return Boolean(String(attempt?.boundAt || "").trim());
+}
+function identifiedAttempt(attempt, claimTokenStandsAsIdentity) {
   const agentId = String(attempt?.agentId || "").trim();
-  if (!agentId) return null;
-  return Object.freeze({ agentId, terminalAt: String(attempt.terminalAt), outcome: String(attempt.outcome || "") });
+  const agentName = String(attempt?.agentName || "").trim();
+  const tokenPrefix = String(attempt?.tokenPrefix || "").trim();
+  if (!agentId && !(claimTokenStandsAsIdentity && boundThroughClaimToken(attempt) && agentName && tokenPrefix)) return null;
+  return Object.freeze({
+    agentId,
+    agentName,
+    tokenPrefix,
+    identity: agentId ? `agent:${agentId}` : `claim:${tokenPrefix}/${agentName}`,
+    terminalAt: String(attempt.terminalAt),
+    outcome: String(attempt.outcome || "")
+  });
+}
+function sameRuntimeIdentity(source, reviewer) {
+  return Boolean(source.agentId) && source.agentId === reviewer.agentId || Boolean(source.agentName) && source.agentName === reviewer.agentName || Boolean(source.tokenPrefix) && source.tokenPrefix === reviewer.tokenPrefix;
 }
 function submittedCandidateAttempt(sourceTicket) {
   const commit = String(sourceTicket?.submission?.commit || "").trim().toLowerCase();
@@ -115,10 +131,10 @@ function reviewProvenance(sourceTicket, reviewTicket) {
   if (!sourceAttempt) return Object.freeze({ source: null, reviewer: null, reason: "source_attempt_missing" });
   const reviewerAttempt = completedReviewAttempt(reviewTicket);
   if (!reviewerAttempt) return Object.freeze({ source: null, reviewer: null, reason: "review_attempt_missing" });
-  const source = identifiedAttempt(sourceAttempt);
-  const reviewer = identifiedAttempt(reviewerAttempt);
+  const source = identifiedAttempt(sourceAttempt, true);
+  const reviewer = identifiedAttempt(reviewerAttempt, false);
   if (!source || !reviewer) return Object.freeze({ source, reviewer, reason: "agent_identity_missing" });
-  if (source.agentId === reviewer.agentId) return Object.freeze({ source, reviewer, reason: "shared_agent_identity" });
+  if (sameRuntimeIdentity(source, reviewer)) return Object.freeze({ source, reviewer, reason: "shared_agent_identity" });
   return Object.freeze({ source, reviewer, reason: "ok" });
 }
 function reviewRelationRef(relation) {

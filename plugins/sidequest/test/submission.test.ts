@@ -1577,11 +1577,63 @@ test('SQ-2355: integration reports a diverged expected upstream without an empty
     assert.strictEqual(refused.reason, 'expected_upstream_diverged');
     assert.match(refused.message, new RegExp(`recorded expected upstream ${expectedUpstream}`));
     assert.match(refused.message, new RegExp(`no longer reachable from target branch ${divergenceBranch}`));
-    assert.match(refused.message, /Rework and submit a fresh candidate against current main/);
-    assert.match(refused.message, /groomClose with deliveryCommit/);
+    assert.match(refused.message, /manually merge the verified candidate onto the current target, re-gate it/);
+    assert.match(refused.message, /groomClose using deliveryCommit/);
     assert.doesNotMatch(refused.message, /outside its admitted scope:/);
   } finally {
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+// SQ-2528 wanted the transient commit kept out of the dispatch baseline too, but a
+// dispatch cannot tell it apart from an ordinary unpushed local commit, which auto
+// worktree bases must still fork (dispatch-lifecycle.test.ts writerAuto, mcp.test.ts
+// SQ-2717). Submission is where the transient commit is knowably gone (SQ-2770).
+test('SQ-2528: a submission recovers the pushed base after a transient local release commit is reset', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  try {
+    store.setBoardConfig(slug, { integrationMode: 'auto', integrationBranch: 'main', worktreeBase: 'auto' });
+    const pushedBase = git(['rev-parse', 'origin/main']);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'transient release commit\n');
+    git(['add', 'README.md']);
+    git(['commit', '-m', 'transient failed release']);
+    const transientCommit = git(['rev-parse', 'HEAD']);
+    git(['branch', '-f', 'main', transientCommit]);
+
+    const ticket = addTicket('transient release baseline', {
+      category: 'submission.fixture',
+      files: ['lib/transient-release.js'],
+    });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'transient-release-baseline' });
+    assert.strictEqual(prepared.ticket.dispatch.baseCommit, transientCommit);
+
+    git(['reset', '--hard', 'origin/main']);
+    git(['branch', '-f', 'main', 'origin/main']);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'transient-release.js'), 'candidate\n');
+    git(['add', 'lib/transient-release.js']);
+    git(['commit', '-m', 'candidate after failed release']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'transient-release-worker', {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId: 'transient-release-baseline',
+    }).ok, true);
+
+    const submitted = runCli(['submit', ticket.ref, '--by', 'transient-release-worker', '--commit', candidate]);
+    assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+    const after = store.getTicket(slug, ticket.ref);
+    assert.strictEqual(after.submission.base, pushedBase);
+    assert.notStrictEqual(after.submission.base, transientCommit);
+  } finally {
+    store.setBoardConfig(slug, {
+      integrationMode: originalConfig.integrationMode,
+      integrationBranch: originalConfig.integrationBranch,
+      worktreeBase: originalConfig.worktreeBase,
+    });
     cleanBranch();
   }
 });
@@ -1613,11 +1665,12 @@ test('integration refuses delivery when the assembled-wave gate fails', () => {
   assert.match(missingWaiver.message, /human waiver with authority, reason, affectedGate/);
 });
 
-test('a missing assembled-wave command reports the gate environment and its setup', () => {
+test('a missing assembled-wave command reports skipped candidate provisioning', () => {
   cleanBranch();
   const missingCommand = `sidequest-missing-gate-command-${process.pid}-${Date.now()}`;
+  const setup = 'node -e "process.exit(0)"';
   const originalConfig = store.boardConfig(slug);
-  store.setBoardConfig(slug, { worktreeSetup: 'cd plugins/sidequest && npm ci' });
+  store.setBoardConfig(slug, { worktreeSetup: setup });
   try {
     const ticket = addTicket('missing assembled-wave command', { files: ['lib/missing-gate-command.js'] });
     assert.strictEqual(store.claimTicket(slug, ticket.ref, 'missing-command-worker', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
@@ -1639,10 +1692,67 @@ test('a missing assembled-wave command reports the gate environment and its setu
     assert.strictEqual(refused.reason, 'assembled_wave_environment_problem');
     assert.strictEqual(refused.gate.verification.status, 'toolchain_missing');
     assert.match(refused.message, new RegExp(missingCommand));
-    assert.match(refused.message, /cd plugins\/sidequest && npm ci/);
+    assert.match(refused.message, /used the project root, so isolated-worktree provisioning was skipped/);
+    assert.doesNotMatch(refused.message, /ran successfully/);
     assert.doesNotMatch(refused.message, /Refresh and reverify/);
   } finally {
     store.setBoardConfig(slug, { worktreeSetup: originalConfig.worktreeSetup });
+  }
+});
+
+test('SQ-2527: wave gates provision linked dependencies in the candidate worktree', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const dependencyName = `wave-gate-dependency-${process.pid}-${Date.now()}`;
+  const dependencyDirectory = path.join(PROJECT_DIR, dependencyName);
+  const candidateWorktree = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-wave-gate-worktree-'));
+  const candidateFile = 'wave-gate-linked-dependency.js';
+  const setupMarker = 'wave-gate-setup-marker';
+  const verify = `node -e ${JSON.stringify("const fs = require('node:fs'); fs.accessSync(process.argv[1]); fs.accessSync(process.argv[2]);")} ${JSON.stringify(`${dependencyName}/sentinel`)} ${JSON.stringify(setupMarker)}`;
+  const setup = `node -e ${JSON.stringify("const fs = require('node:fs'); fs.accessSync(process.argv[1]); fs.writeFileSync(process.argv[2], 'ready');")} ${JSON.stringify(`${dependencyName}/sentinel`)} ${JSON.stringify(setupMarker)}`;
+  try {
+    fs.mkdirSync(dependencyDirectory, { recursive: true });
+    fs.writeFileSync(path.join(dependencyDirectory, 'sentinel'), 'ready\n');
+    store.setBoardConfig(slug, {
+      integrationMode: 'local',
+      integrationBranch: git(['branch', '--show-current']),
+      worktreeDependencyPaths: [{ path: dependencyName, mode: 'link' }],
+      worktreeSetup: setup,
+    });
+    const baseline = git(['rev-parse', 'HEAD']);
+    const ticket = addTicket('linked dependency wave gate', { files: [`lib/${candidateFile}`] });
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'linked-dependency-worker', { direct: true, reason: 'The linked dependency fixture requires a local direct claim.' }).ok, true);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', candidateFile), 'candidate\n');
+    git(['add', `lib/${candidateFile}`]);
+    git(['commit', '-m', 'linked dependency wave candidate']);
+    const commit = git(['rev-parse', 'HEAD']);
+    pin(ticket, commit);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'linked-dependency-worker', { commit, verify, worktree: candidateWorktree }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    Object.assign(submitted.submission, {
+      baseline: { revision: { source: 'git', value: baseline, observedAt: new Date().toISOString() }, purpose: 'dispatch' },
+      changedPaths: [`lib/${candidateFile}`],
+    });
+    persist(submitted);
+
+    assert.strictEqual(fs.existsSync(path.join(candidateWorktree, dependencyName)), false);
+    const assembled = store.assembleSubmissionWave(slug, [ticket.ref]);
+
+    assert.strictEqual(assembled.ok, true, assembled.message);
+    assert.strictEqual(assembled.gate.verification.status, 'passed');
+    assert.strictEqual(fs.readFileSync(path.join(candidateWorktree, dependencyName, 'sentinel'), 'utf8'), 'ready\n');
+    assert.strictEqual(fs.readFileSync(path.join(candidateWorktree, setupMarker), 'utf8'), 'ready');
+  } finally {
+    store.setBoardConfig(slug, {
+      integrationMode: originalConfig.integrationMode,
+      integrationBranch: originalConfig.integrationBranch,
+      worktreeDependencyPaths: originalConfig.worktreeDependencyPaths,
+      worktreeSetup: originalConfig.worktreeSetup,
+    });
+    fs.rmSync(candidateWorktree, { recursive: true, force: true });
+    fs.rmSync(dependencyDirectory, { recursive: true, force: true });
+    cleanBranch();
   }
 });
 
@@ -3250,26 +3360,40 @@ function completeIsolatedReview(review: { review: any; sessionId: string; execut
     });
   }
   const dispatched = store.getTicket(slug, review.review.ref);
+  // requireBoundAgent is what MCP always passes, and it is the only path that
+  // records bindSource, so the fixture has to take it for the claim-token
+  // binding under test to be the authentic one.
   assert.strictEqual(store.claimTicket(slug, review.review.ref, `${review.agentId}-worker`, {
     token: dispatched.dispatchNonce,
     executor: review.executor,
+    sessionId: review.sessionId,
+    requireBoundAgent: true,
   }).ok, true);
   const done = store.completeTicket(slug, review.review.ref, `${review.agentId}-worker`, { model: 'sonnet', effort: 'medium' });
   assert.strictEqual(done.ok, true, done.message);
   return (store.getTicket(slug, review.review.ref).dispatch.attempts || []).at(-1);
 }
 
+// SQ-2772 restored this refusal after SQ-2763 briefly inverted it. A raced
+// read-only review that never reached the identity hook does carry the dispatch
+// token and agent name its own launch stamped, but those authenticate the
+// dispatch, not the runtime that ran it, and one runtime can hold several. Only
+// the hook binding proves the reviewer is somebody other than the submitter.
 test('a read-only isolated review satisfies the candidate gate only once its board call bound its runtime identity', () => {
   const unrepaired = submittedGateSource('gate source without review identity', 'gate-unrepaired.js', 'gate-source-unrepaired');
   const unrepairedReview = dispatchedIsolatedReview('gate review unrepaired', unrepaired.ticket.ref, unrepaired.commit, 'gate-review-unrepaired');
   const unrepairedAttempt = completeIsolatedReview(unrepairedReview, false);
   assert.strictEqual(unrepairedAttempt.outcome, 'done');
   assert.strictEqual(unrepairedAttempt.agentId, null, 'the raced read-only review completes with no hook-bound identity');
+  assert.strictEqual(unrepairedAttempt.agentName, 'gate-review-unrepaired');
+  assert.ok(unrepairedAttempt.tokenPrefix, 'its own dispatch token is still recorded on the attempt');
+  assert.strictEqual(unrepairedAttempt.bindSource, 'claim_token', 'the attempt records how it bound');
 
   const blocked = store.validateIntegrationSubmission(slug, unrepaired.ticket.ref, {});
   assert.strictEqual(blocked.ok, false);
   assert.strictEqual(blocked.reason, 'candidate_review_required');
-  assert.match(blocked.message, /do not both carry a hook-bound runtime agent identity/);
+  assert.match(blocked.message, /recorded no hook-bound agent id on its terminal review attempt/);
+  assert.match(blocked.message, /authenticate a dispatch, not the runtime that ran it/);
 
   const repaired = submittedGateSource('gate source with review identity', 'gate-repaired.js', 'gate-source-repaired');
   const repairedReview = dispatchedIsolatedReview('gate review repaired', repaired.ticket.ref, repaired.commit, 'gate-review-repaired');
@@ -3282,6 +3406,80 @@ test('a read-only isolated review satisfies the candidate gate only once its boa
 
   for (const worktree of [unrepairedReview.worktree, repairedReview.worktree]) {
     if (fs.existsSync(worktree)) execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT_DIR, windowsHide: true });
+  }
+});
+
+// SQ-2773. appendDispatchAttempt only began snapshotting bindSource in SQ-2772,
+// so a candidate submitted before that reads as one that never bound a runtime
+// at all: SQ-2756's work was merged to main and integrate, manual delivery and
+// groomClose all refused it forever, blocking two more tickets behind it. The
+// binding was recorded all along, as boundAt.
+function preBindSourceCandidate(title: string, filename: string, agentName: string) {
+  const commit = createCandidateCommit(filename, `${filename} pre-bindSource candidate\n`);
+  const ticket = addTicket(title, { files: [`lib/${filename}`] });
+  pin(ticket, commit);
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, agentName, {
+    direct: true,
+    reason: 'The submission fixture requires a local direct claim.',
+  }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, ticket.ref, agentName, {
+    commit,
+    verify: 'node -e "process.exit(0)"',
+  }).ok, true);
+  const submitted = store.getTicket(slug, ticket.ref);
+  const base = git(['rev-parse', `${commit}^`]);
+  Object.assign(submitted.submission, {
+    base,
+    upstream: 'origin/main',
+    upstreamCommit: base,
+    commits: [commit],
+    changedPaths: [`lib/${filename}`],
+  });
+  const at = new Date(Date.now() - 60_000).toISOString();
+  // SQ-2756's exact row: a claim-token bind, no agentId, and no bindSource key.
+  submitted.dispatch = {
+    attempts: [{ outcome: 'submitted', commit, agentId: null, agentName, tokenPrefix: 'udck-p7rj-ky', boundAt: at, claimedAt: at, terminalAt: at }],
+  };
+  persist(submitted);
+  return { ticket: submitted, commit };
+}
+
+test('SQ-2773: a pre-bindSource candidate records its landed delivery under a hook-bound reviewer and still refuses an unhooked one', () => {
+  const worktrees: string[] = [];
+  try {
+    const unhooked = preBindSourceCandidate('pre-bindSource candidate with an unhooked review', 'pre-bindsource-unhooked.js', 'sq-2756-repair-repository-opus-high-2');
+    const unhookedReview = dispatchedIsolatedReview('pre-bindSource unhooked review', unhooked.ticket.ref, unhooked.commit, 'pre-bindsource-review-unhooked');
+    worktrees.push(unhookedReview.worktree);
+    completeIsolatedReview(unhookedReview, false);
+    const refused = store.recordDeliveredSubmission(slug, unhooked.ticket.ref, {
+      target: Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) }),
+      deliveryCommit: unhooked.commit,
+      reason: 'The candidate already reached the integration branch.',
+    });
+    assert.strictEqual(refused.ok, false, 'the recovery is not a general bypass');
+    assert.strictEqual(refused.reason, 'candidate_review_required');
+    assert.match(refused.message, /recorded no hook-bound agent id on its terminal review attempt/);
+
+    const recovered = preBindSourceCandidate('pre-bindSource candidate with a hook-bound review', 'pre-bindsource-hooked.js', 'sq-2756-repair-repository-opus-high-3');
+    const hookedReview = dispatchedIsolatedReview('pre-bindSource hook-bound review', recovered.ticket.ref, recovered.commit, 'pre-bindsource-review-hooked');
+    worktrees.push(hookedReview.worktree);
+    const reviewerAttempt = completeIsolatedReview(hookedReview, true);
+    assert.strictEqual(reviewerAttempt.agentId, hookedReview.agentId, 'only the hook binding identifies the reviewer');
+    const recorded = store.recordDeliveredSubmission(slug, recovered.ticket.ref, {
+      target: Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) }),
+      deliveryCommit: recovered.commit,
+      reason: 'The candidate already reached the integration branch.',
+    });
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.integration.deliveryCommit, recovered.commit);
+    // What integratedRepairTicket reads before a rejected candidate may be
+    // superseded by this repair, which is what SQ-2753 and SQ-2511 waited on.
+    assert.strictEqual(recorded.integration.outcome, 'verified');
+    assert.ok(recorded.integration.resultingHead, 'the recorded delivery names the resulting head');
+  } finally {
+    for (const worktree of worktrees) {
+      if (fs.existsSync(worktree)) execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT_DIR, windowsHide: true });
+    }
   }
 });
 
@@ -4260,6 +4458,293 @@ test('SQ-2752: a pending candidate blocks a singleton only where their recorded 
     assert.deepStrictEqual(singleton.wave.participants, [participant.ref]);
     assert.strictEqual(store.pendingSubmission(store.getTicket(slug, disjoint.ref)), true);
   } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+// SQ-2767: the gate script and its run log live outside the repository on purpose. Integration
+// refuses a dirty target including untracked files, so a counter inside PROJECT_DIR would block
+// the delivery half of this fixture.
+function gateRunCounter(label: string) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `sq-gate-runs-${label}-`));
+  const scriptPath = path.join(directory, 'count-gate-runs.cjs');
+  const logPath = path.join(directory, 'runs.log');
+  const append = `require('node:fs').appendFileSync(${JSON.stringify(logPath)}, 'run\\n');\n`;
+  fs.writeFileSync(scriptPath, append);
+  return {
+    command: `node ${JSON.stringify(scriptPath)}`,
+    runs: () => (fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').split('run\n').length - 1 : 0),
+    startFailing: () => fs.writeFileSync(scriptPath, `${append}process.exit(1);\n`),
+    remove: () => fs.rmSync(directory, { recursive: true, force: true }),
+  };
+}
+
+test('SQ-2767: a singleton gate reuses the exact-candidate capture, and delivery still gates the merged tree', async () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  const gate = gateRunCounter('reuse');
+  const captureLogs: string[] = [];
+  try {
+    const baseline = git(['rev-parse', 'HEAD']);
+    const ticket = addTicket('reused capture singleton', { executorVerify: gate.command, files: ['lib/reused-capture.js'] });
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'reused-capture-worker', { direct: true, reason: 'The capture reuse fixture requires a local direct claim.' }).ok, true);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'reused-capture.js'), 'candidate\n');
+    git(['add', 'lib/reused-capture.js']);
+    git(['commit', '-m', 'reused capture candidate']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+
+    const capture = await runVerifyCapture(gate.command, PROJECT_DIR);
+    if (capture.logPath) captureLogs.push(capture.logPath);
+    assert.strictEqual(capture.status, 'passed');
+    const recorded = recordCapture({ project: PROJECT_DIR, ticket: ticket.ref }, capture, PROJECT_DIR);
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.capture.candidate.value, candidate);
+    // SQ-2789: reuse depends on this proof, so the clean-worktree capture has to carry it.
+    assert.strictEqual(recorded.capture.cleanWorktree, true);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'reused-capture-worker', { commit: candidate, verify: gate.command }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    Object.assign(submitted.submission, {
+      baseline: { revision: { source: 'git', value: baseline, observedAt: new Date().toISOString() }, purpose: 'dispatch' },
+      changedPaths: ['lib/reused-capture.js'],
+    });
+    persist(submitted);
+    assert.strictEqual(gate.runs(), 1, 'only the executor capture has run the command so far');
+
+    const assembled = store.assembleSubmissionWave(slug, [ticket.ref]);
+    assert.strictEqual(assembled.ok, true, assembled.message);
+    assert.strictEqual(assembled.gate.state, 'gate_passed');
+    assert.strictEqual(assembled.gate.verification.status, 'passed');
+    assert.strictEqual(assembled.gate.verification.command, gate.command);
+    assert.strictEqual(gate.runs(), 1, 'assembly admitted the candidate without re-running its verifier');
+    assert.strictEqual(assembled.gate.verification.reusedCapture?.id, recorded.capture.id);
+    assert.strictEqual(assembled.gate.verification.reusedCapture?.candidate.value, candidate);
+    assert.match(assembled.gate.verification.evidence, /Reused the authoritative verification capture/);
+
+    const delivered = integrateOnCurrentTestBranch(ticket.ref);
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.strictEqual(gate.runs(), 2, 'delivery still gates the merged tree');
+    assert.strictEqual(delivered.integration.verify.status, 'passed');
+    assert.strictEqual(delivered.integration.verify.command, gate.command);
+    assert.ok(fs.existsSync(delivered.integration.verify.logPath), 'the merged-tree gate records its own capture log');
+    assert.strictEqual(store.getTicket(slug, ticket.ref).submission.wave.delivery.state, 'delivered');
+
+    const mismatched = store.recordVerificationCapture(slug, ticket.ref, {
+      command: 'node -e "process.exit(0)"',
+      status: 'passed',
+      candidate: { source: 'git', value: candidate },
+      completedAt: new Date().toISOString(),
+    });
+    assert.strictEqual(mismatched.ok, false);
+    assert.strictEqual(mismatched.reason, 'verification_capture_command_mismatch');
+  } finally {
+    for (const logPath of captureLogs) fs.rmSync(logPath, { force: true });
+    gate.remove();
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+test('SQ-2767: a capture for another commit and an absent capture both still re-run the singleton gate', async () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  const mismatchGate = gateRunCounter('mismatch');
+  const absentGate = gateRunCounter('absent');
+  const captureLogs: string[] = [];
+  try {
+    const baseline = git(['rev-parse', 'HEAD']);
+    const dispatchBaseline = { revision: { source: 'git', value: baseline, observedAt: new Date().toISOString() }, purpose: 'dispatch' };
+
+    const mismatch = addTicket('capture bound to a superseded commit', { executorVerify: mismatchGate.command, files: ['lib/mismatched-capture.js'] });
+    assert.strictEqual(store.claimTicket(slug, mismatch.ref, 'mismatched-capture-worker', { direct: true, reason: 'The capture mismatch fixture requires a local direct claim.' }).ok, true);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'mismatched-capture.js'), 'captured candidate\n');
+    git(['add', 'lib/mismatched-capture.js']);
+    git(['commit', '-m', 'captured mismatch candidate']);
+    const capturedCommit = git(['rev-parse', 'HEAD']);
+    pin(mismatch, capturedCommit);
+    const capture = await runVerifyCapture(mismatchGate.command, PROJECT_DIR);
+    if (capture.logPath) captureLogs.push(capture.logPath);
+    const recorded = recordCapture({ project: PROJECT_DIR, ticket: mismatch.ref }, capture, PROJECT_DIR);
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(store.submitTicket(slug, mismatch.ref, 'mismatched-capture-worker', { commit: capturedCommit, verify: mismatchGate.command }).ok, true);
+    // The candidate moves past the commit its capture was taken against, exactly the
+    // state a reused capture must not be allowed to certify.
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'mismatched-capture.js'), 'uncaptured candidate\n');
+    git(['add', 'lib/mismatched-capture.js']);
+    git(['commit', '-m', 'uncaptured mismatch candidate']);
+    const uncapturedCommit = git(['rev-parse', 'HEAD']);
+    pin(mismatch, uncapturedCommit);
+    const mismatchSubmission = store.getTicket(slug, mismatch.ref);
+    Object.assign(mismatchSubmission.submission, {
+      commit: uncapturedCommit,
+      commits: [uncapturedCommit],
+      baseline: dispatchBaseline,
+      changedPaths: ['lib/mismatched-capture.js'],
+    });
+    persist(mismatchSubmission);
+    assert.notStrictEqual(recorded.capture.candidate.value, uncapturedCommit);
+
+    const absent = addTicket('candidate without any capture', { files: ['lib/absent-capture.js'] });
+    assert.strictEqual(store.claimTicket(slug, absent.ref, 'absent-capture-worker', { direct: true, reason: 'The absent capture fixture requires a local direct claim.' }).ok, true);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'absent-capture.js'), 'candidate\n');
+    git(['add', 'lib/absent-capture.js']);
+    git(['commit', '-m', 'absent capture candidate']);
+    const absentCommit = git(['rev-parse', 'HEAD']);
+    pin(absent, absentCommit);
+    assert.strictEqual(store.submitTicket(slug, absent.ref, 'absent-capture-worker', { commit: absentCommit, verify: absentGate.command }).ok, true);
+    const absentSubmission = store.getTicket(slug, absent.ref);
+    Object.assign(absentSubmission.submission, { baseline: dispatchBaseline, changedPaths: ['lib/absent-capture.js'] });
+    persist(absentSubmission);
+    assert.deepStrictEqual(store.getTicket(slug, absent.ref).verificationCaptures, undefined);
+
+    const runsBeforeMismatch = mismatchGate.runs();
+    mismatchGate.startFailing();
+    const refused = store.assembleSubmissionWave(slug, [mismatch.ref]);
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'assembled_wave_gate_failed');
+    assert.strictEqual(refused.gate.verification.status, 'failed_suite');
+    assert.strictEqual(mismatchGate.runs(), runsBeforeMismatch + 1, 'a capture for another commit is not reused');
+    assert.strictEqual(store.pendingSubmission(store.getTicket(slug, mismatch.ref)), true);
+
+    const assembled = store.assembleSubmissionWave(slug, [absent.ref]);
+    assert.strictEqual(assembled.ok, true, assembled.message);
+    assert.strictEqual(absentGate.runs(), 1, 'an absent capture is not a passing capture');
+    assert.strictEqual(assembled.gate.verification.reusedCapture, undefined);
+  } finally {
+    for (const logPath of captureLogs) fs.rmSync(logPath, { force: true });
+    mismatchGate.remove();
+    absentGate.remove();
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+// SQ-2789: reusing a capture is only safe if the capture read the committed content, so the
+// fixture gate has to follow one file on disk instead of passing unconditionally.
+function fileContentGate(label: string, filePath: string, passingContent: string) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `sq-content-gate-${label}-`));
+  const scriptPath = path.join(directory, 'check-content.cjs');
+  const logPath = path.join(directory, 'runs.log');
+  fs.writeFileSync(scriptPath, [
+    "const fs = require('node:fs');",
+    `fs.appendFileSync(${JSON.stringify(logPath)}, 'run\\n');`,
+    `const content = fs.existsSync(${JSON.stringify(filePath)}) ? fs.readFileSync(${JSON.stringify(filePath)}, 'utf8').trim() : '';`,
+    `process.exit(content === ${JSON.stringify(passingContent)} ? 0 : 1);`,
+    '',
+  ].join('\n'));
+  return {
+    command: `node ${JSON.stringify(scriptPath)}`,
+    runs: () => (fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').split('run\n').length - 1 : 0),
+    remove: () => fs.rmSync(directory, { recursive: true, force: true }),
+  };
+}
+
+test('SQ-2789: a capture taken over uncommitted edits is not reused, and the singleton gate reruns against the committed candidate', async () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  const gatedFile = path.join(PROJECT_DIR, 'lib', 'dirty-capture.js');
+  const gate = fileContentGate('dirty', gatedFile, 'dirty-pass');
+  const captureLogs: string[] = [];
+  try {
+    const baseline = git(['rev-parse', 'HEAD']);
+    const ticket = addTicket('capture taken over uncommitted edits', { executorVerify: gate.command, files: ['lib/dirty-capture.js'] });
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'dirty-capture-worker', { direct: true, reason: 'The dirty capture fixture requires a local direct claim.' }).ok, true);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(gatedFile, 'clean-fail\n');
+    git(['add', 'lib/dirty-capture.js']);
+    git(['commit', '-m', 'committed content the command fails on']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+
+    // The reviewer's reproduction: the command passes only over an edit that was never committed.
+    fs.writeFileSync(gatedFile, 'dirty-pass\n');
+    const capture = await runVerifyCapture(gate.command, PROJECT_DIR);
+    if (capture.logPath) captureLogs.push(capture.logPath);
+    assert.strictEqual(capture.status, 'passed');
+    const recorded = recordCapture({ project: PROJECT_DIR, ticket: ticket.ref }, capture, PROJECT_DIR);
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.capture.candidate.value, candidate, 'the capture still binds to the committed HEAD it never read');
+    assert.strictEqual(recorded.capture.cleanWorktree, undefined, 'a dirty capture is never marked as proving the committed content');
+
+    git(['checkout', '--', 'lib/dirty-capture.js']);
+    assert.strictEqual(fs.readFileSync(gatedFile, 'utf8').trim(), 'clean-fail');
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'dirty-capture-worker', { commit: candidate, verify: gate.command }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    Object.assign(submitted.submission, {
+      baseline: { revision: { source: 'git', value: baseline, observedAt: new Date().toISOString() }, purpose: 'dispatch' },
+      changedPaths: ['lib/dirty-capture.js'],
+    });
+    persist(submitted);
+    assert.strictEqual(gate.runs(), 1, 'only the executor capture has run the command so far');
+
+    const refused = store.assembleSubmissionWave(slug, [ticket.ref]);
+    assert.strictEqual(refused.ok, false, 'the gate must not certify content the capture never read');
+    assert.strictEqual(refused.reason, 'assembled_wave_gate_failed');
+    assert.strictEqual(refused.gate.verification.status, 'failed_suite');
+    assert.strictEqual(refused.gate.verification.reusedCapture, undefined);
+    assert.strictEqual(gate.runs(), 2, 'assembly reran the command against the committed candidate');
+    assert.strictEqual(store.pendingSubmission(store.getTicket(slug, ticket.ref)), true);
+  } finally {
+    for (const logPath of captureLogs) fs.rmSync(logPath, { force: true });
+    gate.remove();
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+test('SQ-2789: a capture recorded without the clean-worktree proof is not reused', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  const gatedFile = path.join(PROJECT_DIR, 'lib', 'unproven-capture.js');
+  const gate = fileContentGate('unproven', gatedFile, 'candidate');
+  try {
+    const baseline = git(['rev-parse', 'HEAD']);
+    const ticket = addTicket('capture predating the clean-worktree proof', { executorVerify: gate.command, files: ['lib/unproven-capture.js'] });
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'unproven-capture-worker', { direct: true, reason: 'The unproven capture fixture requires a local direct claim.' }).ok, true);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(gatedFile, 'candidate\n');
+    git(['add', 'lib/unproven-capture.js']);
+    git(['commit', '-m', 'unproven capture candidate']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+
+    // Exactly the shape captures recorded before SQ-2789 carry: passing, bound to the candidate,
+    // and silent about whether the worktree it ran in was clean.
+    const recorded = store.recordVerificationCapture(slug, ticket.ref, {
+      command: gate.command,
+      status: 'passed',
+      candidate: { source: 'git', value: candidate },
+      completedAt: new Date().toISOString(),
+    });
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.capture.cleanWorktree, undefined);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'unproven-capture-worker', { commit: candidate, verify: gate.command }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    Object.assign(submitted.submission, {
+      baseline: { revision: { source: 'git', value: baseline, observedAt: new Date().toISOString() }, purpose: 'dispatch' },
+      changedPaths: ['lib/unproven-capture.js'],
+    });
+    persist(submitted);
+    assert.strictEqual(gate.runs(), 0, 'the unproven capture was recorded without running anything');
+
+    const assembled = store.assembleSubmissionWave(slug, [ticket.ref]);
+    assert.strictEqual(assembled.ok, true, assembled.message);
+    assert.strictEqual(assembled.gate.state, 'gate_passed');
+    assert.strictEqual(assembled.gate.verification.reusedCapture, undefined, 'an unmarked capture is not assumed clean');
+    assert.strictEqual(gate.runs(), 1, 'the gate ran the command itself instead of reusing the unproven capture');
+  } finally {
+    gate.remove();
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
     cleanBranch();
   }

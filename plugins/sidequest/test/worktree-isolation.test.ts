@@ -29,6 +29,7 @@ const GUARD_ISOLATION = path.join(HOOKS, 'guard-worktree-isolation.js');
 const BIND_RUNTIME_IDENTITY = path.join(HOOKS, 'bind-runtime-identity.js');
 const GUARD_SHARED_CHECKOUT_GIT = path.join(HOOKS, 'guard-shared-checkout-git.js');
 const GUARD_DESTRUCTIVE = path.join(HOOKS, 'guard-destructive-git.js');
+const FORCE_EXEC_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 
 function initRepo(prefix: string) {
   // native realpath expands 8.3 short names (CI's RUNNERA~1 temp dir) the way git's
@@ -67,6 +68,23 @@ function runHook(script: string, payload: unknown, env: Record<string, string | 
     ...(cwd ? { cwd } : {}),
   });
   return out.trim() ? JSON.parse(out) : null;
+}
+
+function createWorktree(sessionId: string, name: string, cwd: string = PROJECT) {
+  try {
+    return {
+      ok: true,
+      output: execFileSync(process.execPath, [path.join(HOOKS, 'worktree-create.js')], {
+        input: JSON.stringify({ hook_event_name: 'WorktreeCreate', name, session_id: sessionId, cwd }),
+        encoding: 'utf8',
+        env: { ...process.env, SIDEQUEST_HOME },
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim(),
+    };
+  } catch (error: any) {
+    return { ok: false, output: String(error?.stderr || error?.message || error).trim() };
+  }
 }
 
 // The commit command reads its checkout from the working directory, so a test that drives it has to say
@@ -207,7 +225,7 @@ test('the assigned linked worktree remains allowed', () => {
 // the executor dies before it starts. The hook cannot reach across boards -- the
 // worktree it is asked to place belongs to THIS checkout -- so what it owes the
 // orchestrator is a refusal that names the cause instead of a bare reason code.
-test('a cross-project worktree creation refuses with the board it actually searched', () => {
+test('a cross-project worktree creation identifies the matching dispatch', () => {
   const other = initRepo('sq-isolation-other-project-');
   const otherSlug = store.ensureProject(other).slug;
   const sessionId = `cross-project-create-${Date.now()}`;
@@ -224,35 +242,75 @@ test('a cross-project worktree creation refuses with the board it actually searc
     agentName: 'crossproject',
   }).ok, true);
 
-  const createWorktree = (cwd: string) => {
-    try {
-      return {
-        ok: true,
-        output: execFileSync(process.execPath, [path.join(HOOKS, 'worktree-create.js')], {
-          input: JSON.stringify({ hook_event_name: 'WorktreeCreate', name: 'crossproject', session_id: sessionId, cwd }),
-          encoding: 'utf8',
-          env: { ...process.env, SIDEQUEST_HOME },
-          windowsHide: true,
-          stdio: ['pipe', 'pipe', 'pipe'],
-        }).trim(),
-      };
-    } catch (error: any) {
-      return { ok: false, output: String(error?.stderr || error?.message || error).trim() };
-    }
-  };
-
-  const hubSession = createWorktree(PROJECT);
-  const ownSession = createWorktree(other);
+  const hubSession = createWorktree(sessionId, 'crossproject', PROJECT);
+  const ownSession = createWorktree(sessionId, 'crossproject', other);
   try {
     assert.equal(hubSession.ok, false, 'a session rooted in another project cannot place this dispatch');
     assert.match(hubSession.output, /dispatch_binding_unavailable/);
     assert.match(hubSession.output, /sharedTree:true/);
-    assert.ok(hubSession.output.includes(PROJECT), `the refusal names the board it searched: ${hubSession.output}`);
+    assert.match(hubSession.output, /predicate `different_project`/);
     assert.equal(ownSession.ok, true, 'a session rooted in the ticket project still places it');
     assert.equal(store.getTicket(otherSlug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(ownSession.output));
   } finally {
     if (ownSession.ok) execFileSync('git', ['worktree', 'remove', '--force', ownSession.output], { cwd: other, windowsHide: true });
   }
+});
+
+test('a same-project session mismatch names the predicate without shared-tree advice', () => {
+  const name = `session-mismatch-${Date.now()}`;
+  const recordedSessionId = `recorded-session-${Date.now()}-${'r'.repeat(40)}`;
+  const suppliedSessionId = `supplied-session-${Date.now()}-${'s'.repeat(40)}`;
+  const ticket = store.createTicket(slug, {
+    title: 'session mismatch creation fixture',
+    category: 'codebase-exploration',
+    files: ['README.md'],
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: recordedSessionId });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId: recordedSessionId,
+    agentName: name,
+  }).ok, true);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, recordedSessionId, worktrees.namedWorktreePath(PROJECT, name)).ok, true);
+
+  const refusal = createWorktree(suppliedSessionId, name);
+  assert.equal(refusal.ok, false);
+  assert.match(refusal.output, /predicate `session_id`/);
+  assert.ok(refusal.output.includes('hook session id `' + suppliedSessionId.slice(0, 12) + '` against recorded session id `' + recordedSessionId.slice(0, 12) + '`'), 'compares bounded hook and recorded session ids');
+  assert.doesNotMatch(refusal.output, /sharedTree:true/);
+});
+
+test('a same-project worktree mismatch names the canonical-worktree predicate', () => {
+  const name = `worktree-mismatch-${Date.now()}`;
+  const sessionId = `worktree-session-${Date.now()}`;
+  const ticket = store.createTicket(slug, {
+    title: 'worktree mismatch creation fixture',
+    category: 'codebase-exploration',
+    files: ['README.md'],
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+    agentName: name,
+  }).ok, true);
+  const recordedWorktree = worktrees.namedWorktreePath(PROJECT, `${name}-recorded`);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, recordedWorktree).ok, true);
+
+  const refusal = createWorktree(sessionId, name);
+  assert.equal(refusal.ok, false);
+  assert.match(refusal.output, /predicate `canonical_worktree`/);
+  assert.ok(refusal.output.includes(worktrees.canonicalPath(recordedWorktree)), 'names the recorded canonical worktree');
+  assert.doesNotMatch(refusal.output, /sharedTree:true/);
+});
+
+test('a board with no matching launched isolated dispatch says so without shared-tree advice', () => {
+  const refusal = createWorktree(`unmatched-session-${Date.now()}`, `unmatched-worktree-${Date.now()}`);
+  assert.equal(refusal.ok, false);
+  assert.match(refusal.output, /No launched isolated dispatch exists on this board/);
+  assert.doesNotMatch(refusal.output, /sharedTree:true/);
 });
 
 // SQ-1546. Claude Code's own `isolation: worktree` provisions under
@@ -2063,4 +2121,180 @@ test('SQ-2089: the configured integration authority decides the isolated baselin
   // Pushing it makes the same configuration legal, so the refusal is about the missing ref and nothing else.
   git(['push', '--quiet', 'origin', 'terminal-wave:refs/heads/terminal-wave']);
   assert.equal(dispatchBaseline('origin-main', 'terminal-wave', 'remote-terminal'), 'terminal-wave tip', 'origin-main forks the configured branch once its remote ref exists');
+});
+
+// SQ-2537. An orchestrator added `isolation` to a continuation spawn, the Agent call died in WorktreeCreate
+// with no executor, and every recovery path then refused: the supersede the first refusal prescribed, the
+// retry after it, and the worktree-scoped retry. These cover the retirement and the guard that comes first.
+function retainedContinuationFixture(label: string) {
+  const sequence = `${label}-${process.pid}-${Date.now()}`;
+  const ticket = store.createTicket(slug, {
+    title: `continuation spawn fixture ${sequence}`,
+    category: 'codebase-exploration',
+    description: 'A handback left a verified commit in the checkout this ticket retained.',
+    files: ['README.md'],
+  });
+  const sessionId = `${sequence}-first-session`;
+  const agentName = `${sequence}-first-agent`;
+  const branch = `continuation-${sequence}`;
+  const worktree = path.join(SIDEQUEST_HOME, 'continuation-targets', sequence);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { token: prepared.token, executor, sessionId, agentName }).ok, true);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+  execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT, windowsHide: true });
+  completeCheckoutCreation(sessionId, worktree);
+  assert.equal(store.bindDispatchAgent(sessionId, executor, agentName, agentName, worktree).ok, true);
+  const owner = `${sequence}-worker`;
+  assert.equal(store.claimTicket(slug, ticket.ref, owner, { token: prepared.token, executor, sessionId, requireBoundAgent: true }).ok, true);
+  fs.appendFileSync(path.join(worktree, 'README.md'), `verified progress ${sequence}\n`);
+  execFileSync('git', ['add', 'README.md'], { cwd: worktree, windowsHide: true });
+  execFileSync('git', ['commit', '--quiet', '-m', `verified progress ${sequence}`], { cwd: worktree, windowsHide: true });
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
+  assert.equal(store.releaseTicket(slug, ticket.ref, owner, {
+    status: 'todo',
+    source: 'test',
+    releaseKind: 'handback',
+    releaseReason: 'Scope expanded; continue in this checkout.',
+  }).ok, true);
+  return { ticket, worktree, branch, commit, sequence };
+}
+
+test('a continuation spawn that never reached a runtime is retired by the command its refusal names', () => {
+  const { ticket, worktree, branch, commit, sequence } = retainedContinuationFixture('retired');
+  const continuationSession = `${sequence}-continuation-session`;
+  try {
+    const continued = store.prepareDispatch(slug, ticket.ref, { sessionId: continuationSession });
+    assert.equal(continued.ticket.dispatch.continuation?.mode, 'retained_worktree_resume');
+    assert.equal(worktrees.canonicalPath(continued.ticket.dispatch.worktree), worktrees.canonicalPath(worktree));
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: continued.token,
+      executor: continued.ticket.dispatchExecutor,
+      sessionId: continuationSession,
+      agentName: `${sequence}-continuation-agent`,
+    }).ok, true);
+
+    // The orchestrator added isolation, so the harness ran WorktreeCreate for a checkout this attempt never
+    // reserved. The hook refuses, the Agent call dies, and no executor process ever starts.
+    const refusedCreation = store.bindDispatchWorktreeCreation(slug, continuationSession, path.join(SIDEQUEST_HOME, 'continuation-targets', `${sequence}-unreserved`));
+    assert.equal(refusedCreation.ok, false);
+    assert.equal(refusedCreation.reason, 'dispatch_binding_unavailable');
+    const stalled = store.getTicket(slug, ticket.ref).dispatch;
+    assert.equal(stalled.outcome, 'launched');
+    assert.equal(stalled.boundAt, null);
+    assert.equal(stalled.claimedAt, null);
+
+    let refusal = '';
+    assert.throws(
+      () => store.prepareDispatch(slug, ticket.ref, { sessionId: `${sequence}-retry-session` }),
+      (error: any) => {
+        refusal = String(error.message);
+        return /already has a live dispatch attempt \(launched\)/.test(refusal);
+      },
+    );
+    const prescribed = /`sidequest dispatch (SQ-\d+) --recovery-evidence "([^"]*)"`/.exec(refusal);
+    assert.ok(prescribed, `the refusal must name the supersede command: ${refusal}`);
+    assert.equal(prescribed![1], ticket.ref);
+
+    const evidence = 'worktree lease refused creation: dispatch_binding_unavailable; the Agent call failed and no executor ran';
+    const retried = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sequence}-retry-session`, recoveryEvidence: evidence });
+    assert.equal(retried.ok, true);
+    assert.notEqual(retried.token, continued.token);
+    assert.equal(retried.ticket.dispatch.outcome, 'prepared');
+    const retiredAttempt = retried.ticket.dispatch.attempts.at(-1);
+    assert.equal(retiredAttempt.failureShape, 'unclaimed_launch_superseded');
+    assert.equal(retiredAttempt.recoveryEvidence, evidence);
+
+    // The retained checkout belonged to the attempt that created it, so retiring this one leaves it alone.
+    assert.equal(fs.existsSync(worktree), true);
+    assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim(), commit);
+
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'continuation-retired-cleanup', { status: 'todo', source: 'test', force: true });
+    removeWorktreeBranch(worktree, branch);
+  }
+});
+
+test('an isolation field added to a continuation spawn is refused before the harness creates a checkout', () => {
+  const { ticket, worktree, branch, sequence } = retainedContinuationFixture('isolation');
+  const continuationSession = `${sequence}-continuation-session`;
+  try {
+    const continued = store.prepareDispatch(slug, ticket.ref, { sessionId: continuationSession });
+    assert.equal(continued.ticket.dispatch.continuation?.mode, 'retained_worktree_resume');
+    const spawnInput = (extra: Record<string, unknown>) => ({
+      session_id: continuationSession,
+      cwd: PROJECT,
+      tool_name: 'Agent',
+      tool_input: {
+        subagent_type: continued.ticket.dispatchExecutor,
+        model: continued.ticket.exec.model,
+        name: continued.ticket.dispatch.launchName,
+        description: continued.ticket.dispatch.description,
+        prompt: agentsync.renderDispatchStub(continued.ticket, PROJECT),
+        ...extra,
+      },
+    });
+
+    const denied = runHook(FORCE_EXEC_BYPASS, spawnInput({ isolation: 'worktree' }), { CLAUDE_PROJECT_DIR: PROJECT });
+    assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+    // The refusal names the checkout as the board canonicalized it, so an 8.3 short tmpdir
+    // (C:\Users\RUNNER~1 on CI) only matches once the fixture path goes through the same expansion.
+    const named = worktrees.canonicalPath(worktree).replace(/[\\^$*+?.()|[\]{}]/g, '\\$&');
+    assert.match(denied.hookSpecificOutput.permissionDecisionReason, new RegExp(named, 'i'));
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.launchedAt, null, 'a refused spawn must not burn the attempt');
+
+    // The same spawn passed unchanged is the one the board prepared, so it still launches.
+    const allowed = runHook(FORCE_EXEC_BYPASS, spawnInput({}), { CLAUDE_PROJECT_DIR: PROJECT });
+    assert.notEqual(allowed?.hookSpecificOutput?.permissionDecision, 'deny');
+    assert.ok(store.getTicket(slug, ticket.ref).dispatch.launchedAt, 'the unchanged spawn records its launch');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'continuation-isolation-cleanup', { status: 'todo', source: 'test', force: true });
+    removeWorktreeBranch(worktree, branch);
+  }
+});
+
+test('a checkout the attempt reserved itself still blocks the retry, and repeating the evidence names the retirement', () => {
+  const sequence = `reserved-${process.pid}-${Date.now()}`;
+  const ticket = store.createTicket(slug, {
+    title: `reserved checkout fixture ${sequence}`,
+    category: 'codebase-exploration',
+    description: 'WorktreeCreate reserved a checkout, never recorded its identity, and left work in it.',
+    files: ['README.md'],
+  });
+  const sessionId = `${sequence}-session`;
+  const branch = `reserved-${sequence}`;
+  const worktree = path.join(SIDEQUEST_HOME, 'reserved-targets', sequence);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  try {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+      agentName: `${sequence}-agent`,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT, windowsHide: true });
+    fs.writeFileSync(path.join(worktree, 'uncommitted.txt'), 'work nobody has committed\n');
+
+    // This attempt reserved the checkout itself, so the uncommitted work in it still blocks a retry.
+    const evidence = 'observed terminal agent with no claim';
+    assert.throws(
+      () => store.prepareDispatch(slug, ticket.ref, { sessionId: `${sequence}-retry`, recoveryEvidence: evidence }),
+      /cannot retry because immutable recovery fact: .* has uncommitted changes/,
+    );
+    const retired = store.getTicket(slug, ticket.ref).dispatch;
+    assert.equal(retired.failureShape, 'stranded_bound_launch_superseded');
+    assert.equal(fs.existsSync(path.join(worktree, 'uncommitted.txt')), true);
+
+    // The attempt is gone, so repeating the command has to say that rather than deny it ever existed.
+    assert.throws(
+      () => store.prepareDispatch(slug, ticket.ref, { sessionId: `${sequence}-retry`, recoveryEvidence: evidence }),
+      /already retired on recovery evidence[\s\S]*without recoveryEvidence/,
+    );
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'reserved-checkout-cleanup', { status: 'todo', source: 'test', force: true });
+    removeWorktreeBranch(worktree, branch);
+  }
 });

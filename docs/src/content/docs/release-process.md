@@ -5,11 +5,13 @@ description: Maintainer workflow for moving verified Toolshed changes to the mar
 
 ## Maintainer overview
 
-Toolshed publishes from `main`. A release cut creates a marketplace tag, `v<marketplace-version>`, and a tag for each released plugin, `<plugin>-v<plugin-version>`. The `Publish GitHub Release` workflow runs for pushes of `v*` tags, on its daily schedule, and when manually dispatched. It creates GitHub Releases only for marketplace tags, so per-plugin tags do not create GitHub Releases.
+Toolshed publishes from `main`. A release cut creates a marketplace tag, `v<marketplace-version>`, and a tag for each released plugin, `<plugin>-v<plugin-version>`. A window of only repository-scoped work moves no plugin version, so it creates the marketplace tag alone. The `Publish GitHub Release` workflow runs for pushes of `v*` tags, on its daily schedule, and when manually dispatched. It creates GitHub Releases only for marketplace tags, so per-plugin tags do not create GitHub Releases.
 
 ## Prepare a release
 
 1. Add a fragment under `.release/unreleased/` with the plugin, change type, and user-facing summary.
+
+   Work that changes no published plugin declares `scope: repo` instead of `plugins` and `bump`. Release scripts, CI workflows, and repository documentation are the usual cases. A repo-scoped fragment moves no plugin version, so nobody re-extracts a plugin for it; it lands in the repository `CHANGELOG.md` under `Repository` and the release commit message names `repository` alongside any plugins the window does move. The two forms are mutually exclusive: a fragment declaring `scope: repo` alongside `plugins` or `bump` is refused. Do not reach for it to avoid a bump you find inconvenient, and do not bump a plugin the change never touched.
 2. Check the queue and preview the release:
 
    ```text
@@ -31,13 +33,15 @@ The `Test` and `Release guard` workflows run on pull requests and pushes to `mai
 
 The cut also runs tests itself. It writes the release commit and every tag locally, then runs the test suite of each plugin the release moves, and only pushes if they all pass. `--dry-run` lists those suites under `suites (N)`, so you can see what a cut will run before it runs it.
 
-A failing suite publishes nothing, but the local release commit and its tags are already written by that point. The cut prints the two commands that undo them, a `git reset --hard` back to the previous head and a `git tag -d` naming every tag it created. Run both. A reset alone leaves the tags behind, and a later cut for the same version will not be able to create them.
+A failing suite publishes nothing. The cut automatically resets the local release window to the previous head and deletes every tag it created, while preserving the suite log under `.release/logs/`. A marketplace tag that has already been published keeps its existing roll-forward recovery path.
 
-Deleting those tags needs the publish lock, because Sidequest refuses a manual `git tag` on this repository without one. Acquire it with `sidequest publish lock`, delete the tags, then `sidequest publish unlock`. The refusal blocks the whole shell invocation, so run the lock, the deletion, and the unlock as three separate commands rather than chaining them.
+While that window is open, Sidequest refuses to prepare a dispatch, because the baseline it would hand an executor is a commit `main` is about to rewind past. The refusal names the tags it found. Normally you see it only while a cut is still running its suites, and waiting for the cut to finish is the whole fix. It also fires when the automatic rollback itself failed, and there it is doing real work: that commit stays until someone clears it.
+
+Clearing it by hand needs the publish lock, because Sidequest refuses a manual tag deletion on this repository without one. Acquire it with `sidequest publish lock`, run the `git reset --hard` and the `git update-ref -d refs/tags/<tag>` commands the cut printed, then `sidequest publish unlock`. The refusal blocks the whole shell invocation, so run the lock, the deletion, and the unlock as three separate commands rather than chaining them.
 
 This gate is local and it runs on your machine, so a test that reads your own environment can fail here while CI is green on the same commit. That is a bug in the test, not a reason to skip the gate.
 
-A failure that disappears when you rerun the failing file on its own is a different problem: a concurrency flake, usually two test files sharing a fixture, or a reader parsing a file another test is still writing. It is still worth stopping for, because an intermittent that can fail a cut can fail CI later. Undo the window, run the failing file alone to confirm, cut again, and file the flake as its own ticket so the next cut does not pay for it twice.
+A failure that disappears when you rerun the failing file on its own is a different problem: a concurrency flake, usually two test files sharing a fixture, or a reader parsing a file another test is still writing. It is still worth stopping for, because an intermittent that can fail a cut can fail CI later. Run the failing file alone to confirm, cut again, and file the flake as its own ticket so the next cut does not pay for it twice.
 
 GitHub Releases publish at most once per UTC day. When several marketplace tags land before the daily publish, the workflow releases the newest unreleased tag and generated notes cover the intermediate versions from the previous published Release. A cut whose release workflow succeeds under that cap reports the deferral as successful, and the scheduled publish catches it up.
 

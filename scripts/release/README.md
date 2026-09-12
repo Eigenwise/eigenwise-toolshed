@@ -13,7 +13,7 @@ See [`.release/README.md`](../../.release/README.md) for the fragment schema.
 
 ## Release authority
 
-The orchestrator owns the release cut from `main` at `HEAD`. Each integrated ticket gets one fragment in `.release/unreleased/`. Ticket work records the fragment and does not hand-edit plugin or marketplace versions. `cut.mjs` reads the queued fragments, applies the version bumps, writes the changelogs, removes the consumed fragments, creates the release commit and tags, and runs the suites for changed plugins.
+The orchestrator owns the release cut from `main` at `HEAD`. Each integrated ticket gets one fragment in `.release/unreleased/`. Ticket work records the fragment and does not hand-edit plugin or marketplace versions. `cut.mjs` reads the queued fragments, applies the version bumps, writes the changelogs, removes the consumed fragments, creates the release commit and tags, and runs the suites for changed plugins. A window containing only `scope: repo` fragments still creates a marketplace release and repository changelog entry, without changing a plugin version or plugin changelog.
 
 A normal cut defaults to the current `main` checkout. Use `--sha <rev>` only when the release window must be pinned to a specific descendant of `main`. The cut checks the branch and fast-forward relationship before it writes anything.
 
@@ -57,7 +57,7 @@ Run `--help` for the complete option list.
 
 ## Recovery
 
-Everything before the first remote push is local. If a suite or invariant fails, the cut leaves the remote untouched and prints a reset to the previous `HEAD` plus a `git tag -d` command for every tag it created. Run both commands before retrying. A reset alone leaves local tags behind.
+Everything before the marketplace push is local. If a suite or invariant fails, the cut leaves the remote untouched, resets to the previous `HEAD`, and deletes every local release tag. If that rollback fails, the cut prints the manual reset and `git update-ref -d refs/tags/<tag>` fallback commands before retrying. Once the marketplace tag is published, leave it in place and follow the cut's roll-forward instructions.
 
 If the first atomic push succeeds and the separate plugin-tag push fails, `main` and the marketplace tag remain published. Inspect the remote, then publish the missing plugin tags with the plugin-tag push command printed by the cut. Do not rerun the whole cut or move an already-published marketplace tag.
 
@@ -77,4 +77,4 @@ If the pushes succeed and the GitHub Release is deferred by the daily cap, leave
 node --test scripts/release/test/*.test.mjs
 ```
 
-The release tests use throwaway repositories and local bare remotes. They do not contact a network. They cover planning, version bumps, changelogs, the separate push stages, recovery, tag checks, and suite safeguards.
+The release tests use throwaway repositories and local bare remotes. They do not contact a network. They cover planning, version bumps, changelogs, the separate push stages, automatic pre-push rollback, tag checks, and suite safeguards.

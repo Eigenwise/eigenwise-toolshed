@@ -10,7 +10,7 @@ Claude Code can use a project well and still make you re-teach it the repository
 
 The same thing happens around model choice and measurement. Expensive models get routine jobs, parallel changes need ownership and verification, and usage stays invisible until a bill or a slow week makes it obvious. Then a plugin install or update has its own friction: what scope did it change, which session needs a reload, and what is safe to turn on?
 
-Toolshed packages those jobs as six independent Claude Code plugins. Use one, a few, or all six. Quartermaster is the guided starting path when you want help choosing, installing, and checking the pieces that fit a project.
+Toolshed packages those jobs as six independent Claude Code plugins. Use one, a few, or all six. Quartermaster is the guided starting path when you want help choosing, installing, and checking the pieces that fit a project, and it draws on whatever plugins are available on the machine, not only these six.
 
 ## The six plugins
 
@@ -21,13 +21,13 @@ Toolshed packages those jobs as six independent Claude Code plugins. Use one, a 
 | Side work gets lost, and parallel changes need a clear owner | [Sidequest](./plugins/sidequest) | Tracks work as tickets, claims changes before work starts, dispatches independent work, and gates results on verification before integration. |
 | You want the models and subscriptions you already have in Claude Code | [Model Gateway](./plugins/model-gateway) | Adds supported ChatGPT/Codex and Grok subscription models to Claude Code's `/model` picker through a local gateway. |
 | You cannot tell where time and tokens go | [Observability](./plugins/observability) | Records selected session and tool metadata locally, with per-project opt-in and optional sinks. |
-| Setup, updates, and missing capabilities keep pushing back | [Quartermaster](./plugins/quartermaster) | Guides project setup, keeps active Toolshed installs current, checks health, and uses bounded session summaries to suggest one approved improvement at a time. |
+| Setup, updates, and missing capabilities keep pushing back | [Quartermaster](./plugins/quartermaster) | Recommends and installs plugins from any marketplace on the machine for setup, keeps active Toolshed installs current, checks health, and uses bounded session summaries to suggest one approved improvement at a time. |
 
 Each plugin has its own install path and guide. None requires the others. Sidequest can route across Claude models on its own; Model Gateway is only needed for its non-Claude routes. Observability is separate from the other plugins and remains opt-in per project.
 
 ## Start with Quartermaster
 
-Use Quartermaster when you want Claude to look at a project, explain which Toolshed pieces fit, and leave the rest alone. Install a plugin directly when you already know which job you want.
+Use Quartermaster when you want Claude to look at a project and recommend what fits from the plugins available on the machine, Toolshed and otherwise, installing only what you approve. Before it names a plugin, it can check current sources for whether that plugin is still maintained, whether its cached description is stale, and whether something better fits, including from a marketplace you have not added yet. Searches use generic capability terms, so your project names and file paths stay out of the search engine's logs. Install a plugin directly when you already know which job you want.
 
 From the project directory:
 
@@ -50,7 +50,7 @@ From the project directory:
 5. Setup installs the selected plugins and writes the approved workspace files. When it pauses at the reload boundary, reload plugins or restart Claude Code if the change affects the process environment, then tell Claude `continue`.
 6. Let setup verify the installed plugins and workspace after that boundary. Try one real request in the project before adding more pieces.
 
-Quartermaster's setup uses project scope by default, but Claude Code also supports user and local scopes. The updater follows the recorded scope and project path for every active Toolshed install, so a request from one project can update Toolshed installs in other recorded projects too. Read the update and reload notes before running it.
+Quartermaster's setup uses project scope by default, but Claude Code also supports user and local scopes. Setup can recommend and install plugins from any marketplace. The updater is scoped to Toolshed only: it follows the recorded scope and project path for every active Toolshed install, so a request from one project can update Toolshed installs in other recorded projects too, and it never touches plugins from other marketplaces. Read the update and reload notes before running it.
 
 ## Install a plugin directly
 

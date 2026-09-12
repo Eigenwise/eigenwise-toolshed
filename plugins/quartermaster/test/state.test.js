@@ -14,15 +14,19 @@ const {
   markNudged,
   markOffered,
   markResupply,
+  nudgeThresholds,
+  offerThresholds,
   projectStateFile,
   readProjectState,
   recordSessionTally,
   rejectedFingerprints,
+  resupplyThresholds,
   statusFor,
   verifyDecisions,
 } = require('../lib/state.js');
 
 const DAY_MS = 86400000;
+const HOUR_MS = 3600000;
 // A platform-native path: the transcript counter re-resolves the canonical project directory, and a
 // Windows-literal path resolves to a different slug on Linux runners.
 const PROJECT = path.resolve(os.tmpdir(), 'example-project');
@@ -166,6 +170,88 @@ test('statusFor keeps Stop offers independent from SessionStart nudges and recor
   assert.equal(status.lastDeclinedAt, new Date(now).toISOString());
 });
 
+test('strong evidence reopens an accepted resupply cooldown after its floor', () => {
+  const now = Date.now();
+  markResupply(PROJECT, environment, now);
+  for (let index = 0; index < 8; index += 1) {
+    recordSessionTally(PROJECT, `strong-${index}`, tallyWith(), environment, now + index + 1);
+  }
+  assert.equal(statusFor(PROJECT, environment, now + 5 * HOUR_MS).shouldOffer, true, 'eight sessions clear the default 2x escalation bar');
+
+  const weakProject = path.join(PROJECT, 'weak-evidence');
+  markResupply(weakProject, environment, now);
+  for (let index = 0; index < 4; index += 1) {
+    recordSessionTally(weakProject, `weak-${index}`, tallyWith(), environment, now + index + 1);
+  }
+  assert.equal(statusFor(weakProject, environment, now + 5 * HOUR_MS).shouldOffer, false, 'normal-threshold evidence stays inside the accepted resupply cooldown');
+});
+
+test('the resupply floor blocks an immediate second Stop offer', () => {
+  const now = Date.now();
+  markOffered(PROJECT, 'first-stop-session', environment, now);
+  markResupply(PROJECT, environment, now + 1);
+  for (let index = 0; index < 8; index += 1) {
+    recordSessionTally(PROJECT, `immediate-${index}`, tallyWith(), environment, now + index + 2);
+  }
+
+  assert.equal(statusFor(PROJECT, environment, now + 3).shouldOffer, false, 'the four-hour floor wins over escalated evidence');
+});
+
+test('declines preserve evidence and increase the offer backoff', () => {
+  const now = Date.now();
+  for (let index = 0; index < 4; index += 1) {
+    recordSessionTally(PROJECT, `declined-${index}`, tallyWith(), environment, now - DAY_MS + index);
+  }
+
+  declineResupply(PROJECT, environment, now);
+  let state = readProjectState(PROJECT, environment);
+  assert.equal(state.lastResupplyAt, null, 'declining does not move the evidence cutoff');
+  assert.equal(state.sessions.length, 4, 'declining retains the accumulated evidence');
+  assert.equal(state.consecutiveDeclines, 1);
+  assert.equal(statusFor(PROJECT, environment, now + HOUR_MS).shouldOffer, false, 'the first decline suppresses the base offer window');
+
+  const secondDeclineAt = now + 24 * HOUR_MS + 1;
+  assert.equal(statusFor(PROJECT, environment, secondDeclineAt).shouldOffer, true, 'the first decline backoff expires after the base window');
+  declineResupply(PROJECT, environment, secondDeclineAt);
+  state = readProjectState(PROJECT, environment);
+  assert.equal(state.consecutiveDeclines, 2);
+  assert.equal(statusFor(PROJECT, environment, secondDeclineAt + 24 * HOUR_MS).shouldOffer, false, 'the second decline doubles the backoff');
+  assert.equal(statusFor(PROJECT, environment, secondDeclineAt + 48 * HOUR_MS + 1).shouldOffer, true, 'the doubled backoff eventually expires');
+});
+
+test('an accepted resupply resets decline backoff and moves the evidence cutoff', () => {
+  const now = Date.now();
+  for (let index = 0; index < 4; index += 1) {
+    recordSessionTally(PROJECT, `accepted-${index}`, tallyWith(), environment, now - DAY_MS + index);
+  }
+  declineResupply(PROJECT, environment, now);
+  declineResupply(PROJECT, environment, now + DAY_MS);
+
+  const acceptedAt = now + 2 * DAY_MS;
+  markResupply(PROJECT, environment, acceptedAt);
+  let state = readProjectState(PROJECT, environment);
+  assert.equal(state.lastResupplyAt, new Date(acceptedAt).toISOString());
+  assert.equal(state.lastDeclinedAt, null);
+  assert.equal(state.consecutiveDeclines, 0);
+  assert.equal(statusFor(PROJECT, environment, acceptedAt + 1).unanalyzedSessions, 0, 'the accepted pass moves the evidence cutoff');
+
+  declineResupply(PROJECT, environment, acceptedAt + 2);
+  state = readProjectState(PROJECT, environment);
+  assert.equal(state.consecutiveDeclines, 1, 'the next decline starts at the base backoff');
+});
+
+test('the resupply cooldown has its own environment knob', () => {
+  const now = Date.now();
+  const projectDir = path.join(PROJECT, 'resupply-cooldown');
+  markResupply(projectDir, environment, now);
+  for (let index = 0; index < 4; index += 1) {
+    recordSessionTally(projectDir, `cooldown-${index}`, tallyWith(), environment, now + index + 1);
+  }
+
+  assert.equal(statusFor(projectDir, { ...environment, QUARTERMASTER_NUDGE_HOURS: '1' }, now + 5 * HOUR_MS).shouldOffer, false, 'nudge cadence does not shorten the resupply cooldown');
+  assert.equal(statusFor(projectDir, { ...environment, QUARTERMASTER_RESUPPLY_HOURS: '1' }, now + 5 * HOUR_MS).shouldOffer, true, 'the resupply cadence can be configured independently');
+});
+
 test('state written before the rename keeps its history under the new key', () => {
   const now = Date.now();
   for (let index = 0; index < 9; index += 1) {
@@ -189,6 +275,18 @@ test('decisions ledger separates applied from rejected fingerprints', () => {
   const { applied, rejected } = rejectedFingerprints(environment);
   assert.deepEqual(applied, ['plugin-install:context7']);
   assert.deepEqual(rejected, ['rule:no-force-push']);
+});
+
+test('a rejection recorded against another project does not suppress the fingerprint here', () => {
+  appendDecision({ projectDir: path.resolve(os.tmpdir(), 'other-repo'), fingerprint: 'permission:auto-allowlist-optin', status: 'rejected', title: 'elsewhere' }, environment);
+  appendDecision({ fingerprint: 'rule:legacy-entry', status: 'rejected', title: 'no projectDir' }, environment);
+
+  const scoped = rejectedFingerprints(environment, PROJECT);
+  assert.equal(scoped.rejected.includes('permission:auto-allowlist-optin'), false, 'another project cannot silence this one');
+  assert.equal(scoped.rejected.includes('rule:legacy-entry'), true, 'an entry predating projectDir stays global');
+
+  assert.equal(rejectedFingerprints(environment, path.resolve(os.tmpdir(), 'other-repo')).rejected.includes('permission:auto-allowlist-optin'), true);
+  assert.equal(rejectedFingerprints(environment).rejected.includes('permission:auto-allowlist-optin'), true, 'unscoped keeps the whole-ledger view');
 });
 
 test('verifyDecisions reports improvement against the targeted signal', () => {
@@ -236,4 +334,23 @@ test('verifyDecisions declines to judge on thin data', () => {
   recordSessionTally(PROJECT, 'only-one', tallyWith(), environment, now - DAY_MS);
   appendDecision({ projectDir: PROJECT, fingerprint: 'rule:x', status: 'applied', title: 'x' }, environment, now);
   assert.equal(verifyDecisions(PROJECT, environment)[0].verdict, 'insufficient-data');
+});
+
+test('every documented threshold variable is read under its documented name', () => {
+  const documented = [
+    ['QUARTERMASTER_MIN_SESSIONS', 11, () => nudgeThresholds(environment).minSessions],
+    ['QUARTERMASTER_MIN_FRICTION', 13, () => nudgeThresholds(environment).minFriction],
+    ['QUARTERMASTER_NUDGE_HOURS', 17, () => nudgeThresholds(environment).cooldownHours],
+    ['QUARTERMASTER_OFFER_HOURS', 19, () => offerThresholds(environment).cooldownHours],
+    ['QUARTERMASTER_RESUPPLY_HOURS', 23, () => resupplyThresholds(environment).cooldownHours],
+    ['QUARTERMASTER_RESUPPLY_MULTIPLIER', 29, () => resupplyThresholds(environment).escalationMultiplier],
+  ];
+
+  for (const [variable, value, read] of documented) {
+    const withoutOverride = read();
+    environment[variable] = String(value);
+    assert.notEqual(withoutOverride, value, `${variable} test value must differ from the default to prove anything`);
+    assert.equal(read(), value, `${variable} is documented in README.md but state.js does not read that exact name`);
+    delete environment[variable];
+  }
 });
