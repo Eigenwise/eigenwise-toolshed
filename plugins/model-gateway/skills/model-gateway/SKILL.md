@@ -174,6 +174,8 @@ Usage observability also writes one high-water JSON file per valid session under
 largest forwarded request-body byte count observed for that session and an observation timestamp. It does
 not contain the request body. No retention period is promised for either local record.
 
+When the user asks about a failed Codex compaction and consent-gated route telemetry is available, inspect fixed compaction trace metadata only: selected/effective model, backend, upstream status, elapsed time, outcome, terminal/error code, and observed usage counters. `empty_summary` means a clean `message_stop` with no visible non-whitespace text; `incomplete` means the HTTP-200 SSE stream did not reach that terminal event. Unknown provider errors appear only as `unknown_error`. Never infer summary content or repeat prompts, response text, raw errors, headers, credentials, or environment values from diagnostics.
+
 Claude Code's `/remote-control` only lights up when `ANTHROPIC_BASE_URL` is exactly the real
 Anthropic host, which conflicts with gateway model discovery. RC-compatibility is a reversible,
 opt-in local HTTP transport configuration, not a verified end-to-end Remote Control solution. At
