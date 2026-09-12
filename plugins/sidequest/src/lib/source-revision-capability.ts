@@ -1,9 +1,9 @@
 'use strict';
 
-import { createHash } from 'node:crypto';
-import { lstatSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
-import { relative, resolve, sep } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { extname, resolve } from 'node:path';
 import type { Baseline, SourceRevision } from './kernel';
+import type { SnapshotChildResult } from './source-revision-snapshot-child';
 
 export type SourceRevisionResolution = Readonly<{
   candidateExists: boolean;
@@ -43,13 +43,15 @@ export class FilesystemSnapshotLimitError extends Error {
   readonly bound: FilesystemSnapshotLimit;
   readonly observed: number;
   readonly cap: number;
+  readonly path: string | null;
 
-  constructor(bound: FilesystemSnapshotLimit, observed: number, cap: number) {
-    super(`filesystem snapshot ${bound} exceeded: observed ${observed}, cap ${cap}`);
+  constructor(bound: FilesystemSnapshotLimit, observed: number, cap: number, blockingPath: string | null = null) {
+    super(`filesystem snapshot ${bound} exceeded: observed ${observed}, cap ${cap}${blockingPath ? ` while reading ${blockingPath}` : ''}`);
     this.name = 'FilesystemSnapshotLimitError';
     this.bound = bound;
     this.observed = observed;
     this.cap = cap;
+    this.path = blockingPath;
   }
 }
 
@@ -61,20 +63,20 @@ export type FilesystemSnapshotOptions = Readonly<{
   maxPaths?: number;
   maxBytes?: number;
   maxElapsedMs?: number;
-  now?: () => number;
-  readFile?: (entryPath: string) => Buffer;
+  // Seam for the tests that need a walk which blocks forever, which no fixture tree can produce.
+  childScript?: string;
 }>;
 
-type FilesystemSnapshotState = {
-  pathCount: number;
-  bytesRead: number;
-  maxPaths: number;
-  maxBytes: number;
-  maxElapsedMs: number;
-  startedAt: number;
-  now: () => number;
-  readFile: (entryPath: string) => Buffer;
-};
+// Stderr lines from the snapshot child that carry the file it is about to read.
+const SNAPSHOT_READING_MARKER = 'sidequest-snapshot-reading\t';
+
+const snapshotChildExtension = extname(__filename) || '.js';
+// The tests load this module from TypeScript through tsx, so the child needs the same loader, and
+// resolving it from the plugin root rather than the caller's cwd keeps that independent of where
+// the suite was started. The built plugin runs a plain .js child on plain node.
+const snapshotChildRunsTypeScript = snapshotChildExtension === '.ts';
+const defaultSnapshotChildScript = resolve(__dirname, `source-revision-snapshot-child${snapshotChildExtension}`);
+const snapshotChildWorkingDirectory = snapshotChildRunsTypeScript ? resolve(__dirname, '..', '..') : undefined;
 
 const registrationsByProject = new Map<string, SourceRevisionRegistration>();
 const resolvedAdapterFacts = new WeakSet<object>();
@@ -88,85 +90,45 @@ function baselinePurpose(value: unknown): Baseline['purpose'] | null {
   return null;
 }
 
-function snapshotPath(projectPath: string, entryPath: string): string {
-  return relative(projectPath, entryPath).split(sep).join('/');
-}
-
 function snapshotLimit(value: number | undefined, defaultLimit: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : defaultLimit;
 }
 
-function filesystemSnapshotState(options: FilesystemSnapshotOptions | undefined): FilesystemSnapshotState {
-  const now = options?.now || performance.now.bind(performance);
-  return {
-    pathCount: 0,
-    bytesRead: 0,
+function blockingSnapshotPath(stderr: string): string | null {
+  const lines = String(stderr || '').split('\n');
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index] || '';
+    if (line.startsWith(SNAPSHOT_READING_MARKER)) return line.slice(SNAPSHOT_READING_MARKER.length).trim() || null;
+  }
+  return null;
+}
+
+function snapshotChildResult(root: string, options: FilesystemSnapshotOptions | undefined): SnapshotChildResult | null {
+  const maxElapsedMs = snapshotLimit(options?.maxElapsedMs, FILESYSTEM_SNAPSHOT_MAX_ELAPSED_MS);
+  const childScript = options?.childScript || defaultSnapshotChildScript;
+  const payload = JSON.stringify({
+    root,
     maxPaths: snapshotLimit(options?.maxPaths, FILESYSTEM_SNAPSHOT_MAX_PATHS),
     maxBytes: snapshotLimit(options?.maxBytes, FILESYSTEM_SNAPSHOT_MAX_BYTES),
-    maxElapsedMs: snapshotLimit(options?.maxElapsedMs, FILESYSTEM_SNAPSHOT_MAX_ELAPSED_MS),
-    startedAt: now(),
-    now,
-    readFile: options?.readFile || ((entryPath) => readFileSync(entryPath)),
-  };
-}
-
-function assertSnapshotDeadline(state: FilesystemSnapshotState): void {
-  const elapsedMs = Math.max(0, state.now() - state.startedAt);
-  if (elapsedMs > state.maxElapsedMs) {
-    throw new FilesystemSnapshotLimitError('deadline', elapsedMs, state.maxElapsedMs);
+    readingMarker: SNAPSHOT_READING_MARKER,
+  });
+  const startedAt = performance.now();
+  const child = spawnSync(
+    process.execPath,
+    snapshotChildRunsTypeScript ? ['--import', 'tsx', childScript, payload] : [childScript, payload],
+    // spawnSync reads a zero timeout as "no timeout", which is the unbounded hang this exists to end.
+    { encoding: 'utf8', timeout: Math.max(1, maxElapsedMs), windowsHide: true, cwd: snapshotChildWorkingDirectory },
+  );
+  const elapsedMs = Math.max(0, Math.round(performance.now() - startedAt));
+  if ((child.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT') {
+    throw new FilesystemSnapshotLimitError('deadline', elapsedMs, maxElapsedMs, blockingSnapshotPath(child.stderr));
   }
-}
-
-function countSnapshotPath(state: FilesystemSnapshotState): void {
-  state.pathCount += 1;
-  if (state.pathCount > state.maxPaths) {
-    throw new FilesystemSnapshotLimitError('path cap', state.pathCount, state.maxPaths);
+  if (child.error || child.status !== 0) return null;
+  try {
+    return JSON.parse(String(child.stdout || '')) as SnapshotChildResult;
+  } catch {
+    return null;
   }
-}
-
-function reserveSnapshotBytes(state: FilesystemSnapshotState, byteCount: number): void {
-  const observedBytes = state.bytesRead + byteCount;
-  if (observedBytes > state.maxBytes) {
-    throw new FilesystemSnapshotLimitError('byte cap', observedBytes, state.maxBytes);
-  }
-}
-
-function updateFilesystemSnapshot(
-  hash: ReturnType<typeof createHash>,
-  projectPath: string,
-  entryPath: string,
-  state: FilesystemSnapshotState,
-): void {
-  assertSnapshotDeadline(state);
-  const entry = lstatSync(entryPath);
-  assertSnapshotDeadline(state);
-  countSnapshotPath(state);
-  const relativePath = snapshotPath(projectPath, entryPath);
-  if (entry.isDirectory()) {
-    hash.update(`directory\0${relativePath}\0`);
-    const children = readdirSync(entryPath).sort((left, right) => left.localeCompare(right));
-    assertSnapshotDeadline(state);
-    for (const child of children) updateFilesystemSnapshot(hash, projectPath, resolve(entryPath, child), state);
-    return;
-  }
-  if (entry.isSymbolicLink()) {
-    const target = readlinkSync(entryPath);
-    assertSnapshotDeadline(state);
-    hash.update(`symlink\0${relativePath}\0${target}\0`);
-    return;
-  }
-  if (entry.isFile()) {
-    hash.update(`file\0${relativePath}\0`);
-    reserveSnapshotBytes(state, entry.size);
-    const contents = state.readFile(entryPath);
-    assertSnapshotDeadline(state);
-    reserveSnapshotBytes(state, contents.byteLength);
-    state.bytesRead += contents.byteLength;
-    hash.update(contents);
-    hash.update('\0');
-    return;
-  }
-  hash.update(`other\0${relativePath}\0${entry.mode}\0${entry.size}\0`);
 }
 
 export function filesystemSnapshotRevision(
@@ -176,28 +138,15 @@ export function filesystemSnapshotRevision(
 ): SourceRevision | null {
   const root = resolve(String(projectPath || '').trim());
   if (!root || !Number.isFinite(Date.parse(observedAt))) return null;
-  const state = filesystemSnapshotState(options);
-  let rootExists = false;
-  try {
-    if (!lstatSync(root).isDirectory()) return null;
-    assertSnapshotDeadline(state);
-    rootExists = true;
-  } catch (error) {
-    if (isFilesystemSnapshotLimitError(error)) throw error;
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+  const result = snapshotChildResult(root, options);
+  if (!result) return null;
+  if ('limit' in result) {
+    throw new FilesystemSnapshotLimitError(result.limit.bound, result.limit.observed, result.limit.cap);
   }
-  const hash = createHash('sha256');
-  hash.update('sidequest-filesystem-snapshot-v1\0');
-  try {
-    if (rootExists) updateFilesystemSnapshot(hash, root, root, state);
-    else hash.update('missing-project-root\0');
-  } catch (error) {
-    if (isFilesystemSnapshotLimitError(error)) throw error;
-    return null;
-  }
+  if (!('digest' in result)) return null;
   return Object.freeze({
     source: FILESYSTEM_SNAPSHOT_SOURCE,
-    value: hash.digest('hex'),
+    value: result.digest,
     observedAt: new Date(observedAt).toISOString(),
   });
 }
