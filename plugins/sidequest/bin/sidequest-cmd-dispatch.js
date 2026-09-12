@@ -35,12 +35,23 @@ async function cmdDispatch(opts, positional) {
       allowRepeatFailure: !!opts["allow-repeat-failure"],
       allowUnscoped: !!opts["allow-unscoped"],
       recoveryEvidence: opts["recovery-evidence"],
+      retireOnly: !!opts["retire-only"],
       source: "cli",
       transport: "cli",
       allowUnverifiedTransport: unverifiedTransport
     });
   } catch (err) {
     fail(`dispatch: ${err && err.message || err}`);
+  }
+  if (prepared.retired) {
+    process.stdout.write(JSON.stringify({
+      project: slug,
+      projectPath: meta.path,
+      ref: prepared.ticket.ref,
+      retired: true,
+      guidance: `Retired the unclaimed dispatch without preparing a replacement. Use groom-close after its delivery commit is reachable from the recorded integration branch.`
+    }, null, 2) + "\n");
+    return;
   }
   const isolation = agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch && prepared.ticket.dispatch.sharedTree);
   const prompt = agentsync.renderDispatchStub(prepared.ticket, meta.path);

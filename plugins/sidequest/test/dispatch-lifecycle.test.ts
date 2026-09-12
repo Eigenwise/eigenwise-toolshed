@@ -2455,7 +2455,6 @@ test('control plane records an abandoned candidate after recovering the dead unc
     executor: dead.ticket.dispatchExecutor,
     agentName,
   }).ok, true);
-  assert.equal(store.bindDispatchAgent(deadSession, dead.ticket.dispatchExecutor, agentName, agentName).ok, true);
   assert.equal(store.releaseTicket(slug, ticket.ref, 'orchestrator', { source: 'test' }).reason, 'unclaimed_active_dispatch');
   assert.equal(store.clearUnclaimedDispatch(slug, ticket.ref, {
     by: 'orchestrator',
@@ -2489,6 +2488,125 @@ test('control plane records an abandoned candidate after recovering the dead unc
   assert.equal(closed.ticket.submission.integration.outcome, 'abandoned');
   assert.equal(closed.ticket.submission.integration.candidateState, 'unresolvable');
   assert.equal(closed.ticket.completion.delivery, undefined);
+});
+
+test('unclaimed pre-runtime delivery names and preserves its manual recovery path', () => {
+  const ticket = createFixture('manual pre-runtime delivery fixture');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `manual-pre-runtime-${Date.now()}` });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId: `manual-pre-runtime-${Date.now()}`,
+    agentName: `manual-pre-runtime-${ticket.id}`,
+  }).ok, true);
+  commitFixtureChange();
+  const deliveredCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+
+  const bareGroomClose = store.completeTicketAsControlPlane(slug, ticket.ref, {
+    purpose: 'delivery',
+    by: 'control-plane',
+    reason: 'The executor ended before its first claim.',
+    deliveryCommit: deliveredCommit,
+  });
+  assert.equal(bareGroomClose.reason, 'active_dispatch');
+  assert.match(bareGroomClose.message, /deliveryMethod manual/);
+  assert.match(bareGroomClose.message, /recoveryEvidence/);
+  assert.match(bareGroomClose.message, /reachable from the recorded integration branch/);
+  assert.throws(
+    () => store.updateTicket(slug, ticket.ref, { status: 'done' }),
+    /deliveryMethod manual[\s\S]*recoveryEvidence/,
+  );
+
+  const release = store.releaseTicket(slug, ticket.ref, 'control-plane', { source: 'test' });
+  assert.equal(release.reason, 'unclaimed_active_dispatch');
+  assert.match(release.message, /deliveryMethod manual/);
+  assert.match(release.message, /recoveryEvidence/);
+  assert.match(release.message, /reachable from the recorded integration branch/);
+
+  assert.equal(store.clearUnclaimedDispatch(slug, ticket.ref, {
+    by: 'control-plane',
+    evidence: 'The dispatched executor exited before its first claim.',
+  }).ok, true);
+  const closed = store.completeTicketAsControlPlane(slug, ticket.ref, {
+    purpose: 'delivery',
+    by: 'control-plane',
+    reason: 'The executor ended before its first claim.',
+    deliveryCommit: deliveredCommit,
+    deliveryMethod: 'manual',
+  });
+  assert.equal(closed.ok, true);
+  assert.equal(closed.ticket.status, 'done');
+
+  const retireOnly = createFixture('retire-only pre-runtime delivery fixture');
+  const retirePrepared = store.prepareDispatch(slug, retireOnly.ref, { sessionId: `retire-only-${Date.now()}` });
+  assert.equal(store.recordDispatchLaunch(slug, retireOnly.ref, {
+    token: retirePrepared.token,
+    executor: retirePrepared.ticket.dispatchExecutor,
+    agentName: `retire-only-${retireOnly.id}`,
+  }).ok, true);
+  const retired = store.prepareDispatch(slug, retireOnly.ref, {
+    recoveryEvidence: 'The executor exited before its first claim.',
+    retireOnly: true,
+  });
+  assert.equal(retired.ok, true);
+  assert.equal(retired.retired, true);
+  assert.equal(retired.ticket.dispatchNonce, null);
+  assert.equal(retired.ticket.dispatch.failureShape, 'unclaimed_launch_superseded');
+  const retireClosed = store.completeTicketAsControlPlane(slug, retireOnly.ref, {
+    purpose: 'delivery',
+    by: 'control-plane',
+    reason: 'The executor ended before its first claim.',
+    deliveryCommit: deliveredCommit,
+    deliveryMethod: 'manual',
+  });
+  assert.equal(retireClosed.ok, true);
+
+  const bound = createFixture('bound manual delivery guard fixture');
+  const boundSession = `bound-manual-delivery-${Date.now()}`;
+  const boundPrepared = store.prepareDispatch(slug, bound.ref, { sessionId: boundSession, sharedTree: true });
+  const boundAgent = `bound-manual-delivery-${bound.id}`;
+  assert.equal(store.recordDispatchLaunch(slug, bound.ref, {
+    token: boundPrepared.token,
+    executor: boundPrepared.ticket.dispatchExecutor,
+    sessionId: boundSession,
+    agentName: boundAgent,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(boundSession, boundPrepared.ticket.dispatchExecutor, boundAgent, boundAgent).ok, true);
+  const boundGroomClose = store.completeTicketAsControlPlane(slug, bound.ref, {
+    purpose: 'delivery',
+    by: 'control-plane',
+    reason: 'The executor is still live.',
+    deliveryCommit: deliveredCommit,
+    deliveryMethod: 'manual',
+  });
+  assert.equal(boundGroomClose.reason, 'active_dispatch');
+  assert.doesNotMatch(boundGroomClose.message, /deliveryMethod manual/);
+  assert.equal(store.clearUnclaimedDispatch(slug, bound.ref, {
+    by: 'control-plane',
+    evidence: 'A live bound executor must not be retired by grooming.',
+  }).reason, 'active_dispatch');
+  assert.equal(store.releaseTicket(slug, bound.ref, 'control-plane', { force: true, source: 'test' }).ok, true);
+
+  const unreachable = createFixture('unreachable manual delivery fixture');
+  const unreachablePrepared = store.prepareDispatch(slug, unreachable.ref, { sessionId: `unreachable-manual-${Date.now()}` });
+  assert.equal(store.recordDispatchLaunch(slug, unreachable.ref, {
+    token: unreachablePrepared.token,
+    executor: unreachablePrepared.ticket.dispatchExecutor,
+    agentName: `unreachable-manual-${unreachable.id}`,
+  }).ok, true);
+  assert.equal(store.clearUnclaimedDispatch(slug, unreachable.ref, {
+    by: 'control-plane',
+    evidence: 'The executor ended before its first claim.',
+  }).ok, true);
+  const unreachableGroomClose = store.completeTicketAsControlPlane(slug, unreachable.ref, {
+    purpose: 'delivery',
+    by: 'control-plane',
+    reason: 'The delivery has not reached the integration branch.',
+    deliveryCommit: 'deadbeef',
+    deliveryMethod: 'manual',
+  });
+  assert.equal(unreachableGroomClose.reason, 'delivery_not_reachable');
+  assert.match(unreachableGroomClose.message, /not reachable from this ticket's recorded local integration branch/);
 });
 
 test('SQ-2117: a pending submission refuses preparation instead of minting an unclaimable attempt', () => {

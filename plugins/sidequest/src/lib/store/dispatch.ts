@@ -1292,6 +1292,19 @@ function reusablePreparedRecovery(ticket: any, current: any) {
 
 function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
+  if (opts.retireOnly === true) {
+    const ticket = getTicket(slug, idOrRef);
+    const state = dispatchState(ticket);
+    if (!supersedableUnboundAttempt(ticket, state)) {
+      throw new Error(`prepare dispatch: ${idOrRef} cannot retire only because its dispatch is ${evidenceSupersessionBlocker(ticket, state)}. retireOnly accepts only an unclaimed prepared or launched dispatch before runtime binding.`);
+    }
+    const superseded = supersedeUnboundAttempt(slug, idOrRef, {
+      evidence: opts.recoveryEvidence,
+      source: opts.source || opts.transport || 'dispatch',
+    });
+    if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${idOrRef} has no unbound dispatch attempt to retire (${superseded.reason}).`}`);
+    return Object.assign(superseded, { retired: true });
+  }
   if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
   // A fresh native Agent session resolves plugins from Claude Code's registry
   // independently of whatever MCP roster this conversation happens to have

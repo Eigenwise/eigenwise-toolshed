@@ -9,8 +9,7 @@
           "type": "string"
         },
         "cursor": {
-          "type": "string",
-          "description": "Opaque."
+          "type": "string"
         },
         "limit": {
           "type": "integer",
@@ -1498,7 +1497,7 @@
         },
         "reducedAgentSchema": {
           "type": "boolean",
-          "description": "Only when caller schema lacks name/mode; hook needs agent_id + bypassPermissions mode."
+          "description": "Only when caller schema lacks name/mode; hook needs agent_id+bypassPermissions."
         },
         "allowRepeatFailure": {
           "type": "boolean"
@@ -1512,6 +1511,9 @@
         "recoveryEvidence": {
           "type": "string",
           "description": "Proof."
+        },
+        "retireOnly": {
+          "type": "boolean"
         },
         "claimHolder": {
           "type": "string"

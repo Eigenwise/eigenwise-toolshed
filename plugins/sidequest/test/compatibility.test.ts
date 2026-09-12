@@ -133,6 +133,7 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.match(byName.get('dispatch')?.inputSchema.properties?.reducedAgentSchema?.description ?? '', /Only when caller schema lacks name\/mode/);
   assert.match(byName.get('dispatch')?.inputSchema.properties?.reducedAgentSchema?.description ?? '', /hook needs agent_id/);
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description, 'Proof.');
+  assert.equal(byName.get('dispatch')?.inputSchema.properties?.retireOnly?.type, 'boolean');
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.worktree?.description, 'Checkout.');
   const addVerify = byName.get('add')?.inputSchema.properties?.verify?.description ?? '';
   assert.ok(addVerify.includes('`attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`'), addVerify);

@@ -2238,7 +2238,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       return {
         ok: false,
         reason: 'unclaimed_active_dispatch',
-        message: `${t.ref} has an active ${foundState} dispatch but no claim owned by ${by}. Do not release another runtime's attempt. A claimant whose current token and executor were accepted but whose runtime could not bind receives an unbound_dispatch refusal that authorizes the same claimant to release with kind technical_blocker. Otherwise wait for the current attempt's terminal hook, then have the orchestrator dispatch once from todo. recoveryEvidence applies only when a prepared, launched, or bound dispatch never claimed and terminal-agent evidence confirms that runtime ended. After a terminal dispatch, deliver verified landed work through \`sidequest groomClose ${t.ref} --by <integrator> --deliveryCommit <sha>\`.`,
+        message: `${t.ref} has an active ${foundState} dispatch but no claim owned by ${by}. ${unclaimedPreRuntimeDeliveryGuidance(t, dispatch) || `Do not release another runtime's attempt. A claimant whose current token and executor were accepted but whose runtime could not bind receives an unbound_dispatch refusal that authorizes the same claimant to release with kind technical_blocker. Otherwise wait for the current attempt's terminal hook, then have the orchestrator dispatch once from todo. recoveryEvidence applies only when a prepared, launched, or bound dispatch never claimed and terminal-agent evidence confirms that runtime ended. After a terminal dispatch, deliver verified landed work through \`sidequest groomClose ${t.ref} --by <integrator> --deliveryCommit <sha>\`.`}`,
         ticket: t,
       };
     }
@@ -2997,6 +2997,23 @@ function pendingSubmissionDeliveryRefusal(ticket?: any, result?: any) {
   });
 }
 
+function unclaimedPreRuntimeDispatch(ticket?: any, state?: any) {
+  return Boolean(
+    ticket?.dispatchNonce
+    && state
+    && ['prepared', 'launched'].includes(state.outcome)
+    && !state.terminalAt
+    && !state.boundAt
+    && !state.claimedAt
+    && !ticket.claim?.by,
+  );
+}
+
+function unclaimedPreRuntimeDeliveryGuidance(ticket?: any, state?: any) {
+  if (!unclaimedPreRuntimeDispatch(ticket, state)) return '';
+  return ` This attempt is unclaimed and unbound. Once the delivery commit is reachable from the recorded integration branch, close it with \`groomClose ${ticket.ref} --deliveryCommit <sha> --deliveryMethod manual --recoveryEvidence "<why the attempt is dead>"\` (include by and reason). If the commit is not reachable from that branch, grooming still refuses until delivery reaches it. To retire without preparing a replacement first, dispatch with recoveryEvidence and retireOnly:true.`;
+}
+
 function clearUnclaimedDispatch(slug?: any, idOrRef?: any, opts?: any) {
   const by = String(opts?.by || '').trim();
   const agentId = String(opts?.agentId || '').trim();
@@ -3021,7 +3038,14 @@ function clearUnclaimedDispatch(slug?: any, idOrRef?: any, opts?: any) {
         message: `${ticket?.ref || String(idOrRef)} has a terminal dispatch with observed outcome "${outcome}". recoveryEvidence does not apply to a terminal dispatch.${pendingSubmissionGuidance}`,
       };
     }
-    if (ticket.claim?.by) return { ok: false, reason: 'claimed', ticket, claim: ticket.claim };
+    if (!unclaimedPreRuntimeDispatch(ticket, state)) {
+      return {
+        ok: false,
+        reason: 'active_dispatch',
+        ticket,
+        message: `${ticket.ref} cannot apply recovery evidence because its dispatch is live, bound, claimed, or already terminal. Recovery evidence clears only an unclaimed prepared or launched dispatch before runtime binding.`,
+      };
+    }
     if (agentId && String(state.agentId || '') !== agentId) return { ok: false, reason: 'dispatch_identity_mismatch', ticket };
     if (agentName && String(state.agentName || '') !== agentName) return { ok: false, reason: 'dispatch_identity_mismatch', ticket };
     const now = new Date().toISOString();
@@ -3108,7 +3132,7 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
       return {
         ok: false,
         reason: 'active_dispatch',
-        message: `${ticket.ref} still has a live claim or an open dispatch, so hand delivery cannot close it. Release it first: \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : '<claim holder>'}\`, then re-run this closure with the same evidence. Releasing does not discard work already committed.`,
+        message: `${ticket.ref} still has a live claim or an open dispatch, so hand delivery cannot close it.${unclaimedPreRuntimeDeliveryGuidance(ticket, state) || ` Release it first: \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : '<claim holder>'}\`, then re-run this closure with the same evidence. Releasing does not discard work already committed.`}`,
         ticket,
       };
     }
