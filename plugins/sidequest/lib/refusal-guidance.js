@@ -21,6 +21,7 @@ __export(refusal_guidance_exports, {
   CLAIM_REFUSAL_MESSAGES: () => CLAIM_REFUSAL_MESSAGES,
   candidateReviewRequiredGuidance: () => candidateReviewRequiredGuidance,
   claimRefusalMessage: () => claimRefusalMessage,
+  filesystemSnapshotChildFailureGuidance: () => filesystemSnapshotChildFailureGuidance,
   filesystemSnapshotLimitGuidance: () => filesystemSnapshotLimitGuidance,
   manualCandidateDeliveryGuidance: () => manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance: () => negativeControlRecoveryGuidance,
@@ -126,11 +127,22 @@ function filesystemSnapshotLimitGuidance(projectPath, limit) {
   const recourse = limit.bound === "deadline" ? "point the board at a local directory no sync client mirrors" : "point the board at a smaller directory";
   return `filesystem snapshot refused for ${projectPath}: ${limit.bound} reached ${limit.observed} ${unit}; cap ${limit.cap} ${unit}.${blockingFile} Initialize a git repository at the project root so dispatch uses the cheaper git adapter, or ${recourse}.`;
 }
+function filesystemSnapshotChildFailureGuidance(failure) {
+  if (failure.kind === "spawn-error") {
+    return `the filesystem snapshot child process could not run${failure.code ? ` (${failure.code})` : ""}.`;
+  }
+  if (failure.kind === "unparseable") {
+    return "the filesystem snapshot child printed a result that could not be parsed.";
+  }
+  const stderrSuffix = failure.stderr ? ` stderr: ${failure.stderr}` : "";
+  return `the filesystem snapshot child exited with status ${failure.status}.${stderrSuffix}`;
+}
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   CLAIM_REFUSAL_MESSAGES,
   candidateReviewRequiredGuidance,
   claimRefusalMessage,
+  filesystemSnapshotChildFailureGuidance,
   filesystemSnapshotLimitGuidance,
   manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance,

@@ -59,6 +59,31 @@ export function isFilesystemSnapshotLimitError(error: unknown): error is Filesys
   return error instanceof FilesystemSnapshotLimitError;
 }
 
+export type FilesystemSnapshotChildFailureKind = 'spawn-error' | 'exit-status' | 'unparseable';
+
+// The project itself can be perfectly readable while the child that walks it cannot run or
+// cannot answer; this carries which of those happened so a caller stops telling an agent to
+// retry once the project is readable when readability was never the problem (SQ-2801).
+export class FilesystemSnapshotChildError extends Error {
+  readonly kind: FilesystemSnapshotChildFailureKind;
+  readonly code: string | null;
+  readonly status: number | null;
+  readonly stderr: string;
+
+  constructor(kind: FilesystemSnapshotChildFailureKind, details: Readonly<{ code?: string | null; status?: number | null; stderr?: string }> = {}) {
+    super(`filesystem snapshot child ${kind}`);
+    this.name = 'FilesystemSnapshotChildError';
+    this.kind = kind;
+    this.code = details.code ?? null;
+    this.status = typeof details.status === 'number' ? details.status : null;
+    this.stderr = details.stderr || '';
+  }
+}
+
+export function isFilesystemSnapshotChildError(error: unknown): error is FilesystemSnapshotChildError {
+  return error instanceof FilesystemSnapshotChildError;
+}
+
 export type FilesystemSnapshotOptions = Readonly<{
   maxPaths?: number;
   maxBytes?: number;
@@ -69,6 +94,16 @@ export type FilesystemSnapshotOptions = Readonly<{
 
 // Stderr lines from the snapshot child that carry the file it is about to read.
 const SNAPSHOT_READING_MARKER = 'sidequest-snapshot-reading\t';
+
+// Refusals share a total byte budget, so a chatty crashed child cannot flood one.
+const SNAPSHOT_CHILD_STDERR_EXCERPT_MAX_BYTES = 400;
+
+function boundedStderrExcerpt(stderr: string | null | undefined): string {
+  const text = String(stderr || '').trim();
+  return text.length > SNAPSHOT_CHILD_STDERR_EXCERPT_MAX_BYTES
+    ? `${text.slice(0, SNAPSHOT_CHILD_STDERR_EXCERPT_MAX_BYTES)}…`
+    : text;
+}
 
 const snapshotChildExtension = extname(__filename) || '.js';
 // The tests load this module from TypeScript through tsx, so the child needs the same loader, and
@@ -103,7 +138,7 @@ function blockingSnapshotPath(stderr: string): string | null {
   return null;
 }
 
-function snapshotChildResult(root: string, options: FilesystemSnapshotOptions | undefined): SnapshotChildResult | null {
+function snapshotChildResult(root: string, options: FilesystemSnapshotOptions | undefined): SnapshotChildResult {
   const maxElapsedMs = snapshotLimit(options?.maxElapsedMs, FILESYSTEM_SNAPSHOT_MAX_ELAPSED_MS);
   const childScript = options?.childScript || defaultSnapshotChildScript;
   const payload = JSON.stringify({
@@ -120,14 +155,20 @@ function snapshotChildResult(root: string, options: FilesystemSnapshotOptions | 
     { encoding: 'utf8', timeout: Math.max(1, maxElapsedMs), windowsHide: true, cwd: snapshotChildWorkingDirectory },
   );
   const elapsedMs = Math.max(0, Math.round(performance.now() - startedAt));
-  if ((child.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT') {
+  const spawnErrorCode = (child.error as NodeJS.ErrnoException | undefined)?.code ?? null;
+  if (spawnErrorCode === 'ETIMEDOUT') {
     throw new FilesystemSnapshotLimitError('deadline', elapsedMs, maxElapsedMs, blockingSnapshotPath(child.stderr));
   }
-  if (child.error || child.status !== 0) return null;
+  if (child.error) {
+    throw new FilesystemSnapshotChildError('spawn-error', { code: spawnErrorCode });
+  }
+  if (child.status !== 0) {
+    throw new FilesystemSnapshotChildError('exit-status', { status: child.status, stderr: boundedStderrExcerpt(child.stderr) });
+  }
   try {
     return JSON.parse(String(child.stdout || '')) as SnapshotChildResult;
   } catch {
-    return null;
+    throw new FilesystemSnapshotChildError('unparseable');
   }
 }
 
@@ -139,7 +180,6 @@ export function filesystemSnapshotRevision(
   const root = resolve(String(projectPath || '').trim());
   if (!root || !Number.isFinite(Date.parse(observedAt))) return null;
   const result = snapshotChildResult(root, options);
-  if (!result) return null;
   if ('limit' in result) {
     throw new FilesystemSnapshotLimitError(result.limit.bound, result.limit.observed, result.limit.cap);
   }

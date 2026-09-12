@@ -21,9 +21,11 @@ __export(source_revision_capability_exports, {
   FILESYSTEM_SNAPSHOT_MAX_BYTES: () => FILESYSTEM_SNAPSHOT_MAX_BYTES,
   FILESYSTEM_SNAPSHOT_MAX_ELAPSED_MS: () => FILESYSTEM_SNAPSHOT_MAX_ELAPSED_MS,
   FILESYSTEM_SNAPSHOT_MAX_PATHS: () => FILESYSTEM_SNAPSHOT_MAX_PATHS,
+  FilesystemSnapshotChildError: () => FilesystemSnapshotChildError,
   FilesystemSnapshotLimitError: () => FilesystemSnapshotLimitError,
   filesystemSnapshotCapability: () => filesystemSnapshotCapability,
   filesystemSnapshotRevision: () => filesystemSnapshotRevision,
+  isFilesystemSnapshotChildError: () => isFilesystemSnapshotChildError,
   isFilesystemSnapshotLimitError: () => isFilesystemSnapshotLimitError,
   isSourceRevisionAdapterFacts: () => isSourceRevisionAdapterFacts,
   registerSourceRevisionCapability: () => registerSourceRevisionCapability,
@@ -55,7 +57,29 @@ class FilesystemSnapshotLimitError extends Error {
 function isFilesystemSnapshotLimitError(error) {
   return error instanceof FilesystemSnapshotLimitError;
 }
+class FilesystemSnapshotChildError extends Error {
+  kind;
+  code;
+  status;
+  stderr;
+  constructor(kind, details = {}) {
+    super(`filesystem snapshot child ${kind}`);
+    this.name = "FilesystemSnapshotChildError";
+    this.kind = kind;
+    this.code = details.code ?? null;
+    this.status = typeof details.status === "number" ? details.status : null;
+    this.stderr = details.stderr || "";
+  }
+}
+function isFilesystemSnapshotChildError(error) {
+  return error instanceof FilesystemSnapshotChildError;
+}
 const SNAPSHOT_READING_MARKER = "sidequest-snapshot-reading	";
+const SNAPSHOT_CHILD_STDERR_EXCERPT_MAX_BYTES = 400;
+function boundedStderrExcerpt(stderr) {
+  const text = String(stderr || "").trim();
+  return text.length > SNAPSHOT_CHILD_STDERR_EXCERPT_MAX_BYTES ? `${text.slice(0, SNAPSHOT_CHILD_STDERR_EXCERPT_MAX_BYTES)}…` : text;
+}
 const snapshotChildExtension = (0, import_node_path.extname)(__filename) || ".js";
 const snapshotChildRunsTypeScript = snapshotChildExtension === ".ts";
 const defaultSnapshotChildScript = (0, import_node_path.resolve)(__dirname, `source-revision-snapshot-child${snapshotChildExtension}`);
@@ -97,21 +121,26 @@ function snapshotChildResult(root, options) {
     { encoding: "utf8", timeout: Math.max(1, maxElapsedMs), windowsHide: true, cwd: snapshotChildWorkingDirectory }
   );
   const elapsedMs = Math.max(0, Math.round(performance.now() - startedAt));
-  if (child.error?.code === "ETIMEDOUT") {
+  const spawnErrorCode = child.error?.code ?? null;
+  if (spawnErrorCode === "ETIMEDOUT") {
     throw new FilesystemSnapshotLimitError("deadline", elapsedMs, maxElapsedMs, blockingSnapshotPath(child.stderr));
   }
-  if (child.error || child.status !== 0) return null;
+  if (child.error) {
+    throw new FilesystemSnapshotChildError("spawn-error", { code: spawnErrorCode });
+  }
+  if (child.status !== 0) {
+    throw new FilesystemSnapshotChildError("exit-status", { status: child.status, stderr: boundedStderrExcerpt(child.stderr) });
+  }
   try {
     return JSON.parse(String(child.stdout || ""));
   } catch {
-    return null;
+    throw new FilesystemSnapshotChildError("unparseable");
   }
 }
 function filesystemSnapshotRevision(projectPath, observedAt = (/* @__PURE__ */ new Date()).toISOString(), options) {
   const root = (0, import_node_path.resolve)(String(projectPath || "").trim());
   if (!root || !Number.isFinite(Date.parse(observedAt))) return null;
   const result = snapshotChildResult(root, options);
-  if (!result) return null;
   if ("limit" in result) {
     throw new FilesystemSnapshotLimitError(result.limit.bound, result.limit.observed, result.limit.cap);
   }
@@ -195,9 +224,11 @@ function isSourceRevisionAdapterFacts(value) {
   FILESYSTEM_SNAPSHOT_MAX_BYTES,
   FILESYSTEM_SNAPSHOT_MAX_ELAPSED_MS,
   FILESYSTEM_SNAPSHOT_MAX_PATHS,
+  FilesystemSnapshotChildError,
   FilesystemSnapshotLimitError,
   filesystemSnapshotCapability,
   filesystemSnapshotRevision,
+  isFilesystemSnapshotChildError,
   isFilesystemSnapshotLimitError,
   isSourceRevisionAdapterFacts,
   registerSourceRevisionCapability,
