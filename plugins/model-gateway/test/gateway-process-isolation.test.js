@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway } = require('./support.js');
-const { commandIncludesFile, commandResultAsync, createProxyRecovery, installBelongsToThisPlugin, isDescendantOfAsync, probeTimeoutMs, resolvePortOwner } = require('../lib/process-supervision.js');
+const { commandIncludesFile, commandResultAsync, createProxyRecovery, installBelongsToThisPlugin, isDescendantOfAsync, probeTimeoutMs, resolvePortOwner, unknownPortOwnerReason } = require('../lib/process-supervision.js');
 const { startAll } = require('../lib/commands.js');
 const { canReplaceInstalledCliPath } = require('../lib/runtime.js');
 
@@ -366,13 +366,39 @@ test('startup ownership resolves bounded same-install, unowned, foreign, and unk
     state: 'same-install', pid: 701, installRoot: path.join(__dirname, '..'),
   });
   assert.deepEqual(await resolve([701, null], [null], [true, false]), { state: 'unowned', pid: null });
-  assert.deepEqual(await resolve([701, 702], [null, sameInstallProcess]), { state: 'unknown', pid: 702 });
-  assert.deepEqual(await resolve([701, 701], [undefined, undefined], [true, true]), { state: 'unknown', pid: 701 });
-  assert.deepEqual(await resolve([null, null], [], [true, true]), { state: 'unknown', pid: null });
-  assert.deepEqual(await resolve([701, 701], [{ command: 'unrecognized command' }, { command: 'unrecognized command' }]), { state: 'unknown', pid: 701 });
+  assert.deepEqual(await resolve([701, 702], [null, sameInstallProcess]), { state: 'unknown', pid: 702, reason: 'unidentified' });
+  assert.deepEqual(await resolve([701, 701], [undefined, undefined], [true, true]), { state: 'unknown', pid: 701, reason: 'timeout', timeout: 20 });
+  assert.deepEqual(await resolve([null, null], [], [true, true]), { state: 'unknown', pid: null, reason: 'unidentified' });
+  assert.deepEqual(await resolve([701, 701], [{ command: 'unrecognized command' }, { command: 'unrecognized command' }]), { state: 'unknown', pid: 701, reason: 'unidentified' });
   assert.deepEqual(await resolve([701], [{ command: `${process.execPath} "${foreignGatewayScript}" serve-shim` }]), {
     state: 'foreign-install', pid: 701, installRoot: path.join(os.tmpdir(), 'foreign-model-gateway'),
   });
+});
+
+test('startup ownership names a probe budget exhaustion separately from an unrecognized owner', async () => {
+  let elapsed = 0;
+  const exhaustedOwner = await resolvePortOwner(18764, {
+    owner: async () => { elapsed = 20; return 701; },
+    inspectProcess: async () => ({ command: 'unrecognized command' }),
+    timeout: 20,
+    now: () => elapsed,
+  });
+  const unrecognizedOwner = await resolvePortOwner(18764, {
+    owner: async () => 701,
+    inspectProcess: async () => ({ command: 'unrecognized command' }),
+    timeout: 20,
+    now: () => 0,
+  });
+
+  const exhaustionReason = unknownPortOwnerReason(exhaustedOwner, 18764);
+  const unrecognizedReason = unknownPortOwnerReason(unrecognizedOwner, 18764);
+  assert.equal(exhaustedOwner.reason, 'timeout');
+  assert.equal(unrecognizedOwner.reason, 'unidentified');
+  assert.match(exhaustionReason, /20ms budget/);
+  assert.match(exhaustionReason, /CODEX_GATEWAY_PROBE_TIMEOUT_MS/);
+  assert.notEqual(exhaustionReason, unrecognizedReason);
+  assert.match(unrecognizedReason, /could not be identified as this model-gateway install/);
+  assert.doesNotMatch(unrecognizedReason, /CODEX_GATEWAY_PROBE_TIMEOUT_MS/);
 });
 
 test('startup ownership keeps unknown and expired absence evidence unknown', async () => {
@@ -384,7 +410,7 @@ test('startup ownership keeps unknown and expired absence evidence unknown', asy
     timeout: 20,
     now: () => 0,
   });
-  assert.deepEqual(unknownInspection, { state: 'unknown', pid: 701 });
+  assert.deepEqual(unknownInspection, { state: 'unknown', pid: 701, reason: 'timeout', timeout: 20 });
   assert.equal(listeningCalls, 0);
 
   let currentTime = 0;
@@ -397,7 +423,7 @@ test('startup ownership keeps unknown and expired absence evidence unknown', asy
     timeout: 20,
     now: () => currentTime,
   });
-  assert.deepEqual(expiredBeforeFallback, { state: 'unknown', pid: null });
+  assert.deepEqual(expiredBeforeFallback, { state: 'unknown', pid: null, reason: 'timeout', timeout: 20 });
   assert.equal(ownerCalls, 1);
   assert.equal(listeningCalls, 0);
 
@@ -411,7 +437,7 @@ test('startup ownership keeps unknown and expired absence evidence unknown', asy
     timeout: 20,
     now: () => currentTime,
   });
-  assert.deepEqual(expiredBeforeRetry, { state: 'unknown', pid: null });
+  assert.deepEqual(expiredBeforeRetry, { state: 'unknown', pid: null, reason: 'timeout', timeout: 20 });
   assert.equal(ownerCalls, 1);
   assert.equal(listeningCalls, 1);
 
@@ -449,7 +475,7 @@ test('startup ownership leaves unknown and confirmed foreign listeners untouched
 
   const unknown = await run({ state: 'unknown', pid: 701 });
   assert.equal(unknown.ok, false);
-  assert.match(unknown.reason, /could not confirm the owner of :18764 \(last observed PID 701\); left the listener untouched/);
+  assert.match(unknown.reason, /could not confirm the owner of :18764 \(last observed PID 701\); .*left the listener untouched/);
   assert.deepEqual(calls, []);
   assert.deepEqual(lifecycle, [{ event: 'start-owner-unknown', details: { component: 'start', pid: process.pid, outcome: 'owner-unknown' } }]);
 
