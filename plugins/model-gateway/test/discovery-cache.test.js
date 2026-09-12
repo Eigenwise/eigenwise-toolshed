@@ -229,19 +229,27 @@ test('ensure writes the discovery cache before reporting missing ChatGPT auth', 
   });
   const proxyPort = await listen(proxy);
   testContext.after(() => new Promise((resolve) => proxy.close(resolve)));
-  const shimPort = await freePort();
+  const occupiedShim = net.createServer();
+  const shimPort = await listen(occupiedShim);
+  testContext.after(() => new Promise((resolve) => occupiedShim.close(resolve)));
   const workerPort = await freePort();
   const baseUrl = `http://127.0.0.1:${shimPort}`;
   const environment = discoveryEnvironment(testContext, baseUrl, shimPort, workerPort, proxyPort);
   const cache = path.join(environment.CLAUDE_CONFIG_DIR, 'cache', 'gateway-models.json');
   installProxyStub(environment.HOME);
-  const shim = await startGateway(testContext, 'serve-shim', environment, {
-    isolatedOverrides: discoveryProcessOverrides(shimPort, workerPort, proxyPort),
-  });
 
-  assert.equal(shim.port, shimPort);
-  await waitUntil(() => fs.existsSync(cache), 'initial refresh did not write the discovery cache');
-  fs.rmSync(cache);
+  const timedOutProbe = await runGatewayCommand(
+    testContext,
+    'ensure',
+    environment,
+    {
+      ...discoveryProcessOverrides(shimPort, workerPort, proxyPort),
+      CODEX_GATEWAY_PROBE_TIMEOUT_MS: '1',
+    },
+  );
+  assert.equal(timedOutProbe.status, 1, timedOutProbe.stderr);
+  assert.match(timedOutProbe.stderr, /could not confirm the owner of .*left the listener untouched/);
+  await new Promise((resolve) => occupiedShim.close(resolve));
 
   const result = await runGatewayCommand(
     testContext,
