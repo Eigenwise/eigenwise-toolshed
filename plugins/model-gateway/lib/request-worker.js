@@ -1943,8 +1943,12 @@ function runWorker() {
     // bytes untouched on the Anthropic path (prompt caching keys on them)
     const routeTelemetry = createRouteTelemetry(req);
     req.once('aborted', () => routeTelemetry.cancel());
+    // res 'close' already covers a connection dropped mid-response, and res is
+    // per-request. Never register this on res.socket: keep-alive shares one
+    // socket across every request on the connection, so each registration
+    // outlives its request and retains the telemetry closure until the client
+    // finally disconnects.
     res.once('close', () => routeTelemetry.cancel());
-    res.socket?.once('close', () => routeTelemetry.cancel());
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
