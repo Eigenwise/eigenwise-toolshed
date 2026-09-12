@@ -203,7 +203,7 @@ function readPluginVersion() {
 function mkdirs() { for (const d of [STATE, LOGS, BIN_DIR]) fs.mkdirSync(d, { recursive: true }); }
 
 const {
-  createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, killPidAsync, portListening, postJson, processOwningPortAsync, recordedGatewayPids, reapGatewayOrphans, resolvePortOwner,
+  createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, killPidAsync, portListening, postJson, processOwningPortAsync, recordedGatewayPids, reapGatewayOrphans, resolvePortOwner, unknownPortOwnerReason,
   removePid, restartWorkerWithDrain, shimHealthy, spawnDetached, stopAll, stopProcess, stopRunningSupervisor,
   stopShimWithDrain, waitForShimExit, writePidRecordAsync,
 } = require('./process-supervision.js');
@@ -700,7 +700,7 @@ async function startAll({
       pid: process.pid,
       outcome: 'owner-unknown',
     });
-    return { ok: false, reason: `could not confirm the owner of :${PUBLIC_SHIM_PORT} (last observed PID ${owner.pid || 'unknown'}); left the listener untouched` };
+    return { ok: false, reason: unknownPortOwnerReason(owner, PUBLIC_SHIM_PORT) };
   }
   const portOwner = owner.pid;
   const started = [];

@@ -257,12 +257,13 @@ agree).
   evidence, not that Codex is live. An `upstream-blocked` OpenAI/auth rejection stays separate
   and does not expire; `setup` deliberately clears either record. Sidequest consumes a cached
   catalog and can lag this state by up to five minutes.
-- **Startup, recovery, restart, or drain refuses to touch a listener**: each ownership probe is bounded by
-  `CODEX_GATEWAY_PROBE_TIMEOUT_MS` (2 seconds by default, 8 seconds on Windows, where the Win32_Process
-  lookup itself typically takes 1.8-2.4 seconds). A timeout, malformed process result, or
-  unrecognized command leaves ownership unknown. Startup records `owner-unknown` and leaves that
-  listener untouched; recovery leaves it for the next tick. A confirmed foreign owner gets the same
-  refusal. Probe children are stopped with the supervisor, so they cannot keep a test fixture home open.
+- **Startup, recovery, restart, or drain refuses to touch a listener**: each ownership probe shares one
+  `CODEX_GATEWAY_PROBE_TIMEOUT_MS` budget (2 seconds by default, 8 seconds on Windows, where the Win32_Process
+  lookup itself typically takes 1.8-2.4 seconds). When that budget expires, the refusal says so, names the elapsed
+  budget, and points to `CODEX_GATEWAY_PROBE_TIMEOUT_MS` as the override. A malformed process result or
+  unrecognized command remains an ownership-unknown refusal without the timeout guidance. Startup records
+  `owner-unknown` and leaves that listener untouched; recovery leaves it for the next tick. A confirmed foreign
+  owner is also left untouched. Probe children are stopped with the supervisor, so they cannot keep a test fixture home open.
 - **`doctor` shows `Not authenticated` right after an upgrade**: bumping the proxy binary (e.g.
   0.1.10 → 0.1.17 via `setup`) can invalidate the credential the old version accepted — the new
   binary reads it as not authenticated and `setup` stops before wiring. Fix: re-run `login`, then

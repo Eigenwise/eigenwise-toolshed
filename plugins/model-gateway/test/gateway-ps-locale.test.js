@@ -124,7 +124,7 @@ test('POSIX process probes pin C while parser and ownership fixtures retain thei
   assert.equal(fixture.foreignOwner.state, 'foreign-install');
   assert.equal(fixture.foreignOwner.pid, 95299);
   assert.ok(fixture.foreignOwner.installRoot);
-  assert.deepEqual(fixture.unknownOwner, { state: 'unknown', pid: 95299 });
+  assert.deepEqual(fixture.unknownOwner, { state: 'unknown', pid: 95299, reason: 'unidentified' });
 });
 
 test('Windows process probes inherit their existing environment', () => {

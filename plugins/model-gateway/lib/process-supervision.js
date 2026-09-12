@@ -481,27 +481,27 @@ async function resolvePortOwner(port = PUBLIC_SHIM_PORT, {
 } = {}) {
   const deadline = now() + timeout;
   const remainingTimeout = () => deadline - now();
-  const unknownOwner = (pid = null) => ({ state: 'unknown', pid });
+  const unknownOwner = (reason, pid = null) => ({ state: 'unknown', pid, reason, ...(reason === 'timeout' ? { timeout } : {}) });
   const confirmAbsence = async (pid) => {
     const listeningTimeout = remainingTimeout();
-    if (listeningTimeout <= 0) return unknownOwner(pid);
+    if (listeningTimeout <= 0) return unknownOwner('timeout', pid);
     const isListening = await listening(port, listeningTimeout);
-    if (!isListening && remainingTimeout() <= 0) return unknownOwner(pid);
-    return isListening ? unknownOwner(pid) : { state: 'unowned', pid };
+    if (!isListening && remainingTimeout() <= 0) return unknownOwner('timeout', pid);
+    return isListening ? unknownOwner('unidentified', pid) : { state: 'unowned', pid };
   };
   const inspectOwner = async () => {
     const ownerTimeout = remainingTimeout();
-    if (ownerTimeout <= 0) return unknownOwner();
+    if (ownerTimeout <= 0) return unknownOwner('timeout');
     const pid = await owner(port, { probeChildren, timeout: ownerTimeout });
-    if (pid === undefined) return unknownOwner();
+    if (pid === undefined) return unknownOwner('timeout');
     if (!pid) return confirmAbsence(null);
     const inspectionTimeout = remainingTimeout();
-    if (inspectionTimeout <= 0) return unknownOwner(pid);
+    if (inspectionTimeout <= 0) return unknownOwner('timeout', pid);
     const process = await inspectProcess(pid, { probeChildren, timeout: inspectionTimeout });
-    if (process === undefined) return unknownOwner(pid);
+    if (process === undefined) return unknownOwner('timeout', pid);
     if (process === null) return confirmAbsence(pid);
     const installRoot = gatewayInstallRootFromCommand(process.command);
-    if (!installRoot) return unknownOwner(pid);
+    if (!installRoot) return unknownOwner('unidentified', pid);
     return { state: belongsToThisInstall(installRoot) ? 'same-install' : 'foreign-install', installRoot, pid };
   };
   const firstOwner = await inspectOwner();
@@ -510,7 +510,7 @@ async function resolvePortOwner(port = PUBLIC_SHIM_PORT, {
   const retriedOwner = await inspectOwner();
   if (retriedOwner.state === 'foreign-install' || retriedOwner.state === 'unowned') return retriedOwner;
   if (retriedOwner.state === 'same-install' && retriedOwner.pid === firstOwner.pid) return retriedOwner;
-  return { state: 'unknown', pid: retriedOwner.pid || firstOwner.pid };
+  return { state: 'unknown', pid: retriedOwner.pid || firstOwner.pid, reason: retriedOwner.reason || 'unidentified', ...(retriedOwner.reason === 'timeout' ? { timeout: retriedOwner.timeout } : {}) };
 }
 function foreignPortOwner(port = PUBLIC_SHIM_PORT) {
   const owner = portOwner(port);
@@ -521,7 +521,10 @@ function foreignPortOwnerReason(owner, port = PUBLIC_SHIM_PORT) {
   return `refusing to stop PID ${owner.pid} on :${port}; it belongs to a different install root (${owner.installRoot}), not ${gatewayInstallRoot()}`;
 }
 function unknownPortOwnerReason(owner, port = PUBLIC_SHIM_PORT) {
-  return `could not confirm the owner of :${port} (last observed PID ${owner.pid || 'unknown'}); left the listener untouched`;
+  if (owner.reason === 'timeout') {
+    return `could not confirm the owner of :${port} (last observed PID ${owner.pid || 'unknown'}); the ownership probe exhausted its ${owner.timeout}ms budget (set CODEX_GATEWAY_PROBE_TIMEOUT_MS to override); left the listener untouched`;
+  }
+  return `could not confirm the owner of :${port} (last observed PID ${owner.pid || 'unknown'}); the owning process could not be identified as this model-gateway install; left the listener untouched`;
 }
 function isDescendantInProcessTable(pid, ancestorPid, processes) {
   const visited = new Set();
@@ -909,7 +912,7 @@ function createProxyRecovery({
 
 module.exports = {
   commandIncludesFile, commandResultAsync, commandResultSync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, killPidAsync, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
-  probeTimeoutMs, processInfoAsync, processInfoSync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync, processTableSync, resolvePortOwner,
+  probeTimeoutMs, processInfoAsync, processInfoSync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync, processTableSync, resolvePortOwner, unknownPortOwnerReason,
   proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPids, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
   spawnSupervisedProxy, stopAll, stopProcess, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit, writePidRecord, writePidRecordAsync,
 };
