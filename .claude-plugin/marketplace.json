@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.562.0",
+  "version": "3.563.0",
   "plugins": [
     {
       "name": "observability",
@@ -34,7 +34,7 @@
       "name": "model-gateway",
       "source": "./plugins/model-gateway",
       "description": "Your ChatGPT/Codex and Grok subscription models in Claude Code's /model picker. A local gateway routes claude-gpt-* models to OpenAI's Codex backend, claude-grok-* models to Grok, and everything else to api.anthropic.com, so you switch between Claude, GPT-5.x, and Grok mid-session like any other model. No API keys.",
-      "version": "0.50.22",
+      "version": "0.50.23",
       "author": {
         "name": "Eigenwise"
       },
@@ -57,7 +57,7 @@
       "name": "sidequest",
       "source": "./plugins/sidequest",
       "description": "The Toolshed's core work board and orchestration loop for Claude Code. Tickets are classified into categories that route each one to a concrete model and effort, then dispatched to token-gated executors; side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in.",
-      "version": "5.1.14",
+      "version": "5.1.15",
       "author": {
         "name": "Eigenwise"
       },

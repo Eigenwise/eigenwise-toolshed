@@ -8,6 +8,26 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.563.0 (2026-09-12)
+
+### model-gateway 0.50.22 → 0.50.23
+
+#### Fixes
+
+- Correct the README's account of gateway ownership checks (SQ-2813)
+  The plugin README described the pre-elevation ownership rule and a `stale pid file` diagnostic that is never printed. It now matches what cleanup actually does, including the Windows case where a hidden command line means the process is probably elevated.
+- Stop the shim leaking a listener per keep-alive request (SQ-2814)
+  The shim registered a telemetry cancel listener on the connection socket once per request. Claude Code keeps that connection open and sends many requests down it, so the listeners piled up for the life of the connection, flooded `shim.log` with `MaxListenersExceededWarning`, and held every request's telemetry closure in memory until the client disconnected. The per-response listener already covers a connection dropped mid-response, so the socket registration is gone.
+
+### sidequest 5.1.14 → 5.1.15
+
+#### Fixes
+
+- Detect stale Sidequest servers (SQ-2807)
+  Dispatch now refuses stale serving builds, warns when the server is newer, and includes the serving version in refusal results.
+- Close serving-build guard gaps (SQ-2817)
+  Dispatch compatibility now retries transient install reads and refuses unreadable or build-metadata-drifted serving builds.
+
 ## v3.562.0 (2026-09-12)
 
 ### model-gateway 0.50.21 → 0.50.22
