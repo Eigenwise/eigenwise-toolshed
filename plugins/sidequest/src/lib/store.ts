@@ -82,8 +82,11 @@ let servingInstallResolved = false;
 let resolvedServingInstall: any;
 function servingInstall() {
   if (!servingInstallResolved) {
-    resolvedServingInstall = servingSidequestInstall(__filename);
-    servingInstallResolved = true;
+    const snapshot = servingSidequestInstall(__filename);
+    if (snapshot) {
+      resolvedServingInstall = snapshot;
+      servingInstallResolved = true;
+    }
   }
   return resolvedServingInstall;
 }
