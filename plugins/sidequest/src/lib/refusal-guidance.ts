@@ -142,8 +142,14 @@ export function negativeControlRecoveryGuidance(): string {
 
 export function filesystemSnapshotLimitGuidance(
   projectPath: string,
-  limit: Readonly<{ bound: string; observed: number; cap: number }>,
+  limit: Readonly<{ bound: string; observed: number; cap: number; path?: string | null }>,
 ): string {
   const unit = limit.bound === 'path cap' ? 'paths' : limit.bound === 'byte cap' ? 'bytes' : 'ms';
-  return `filesystem snapshot refused for ${projectPath}: ${limit.bound} reached ${limit.observed} ${unit}; cap ${limit.cap} ${unit}. Initialize a git repository at the project root so dispatch uses the cheaper git adapter, or point the board at a smaller directory.`;
+  const blockingFile = limit.path
+    ? ` The snapshot was reading ${limit.path} when the clock ran out; a cloud-sync placeholder read cannot be interrupted, so the snapshot process was killed.`
+    : '';
+  const recourse = limit.bound === 'deadline'
+    ? 'point the board at a local directory no sync client mirrors'
+    : 'point the board at a smaller directory';
+  return `filesystem snapshot refused for ${projectPath}: ${limit.bound} reached ${limit.observed} ${unit}; cap ${limit.cap} ${unit}.${blockingFile} Initialize a git repository at the project root so dispatch uses the cheaper git adapter, or ${recourse}.`;
 }

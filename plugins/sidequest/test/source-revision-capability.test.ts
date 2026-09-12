@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -20,6 +20,29 @@ function withSnapshotProject(run: (projectPath: string) => void): void {
     run(projectPath);
   } finally {
     rmSync(projectPath, { recursive: true, force: true });
+  }
+}
+
+// No fixture tree can hold a file whose read never returns, so the block is injected at the child's
+// reader seam: an Atomics.wait with no timeout is the same uninterruptible synchronous block a
+// files-on-demand placeholder hydration is, and it leaves no OS resource behind to clean up.
+function withBlockingSnapshotChild(blockingFile: string, run: (childScript: string) => void): void {
+  const scriptDirectory = mkdtempSync(join(tmpdir(), 'sq-snapshot-child-'));
+  const childScript = join(scriptDirectory, 'blocking-child.cjs');
+  const childModule = join(__dirname, '..', 'src', 'lib', 'source-revision-snapshot-child.ts');
+  writeFileSync(childScript, [
+    `const { runSnapshotChild } = require(${JSON.stringify(childModule)});`,
+    `const blockingFile = ${JSON.stringify(blockingFile)};`,
+    'runSnapshotChild(process.argv[2], (entryPath) => {',
+    '  if (!entryPath.endsWith(blockingFile)) return require("node:fs").readFileSync(entryPath);',
+    '  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);',
+    '  return Buffer.alloc(0);',
+    '});',
+  ].join('\n'));
+  try {
+    run(childScript);
+  } finally {
+    rmSync(scriptDirectory, { recursive: true, force: true });
   }
 }
 
@@ -85,23 +108,45 @@ test('filesystem snapshot refuses a tree over its byte cap', () => {
   });
 });
 
-test('filesystem snapshot refuses when a read exceeds its deadline', () => {
+// Its own timeout: before the snapshot walk moved out of process this call never returned at all,
+// so a regression here has to fail rather than wedge the whole suite.
+test('filesystem snapshot refuses a read that never returns and names the blocking file', { timeout: 60_000 }, () => {
+  const maxElapsedMs = 1_500;
+  withSnapshotProject((projectPath) => {
+    writeFileSync(join(projectPath, 'alpha.txt'), 'alpha\n');
+    writeFileSync(join(projectPath, 'blocking.txt'), 'never read\n');
+
+    withBlockingSnapshotChild('blocking.txt', (childScript) => {
+      const startedAt = Date.now();
+      assert.throws(
+        () => sourceRevisionCapability.filesystemSnapshotRevision(projectPath, observedAt, { maxElapsedMs, childScript }),
+        (error: unknown) => {
+          assert.equal(sourceRevisionCapability.isFilesystemSnapshotLimitError(error), true);
+          assert.equal((error as { bound: string }).bound, 'deadline');
+          assert.equal((error as { cap: number }).cap, maxElapsedMs);
+          assert.ok((error as { observed: number }).observed >= maxElapsedMs, 'the refusal reports the elapsed wall clock');
+          assert.equal((error as { path: string | null }).path, 'blocking.txt', 'the refusal names the file the read hung on');
+          assert.match((error as Error).message, /while reading blocking\.txt/);
+          return true;
+        },
+      );
+      const elapsedMs = Date.now() - startedAt;
+      assert.ok(elapsedMs < maxElapsedMs * 3, `the refusal arrived within its wall clock, not after ${elapsedMs}ms`);
+    });
+  });
+});
+
+test('filesystem snapshot still bounds a zero wall clock', { timeout: 60_000 }, () => {
   withSnapshotProject((projectPath) => {
     writeFileSync(join(projectPath, 'contents.txt'), 'a');
-    let now = 0;
 
-    expectSnapshotLimit(
-      () => sourceRevisionCapability.filesystemSnapshotRevision(projectPath, observedAt, {
-        maxElapsedMs: 4,
-        now: () => now,
-        readFile: (entryPath: string) => {
-          now = 5;
-          return readFileSync(entryPath);
-        },
-      }),
-      'deadline',
-      5,
-      4,
+    assert.throws(
+      () => sourceRevisionCapability.filesystemSnapshotRevision(projectPath, observedAt, { maxElapsedMs: 0 }),
+      (error: unknown) => {
+        assert.equal((error as { bound: string }).bound, 'deadline');
+        assert.equal((error as { cap: number }).cap, 0);
+        return true;
+      },
     );
   });
 });
@@ -124,4 +169,18 @@ test('filesystem snapshot cap guidance names the bound and recourse', () => {
   assert.match(guidance, /path cap reached 501 paths; cap 500 paths/);
   assert.match(guidance, /Initialize a git repository at the project root/);
   assert.match(guidance, /point the board at a smaller directory/);
+});
+
+test('filesystem snapshot deadline guidance names the blocking file and a non-synced directory', () => {
+  const guidance = filesystemSnapshotLimitGuidance('/project', {
+    bound: 'deadline',
+    observed: 10_004,
+    cap: 10_000,
+    path: 'docs/spec.pdf',
+  });
+
+  assert.match(guidance, /deadline reached 10004 ms; cap 10000 ms/);
+  assert.match(guidance, /reading docs\/spec\.pdf when the clock ran out/);
+  assert.match(guidance, /Initialize a git repository at the project root/);
+  assert.match(guidance, /point the board at a local directory no sync client mirrors/);
 });
