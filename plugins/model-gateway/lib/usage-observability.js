@@ -724,6 +724,7 @@ function createUsageCapture(options) {
   let retainedBytes = 0;
   let retainedChunks = [];
   let overflowed = false;
+  let responseComplete = true;
   let finished = false;
 
   function observeIdentity(message) {
@@ -805,7 +806,7 @@ function createUsageCapture(options) {
     const exact = exactUsage(usage);
     const hasUsage = [exact.input_tokens, exact.output_tokens, exact.cache_read_tokens, exact.cache_creation_tokens]
       .some((value) => value !== null);
-    if (isSuccess && (overflowed || !hasUsage)) return null;
+    if (isSuccess && (!responseComplete || overflowed || !hasUsage)) return null;
     if (!isSuccess && Object.keys(limits).length === 0) return null;
 
     const requestIdEvidence = providerRequestId(responseHeaders)
@@ -877,6 +878,14 @@ function createUsageCapture(options) {
   return {
     finish,
     markOverflow,
+    resetUsage() {
+      usage = {};
+      responseId = null;
+      responseModel = null;
+      responseMode = null;
+    },
+    setResponseComplete(value) { responseComplete = value !== false; },
+    snapshot() { return exactUsage(usage); },
     noteResponseBytes(value) { responseBytes += Math.max(0, Number(value) || 0); },
     observeChunk,
     observeEvent,

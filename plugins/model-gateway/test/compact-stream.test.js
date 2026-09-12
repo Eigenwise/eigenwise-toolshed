@@ -11,6 +11,38 @@ function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
 }
 
+async function telemetryCollector(t) {
+  const received = [];
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      received.push(Buffer.concat(chunks).toString());
+      res.writeHead(200);
+      res.end();
+    });
+  });
+  const port = await listen(server);
+  t.after(() => server.close());
+  return { received, endpoint: `http://127.0.0.1:${port}/v1/traces` };
+}
+
+async function waitFor(predicate, message) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const value = predicate();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(message);
+}
+
+function telemetryAttributes(body) {
+  const attributes = JSON.parse(body).resourceSpans[0].scopeSpans[0].spans[0].attributes;
+  return Object.fromEntries(attributes.map(({ key, value }) => [key,
+    value.stringValue ?? value.intValue ?? value.doubleValue ?? value.boolValue]));
+}
+
 function get(port, pathname) {
   return new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port, method: 'GET', path: pathname }, (res) => {
@@ -70,6 +102,25 @@ const BLOCK_START = frame('content_block_start', { type: 'content_block_start', 
 const BLOCK_STOP = frame('content_block_stop', { type: 'content_block_stop', index: 0 });
 const MESSAGE_DELTA = frame('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 12 } });
 const MESSAGE_STOP = frame('message_stop', { type: 'message_stop' });
+
+function messageStartWithUsage(inputTokens) {
+  return frame('message_start', {
+    type: 'message_start',
+    message: {
+      id: 'msg_compact',
+      type: 'message',
+      role: 'assistant',
+      model: 'gpt-5.6-sol',
+      content: [],
+      stop_reason: null,
+      usage: { input_tokens: inputTokens, cache_read_input_tokens: 3 },
+    },
+  });
+}
+
+function messageDeltaWithUsage(outputTokens) {
+  return frame('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: outputTokens } });
+}
 
 function delta(text) {
   return frame('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } });
@@ -475,4 +526,88 @@ test('20 compaction requests whose first upstream attempt dies all come back com
     assert.doesNotMatch(response.body, /websocket_missing_terminal/, `request ${i} leaked the upstream failure`);
     assert.doesNotMatch(response.body, /partial /, `request ${i} leaked a discarded attempt`);
   });
+});
+
+test('compaction route diagnostics classify safe terminal outcomes without response content', async (t) => {
+  const partialSecret = 'partial-response-secret';
+  const promptSecret = 'prompt-secret-must-not-enter-diagnostics';
+  const unknownErrorSecret = 'synthetic-error-secret';
+  const upstreamHttpSecret = 'upstream-http-secret';
+  const proxy = scriptedProxy([
+    {
+      body: messageStartWithUsage(17) + BLOCK_START + delta(partialSecret)
+        + messageDeltaWithUsage(12)
+        + frame('error', { type: 'error', error: { type: 'api_error', message: 'websocket_missing_terminal' } }),
+    },
+    { body: messageStartWithUsage(19) + BLOCK_START + delta('healthy summary') + BLOCK_STOP + messageDeltaWithUsage(13) + MESSAGE_STOP },
+    { body: messageStartWithUsage(23) + messageDeltaWithUsage(0) + MESSAGE_STOP },
+    {
+      body: messageStartWithUsage(29) + BLOCK_START + delta(partialSecret)
+        + frame('error', { type: 'error', error: { type: 'api_error', message: unknownErrorSecret } }),
+    },
+    { status: 503, body: JSON.stringify({ error: { message: upstreamHttpSecret } }) },
+  ]);
+  const proxyPort = await listen(proxy.server);
+  t.after(() => proxy.server.close());
+  const collector = await telemetryCollector(t);
+  const shimPort = await spawnShim(t, proxyPort, {
+    CLAUDE_CODE_PROPAGATE_TRACEPARENT: '1',
+    CODEX_GATEWAY_COMPACT_STREAM_RETRIES: '0',
+    CODEX_GATEWAY_TELEMETRY_ENDPOINT: collector.endpoint,
+    CODEX_GATEWAY_USAGE_ENDPOINT: '0',
+  });
+  const body = compactBody({ messages: [{ role: 'user', content: promptSecret }] });
+
+  const responses = [];
+  for (let index = 0; index < 5; index++) responses.push(await postStream(shimPort, body));
+  await waitFor(() => collector.received.length === 5, 'compaction route telemetry was incomplete');
+
+  const [incomplete, completed, emptySummary, unknownError, upstreamHttpError] = collector.received.map(telemetryAttributes);
+  assert.equal(incomplete.compaction_outcome, 'incomplete');
+  assert.equal(incomplete.selected_model, 'claude-gpt-5.6-sol');
+  assert.equal(incomplete.effective_model, 'gpt-5.6-sol');
+  assert.equal(incomplete.backend, 'codex');
+  assert.equal(incomplete.compaction_error_code, 'websocket_missing_terminal');
+  assert.equal(incomplete.compaction_terminal_code, undefined);
+  assert.equal(Number(incomplete.upstream_status_code), 200);
+  assert.equal(Number(incomplete.compaction_input_tokens), 17);
+  assert.equal(Number(incomplete.compaction_output_tokens), 12);
+  assert.equal(Number(incomplete.compaction_cache_read_tokens), 3);
+  assert.ok(Number(incomplete.duration_ms) >= 0);
+
+  assert.equal(completed.compaction_outcome, 'completed');
+  assert.equal(completed.compaction_terminal_code, 'message_stop');
+  assert.equal(Number(completed.compaction_input_tokens), 19);
+  assert.equal(Number(completed.compaction_output_tokens), 13);
+  assert.equal(emptySummary.compaction_outcome, 'empty_summary');
+  assert.equal(emptySummary.compaction_terminal_code, 'message_stop');
+  assert.equal(Number(emptySummary.compaction_output_tokens), 0);
+
+  assert.equal(unknownError.compaction_outcome, 'unknown_error');
+  assert.equal(unknownError.compaction_error_code, 'unknown_error');
+  assert.equal(upstreamHttpError.compaction_outcome, 'upstream_error');
+  assert.equal(upstreamHttpError.compaction_error_code, 'upstream_http_error');
+  assert.equal(Number(upstreamHttpError.upstream_status_code), 503);
+  const emitted = collector.received.join('\n');
+  for (const secret of [partialSecret, promptSecret, unknownErrorSecret, upstreamHttpSecret]) {
+    assert.equal(emitted.includes(secret), false, `diagnostics leaked ${secret}`);
+  }
+  assert.match(responses[0].body, /websocket_missing_terminal/, 'response behavior changed for the known error');
+  assert.match(responses[3].body, new RegExp(unknownErrorSecret), 'response behavior changed for the unknown error');
+  assert.equal(responses[4].status, 503, 'response behavior changed for the HTTP error');
+});
+
+test('compaction diagnostics stay silent when telemetry is disabled', async (t) => {
+  const proxy = scriptedProxy([{ body: completeStream('summary') }]);
+  const proxyPort = await listen(proxy.server);
+  t.after(() => proxy.server.close());
+  const collector = await telemetryCollector(t);
+  const shimPort = await spawnShim(t, proxyPort, {
+    CODEX_GATEWAY_COMPACT_STREAM_RETRIES: '0',
+    CODEX_GATEWAY_USAGE_ENDPOINT: '0',
+  });
+
+  assert.equal((await postStream(shimPort, compactBody())).status, 200);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(collector.received.length, 0, 'disabled telemetry must not emit compaction diagnostics');
 });
