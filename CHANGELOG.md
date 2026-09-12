@@ -8,6 +8,59 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.559.0 (2026-09-12)
+
+### Repository
+
+- Roll back failed local release cuts (SQ-2775)
+  A failed pre-push cut now resets its release commit and removes its local tags,
+  so a doomed release window cannot remain in the checkout. Manual fallback uses
+  `git update-ref -d refs/tags/<tag>` when automatic rollback itself fails.
+- Let release fragments declare repository-only work (SQ-2779)
+
+### model-gateway 0.50.19 → 0.50.20
+
+#### Fixes
+
+- Reap model-gateway test proxy fixtures before cleanup (SQ-2760)
+  Model-gateway isolation tests now reap observed proxy and worker processes before removing temporary homes.
+- Use pure sibling version checks (SQ-2768)
+  Use the pure sibling version comparison without spawning a shim or copying plugin trees.
+- Repair gateway project identity attribution (SQ-2783)
+  Gateway usage keeps compatibility with older project-name IDs while resolving transcript labels from the repository root for dashboard attribution.
+- Canonicalize gateway repository labels (SQ-2785)
+  Gateway usage now canonicalizes repository roots so labels agree with Observability hooks through links and Windows path-casing variants.
+
+### observability 0.7.30 → 0.7.31
+
+#### Fixes
+
+- Use canonical IDs for native telemetry (SQ-2750)
+  Project telemetry now sends the repository SHA-256 identity as `project.id` and its sanitized name as `project.name`; dashboards keep matching legacy name-labelled samples until telemetry is re-enabled.
+- Repair gateway project identity attribution (SQ-2783)
+  Gateway usage keeps compatibility with older project-name IDs while resolving transcript labels from the repository root for dashboard attribution.
+
+### sidequest 5.1.10 → 5.1.11
+
+#### Fixes
+
+- Wave and integration refusals now name the recovery for a rewound baseline (SQ-2770)
+  When a candidate's recorded baseline is no longer reachable from the integration
+  target, redispatching cannot recover it: the work is already verified against a
+  revision the branch rewound past. Both refusal surfaces said "redispatch against
+  the current base" anyway. They now say what actually works, which is a hand merge
+  onto the current target, a re-gate, and `groomClose` with `deliveryCommit`.
+- Dispatch refuses to baseline on an unpublished release tip (SQ-2777)
+  A release cut tags its commit before it runs the release suites and only pushes
+  once they pass, so for the length of that run local main sits on a tip that may
+  still be rewound. A dispatch prepared there handed the executor a checkout forked
+  from that commit, and after the rewind the candidate's submission range came back
+  as [release commit, candidate] and failed `outside_scope`. Preparation now refuses
+  while the baseline carries the annotated release tag set (the marketplace
+  `v<version>` tag plus at least one `<plugin>-v<version>` tag) and is not yet on the
+  remote branch, naming the tags and the teardown. An ordinary unpushed local commit
+  carries no such tags and still baselines local main exactly as before.
+
 ## v3.558.0 (2026-09-11)
 
 ### model-gateway 0.50.18 → 0.50.19
