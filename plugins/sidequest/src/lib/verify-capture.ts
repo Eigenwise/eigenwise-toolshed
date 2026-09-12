@@ -301,6 +301,21 @@ function verifiedRevision(cwd: string) {
   }
 }
 
+// SQ-2789: the recorded revision is the cwd's HEAD, which says nothing about what the run
+// actually read. A capture taken over uncommitted edits is indistinguishable from one taken at
+// the committed content, so a later reuse could certify content nothing ran.
+function verifiedWorktreeIsClean(cwd: string) {
+  try {
+    return String(execFileSync('git', ['status', '--porcelain'], {
+      cwd,
+      encoding: 'utf8',
+      windowsHide: true,
+    })).trim() === '';
+  } catch (_) {
+    return false;
+  }
+}
+
 function recordCapture(target: CaptureTarget, capture: VerifyCapture, cwd: string) {
   const store = require('./store.js') as VerificationCaptureStore;
   const project = store.findProject(target.project);
@@ -313,6 +328,7 @@ function recordCapture(target: CaptureTarget, capture: VerifyCapture, cwd: strin
     command: capture.command || '',
     status: capture.status,
     candidate,
+    cleanWorktree: verifiedWorktreeIsClean(cwd),
     completedAt: new Date().toISOString(),
     worktree: cwd,
     logPath: capture.logPath,

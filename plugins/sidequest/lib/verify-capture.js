@@ -237,6 +237,17 @@ function verifiedRevision(cwd) {
     return null;
   }
 }
+function verifiedWorktreeIsClean(cwd) {
+  try {
+    return String(execFileSync("git", ["status", "--porcelain"], {
+      cwd,
+      encoding: "utf8",
+      windowsHide: true
+    })).trim() === "";
+  } catch (_) {
+    return false;
+  }
+}
 function recordCapture(target, capture, cwd) {
   const store = require("./store.js");
   const project = store.findProject(target.project);
@@ -249,6 +260,7 @@ function recordCapture(target, capture, cwd) {
     command: capture.command || "",
     status: capture.status,
     candidate,
+    cleanWorktree: verifiedWorktreeIsClean(cwd),
     completedAt: (/* @__PURE__ */ new Date()).toISOString(),
     worktree: cwd,
     logPath: capture.logPath,
