@@ -5,11 +5,13 @@ description: Maintainer workflow for moving verified Toolshed changes to the mar
 
 ## Maintainer overview
 
-Toolshed publishes from `main`. A release cut creates a marketplace tag, `v<marketplace-version>`, and a tag for each released plugin, `<plugin>-v<plugin-version>`. The `Publish GitHub Release` workflow runs for pushes of `v*` tags, on its daily schedule, and when manually dispatched. It creates GitHub Releases only for marketplace tags, so per-plugin tags do not create GitHub Releases.
+Toolshed publishes from `main`. A release cut creates a marketplace tag, `v<marketplace-version>`, and a tag for each released plugin, `<plugin>-v<plugin-version>`. A window of only repository-scoped work moves no plugin version, so it creates the marketplace tag alone. The `Publish GitHub Release` workflow runs for pushes of `v*` tags, on its daily schedule, and when manually dispatched. It creates GitHub Releases only for marketplace tags, so per-plugin tags do not create GitHub Releases.
 
 ## Prepare a release
 
 1. Add a fragment under `.release/unreleased/` with the plugin, change type, and user-facing summary.
+
+   Work that changes no published plugin declares `scope: repo` instead of `plugins` and `bump`. Release scripts, CI workflows, and repository documentation are the usual cases. A repo-scoped fragment moves no plugin version, so nobody re-extracts a plugin for it; it lands in the repository `CHANGELOG.md` under `Repository` and the release commit message names `repository` alongside any plugins the window does move. The two forms are mutually exclusive: a fragment declaring `scope: repo` alongside `plugins` or `bump` is refused. Do not reach for it to avoid a bump you find inconvenient, and do not bump a plugin the change never touched.
 2. Check the queue and preview the release:
 
    ```text
