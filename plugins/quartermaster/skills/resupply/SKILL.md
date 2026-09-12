@@ -246,7 +246,8 @@ not installed, that install is the finding; point the user at the official marke
 `/reload-plugins`.
 
 Drop any finding whose fingerprint sits in `decisions.rejected`. The user already said no; do not
-re-litigate unless they raise it.
+re-litigate unless they raise it. That list is scoped to this project, so a rejection recorded
+against another repository does not silence a proposal here.
 
 ### 6. Propose, one at a time
 
@@ -260,7 +261,10 @@ each claim to what you read. A proposal whose research did not run says `unresea
 
 Seven findings maximum, best first. For each: the evidence, the purpose it serves, the exact command
 or diff, and the cost (for plugin installs, `claude plugin details <name>` when context cost is
-relevant). Wait for an explicit yes or no before touching anything or moving on. Never batch-apply.
+relevant). That command resolves only marketplaces already added here, so it failing means the
+marketplace is missing: read the plugin at its source and propose the
+`claude plugin marketplace add <source>` line alongside the install, rather than dropping the
+candidate as uninspectable. Wait for an explicit yes or no before touching anything or moving on. Never batch-apply.
 
 Best first means value weighted by how well the evidence carries it, not step 4's search order. An
 attested measurement gap is the strongest thing you can lead with. An inferred one belongs below the
@@ -279,7 +283,14 @@ to look useful is how these passes turn into noise the user learns to skip.
 ### 7. Record and close
 
 On approval, apply exactly what was shown, then record it. Record rejections too, since that is
-what stops the same advice from resurfacing:
+what stops the same advice from resurfacing.
+
+`--status rejected` means the user said no, in their own words, to a proposal you actually showed
+them. It is the one status that silences a fingerprint for good, so it records their decision and
+never yours. Deciding something is already covered, not worth the context, or superseded by an
+existing setting is a reason not to propose it this round: leave it unrecorded, or use `deferred`.
+Filing your own call as a rejection retires the idea permanently on the user's behalf, and they
+never find out it was raised.
 
 ```
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" decisions add --project "${CLAUDE_PROJECT_DIR}" \

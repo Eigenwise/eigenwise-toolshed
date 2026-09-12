@@ -336,11 +336,20 @@ function readDecisions(env = process.env) {
   return decisions;
 }
 
-function rejectedFingerprints(env = process.env) {
+/**
+ * Scoped to one project because the ledger is machine-global. A decision recorded in one repository
+ * used to silence the same proposal in every other one: a `permission:auto-allowlist-optin`
+ * rejection filed against C:\dev\Cantizans suppressed that proposal in an unrelated vault a month
+ * later, and the user had never seen it there. Entries with no projectDir predate the field and stay
+ * global; passing no projectDir keeps the whole-ledger view.
+ */
+function rejectedFingerprints(env = process.env, projectDir = null) {
+  const wanted = projectDir ? path.resolve(projectDir).toLowerCase() : null;
   const rejected = new Set();
   const applied = new Set();
   for (const decision of readDecisions(env)) {
     if (!decision.fingerprint) continue;
+    if (wanted && decision.projectDir && path.resolve(decision.projectDir).toLowerCase() !== wanted) continue;
     if (decision.status === 'rejected') rejected.add(decision.fingerprint);
     if (decision.status === 'applied') applied.add(decision.fingerprint);
   }

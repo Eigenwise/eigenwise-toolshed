@@ -46,6 +46,12 @@ packaged.
 - Cost check before proposing: `claude plugin details <name>@<marketplace>` shows components and
   projected token cost. A plugin whose always-on cost outweighs what it saves is a bad trade; say
   so.
+- That command can only resolve a marketplace this machine has already added, so it failing on a
+  plugin you found elsewhere means the marketplace is missing, not that the plugin is unknowable.
+  Read its manifest and README at the source instead, and propose the
+  `claude plugin marketplace add <source>` line together with the install. Dropping the candidate as
+  uninspectable hides a real option behind a setup step the user was never offered. Say plainly that
+  the cost numbers are unavailable until the marketplace is added.
 - Apply: `claude plugin install <name>@<marketplace> --scope project`. New hooks and MCP servers
   take effect on the next session.
 - Fingerprint: `plugin-install:<name>`.

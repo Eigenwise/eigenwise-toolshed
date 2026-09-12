@@ -277,6 +277,18 @@ test('decisions ledger separates applied from rejected fingerprints', () => {
   assert.deepEqual(rejected, ['rule:no-force-push']);
 });
 
+test('a rejection recorded against another project does not suppress the fingerprint here', () => {
+  appendDecision({ projectDir: path.resolve(os.tmpdir(), 'other-repo'), fingerprint: 'permission:auto-allowlist-optin', status: 'rejected', title: 'elsewhere' }, environment);
+  appendDecision({ fingerprint: 'rule:legacy-entry', status: 'rejected', title: 'no projectDir' }, environment);
+
+  const scoped = rejectedFingerprints(environment, PROJECT);
+  assert.equal(scoped.rejected.includes('permission:auto-allowlist-optin'), false, 'another project cannot silence this one');
+  assert.equal(scoped.rejected.includes('rule:legacy-entry'), true, 'an entry predating projectDir stays global');
+
+  assert.equal(rejectedFingerprints(environment, path.resolve(os.tmpdir(), 'other-repo')).rejected.includes('permission:auto-allowlist-optin'), true);
+  assert.equal(rejectedFingerprints(environment).rejected.includes('permission:auto-allowlist-optin'), true, 'unscoped keeps the whole-ledger view');
+});
+
 test('verifyDecisions reports improvement against the targeted signal', () => {
   const now = Date.now();
   for (let index = 0; index < 4; index += 1) {
