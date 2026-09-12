@@ -22,6 +22,7 @@ const {
   requestBodyHighWaterPath,
   resolveUsageEndpoint,
   serializedBytes,
+  SessionProjectResolver,
 } = require('../lib/usage-observability.js');
 
 function attributeMap(payload) {
@@ -37,6 +38,14 @@ function attributeMap(payload) {
 function resourceAttributeMap(payload) {
   const attributes = payload.resourceLogs[0].resource.attributes;
   return Object.fromEntries(attributes.map(({ key, value }) => [key, value.stringValue]));
+}
+
+function projectNameForTranscriptCwd(directory, sessionId, cwd) {
+  const projectsDirectory = path.join(directory, 'projects');
+  const transcriptDirectory = path.join(projectsDirectory, 'transcripts');
+  fs.mkdirSync(transcriptDirectory, { recursive: true });
+  fs.writeFileSync(path.join(transcriptDirectory, `${sessionId}.jsonl`), JSON.stringify({ cwd }) + '\n');
+  return new SessionProjectResolver({ projectsDirectory }).resolve(sessionId);
 }
 
 const payload = {
@@ -310,7 +319,7 @@ test('accepts loopback OTLP endpoints only', () => {
   assert.equal(createGatewayUsageEmitter({ endpoint: 'https://telemetry.example.com/v1/logs' }).enabled, false);
 });
 
-test('resolves a gateway session transcript into an OTLP project resource', (t) => {
+test('resolves a gateway session transcript into an OTLP project name attribute', (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-project-'));
   const projectsDirectory = path.join(directory, 'projects');
   const sessionId = 'session-project';
@@ -332,11 +341,39 @@ test('resolves a gateway session transcript into an OTLP project resource', (t) 
   const record = finishEmitterRequest(emitter, { tools: [{ name: 'mcp__sidequest__claim' }], messages: [] }, 10, sessionId, 'agent-project');
   const resource = resourceAttributeMap(buildOtlpLogPayload(record));
 
-  assert.equal(record.projectId, 'eigenwise-toolshed');
-  assert.equal(resource['project.id'], 'eigenwise-toolshed');
+  assert.equal(record.attributes.project_name, 'eigenwise-toolshed');
+  assert.equal(resource['project.id'], undefined);
   assert.equal(JSON.stringify(buildOtlpLogPayload(record)).includes(projectDirectory), false);
-  assert.ok(emitted.every((emittedRecord) => emittedRecord.projectId === 'eigenwise-toolshed'));
-  assert.ok(emitted.every((emittedRecord) => resourceAttributeMap(buildOtlpLogPayload(emittedRecord))['project.id'] === 'eigenwise-toolshed'));
+  assert.ok(emitted.every((emittedRecord) => emittedRecord.attributes.project_name === 'eigenwise-toolshed'));
+  assert.ok(emitted.every((emittedRecord) => resourceAttributeMap(buildOtlpLogPayload(emittedRecord))['project.id'] === undefined));
+});
+
+test('uses the real repository root label for a linked transcript cwd', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-linked-project-'));
+  const repository = path.join(directory, 'repo-root');
+  const alias = path.join(directory, 'alias');
+  fs.mkdirSync(path.join(repository, '.git'), { recursive: true });
+  fs.mkdirSync(path.join(repository, 'packages', 'api'), { recursive: true });
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  try {
+    fs.symlinkSync(repository, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (error) {
+    t.skip(`could not create directory link: ${error.code}`);
+    return;
+  }
+
+  assert.equal(projectNameForTranscriptCwd(directory, 'linked-project', path.join(alias, 'packages', 'api')), 'repo-root');
+});
+
+test('uses the on-disk Windows repository casing for a transcript cwd', { skip: process.platform !== 'win32' }, (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-case-project-'));
+  const repository = path.join(directory, 'RepoRoot');
+  fs.mkdirSync(path.join(repository, '.git'), { recursive: true });
+  fs.mkdirSync(path.join(repository, 'packages', 'api'), { recursive: true });
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  assert.equal(projectNameForTranscriptCwd(directory, 'case-project', path.join(repository.toLowerCase(), 'packages', 'api')), 'RepoRoot');
 });
 
 test('JSON capture emits exact identities, resolved route, measurements, and no content', () => {
