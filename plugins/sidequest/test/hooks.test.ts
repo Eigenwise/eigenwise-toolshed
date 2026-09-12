@@ -77,6 +77,12 @@ const BUDGET = {
 };
 const PLUGIN_ROOT = fs.realpathSync(path.join(__dirname, '..'));
 const PINNED_ROOT_NAME_LENGTH = 'sq-plugin-root'.length;
+// A sweep that misses its deadline appends a ~320-byte deferral notice to the
+// injected block, which is enough on its own to blow these byte budgets. The
+// default 2500ms holds on a developer machine and does not on a Windows CI
+// runner, so every budget helper pins a deadline the sweep cannot miss. Tests
+// that want the deferral notice pass their own value and still win.
+const BUDGET_SWEEP_DEADLINE_MS = '60000';
 const PINNED_ROOT_NAME = crypto
   .createHash('sha256')
   .update(PLUGIN_ROOT)
@@ -155,6 +161,7 @@ function runHookProcessForBudget(script?: any, payload?: any, envOverrides?: any
       env: {
         ...process.env,
         CLAUDE_PLUGIN_ROOT: FIXED_PLUGIN_ROOT,
+        SIDEQUEST_SWEEP_DEADLINE_MS: BUDGET_SWEEP_DEADLINE_MS,
         ...(envOverrides || {}),
       },
       windowsHide: true,
@@ -233,11 +240,11 @@ function runSessionWithHome(home?: any, envOverrides?: any) {
 }
 
 function runHookOutputForBudget(script?: any, payload?: any, envOverrides?: any) {
-  return runHookOutput(script, payload, { ...(envOverrides || {}), CLAUDE_PLUGIN_ROOT: FIXED_PLUGIN_ROOT });
+  return runHookOutput(script, payload, { SIDEQUEST_SWEEP_DEADLINE_MS: BUDGET_SWEEP_DEADLINE_MS, ...(envOverrides || {}), CLAUDE_PLUGIN_ROOT: FIXED_PLUGIN_ROOT });
 }
 
 function runHookForBudget(script?: any, payload?: any, envOverrides?: any) {
-  return runHook(script, payload, { ...(envOverrides || {}), CLAUDE_PLUGIN_ROOT: FIXED_PLUGIN_ROOT });
+  return runHook(script, payload, { SIDEQUEST_SWEEP_DEADLINE_MS: BUDGET_SWEEP_DEADLINE_MS, ...(envOverrides || {}), CLAUDE_PLUGIN_ROOT: FIXED_PLUGIN_ROOT });
 }
 
 function runSessionWithHomeForBudget(home?: any, envOverrides?: any) {
@@ -265,6 +272,20 @@ test('budget pin resolves to this checkout and isolates its fixed-length path', 
   const otherPluginRoot = `${PLUGIN_ROOT}-other`;
   const otherName = crypto.createHash('sha256').update(otherPluginRoot).digest('hex').slice(0, PINNED_ROOT_NAME_LENGTH);
   assert.notEqual(otherName, PINNED_ROOT_NAME);
+});
+
+test('budget helpers pin a sweep deadline the deferral notice cannot beat', () => {
+  const pinned = runHookForBudget(SESSION, { session_id: 'sweep-budget-pin', source: 'compact' });
+  assert.doesNotMatch(pinned, /worktree sweep exceeded its SessionStart budget/, 'the pinned deadline must keep the timing-dependent notice out of a measured block');
+
+  // Negative control: the notice is what pushed this block 306 bytes over its
+  // 3200 budget on a Windows CI runner while the same commit passed on Linux.
+  const deferred = runHookForBudget(SESSION, { session_id: 'sweep-budget-deferred', source: 'compact' }, { SIDEQUEST_SWEEP_DEADLINE_MS: '0' });
+  assert.match(deferred, /worktree sweep exceeded its SessionStart budget/, 'an explicit deadline must still win over the pin');
+  assert.ok(
+    Buffer.byteLength(deferred) - Buffer.byteLength(pinned) >= 250,
+    `the deferral notice must be large enough to matter: pinned ${Buffer.byteLength(pinned)} bytes, deferred ${Buffer.byteLength(deferred)} bytes`,
+  );
 });
 
 function writeCategory(home?: any, category?: any) {
