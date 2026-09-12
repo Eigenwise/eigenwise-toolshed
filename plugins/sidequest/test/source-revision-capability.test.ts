@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const sourceRevisionCapability = require('../src/lib/source-revision-capability.ts');
-const { filesystemSnapshotLimitGuidance } = require('../src/lib/refusal-guidance.ts');
+const { filesystemSnapshotLimitGuidance, filesystemSnapshotChildFailureGuidance } = require('../src/lib/refusal-guidance.ts');
 
 const candidate = Object.freeze({ source: 'git', value: 'delivered-commit', observedAt: '2026-08-14T00:00:00.000Z' });
 const integrationBaseline = Object.freeze({
@@ -39,6 +39,17 @@ function withBlockingSnapshotChild(blockingFile: string, run: (childScript: stri
     '  return Buffer.alloc(0);',
     '});',
   ].join('\n'));
+  try {
+    run(childScript);
+  } finally {
+    rmSync(scriptDirectory, { recursive: true, force: true });
+  }
+}
+
+function withSnapshotChildScript(source: string, run: (childScript: string) => void): void {
+  const scriptDirectory = mkdtempSync(join(tmpdir(), 'sq-snapshot-child-'));
+  const childScript = join(scriptDirectory, 'child.cjs');
+  writeFileSync(childScript, source);
   try {
     run(childScript);
   } finally {
@@ -169,6 +180,80 @@ test('filesystem snapshot cap guidance names the bound and recourse', () => {
   assert.match(guidance, /path cap reached 501 paths; cap 500 paths/);
   assert.match(guidance, /Initialize a git repository at the project root/);
   assert.match(guidance, /point the board at a smaller directory/);
+});
+
+test('filesystem snapshot child that cannot run is reported as a child failure, not an unreadable project', () => {
+  withSnapshotProject((projectPath) => {
+    const childScript = join(mkdtempSync(join(tmpdir(), 'sq-snapshot-missing-')), 'does-not-exist.cjs');
+
+    assert.throws(
+      () => sourceRevisionCapability.filesystemSnapshotRevision(projectPath, observedAt, { childScript }),
+      (error: unknown) => {
+        assert.equal(sourceRevisionCapability.isFilesystemSnapshotChildError(error), true);
+        const guidance = filesystemSnapshotChildFailureGuidance(error as { kind: string });
+        assert.match(guidance, /snapshot child/);
+        assert.doesNotMatch(guidance, /Retry dispatch after the project is readable/);
+        return true;
+      },
+    );
+  });
+});
+
+test('filesystem snapshot child that exits non-zero reports the status and a bounded stderr excerpt', () => {
+  withSnapshotProject((projectPath) => {
+    withSnapshotChildScript(
+      ['process.stderr.write("child crashed while walking the tree\\n");', 'process.exitCode = 7;'].join('\n'),
+      (childScript) => {
+        assert.throws(
+          () => sourceRevisionCapability.filesystemSnapshotRevision(projectPath, observedAt, { childScript }),
+          (error: unknown) => {
+            assert.equal(sourceRevisionCapability.isFilesystemSnapshotChildError(error), true);
+            assert.equal((error as { kind: string }).kind, 'exit-status');
+            assert.equal((error as { status: number }).status, 7);
+            assert.match((error as { stderr: string }).stderr, /child crashed while walking the tree/);
+            const guidance = filesystemSnapshotChildFailureGuidance(error as { kind: string; status: number; stderr: string });
+            assert.match(guidance, /exited with status 7/);
+            assert.match(guidance, /child crashed while walking the tree/);
+            return true;
+          },
+        );
+      },
+    );
+  });
+});
+
+test('filesystem snapshot child that exits clean but prints non-JSON reports an unparseable result', () => {
+  withSnapshotProject((projectPath) => {
+    withSnapshotChildScript('process.stdout.write("not json");', (childScript) => {
+      assert.throws(
+        () => sourceRevisionCapability.filesystemSnapshotRevision(projectPath, observedAt, { childScript }),
+        (error: unknown) => {
+          assert.equal(sourceRevisionCapability.isFilesystemSnapshotChildError(error), true);
+          assert.equal((error as { kind: string }).kind, 'unparseable');
+          const guidance = filesystemSnapshotChildFailureGuidance(error as { kind: string });
+          assert.match(guidance, /could not be parsed/);
+          assert.doesNotMatch(guidance, /Retry dispatch after the project is readable/);
+          return true;
+        },
+      );
+    });
+  });
+});
+
+// Regression control: a genuinely unreadable project root (not a directory at all) is the one
+// case where the existing "retry after the project is readable" wording is correct, and it must
+// not drift.
+test('filesystem snapshot of a genuinely unreadable project returns null, not a child failure', () => {
+  const parentDirectory = mkdtempSync(join(tmpdir(), 'sq-snapshot-unreadable-'));
+  const notADirectory = join(parentDirectory, 'project-path-is-a-file');
+  writeFileSync(notADirectory, 'not a project root');
+
+  try {
+    const revision = sourceRevisionCapability.filesystemSnapshotRevision(notADirectory, observedAt);
+    assert.equal(revision, null);
+  } finally {
+    rmSync(parentDirectory, { recursive: true, force: true });
+  }
 });
 
 test('filesystem snapshot deadline guidance names the blocking file and a non-synced directory', () => {

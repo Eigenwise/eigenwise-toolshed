@@ -153,3 +153,19 @@ export function filesystemSnapshotLimitGuidance(
     : 'point the board at a smaller directory';
   return `filesystem snapshot refused for ${projectPath}: ${limit.bound} reached ${limit.observed} ${unit}; cap ${limit.cap} ${unit}.${blockingFile} Initialize a git repository at the project root so dispatch uses the cheaper git adapter, or ${recourse}.`;
 }
+
+// The project can be perfectly readable while the child that snapshots it cannot run or answer;
+// this names which of those happened instead of the readability wording that fits only a
+// genuinely unreadable project (SQ-2801).
+export function filesystemSnapshotChildFailureGuidance(
+  failure: Readonly<{ kind: string; code?: string | null; status?: number | null; stderr?: string }>,
+): string {
+  if (failure.kind === 'spawn-error') {
+    return `the filesystem snapshot child process could not run${failure.code ? ` (${failure.code})` : ''}.`;
+  }
+  if (failure.kind === 'unparseable') {
+    return 'the filesystem snapshot child printed a result that could not be parsed.';
+  }
+  const stderrSuffix = failure.stderr ? ` stderr: ${failure.stderr}` : '';
+  return `the filesystem snapshot child exited with status ${failure.status}.${stderrSuffix}`;
+}
