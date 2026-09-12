@@ -13,7 +13,7 @@ const MODEL_GATEWAY_PLUGIN = `model-gateway@${GATEWAY_MARKETPLACE}`;
 const UPDATE_SCOPES = new Set(['user', 'project', 'local']);
 
 function parseArgs(argv) {
-  const options = { check: false, dryRun: false, claude: 'claude' };
+  const options = { check: false, dryRun: false, claude: 'claude', claudeExplicit: false };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -23,6 +23,7 @@ function parseArgs(argv) {
     else if (arg === '--confirm-sessions-closed') options.confirmSessionsClosed = true;
     else if (arg === '--claude') {
       options.claude = argv[index + 1];
+      options.claudeExplicit = true;
       index += 1;
     } else if (arg === '--wiring-mode') {
       throw new Error('--wiring-mode was removed: model gateway wiring follows the scope where it is recorded. To change it, use /model-gateway:model-gateway env --write-project for one project or env --write-user for machine-wide wiring.');
@@ -47,8 +48,8 @@ their recorded project directory so Claude Code updates the right scope.
                 Migrate the retired codex-gateway install after every Claude Code session is closed
   --confirm-sessions-closed
                 Required with --migrate-model-gateway because migration moves shared gateway state
-  --claude      Claude Code command to run (default: claude). If it is not on PATH,
-                use --claude <absolute claude.exe path>.`;
+  --claude      Claude Code command to run. By default, the updater tries claude on PATH,
+                then known desktop-app install locations. Use an absolute path to override discovery.`;
 }
 
 function registryPath(home = os.homedir()) {
@@ -448,14 +449,78 @@ function claudePreflightCommand(claude) {
   return { command: claude, args: ['--version'], label: 'Claude Code availability' };
 }
 
-function preflightClaude(options, run, report) {
+function claudeExecutablesInVersionDirectories(directory) {
+  try {
+    return fs.readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => ({
+        command: path.join(directory, entry.name, 'claude.exe'),
+        version: entry.name,
+      }))
+      .filter((candidate) => fs.existsSync(candidate.command));
+  } catch {
+    return [];
+  }
+}
+
+function desktopClaudeCandidates(platform = process.platform, environment = process.env) {
+  if (platform === 'darwin') {
+    const command = path.join(environment.HOME || os.homedir(), '.local', 'bin', 'claude');
+    return fs.existsSync(command) ? [command] : [];
+  }
+  if (platform !== 'win32') return [];
+
+  const candidates = [];
+  if (environment.APPDATA) {
+    candidates.push(...claudeExecutablesInVersionDirectories(path.join(environment.APPDATA, 'Claude', 'claude-code')));
+  }
+  if (environment.LOCALAPPDATA) {
+    const packages = path.join(environment.LOCALAPPDATA, 'Packages');
+    try {
+      for (const entry of fs.readdirSync(packages, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !/^Claude_/i.test(entry.name)) continue;
+        candidates.push(...claudeExecutablesInVersionDirectories(path.join(packages, entry.name, 'LocalCache', 'Roaming', 'Claude', 'claude-code')));
+      }
+    } catch {}
+  }
+
+  return candidates
+    .sort((left, right) => right.version.localeCompare(left.version, undefined, { numeric: true, sensitivity: 'base' }) || right.command.localeCompare(left.command))
+    .map((candidate) => candidate.command);
+}
+
+function hasExplicitClaudeCommand(options) {
+  return options.claudeExplicit === true || options.claude !== 'claude';
+}
+
+function preflightClaude(options, run, report, platform = process.platform, environment = process.env) {
   if (options.check || options.dryRun) return true;
 
-  const result = run(claudePreflightCommand(options.claude));
-  if (result.ok) return true;
+  const explicit = hasExplicitClaudeCommand(options);
+  const candidates = explicit
+    ? [options.claude]
+    : ['claude', ...desktopClaudeCandidates(platform, environment)];
+  let failedCandidate;
 
-  const detail = result.error ?? result.output ?? 'command exited unsuccessfully';
-  report(`Toolshed update stopped: Claude Code executable ${JSON.stringify(options.claude)} could not be run (${detail}). Retry with --claude <absolute claude.exe path> if Claude Code is installed elsewhere.`);
+  for (const candidate of candidates) {
+    const result = run(claudePreflightCommand(candidate));
+    if (result.ok) {
+      options.claude = candidate;
+      return true;
+    }
+    failedCandidate = {
+      command: candidate,
+      detail: result.error ?? result.output ?? 'command exited unsuccessfully',
+    };
+  }
+
+  const detail = failedCandidate?.detail ?? 'command exited unsuccessfully';
+  if (explicit) {
+    report(`Toolshed update stopped: Claude Code executable ${JSON.stringify(options.claude)} could not be run (${detail}).`);
+  } else {
+    report(`Toolshed update stopped: no runnable Claude Code executable was found (${detail}).`);
+  }
+  report('Retry with --claude <absolute claude.exe path> if Claude Code is installed elsewhere.');
   return false;
 }
 
@@ -467,14 +532,15 @@ function reloadAdvice(instances) {
   return lines;
 }
 
-function execute(command, options, run, report) {
+function execute(command, options, run, report, failureDetails) {
   report(`\n${command.label}\n  ${commandText(command)}${command.cwd ? `\n  cwd: ${command.cwd}` : ''}`);
   if (options.dryRun) return true;
 
   const result = run(command);
-  if (result.output) report(result.output);
+  if (result.output && (result.ok || !failureDetails)) report(result.output);
   if (result.ok) return true;
-  report(`FAILED: ${result.error ?? 'command exited unsuccessfully'}`);
+  if (failureDetails) failureDetails.push(result.error ?? result.output ?? 'command exited unsuccessfully');
+  report('FAILED');
   return false;
 }
 
@@ -549,7 +615,7 @@ function runModelGatewayMigration({ registryFile = registryPath(), home = os.hom
   return { ok: true, failures: [] };
 }
 
-function runUpdate({ registryFile = registryPath(), home = os.homedir(), options, run = defaultRun, report = console.log, installGatewayLauncher = installGatewayUpdateLauncher }) {
+function runUpdate({ registryFile = registryPath(), home = os.homedir(), options, run = defaultRun, report = console.log, installGatewayLauncher = installGatewayUpdateLauncher, platform = process.platform, environment = process.env }) {
   let registry;
   try {
     registry = readRegistry(registryFile);
@@ -570,7 +636,7 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
       migrationRequired: true,
     };
   }
-  if (!preflightClaude(options, run, report)) {
+  if (!preflightClaude(options, run, report, platform, environment)) {
     return {
       ok: false,
       instances: toolshedPlugins(registry),
@@ -597,20 +663,24 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
   report('Other marketplaces are managed by Claude Code auto-update — not touched.');
 
   const failures = [];
+  const failureDetails = [];
+  const updatedInstances = [];
   if (!options.check) {
     for (const marketplace of marketplaces) {
       const command = marketplaceCommand(marketplace, options.claude);
-      if (!execute(command, options, run, report)) failures.push(command.label);
+      if (!execute(command, options, run, report, failureDetails)) failures.push(command.label);
     }
 
     for (const instance of instances) {
       const command = updateCommand(instance, options.claude);
-      if (!execute(command, options, run, report)) failures.push(command.label);
+      if (execute(command, options, run, report, failureDetails)) {
+        if (!options.dryRun) updatedInstances.push(instance);
+      } else failures.push(command.label);
     }
 
     if (!options.dryRun) {
       instances = activeProjectInstances(toolshedPlugins(readRegistry(registryFile)));
-      reportVersionTransitions(versionTransitions(beforeUpdate, instances), report);
+      if (updatedInstances.length > 0) reportVersionTransitions(versionTransitions(beforeUpdate, instances), report);
     } else {
       report('Dry run cannot know version targets until Claude Code refreshes the marketplace. It will print the gateway restart warning before it would run setup.');
     }
@@ -627,6 +697,7 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
     if (!launcher.written) {
       gatewaySetupOk = false;
       failures.push(gateway.label);
+      failureDetails.push(launcher.reason || 'could not install the stable model-gateway updater');
       report(`FAILED: could not install the stable model-gateway updater (${launcher.reason || 'unknown reason'})`);
     }
   }
@@ -634,7 +705,7 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
     report('Gateway update: the stable updater swaps the proxy by rename, keeps the running listener available until restart, and reports the resulting state.');
   }
   if (gateway && gatewaySetupOk) {
-    gatewaySetupOk = execute(gateway, options, run, report);
+    gatewaySetupOk = execute(gateway, options, run, report, failureDetails);
     if (!gatewaySetupOk) failures.push(gateway.label);
   }
 
@@ -648,9 +719,13 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
     report(`Healed ${healedStatuslines.length} stale managed status-line shim setting(s).`);
   }
 
-  for (const line of reloadAdvice(instances)) report(line);
-  if (failures.length > 0) report(`\nCompleted with ${failures.length} failure(s): ${failures.join(', ')}`);
-  else report('\nCompleted successfully.');
+  if (updatedInstances.length > 0) {
+    for (const line of reloadAdvice(updatedInstances)) report(line);
+  }
+  if (failures.length > 0) {
+    report(`\nCompleted with ${failures.length} failure(s): ${failures.join(', ')}`);
+    if (failureDetails.length > 0) report(`Failure detail: ${failureDetails[0]}`);
+  } else report('\nCompleted successfully.');
   return { ok: failures.length === 0, instances, staleInstances, registryGc, failures, healedGatewayWiring, healedStatuslines };
 }
 
