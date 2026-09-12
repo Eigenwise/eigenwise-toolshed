@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway } = require('./support.js');
-const { commandIncludesFile, commandResultAsync, createProxyRecovery, installBelongsToThisPlugin, isDescendantOfAsync, probeTimeoutMs, resolvePortOwner, unknownPortOwnerReason } = require('../lib/process-supervision.js');
+const { commandIncludesFile, commandResultAsync, createProxyRecovery, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, processIsOwnedByThisInstall, probeTimeoutMs, recordedGatewayPid, resolvePortOwner, unknownPortOwnerReason } = require('../lib/process-supervision.js');
 const { startAll } = require('../lib/commands.js');
 const { canReplaceInstalledCliPath } = require('../lib/runtime.js');
 
@@ -375,6 +375,50 @@ test('startup ownership resolves bounded same-install, unowned, foreign, and unk
   });
 });
 
+test('a matching start-time record identifies a command-hidden process without retiring it', async () => {
+  const pid = 701;
+  const startedAt = '2026-09-12T08:03:16.73938+02:00';
+  const record = { pid, startedAt };
+  const hiddenProcess = { command: '', pid, startedAt };
+  const retired = [];
+
+  assert.equal(processIsOwnedByThisInstall(pid, { record, inspectProcess: () => hiddenProcess }), true);
+  assert.equal(recordedGatewayPid('shim', {
+    inspectProcess: () => hiddenProcess,
+    readPidFile: () => pid,
+    readRecord: () => record,
+    retireRecord: (...retirementArguments) => retired.push(retirementArguments),
+  }), pid);
+  assert.deepEqual(retired, [], 'a matching start-time record stays available when Windows hides the command line');
+
+  const resolved = await resolvePortOwner(18764, {
+    owner: async () => pid,
+    inspectProcess: async () => hiddenProcess,
+    recordedPids: () => [pid],
+    timeout: 20,
+  });
+  assert.deepEqual(resolved, {
+    state: 'same-install', identity: 'pid-record', installRoot: gatewayInstallRoot(), pid,
+  });
+
+  const foreignProcess = { command: `${process.execPath} "${path.join(os.tmpdir(), 'foreign-model-gateway', 'bin', 'model-gateway.js')}" serve-shim`, pid, startedAt };
+  assert.equal(processIsOwnedByThisInstall(pid, { record, inspectProcess: () => foreignProcess }), false);
+});
+
+test('a failed termination is reported after a matching start-time ownership check', () => {
+  const pid = 701;
+  const record = { pid, startedAt: '2026-09-12T08:03:16.73938+02:00' };
+  const hiddenProcess = { command: '', pid, startedAt: record.startedAt };
+  const terminated = [];
+
+  assert.equal(killPid(pid, {
+    inspectProcess: () => hiddenProcess,
+    record,
+    terminate: (targetPid) => { terminated.push(targetPid); return false; },
+  }), false);
+  assert.deepEqual(terminated, [pid], 'a taskkill failure remains a failed stop');
+});
+
 test('startup ownership names a probe budget exhaustion separately from an unrecognized owner', async () => {
   let elapsed = 0;
   const exhaustedOwner = await resolvePortOwner(18764, {
@@ -469,6 +513,7 @@ test('startup ownership leaves unknown and confirmed foreign listeners untouched
     recordLifecycle: (event, details) => lifecycle.push({ event, details }),
     resolveOwner: async () => owner,
     reapOrphans: () => calls.push('cleanup'),
+    shimReady: async () => false,
     stopSupervisor: async () => calls.push('stop'),
     spawnSupervisor: () => calls.push('start'),
   });
@@ -483,6 +528,22 @@ test('startup ownership leaves unknown and confirmed foreign listeners untouched
   assert.equal(foreign.ok, false);
   assert.match(foreign.reason, /PID 702 owns :18764 from a different install root/);
   assert.deepEqual(calls, []);
+});
+
+test('startup leaves a healthy command-hidden listener running', async () => {
+  const calls = [];
+  const result = await startAll({
+    ensureState: () => calls.push('state'),
+    proxyExists: () => true,
+    reapOrphans: () => calls.push('cleanup'),
+    resolveOwner: async () => ({ state: 'unknown', pid: 701, reason: 'unreadable-command' }),
+    shimReady: async () => true,
+    spawnSupervisor: () => calls.push('start'),
+    stopSupervisor: async () => calls.push('stop'),
+  });
+
+  assert.deepEqual(result, { ok: true, started: [], recoveryAttempted: false });
+  assert.deepEqual(calls, ['state'], 'a healthy listener does not become a failed-start report');
 });
 
 test('cache ownership resolves physical install roots before accepting sibling versions', (t) => {

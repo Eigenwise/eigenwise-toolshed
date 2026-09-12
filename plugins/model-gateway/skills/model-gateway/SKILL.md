@@ -84,10 +84,7 @@ alone. Recovery output remains in `~/.claude/model-gateway/logs/guardian.log`; b
 `~/.claude/model-gateway/logs/lifecycle.jsonl` identify supervisor, worker, and proxy PIDs, orderly
 stop/restart requests, observed exits, and recovery outcomes. Use `doctor` to print the evidence path and
 the last observed exit. An OS termination or force-killed supervisor may leave no final record, so treat an
-absent exit record as absence of evidence, not a clean shutdown. Cleanup kills recorded PIDs only when the
-live command still identifies this install and the record matches its command or start time. A stale record is
-deleted without stopping its reused PID; `doctor` prints `stale pid
-file guardian: PID <pid> is now <command>`. Proxy recovery stops a listener using the shared proxy binary only
+absent exit record as absence of evidence, not a clean shutdown. Cleanup accepts a PID record whose start time matches even when the live command line is unavailable, and deletes a record only when a readable command line contradicts it; it never stops a reused PID. On Windows, an unavailable command line can mean the process is elevated, so `doctor` names the condition and `stop` or `setup` must run from a session with the same privileges. Proxy recovery stops a listener using the shared proxy binary only
 when the live process tree proves it descends from the recovering supervisor. A matching shared binary alone
 never proves ownership. A failed `/v1/models` check gets one fresh-connection confirmation before recovery can stop an owned listener; a healthy confirmation resets recovery without stopping or starting the proxy. This matters when an agent is mid-orchestration
 (e.g. dispatching Codex subagents through the gateway): do not tell the user to restart Claude Code just to
