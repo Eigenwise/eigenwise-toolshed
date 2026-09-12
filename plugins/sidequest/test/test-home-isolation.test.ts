@@ -19,8 +19,14 @@ const planningWarningsTest = path.join(pluginRoot, 'test', 'planning-depth-warni
 const testHomePreload = pathToFileURL(path.join(pluginRoot, 'test', '_sidequest-test-home.ts')).href;
 const fixtureBoardPath = path.join(planningDepthWarningsFixtureParent, 'board');
 
-function runPlanningWarningsSuite(sidequestHome: string, preloads: string[] = []) {
-  return spawnSync(process.execPath, ['--import', 'tsx', ...preloads.flatMap((preload) => ['--import', preload]), '--test', planningWarningsTest], {
+function runPlanningWarningsSuite(sidequestHome: string, preloads: string[] = [], testNamePattern?: string) {
+  return spawnSync(process.execPath, [
+    '--import', 'tsx',
+    ...preloads.flatMap((preload) => ['--import', preload]),
+    '--test',
+    ...(testNamePattern ? ['--test-name-pattern', testNamePattern] : []),
+    planningWarningsTest,
+  ], {
     cwd: pluginRoot,
     encoding: 'utf8',
     env: { ...process.env, NODE_TEST_CONTEXT: undefined, SIDEQUEST_HOME: sidequestHome },
@@ -79,7 +85,8 @@ test('a test process without test-home preload registers a planning fixture, whi
 
     registerProject(liveHome, sentinelProject, 'sentinel');
     const before = registryBytes(liveHome);
-    const isolatedRun = runPlanningWarningsSuite(liveHome, [testHomePreload]);
+    // The nested planning suite's 42 tests run separately; this isolation check needs only its fixture-writing test.
+    const isolatedRun = runPlanningWarningsSuite(liveHome, [testHomePreload], 'complexity 4\\+ add warns');
     assert.strictEqual(isolatedRun.status, 0, isolatedRun.stderr || isolatedRun.stdout);
     assert.match(isolatedRun.stdout + isolatedRun.stderr, /complexity 4\+ add warns for empty executor context and file scope/);
     assert.deepStrictEqual(registryBytes(liveHome), before);
