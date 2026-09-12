@@ -13,7 +13,7 @@ export const HOLD_FILE = '.release/HOLD';
 const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]/;
 const REF_PATTERN = /^[A-Z][A-Z0-9]*-\d+$/;
 const COMMIT_PATTERN = /^[0-9a-f]{7,40}$/;
-const KNOWN_KEYS = new Set(['ref', 'title', 'plugins', 'bump', 'commit', 'hold', 'category', 'story']);
+const KNOWN_KEYS = new Set(['ref', 'title', 'scope', 'plugins', 'bump', 'commit', 'hold', 'category', 'story']);
 
 export class FragmentError extends Error {
   constructor(file, message) {
@@ -94,6 +94,18 @@ function resolvePlugins(file, data) {
   return entries.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function resolveScope(file, data) {
+  if (data.scope === undefined || data.scope === null) return null;
+  if (data.scope !== 'repo') throw new FragmentError(file, 'field "scope" must be "repo"');
+  if (Object.hasOwn(data, 'plugins')) {
+    throw new FragmentError(file, 'a repo-scoped fragment must not declare "plugins"');
+  }
+  if (Object.hasOwn(data, 'bump')) {
+    throw new FragmentError(file, 'a repo-scoped fragment must not declare "bump"');
+  }
+  return 'repo';
+}
+
 export function parseFragment(file, text, { knownPlugins = null } = {}) {
   const base = path.posix.basename(file);
   if (!base.endsWith('.md')) throw new FragmentError(file, 'fragments must be .md files');
@@ -128,7 +140,8 @@ export function parseFragment(file, text, { knownPlugins = null } = {}) {
     throw new FragmentError(file, 'field "hold" must be true or false');
   }
 
-  const plugins = resolvePlugins(file, data);
+  const scope = resolveScope(file, data);
+  const plugins = scope === 'repo' ? [] : resolvePlugins(file, data);
   if (knownPlugins) {
     for (const entry of plugins) {
       if (!knownPlugins.has(entry.name)) {
@@ -143,6 +156,7 @@ export function parseFragment(file, text, { knownPlugins = null } = {}) {
   return {
     ref,
     title,
+    scope,
     plugins,
     bump: data.bump ?? null,
     commit,
@@ -162,7 +176,11 @@ export function renderFragment(fragment) {
   const front = {
     ref: fragment.ref,
     title: fragment.title,
-    ...(uniform ? { bump: uniform, plugins: fragment.plugins.map((entry) => entry.name) } : { plugins }),
+    ...(fragment.scope === 'repo'
+      ? { scope: 'repo' }
+      : uniform
+        ? { bump: uniform, plugins: fragment.plugins.map((entry) => entry.name) }
+        : { plugins }),
     ...(fragment.commit ? { commit: fragment.commit } : {}),
     ...(fragment.category ? { category: fragment.category } : {}),
     ...(fragment.story ? { story: fragment.story } : {}),

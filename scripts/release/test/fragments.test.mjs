@@ -36,6 +36,26 @@ test('a map entry with no level falls back to bump', () => {
   ]);
 });
 
+test('repo scope renders without plugin fields', () => {
+  const text = '---\nref: SQ-1\ntitle: Release script fix\nscope: repo\ncommit: c7b2702\n---\n\nA detail line.\n';
+  const fragment = parseFragment('.release/unreleased/SQ-1.md', text, { knownPlugins: KNOWN });
+
+  assert.equal(fragment.scope, 'repo');
+  assert.deepEqual(fragment.plugins, []);
+  assert.equal(renderFragment(fragment), text);
+});
+
+test('repo scope refuses plugin fields and unknown scopes', () => {
+  assert.throws(
+    () => parseFragment('.release/unreleased/SQ-1.md', '---\nref: SQ-1\ntitle: t\nscope: repo\nplugins: []\n---\n', { knownPlugins: KNOWN }),
+    /repo-scoped fragment must not declare "plugins"/,
+  );
+  assert.throws(
+    () => parseFragment('.release/unreleased/SQ-1.md', '---\nref: SQ-1\ntitle: t\nscope: plugin\nplugins: [sidequest]\nbump: patch\n---\n', { knownPlugins: KNOWN }),
+    /field "scope" must be "repo"/,
+  );
+});
+
 test('malformed fragments are rejected one reason at a time', () => {
   const cases = [
     [{ plugins: ['sidequest'] }, /needs a "bump" level/],

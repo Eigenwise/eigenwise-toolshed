@@ -55,6 +55,19 @@ test('entries group by what the change was, in a fixed order', () => {
   assert.match(section, /^ {2}Heredocs stopped tripping it\.$/m);
 });
 
+test('repository entries stay in the repository changelog', () => {
+  const section = renderRepoSection({
+    ...PLAN,
+    plugins: [],
+    repositoryEntries: [{ ref: 'SQ-901', title: 'Fix release rollback', commit: null, body: 'No plugin changes.' }],
+  });
+
+  assert.match(section, /^### Repository$/m);
+  assert.match(section, /- Fix release rollback \(SQ-901\)/);
+  assert.match(section, /^ {2}No plugin changes\.$/m);
+  assert.deepEqual([...releasedRefs(section)], ['SQ-901']);
+});
+
 test('a plugin changelog only carries that plugin', () => {
   const section = renderPluginSection(PLAN.plugins[1], PLAN);
   assert.match(section, /^## 0\.63\.12 \(2026-07-25\)$/m);

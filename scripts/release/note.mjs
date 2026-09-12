@@ -9,12 +9,13 @@ import { LEVELS } from './lib/semver.mjs';
 import { diskSource } from './lib/treesource.mjs';
 import { repoRootFrom, runCli, splitList, UsageError } from './lib/cli.mjs';
 
-const USAGE = `Usage: node scripts/release/note.mjs <REF> --bump <${LEVELS.join('|')}> [--plugins a,b] [options]
+const USAGE = `Usage: node scripts/release/note.mjs <REF> (--scope repo | --bump <${LEVELS.join('|')}> [--plugins a,b]) [options]
 
 Writes one release fragment to .release/unreleased/<REF>.md. Run it at integration time, in the
 same push as the ticket's code, so the release cut can see what shipped.
 
   --title <text>       Ticket title (defaults to the board export's title)
+  --scope <repo>        Release repository-only work with no plugin version bump
   --plugins <a,b>      Plugins this ticket releases; omit to infer from --changed
   --bump <level>       ${LEVELS.join(' | ')} (applies to every named plugin)
   --level <p=level>    Per-plugin override, repeatable (e.g. --level workbench=patch)
@@ -47,14 +48,27 @@ export function buildFragment({ input = {}, manifest }) {
   const ref = input.ref;
   if (!ref) throw new UsageError('a board ref is required (e.g. SQ-843)');
 
+  const scope = input.scope ?? null;
+  if (scope !== null && scope !== 'repo') throw new UsageError('scope must be "repo"');
+
   const changed = input.changed ?? [];
   const names = input.plugins ?? (changed.length > 0 ? inferPlugins(changed, manifest.plugins) : null);
-  if (!names || names.length === 0) {
+  if (scope === 'repo') {
+    if (input.plugins !== null && input.plugins !== undefined) {
+      throw new UsageError('repo scope must not name plugins');
+    }
+    if (input.bump !== null && input.bump !== undefined) {
+      throw new UsageError('repo scope must not declare a bump level');
+    }
+    if (input.levels && Object.keys(input.levels).length > 0) {
+      throw new UsageError('repo scope must not declare plugin levels');
+    }
+  } else if (!names || names.length === 0) {
     throw new UsageError(`no plugins for ${ref}: pass --plugins, or --changed with paths under plugins/<name>/`);
   }
 
   const levels = input.levels ?? {};
-  const plugins = names.map((name) => ({ name, level: levels[name] ?? input.bump ?? null }));
+  const plugins = scope === 'repo' ? [] : names.map((name) => ({ name, level: levels[name] ?? input.bump ?? null }));
   const missing = plugins.filter((entry) => entry.level === null).map((entry) => entry.name);
   if (missing.length > 0) {
     throw new UsageError(`no bump level for ${missing.join(', ')}: pass --bump ${LEVELS.join('|')} or --level <plugin>=<level>`);
@@ -63,6 +77,7 @@ export function buildFragment({ input = {}, manifest }) {
   const draft = {
     ref,
     title: input.title ?? null,
+    scope,
     plugins,
     commit: input.commit ?? null,
     hold: input.hold === true,
@@ -99,6 +114,7 @@ function collectInput(values, positionals) {
   return {
     ref: positionals[0] ?? exported.ref ?? null,
     title: values.title ?? exported.title ?? null,
+    scope: values.scope ?? exported.scope ?? null,
     plugins: splitList(values.plugins) ?? exportedPlugins,
     levels,
     bump: values.bump ?? exported.bump ?? null,
@@ -117,6 +133,7 @@ export async function main(argv) {
     allowPositionals: true,
     options: {
       title: { type: 'string' },
+      scope: { type: 'string' },
       plugins: { type: 'string' },
       bump: { type: 'string' },
       level: { type: 'string', multiple: true },

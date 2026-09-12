@@ -52,6 +52,48 @@ test('a normal cut moves three version fields and nothing else', async (t) => {
   assert.deepEqual(context.suites, ['sidequest', 'workbench'], 'only the changed plugins are verified');
 });
 
+test('a repo-only cut writes no plugin files or versions', async (t) => {
+  const context = setup(t);
+  context.write('.release/unreleased/SQ-1.md', '---\nref: SQ-1\ntitle: Fix release rollback\nscope: repo\n---\n');
+  context.commit('integrate');
+
+  const result = await cut({ repoRoot: context.root, runSuite: context.runSuite, log: () => {} });
+
+  assert.equal(result.status, 'cut');
+  assert.equal(context.marketplaceVersion(), '3.208.0');
+  assert.deepEqual(result.plan.tags, ['v3.208.0']);
+  assert.equal(context.version('sidequest'), '3.6.17');
+  assert.equal(context.version('workbench'), '0.63.6');
+  assert.equal(context.version('codex-gateway'), '0.33.4');
+  assert.deepEqual(context.suites, []);
+  assert.match(context.read('CHANGELOG.md'), /- Fix release rollback \(SQ-1\)/);
+  assert.equal(context.exists('plugins/sidequest/CHANGELOG.md'), false);
+  assert.equal(context.exists('plugins/workbench/CHANGELOG.md'), false);
+  assert.equal(context.exists('plugins/codex-gateway/CHANGELOG.md'), false);
+  assert.deepEqual(context.git('show', '--name-only', '--format=', 'HEAD').split('\n').filter(Boolean).sort(), [
+    '.claude-plugin/marketplace.json',
+    '.release/unreleased/SQ-1.md',
+    'CHANGELOG.md',
+  ]);
+});
+
+test('a mixed window bumps only its named plugin and records every entry', async (t) => {
+  const context = setup(t);
+  context.write('.release/unreleased/SQ-1.md', '---\nref: SQ-1\ntitle: Fix release rollback\nscope: repo\n---\n');
+  context.writeFragment('SQ-2', { plugins: ['sidequest'], bump: 'patch' });
+  context.commit('integrate');
+
+  const result = await cut({ repoRoot: context.root, skipTests: true, log: () => {} });
+
+  assert.equal(context.version('sidequest'), '3.6.18');
+  assert.equal(context.version('workbench'), '0.63.6');
+  assert.equal(context.version('codex-gateway'), '0.33.4');
+  assert.deepEqual(result.plan.tags, ['v3.208.0', 'sidequest-v3.6.18']);
+  assert.match(context.read('CHANGELOG.md'), /- Fix release rollback \(SQ-1\)/);
+  assert.match(context.read('CHANGELOG.md'), /- SQ-2 title \(SQ-2\)/);
+  assert.doesNotMatch(context.read('plugins/sidequest/CHANGELOG.md'), /Fix release rollback/);
+});
+
 test('the release commit contains exactly what the cut generated', async (t) => {
   const context = setup(t);
   context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'minor' });
