@@ -113,7 +113,7 @@ test('matching serving and on-disk proxy versions do nothing', async () => {
   assert.equal(restarted, false);
 });
 
-test('stable updater launches the highest installed model-gateway version', (t) => {
+test('stable command launcher follows registry changes and forwards command exits', (t) => {
   const home = temporaryDirectory(t);
   const registryDirectory = path.join(home, '.claude', 'plugins');
   const oldInstall = path.join(home, 'model-gateway-0.1.9');
@@ -121,10 +121,15 @@ test('stable updater launches the highest installed model-gateway version', (t) 
   const result = path.join(home, 'result.json');
   for (const install of [oldInstall, newInstall]) {
     fs.mkdirSync(path.join(install, 'bin'), { recursive: true });
-    fs.writeFileSync(path.join(install, 'bin', 'model-gateway.js'), "require('node:fs').writeFileSync(process.env.MODEL_GATEWAY_TEST_RESULT, JSON.stringify([process.argv[1], ...process.argv.slice(2)]));\n");
+    fs.writeFileSync(path.join(install, 'bin', 'model-gateway.js'), [
+      "const fs = require('node:fs');",
+      "fs.writeFileSync(process.env.MODEL_GATEWAY_TEST_RESULT, JSON.stringify([process.argv[1], ...process.argv.slice(2)]));",
+      'process.exit(Number(process.env.MODEL_GATEWAY_TEST_EXIT));',
+    ].join('\n'));
   }
   fs.mkdirSync(registryDirectory, { recursive: true });
-  fs.writeFileSync(path.join(registryDirectory, 'installed_plugins.json'), JSON.stringify({
+  const registry = path.join(registryDirectory, 'installed_plugins.json');
+  fs.writeFileSync(registry, JSON.stringify({
     plugins: {
       'model-gateway@eigenwise-toolshed': [
         { version: '0.1.9', installPath: oldInstall },
@@ -132,13 +137,40 @@ test('stable updater launches the highest installed model-gateway version', (t) 
       ],
     },
   }));
-  const launcher = writer.writeUpdateLauncher({ home }).file;
+  const updateLauncher = writer.writeUpdateLauncher({ home }).file;
+  const launcher = writer.commandLauncherPath(home);
+  const env = { ...process.env, MODEL_GATEWAY_CLAUDE_HOME: path.join(home, '.claude'), MODEL_GATEWAY_TEST_RESULT: result };
 
-  const run = spawnGatewayProcessSync(process.execPath, [launcher], {
+  const update = spawnGatewayProcessSync(process.execPath, [updateLauncher], {
     encoding: 'utf8',
-    env: { ...process.env, MODEL_GATEWAY_CLAUDE_HOME: path.join(home, '.claude'), MODEL_GATEWAY_TEST_RESULT: result },
+    env: { ...env, MODEL_GATEWAY_TEST_EXIT: '11' },
   });
 
-  assert.equal(run.status, 0, run.stderr);
+  assert.equal(update.status, 11, update.stderr);
   assert.deepEqual(JSON.parse(fs.readFileSync(result, 'utf8')), [path.join(newInstall, 'bin', 'model-gateway.js'), 'setup']);
+
+  const newer = spawnGatewayProcessSync(process.execPath, [launcher, 'status', '--json'], {
+    encoding: 'utf8',
+    env: { ...env, MODEL_GATEWAY_TEST_EXIT: '17' },
+  });
+
+  assert.equal(newer.status, 17, newer.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(result, 'utf8')), [path.join(newInstall, 'bin', 'model-gateway.js'), 'status', '--json']);
+
+  fs.writeFileSync(registry, JSON.stringify({
+    plugins: { 'model-gateway@eigenwise-toolshed': [{ version: '0.1.9', installPath: oldInstall }] },
+  }));
+  const downgraded = spawnGatewayProcessSync(process.execPath, [launcher, 'doctor'], {
+    encoding: 'utf8',
+    env: { ...env, MODEL_GATEWAY_TEST_EXIT: '23' },
+  });
+
+  assert.equal(downgraded.status, 23, downgraded.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(result, 'utf8')), [path.join(oldInstall, 'bin', 'model-gateway.js'), 'doctor']);
+
+  fs.writeFileSync(registry, JSON.stringify({ plugins: { 'model-gateway@eigenwise-toolshed': [] } }));
+  const missing = spawnGatewayProcessSync(process.execPath, [launcher, 'status'], { encoding: 'utf8', env });
+
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /no installed Model Gateway CLI was found in Claude Code's plugin registry/);
 });

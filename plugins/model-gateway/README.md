@@ -21,6 +21,8 @@ Reload the plugin, then start the Model Gateway skill:
 
 The skill runs `setup`, which installs and starts the local gateway, checks your login, writes the current project's `.claude/settings.local.json`, and confirms the project wiring. If setup asks for login, complete the browser sign-in, then let Claude run `setup` again to finish the wiring and confirmation. The bundled `env --write-user` command enables machine-wide wiring, while `env --write-project` wires one project.
 
+For direct recovery, run `node ~/.claude/model-gateway/model-gateway.js <command>`. SessionStart recreates that launcher from Claude Code's installed-plugin registry, so it follows upgrades, uses an installed downgrade when newer copies are gone, and reports a missing install clearly.
+
 After the project wiring is confirmed, fully restart the Claude Code process for that same project. A plugin reload alone does not reload the model picker or settings from the new process. Select a gateway model only after that restart.
 
 A process `ANTHROPIC_BASE_URL` has precedence over project and user settings. If `doctor` or SessionStart says it shadows a wired settings file, it bypasses Model Gateway. If you control the Claude Code CLI launch, correct or unset that value, then restart. If the host replaces it, use the supported Claude Code CLI on the wired project instead. Model Gateway does not support Desktop routing under forced overrides on Windows or macOS, and settings, parent, or User-scope edits cannot be promised to win.

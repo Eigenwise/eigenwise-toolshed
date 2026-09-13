@@ -655,7 +655,8 @@ test('rewrites Codex authentication failures for streaming and non-streaming req
     assert.equal(response.status, expectedStatus);
     const error = JSON.parse(response.body).error;
     assert.equal(error.type, 'authentication_error');
-    assert.match(error.message, new RegExp(`node "${CLI.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}" login`));
+    assert.match(error.message, /node "[^"]*[\\/]model-gateway[\\/]model-gateway\.js" login/);
+    assert.doesNotMatch(error.message, /plugins[\\/]cache[\\/]/);
     assert.doesNotMatch(error.message, /claude-code-proxy\s+codex\s+auth\s+login/i);
     assert.match(error.message, /API Error: 401 Not authenticated\./);
   }
