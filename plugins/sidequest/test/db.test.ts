@@ -348,10 +348,16 @@ test('SQLite busy budgets separate hook and migration waits', () => {
   );
 });
 
-test('a below-current store waits past the hook budget before refusing a migration', async () => {
+// A real v6 store, not a current store with v7's tables removed: v7 also creates the legacy
+// read-only triggers, and leaving those behind makes the ladder fail on `already exists` the
+// moment it actually runs, which hides whether the wait was the point or the refusal was.
+function makeBelowCurrentDb(): string {
   const { db, homeRoot } = makeDb();
   db.exec(`
     PRAGMA foreign_keys=OFF;
+    DROP TRIGGER categories_legacy_read_only_insert;
+    DROP TRIGGER categories_legacy_read_only_update;
+    DROP TRIGGER categories_legacy_read_only_delete;
     DROP TABLE project_routing_profiles;
     DROP TABLE routing_profile_settings;
     DROP TABLE routing_profile_entries;
@@ -361,22 +367,29 @@ test('a below-current store waits past the hook budget before refusing a migrati
     UPDATE meta SET value = '6' WHERE key = 'schema_version';
   `);
   db.close();
+  return homeRoot;
+}
 
+test('a below-current store outwaits the hook budget and still migrates', async () => {
+  const homeRoot = makeBelowCurrentDb();
   const retryDelaysMs = SQLITE_BUSY_RETRY_DELAYS_MS.reduce((total, delay) => total + delay, 0);
   const hookBusyBudgetMs = SQLITE_BUSY_RETRY_ATTEMPTS * SQLITE_BUSY_TIMEOUT_MS + retryDelaysMs;
-  const migrationBusyBudgetMs = SQLITE_BUSY_RETRY_ATTEMPTS * SQLITE_MIGRATION_BUSY_TIMEOUT_MS + retryDelaysMs;
-  const childProcess = await holdWriteLock(homeRoot, migrationBusyBudgetMs + 250);
+  // Outlasting the whole hook budget is the proof: on the steady-state timeout this open would
+  // have given up at hookBusyBudgetMs instead of reaching the ladder at all. Waiting out the full
+  // migration budget would prove the same thing and cost 45 seconds of suite time.
+  const childProcess = await holdWriteLock(homeRoot, hookBusyBudgetMs + 2_000);
   const startedAt = Date.now();
 
   try {
-    assert.throws(
-      () => openDb(homeRoot),
-      new RegExp(`stayed locked while preparing a schema migration.*each waiting up to ${SQLITE_MIGRATION_BUSY_TIMEOUT_MS}ms`, 'i'),
-    );
+    const migrated = openDb(homeRoot);
     const elapsedMs = Date.now() - startedAt;
-    assert.ok(elapsedMs > hookBusyBudgetMs, 'a below-current store must wait beyond the hook busy budget');
-    assert.ok(elapsedMs > SQLITE_MIGRATION_BUSY_TIMEOUT_MS, 'a below-current store must use the migration busy timeout');
+
+    assert.ok(elapsedMs > hookBusyBudgetMs, `a below-current open must outlast the ${hookBusyBudgetMs}ms hook budget, took ${elapsedMs}ms`);
+    assert.strictEqual(stampedSchemaVersion(migrated), CURRENT_SCHEMA_VERSION);
+    assert.ok(countRows(migrated, 'routing_profiles') > 0, 'the v7 migration must run, not merely be waited for');
+    migrated.close();
   } finally {
+    childProcess.kill();
     await waitForProcessExit(childProcess);
   }
 });
