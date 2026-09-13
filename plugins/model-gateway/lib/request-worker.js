@@ -407,8 +407,8 @@ function isSuccessStatus(statusCode) {
 
 function compactOutcome(attempt, statusCode, statusOverride) {
   if (!isSuccessStatus(statusCode)) return 'upstream_error';
-  if (statusOverride === 'upstream_aborted') return 'aborted';
   if (deliverableAttempt(attempt)) return attempt.hasVisibleText ? 'completed' : 'empty_summary';
+  if (statusOverride === 'upstream_aborted') return 'aborted';
   return attempt.errorCode === 'unknown_error' ? 'unknown_error' : 'incomplete';
 }
 
