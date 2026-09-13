@@ -188,7 +188,7 @@ test('the suite environment carries no credentials a push could use', async () =
   assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
 });
 
-test('the suite environment carries no ambient Claude session or agent identity', async () => {
+test('the suite environment carries no ambient Claude session, agent, or installed plugin identity', async () => {
   const { suiteEnvironment } = await import('../cut.mjs');
   const env = suiteEnvironment({
     PATH: '/usr/bin',
@@ -196,9 +196,12 @@ test('the suite environment carries no ambient Claude session or agent identity'
     CLAUDE_SESSION_ID: 'legacy-developer-session',
     SIDEQUEST_SESSION: 'sidequest-developer-session',
     SIDEQUEST_AGENT: 'developer-agent',
+    // A plugin-hosted process running a verification suite points this at the RELEASED build, which
+    // then answers for the checkout under test and hides the fix being verified.
+    CLAUDE_PLUGIN_ROOT: '/home/dev/.claude/plugins/cache/eigenwise-toolshed/sidequest/5.1.15',
   });
 
-  for (const name of ['CLAUDE_CODE_SESSION_ID', 'CLAUDE_SESSION_ID', 'SIDEQUEST_SESSION', 'SIDEQUEST_AGENT']) {
+  for (const name of ['CLAUDE_CODE_SESSION_ID', 'CLAUDE_SESSION_ID', 'SIDEQUEST_SESSION', 'SIDEQUEST_AGENT', 'CLAUDE_PLUGIN_ROOT']) {
     assert.equal(env[name], undefined, `${name} must not reach a suite`);
   }
   assert.equal(env.PATH, '/usr/bin', 'the rest of the environment survives');
