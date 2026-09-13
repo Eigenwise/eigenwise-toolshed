@@ -30,7 +30,7 @@ function request(port, method, pathname, body, extraHeaders = {}) {
     }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString() }));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString() }));
     });
     req.on('error', reject);
     req.end(encoded);
@@ -476,6 +476,59 @@ test('restart rejects an older installed worker script without restarting', asyn
   assert.equal((await request(shimPort, 'POST', '/restart', { script: olderCliPath }, lifecycleHeaders(home))).status, 400);
   assert.equal(Number(fs.readFileSync(pidFile, 'utf8')), previousPid);
   await waitForWorkerVersion(shimPort, '0.48.12');
+});
+
+// A worker that answers nothing and drops the supervisor's connection, then
+// stops listening on request, so both halves of the refusal are reachable: the
+// body was taken, and the body never left the supervisor.
+function fixtureWorkerSource(version) {
+  return `'use strict';
+const http = require('node:http');
+let taken = 0;
+const server = http.createServer((req, res) => {
+  if (req.url === '/healthz') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ ok: true, version: ${JSON.stringify(version)} }));
+  }
+  if (req.url === '/fixture/stop-listening') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.once('finish', () => {
+      server.close();
+      setInterval(() => {}, 60000); // stay alive unlistening, so the supervisor cannot fork a replacement
+    });
+    return res.end(JSON.stringify({ taken }));
+  }
+  taken += 1;
+  req.socket.destroy();
+});
+server.listen(0, '127.0.0.1', () => process.send({ type: 'listening', port: server.address().port }));
+`;
+}
+
+test('supervisor refuses the client retry only when a worker took the body', async (t) => {
+  const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-worker-cache-'));
+  const environment = gatewayTestEnvironment(t);
+  const home = environment.HOME;
+  t.after(() => fs.rmSync(cacheRoot, { recursive: true, force: true }));
+  const currentCliPath = createCachedCli(cacheRoot, '0.48.12');
+  const droppingCliPath = createCachedCli(cacheRoot, '0.48.13');
+  fs.writeFileSync(droppingCliPath, fixtureWorkerSource('0.48.13'));
+  const { port: shimPort } = await startGateway(t, 'serve-shim', environment, { cliPath: currentCliPath });
+  assert.equal((await request(shimPort, 'POST', '/restart', { script: droppingCliPath }, lifecycleHeaders(home))).status, 202);
+  await waitForWorkerVersion(shimPort, '0.48.13');
+
+  const taken = await request(shimPort, 'POST', '/v1/messages', { model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1 });
+  assert.equal(taken.status, 503);
+  assert.equal(taken.headers['x-should-retry'], 'false', 'a request the worker took must not be resent by the client');
+  assert.match(JSON.parse(taken.body).error.message, /after this request reached the model/);
+
+  const stopped = await request(shimPort, 'GET', '/fixture/stop-listening');
+  assert.equal(JSON.parse(stopped.body).taken, 1, 'the supervisor delivered the body exactly once');
+
+  const refused = await request(shimPort, 'POST', '/v1/messages', { model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1 });
+  assert.equal(refused.status, 503);
+  assert.equal(refused.headers['x-should-retry'], undefined, 'a request no worker accepted stays retryable');
+  assert.match(JSON.parse(refused.body).error.message, /retry it shortly/);
 });
 
 test('restart adopts a newer installed worker script', async (t) => {
