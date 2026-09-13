@@ -8,7 +8,7 @@ const path = require('path');
 
 const SCHEMA_VERSION = 1;
 const CATALOG_SCHEMA_VERSION = 4;
-const UPDATE_LAUNCHER = `#!/usr/bin/env node
+const COMMAND_LAUNCHER = `#!/usr/bin/env node
 'use strict';
 
 const fs = require('node:fs');
@@ -29,19 +29,37 @@ function compareVersions(left, right) {
 
 function currentModelGatewayCli() {
   const claudeHome = process.env.MODEL_GATEWAY_CLAUDE_HOME || path.join(os.homedir(), '.claude');
-  const registry = JSON.parse(fs.readFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), 'utf8'));
-  const candidates = (registry.plugins?.['model-gateway@eigenwise-toolshed'] || [])
-    .filter((install) => install?.installPath)
-    .map((install) => ({ ...install, script: path.join(install.installPath, 'bin', 'model-gateway.js') }))
-    .filter((install) => fs.existsSync(install.script));
-  candidates.sort((left, right) => compareVersions(right.version, left.version)
-    || String(right.lastUpdated || '').localeCompare(String(left.lastUpdated || '')));
-  return candidates[0]?.script;
+  try {
+    const registry = JSON.parse(fs.readFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), 'utf8'));
+    const candidates = (registry.plugins?.['model-gateway@eigenwise-toolshed'] || [])
+      .filter((install) => install?.installPath)
+      .map((install) => ({ ...install, script: path.join(install.installPath, 'bin', 'model-gateway.js') }))
+      .filter((install) => fs.existsSync(install.script));
+    candidates.sort((left, right) => compareVersions(right.version, left.version)
+      || String(right.lastUpdated || '').localeCompare(String(left.lastUpdated || '')));
+    return candidates[0]?.script;
+  } catch {
+    return null;
+  }
 }
 
 const script = currentModelGatewayCli();
-if (!script) throw new Error('Model Gateway is not installed in Claude Code\\'s plugin registry.');
-const result = spawnSync(process.execPath, [script, 'setup'], { stdio: 'inherit', windowsHide: true });
+if (!script) {
+  console.error('model-gateway: no installed Model Gateway CLI was found in Claude Code\\'s plugin registry.');
+  process.exit(1);
+}
+const result = spawnSync(process.execPath, [script, ...process.argv.slice(2)], { stdio: 'inherit', windowsHide: true });
+if (result.error) throw result.error;
+process.exit(result.status == null ? 1 : result.status);
+`;
+
+const UPDATE_LAUNCHER = `#!/usr/bin/env node
+'use strict';
+
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const result = spawnSync(process.execPath, [path.join(__dirname, 'model-gateway.js'), 'setup'], { stdio: 'inherit', windowsHide: true });
 if (result.error) throw result.error;
 process.exit(result.status == null ? 1 : result.status);
 `;
@@ -62,7 +80,18 @@ function updateLauncherPath(home = os.homedir()) {
   return path.join(home, '.claude', 'model-gateway', 'update.js');
 }
 
+function commandLauncherPath(home = os.homedir()) {
+  return path.join(home, '.claude', 'model-gateway', 'model-gateway.js');
+}
+
+function writeCommandLauncher({ home = os.homedir() } = {}) {
+  const file = commandLauncherPath(home);
+  writeAtomically(file, COMMAND_LAUNCHER);
+  return { written: true, file };
+}
+
 function writeUpdateLauncher({ home = os.homedir() } = {}) {
+  writeCommandLauncher({ home });
   const file = updateLauncherPath(home);
   writeAtomically(file, UPDATE_LAUNCHER);
   return { written: true, file };
@@ -114,4 +143,4 @@ if (require.main === module) {
   try { writeBreadcrumb(); } catch (_) {}
 }
 
-module.exports = { CATALOG_SCHEMA_VERSION, SCHEMA_VERSION, breadcrumb, registryPath, updateLauncherPath, writeBreadcrumb, writeUpdateLauncher };
+module.exports = { CATALOG_SCHEMA_VERSION, SCHEMA_VERSION, breadcrumb, commandLauncherPath, registryPath, updateLauncherPath, writeBreadcrumb, writeCommandLauncher, writeUpdateLauncher };

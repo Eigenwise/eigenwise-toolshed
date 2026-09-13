@@ -1138,8 +1138,8 @@ function createDispatch(dependencies) {
     if (opts.retireOnly === true) {
       const ticket = getTicket(slug, idOrRef);
       const state = dispatchState(ticket);
-      if (!supersedableUnboundAttempt(ticket, state)) {
-        throw new Error(`prepare dispatch: ${idOrRef} cannot retire only because its dispatch is ${evidenceSupersessionBlocker(ticket, state)}. retireOnly accepts only an unclaimed prepared or launched dispatch before runtime binding.`);
+      if (!evidenceRetirableAttempt(ticket, state)) {
+        throw new Error(`prepare dispatch: ${idOrRef} cannot retire only because its dispatch is ${evidenceSupersessionBlocker(ticket, state)}. retireOnly accepts the same unclaimed attempt shapes as recovery evidence: prepared or launched before runtime binding, or bound and unclaimed past the claim-idle backstop.`);
       }
       const superseded = supersedeUnboundAttempt(slug, idOrRef, {
         evidence: opts.recoveryEvidence,

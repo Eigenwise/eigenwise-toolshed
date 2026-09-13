@@ -15,7 +15,7 @@ Remote Control has two per-project choices. Explain both costs before changing a
 Run RC-compatibility commands with:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" remote-control <command>
+node ~/.claude/model-gateway/model-gateway.js remote-control <command>
 ```
 
 ## Turn the gateway off for this project
@@ -36,7 +36,7 @@ Use this only when the user wants `/remote-control` while keeping Model Gateway 
 1. Start with a read-only diagnosis:
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" remote-control doctor
+   node ~/.claude/model-gateway/model-gateway.js remote-control doctor
    ```
 
    `doctor` reports the serving supervisor as `bound`, `bindable`, `unavailable (CODE)`, or `unknown`. Start the normal-user gateway supervisor before enabling when it is not `bound` or `bindable`. Stop and explain any partial plugin block, non-loopback mapping for `api.anthropic.com`, an
@@ -71,7 +71,7 @@ Use this only when the user wants `/remote-control` while keeping Model Gateway 
 4. After that direct yes, run:
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" remote-control enable --confirm
+   node ~/.claude/model-gateway/model-gateway.js remote-control enable --confirm
    ```
 
    It first confirms the current serving supervisor is `bound` or `bindable` on the configured loopback port. A `bound` same-supervisor result can adopt an existing unmarked mapping; a listener lookup never overrides it. It then backs up the hosts file, adopts an existing unmarked `127.0.0.1 api.anthropic.com` entry in
@@ -93,7 +93,7 @@ Disabling RC-compatibility restores the Codex/Grok rows in `/model`. It does not
 3. Ask for direct user confirmation, then run:
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" remote-control disable --confirm
+   node ~/.claude/model-gateway/model-gateway.js remote-control disable --confirm
    ```
 
    The command backs up the file, removes only that exact block, uses the normal safe gateway recovery

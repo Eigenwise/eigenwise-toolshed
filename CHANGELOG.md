@@ -8,6 +8,24 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.565.0 (2026-09-13)
+
+### model-gateway 0.50.24 → 0.50.25
+
+#### Fixes
+
+- Fix Codex sign-in guidance (SQ-2839)
+  Codex authentication failures now show the model-gateway login command that works on this install.
+- Stable Model Gateway commands (SQ-2840)
+  Use `~/.claude/model-gateway/model-gateway.js` for gateway commands so they keep working across plugin upgrades.
+
+### sidequest 5.1.16 → 5.1.17
+
+#### Fixes
+
+- Retire expired bound attempts (SQ-2834)
+  `--retire-only` now accepts expired, bound-but-unclaimed dispatch attempts, matching recovery evidence. Immediate API-failure recovery remains unresolved.
+
 ## v3.564.0 (2026-09-13)
 
 ### model-gateway 0.50.23 → 0.50.24
