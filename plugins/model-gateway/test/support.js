@@ -305,12 +305,12 @@ function startGateway(t, command, environment, { cliPath = CLI, isolatedOverride
     child.fixtureShutdown = command === 'serve-shim';
     let output = '';
     let listening = false;
-    const timeout = setTimeout(() => {
+    const listenerTimeout = setTimeout(() => {
       child.kill();
       reject(new Error(`${command} did not report an ephemeral listener within ${START_TIMEOUT_MS}ms: ${output}`));
     }, START_TIMEOUT_MS);
     const settle = (callback) => {
-      clearTimeout(timeout);
+      clearTimeout(listenerTimeout);
       callback();
     };
     child.stdout.on('data', (chunk) => {
@@ -318,10 +318,14 @@ function startGateway(t, command, environment, { cliPath = CLI, isolatedOverride
       const match = output.match(/listening on 127\.0\.0\.1:(\d+)/);
       if (!match || listening) return;
       listening = true;
+      clearTimeout(listenerTimeout);
       const port = Number(match[1]);
       waitForHealth(port).then(
         () => settle(() => resolve({ child, port })),
-        (error) => settle(() => reject(new Error(`${error.message}: ${output}`))),
+        (error) => settle(() => {
+          child.kill();
+          reject(new Error(`${error.message}: ${output}`));
+        }),
       );
     });
     child.stderr.on('data', (chunk) => { output += chunk; });
