@@ -2086,7 +2086,17 @@ function runShim() {
         settled = true;
         finish(value);
       };
-      const takenByWorker = (error) => Object.assign(error, { bodyTakenByWorker: true });
+      const lostWorkerRequest = (error, workerThatTookBody) => {
+        recordGatewayLifecycle('worker-request-lost', {
+          component: 'supervisor',
+          pid: process.pid,
+          startedAt: supervisorStartedAt,
+          ...(workerThatTookBody?.pid ? { child: { component: 'worker', pid: workerThatTookBody.pid } } : {}),
+          outcome: 'response-lost',
+          errorType: error.code || error.name,
+        });
+        return Object.assign(error, { bodyTakenByWorker: true });
+      };
       const attempt = (attemptsLeft, acceptingWorker) => {
         if (settled) return;
         const canWait = () => attemptsLeft > 0 && !stopped;
@@ -2094,7 +2104,7 @@ function runShim() {
           () => attempt(attemptsLeft - 1, nextAcceptingWorker), 50,
         );
         if (acceptingWorker && worker === acceptingWorker) {
-          if (!canWait()) return settle(reject, takenByWorker(new Error('shim worker never answered the request it had accepted')));
+          if (!canWait()) return settle(reject, lostWorkerRequest(new Error('shim worker never answered the request it had accepted'), acceptingWorker));
           return waitForAnotherAttempt(acceptingWorker);
         }
         if (!workerPort) {
@@ -2114,7 +2124,7 @@ function runShim() {
         });
         upstream.once('error', (error) => {
           if (settled) return;
-          if (!canWait()) return settle(reject, deliveredToWorker ? takenByWorker(error) : error);
+          if (!canWait()) return settle(reject, deliveredToWorker ? lostWorkerRequest(error, deliveredToWorker) : error);
           waitForAnotherAttempt(deliveredToWorker);
         });
         upstream.end(body);
@@ -2163,7 +2173,7 @@ function runShim() {
           type: 'api_error',
           message: bodyTakenByWorker
             ? 'model-gateway lost the shim worker connection after this request reached the model; that answer cannot be recovered, and retrying automatically would pay for a second inference, so send it again yourself if you still want one'
-            : 'model-gateway could not complete this request; retry it shortly',
+            : 'model-gateway could not deliver this request to the shim worker; retry it shortly',
         },
       }));
     }
