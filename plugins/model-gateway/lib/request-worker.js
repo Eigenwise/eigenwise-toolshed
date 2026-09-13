@@ -11,6 +11,7 @@ const net = require('node:net');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const { writeFileAtomically } = require('./atomic-file.js');
+const { CONTROL_HEADER, authenticatedControlRequest, ensureControlToken } = require('./control-auth.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
 const { fetchUrl } = require('./process-supervision.js');
@@ -947,6 +948,7 @@ function requestHeader(req, name) {
 
 
 function runWorker() {
+  const controlToken = ensureControlToken();
   process.once('disconnect', () => process.exit(0));
   let modelCache = {
     at: 0,
@@ -1433,7 +1435,7 @@ function runWorker() {
     if (usageCapture) clientRes.once('finish', () => finishUsage());
     const isHttps = url.protocol === 'https:';
     const headers = { ...clientReq.headers };
-    for (const h of ['host', 'connection', 'content-length', 'keep-alive', ...TRACE_HEADERS, ...extraHeaderDrop]) delete headers[h];
+    for (const h of ['host', 'connection', 'content-length', 'keep-alive', CONTROL_HEADER, ...TRACE_HEADERS, ...extraHeaderDrop]) delete headers[h];
     if (body != null) headers['content-length'] = Buffer.byteLength(body);
     const reqOptions = {
       method: clientReq.method,
@@ -1885,6 +1887,10 @@ function runWorker() {
     const pathOnly = req.url.split('?')[0];
 
     if (req.method === 'POST' && pathOnly === '/drain') {
+      if (!authenticatedControlRequest(req, controlToken, [req.socket.localPort], compatState.port80Bound && req.socket.localPort === COMPAT_PORT)) {
+        res.writeHead(403);
+        return res.end();
+      }
       draining = true;
       res.once('finish', () => setImmediate(beginDrain));
       res.writeHead(202, { 'content-type': 'application/json' });

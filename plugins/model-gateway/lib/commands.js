@@ -38,6 +38,8 @@ const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const { writeFileAtomically } = require('./atomic-file.js');
+const { authenticatedControlRequest, controlRequestHeaders, ensureControlToken } = require('./control-auth.js');
+const { downloadVerifiedArchive } = require('./release-verification.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
 const {
@@ -487,25 +489,13 @@ async function setup() {
   const rel = await fetchUrl(`https://api.github.com/repos/${REPO}/releases/latest`);
   if (rel.status !== 200) die(`GitHub API returned ${rel.status}`);
   const release = JSON.parse(rel.body.toString());
-  const asset = (release.assets || []).find((a) => a.name === assetName);
-  if (!asset) die(`no asset ${assetName} in release ${release.tag_name}`);
-  const shaAsset = (release.assets || []).find((a) => a.name === assetName.replace(/\.(zip|tar\.gz)$/, '.sha256'));
-
-  log(`downloading ${assetName} (${release.tag_name})...`);
-  const archive = await fetchUrl(asset.browser_download_url, { timeout: 120000 });
-  if (archive.status !== 200) die(`download failed with ${archive.status}`);
-
-  if (shaAsset) {
-    const shaBody = (await fetchUrl(shaAsset.browser_download_url)).body.toString();
-    const want = (shaBody.match(/[0-9a-f]{64}/i) || [])[0];
-    const got = crypto.createHash('sha256').update(archive.body).digest('hex');
-    if (want && want.toLowerCase() !== got) die(`sha256 mismatch: expected ${want}, got ${got}`);
-    log('sha256 verified');
-  }
+  let archive;
+  try { archive = await downloadVerifiedArchive(release, assetName, { fetchUrl, log }); }
+  catch (error) { die(error.message); }
 
   const stage = fs.mkdtempSync(path.join(BIN_DIR, 'stage-'));
   const archiveFile = path.join(stage, assetName);
-  fs.writeFileSync(archiveFile, archive.body);
+  fs.writeFileSync(archiveFile, archive);
   const tarBin = WIN
     ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe')
     : 'tar';
@@ -1994,6 +1984,7 @@ function requestHeader(req, name) {
 const { effectiveCodexSentryPolicy, runWorker } = require('./request-worker.js');
 function runShim() {
   mkdirs();
+  const controlToken = ensureControlToken();
   const supervisorStartedAt = new Date().toISOString();
   const probeChildren = createProbeChildRegistry();
   let proxyRecovery = null;
@@ -2184,7 +2175,8 @@ function runShim() {
         return reject(new Error('shim worker did not report a listener port'));
       }
       const upstream = http.request({
-        host: '127.0.0.1', port: workerPort, method: req.method, path: req.url, headers: req.headers,
+        host: '127.0.0.1', port: workerPort, method: req.method, path: req.url,
+        headers: { ...req.headers, host: `127.0.0.1:${workerPort}` },
       }, (response) => resolve(response));
       upstream.once('error', (error) => {
         if (retry < 80 && !stopped) return setTimeout(() => requestWorker(req, body, retry + 1).then(resolve, reject), 50);
@@ -2237,7 +2229,7 @@ function runShim() {
       startWorker();
       return;
     }
-    try { await postJson(`http://127.0.0.1:${workerPort}/drain`, { timeout }, timeout + 1000); } catch {}
+    try { await postJson(`http://127.0.0.1:${workerPort}/drain`, { timeout }, timeout + 1000, controlRequestHeaders()); } catch {}
     setTimeout(() => {
       if (worker === current && current.exitCode == null) {
         console.error(`model-gateway: shim drain timed out after ${Math.ceil(timeout / 1000)}s; force-stopping it.`);
@@ -2345,6 +2337,13 @@ function runShim() {
 
   function handle(req, res, compatibilityListener = false) {
     const pathOnly = req.url.split('?')[0];
+    if (pathOnly === '/restart' || pathOnly === '/drain') {
+      if (!authenticatedControlRequest(req, controlToken, [req.socket.localPort], compatibilityListener)) {
+        res.writeHead(403);
+        res.end();
+        return;
+      }
+    }
     if (pathOnly === RC_CONTROL_PATH) {
       if (!controlRequestAllowed(req, compatibilityListener)) {
         res.writeHead(404);
@@ -2356,10 +2355,25 @@ function runShim() {
     }
     if (req.method === 'POST' && pathOnly === '/restart') {
       const chunks = [];
-      req.on('data', (chunk) => chunks.push(chunk));
+      let size = 0;
+      req.on('data', (chunk) => {
+        size += chunk.length;
+        if (size <= 4096) chunks.push(chunk);
+        else if (!res.writableEnded) { res.writeHead(413); res.end(); }
+      });
       req.on('end', () => {
+        if (res.writableEnded) return;
         let script;
-        try { script = JSON.parse(Buffer.concat(chunks).toString()).script; } catch {}
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString());
+          if (!body || Array.isArray(body) || typeof body !== 'object') throw new Error('invalid restart body');
+          script = body.script;
+          if (script !== undefined && !canReplaceInstalledCliPath(workerScript, script)) throw new Error('untrusted worker path');
+        } catch {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, reason: 'restart requires this CLI or a non-older sibling in the same plugin cache' }));
+          return;
+        }
         restartWorker(script);
         res.writeHead(202, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true, restarting: true }));
