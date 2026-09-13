@@ -256,7 +256,7 @@ const tools = [
   },
   {
     name: "dispatch",
-    description: "Prepare a token-gated dispatch. It returns a stable executor spawn spec and token. Each returned subagent_type is bundled in Sidequest and discoverable when the plugin loads, before SessionStart maintenance. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor. retireOnly retires without a replacement.",
+    description: "Prepare a token-gated dispatch. Returns stable executor spawn spec and token. Bundled types load with Sidequest. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor. retireOnly retires an evidence-eligible attempt without a replacement.",
     inputSchema: {
       type: "object",
       properties: {
@@ -267,8 +267,8 @@ const tools = [
         allowRepeatFailure: { type: "boolean" },
         allowUnscoped: { type: "boolean", description: "Explicitly allow a write ticket with no declared file scope." },
         integrationBranch: { type: "string", description: "Ticket delivery target branch. Dispatch records it for submit, wave assembly, and integration even if the board target later changes." },
-        recoveryEvidence: { type: "string", description: "Observed failure evidence. With claimHolder, executor, and worktree, recover that live isolated claim without releasing it. With retireOnly:true, retire an unclaimed prepared or launched attempt without preparing a replacement." },
-        retireOnly: { type: "boolean" },
+        recoveryEvidence: { type: "string", description: "Observed failure evidence. With claimHolder, executor, and worktree, recover that live isolated claim without releasing it. With retireOnly:true, retire an eligible unclaimed prepared or launched attempt before runtime binding, or one bound and unclaimed past the claim-idle backstop, without preparing a replacement." },
+        retireOnly: { type: "boolean", description: "Stop after recovery-evidence retirement rather than prepare a replacement. It accepts the same eligible unclaimed attempt shapes as recovery-evidence retirement." },
         claimHolder: { type: "string", description: "The exact by identity holding the live claim being recovered." },
         worktree: { type: "string", description: "The resumed executor's linked worktree path for live-claim recovery." },
         full: { type: "boolean", description: "Include token, executor, warnings, and recovery details." }

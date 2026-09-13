@@ -1229,7 +1229,8 @@ test('tools/list preserves MCP contracts within the payload budget', async (cont
   assert.ok(headroom >= mcp.MCP_TOOLS_LIST_HEADROOM_BYTES, `tools/list headroom is ${headroom} bytes, below ${mcp.MCP_TOOLS_LIST_HEADROOM_BYTES}`);
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /token and spawn spec/);
-  assert.match(tools.find((tool: any) => tool.name === 'dispatch').inputSchema.properties.recoveryEvidence.description, /Proof/);
+  assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /retireOnly/);
+  assert.match(tools.find((tool: any) => tool.name === 'dispatch').inputSchema.properties.recoveryEvidence.description, /expired bound/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /declared external needs current capture/);
   assert.match(tools.find((tool: any) => tool.name === 'list').description, /changes\/pulse/);
   const list = tools.find((tool: any) => tool.name === 'list');

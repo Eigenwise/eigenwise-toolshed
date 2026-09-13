@@ -1481,7 +1481,7 @@
   },
   {
     "name": "dispatch",
-    "description": "Dispatch; token and spawn spec.",
+    "description": "token and spawn spec; retireOnly.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1497,7 +1497,7 @@
         },
         "reducedAgentSchema": {
           "type": "boolean",
-          "description": "Only when caller schema lacks name/mode; hook needs agent_id+bypassPermissions."
+          "description": "Only when name/mode missing; hook needs agent_id+bypassPermissions."
         },
         "allowRepeatFailure": {
           "type": "boolean"
@@ -1510,7 +1510,7 @@
         },
         "recoveryEvidence": {
           "type": "string",
-          "description": "Proof."
+          "description": "unbound or expired bound"
         },
         "retireOnly": {
           "type": "boolean"
