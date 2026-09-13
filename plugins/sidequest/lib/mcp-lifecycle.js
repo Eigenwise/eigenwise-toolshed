@@ -370,7 +370,7 @@ const tools = [
   },
   {
     name: "sweepClaims",
-    description: "Audit residual reclaimable claims. Observed terminal executor failures release their exact claim immediately; this only handles unobserved idle/abandoned backstops and missing worktrees.",
+    description: "Audit residual reclaimable claims. Observed terminal executor failures release their exact claim immediately; this only handles the unobserved idle and abandoned backstops. A missing worktree is not evidence its executor stopped, so it frees nothing on its own.",
     inputSchema: {
       type: "object",
       properties: { project: PROJECT_PROP }

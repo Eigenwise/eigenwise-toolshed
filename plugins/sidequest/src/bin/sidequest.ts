@@ -360,13 +360,18 @@ Native Agent dispatch (routed work stays in this conversation):
     Invoke the returned executor through the current conversation's Agent tool. It is already registered; native-agent does not write a temporary definition.
     \`sidequest work\`/\`drain\` are disabled because they cannot invoke Agent and never start a separate Claude process.
   sidequest reconcile [--session <id>] [--reason "..."]   forget a session's claim registrations (claims stay held)
-    (the SessionEnd hook calls this automatically on the session id it's given, so a crashed/ended worker's
-    tickets recover immediately; safe — it only touches that session's claims).
+    (the SessionEnd hook calls this automatically on the session id it's given. It releases nothing: a bare
+    session id cannot prove the executor is gone, and the hook is replayable against a live claim. Those
+    tickets recover through the backstops below, not immediately).
     Defaults to \$CLAUDE_CODE_SESSION_ID when --session is omitted.
   sidequest claims sweep [--project <path-or-slug>]  audit residual claims after terminal failures already release their exact claim,
-    then two activity-based backstops: no board activity for SIDEQUEST_CLAIM_IDLE_MIN (default 60m) with no live executor
-    associated, or SIDEQUEST_CLAIM_ABANDON_MIN (default 1440m) for a death nothing observed. A running executor's claim is
-    never swept on age, and closeout (commit/submit/done) never consults these windows.
+    then two activity-based backstops, both strict: no board activity for longer than SIDEQUEST_CLAIM_IDLE_MIN
+    (default 60m) with no live executor associated, or longer than SIDEQUEST_CLAIM_ABANDON_MIN (default 1440m)
+    for a death nothing observed. An attested death frees its claim at once; a gone checkout does not attest
+    one, so a removed worktree waits out the abandon window. A quiet but running executor is swept once that
+    window passes, so keep long work writing to the board. Closeout (commit/submit/done) never consults these
+    windows, and a bound unclaimed attempt is never swept on age at all: it needs its terminal hook or
+    explicit recovery evidence.
   sidequest worktrees <status|sweep> [--dry-run] [--yes] [--min-age-hours N] [--recovery-retention-age-hours N] [--recovery-retention-max-per-agent N] [--project <path-or-slug>]  report worktree storage; --yes removes planned stale worktrees and expired recovery entries
   sidequest recover-shared --project <path-or-slug> --stash <stash@{n}> --yes  reset a dirty shared checkout only after verifying its named stash
 

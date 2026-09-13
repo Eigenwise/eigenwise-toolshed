@@ -2135,8 +2135,10 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       t.updatedAt = now;
     }
     putTicket(slug, t);
-    // Tie this claim to the worker's session so a SessionEnd/SubagentStop hook can
-    // release it immediately instead of waiting out the TTL. No-op without a session id.
+    // Tie this claim to the worker's session so an attested terminal hook can release
+    // it immediately instead of waiting out the backstop. SessionEnd alone does not
+    // attest anything: it carries a bare session id and is replayable against a live
+    // claim, so reconcile only forgets these registrations. No-op without a session id.
     if (opts.sessionId) registerWorker(opts.sessionId, slug, t.id, by);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return { ok: true, ticket: t, ...(compatibilityAdvisory ? { advisory: compatibilityAdvisory } : {}) };
@@ -3423,21 +3425,24 @@ function claimPulse(ticket?: any, now?: any) {
 /* ------------------------------------------------------------------ *
  *  Worker registry (session -> the claims it holds)
  *
- *  The claim TTL (default 60 min) is the backstop that frees a crashed worker's
- *  ticket. But when a *session* ends cleanly, we know its claims are dead right
- *  then — no reason to make a dependent wait out the TTL. The SessionEnd hook
- *  fires on that boundary; it has the session id but a claim is tagged
- *  only with an opaque `--by`. This tiny registry is the missing link: it maps a
- *  session id to the claims taken under it, so reconcileSession() can release
- *  exactly those (and only those — never another live session's) on the spot.
+ *  The activity backstops are what free a crashed worker's ticket. This registry
+ *  maps a session id to the claims taken under it, because a claim is tagged only
+ *  with an opaque `--by` and a hook knows only the session id.
+ *
+ *  It deliberately does NOT release anything. A SessionEnd payload is a bare
+ *  session id with no generation or owning pid, two of its own reasons fire while
+ *  the process keeps running, and the hook is replayable against a live claim, so
+ *  "the session ended" cannot stand in for "the executor is gone". Treating it as
+ *  death swept live claims and minted permanent `died` records from a guess.
+ *  reconcileSession() therefore only forgets these registrations; recovery comes
+ *  from an attested terminal hook, or from the backstops.
  *
  *  One file, projects/workers.json, a sibling to notifications.json:
  *    { sessions: { <sessionId>: { updatedAt, claims: [{ slug, ticketId, by, at }] } } }
  *
- *  Fail-soft throughout: a missing/garbage file degrades to an empty registry,
- *  and any hiccup here must never break a claim (the TTL still covers us). The
- *  registry is an OPTIMIZATION over the TTL, not a new source of truth — nothing
- *  reads it to decide whether a claim is valid, only to speed up releasing it.
+ *  Fail-soft throughout: a missing/garbage file degrades to an empty registry, and
+ *  any hiccup here must never break a claim. Nothing reads it to decide whether a
+ *  claim is valid.
  * ------------------------------------------------------------------ */
 
 // Sessions untouched for this long with no live claims are pruned on write, so
