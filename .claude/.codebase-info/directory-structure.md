@@ -1,6 +1,6 @@
 # Directory structure
 
-Last Updated: 2026-09-10
+Last Updated: 2026-09-13
 
 - `.claude/`: project settings, live rules, and generated codebase map.
 - `.claude-plugin/`: marketplace manifest and published plugin entries.
@@ -13,7 +13,7 @@ Last Updated: 2026-09-10
 - `plugins/test-support/`: JavaScript test scanner shared by Quartermaster, Observability, and Model Gateway tests.
 - `docs/`: Astro/Starlight prose, generated reference source, scripts, and synthetic screenshots.
 - `sandbox/windows/`: maintainer-only, gitignored Windows Sandbox launcher, guest bootstrap, and PowerShell contract test — never committed, no public docs page.
-- `scripts/release/`: release note, plan, cut, guard, manifest, and release tests.
+- `scripts/release/`: release note, plan, cut, finalize, guard, manifest, promotion/publication helpers, and release tests. Protected publication prepares an unprotected release branch, promotes it to `main` through a reviewed PR, then tags the exact merged commit and prints a `main`-to-`develop` sync PR.
 - `.github/workflows/`: test, release guard, release cut, and docs deployment automation.
 - `examples/`: small example projects, not production plugin runtime.
 
