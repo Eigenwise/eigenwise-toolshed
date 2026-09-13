@@ -8,6 +8,24 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.564.0 (2026-09-13)
+
+### model-gateway 0.50.23 → 0.50.24
+
+#### Fixes
+
+- Safe compaction stream diagnostics (SQ-2822)
+  Add privacy-safe diagnostics for Codex compaction stream outcomes.
+
+### sidequest 5.1.15 → 5.1.16
+
+#### Fixes
+
+- Protected-branch release publication and a provable sync-back waiver (SQ-2829)
+  Releasing is three explicit steps: `cut.mjs --prepare` builds the window on a release branch from `develop`, a promotion PR carries it to `main`, and `finalize.mjs` tags the exact merged `main` commit it validated, with the target named explicitly and no override for a failed Test run, a comparison other than the first parent, or a publish branch that moved while it was validating. Direct publication of `main` now needs `--direct-publish` and is never used here. The release guard requires a real version move from a PR into `main`.
+
+  It also recognises the `main` → `develop` sync-back from the forge's repository and ref metadata rather than a branch name, and then proves the waiver instead of inferring it. The publish ref is pinned to one commit, and a release-owned path is waived only where the PR's resulting tree holds exactly the entry that commit published: same content and same mode, or absent on both sides. Different content, a different mode, a path only one side has, an entry that is not an ordinary file, and a tree git cannot read all keep the ordinary fragment requirement, so an edit riding the sync merge commit no longer collects the waiver. Build the sync as a plain merge of `main` into a branch off `develop` and amend nothing on top; the refusal names the path, the reason, and the two remedies.
+
 ## v3.563.0 (2026-09-12)
 
 ### model-gateway 0.50.22 → 0.50.23
