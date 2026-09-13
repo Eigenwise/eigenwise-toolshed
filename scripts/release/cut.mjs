@@ -72,6 +72,9 @@ const SUITE_CREDENTIAL_DENYLIST = [
 // A test that needs an identity sets its own.
 const SUITE_RUNTIME_IDENTITY_DENYLIST = [
   'CLAUDE_CODE_SESSION_ID', 'CLAUDE_SESSION_ID', 'SIDEQUEST_SESSION', 'SIDEQUEST_AGENT',
+  // A suite launched from a plugin-hosted process inherits this pointing at the INSTALLED plugin,
+  // so hooks under test load the released build instead of the checkout being verified.
+  'CLAUDE_PLUGIN_ROOT',
 ];
 
 export function suiteEnvironment(base = process.env) {
