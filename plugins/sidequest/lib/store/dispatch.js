@@ -1394,7 +1394,7 @@ function createDispatch(dependencies) {
           `refs/remotes/origin/${integrationTargetState?.branch || boardConfig(slug)?.integrationBranch || "main"}`
         ) : null;
         if (releaseTip) {
-          throw new Error(`prepare dispatch: ${t.ref} refused; baseline ${releaseTip.commit} is an unpublished release commit, tagged ${releaseTip.tags.join(", ")} and not yet on the remote branch. A release cut tags its commit before running its suites, so this is either a cut still in flight or one that failed and left its commit live. Wait for the cut to finish and push, or tear it down (delete those tags and reset the branch), then dispatch again.`);
+          throw new Error(`prepare dispatch: ${t.ref} refused; baseline ${releaseTip.commit} is an unpublished release commit, tagged ${releaseTip.tags.join(", ")} and not yet on the remote branch. A direct release cut tags its commit before running its suites, so this is either a direct cut still in flight or one that failed and left its commit live. The prepare/finalize flow never reaches this state: preparation creates no tag, and finalize only tags a commit the remote branch already has. Wait for the cut to finish and push, or tear it down (delete those tags and reset the branch), then dispatch again.`);
         }
         const dispatchBaseline = dispatchBaselineForProject(slug, t, now, baseCommit, nonRepoOutput, snapshotPreflight);
         t.dispatchNonce = mintDispatchToken();

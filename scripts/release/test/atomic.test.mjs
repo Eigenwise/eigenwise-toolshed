@@ -47,7 +47,7 @@ test('a held publish lock stops before the local release window changes', async 
   };
 
   await assert.rejects(
-    () => cut({ repoRoot: repo.root, git, push: true, publishLock, skipTests: true, log: () => {} }),
+    () => cut({ repoRoot: repo.root, git, push: true, directPublish: true, publishLock, skipTests: true, log: () => {} }),
     /publish lock is held by "another-publisher"/,
   );
 
@@ -76,7 +76,7 @@ test('--push holds the publish lock across every remote update and releases it a
     },
   };
 
-  await cut({ repoRoot: repo.root, git, push: true, publishLock, skipTests: true, log: () => {} });
+  await cut({ repoRoot: repo.root, git, push: true, directPublish: true, publishLock, skipTests: true, log: () => {} });
 
   assert.deepEqual(events, ['acquire', 'push', 'push', 'release']);
 });
@@ -86,7 +86,7 @@ test('every remote-changing command happens after the whole release is built', a
   const calls = [];
   const git = createGit({ cwd: repo.root, onCommand: (entry) => calls.push(entry.args.join(' ')) });
 
-  const result = await cut({ repoRoot: repo.root, git, push: true, skipTests: true, log: () => {} });
+  const result = await cut({ repoRoot: repo.root, git, push: true, directPublish: true, skipTests: true, log: () => {} });
 
   const mutations = calls.filter((call) => call.startsWith('push'));
   assert.equal(mutations.length, 2, 'the marketplace ref and plugin tags publish separately');
@@ -109,7 +109,7 @@ test('the marketplace tag shares an atomic push with main while plugin tags foll
   const repo = setup(t);
   const logged = [];
 
-  const result = await cut({ repoRoot: repo.root, push: true, skipTests: true, log: (line) => logged.push(line) });
+  const result = await cut({ repoRoot: repo.root, push: true, directPublish: true, skipTests: true, log: (line) => logged.push(line) });
 
   assert.deepEqual(result.marketplacePush, [
     `${result.commit}:refs/heads/main`,
@@ -139,7 +139,7 @@ test('a three-plugin release puts only the marketplace tag in the workflow-trigg
   const calls = [];
   const git = createGit({ cwd: repo.root, onCommand: (entry) => calls.push(entry.args.join(' ')) });
 
-  const result = await cut({ repoRoot: repo.root, git, push: true, skipTests: true, log: () => {} });
+  const result = await cut({ repoRoot: repo.root, git, push: true, directPublish: true, skipTests: true, log: () => {} });
 
   const mutations = calls.filter((call) => call.startsWith('push'));
   assert.equal(result.pluginPush.length, 3);
@@ -169,7 +169,7 @@ test('a rejected ref rejects the whole push, so the remote never half-publishes'
   };
 
   await assert.rejects(
-    () => cut({ repoRoot: repo.root, push: true, publishLock, skipTests: true, force: true, log: () => {} }),
+    () => cut({ repoRoot: repo.root, push: true, directPublish: true, publishLock, skipTests: true, force: true, log: () => {} }),
     /git push .* failed/,
   );
 
@@ -184,7 +184,7 @@ test('a failing suite leaves every remote ref untouched', async (t) => {
   await assert.rejects(
     () => cut({
       repoRoot: repo.root,
-      push: true,
+      push: true, directPublish: true,
       log: () => {},
       runSuite: (suite) => ({ code: suite.plugin === 'workbench' ? 1 : 0, command: suite.command }),
     }),
@@ -204,7 +204,7 @@ test('a failure while building the release leaves every remote ref untouched', a
   });
 
   await assert.rejects(
-    () => cut({ repoRoot: repo.root, git, push: true, skipTests: true, log: () => {} }),
+    () => cut({ repoRoot: repo.root, git, push: true, directPublish: true, skipTests: true, log: () => {} }),
     /git commit .* failed/,
   );
 
@@ -230,7 +230,7 @@ test('a run that finds nothing to release contacts nothing at all', async (t) =>
   const calls = [];
   const git = createGit({ cwd: repo.root, onCommand: (entry) => calls.push(entry.args.join(' ')) });
 
-  const result = await cut({ repoRoot: repo.root, git, push: true, skipTests: true, log: () => {} });
+  const result = await cut({ repoRoot: repo.root, git, push: true, directPublish: true, skipTests: true, log: () => {} });
 
   assert.equal(result.status, 'nothing-to-release');
   assert.deepEqual(calls.filter((call) => call.startsWith('push')), []);

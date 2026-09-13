@@ -2,7 +2,7 @@ name: Test
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
 
 permissions:
@@ -162,3 +162,25 @@ jobs:
           cd "${{ matrix.path }}"
           if [ -n "$SETUP" ]; then eval "$SETUP"; fi
           if [ -n "$COMMAND" ]; then eval "$COMMAND"; fi
+
+  # Branch protection requires check names, and the matrix job names are generated per
+  # plugin/platform pair: they truncate and collide, so none of them is a stable thing to require.
+  # This job is the one name that means "every test job passed on this sha".
+  test-complete:
+    if: always()
+    needs: [release-engine, plugin-matrix, affected-plugin]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every test job to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node -e '
+            const jobs = Object.entries(JSON.parse(process.env.RESULTS));
+            const failed = jobs.filter(([, job]) => job.result !== "success");
+            for (const [name, job] of jobs) console.log(`${name}: ${job.result}`);
+            if (failed.length > 0) {
+              console.error(`failed: ${failed.map(([name]) => name).join(", ")}`);
+              process.exit(1);
+            }
+          '

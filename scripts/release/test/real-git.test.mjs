@@ -49,7 +49,7 @@ test('a real push atomically lands main and the marketplace tag before plugin ta
     GIT_CONFIG_COUNT: '1',
     GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
     GIT_CONFIG_VALUE_0: 'AUTHORIZATION: basic cmVsZWFzZV90b2tlbl9zZWNyZXQ=',
-  }, () => cut({ repoRoot: repo.root, push: true, skipTests: true, log: () => {} }));
+  }, () => cut({ repoRoot: repo.root, push: true, directPublish: true, skipTests: true, log: () => {} }));
 
   assert.equal(result.status, 'cut');
   assert.deepEqual(result.refspecs, [
@@ -80,7 +80,7 @@ test('a rejected refspec leaves every remote ref exactly where it was', async (t
   const before = repo.remoteRefs();
 
   await assert.rejects(
-    () => cut({ repoRoot: repo.root, push: true, skipTests: true, force: true, log: () => {} }),
+    () => cut({ repoRoot: repo.root, push: true, directPublish: true, skipTests: true, force: true, log: () => {} }),
     /git push .* failed/,
   );
 
@@ -96,7 +96,7 @@ test('a suite that moves HEAD stops the release before it is published', async (
   await assert.rejects(
     () => cut({
       repoRoot: repo.root,
-      push: true,
+      push: true, directPublish: true,
       log: () => {},
       runSuite: () => {
         repo.git('commit', '-q', '--allow-empty', '-m', 'a suite slipped a commit in');
@@ -118,7 +118,7 @@ test('a suite that retargets a release tag stops the release', async (t) => {
   await assert.rejects(
     () => cut({
       repoRoot: repo.root,
-      push: true,
+      push: true, directPublish: true,
       log: () => {},
       runSuite: () => {
         repo.git('tag', '-f', 'v3.208.0', integration);
@@ -139,7 +139,7 @@ test('a suite that stages files stops the release', async (t) => {
   await assert.rejects(
     () => cut({
       repoRoot: repo.root,
-      push: true,
+      push: true, directPublish: true,
       log: () => {},
       runSuite: () => {
         writeFileSync(path.join(repo.root, 'plugins/sidequest/sneaky.js'), 'module.exports = 1;\n');
@@ -444,7 +444,7 @@ test('the three real windows publish three tags and ten plugin bumps to a real r
     }
     repo.commit(`integrate ${window.date}`);
 
-    const result = await cut({ repoRoot: repo.root, push: true, skipTests: true, date: window.date, log: () => {} });
+    const result = await cut({ repoRoot: repo.root, push: true, directPublish: true, skipTests: true, date: window.date, log: () => {} });
     assert.equal(result.plan.tag, window.tag);
     assert.equal(result.plan.selected.length, Object.values(window.tickets).flat().length);
     for (const plugin of result.plan.plugins) bumps.push(`${plugin.name} ${plugin.from} -> ${plugin.to}`);
@@ -479,6 +479,6 @@ test('the three real windows publish three tags and ten plugin bumps to a real r
   }
   assert.doesNotMatch(readFileSync(path.join(repo.root, 'plugins/sidequest/CHANGELOG.md'), 'utf8'), /SQ-788/, 'a workbench ticket stays out of the sidequest changelog');
 
-  const rerun = await cut({ repoRoot: repo.root, push: true, skipTests: true, log: () => {} });
+  const rerun = await cut({ repoRoot: repo.root, push: true, directPublish: true, skipTests: true, log: () => {} });
   assert.equal(rerun.status, 'nothing-to-release');
 });
