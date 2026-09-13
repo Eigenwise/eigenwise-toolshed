@@ -730,6 +730,7 @@ test('compaction route diagnostics classify safe terminal outcomes without respo
         + frame('error', { type: 'error', error: { type: 'api_error', message: unknownErrorSecret } }),
     },
     { status: 503, body: JSON.stringify({ error: { message: upstreamHttpSecret } }) },
+    { body: completeStream('delivered before socket abort'), abort: true },
   ]);
   const proxyPort = await listen(proxy.server);
   t.after(() => proxy.server.close());
@@ -743,10 +744,10 @@ test('compaction route diagnostics classify safe terminal outcomes without respo
   const body = compactBody({ messages: [{ role: 'user', content: promptSecret }] });
 
   const responses = [];
-  for (let index = 0; index < 5; index++) responses.push(await postStream(shimPort, body));
-  await waitFor(() => collector.received.length === 5, 'compaction route telemetry was incomplete');
+  for (let index = 0; index < 6; index++) responses.push(await postStream(shimPort, body));
+  await waitFor(() => collector.received.length === 6, 'compaction route telemetry was incomplete');
 
-  const [incomplete, completed, emptySummary, unknownError, upstreamHttpError] = collector.received.map(telemetryAttributes);
+  const [incomplete, completed, emptySummary, unknownError, upstreamHttpError, abortedAfterCompletion] = collector.received.map(telemetryAttributes);
   assert.equal(incomplete.compaction_outcome, 'incomplete');
   assert.equal(incomplete.selected_model, 'claude-gpt-5.6-sol');
   assert.equal(incomplete.effective_model, 'gpt-5.6-sol');
@@ -772,6 +773,8 @@ test('compaction route diagnostics classify safe terminal outcomes without respo
   assert.equal(upstreamHttpError.compaction_outcome, 'upstream_error');
   assert.equal(upstreamHttpError.compaction_error_code, 'upstream_http_error');
   assert.equal(Number(upstreamHttpError.upstream_status_code), 503);
+  assert.equal(abortedAfterCompletion.compaction_outcome, 'completed');
+  assert.equal(abortedAfterCompletion.compaction_terminal_code, 'message_stop');
   const emitted = collector.received.join('\n');
   for (const secret of [partialSecret, promptSecret, unknownErrorSecret, upstreamHttpSecret]) {
     assert.equal(emitted.includes(secret), false, `diagnostics leaked ${secret}`);
@@ -779,6 +782,7 @@ test('compaction route diagnostics classify safe terminal outcomes without respo
   assert.match(responses[0].body, /websocket_missing_terminal/, 'response behavior changed for the known error');
   assert.match(responses[3].body, new RegExp(unknownErrorSecret), 'response behavior changed for the unknown error');
   assert.equal(responses[4].status, 503, 'response behavior changed for the HTTP error');
+  assert.match(responses[5].body, /delivered before socket abort/, 'completed output still reaches the client');
 });
 
 test('compaction diagnostics stay silent when telemetry is disabled', async (t) => {
