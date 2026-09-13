@@ -82,9 +82,13 @@ export function makeRepo({
   return { root, cleanup: () => rmSync(root, { recursive: true, force: true, maxRetries: 3 }) };
 }
 
-/** Answers `git show <ref>:<path>` from a map and nothing else. */
+/** The commit every ref in `fileGit` resolves to, since the guard pins its publish ref exactly once. */
+export const FILE_GIT_SHA = '1f3c7b2a4d5e6f708192a3b4c5d6e7f809a1b2c3';
+
+/** Answers `git show <ref>:<path>` from a map, resolves any ref, and nothing else. */
 export function fileGit(files = {}) {
   return (args) => {
+    if (args[0] === 'rev-parse') return { code: 0, stdout: `${FILE_GIT_SHA}\n`, stderr: '' };
     if (args[0] !== 'show') return { code: 0, stdout: '', stderr: '' };
     const file = args[1].slice(args[1].indexOf(':') + 1);
     return Object.hasOwn(files, file)

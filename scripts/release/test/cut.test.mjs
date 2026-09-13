@@ -436,7 +436,7 @@ test('a cut succeeds and reports a deferred GitHub Release', async (t) => {
   const result = await cut({
     repoRoot: context.root,
     git,
-    push: true,
+    push: true, directPublish: true,
     skipTests: true,
     log: (message) => logs.push(message),
     publishLock: { acquire: async () => ({ ok: true }), release: async () => ({ ok: true }) },
