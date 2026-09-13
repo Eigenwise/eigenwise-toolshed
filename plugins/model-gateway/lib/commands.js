@@ -1920,6 +1920,12 @@ function runShim() {
   const hostsEntry = detectHostsCompat();
   const compatState = { hostsDetected: !!hostsEntry, hostsLine: hostsEntry?.line ?? null, port80Bound: false, reason: null };
   let worker = null;
+  // One connection per request. A pooled keep-alive socket the worker closed at
+  // the same moment fails after the body is written even though the worker never
+  // read it, which is indistinguishable from a worker that took the body and
+  // went quiet: measured 4 requests over 1 socket on the default agent, so three
+  // of four would have been misread that way (verification/SQ-2861).
+  const workerAgent = new http.Agent({ keepAlive: false });
   let workerScript = CLI_PATH;
   let workerPortReportTimeout = null;
   let restarting = false;
@@ -2080,6 +2086,7 @@ function runShim() {
         settled = true;
         finish(value);
       };
+      const takenByWorker = (error) => Object.assign(error, { bodyTakenByWorker: true });
       const attempt = (attemptsLeft, acceptingWorker) => {
         if (settled) return;
         const canWait = () => attemptsLeft > 0 && !stopped;
@@ -2087,7 +2094,7 @@ function runShim() {
           () => attempt(attemptsLeft - 1, nextAcceptingWorker), 50,
         );
         if (acceptingWorker && worker === acceptingWorker) {
-          if (!canWait()) return settle(reject, new Error('shim worker never answered the request it had accepted'));
+          if (!canWait()) return settle(reject, takenByWorker(new Error('shim worker never answered the request it had accepted')));
           return waitForAnotherAttempt(acceptingWorker);
         }
         if (!workerPort) {
@@ -2098,6 +2105,7 @@ function runShim() {
         const upstream = http.request({
           host: '127.0.0.1', port: workerPort, method: req.method, path: req.url,
           headers: { ...req.headers, host: `127.0.0.1:${workerPort}` },
+          agent: workerAgent,
         }, (response) => settle(resolve, response));
         upstream.once('socket', (socket) => {
           const noteDelivered = () => { deliveredToWorker = worker; };
@@ -2106,7 +2114,7 @@ function runShim() {
         });
         upstream.once('error', (error) => {
           if (settled) return;
-          if (!canWait()) return settle(reject, error);
+          if (!canWait()) return settle(reject, deliveredToWorker ? takenByWorker(error) : error);
           waitForAnotherAttempt(deliveredToWorker);
         });
         upstream.end(body);
@@ -2137,9 +2145,27 @@ function runShim() {
       }
       res.writeHead(upstream.statusCode || 502, upstream.headers);
       upstream.pipe(res);
-    } catch {
-      res.writeHead(503, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'model-gateway could not complete this request; retry it shortly' } }));
+    } catch (error) {
+      // Claude Code resends any retryable status without telling the user:
+      // measured at five identical resends of one 503, and `x-should-retry:
+      // false` cuts that to none (verification/SQ-2861). So the answer depends
+      // on whether a worker took the body: if it did, that inference is
+      // already being paid for upstream and a resend silently buys a second
+      // one, and if it did not, the resend is free and wanted.
+      const bodyTakenByWorker = error?.bodyTakenByWorker === true;
+      res.writeHead(503, {
+        'content-type': 'application/json',
+        ...(bodyTakenByWorker ? { 'x-should-retry': 'false' } : {}),
+      });
+      res.end(JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'api_error',
+          message: bodyTakenByWorker
+            ? 'model-gateway lost the shim worker connection after this request reached the model; that answer cannot be recovered, and retrying automatically would pay for a second inference, so send it again yourself if you still want one'
+            : 'model-gateway could not complete this request; retry it shortly',
+        },
+      }));
     }
   }
 
