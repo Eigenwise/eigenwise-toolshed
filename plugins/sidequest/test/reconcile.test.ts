@@ -2,13 +2,16 @@ import './_temp-cleanup.js';
 import './_sidequest-install-fixture.js';
 'use strict';
 /**
- * Tests for the session worker registry + reconcileSession (SQ-153).
+ * Tests for the session worker registry + reconcileSession (SQ-153, SQ-2862).
  *
- * The sweep's idle/abandoned backstops free a crashed worker's ticket eventually.
- * The registry lets a SessionEnd hook do it IMMEDIATELY, but safely:
- * reconciling a session must release ONLY the claims taken under that exact
- * session id, never a claim another live session holds, and never a finished
- * ticket. These tests pin that safety.
+ * The registry once let a SessionEnd hook release a session's claims IMMEDIATELY,
+ * instead of waiting out a backstop. It cannot: the SessionEnd payload carries no
+ * generation, nonce or owning pid, two of its own reasons (`clear`, `resume`) fire
+ * while the process keeps running, and the host offers no way to ask whether a
+ * session id is live. So the assertion is replayable, and SQ-2859 replayed it
+ * against a live executor claim and watched a replacement take the ticket while the
+ * original runtime kept writing. These tests pin that a bare session id now only
+ * forgets registrations: the claims stay held and the backstops do the recovering.
  *
  * Run: node --test plugins/sidequest/test/reconcile.test.js
  */
@@ -31,7 +34,7 @@ function addTicket(title?: any) {
   return store.createTicket(slug, { title, complexity: 3, complexityWhy: 'fixture for reconcile tests, single mechanical change', labels: ['direct-ok'], source: 'cli' });
 }
 
-test('reconcileSession releases only the ending session\'s claims, and moves them back to todo', () => {
+test('reconcileSession reports the ending session\'s claims as held, and releases nothing', () => {
   const a = addTicket('session A ticket');
   const b = addTicket('session B ticket');
 
@@ -39,61 +42,56 @@ test('reconcileSession releases only the ending session\'s claims, and moves the
   const rb = store.claimTicket(slug, b.ref, 'worker-b', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-B' });
   assert.strictEqual(ra.ok, true);
   assert.strictEqual(rb.ok, true);
-  assert.strictEqual(store.getTicket(slug, a.ref).status, 'doing');
-  assert.strictEqual(store.getTicket(slug, b.ref).status, 'doing');
 
   const res = store.reconcileSession('sess-A', { reason: 'session ended' });
   assert.strictEqual(res.ok, true);
-  assert.deepStrictEqual(res.released, [a.ref], 'only A\'s ticket is released');
+  assert.deepStrictEqual(res.released, [], 'a session id releases nothing');
+  assert.deepStrictEqual(res.held, [a.ref], 'only A\'s claim is reported, and it is reported as still held');
 
   const at = store.getTicket(slug, a.ref);
-  assert.strictEqual(at.status, 'todo', 'A\'s ticket returns to todo');
-  assert.strictEqual(at.claim, null, 'A\'s claim is cleared');
-
-  const bt = store.getTicket(slug, b.ref);
-  assert.strictEqual(bt.status, 'doing', 'B\'s ticket is untouched');
-  assert.ok(bt.claim && bt.claim.by === 'worker-b', 'B\'s claim is intact');
+  assert.strictEqual(at.status, 'doing', 'A\'s ticket stays in doing');
+  assert.ok(at.claim && at.claim.by === 'worker-a', 'A\'s claim is intact');
+  assert.strictEqual(store.getTicket(slug, b.ref).claim.by, 'worker-b', 'B\'s claim is untouched');
 });
 
-test('reconcileSession records a durable died dispatch outcome', () => {
+// The exact sequence SQ-2859 used to strand a live executor: claim a routed dispatch,
+// then replay that session's SessionEnd while its runtime is still working.
+test('a replayed SessionEnd for a session with live routed work releases nothing and records no death', () => {
   const ticket = store.createTicket(slug, {
-    title: 'routed session death',
-    description: 'Where: session reconcile fixture. Contract: record an ended routed dispatch. Verify: inspect pulse.',
+    title: 'routed session end replay',
+    description: 'Where: session reconcile fixture. Contract: keep a live routed claim through a replayed session end. Verify: inspect pulse.',
     category: 'coding.normal',
     files: ['lib/fixture.js'],
     source: 'test',
   });
   const sessionId = 'sess-routed-death';
+  const agentName = 'routed-death-agent';
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId, agentName,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).ok, true);
   assert.equal(store.claimTicket(slug, ticket.ref, 'routed-worker', {
     sessionId,
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
   }).ok, true);
 
-  const reconciled = store.reconcileSession(sessionId, { reason: 'session ended', source: 'session-end' });
-  assert.deepStrictEqual(reconciled.released, [ticket.ref]);
+  for (const attempt of [1, 2]) {
+    const reconciled = store.reconcileSession(sessionId, { reason: 'session ended', source: 'session-end' });
+    assert.deepStrictEqual(reconciled.released, [], `replay ${attempt} releases nothing`);
+  }
   const stored = store.getTicket(slug, ticket.ref);
-  assert.equal(stored.dispatch.outcome, 'died');
-  assert.equal(stored.dispatch.terminalSource, 'session-end');
-  assert.ok(stored.dispatch.terminalAt);
-  const pulse = store.pulsePayload(slug, ticket.ref);
-  assert.equal(pulse.liveness, 'dead');
-  assert.equal(pulse.died.at, stored.dispatch.terminalAt);
+  assert.equal(stored.claim.by, 'routed-worker', 'the live executor keeps its claim');
+  assert.equal(stored.status, 'doing');
+  assert.equal(stored.dispatch.outcome, 'claimed');
+  assert.equal(stored.dispatch.terminalAt, null, 'no died record is minted from a bare session id');
+  assert.equal(store.claimReleaseVerdict(stored), null);
+  assert.equal(store.pulsePayload(slug, ticket.ref).liveness, 'unknown');
+  assert.equal(store.sweepStaleClaims({ project: slug, source: 'test' }).released.some((entry?: any) => entry.ref === ticket.ref), false, 'and the sweep behind it leaves the claim alone');
 });
 
-test('reconcileSession leaves a note comment on each released ticket', () => {
-  const a = addTicket('to be auto-released');
-  store.claimTicket(slug, a.ref, 'worker-x', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-note' });
-  store.reconcileSession('sess-note', { reason: 'subagent stopped' });
-  const t = store.getTicket(slug, a.ref);
-  const last = t.comments[t.comments.length - 1];
-  assert.ok(last, 'a comment was added');
-  assert.match(last.body, /Auto-released/i);
-  assert.match(last.body, /subagent stopped/i);
-});
-
-test('a completed ticket is never auto-released, even if still registered', () => {
+test('a completed ticket is never reported as held, even if still registered', () => {
   const a = addTicket('finished before reconcile');
   store.claimTicket(slug, a.ref, 'worker-done', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-done' });
   // Finish WITHOUT passing the sessionId (simulates a done that forgot to thread
@@ -102,20 +100,21 @@ test('a completed ticket is never auto-released, even if still registered', () =
   assert.strictEqual(store.getTicket(slug, a.ref).status, 'done');
 
   const res = store.reconcileSession('sess-done', { reason: 'session ended' });
-  assert.deepStrictEqual(res.released, [], 'a done ticket is not released');
+  assert.deepStrictEqual(res.held, [], 'a done ticket is not reported');
   assert.strictEqual(store.getTicket(slug, a.ref).status, 'done', 'still done');
 });
 
-test('reconcileSession is idempotent — a second call releases nothing', () => {
+test('reconcileSession forgets the registration — a second call reports nothing', () => {
   const a = addTicket('idempotency check');
   store.claimTicket(slug, a.ref, 'worker-i', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-idem' });
   const first = store.reconcileSession('sess-idem', { reason: 'ended' });
-  assert.deepStrictEqual(first.released, [a.ref]);
+  assert.deepStrictEqual(first.held, [a.ref]);
   const second = store.reconcileSession('sess-idem', { reason: 'ended' });
-  assert.deepStrictEqual(second.released, [], 'nothing left to release');
+  assert.deepStrictEqual(second.held, [], 'the registration is gone, so a replay has nothing to say');
+  assert.strictEqual(store.getTicket(slug, a.ref).claim.by, 'worker-i', 'and the claim survived both');
 });
 
-test('a claim re-taken by another session since is NOT released by the first session\'s reconcile', () => {
+test('a claim re-taken by another session since is NOT reported by the first session\'s reconcile', () => {
   const a = addTicket('re-claimed in the interim');
   store.claimTicket(slug, a.ref, 'worker-1', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-1' });
   // Session 2 force-steals it (as if the TTL lapsed or --force was used) and
@@ -124,7 +123,7 @@ test('a claim re-taken by another session since is NOT released by the first ses
   assert.strictEqual(store.getTicket(slug, a.ref).claim.by, 'worker-2');
 
   const res = store.reconcileSession('sess-1', { reason: 'session 1 ended' });
-  assert.deepStrictEqual(res.released, [], 'session 1 must not release a claim now held by session 2');
+  assert.deepStrictEqual(res.held, [], 'session 1 must not speak for a claim now held by session 2');
   assert.strictEqual(store.getTicket(slug, a.ref).claim.by, 'worker-2', 'session 2\'s live claim stands');
 });
 
@@ -135,21 +134,21 @@ test('unregisterClaim drops a claim so a later reconcile ignores it', () => {
   // The ticket is still 'doing' (unregister doesn't touch the ticket), but the
   // registry no longer attributes it to the session, so reconcile is a no-op.
   const res = store.reconcileSession('sess-unreg', { reason: 'ended' });
-  assert.deepStrictEqual(res.released, []);
+  assert.deepStrictEqual(res.held, []);
   assert.strictEqual(store.getTicket(slug, a.ref).status, 'doing', 'ticket unchanged by a no-op reconcile');
 });
 
 test('reconciling an unknown session is a harmless no-op', () => {
   const res = store.reconcileSession('nope-not-a-session', { reason: 'ended' });
   assert.strictEqual(res.ok, true);
-  assert.deepStrictEqual(res.released, []);
+  assert.deepStrictEqual(res.held, []);
 });
 
 // The TOCTOU guard: releaseTicket must refuse a DONE ticket outright (the fresh
-// locked read is authoritative), so a reconcile racing behind a completeTicket
-// can never yank finished work back to todo. completeTicket clears the claim, so
-// without this guard the empty-claim ownership check would pass vacuously.
-test('releaseTicket refuses a done ticket — a reconcile cannot un-complete finished work', () => {
+// locked read is authoritative), so a stale release cannot yank finished work back
+// to todo. completeTicket clears the claim, so without this guard the empty-claim
+// ownership check would pass vacuously.
+test('releaseTicket refuses a done ticket — a stale session-end release cannot un-complete finished work', () => {
   const a = addTicket('finished, then a stale release arrives');
   store.claimTicket(slug, a.ref, 'worker-r', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-race' });
   store.completeTicket(slug, a.ref, 'worker-r', { model: 'sonnet', effort: 'high' });
