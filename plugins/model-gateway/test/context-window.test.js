@@ -633,6 +633,36 @@ test('a genuine overflow lowers only the model that received it', async (t) => {
   assert.equal(forwarded, 5);
 });
 
+test('rewrites Codex authentication failures for streaming and non-streaming requests', async (t) => {
+  const upstreamDetail = 'API Error: 401 Not authenticated. Run: claude-code-proxy codex auth login';
+  let forwarded = 0;
+  const proxy = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+    }
+    forwarded++;
+    res.writeHead(forwarded === 3 ? 403 : 401, { 'content-type': 'text/plain' });
+    res.end(upstreamDetail);
+  });
+  const proxyPort = await listen(proxy);
+  t.after(() => proxy.close());
+  const shimPort = await spawnShim(t, proxyPort);
+  const streamingBody = JSON.stringify({ ...JSON.parse(codexBody), stream: true });
+
+  for (const [body, expectedStatus] of [[codexBody, 401], [streamingBody, 401], [codexBody, 403]]) {
+    const response = await request(shimPort, 'POST', '/v1/messages', body);
+    assert.equal(response.status, expectedStatus);
+    const error = JSON.parse(response.body).error;
+    assert.equal(error.type, 'authentication_error');
+    assert.match(error.message, /node "[^"]*[\\/]model-gateway[\\/]model-gateway\.js" login/);
+    assert.doesNotMatch(error.message, /plugins[\\/]cache[\\/]/);
+    assert.doesNotMatch(error.message, /claude-code-proxy\s+codex\s+auth\s+login/i);
+    assert.match(error.message, /API Error: 401 Not authenticated\./);
+  }
+  assert.equal(forwarded, 3);
+});
+
 test('retries transient Codex WebSocket upgrade rejections before returning the response', async (t) => {
   let forwarded = 0;
   const rejection = JSON.stringify({
@@ -1471,10 +1501,12 @@ test('env with no scope flag explains project wiring and writes nothing', () => 
 });
 
 test('SessionStart nudges hand off gateway actions to the runnable skill', () => {
-  const source = fs.readFileSync(COMMANDS, 'utf8');
-  assert.match(source, /Run \/model-gateway:model-gateway, then use its env --write-project command/);
-  assert.match(source, /claude-code-proxy is missing[\s\S]*No Anthropic fallback was used\./);
-  assert.doesNotMatch(source, /(?:Run|run):? env --/);
+  const commandsSource = fs.readFileSync(COMMANDS, 'utf8');
+  const runtimeSource = fs.readFileSync(RUNTIME, 'utf8');
+  assert.match(commandsSource, /Run \/model-gateway:model-gateway, then use its env --write-project command/);
+  assert.match(commandsSource, /codexReadinessMessage\(state\)/);
+  assert.match(runtimeSource, /claude-code-proxy is missing[\s\S]*No Anthropic fallback was used\./);
+  assert.doesNotMatch(commandsSource, /(?:Run|run):? env --/);
 });
 
 test('claude-* passthrough is byte-identical and never subjected to Codex window/error rewriting', async (t) => {

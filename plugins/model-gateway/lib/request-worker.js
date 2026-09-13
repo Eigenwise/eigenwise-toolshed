@@ -25,10 +25,10 @@ const {
 const {
   ANTHROPIC_UPSTREAM, AUTH_HEADERS, CODEX_FAMILY_RE, COMPAT_HOST,
   COMPAT_PORT, DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GROK_ENDPOINT, GROK_PREFIX, LIST_DISPATCH_MODEL,
-  LOGS, PLUGIN_VERSION, PREFIX, PROXY_BIN, PROXY_PORT, REQUEST_ROUTE_LOG,
+  PLUGIN_VERSION, PREFIX, PROXY_BIN, PROXY_PORT, REQUEST_ROUTE_LOG,
   REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT, SOCKET_PATH,
-  MODEL_WINDOW_POLICY, STATE, STABLE_COMMAND_PATH, syncGatewayDiscoveryCache, TRACE_HEADERS, codexClientModelId,
-  codexContextWindow, codexContextWindowModelId, gatewayAdvertisedWindow, gatewayClientModelId, mkdirs,
+  MODEL_WINDOW_POLICY, STATE, syncGatewayDiscoveryCache, TRACE_HEADERS, codexClientModelId,
+  codexContextWindow, codexContextWindowModelId, codexReadinessMessage, gatewayAdvertisedWindow, gatewayClientModelId, mkdirs,
   resolveGatewayModelPolicy,
 } = require('./runtime.js');
 
@@ -36,16 +36,6 @@ function isAuthed() {
   const r = spawnSync(PROXY_BIN, ['codex', 'auth', 'status'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
   return r.status === 0 && /account/i.test((r.stdout || '') + (r.stderr || ''));
 }
-
-const CODEX_READINESS_MESSAGES = {
-  'binary-missing': () => `Codex dispatch refused: claude-code-proxy is missing. Run \`node "${STABLE_COMMAND_PATH}" setup\`, then retry. No Anthropic fallback was used.`,
-  'auth-missing': () => `Codex dispatch refused: ChatGPT sign-in is required. Run \`node "${STABLE_COMMAND_PATH}" login\`, finish browser OAuth, then run \`node "${STABLE_COMMAND_PATH}" setup\` and retry. Credentials live in \`~/.config/claude-code-proxy/\`.`,
-  'proxy-down': () => `Codex dispatch refused: claude-code-proxy is not answering on /v1/models. The running shim supervisor retries recovery with bounded backoff; check ${path.join(LOGS, 'guardian.log')} if it does not recover. No Anthropic fallback was used.`,
-  'shim-down': () => `Codex dispatch refused: the model-gateway shim is down. Run \`node "${STABLE_COMMAND_PATH}" ensure\`, then retry. No Anthropic fallback was used.`,
-  'serving-version-mismatch': () => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${STABLE_COMMAND_PATH}" ensure\`, then retry. No Anthropic fallback was used.`,
-  'upstream-blocked': () => `Codex is blocked by an OpenAI rejection. Run \`node "${STABLE_COMMAND_PATH}" setup\`; if it persists, wait for a claude-code-proxy update or explicitly re-route this ticket. Codex tickets remain blocked.`,
-  'upstream-unavailable': () => 'Codex had a terminal upstream failure in the last 60 seconds. Wait briefly, then retry; /v1/models only proves the local proxy is answering.',
-};
 
 async function proxyModelsAnswering() {
   try {
@@ -98,7 +88,7 @@ async function getCodexReadiness({
     state,
     message: state === 'ready'
       ? 'Codex readiness confirms local binary, /v1/models, authentication, shim, and serving-version checks. It does not prove a streaming request will succeed.'
-      : CODEX_READINESS_MESSAGES[state](),
+      : codexReadinessMessage(state),
     checks,
     upstreamBlocked,
     upstreamUnavailable,
@@ -298,13 +288,35 @@ function sseErrorFrame(type, message) {
   return `event: error\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
-function upstreamErrorMessage(body, statusCode) {
+function upstreamErrorDetail(body, includePlainText = false) {
   try {
     const parsed = JSON.parse(body.toString());
     const detail = parsed?.error?.message || parsed?.message;
-    if (typeof detail === 'string' && detail) return `model-gateway: upstream returned ${statusCode}: ${detail}`;
-  } catch { /* not JSON */ }
-  return `model-gateway: upstream returned ${statusCode} with no readable error body`;
+    if (typeof detail === 'string' && detail) return detail;
+  } catch {}
+  return includePlainText ? body.toString().trim() : null;
+}
+
+function upstreamErrorMessage(body, statusCode) {
+  const detail = upstreamErrorDetail(body);
+  return detail
+    ? `model-gateway: upstream returned ${statusCode}: ${detail}`
+    : `model-gateway: upstream returned ${statusCode} with no readable error body`;
+}
+
+function codexAuthenticationFailure(body, statusCode) {
+  const detail = upstreamErrorDetail(body, true);
+  const isAuthenticationFailure = statusCode === 401
+    || (statusCode === 403 && /\b(?:not authenticated|unauthenticated|authentication (?:is )?required|authentication failed)\b/i.test(detail));
+  if (!isAuthenticationFailure) return null;
+  const preservedDetail = detail.replace(/claude-code-proxy\s+codex\s+auth\s+login\b/gi, 'the model-gateway login command above');
+  return Buffer.from(JSON.stringify({
+    type: 'error',
+    error: {
+      type: 'authentication_error',
+      message: `${codexReadinessMessage('auth-missing')} Upstream detail: ${preservedDetail || `HTTP ${statusCode}`}`,
+    },
+  }));
 }
 
 function compactErrorCode(error) {
@@ -1526,7 +1538,12 @@ function runWorker() {
           // The status line is gone but the sentry's learned ceiling is not.
           if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) noteGenuineOverflow(sessionId, contextModel);
           if (normalizeContextErrors) noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, Buffer.concat(chunks));
-          clientRes.write(sseErrorFrame('api_error', upstreamErrorMessage(Buffer.concat(chunks), upRes.statusCode)));
+          const authenticationFailure = codexAuthenticationFailure(Buffer.concat(chunks), upRes.statusCode);
+          const error = authenticationFailure ? JSON.parse(authenticationFailure).error : {
+            type: 'api_error',
+            message: upstreamErrorMessage(Buffer.concat(chunks), upRes.statusCode),
+          };
+          clientRes.write(sseErrorFrame(error.type, error.message));
           clientRes.end();
         };
         upRes.on('data', (chunk) => {
@@ -1558,7 +1575,9 @@ function runWorker() {
             noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, upstreamBody);
             usageCapture?.setResponse(upRes.statusCode, upRes.headers);
             routeTelemetry?.finish(upRes.statusCode);
-            const rewritten = rewriteCodexJson(upstreamBody, advertisedModel, false);
+            const authenticationFailure = codexAuthenticationFailure(upstreamBody, upRes.statusCode);
+            const rewritten = authenticationFailure || rewriteCodexJson(upstreamBody, advertisedModel, false);
+            if (authenticationFailure) resHeaders['content-type'] = 'application/json';
             resHeaders['content-length'] = rewritten.length;
             clientRes.writeHead(upRes.statusCode, resHeaders);
             return clientRes.end(rewritten);
@@ -1669,9 +1688,12 @@ function runWorker() {
             return clientRes.end(normalized);
           }
           routeTelemetry?.finish(upRes.statusCode);
-          resHeaders['content-length'] = upstreamBody.length;
+          const authenticationFailure = codexAuthenticationFailure(upstreamBody, upRes.statusCode);
+          const responseBody = authenticationFailure || upstreamBody;
+          if (authenticationFailure) resHeaders['content-type'] = 'application/json';
+          resHeaders['content-length'] = responseBody.length;
           clientRes.writeHead(upRes.statusCode, resHeaders);
-          clientRes.end(upstreamBody);
+          clientRes.end(responseBody);
         });
         return;
       }
