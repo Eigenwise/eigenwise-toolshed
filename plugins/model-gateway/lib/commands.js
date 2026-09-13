@@ -1332,17 +1332,6 @@ const configuredCompactStreamMaxBytes = Number(process.env.CODEX_GATEWAY_COMPACT
 const COMPACT_STREAM_MAX_BYTES = Number.isFinite(configuredCompactStreamMaxBytes) && configuredCompactStreamMaxBytes > 0
   ? configuredCompactStreamMaxBytes
   : 16 * 1024 * 1024;
-// Retrying these would re-send a body the backend has already refused on its
-// merits; they pass straight through to the client instead.
-const COMPACT_FATAL_ERROR_TYPES = new Set([
-  'invalid_request_error',
-  'authentication_error',
-  'permission_error',
-  'not_found_error',
-  'request_too_large',
-  'rate_limit_error',
-  'billing_error',
-]);
 
 function systemPromptText(system) {
   if (typeof system === 'string') return system;
@@ -1367,14 +1356,6 @@ function upstreamErrorMessage(body, statusCode) {
     if (typeof detail === 'string' && detail) return `model-gateway: upstream returned ${statusCode}: ${detail}`;
   } catch { /* not JSON */ }
   return `model-gateway: upstream returned ${statusCode} with no readable error body`;
-}
-
-function noteCompactEvent(attempt, event) {
-  if (!event || typeof event !== 'object') return;
-  if (event.type === 'message_stop') attempt.terminal = true;
-  if (event.type !== 'error') return;
-  attempt.sawError = true;
-  if (COMPACT_FATAL_ERROR_TYPES.has(event.error?.type)) attempt.fatal = true;
 }
 
 function gatewayModel(id, backend = 'codex') {

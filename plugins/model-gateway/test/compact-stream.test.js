@@ -142,6 +142,16 @@ function truncatedStream() {
   return MESSAGE_START + BLOCK_START + delta('partial ');
 }
 
+function messageDeltaWithStop(stopReason) {
+  return frame('message_delta', { type: 'message_delta', delta: { stop_reason: stopReason }, usage: { output_tokens: 12 } });
+}
+
+// The shape behind the defect: the whole summary, the closed block and the stop
+// reason all arrive, and only the terminal message_stop frame is lost.
+function lostTerminalStream(summary, stopReason = 'end_turn') {
+  return MESSAGE_START + BLOCK_START + delta(summary) + BLOCK_STOP + messageDeltaWithStop(stopReason);
+}
+
 function compactBody(extra = {}) {
   return JSON.stringify({
     model: 'claude-gpt-5.6-sol',
@@ -209,6 +219,180 @@ function scriptedProxy(scripts) {
   });
   return { server, attemptCount: () => attempts };
 }
+
+// One shim, one case at a time: the first upstream attempt of each case gets the
+// case's stream and every retry gets a distinct replacement, so a failing case
+// cannot desync the cases after it.
+function casedProxy() {
+  let current = { first: '', replacement: '' };
+  let attempts = 0;
+  const server = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+    }
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const body = attempts === 0 ? current.first : current.replacement;
+      attempts++;
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(body);
+    });
+  });
+  return {
+    server,
+    begin(next) { current = next; attempts = 0; },
+    attemptCount: () => attempts,
+  };
+}
+
+// Every stop reason the review measured, plus the non-string values it accepted.
+// `end_turn` is what a compaction turn produces; `stop_sequence` is the other
+// real end of generation. Everything else means the summary stopped short, so
+// re-inferring it is correct and delivering it would ship a truncated summary.
+const STOP_REASON_MATRIX = [
+  { stopReason: 'end_turn', finished: true },
+  { stopReason: 'stop_sequence', finished: true },
+  { stopReason: 'max_tokens', finished: false },
+  { stopReason: 'refusal', finished: false },
+  { stopReason: 'pause_turn', finished: false },
+  { stopReason: 'tool_use', finished: false },
+  { stopReason: 'vendor_specific_stop', finished: false },
+  { stopReason: 7, finished: false },
+  { stopReason: '', finished: false },
+  { stopReason: null, finished: false },
+  { stopReason: false, finished: false },
+];
+
+test('a lost terminal frame is only inferred complete for an end-of-generation stop reason', async (t) => {
+  const proxy = casedProxy();
+  const proxyPort = await listen(proxy.server);
+  t.after(() => proxy.server.close());
+  const shimPort = await spawnShim(t, proxyPort, { CODEX_GATEWAY_COMPACT_STREAM_RETRIES: '1' });
+
+  for (const { stopReason, finished } of STOP_REASON_MATRIX) {
+    const label = `stop_reason ${JSON.stringify(stopReason)}`;
+    const summary = `SUMMARY_${String(stopReason)}`;
+    proxy.begin({
+      first: lostTerminalStream(summary, stopReason),
+      replacement: completeStream(`REPLACEMENT_${String(stopReason)}`),
+    });
+
+    const response = await postStream(shimPort, compactBody());
+
+    assert.equal(response.status, 200, label);
+    assert.equal(proxy.attemptCount(), finished ? 1 : 2, `${label}: wrong number of upstream attempts`);
+    assert.equal(countFrames(response.body, 'message_stop'), 1, `${label}: exactly one terminal frame`);
+    assert.equal(countFrames(response.body, 'message_start'), 1, `${label}: exactly one message`);
+    if (finished) {
+      assert.match(response.body, new RegExp(summary), `${label}: the finished summary must be delivered`);
+      assert.doesNotMatch(response.body, /"type":"error"/, `${label}: a finished turn is not an error`);
+    } else {
+      assert.match(response.body, new RegExp(`REPLACEMENT_${String(stopReason)}`), `${label}: the retry must be delivered`);
+      assert.doesNotMatch(response.body, new RegExp(summary), `${label}: the short summary must not reach the client`);
+    }
+  }
+});
+
+test('a stop reason the stream itself contradicts is re-inferred, not delivered', async (t) => {
+  const openBlock = MESSAGE_START + BLOCK_START + delta('OPEN_BLOCK_TEXT') + messageDeltaWithStop('end_turn');
+  const contentAfterStop = MESSAGE_START + BLOCK_START + delta('BEFORE_EARLY_STOP')
+    + messageDeltaWithStop('end_turn') + delta('AFTER_EARLY_STOP') + BLOCK_STOP
+    + frame('message_delta', { type: 'message_delta', delta: { stop_reason: null }, usage: { output_tokens: 2 } });
+  const typedErrorAfterStop = lostTerminalStream('SUSPECT_TYPED_ERROR')
+    + frame('error', { type: 'error', error: { type: 'api_error', message: 'websocket_missing_terminal' } });
+  const contradictions = [
+    { name: 'a content block still open at the stop', first: openBlock, leaked: /OPEN_BLOCK_TEXT/ },
+    { name: 'content after the earlier of two message_delta frames', first: contentAfterStop, leaked: /AFTER_EARLY_STOP/ },
+    { name: 'a typed upstream error after the stop', first: typedErrorAfterStop, leaked: /SUSPECT_TYPED_ERROR/ },
+  ];
+  const proxy = casedProxy();
+  const proxyPort = await listen(proxy.server);
+  t.after(() => proxy.server.close());
+  const shimPort = await spawnShim(t, proxyPort, { CODEX_GATEWAY_COMPACT_STREAM_RETRIES: '1' });
+
+  for (const { name, first, leaked } of contradictions) {
+    proxy.begin({ first, replacement: completeStream('CONTRADICTION_REPLACEMENT') });
+
+    const response = await postStream(shimPort, compactBody());
+
+    assert.equal(proxy.attemptCount(), 2, `${name}: must be retried`);
+    assert.match(response.body, /CONTRADICTION_REPLACEMENT/, name);
+    assert.doesNotMatch(response.body, leaked, `${name}: the contradicted attempt must not reach the client`);
+    assert.equal(countFrames(response.body, 'message_stop'), 1, name);
+  }
+});
+
+test('an error frame upstream never typed leaves a finished generation deliverable', async (t) => {
+  const untypedErrorAfterStop = lostTerminalStream('DELIVERED_PAST_UNTYPED_ERROR')
+    + frame('error', { error: { type: 'api_error', message: 'websocket_missing_terminal' } });
+  const proxy = scriptedProxy([{ body: untypedErrorAfterStop }, { body: completeStream('must not be reached') }]);
+  const proxyPort = await listen(proxy.server);
+  t.after(() => proxy.server.close());
+  const shimPort = await spawnShim(t, proxyPort);
+
+  const response = await postStream(shimPort, compactBody());
+
+  assert.equal(proxy.attemptCount(), 1, 'a payload with no error type does not contradict the stop');
+  assert.match(response.body, /DELIVERED_PAST_UNTYPED_ERROR/);
+  assert.equal(countFrames(response.body, 'message_stop'), 1);
+});
+
+test('a finished generation with no visible text is delivered, not re-inferred', async (t) => {
+  const zeroText = MESSAGE_START + messageDeltaWithStop('end_turn');
+  const proxy = scriptedProxy([{ body: zeroText }, { body: completeStream('must not be reached') }]);
+  const proxyPort = await listen(proxy.server);
+  t.after(() => proxy.server.close());
+  const shimPort = await spawnShim(t, proxyPort);
+
+  const response = await postStream(shimPort, compactBody());
+
+  assert.equal(proxy.attemptCount(), 1, 'the model said it finished; an empty summary is reported, not retried');
+  assert.doesNotMatch(response.body, /must not be reached/);
+  assert.equal(countFrames(response.body, 'message_stop'), 1);
+});
+
+test('the terminal frame synthesized for a lost one is byte-identical to a real one', async (t) => {
+  const proxy = scriptedProxy([{ body: lostTerminalStream('IDENTICAL') }, { body: completeStream('IDENTICAL') }]);
+  const proxyPort = await listen(proxy.server);
+  t.after(() => proxy.server.close());
+  const shimPort = await spawnShim(t, proxyPort);
+
+  const synthesized = await postStream(shimPort, compactBody());
+  const genuine = await postStream(shimPort, compactBody());
+
+  assert.equal(proxy.attemptCount(), 2, 'neither stream should have been retried');
+  assert.equal(synthesized.body, genuine.body,
+    'the client must not be able to tell a recovered terminal frame from a real one');
+});
+
+test('a compaction stream that contradicts itself never clears attributed 429 evidence', async (t) => {
+  const prematureStopThenContent = MESSAGE_START + BLOCK_START + messageDeltaWithStop('end_turn')
+    + delta('ROUTE_ABORT_CONTINUED');
+  const proxy = scriptedProxy([
+    {
+      status: 429,
+      headers: { 'x-openai-request-id': 'req-contradicted' },
+      body: JSON.stringify({ error: { message: 'OpenAI rate limit' } }),
+    },
+    { body: prematureStopThenContent, abort: true },
+  ]);
+  const proxyPort = await listen(proxy.server);
+  t.after(() => proxy.server.close());
+  const shimPort = await spawnShim(t, proxyPort, { CODEX_GATEWAY_COMPACT_STREAM_RETRIES: '0' });
+
+  assert.equal((await postStream(shimPort, normalBody())).status, 429);
+  assert.equal((await codexReadiness(shimPort)).upstreamBlocked.state, 'upstream-blocked');
+
+  await postStream(shimPort, compactBody());
+
+  const readiness = await codexReadiness(shimPort);
+  assert.equal(readiness.upstreamBlocked.state, 'upstream-blocked',
+    'a stream that kept producing content after its own stop reason did not succeed');
+  assert.equal(readiness.upstreamUnavailable, null,
+    'the attributed 429 stays the explanation, and nothing downgraded it');
+});
 
 test('a compaction stream that dies without a terminal event is retried and delivered complete', async (t) => {
   const proxy = scriptedProxy([
@@ -331,7 +515,7 @@ test('exhausted compaction retries surface a truthful error instead of a fabrica
   assert.equal(proxy.attemptCount(), 2, 'one retry, then give up');
   assert.doesNotMatch(response.body, /"type":"message_stop"/,
     'the shim must never invent a terminal event it did not receive');
-  assert.match(response.body, /ended without a terminal message_stop event after 2 attempt/);
+  assert.match(response.body, /ended without a completed generation after 2 attempt/);
   assert.match(response.body, /"type":"error"/);
 });
 
