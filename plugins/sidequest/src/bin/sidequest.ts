@@ -359,7 +359,7 @@ Native Agent dispatch (routed work stays in this conversation):
   sidequest native-agent cleanup --name <name>        clean up any legacy temporary native Agent definition
     Invoke the returned executor through the current conversation's Agent tool. It is already registered; native-agent does not write a temporary definition.
     \`sidequest work\`/\`drain\` are disabled because they cannot invoke Agent and never start a separate Claude process.
-  sidequest reconcile [--session <id>] [--reason "..."]   release a session's claims back to todo now
+  sidequest reconcile [--session <id>] [--reason "..."]   forget a session's claim registrations (claims stay held)
     (the SessionEnd hook calls this automatically on the session id it's given, so a crashed/ended worker's
     tickets recover immediately; safe — it only touches that session's claims).
     Defaults to \$CLAUDE_CODE_SESSION_ID when --session is omitted.

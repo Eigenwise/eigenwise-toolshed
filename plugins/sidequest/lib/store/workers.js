@@ -2,14 +2,12 @@
 function createWorkers(dependencies) {
   const {
     acquireLock,
-    addComment,
     dispatchState,
     getTicket,
     path,
     projectsRoot,
     readGlobal,
     releaseLock,
-    releaseTicket,
     transaction,
     writeGlobal
   } = dependencies;
@@ -99,10 +97,9 @@ function createWorkers(dependencies) {
   }
   function reconcileSession(sessionId, opts) {
     opts = opts || {};
-    const reason = opts.reason ? String(opts.reason) : "worker session ended";
-    const source = opts.source ? String(opts.source) : "cli";
     const released = [];
-    if (!sessionId) return { ok: true, released };
+    const held = [];
+    if (!sessionId) return { ok: true, released, held };
     let claims = [];
     try {
       withWorkersLock(() => {
@@ -115,7 +112,7 @@ function createWorkers(dependencies) {
         }
       });
     } catch (_) {
-      return { ok: true, released };
+      return { ok: true, released, held };
     }
     for (const c of claims) {
       let t;
@@ -127,28 +124,9 @@ function createWorkers(dependencies) {
       if (!t || t.archived || t.status === "done") continue;
       if (!t.claim || !t.claim.by) continue;
       if (c.by && t.claim.by !== c.by) continue;
-      try {
-        const res = releaseTicket(c.slug, c.ticketId, t.claim.by, {
-          status: "todo",
-          source,
-          claimRelease: { kind: "session_ended", reason }
-        });
-        if (res && res.ok) {
-          released.push(t.ref);
-          try {
-            addComment(c.slug, c.ticketId, {
-              by: "sidequest",
-              kind: "comment",
-              source,
-              body: `↩️ Auto-released to **todo**: ${reason} (was claimed by \`${t.claim.by}\`). It's back in the ready pool for another worker.`
-            });
-          } catch (_) {
-          }
-        }
-      } catch (_) {
-      }
+      held.push(t.ref);
     }
-    return { ok: true, released };
+    return { ok: true, released, held };
   }
   function sessionClaims(sessionId, opts) {
     const out = [];

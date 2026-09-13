@@ -1042,7 +1042,6 @@ const {
   completionTreeCheck,
   dispatchDelta,
   dispatchState,
-  isolatedDispatchWorktreeMissing,
   getTicket,
   putTicket,
   withTicketLock,
@@ -1232,14 +1231,12 @@ const {
   unregisterClaim,
 } = createWorkers({
   acquireLock,
-  addComment,
   dispatchState,
   getTicket,
   path,
   projectsRoot,
   readGlobal,
   releaseLock,
-  releaseTicket,
   transaction,
   writeGlobal,
 });

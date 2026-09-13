@@ -199,8 +199,9 @@ async function cmdReconcile(opts) {
     console.log("reconcile: no session id (pass --session or set CLAUDE_SESSION_ID) — nothing to do.");
     return;
   }
-  if (res.released.length) console.log(`✓ reconciled ${sid}: released ${res.released.join(", ")} back to todo.`);
-  else console.log(`✓ reconciled ${sid}: no outstanding claims to release.`);
+  if (res.held.length) {
+    console.log(`✓ reconciled ${sid}: forgot its claim registrations. ${res.held.join(", ")} stay claimed — a session id is not evidence its runtime stopped, so recovery waits for a terminal record or the claim backstop.`);
+  } else console.log(`✓ reconciled ${sid}: no outstanding claims.`);
 }
 async function cmdAssign(opts, positional, clear) {
   const idOrRef = positional[0];
