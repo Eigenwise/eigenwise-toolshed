@@ -278,6 +278,9 @@ const COMPACT_FATAL_ERROR_TYPES = new Set([
   'rate_limit_error',
   'billing_error',
 ]);
+const COMPACT_OUTCOMES = new Set(['completed', 'aborted', 'incomplete', 'empty_summary', 'upstream_error', 'unknown_error']);
+const COMPACT_ERROR_CODES = new Set([...COMPACT_FATAL_ERROR_TYPES, 'websocket_missing_terminal', 'upstream_http_error', 'unknown_error']);
+const COMPACT_USAGE_FIELDS = ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_creation_tokens'];
 
 function systemPromptText(system) {
   if (typeof system === 'string') return system;
@@ -304,12 +307,43 @@ function upstreamErrorMessage(body, statusCode) {
   return `model-gateway: upstream returned ${statusCode} with no readable error body`;
 }
 
+function compactErrorCode(error) {
+  if (!error || typeof error !== 'object') return 'unknown_error';
+  if (error.type === 'api_error' && error.message === 'websocket_missing_terminal') return 'websocket_missing_terminal';
+  return COMPACT_FATAL_ERROR_TYPES.has(error.type) ? error.type : 'unknown_error';
+}
+
+function compactUsageSnapshot(usage) {
+  return Object.fromEntries(COMPACT_USAGE_FIELDS.map((field) => [field,
+    Number.isFinite(usage?.[field]) && usage[field] >= 0 ? usage[field] : null]));
+}
+
+function mergeCompactUsage(previous, next) {
+  return Object.fromEntries(COMPACT_USAGE_FIELDS.map((field) => [field,
+    next?.[field] ?? previous?.[field] ?? null]));
+}
+
 function noteCompactEvent(attempt, event) {
   if (!event || typeof event !== 'object') return;
-  if (event.type === 'message_stop') attempt.terminal = true;
+  if (event.type === 'message_stop') {
+    attempt.terminal = true;
+    attempt.terminalCode = 'message_stop';
+  }
+  if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta'
+      && typeof event.delta.text === 'string' && event.delta.text.trim()) {
+    attempt.hasVisibleText = true;
+  }
   if (event.type !== 'error') return;
   attempt.sawError = true;
+  attempt.errorCode = compactErrorCode(event.error);
   if (COMPACT_FATAL_ERROR_TYPES.has(event.error?.type)) attempt.fatal = true;
+}
+
+function compactOutcome(attempt, statusCode, statusOverride) {
+  if (!Number.isInteger(statusCode) || statusCode < 200 || statusCode >= 300) return 'upstream_error';
+  if (statusOverride === 'upstream_aborted') return 'aborted';
+  if (attempt.terminal && !attempt.sawError) return attempt.hasVisibleText ? 'completed' : 'empty_summary';
+  return attempt.errorCode === 'unknown_error' ? 'unknown_error' : 'incomplete';
 }
 
 function gatewayModel(id, backend = 'codex') {
@@ -843,7 +877,7 @@ function routeStatus(statusCode, override) {
 
 function buildRouteTelemetry(req) {
   const endpoint = loopbackTelemetryEndpoint();
-  if (!endpoint) return { setRoute() {}, finish() {} };
+  if (!endpoint) return { enabled: false, setRoute() {}, finish() {} };
   const incoming = parseIncomingTraceparent(req.headers);
   const traceId = incoming?.traceId || crypto.randomBytes(16).toString('hex');
   const spanId = crypto.randomBytes(8).toString('hex');
@@ -855,6 +889,7 @@ function buildRouteTelemetry(req) {
   let route = {};
   let finished = false;
   return {
+    enabled: true,
     setRoute(nextRoute) {
       route = { ...nextRoute };
     },
@@ -884,6 +919,11 @@ function buildRouteTelemetry(req) {
           otlpAttribute('via', ['direct', 'dispatch', 'dispatch-cached'].includes(route.via) ? route.via : null),
           otlpAttribute('status', status),
           otlpAttribute('status_code', Number.isInteger(statusCode) ? statusCode : null),
+          otlpAttribute('compaction_outcome', COMPACT_OUTCOMES.has(route.compaction?.outcome) ? route.compaction.outcome : null),
+          otlpAttribute('upstream_status_code', Number.isInteger(route.compaction?.upstreamStatus) ? route.compaction.upstreamStatus : null),
+          otlpAttribute('compaction_terminal_code', route.compaction?.terminalCode === 'message_stop' ? 'message_stop' : null),
+          otlpAttribute('compaction_error_code', COMPACT_ERROR_CODES.has(route.compaction?.errorCode) ? route.compaction.errorCode : null),
+          ...COMPACT_USAGE_FIELDS.map((field) => otlpAttribute(`compaction_${field}`, route.compaction?.usage?.[field])),
           otlpAttribute('duration_ms', durationMs),
         ].filter(Boolean);
         const endedAt = startedAt + elapsed;
@@ -910,15 +950,29 @@ function createRouteTelemetry(req) {
   try {
     telemetry = buildRouteTelemetry(req);
   } catch {
-    telemetry = { setRoute() {}, finish() {} };
+    telemetry = { enabled: false, setRoute() {}, finish() {} };
   }
   let route = {};
   let finished = false;
   let cancelled = false;
   return {
+    enabled: telemetry.enabled === true,
     setRoute(nextRoute) {
       route = { ...nextRoute };
-      telemetry.setRoute(nextRoute);
+      telemetry.setRoute(route);
+    },
+    setCompaction(nextCompaction) {
+      route = {
+        ...route,
+        compaction: {
+          outcome: COMPACT_OUTCOMES.has(nextCompaction?.outcome) ? nextCompaction.outcome : 'unknown_error',
+          upstreamStatus: Number.isInteger(nextCompaction?.upstreamStatus) ? nextCompaction.upstreamStatus : null,
+          terminalCode: nextCompaction?.terminalCode === 'message_stop' ? 'message_stop' : null,
+          errorCode: COMPACT_ERROR_CODES.has(nextCompaction?.errorCode) ? nextCompaction.errorCode : null,
+          usage: compactUsageSnapshot(nextCompaction?.usage),
+        },
+      };
+      telemetry.setRoute(route);
     },
     cancel() {
       cancelled = true;
@@ -1461,6 +1515,13 @@ function runWorker() {
         const report = (statusOverride = null) => {
           if (reported) return;
           reported = true;
+          usageCapture?.setResponseComplete(false);
+          routeTelemetry?.setCompaction({
+            outcome: 'upstream_error',
+            upstreamStatus: upRes.statusCode,
+            errorCode: 'upstream_http_error',
+            usage: mergeCompactUsage(compactGuard.observedUsage, usageCapture?.snapshot()),
+          });
           routeTelemetry?.finish(upRes.statusCode, statusOverride);
           // The status line is gone but the sentry's learned ceiling is not.
           if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) noteGenuineOverflow(sessionId, contextModel);
@@ -1517,6 +1578,15 @@ function runWorker() {
         return;
       }
       usageCapture?.setResponse(upRes.statusCode, upRes.headers);
+      if (compactGuard && !successful2xx) {
+        usageCapture?.setResponseComplete(false);
+        routeTelemetry?.setCompaction({
+          outcome: 'upstream_error',
+          upstreamStatus: upRes.statusCode,
+          errorCode: 'upstream_http_error',
+          usage: mergeCompactUsage(compactGuard.observedUsage, usageCapture?.snapshot()),
+        });
+      }
       const codexInferenceResponse = advertisedModel && successful2xx;
       const compactStream = compactGuard && codexInferenceResponse && streamedContentType;
       const bufferedContextFailure = normalizeContextErrors && upRes.statusCode >= 400;
@@ -1628,7 +1698,7 @@ function runWorker() {
           if (compactGuard) compactGuard.headWritten = true;
           keepSseAlive(upRes, clientRes);
           const attempt = compactGuard
-            ? { chunks: [], bytes: 0, terminal: false, fatal: false, sawError: false, degraded: false }
+            ? { chunks: [], bytes: 0, terminal: false, terminalCode: null, errorCode: null, hasVisibleText: false, fatal: false, sawError: false, degraded: false }
             : null;
           const inference = attempt || { terminal: false, sawError: false };
           const observeEvent = (event) => {
@@ -1679,14 +1749,29 @@ function runWorker() {
             if (clientRes.destroyed || !clientRes.writable) return;
             const recoverable = !attempt.terminal && !attempt.fatal && !attempt.degraded;
             if (recoverable && compactGuard.attempts < COMPACT_STREAM_RETRIES) {
+              compactGuard.observedUsage = mergeCompactUsage(compactGuard.observedUsage, usageCapture?.snapshot());
+              usageCapture?.resetUsage();
               compactGuard.attempts++;
               upRes.destroy();
               return setTimeout(() => forward(clientReq, clientRes, target, body, extraHeaderDrop,
                 normalizeContextErrors, filterPlanTools, sessionId, advertisedModel, contextModel, routeTelemetry,
                 usageCapture, webSocketUpgradeRetries, compactGuard), COMPACT_STREAM_RETRY_DELAY_MS);
             }
+            const outcome = compactOutcome(attempt, upRes.statusCode, statusOverride);
+            const completed = ['completed', 'empty_summary'].includes(outcome);
+            const observedUsage = completed
+              ? compactUsageSnapshot(usageCapture?.snapshot())
+              : mergeCompactUsage(compactGuard.observedUsage, usageCapture?.snapshot());
+            usageCapture?.setResponseComplete(completed);
+            routeTelemetry?.setCompaction({
+              outcome,
+              upstreamStatus: upRes.statusCode,
+              terminalCode: attempt.terminalCode,
+              errorCode: attempt.errorCode,
+              usage: observedUsage,
+            });
             routeTelemetry?.finish(upRes.statusCode,
-              statusOverride || (attempt.terminal && !attempt.sawError ? null : 'upstream_error'));
+              statusOverride || (completed ? null : 'upstream_error'));
             for (const buffered of attempt.chunks) clientRes.write(buffered);
             if (!attempt.terminal && !attempt.sawError) {
               const attempts = compactGuard.attempts + 1;
@@ -1765,6 +1850,15 @@ function runWorker() {
     });
     upReq.setTimeout(3600000, () => upReq.destroy(new Error('upstream timeout')));
     upReq.on('error', (e) => {
+      if (compactGuard) {
+        usageCapture?.setResponseComplete(false);
+        routeTelemetry?.setCompaction({
+          outcome: 'upstream_error',
+          upstreamStatus: 502,
+          errorCode: 'upstream_http_error',
+          usage: mergeCompactUsage(compactGuard.observedUsage, usageCapture?.snapshot()),
+        });
+      }
       routeTelemetry?.finish(502, 'upstream_error');
       if (clientRes.headersSent) return clientRes.destroy();
       clientRes.writeHead(502, { 'content-type': 'application/json' });
@@ -2090,7 +2184,7 @@ function runWorker() {
             }
             const forwardedBody = JSON.stringify(parsed);
             recordRequestBodyHighWater(requestBodySessionId, Buffer.byteLength(forwardedBody));
-            const usageCapture = pathOnly === '/v1/messages' && usageEmitter.enabled
+            const usageCapture = pathOnly === '/v1/messages' && (usageEmitter.enabled || routeTelemetry.enabled)
               ? usageEmitter.start({
                 payload: parsed,
                 requestBodyBytes: Buffer.byteLength(forwardedBody),
@@ -2106,7 +2200,7 @@ function runWorker() {
               })
               : null;
             const compactGuard = COMPACT_STREAM_GUARD && pathOnly === '/v1/messages' && isCompactionRequest(parsed)
-              ? { attempts: 0, headWritten: false }
+              ? { attempts: 0, headWritten: false, observedUsage: compactUsageSnapshot() }
               : null;
             // claude.ai credentials never leave this machine toward the proxy
             return forward(req, res, `http://127.0.0.1:${PROXY_PORT}`,

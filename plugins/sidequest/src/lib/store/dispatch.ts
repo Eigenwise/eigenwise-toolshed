@@ -1641,14 +1641,17 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       : integrationTargetState
         ? integrationTargetCommit(readMeta(slug)?.path || '', integrationTargetState)
         : commitScope.headCommit(readMeta(slug)?.path || '');
-    // A cut tags its release commit before it runs the release suites and only
-    // pushes once they pass, so between those two moments local main sits on a tip
-    // that may still be rewound. Baselining a dispatch there hands the executor a
-    // checkout forked from a commit the branch rewinds past, and the candidate's
-    // submission range then comes back as [release commit, candidate] and fails
-    // outside_scope (SQ-2776 reproduced it). Refusing is the conservative half of
-    // the fix: silently baselining somewhere other than the branch the board
-    // recorded is its own class of confusion, and the window is minutes.
+    // A direct cut (cut.mjs --push without --prepare) tags its release commit
+    // before it runs the release suites and only pushes once they pass, so between
+    // those two moments local main sits on a tip that may still be rewound.
+    // Baselining a dispatch there hands the executor a checkout forked from a
+    // commit the branch rewinds past, and the candidate's submission range then
+    // comes back as [release commit, candidate] and fails outside_scope (SQ-2776
+    // reproduced it). Refusing is the conservative half of the fix: silently
+    // baselining somewhere other than the branch the board recorded is its own
+    // class of confusion, and the window is minutes. The prepare/finalize flow
+    // cannot produce this state: preparation creates no tag at all, and finalize
+    // only tags a commit the remote publish branch already carries.
     const releaseTip = projectPath
       ? commitScope.unpublishedReleaseTip(
         projectPath,
@@ -1657,7 +1660,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       )
       : null;
     if (releaseTip) {
-      throw new Error(`prepare dispatch: ${t.ref} refused; baseline ${releaseTip.commit} is an unpublished release commit, tagged ${releaseTip.tags.join(', ')} and not yet on the remote branch. A release cut tags its commit before running its suites, so this is either a cut still in flight or one that failed and left its commit live. Wait for the cut to finish and push, or tear it down (delete those tags and reset the branch), then dispatch again.`);
+      throw new Error(`prepare dispatch: ${t.ref} refused; baseline ${releaseTip.commit} is an unpublished release commit, tagged ${releaseTip.tags.join(', ')} and not yet on the remote branch. A direct release cut tags its commit before running its suites, so this is either a direct cut still in flight or one that failed and left its commit live. The prepare/finalize flow never reaches this state: preparation creates no tag, and finalize only tags a commit the remote branch already has. Wait for the cut to finish and push, or tear it down (delete those tags and reset the branch), then dispatch again.`);
     }
     const dispatchBaseline = dispatchBaselineForProject(slug, t, now, baseCommit, nonRepoOutput, snapshotPreflight);
     // Everything above this line only validates. Minting the replacement token

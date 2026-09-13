@@ -186,18 +186,27 @@ the ticket.
    completed review, and refuses when either is missing or both are the same agent. Resolve or
    explicitly accept every finding before versioning or pushing. A finding that needs repair leaves
    its submission parked and goes through the applicable rejection flow below.
-9. **Assign versions centrally**: for each plugin touched by the integrated set, take origin's next
-   free version ONCE for the batch and bump BOTH `plugins/<name>/.claude-plugin/plugin.json` and the
-   root `.claude-plugin/marketplace.json` (they must match) in one commit. Executors no longer bump
-   anything, so versioning has exactly one writer: this step. If this or the seam/review gate fails,
-   the locally delivered ticket is already done; record the failure and do not claim that it was pushed.
-10. **Push and confirm**: `git push origin HEAD:main` from the registered checkout — never a new
-    branch. A non-fast-forward → `git pull --rebase origin main`, rerun steps 7-9, push again. Then
+9. **Validate the release window, do not write versions**: the cut is the only writer of plugin and
+   marketplace versions, so never hand-edit `plugins/<name>/.claude-plugin/plugin.json` or the root
+   `.claude-plugin/marketplace.json`. Confirm instead that every integrated ticket that changed a
+   published plugin left a fragment in `.release/unreleased/`, and that the window is the one you mean
+   to ship: `node scripts/release/plan.mjs` then `node scripts/release/cut.mjs --prepare --dry-run`.
+   A missing fragment is what `node scripts/release/note.mjs <REF> --plugins <name> --bump <level>
+   --commit <sha>` is for. If this or the seam/review gate fails, the locally delivered ticket is
+   already done; record the failure and do not claim that it was pushed.
+10. **Push and confirm**: push the integration branch the dispatch recorded, from the registered
+    checkout — never a new branch. Where that branch is protected (Toolshed: both `develop` and
+    `main` are), it moves through a pull request instead of a direct push, and the release itself is
+    a separate promotion PR from a release branch: `node scripts/release/cut.mjs --prepare --push`,
+    merge the PR it prints, then `node scripts/release/finalize.mjs --push` to tag the merged commit,
+    then merge the `main` → `develop` sync PR that finalize prints before any further feature PR.
+    Never force-push, reset, or otherwise rewrite a protected branch to get work landed. A
+    non-fast-forward → `git pull --rebase origin <branch>`, rerun steps 7-9, push again. Then
     fetch fresh and confirm the integrated commits (the cherry-picked equivalents, not the submitted
-    range hashes) are covered by `git log origin/main`; the assembled-wave record identifies the exact
-    participant set whose delivered content passed verification. If push or confirmation fails, the
-    ticket remains done from local delivery but unpushed; finish the push or record the failure on the
-    ticket instead of claiming remote reachability.
+    range hashes) are covered by `git log origin/<branch>`; the assembled-wave record identifies the
+    exact participant set whose delivered content passed verification. If push or confirmation fails,
+    the ticket remains done from local delivery but unpushed; finish the push or record the failure on
+    the ticket instead of claiming remote reachability.
 11. **Clean up after confirmation**: do not use `groom-close --integration` as a publish step or to
     close a wave participant individually. After every delivered commit is reachable, remove its
     durable ref (`git update-ref -d refs/sidequest/<SQ-n>`) and run `sidequest publish unlock`. Unlock

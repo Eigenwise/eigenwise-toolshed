@@ -3297,6 +3297,13 @@ test('SQ-2777: a dispatch refuses to baseline on an unpublished release tip, and
       () => store.prepareDispatch(tipSlug, refused.ref, { sessionId: 'release-tip-refused' }),
       /unpublished release commit, tagged sidequest-v9\.9\.9, v9\.9\.9 and not yet on the remote branch/,
     );
+    // Only a DIRECT cut can leave this state. Preparation creates no tag and finalize
+    // tags a commit the remote already carries, so naming the flow generically sent
+    // operators looking for a failed finalize that cannot produce it (SQ-2826).
+    assert.throws(
+      () => store.prepareDispatch(tipSlug, refused.ref, { sessionId: 'release-tip-refused' }),
+      /A direct release cut tags its commit before running its suites[\s\S]*prepare\/finalize flow never reaches this state/,
+    );
     assert.equal(store.getTicket(tipSlug, refused.ref).dispatch, undefined);
 
     // What the refusal averts, measured through the wire it would have used:

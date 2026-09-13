@@ -1,29 +1,40 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 
 import { applyChangelogs, readRepoChangelog, releasedFragmentFingerprints, REPO_CHANGELOG } from './lib/changelog.mjs';
 import { createGit } from './lib/git.mjs';
 import { fragmentFile, fragmentFingerprint, HOLD_FILE, isHeld, readFragments } from './lib/fragments.mjs';
+import { assertGitHubReleasePublished, assertParentCiPassed, isGitHubRemote } from './lib/github.mjs';
 import { applyVersions, checkManifest, readManifest } from './lib/manifests.mjs';
 import { resolveInRepo } from './lib/paths.mjs';
 import { buildPlan, formatPlan, planCommitMessage, planRefspecs } from './lib/plan.mjs';
+import { createPublishLock, publishLockRefusal, publishLockReleaseFailure } from './lib/publishlock.mjs';
+import { promotionCommands } from './lib/promotion.mjs';
 import { createSuiteResolver } from './lib/suites.mjs';
 import { commitSource, diskSource } from './lib/treesource.mjs';
 import { repoRootFrom, runCli, splitList, UsageError } from './lib/cli.mjs';
 
-const require = createRequire(import.meta.url);
-const { acquirePublishLock, releasePublishLock } = require('../../plugins/sidequest/lib/publish.js');
+export { assertGitHubReleasePublished, assertParentCiPassed };
 
 const USAGE = `Usage: node scripts/release/cut.mjs [options]
 
 Builds a release window in the working tree and stops just short of publishing it. Everything is
-local until --push. Publishing atomically pairs the verified release commit with the marketplace
-tag, then pushes the plugin tags separately.
+local until --push.
 
+--prepare is the entry for a protected publish branch: it builds the window on a release branch cut
+from --base-branch, creates no tags, and never touches the publish branch. The promotion PR carries
+it to the publish branch, and scripts/release/finalize.mjs tags the merged commit.
+
+Without --prepare the cut publishes directly: it atomically pairs the verified release commit with
+the marketplace tag, then pushes the plugin tags separately. That path needs an unprotected publish
+branch and an explicit --direct-publish; it is refused by default.
+
+  --prepare                Build the window on a release branch for a promotion PR; never tag
+  --base-branch <name>     Branch a --prepare window is cut from (default develop)
+  --release-branch <name>  Release branch to create (default release/v<marketplace-version>)
   --sha <rev>              Pin the window to this commit (default HEAD). Every input is read from it
   --mode <normal|hotfix>   Window kind (default normal)
   --tickets <a,b>          Refs to release in a hotfix, each named once
@@ -31,12 +42,14 @@ tag, then pushes the plugin tags separately.
   --publish-branch <name>  Branch the release lands on (default main)
   --remote <name>          Remote to publish to (default origin)
   --dry-run                Plan only: no file writes, no git mutations
-  --push                   Acquire the publish lock and run the atomic push
+  --push                   Acquire the publish lock and push (the release branch under --prepare)
   --skip-tests             Do not run the changed plugins' suites
   --no-merge               The tree is already prepared; skip the fast-forward merge
-  --no-branch-check        Allow cutting from a branch other than --publish-branch
+  --no-branch-check        Allow cutting from a branch other than the one the window is cut from
   --allow-dirty            Tolerate unstaged or untracked files (staged changes are never allowed)
   --force                  Override .release/HOLD, held fragments, and existing tags
+  --direct-publish         Allow --push without --prepare to move the publish branch itself. Off by
+                           default: it only works where the publish branch is unprotected
   --ci-override <reason>   Proceed after a failed or missing Test workflow, recording why
   --json                   Machine-readable result
   --repo <dir>             Repository root (defaults to this script's repo)`;
@@ -44,11 +57,6 @@ tag, then pushes the plugin tags separately.
 // Anything that lets a suite authenticate to a remote, or reconfigure git underneath the engine,
 // is removed before the suite runs. The engine still re-verifies every ref afterwards, because
 // stripping credentials is a reduction in reach, not a proof.
-const GITHUB_RELEASE_WORKFLOW = 'Publish GitHub Release';
-const GITHUB_RELEASE_DEFERRED_MESSAGE = 'GitHub Release deferred by the daily cap; the scheduled publish will cover this tag.';
-const GITHUB_RELEASE_POLL_INTERVAL_MS = 2_000;
-const GITHUB_RELEASE_TIMEOUT_MS = 10 * 60 * 1_000;
-
 const SUITE_CREDENTIAL_DENYLIST = [
   'GITHUB_TOKEN', 'GH_TOKEN', 'GH_ENTERPRISE_TOKEN', 'RELEASE_TOKEN', 'GITHUB_ACTIONS_TOKEN',
   'NPM_TOKEN', 'NODE_AUTH_TOKEN', 'NPM_CONFIG__AUTH', 'NPM_CONFIG__AUTHTOKEN',
@@ -65,37 +73,6 @@ const SUITE_CREDENTIAL_DENYLIST = [
 const SUITE_RUNTIME_IDENTITY_DENYLIST = [
   'CLAUDE_CODE_SESSION_ID', 'CLAUDE_SESSION_ID', 'SIDEQUEST_SESSION', 'SIDEQUEST_AGENT',
 ];
-
-function releaseLockOwner() {
-  return process.env.SIDEQUEST_AGENT
-    || process.env.CLAUDE_CODE_SESSION_ID
-    || process.env.CLAUDE_SESSION_ID
-    || `release-cut-${process.pid}`;
-}
-
-function releaseSessionId() {
-  return process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || process.env.SIDEQUEST_SESSION || null;
-}
-
-function createPublishLock(repoRoot) {
-  const options = { by: releaseLockOwner(), sessionId: releaseSessionId() };
-  return {
-    acquire: () => acquirePublishLock(repoRoot, options),
-    release: () => releasePublishLock(repoRoot, options),
-  };
-}
-
-function publishLockRefusal(result) {
-  const holder = result.holder ?? {};
-  const owner = holder.by || holder.sessionId || 'another publisher';
-  return `publish lock is held by "${owner}". Wait for it to release, or use sidequest publish lock --steal only after confirming the holder is dead.`;
-}
-
-function publishLockReleaseFailure(result) {
-  const holder = result?.holder ?? {};
-  const owner = holder.by || holder.sessionId || 'another publisher';
-  return `could not release the publish lock owned by "${owner}". Release it with sidequest publish unlock after confirming the published refs.`;
-}
 
 export function suiteEnvironment(base = process.env) {
   const env = { ...base };
@@ -157,6 +134,20 @@ function assertNoStaleTags(git, plan, { remote, force }) {
   );
 }
 
+function preparedRecoveryInstructions({ pinned, baseBranch, releaseBranch, rolledBack }) {
+  if (rolledBack) {
+    return releaseBranch
+      ? `Nothing was published. The prepared branch ${releaseBranch} was deleted and ${baseBranch} never moved.`
+      : `Nothing was published and no release branch was created; ${baseBranch} never moved.`;
+  }
+  return [
+    `Nothing was published. To undo this prepared window:`,
+    `  git reset --hard ${pinned}`,
+    `  git checkout ${baseBranch}`,
+    ...(releaseBranch ? [`  git branch -D ${releaseBranch}`] : []),
+  ].join('\n');
+}
+
 function releaseRecoveryInstructions(plan, originalHead, remote, marketplacePublished, { rolledBack = false } = {}) {
   if (marketplacePublished) {
     return [
@@ -178,6 +169,13 @@ function releaseRecoveryInstructions(plan, originalHead, remote, marketplacePubl
 function rollBackLocalReleaseWindow(git, plan, originalHead) {
   git.resetHard(originalHead);
   for (const tag of plan.tags) git.deleteTag(tag);
+}
+
+function rollBackPreparedRelease(git, { pinned, baseBranch, releaseBranch }) {
+  git.resetHard(pinned);
+  if (!releaseBranch) return;
+  git.switchBranch(baseBranch);
+  git.deleteBranch(releaseBranch);
 }
 
 function marketplaceRefspecs(plan, commit) {
@@ -203,123 +201,11 @@ function publishCommands(plan, { remote, commit }) {
   return commands;
 }
 
-function quoteForSh(command) {
-  return `'${command.replaceAll("'", "'\"'\"'")}'`;
-}
-
-function containerTestCommand(commit, suites) {
-  const suiteCommands = suites.map((suite) => {
-    const commands = [suite.setup, suite.command].filter(Boolean).join('; ');
-    return `(cd ${JSON.stringify(suite.cwd)}; ${commands})`;
-  }).join('; ');
-  const commands = `set -eu; mkdir repo; tar -x -C repo; cd repo; git init -q; git -c user.email=ci@local -c user.name=ci add -A; git -c user.email=ci@local -c user.name=ci commit -q -m baseline; ${suiteCommands}`;
-  return `git archive ${commit} | docker run -i --rm node:22 sh -c ${quoteForSh(commands)}`;
-}
-
-export function assertParentCiPassed(repoRoot, commit, runner = spawnSync, suites = []) {
-  const result = runner('gh', [
-    'run', 'list', '--workflow', 'Test', '--commit', commit, '--status', 'completed', '--limit', '1', '--json', 'conclusion,headSha',
-  ], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    windowsHide: true,
-  });
-  if (result.error) throw new Error(`cannot check Test workflow for ${commit}: ${result.error.message}`);
-  if (result.status !== 0) {
-    const detail = String(result.stderr || '').trim();
-    throw new Error(`cannot check Test workflow for ${commit}${detail ? `: ${detail}` : ''}`);
-  }
-  let runs;
-  try {
-    runs = JSON.parse(result.stdout || '[]');
-  } catch (_) {
-    throw new Error(`cannot read Test workflow status for ${commit}: gh returned invalid JSON`);
-  }
-  const run = Array.isArray(runs) && runs.find((candidate) => candidate?.headSha === commit);
-  if (!run) {
-    throw new Error(
-      `no completed Test workflow run found for ${commit}; refusing to publish. ` +
-      `If Docker is available, run ${containerTestCommand(commit, suites)} before retrying with --ci-override "<reason>".`,
-    );
-  }
-  if (run.conclusion !== 'success') {
-    throw new Error(
-      `Test workflow for ${commit} concluded ${run.conclusion || 'without a conclusion'}; refusing to publish. ` +
-      'Retry with --ci-override "<reason>" only when the release fixes that CI failure.',
-    );
-  }
-  return { commit, conclusion: run.conclusion };
-}
-
-function isGitHubRemote(remoteUrl) {
-  return /(?:^|[@/:])github\.com(?::|\/|$)/i.test(remoteUrl);
-}
-
-export async function assertGitHubReleasePublished(
-  repoRoot,
-  tag,
-  commit,
-  {
-    runner = spawnSync,
-    sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
-    now = Date.now,
-    timeoutMs = GITHUB_RELEASE_TIMEOUT_MS,
-  } = {},
-) {
-  const deadline = now() + timeoutMs;
-  for (;;) {
-    const release = runner('gh', ['release', 'view', tag], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      windowsHide: true,
-    });
-    if (release.error) throw new Error(`cannot check GitHub Release ${tag}: ${release.error.message}`);
-    if (release.status === 0) return { tag, status: 'published' };
-
-    const workflow = runner('gh', [
-      'run', 'list', '--workflow', GITHUB_RELEASE_WORKFLOW, '--commit', commit,
-      '--status', 'completed', '--limit', '1', '--json', 'conclusion,headSha',
-    ], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      windowsHide: true,
-    });
-    if (workflow.error) throw new Error(`cannot check ${GITHUB_RELEASE_WORKFLOW} for ${tag}: ${workflow.error.message}`);
-    if (workflow.status !== 0) {
-      const detail = String(workflow.stderr || '').trim();
-      throw new Error(`cannot check ${GITHUB_RELEASE_WORKFLOW} for ${tag}${detail ? `: ${detail}` : ''}`);
-    }
-    let runs;
-    try {
-      runs = JSON.parse(workflow.stdout || '[]');
-    } catch (_) {
-      throw new Error(`cannot read ${GITHUB_RELEASE_WORKFLOW} status for ${tag}: gh returned invalid JSON`);
-    }
-    const run = Array.isArray(runs) && runs.find((candidate) => candidate?.headSha === commit);
-    if (run?.conclusion === 'success') {
-      const completedRelease = runner('gh', ['release', 'view', tag], {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        windowsHide: true,
-      });
-      if (completedRelease.error) throw new Error(`cannot check GitHub Release ${tag}: ${completedRelease.error.message}`);
-      if (completedRelease.status === 0) return { tag, status: 'published' };
-      return { tag, status: 'deferred', message: GITHUB_RELEASE_DEFERRED_MESSAGE };
-    }
-    if (run?.conclusion) {
-      throw new Error(`${GITHUB_RELEASE_WORKFLOW} for ${tag} concluded ${run.conclusion}; GitHub Release was not published`);
-    }
-    if (now() >= deadline) {
-      throw new Error(`GitHub Release ${tag} was not found within ${Math.round(timeoutMs / 60_000)} minutes after publish`);
-    }
-    await sleep(GITHUB_RELEASE_POLL_INTERVAL_MS);
-  }
-}
 /**
  * The release commit and its tags are the verified artefact. Suites run arbitrary repository code,
  * so nothing they could have done to the local refs is allowed to reach the remote.
  */
-function assertReleaseIntact(git, plan, commit) {
+function assertReleaseIntact(git, plan, commit, { tags = true } = {}) {
   const head = git.revParse('HEAD');
   if (head !== commit) {
     throw new Error(`HEAD moved from the verified release commit ${commit} to ${head} while the suites ran; nothing was published`);
@@ -328,6 +214,7 @@ function assertReleaseIntact(git, plan, commit) {
   if (staged.length > 0) {
     throw new Error(`the suites left staged changes (${staged.slice(0, 5).join(', ')}); the verified release commit is no longer what the tree says, nothing was published`);
   }
+  if (!tags) return;
   for (const tag of plan.tags) {
     const target = git.tagTarget(tag);
     if (target !== commit) {
@@ -337,9 +224,10 @@ function assertReleaseIntact(git, plan, commit) {
 }
 
 /**
- * Builds the whole release locally, then atomically publishes its commit and marketplace tag.
- * Plugin tags follow in a separate atomic update, so the tag that triggers the GitHub Release
- * workflow never shares a push with more than three tags. Everything before that stays local.
+ * Builds the whole release locally, then either hands it to a promotion PR (--prepare) or
+ * atomically publishes its commit and marketplace tag. Plugin tags follow in a separate atomic
+ * update, so the tag that triggers the GitHub Release workflow never shares a push with more than
+ * three tags. Everything before that stays local.
  */
 export async function cut(options = {}) {
   const {
@@ -349,6 +237,9 @@ export async function cut(options = {}) {
     sha = null,
     date = null,
     publishBranch = 'main',
+    prepare = false,
+    baseBranch = null,
+    releaseBranch = null,
     remote = 'origin',
     dryRun = false,
     push = false,
@@ -357,11 +248,25 @@ export async function cut(options = {}) {
     branchCheck = true,
     allowDirty = false,
     force = false,
+    directPublish = false,
     ciOverrideReason = null,
     log = console.log,
   } = options;
 
   if (!repoRoot) throw new UsageError('cut() needs a repoRoot');
+  // Direct publication pushes the publish branch itself. Here that branch is protected, so this
+  // repository releases through --prepare plus a promotion PR and finalize.mjs; the old path stays
+  // reachable for repositories with an unprotected publish branch, but only when asked for by name.
+  if (push && !prepare && !directPublish) {
+    throw new UsageError(
+      `publishing ${publishBranch} directly is off by default: this repository's publish branch is protected and moves ` +
+      'only through a reviewed promotion PR. Use --prepare --push, merge the PR it prints, then ' +
+      'node scripts/release/finalize.mjs --push. --direct-publish is only for a repository whose publish branch is unprotected.',
+    );
+  }
+  // A prepared window is cut from the integration branch and promoted; a direct window is cut from
+  // the publish branch itself.
+  const windowBranch = baseBranch ?? (prepare ? 'develop' : publishBranch);
   const git = options.git ?? createGit({ cwd: repoRoot, dryRun });
 
   const loadManifest = (source) => {
@@ -387,8 +292,11 @@ export async function cut(options = {}) {
   }
   if (branchCheck) {
     const branch = git.currentBranch();
-    if (branch !== publishBranch) {
-      throw new Error(`cutting from "${branch}" but the release lands on "${publishBranch}"; check out ${publishBranch} or pass --no-branch-check`);
+    if (branch !== windowBranch) {
+      const hint = prepare
+        ? `check out ${windowBranch} or pass --no-branch-check`
+        : `check out ${windowBranch} or pass --no-branch-check. A protected ${publishBranch} is released with --prepare plus a promotion PR, then node scripts/release/finalize.mjs`;
+      throw new Error(`cutting from "${branch}" but this window is cut from "${windowBranch}"; ${hint}`);
     }
   }
 
@@ -410,7 +318,7 @@ export async function cut(options = {}) {
   // A normal window is only what a fast-forward would produce. If the pin does not already contain
   // the publish branch, no plan built from it describes the cut that would follow.
   if (mode === 'normal' && pinned !== basePin && !git.isAncestor(basePin, pinned)) {
-    throw new Error(`${publishBranch} (${basePin}) is not an ancestor of the pin ${pinned}, so this window could not fast-forward; choose a pin descended from ${publishBranch}`);
+    throw new Error(`${windowBranch} (${basePin}) is not an ancestor of the pin ${pinned}, so this window could not fast-forward; choose a pin descended from ${windowBranch}`);
   }
 
   const manifest = loadManifest(baseSource);
@@ -438,11 +346,15 @@ export async function cut(options = {}) {
   }
 
   assertNoStaleTags(git, plan, { remote, force });
+  const preparedBranchName = prepare ? (releaseBranch ?? `release/${plan.tag}`) : null;
+  if (prepare && !dryRun && git.branchExists(preparedBranchName)) {
+    throw new Error(`branch "${preparedBranchName}" already exists; delete that leftover release branch or pass --release-branch <name>`);
+  }
 
   const githubRemote = !dryRun && isGitHubRemote(git.remoteUrl(remote));
   let ci = null;
   if (!dryRun && (options.assertParentCiPassed || githubRemote)) {
-    const parent = git.remoteBranchHead(remote, publishBranch);
+    const parent = git.remoteBranchHead(remote, windowBranch);
     const assertCiPassed = options.assertParentCiPassed
       ?? ((repoRoot, commit, suites) => assertParentCiPassed(repoRoot, commit, spawnSync, suites));
     try {
@@ -455,13 +367,16 @@ export async function cut(options = {}) {
   }
 
   if (dryRun) {
-    const pushCommands = publishCommands(plan, { remote, commit: null });
+    const pushCommands = prepare
+      ? promotionCommands({ remote, releaseBranch: preparedBranchName, publishBranch, tag: plan.tag })
+      : publishCommands(plan, { remote, commit: null });
     log(formatPlan(plan).replace(/^publish:.*$/m, `publish:     ${pushCommands.join('\n             ')}`));
-    return { status: 'dry-run', plan, pushCommands };
+    return { status: 'dry-run', plan, pushCommands, releaseBranch: preparedBranchName };
   }
 
   let publishLock = null;
   let publishLockAcquired = false;
+  let preparedBranch = null;
   try {
     if (push) {
       publishLock = options.publishLock ?? createPublishLock(repoRoot);
@@ -470,9 +385,15 @@ export async function cut(options = {}) {
       publishLockAcquired = true;
     }
 
-    // The plan was read from the pin, so the tree the writes land on has to BE the pin.
+    // The plan was read from the pin, so the tree the writes land on has to BE the pin. A prepared
+    // window gets its own branch at the pin, so the integration branch never carries the release
+    // commit and the promotion PR is the only thing that can move the publish branch.
+    if (prepare) {
+      git.switchNewBranch(preparedBranchName, pinned);
+      preparedBranch = preparedBranchName;
+    }
     if (mode === 'normal') {
-      if (!noMerge && pinned !== basePin) git.mergeFastForward(pinned);
+      if (!prepare && !noMerge && pinned !== basePin) git.mergeFastForward(pinned);
       const head = git.revParse('HEAD');
       if (head !== pinned) {
         throw new Error(`the working tree is at ${head} but the window was planned from ${pinned}; refusing to release a tree nobody planned`);
@@ -523,9 +444,13 @@ export async function cut(options = {}) {
     git.add([...new Set([...touched, ...consumed])].sort());
     git.commit(message);
     const commit = git.revParse('HEAD');
-    git.tag(plan.tag, message);
-    for (const plugin of plan.plugins) {
-      git.tag(`${plugin.name}-v${plugin.to}`, `${plugin.name} ${plugin.to} (${plan.tag})`);
+    // A prepared window is untagged on purpose: the tag must name the commit that actually lands on
+    // the publish branch, and only finalize.mjs knows that sha.
+    if (!prepare) {
+      git.tag(plan.tag, message, commit);
+      for (const plugin of plan.plugins) {
+        git.tag(`${plugin.name}-v${plugin.to}`, `${plugin.name} ${plugin.to} (${plan.tag})`, commit);
+      }
     }
     plan.commit = commit;
 
@@ -547,7 +472,28 @@ export async function cut(options = {}) {
           `release suites failed, nothing was published:\n  ${failures.join('\n  ')}`,
         );
       }
-      assertReleaseIntact(git, plan, commit);
+      assertReleaseIntact(git, plan, commit, { tags: !prepare });
+
+      if (prepare) {
+        const branchPush = [`${commit}:refs/heads/${preparedBranchName}`];
+        let pushed = false;
+        if (push) {
+          git.pushAtomic(remote, branchPush);
+          pushed = true;
+          log(`pushed ${preparedBranchName} (${commit}); promote it with:`);
+        } else {
+          log(`prepared ${plan.tag} on ${preparedBranchName} as ${commit}; promote it with:`);
+        }
+        if (ci?.status === 'passed') log(`Test CI on ${remote}/${windowBranch} (${ci.commit}) passed.`);
+        else if (ci?.status === 'overridden') log(`Test CI on ${remote}/${windowBranch} (${ci.commit}) was overridden: ${ci.reason}`);
+        const promotion = promotionCommands({ remote, releaseBranch: preparedBranchName, publishBranch, tag: plan.tag, pushed });
+        for (const command of promotion) log(`  ${command}`);
+        return {
+          status: 'prepared', plan, commit, message, pushed, releaseBranch: preparedBranchName,
+          baseBranch: windowBranch, branchPush, pushCommands: promotion, touched, consumed, ci,
+          githubRelease: null,
+        };
+      }
 
       const refspecs = planRefspecs(plan, commit);
       const marketplacePush = marketplaceRefspecs(plan, commit);
@@ -582,20 +528,21 @@ export async function cut(options = {}) {
         pushCommands, touched, consumed, ci, githubRelease,
       };
     } catch (error) {
+      const recovery = (rolledBack) => (prepare
+        ? preparedRecoveryInstructions({ pinned, baseBranch: windowBranch, releaseBranch: preparedBranch, rolledBack })
+        : releaseRecoveryInstructions(plan, basePin, remote, marketplacePublished, { rolledBack }));
       if (!marketplacePublished) {
         try {
-          rollBackLocalReleaseWindow(git, plan, basePin);
+          if (prepare) rollBackPreparedRelease(git, { pinned, baseBranch: windowBranch, releaseBranch: preparedBranch });
+          else rollBackLocalReleaseWindow(git, plan, basePin);
         } catch (rollbackError) {
           throw new Error(
-            `${error.message}\nAutomatic rollback failed: ${rollbackError.message}\n${releaseRecoveryInstructions(plan, basePin, remote, marketplacePublished)}`,
+            `${error.message}\nAutomatic rollback failed: ${rollbackError.message}\n${recovery(false)}`,
             { cause: error },
           );
         }
       }
-      throw new Error(
-        `${error.message}\n${releaseRecoveryInstructions(plan, basePin, remote, marketplacePublished, { rolledBack: !marketplacePublished })}`,
-        { cause: error },
-      );
+      throw new Error(`${error.message}\n${recovery(!marketplacePublished)}`, { cause: error });
     }
   } finally {
     if (publishLockAcquired) {
@@ -614,6 +561,9 @@ export async function main(argv) {
       tickets: { type: 'string' },
       date: { type: 'string' },
       'publish-branch': { type: 'string' },
+      prepare: { type: 'boolean' },
+      'base-branch': { type: 'string' },
+      'release-branch': { type: 'string' },
       remote: { type: 'string' },
       'dry-run': { type: 'boolean' },
       push: { type: 'boolean' },
@@ -622,6 +572,7 @@ export async function main(argv) {
       'no-branch-check': { type: 'boolean' },
       'allow-dirty': { type: 'boolean' },
       force: { type: 'boolean' },
+      'direct-publish': { type: 'boolean' },
       'ci-override': { type: 'string' },
       json: { type: 'boolean' },
       repo: { type: 'string' },
@@ -642,6 +593,9 @@ export async function main(argv) {
     sha: values.sha ?? null,
     date: values.date ?? null,
     publishBranch: values['publish-branch'] ?? 'main',
+    prepare: values.prepare === true,
+    baseBranch: values['base-branch'] ?? null,
+    releaseBranch: values['release-branch'] ?? null,
     remote: values.remote ?? 'origin',
     dryRun: values['dry-run'] === true,
     push: values.push === true,
@@ -650,6 +604,7 @@ export async function main(argv) {
     branchCheck: values['no-branch-check'] !== true,
     allowDirty: values['allow-dirty'] === true,
     force: values.force === true,
+    directPublish: values['direct-publish'] === true,
     ciOverrideReason: values['ci-override'] ?? null,
     log: values.json ? () => {} : console.log,
   });
@@ -660,6 +615,8 @@ export async function main(argv) {
       commit: result.commit ?? null,
       pushed: result.pushed ?? false,
       pushCommand: result.pushCommand ?? null,
+      pushCommands: result.pushCommands ?? [],
+      releaseBranch: result.releaseBranch ?? null,
       refspecs: result.refspecs ?? [],
       ci: result.ci ?? null,
       githubRelease: result.githubRelease ?? null,

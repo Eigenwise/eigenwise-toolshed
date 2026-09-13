@@ -6,7 +6,7 @@ import test from 'node:test';
 import { runGuard } from '../guard.mjs';
 import { createGit } from '../lib/git.mjs';
 import { DEFAULT_SCHEMA, load, Type } from '../vendor/js-yaml.mjs';
-import { fileGit, makeRepo, marketplaceJson } from './helpers.mjs';
+import { FILE_GIT_SHA, fileGit, makeRepo, marketplaceJson } from './helpers.mjs';
 
 const PLUGINS = { sidequest: '3.6.49', workbench: '0.63.11' };
 
@@ -179,6 +179,31 @@ test('versions may not move on the integration branch', (t) => {
 test('a back-merged tree matches the publish branch and passes', (t) => {
   const context = setup(t, { published: { version: '3.207.0', plugins: PLUGINS } });
   assert.deepEqual(runGuard(context.root, { git: context.git, mode: 'dev', publishRef: 'origin/main' }).failures, []);
+});
+
+test('the publish ref is resolved once and no later check names the mutable ref again', (t) => {
+  const context = setup(t, {
+    published: { version: '3.207.0', plugins: PLUGINS },
+    fragments: { 'SQ-1': { plugins: ['sidequest'], bump: 'patch' } },
+  });
+
+  const result = runGuard(context.root, {
+    git: context.git,
+    mode: 'dev',
+    publishRef: 'origin/main',
+    changed: ['plugins/sidequest/src/a.ts'],
+    pullRequest: {
+      baseRepo: 'Eigenwise/eigenwise-toolshed',
+      headRepo: 'Eigenwise/eigenwise-toolshed',
+      baseRef: 'develop',
+      headSha: 'c'.repeat(40),
+    },
+  });
+
+  assert.deepEqual(result.failures, []);
+  assert.equal(result.syncBack?.publishSha, FILE_GIT_SHA, 'the sync-back proof works from the pinned commit');
+  const naming = context.git.history.filter((entry) => entry.args.some((arg) => arg.includes('origin/main')));
+  assert.deepEqual(naming.map((entry) => entry.args), [['rev-parse', '--verify', 'origin/main^{commit}']]);
 });
 
 test('the marketplace counter may not move on the integration branch either', (t) => {

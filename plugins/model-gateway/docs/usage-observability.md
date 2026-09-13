@@ -66,6 +66,12 @@ Estimated measurements:
 
 No response content, prompt text, tool schema, tool arguments, tool results, arbitrary header values, credentials, trace baggage, or error text is emitted.
 
+## Compaction route diagnostics
+
+The existing consent-gated `codex_gateway.route` trace carries compaction-only metadata when the request reaches a Codex compaction stream: `compaction_outcome`, `upstream_status_code`, `compaction_terminal_code`, `compaction_error_code`, `compaction_input_tokens`, `compaction_output_tokens`, `compaction_cache_read_tokens`, and `compaction_cache_creation_tokens`. Its usual route fields provide selected model, effective model, backend, and elapsed `duration_ms`.
+
+`compaction_outcome` is one of `completed`, `empty_summary`, `incomplete`, `aborted`, `upstream_error`, or `unknown_error`. `message_stop` is the only terminal code. Error codes are allowlisted: request-shaped errors, `websocket_missing_terminal`, `upstream_http_error`, or `unknown_error`. An unfamiliar provider error maps to `unknown_error`; its text is never copied. An empty summary means the stream reached `message_stop` without visible non-whitespace text. If a retry is discarded, the final successful usage record uses only the successful attempt; an incomplete final outcome can retain counters observed before it failed.
+
 ## Tokenization and accuracy
 
 Calling a provider token-count endpoint would resend content, add latency, and create another billed or rate-limited dependency. Bundling a provider tokenizer would make the gateway much larger and still fail across resolved Codex and Anthropic tokenizers.
