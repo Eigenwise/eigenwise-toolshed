@@ -111,7 +111,7 @@ const AUTH_HEADERS = ['authorization', 'proxy-authorization', 'x-api-key', 'cook
 const {
   COMPAT_BASE_URL, COMPAT_HOST, COMPAT_PORT, DEFAULT_BASE_URL, HOSTS_BLOCK_END, HOSTS_BLOCK_LINE,
   HOSTS_BLOCK_START, PIN_ALIASES, PIN_OVERRIDE_PATH, STATIC_ENV_BLOCK, CODEX_UNKNOWN_MODEL_WINDOW,
-  codexContextWindow,
+  codexContextWindow, codexReadinessMessage,
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
@@ -285,16 +285,6 @@ function isAuthed() {
   return r.status === 0 && /account/i.test((r.stdout || '') + (r.stderr || ''));
 }
 
-const CODEX_READINESS_MESSAGES = {
-  'binary-missing': () => `Codex dispatch refused: claude-code-proxy is missing. Run \`node "${CLI_PATH}" setup\`, then retry. No Anthropic fallback was used.`,
-  'auth-missing': () => `Codex dispatch refused: ChatGPT sign-in is required. Run \`node "${CLI_PATH}" login\`, finish browser OAuth, then run \`node "${CLI_PATH}" setup\` and retry. Credentials live in \`~/.config/claude-code-proxy/\`.`,
-  'proxy-down': () => `Codex dispatch refused: claude-code-proxy is not answering on /v1/models. The running shim supervisor retries recovery with bounded backoff; check ${path.join(LOGS, 'guardian.log')} if it does not recover. No Anthropic fallback was used.`,
-  'shim-down': () => `Codex dispatch refused: the model-gateway shim is down. Run \`node "${CLI_PATH}" ensure\`, then retry. No Anthropic fallback was used.`,
-  'serving-version-mismatch': () => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${resolveNewestInstalledCliPath()}" ensure\`, then retry. No Anthropic fallback was used.`,
-  'upstream-blocked': () => `Codex is blocked by an OpenAI rejection. Run \`node "${CLI_PATH}" setup\`; if it persists, wait for a claude-code-proxy update or explicitly re-route this ticket. Codex tickets remain blocked.`,
-  'upstream-unavailable': () => 'Codex had a terminal upstream failure in the last 60 seconds. Wait briefly, then retry; /v1/models only proves the local proxy is answering.',
-};
-
 function noteCodexRequestSuccess() {
   clearUpstreamBlocked();
   clearUpstreamUnavailable();
@@ -351,7 +341,7 @@ async function getCodexReadiness({
     state,
     message: state === 'ready'
       ? 'Codex readiness confirms local binary, /v1/models, authentication, shim, and serving-version checks. It does not prove a streaming request will succeed.'
-      : CODEX_READINESS_MESSAGES[state](),
+      : codexReadinessMessage(state),
     checks,
     upstreamBlocked,
     upstreamUnavailable,
