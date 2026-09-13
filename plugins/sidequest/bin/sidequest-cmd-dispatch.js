@@ -49,7 +49,7 @@ async function cmdDispatch(opts, positional) {
       projectPath: meta.path,
       ref: prepared.ticket.ref,
       retired: true,
-      guidance: `Retired the unclaimed dispatch without preparing a replacement. Use groom-close after its delivery commit is reachable from the recorded integration branch.`
+      guidance: `Retired the evidence-eligible unclaimed dispatch without preparing a replacement. Use groom-close after its delivery commit is reachable from the recorded integration branch.`
     }, null, 2) + "\n");
     return;
   }

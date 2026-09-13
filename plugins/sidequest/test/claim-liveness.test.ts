@@ -1246,6 +1246,56 @@ test('SQ-2206: a bound launch that never claimed becomes retirable on evidence p
   }
 });
 
+test('retireOnly retires an expired bound-unclaimed attempt without a replacement and preserves recovery guards', () => {
+  const evidence = 'The dispatch remained bound and unclaimed beyond the backstop.';
+  const expired = addRouted('retire only expired bound attempt');
+  const expiredSessionId = 'retire-only-expired-session';
+  const expiredPrepared = store.prepareDispatch(slug, expired.ref, { sharedTree: true, sessionId: expiredSessionId });
+  assert.equal(store.recordDispatchLaunch(slug, expired.ref, {
+    token: expiredPrepared.token, executor: expiredPrepared.ticket.dispatchExecutor, sessionId: expiredSessionId, agentName: 'retire-only-expired-agent',
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent('wrong-retire-only-session', expiredPrepared.ticket.dispatchExecutor, 'retire-only-expired-agent', 'retire-only-expired-agent').reason, 'not_found', 'a different session cannot bind the attempt');
+  assert.equal(store.bindDispatchAgent(expiredSessionId, expiredPrepared.ticket.dispatchExecutor, 'retire-only-expired-agent', 'retire-only-expired-agent').ok, true);
+  const expiredState = store.getTicket(slug, expired.ref);
+  expiredState.dispatch.boundAt = new Date(Date.now() - 2 * HOUR).toISOString();
+  persist(expiredState);
+
+  assert.doesNotThrow(
+    () => store.prepareDispatch(slug, expired.ref, { retireOnly: true, recoveryEvidence: evidence }),
+    'an expired bound-unclaimed attempt is eligible for retireOnly',
+  );
+  const retired = store.getTicket(slug, expired.ref);
+  assert.equal(retired.dispatchNonce, null, 'retireOnly does not prepare a replacement token');
+  assert.equal(retired.dispatch.attempts.at(-1).failureShape, 'stranded_bound_launch_superseded');
+  assert.equal(retired.dispatch.attempts.at(-1).recoveryEvidence, evidence);
+
+  const young = addRouted('retire only young bound attempt');
+  const youngPrepared = store.prepareDispatch(slug, young.ref, { sharedTree: true, sessionId: 'retire-only-young-session' });
+  assert.equal(store.recordDispatchLaunch(slug, young.ref, {
+    token: youngPrepared.token, executor: youngPrepared.ticket.dispatchExecutor, sessionId: 'retire-only-young-session', agentName: 'retire-only-young-agent',
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent('retire-only-young-session', youngPrepared.ticket.dispatchExecutor, 'retire-only-young-agent', 'retire-only-young-agent').ok, true);
+  assert.throws(
+    () => store.prepareDispatch(slug, young.ref, { retireOnly: true, recoveryEvidence: evidence }),
+    /bound to a runtime .* ago and still unclaimed, which becomes retirable on evidence in/,
+    'a live bound attempt stays protected during the backstop',
+  );
+
+  const claimed = addRouted('retire only claimed attempt');
+  const claimedPrepared = store.prepareDispatch(slug, claimed.ref, { sharedTree: true, sessionId: 'retire-only-claimed-session' });
+  assert.equal(store.recordDispatchLaunch(slug, claimed.ref, {
+    token: claimedPrepared.token, executor: claimedPrepared.ticket.dispatchExecutor, sessionId: 'retire-only-claimed-session', agentName: 'retire-only-claimed-agent',
+  }).ok, true);
+  assert.equal(store.claimTicket(slug, claimed.ref, 'retire-only-claimed-executor', {
+    token: claimedPrepared.token, executor: claimedPrepared.ticket.dispatchExecutor, sessionId: 'retire-only-claimed-session',
+  }).ok, true);
+  assert.throws(
+    () => store.prepareDispatch(slug, claimed.ref, { retireOnly: true, recoveryEvidence: evidence }),
+    /claimed by retire-only-claimed-executor/,
+    'a claimed attempt stays protected',
+  );
+});
+
 test('SQ-2136: a prepared dispatch that never launched is retirable on evidence, and the refusal names the real blocker', () => {
   const ticket = addRouted('prepared unbound retirement');
   const first = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'session-prepared-unbound' });
