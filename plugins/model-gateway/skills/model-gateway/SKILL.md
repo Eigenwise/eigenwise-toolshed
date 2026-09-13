@@ -16,7 +16,7 @@ Codex models with a `claude-` prefix because Claude Code's model discovery drops
 start with `claude`/`anthropic`. That prefix is shared with the real Anthropic ids, so the route
 is decided by the backend family segment (`claude-gpt-*`, `claude-grok-*`), never by the prefix.
 
-All commands: `node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" <command>`
+All commands: `node ~/.claude/model-gateway/model-gateway.js <command>`. SessionStart recreates this stable launcher from Claude Code's installed-plugin registry, so it follows upgrades and falls back to an installed downgrade; it reports a missing install directly.
 
 ## First-time setup
 
@@ -42,10 +42,10 @@ gateway, then leaves its supervisor to finish in the background so it stays insi
 (sha256-verified) and starts everything. Re-running it later is also the upgrade path. A newer cached Model Gateway version replaces an older sibling version from the same marketplace and plugin name. A different marketplace, plugin name, or non-cache install stays foreign and is refused.
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" setup
+node ~/.claude/model-gateway/model-gateway.js setup
 # only if setup says sign-in is needed:
-node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" login    # browser OAuth; --device for headless
-node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" setup    # finishes the wiring
+node ~/.claude/model-gateway/model-gateway.js login    # browser OAuth; --device for headless
+node ~/.claude/model-gateway/model-gateway.js setup    # finishes the wiring
 ```
 
 `login` opens the user's browser; they complete it themselves (suggest `! node ... login` if it

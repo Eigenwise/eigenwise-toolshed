@@ -27,9 +27,9 @@ const {
   COMPAT_PORT, DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GROK_ENDPOINT, GROK_PREFIX, LIST_DISPATCH_MODEL,
   LOGS, PLUGIN_VERSION, PREFIX, PROXY_BIN, PROXY_PORT, REQUEST_ROUTE_LOG,
   REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT, SOCKET_PATH,
-  MODEL_WINDOW_POLICY, STATE, syncGatewayDiscoveryCache, TRACE_HEADERS, codexClientModelId,
+  MODEL_WINDOW_POLICY, STATE, STABLE_COMMAND_PATH, syncGatewayDiscoveryCache, TRACE_HEADERS, codexClientModelId,
   codexContextWindow, codexContextWindowModelId, gatewayAdvertisedWindow, gatewayClientModelId, mkdirs,
-  resolveGatewayModelPolicy, resolveNewestInstalledCliPath,
+  resolveGatewayModelPolicy,
 } = require('./runtime.js');
 
 function isAuthed() {
@@ -38,12 +38,12 @@ function isAuthed() {
 }
 
 const CODEX_READINESS_MESSAGES = {
-  'binary-missing': () => `Codex dispatch refused: claude-code-proxy is missing. Run \`node "${__filename}" setup\`, then retry. No Anthropic fallback was used.`,
-  'auth-missing': () => `Codex dispatch refused: ChatGPT sign-in is required. Run \`node "${__filename}" login\`, finish browser OAuth, then run \`node "${__filename}" setup\` and retry. Credentials live in \`~/.config/claude-code-proxy/\`.`,
+  'binary-missing': () => `Codex dispatch refused: claude-code-proxy is missing. Run \`node "${STABLE_COMMAND_PATH}" setup\`, then retry. No Anthropic fallback was used.`,
+  'auth-missing': () => `Codex dispatch refused: ChatGPT sign-in is required. Run \`node "${STABLE_COMMAND_PATH}" login\`, finish browser OAuth, then run \`node "${STABLE_COMMAND_PATH}" setup\` and retry. Credentials live in \`~/.config/claude-code-proxy/\`.`,
   'proxy-down': () => `Codex dispatch refused: claude-code-proxy is not answering on /v1/models. The running shim supervisor retries recovery with bounded backoff; check ${path.join(LOGS, 'guardian.log')} if it does not recover. No Anthropic fallback was used.`,
-  'shim-down': () => `Codex dispatch refused: the model-gateway shim is down. Run \`node "${__filename}" ensure\`, then retry. No Anthropic fallback was used.`,
-  'serving-version-mismatch': () => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${resolveNewestInstalledCliPath()}" ensure\`, then retry. No Anthropic fallback was used.`,
-  'upstream-blocked': () => `Codex is blocked by an OpenAI rejection. Run \`node "${__filename}" setup\`; if it persists, wait for a claude-code-proxy update or explicitly re-route this ticket. Codex tickets remain blocked.`,
+  'shim-down': () => `Codex dispatch refused: the model-gateway shim is down. Run \`node "${STABLE_COMMAND_PATH}" ensure\`, then retry. No Anthropic fallback was used.`,
+  'serving-version-mismatch': () => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${STABLE_COMMAND_PATH}" ensure\`, then retry. No Anthropic fallback was used.`,
+  'upstream-blocked': () => `Codex is blocked by an OpenAI rejection. Run \`node "${STABLE_COMMAND_PATH}" setup\`; if it persists, wait for a claude-code-proxy update or explicitly re-route this ticket. Codex tickets remain blocked.`,
   'upstream-unavailable': () => 'Codex had a terminal upstream failure in the last 60 seconds. Wait briefly, then retry; /v1/models only proves the local proxy is answering.',
 };
 

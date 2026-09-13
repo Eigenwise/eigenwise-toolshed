@@ -660,7 +660,7 @@ test('doctor reports a serving version mismatch and the ensure remedy', async (t
   assert.match(output.text, /lifecycle evidence: .*model-gateway[\\/]logs[\\/]lifecycle\.jsonl/);
   assert.match(output.text, /lifecycle exit evidence: no observed exit record/);
   assert.match(output.text, new RegExp(`VERSION MISMATCH: CLI ${gateway.PLUGIN_VERSION.replaceAll('.', '\\.')}, serving shim 0\\.0\\.0`));
-  assert.match(output.text, new RegExp(`Run node "${CLI.replace(/[\\/]/g, '[\\\\/]')}" ensure`));
+  assert.match(output.text, new RegExp(`Run node "${path.join(home, '.claude', 'model-gateway', 'model-gateway.js').replace(/[\\/]/g, '[\\\\/]')}" ensure`));
 });
 
 test('doctor describes an observed lifecycle exit', async (t) => {

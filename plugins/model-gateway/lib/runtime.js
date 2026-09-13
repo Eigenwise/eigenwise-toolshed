@@ -191,6 +191,7 @@ const CLAUDE_BIN_IS_BATCH = WIN && /\.(?:cmd|bat)$/i.test(CLAUDE_BIN);
 const LEGACY_ENV_BLOCK = { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '950000' };
 const GATEWAY_MODELS_CACHE = path.join(CLAUDE_CONFIG_DIR, 'cache', 'gateway-models.json');
 const CLI_PATH = path.join(__dirname, '..', 'bin', 'model-gateway.js');
+const STABLE_COMMAND_PATH = path.join(STATE, 'model-gateway.js');
 
 function gatewayDiscoveryModels(models) {
   if (!Array.isArray(models)) return [];
@@ -294,7 +295,7 @@ module.exports = {
   PIN_CACHE_TTL_MS, PIN_OVERRIDE_PATH, PIN_PROBE_TIMEOUT_MS, PLUGIN_VERSION, PREFIX, PROXY_BIN,
   PROXY_PORT, PUBLIC_SHIM_PORT, REPO, REQUEST_ROUTE_LOG, REQUEST_ROUTE_LOG_PATH, LIFECYCLE_LOG_PATH,
   PROJECT_WIRING_REGISTRY_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_FAILURE_PATH, SHIM_PORT, SOCKET_PATH, STATE,
-  STATIC_ENV_BLOCK, TRACE_HEADERS, WIRING_CONFIG_PATH, WIN, CLI_PATH, CLAUDE_CONFIG_DIR, mkdirs,
+  STATIC_ENV_BLOCK, STABLE_COMMAND_PATH, TRACE_HEADERS, WIRING_CONFIG_PATH, WIN, CLI_PATH, CLAUDE_CONFIG_DIR, mkdirs,
   canReplaceInstalledCliPath, codexClientModelId, codexContextWindow, codexContextWindowModelId,
   gatewayAdvertisedWindow, gatewayBackendModelId, gatewayClientModelId, gatewayDiscoveryModels,
   readGatewayDiscoveryCache, resolveGatewayModelPolicy, resolveNewestInstalledCliPath,
