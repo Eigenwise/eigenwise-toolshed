@@ -2167,20 +2167,49 @@ function runShim() {
     return portListening(workerPort, 100);
   }
 
-  function requestWorker(req, body, retry = 0) {
+  // A worker that already took the body may have spent it upstream, so only
+  // the loss of that worker justifies sending the request again: a resend to a
+  // live worker is a second inference, billed to the user's subscription, that
+  // the caller never sees.
+  function requestWorker(req, body) {
     return new Promise((resolve, reject) => {
-      if (!workerPort) {
-        if (retry < 80 && !stopped) return setTimeout(() => requestWorker(req, body, retry + 1).then(resolve, reject), 50);
-        return reject(new Error('shim worker did not report a listener port'));
-      }
-      const upstream = http.request({
-        host: '127.0.0.1', port: workerPort, method: req.method, path: req.url, headers: req.headers,
-      }, (response) => resolve(response));
-      upstream.once('error', (error) => {
-        if (retry < 80 && !stopped) return setTimeout(() => requestWorker(req, body, retry + 1).then(resolve, reject), 50);
-        reject(error);
-      });
-      upstream.end(body);
+      let settled = false;
+      const settle = (finish, value) => {
+        if (settled) return;
+        settled = true;
+        finish(value);
+      };
+      const attempt = (attemptsLeft, acceptingWorker) => {
+        if (settled) return;
+        const canWait = () => attemptsLeft > 0 && !stopped;
+        const waitForAnotherAttempt = (nextAcceptingWorker) => setTimeout(
+          () => attempt(attemptsLeft - 1, nextAcceptingWorker), 50,
+        );
+        if (acceptingWorker && worker === acceptingWorker) {
+          if (!canWait()) return settle(reject, new Error('shim worker never answered the request it had accepted'));
+          return waitForAnotherAttempt(acceptingWorker);
+        }
+        if (!workerPort) {
+          if (!canWait()) return settle(reject, new Error('shim worker did not report a listener port'));
+          return waitForAnotherAttempt(null);
+        }
+        let deliveredToWorker = null;
+        const upstream = http.request({
+          host: '127.0.0.1', port: workerPort, method: req.method, path: req.url, headers: req.headers,
+        }, (response) => settle(resolve, response));
+        upstream.once('socket', (socket) => {
+          const noteDelivered = () => { deliveredToWorker = worker; };
+          if (socket.connecting) socket.once('connect', noteDelivered);
+          else noteDelivered();
+        });
+        upstream.once('error', (error) => {
+          if (settled) return;
+          if (!canWait()) return settle(reject, error);
+          waitForAnotherAttempt(deliveredToWorker);
+        });
+        upstream.end(body);
+      };
+      attempt(80, null);
     });
   }
 
@@ -2208,7 +2237,7 @@ function runShim() {
       upstream.pipe(res);
     } catch {
       res.writeHead(503, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'model-gateway is restarting; retry this request shortly' } }));
+      res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'model-gateway could not complete this request; retry it shortly' } }));
     }
   }
 
