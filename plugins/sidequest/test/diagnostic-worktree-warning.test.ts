@@ -144,17 +144,30 @@ test('the same worktree is expected noise while its claim is live and dead weigh
   assert.match(ended, /Keep error-severity diagnostics in your own files actionable\./);
 });
 
-test('a dead claim over a vanished worktree is named as false, without waiting for a terminal stamp', () => {
+test('a vanished worktree is named as false while its claim is still live, and drops off once the run is attested over', () => {
   const { repository, slug } = board('swept');
   const swept = claimedIsolatedDispatch(slug, repository, 'swept isolated executor', 'swept');
   assert.equal(store.getTicket(slug, swept.ref).dispatch.terminalAt, null, 'nothing observed this executor stop');
   assert.equal(fs.existsSync(swept.worktree), false);
-  assert.equal(store.claimReleaseVerdict(store.getTicket(slug, swept.ref)).kind, 'missing_worktree');
+  // SQ-2862: a gone checkout says nothing about whether the executor stopped, so the claim stays live
+  // and the warning has to carry both facts — the paths are false AND the run is still in flight.
+  assert.equal(store.claimReleaseVerdict(store.getTicket(slug, swept.ref)), null);
 
   const warning = diagnosticWorktreeWarning({ cwd: repository });
   assert.match(warning, /1 of those paths is already gone from disk/);
   assert.match(warning, /a diagnostic naming a path that no longer exists is always false/);
-  assert.doesNotMatch(warning, /live claim/, 'a claim the board calls reclaimable is not live work');
+  assert.match(warning, new RegExp(`1 holds a live claim \\(${swept.ref}\\)`), 'the board still calls this live work');
+
+  assert.equal(store.recordDispatchAgentFailure(slug, swept.ref, {
+    token: swept.token,
+    executor: swept.executor,
+    sessionId: swept.sessionId,
+    taskName: swept.agentId,
+    agentId: swept.agentId,
+    agentName: swept.agentId,
+    error: 'Prompt is too long',
+  }).ok, true);
+  assert.doesNotMatch(diagnosticWorktreeWarning({ cwd: repository }), /live claim/, 'an attested stop ends the lease');
 
   // Pushes for a removed worktree keep arriving for minutes, not hours, so the record stops being worth a line.
   assert.equal(diagnosticWorktreeWarning({ cwd: repository }, Date.now() + 3 * HOUR), '');

@@ -5,7 +5,6 @@ function createClaims(dependencies: any) {
     completionTreeCheck,
     dispatchDelta,
     dispatchState,
-    isolatedDispatchWorktreeMissing,
     getTicket,
     putTicket,
     withTicketLock,
@@ -214,10 +213,6 @@ function createClaims(dependencies: any) {
     return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
   }
 
-  function missingIsolatedWorktree(dispatch?: any) {
-    try { return isolatedDispatchWorktreeMissing(dispatch); } catch (_) { return false; }
-  }
-
   function claimReleaseBlocker(slug?: any, ticket?: any) {
     const dispatch = dispatchState(ticket);
     if (!dispatch || dispatch.sharedTree !== true) return null;
@@ -249,9 +244,14 @@ function createClaims(dependencies: any) {
     if (observedStop(dispatch, claim)) {
       return { kind: 'observed_stop', idleMs, at: dispatch.terminalAt, reason: 'its executor has a durable died outcome while still holding the claim' };
     }
-    if (missingIsolatedWorktree(dispatch)) {
-      return { kind: 'missing_worktree', idleMs, reason: 'its isolated executor worktree no longer exists' };
-    }
+    // A missing isolated checkout used to free the claim on the spot. It never proved the
+    // executor was gone: a native agent is a loop inside its session process and holds no
+    // directory, so `git worktree remove --force` succeeds under a working executor and the
+    // runtime keeps writing (SQ-2859, SQ-2862). Nothing pairs with the absence either — the
+    // sweep refuses to remove a checkout whose ticket is claimed, so any removal under a live
+    // claim is unsanctioned by construction, and the one attestation that does prove death
+    // (a durable died/stopped_claimed record) already decides above on its own. So absence
+    // reports nothing here and the backstops carry the case.
     if (verification) {
       if (idleMs > claimAbandonMs()) {
         return { kind: 'abandoned_verifying', idleMs, at: verification.startedAt, reason: 'its verification marker never completed past the unobserved-death backstop' };
@@ -296,9 +296,6 @@ function createClaims(dependencies: any) {
     if (verdict.kind === 'abandoned_verifying') {
       return `↩️ Auto-released to **todo**: verification from \`${by}\` never completed for ${idle}, past the unobserved-death backstop.`;
     }
-    if (verdict.kind === 'missing_worktree') {
-      return `↩️ Auto-released to **todo**: the isolated executor worktree for \`${by}\` no longer exists.`;
-    }
     if (verdict.kind === 'idle') {
       return `↩️ Auto-released to **todo**: no board activity from \`${by}\` for ${idle}, and this claim has no executor dispatch.`;
     }
@@ -340,7 +337,6 @@ function createClaims(dependencies: any) {
     claimReleaseVerdict,
     claimVerification,
     hasNoOpReleaseProof,
-    missingIsolatedWorktree,
     observedStop,
     preparedDispatchTtlMs,
     recordClaimVerification,

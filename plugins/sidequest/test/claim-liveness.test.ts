@@ -1072,25 +1072,47 @@ test('the sweep refuses to release a shared-tree claim while the checkout is dir
   assert.equal(cleanSweep.released.some((entry?: any) => entry.ref === ticket.ref && entry.kind === 'observed_stop'), true);
 });
 
-test('a missing isolated worktree is death evidence without a terminal dispatch stamp, and a silent bound dispatch reaches the abandon backstop', () => {
-  const missing = addRouted('missing worktree without observed stop');
-  const missingSession = 'session-missing-worktree';
-  const missingAgent = 'missing-worktree-agent';
-  const missingPrepared = store.prepareDispatch(slug, missing.ref, { sharedTree: false, sessionId: missingSession });
-  assert.equal(store.recordDispatchLaunch(slug, missing.ref, {
-    token: missingPrepared.token, executor: missingPrepared.ticket.dispatchExecutor, sessionId: missingSession, agentName: missingAgent,
+// SQ-2862: a removed checkout used to free the claim on the spot. A native agent is a
+// loop inside its session process and holds no directory, so `git worktree remove --force`
+// succeeds under a working executor while its runtime keeps writing — the absence proves
+// nothing, and a replacement used to claim the ticket out from under it.
+test('a checkout removed under a live claim does not free it, an attested death still does, and a silent bound dispatch reaches the abandon backstop', () => {
+  const removed = addRouted('checkout removed under a live claim');
+  const removedSession = 'session-removed-checkout';
+  const removedAgent = 'removed-checkout-agent';
+  const removedPrepared = store.prepareDispatch(slug, removed.ref, { sharedTree: false, sessionId: removedSession });
+  assert.equal(store.recordDispatchLaunch(slug, removed.ref, {
+    token: removedPrepared.token, executor: removedPrepared.ticket.dispatchExecutor, sessionId: removedSession, agentName: removedAgent,
   }).ok, true);
-  const missingWorktree = worktrees.agentWorktreePath(PROJECT_DIR, missingAgent);
-  assert.equal(store.bindDispatchWorktreeCreation(slug, missingSession, missingWorktree).ok, true);
-  assert.equal(store.bindDispatchAgent(missingSession, missingPrepared.ticket.dispatchExecutor, missingAgent, missingAgent).ok, true);
-  assert.equal(store.claimTicket(slug, missing.ref, 'missing-isolated-executor', {
-    token: missingPrepared.token, executor: missingPrepared.ticket.dispatchExecutor, sessionId: missingSession,
+  const removedWorktree = worktrees.agentWorktreePath(PROJECT_DIR, removedAgent);
+  git(['worktree', 'add', '--detach', removedWorktree]);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, removedSession, removedWorktree).ok, true);
+  assert.equal(store.bindDispatchAgent(removedSession, removedPrepared.ticket.dispatchExecutor, removedAgent, removedAgent).ok, true);
+  assert.equal(store.claimTicket(slug, removed.ref, 'live-isolated-executor', {
+    token: removedPrepared.token, executor: removedPrepared.ticket.dispatchExecutor, sessionId: removedSession,
   }).ok, true);
-  const missingDispatch = store.getTicket(slug, missing.ref).dispatch;
-  assert.equal(missingDispatch.terminalAt, null);
-  assert.equal(fs.existsSync(missingDispatch.worktree), false);
-  assert.equal(store.claimReleaseVerdict(store.getTicket(slug, missing.ref)).kind, 'missing_worktree');
-  assert.equal(store.pulsePayload(slug, missing.ref).liveness, 'dead');
+  const removedDispatch = store.getTicket(slug, removed.ref).dispatch;
+  assert.equal(removedDispatch.terminalAt, null);
+  git(['worktree', 'remove', '--force', removedDispatch.worktree]);
+  assert.equal(fs.existsSync(removedDispatch.worktree), false, 'the checkout is genuinely gone');
+  assert.equal(store.claimReleaseVerdict(store.getTicket(slug, removed.ref)), null, 'a gone checkout is not evidence its executor stopped');
+  assert.equal(store.pulsePayload(slug, removed.ref).liveness, 'unknown');
+  assert.equal(store.sweepStaleClaims({ project: slug, source: 'test' }).released.some((entry?: any) => entry.ref === removed.ref), false, 'the sweep leaves the live claim held');
+  assert.equal(store.getTicket(slug, removed.ref).claim.by, 'live-isolated-executor');
+
+  // The authority that does free it, with the checkout just as gone: a durable terminal
+  // record for that exact runtime.
+  assert.equal(store.recordDispatchAgentFailure(slug, removed.ref, {
+    token: removedPrepared.token,
+    executor: removedPrepared.ticket.dispatchExecutor,
+    sessionId: removedSession,
+    taskName: removedAgent,
+    agentId: removedAgent,
+    agentName: removedAgent,
+    error: 'Prompt is too long',
+  }).ok, true);
+  assert.equal(store.getTicket(slug, removed.ref).dispatch.outcome, 'died');
+  assert.equal(store.getTicket(slug, removed.ref).claim, null, 'an attested death still recovers the ticket at once');
 
   const live = addRouted('quiet live isolated dispatch');
   const liveSession = 'session-quiet-isolated';
@@ -1112,8 +1134,11 @@ test('a missing isolated worktree is death evidence without a terminal dispatch 
   assert.equal(livePulse.liveness, 'dead');
   assert.equal(livePulse.claim.reclaimable, 'abandoned');
 
+  // A session-end assertion for that same session frees nothing; the backstop is what recovers it.
+  assert.deepEqual(store.reconcileSession(liveSession, { reason: 'session ended', source: 'session-end' }).released, []);
+  assert.equal(store.getTicket(slug, live.ref).claim.by, 'quiet-isolated-executor');
+
   const swept = store.sweepStaleClaims({ project: slug, source: 'test' });
-  assert.equal(swept.released.some((entry?: any) => entry.ref === missing.ref && entry.kind === 'missing_worktree'), true);
   assert.equal(swept.released.some((entry?: any) => entry.ref === live.ref && entry.kind === 'abandoned'), true);
   assert.equal(store.getTicket(slug, live.ref).claim, null);
   fs.rmSync(liveDispatch.worktree, { recursive: true, force: true });
