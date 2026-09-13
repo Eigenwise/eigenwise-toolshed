@@ -209,15 +209,20 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   never claimed, past the claim-idle backstop", that runtime is gone: a claim is a bound executor's FIRST
   action, and its stop hook never fired, so nothing else will ever retire the attempt. Retire either in one
   call with `sidequest dispatch <ref> --recovery-evidence "<observed failure evidence>"` (MCP
-  `recoveryEvidence`). A tokened claim refused as `prepared_compatibility_stale` is already terminal: that
-  refusal retires its own stale attempt, so the executor stops without claiming and the orchestrator dispatches
-  a fresh token. That records the evidence on the failed attempt, keeps it in `dispatch.attempts` as
-  history, and prepares exactly one fresh identity. It refuses while a bound attempt is still inside the
-  backstop, and once the attempt is checkpointed or terminal; the refusal names which of those it
-  found and, for a bound one, how long is left. A claimed executor that is provably dead goes through claim
-  release or `groomClose --recoveryEvidence`. The exception is a live claimed executor that resumed into its
-  original linked checkout but lost only the board binding: it uses `dispatch` with `recoveryEvidence`,
-  `claimHolder`, and `worktree`; the board verifies the stored executor and restores that same identity without releasing.
+  `recoveryEvidence`). Add `--retire-only` (MCP `retireOnly:true`) when the attempt should be retired without
+  preparing a replacement; it accepts those same two recovery-evidence shapes. A tokened claim refused as
+  `prepared_compatibility_stale` is already terminal: that refusal retires its own stale attempt, so the executor
+  stops without claiming and the orchestrator dispatches a fresh token. That records the evidence on the failed
+  attempt, keeps it in `dispatch.attempts` as history, and prepares exactly one fresh identity when replacement
+  is requested. It refuses while a bound attempt is still inside the backstop, and once the attempt is
+  checkpointed or terminal; the refusal names which of those it found and, for a bound one, how long is left.
+  TaskStop output and host task notifications do not include the dispatch token, attempt generation, and immutable
+  ticket binding, so they cannot record a terminal dispatch. The backstop remains the only recovery route when
+  a bound unclaimed runtime dies without SubagentStop or PostToolUseFailure. A claimed executor that is provably
+  dead goes through claim release or `groomClose --recoveryEvidence`. The exception is a live claimed executor
+  that resumed into its original linked checkout but lost only the board binding: it uses `dispatch` with
+  `recoveryEvidence`, `claimHolder`, and `worktree`; the board verifies the stored executor and restores that
+  same identity without releasing.
 - **A submitted ticket is not dispatchable.** While a submission is pending, the ticket is parked for the
   publish transaction, and a claim on it is refused as `submitted`, so dispatching would mint a token nobody
   can claim. Preparation refuses there and names the three exits: integrate it, `rework` it (which clears the

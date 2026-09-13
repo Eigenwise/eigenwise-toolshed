@@ -166,7 +166,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   link: "Link.",
   remove: "Delete; force.",
   claim: "Claim before work; proceed only on ok:true.",
-  dispatch: "Dispatch; token and spawn spec.",
+  dispatch: "token and spawn spec; retireOnly.",
   done: "Finish; declared external needs current capture; commandless working-tree needs verify.",
   release: "Release; reason required. oracle handoff needs ask until verdict.",
   groomClose: "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; reviewed interaction.",

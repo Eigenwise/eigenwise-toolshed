@@ -270,8 +270,8 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   category_edit: { fallbackModel: 'null clears fallback.' },
   dispatch: {
     sharedTree: 'Tree.',
-    reducedAgentSchema: 'Only when caller schema lacks name/mode; hook needs agent_id+bypassPermissions.',
-    recoveryEvidence: 'Proof.',
+    reducedAgentSchema: 'Only when name/mode missing; hook needs agent_id+bypassPermissions.',
+    recoveryEvidence: 'unbound or expired bound',
     worktree: 'Checkout.',
   },
   integrate: { deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.' },
