@@ -521,6 +521,13 @@ test('supervisor refuses the client retry only when a worker took the body', asy
   assert.equal(taken.status, 503);
   assert.equal(taken.headers['x-should-retry'], 'false', 'a request the worker took must not be resent by the client');
   assert.match(JSON.parse(taken.body).error.message, /after this request reached the model/);
+  const lostRequest = lifecycleRecords(home).find((record) => record.event === 'worker-request-lost');
+  assert.ok(lostRequest, 'a lost response after worker delivery is recorded');
+  assert.equal(lostRequest.component, 'supervisor');
+  assert.equal(lostRequest.outcome, 'response-lost');
+  assert.equal(lostRequest.child?.component, 'worker');
+  assert.equal(lostRequest.child?.pid, lifecycleRecords(home).findLast((record) => record.event === 'worker-started')?.child?.pid);
+  assert.equal(typeof lostRequest.errorType, 'string');
 
   const stopped = await request(shimPort, 'GET', '/fixture/stop-listening');
   assert.equal(JSON.parse(stopped.body).taken, 1, 'the supervisor delivered the body exactly once');
@@ -528,7 +535,7 @@ test('supervisor refuses the client retry only when a worker took the body', asy
   const refused = await request(shimPort, 'POST', '/v1/messages', { model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1 });
   assert.equal(refused.status, 503);
   assert.equal(refused.headers['x-should-retry'], undefined, 'a request no worker accepted stays retryable');
-  assert.match(JSON.parse(refused.body).error.message, /retry it shortly/);
+  assert.match(JSON.parse(refused.body).error.message, /could not deliver this request to the shim worker/);
 });
 
 test('restart adopts a newer installed worker script', async (t) => {
