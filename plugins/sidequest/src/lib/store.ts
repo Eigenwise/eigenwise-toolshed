@@ -1382,11 +1382,33 @@ function refreshRoutingProfileSeeds(handle?: any) {
   invalidateStoreCaches();
 }
 
+// A profile entry is keyed by the id inside its stored category; a project layer row carries its own.
+function categoryNeedingReadonlyFlag(readonlyIds: Set<string>, data: string, rowId?: string) {
+  let category: any;
+  try { category = JSON.parse(data); } catch (_: any) { return null; }
+  if (!readonlyIds.has(rowId ?? category?.id) || category?.readonly !== undefined) return null;
+  return category;
+}
+
+function readonlyCategorySeedsAreStale(handle: any, readonlyIds: Set<string>) {
+  for (const row of handle.prepare('SELECT data FROM routing_profile_entries').all()) {
+    if (categoryNeedingReadonlyFlag(readonlyIds, row.data)) return true;
+  }
+  for (const row of handle.prepare('SELECT id, data FROM project_categories').all()) {
+    if (categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id)) return true;
+  }
+  return false;
+}
+
 function refreshReadonlyCategorySeeds(handle?: any) {
   const readonlyIds = new Set([
     ...DEFAULT_CATEGORIES.filter((category: any) => category.readonly === true).map((category: any) => category.id),
     'hand-analysis',
   ]);
+  // Scanning first means a settled store never opens a write transaction, which is the whole cost
+  // of this refresher on process start. The scan inside the transaction stays authoritative so the
+  // decision is never acted on from outside the lock.
+  if (!readonlyCategorySeedsAreStale(handle, readonlyIds)) return;
   const affected = new Set<string>();
   let changed = false;
   withinTransaction(handle, () => {
@@ -1394,18 +1416,16 @@ function refreshReadonlyCategorySeeds(handle?: any) {
     const updateProjectEntry = handle.prepare('UPDATE project_categories SET data = ? WHERE project = ? AND id = ?');
     const now = new Date().toISOString();
     for (const row of handle.prepare('SELECT profile_id, category_id, data FROM routing_profile_entries').all()) {
-      let category: any;
-      try { category = JSON.parse(row.data); } catch (_: any) { continue; }
-      if (!readonlyIds.has(category?.id) || category.readonly !== undefined) continue;
+      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data);
+      if (!category) continue;
       category.readonly = true;
       updateProfileEntry.run(JSON.stringify(category), now, row.profile_id, row.category_id);
       for (const project of handle.prepare('SELECT project FROM project_routing_profiles WHERE profile_id = ?').all(row.profile_id)) affected.add(String(project.project));
       changed = true;
     }
     for (const row of handle.prepare('SELECT project, id, data FROM project_categories').all()) {
-      let category: any;
-      try { category = JSON.parse(row.data); } catch (_: any) { continue; }
-      if (!readonlyIds.has(row.id) || category.readonly !== undefined) continue;
+      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id);
+      if (!category) continue;
       category.readonly = true;
       updateProjectEntry.run(JSON.stringify(category), row.project, row.id);
       affected.add(String(row.project));
