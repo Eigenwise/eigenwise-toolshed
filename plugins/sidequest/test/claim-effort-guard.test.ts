@@ -729,7 +729,8 @@ test('SQ-1017: dispatch refuses when the target project has no Sidequest install
       () => store.prepareDispatch(slug, ref, { allowUnscoped: true }),
       (err?: any) => {
         assert.match(err.message, /no install/i);
-        assert.match(err.message, /claude plugin install sidequest@eigenwise-toolshed --scope project/);
+        assert.match(err.message, /Inspect the intended marketplace in \/plugin/);
+        assert.doesNotMatch(err.message, /sidequest@eigenwise-toolshed/);
         assert.match(err.message, /reload-plugins|start a new session/);
         return true;
       },
@@ -873,7 +874,8 @@ test('SQ-1017: native-agent refuses the same way dispatch does when the project 
     const env = Object.assign({}, process.env, { SIDEQUEST_HOME, SIDEQUEST_CLAUDE_HOME: claudeHome, CLAUDE_PROJECT_DIR: project });
     const result = spawnSync(process.execPath, [BIN, 'native-agent', ref, '--project', project], { encoding: 'utf8', env });
     assert.notEqual(result.status, 0);
-    assert.match(result.stdout + result.stderr, /claude plugin install sidequest@eigenwise-toolshed --scope project/);
+    assert.match(result.stdout + result.stderr, /Inspect the intended marketplace in \/plugin/);
+    assert.doesNotMatch(result.stdout + result.stderr, /sidequest@eigenwise-toolshed/);
   } finally {
     process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
   }

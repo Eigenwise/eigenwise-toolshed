@@ -1497,7 +1497,7 @@
         },
         "reducedAgentSchema": {
           "type": "boolean",
-          "description": "Only when name/mode missing; hook needs agent_id+bypassPermissions."
+          "description": "Only when name/mode missing; hook needs agent_id+auto|bypassPermissions."
         },
         "allowRepeatFailure": {
           "type": "boolean"
@@ -1507,6 +1507,10 @@
         },
         "integrationBranch": {
           "type": "string"
+        },
+        "integrationCheckout": {
+          "type": "string",
+          "description": "Existing clean linked target checkout; its branch must match integrationBranch."
         },
         "recoveryEvidence": {
           "type": "string",
@@ -2036,6 +2040,13 @@
             "origin-main",
             "local-main"
           ]
+        },
+        "worktreeDirectory": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Existing Git-ignored, untracked repo-relative directory without symlinks; null restores external placement."
         },
         "notIntegratedSalvageAgeHours": {
           "type": "integer",

@@ -13,10 +13,10 @@ import {
 // its own worktree creation, but a read-only executor never writes, so a review
 // run stayed identity-less and its terminal done could not satisfy the
 // independent candidate-review gate. Every executor reaches the board to claim
-// and again to close, so a board call is the lifecycle event a read-only run
-// necessarily makes while the binding can still be repaired. Nothing here can
-// deny or rewrite the call: it only re-offers the checkout the harness put this
-// agent in, and the store decides whether that is the exact reserved target.
+// and again to close, so board calls are where its binding can be repaired.
+// This hook binds identity, never grants tool permissions. A reduced-schema
+// claim with missing or incompatible hook evidence is denied; the store keeps
+// verified runtime identity for terminal correlation without granting a claim.
 function bindClaimRuntimeIdentity(input: HookInput, agentId: string, executor: string): boolean {
   if (stringField(input, 'tool_name') !== 'mcp__plugin_sidequest_board__claim' || !isRecord(input.tool_input)) return false;
   const toolInput = input.tool_input;
@@ -54,7 +54,7 @@ function bindClaimRuntimeIdentity(input: HookInput, agentId: string, executor: s
       if (binding?.ticket?.dispatch?.reducedAgentSchema === true && !binding.ok) {
         writeDeny(
           'PreToolUse',
-          binding.message || `sidequest: ${ref} reduced Agent-schema dispatch could not verify this hook-reported runtime identity. Reload into a host that reports agent_id and permission_mode "bypassPermissions" to PreToolUse, then dispatch again without adding unsupported Agent fields or changing permissions.`,
+          binding.message || `sidequest: ${ref} reduced Agent-schema dispatch could not verify hook-reported runtime identity (${binding.reason || 'unknown'}). Stop without claiming. The hook must report matching agent_id, session and executor plus permission_mode "auto" or "bypassPermissions"; do not add unsupported Agent fields or change permissions.`,
         );
       }
     }

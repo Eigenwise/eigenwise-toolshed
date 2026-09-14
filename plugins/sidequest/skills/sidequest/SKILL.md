@@ -219,7 +219,7 @@ hand-pick either. Legacy complexity maps to bands at read time (1–3/4–6/7–
 3. **The ticket read tells you exactly what to spawn.** Print `SQ-n · category · Model · effort`,
    then spawn the exact `agent` a fresh `dispatch <ref>` returned through native Agent,
    pass returned fields unchanged. If Agent omits `name`/`mode`, dispatch `reducedAgentSchema: true`; don't
-   restore them. First claim needs hook `agent_id` + `permission_mode: "bypassPermissions"`. **Claude routes**:
+   restore them. First claim needs hook `agent_id` + `permission_mode: auto|bypassPermissions`. **Claude routes**:
    `model: exec.model` (otherwise it inherits the pricey session model), including Haiku. Use the dispatched
    executor/model, never generic Agent. **Codex routes** (`exec.model` null): omit `model`; the route marker
    carries the real model and any value runs Anthropic. Effort is verbatim; mismatched claims are refused.

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { selectSidequestRegistry } from './sidequest-install.js';
 
 export const SIDEQUEST_PLUGIN_ID = 'sidequest@eigenwise-toolshed';
 
@@ -89,7 +90,7 @@ function registryInstalls(projectPath: string, options: FreshnessOptions = {}): 
   } catch (_) {
     return [];
   }
-  const installs = registry.plugins?.[SIDEQUEST_PLUGIN_ID];
+  const { pluginId, installs } = selectSidequestRegistry(registry, options.pluginRoot || process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, '..'), claudeHome(options));
   if (!Array.isArray(installs)) return [];
   const currentPath = normalizedPath(projectPath);
   if (!currentPath) return [];
@@ -97,7 +98,9 @@ function registryInstalls(projectPath: string, options: FreshnessOptions = {}): 
     if (!install || typeof install !== 'object') return false;
     if (install.scope === 'user') return true;
     const installedProject = normalizedPath(install.projectPath);
-    return installedProject !== null && pathsOverlap(currentPath, installedProject);
+    return installedProject !== null && (pluginId === SIDEQUEST_PLUGIN_ID
+      ? pathsOverlap(currentPath, installedProject)
+      : currentPath === installedProject);
   });
 }
 

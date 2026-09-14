@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { selectSidequestRegistry } from './sidequest-install.js';
 
 export interface LocalAheadWarning {
   count: number;
@@ -68,6 +69,7 @@ function readFileSyncWithRetry(filePath: string, encoding?: BufferEncoding): Buf
 
 export interface InstallCheckOptions {
   claudeHome?: string;
+  pluginRoot?: string;
 }
 
 export interface PythonIoEncodingCheckOptions {
@@ -85,6 +87,7 @@ export interface InstallCheckResult {
   ok: boolean;
   reason?: InstallCheckReason;
   registryPath: string;
+  pluginId?: string | null;
   installPath?: string;
   version?: string;
   identity?: string;
@@ -223,22 +226,28 @@ function installRuntimeSnapshot(installPath: unknown, version: unknown): Install
 }
 
 // Preflight for the one fact dispatch actually depends on: a fresh native
-// Agent session started in `projectPath` will resolve `sidequest@eigenwise-toolshed`
-// from Claude Code's installed-plugin registry and get its board MCP server.
+// Agent session started in `projectPath` will resolve this serving Sidequest
+// marketplace from Claude Code's installed-plugin registry and get its board
+// MCP server. Unregistered source/ZIP overrides retain the official fallback.
 // `.claude/settings.json`'s `enabledPlugins` is not proof of that — it can be
 // true while the registry has no matching install (SQ-1017's repro).
 export function checkSidequestInstall(projectPath: string, opts: InstallCheckOptions = {}): InstallCheckResult {
   const claudeHome = claudeHomeDir(opts);
   const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
-  let registry: any;
+  const pluginRoot = opts.pluginRoot || servingSidequestInstall()?.installPath || '';
+  let selected = selectSidequestRegistry(null, pluginRoot, claudeHome);
+  const provenance = () => selected.pluginId !== PLUGIN_ID ? { pluginId: selected.pluginId } : {};
   try {
-    registry = JSON.parse(readFileSyncWithRetry(registryPath, 'utf8'));
+    const registry = JSON.parse(readFileSyncWithRetry(registryPath, 'utf8'));
+    selected = selectSidequestRegistry(registry, pluginRoot, claudeHome);
   } catch (err: any) {
-    if (err && err.code === 'ENOENT') return { ok: false, reason: 'missing', registryPath };
-    return { ok: false, reason: 'registry_unreadable', registryPath, detail: String((err && err.message) || err) };
+    // Without a readable registry, an external source/ZIP has no proven marketplace.
+    const source = { pluginId: selected.pluginId === PLUGIN_ID ? null : selected.pluginId };
+    if (err && err.code === 'ENOENT') return { ok: false, reason: 'missing', registryPath, ...source };
+    return { ok: false, reason: 'registry_unreadable', registryPath, ...source, detail: String((err && err.message) || err) };
   }
-  const installs = registry?.plugins?.[PLUGIN_ID];
-  if (!Array.isArray(installs) || !installs.length) return { ok: false, reason: 'missing', registryPath };
+  const { installs } = selected;
+  if (!Array.isArray(installs) || !installs.length) return { ok: false, reason: 'missing', registryPath, ...provenance() };
 
   const target = normalizeDir(projectPath);
   // 'user' scope would apply to every project; Sidequest does not offer it
@@ -249,7 +258,7 @@ export function checkSidequestInstall(projectPath: string, opts: InstallCheckOpt
     if (!target) return false;
     return normalizeDir(install.projectPath) === target;
   });
-  if (!matching.length) return { ok: false, reason: 'missing', registryPath };
+  if (!matching.length) return { ok: false, reason: 'missing', registryPath, ...provenance() };
 
   for (const install of matching) {
     const snapshot = installRuntimeSnapshot(install.installPath, install.version);
@@ -258,15 +267,16 @@ export function checkSidequestInstall(projectPath: string, opts: InstallCheckOpt
         ok: false,
         reason: 'runtime_unreadable',
         registryPath,
+        ...provenance(),
         ...(typeof install.installPath === 'string' ? { installPath: install.installPath } : {}),
         detail: snapshot.detail,
       };
     }
     if (snapshot.advertisesBoardMcp) {
-      return { ok: true, registryPath, installPath: install.installPath, version: install.version.trim(), identity: snapshot.identity };
+      return { ok: true, registryPath, ...provenance(), installPath: install.installPath, version: install.version.trim(), identity: snapshot.identity };
     }
   }
-  return { ok: false, reason: 'stale', registryPath, detail: 'the .mcp.json snapshot declares no MCP server' };
+  return { ok: false, reason: 'stale', registryPath, ...provenance(), detail: 'the .mcp.json snapshot declares no MCP server' };
 }
 
 function repairGuidance(): string {
@@ -274,6 +284,9 @@ function repairGuidance(): string {
 }
 
 export function installRefusalMessage(check: InstallCheckResult, projectPath: string): string {
+  if (check.pluginId !== undefined && check.pluginId !== PLUGIN_ID) {
+    return `Dispatch refused: ${check.pluginId || 'Sidequest (marketplace unresolved)'} has no install with a lifecycle-compatible runtime for ${projectPath} (registry ${check.registryPath}; ${check.reason}${check.detail ? `: ${check.detail}` : ''}). Inspect the intended marketplace in /plugin and repair its install, then run /reload-plugins or start a new session. Do not replace a private build with a different marketplace to clear this check.`;
+  }
   if (check.reason === 'registry_unreadable') {
     return `Dispatch refused: could not read Claude Code's plugin registry at ${check.registryPath} (${check.detail}). Fix or remove the corrupt registry, confirm sidequest@eigenwise-toolshed is installed for ${projectPath}, then dispatch again.`;
   }

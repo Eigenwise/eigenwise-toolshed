@@ -40,6 +40,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('node:child_process');
+const { selectSidequestRegistry } = require('./sidequest-install.js');
 const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME, bundledAgentType } = require('./exec-names.js');
 const { createWorktreeLease, worktreeResumeDecision } = require('./kernel/worktree.js');
 const crypto = require('crypto');
@@ -1056,11 +1057,12 @@ function quotedShellArgument(value?: any) {
   return `"${String(value || '').replace(/"/g, '\\"')}"`;
 }
 
-function dispatchLauncherPath() {
-  return path.join(store.homeRoot(), 'sidequest-launcher.js');
+function dispatchLauncherPath(pluginRoot = path.resolve(__dirname, '..')) {
+  const identity = crypto.createHash('sha256').update(pluginRoot).digest('hex');
+  return path.join(store.homeRoot(), 'launchers', identity, 'sidequest-launcher.js');
 }
 
-function dispatchLauncherSource() {
+function dispatchLauncherSource(pluginRoot = path.resolve(__dirname, '..')) {
   return `'use strict';
 
 const fs = require('node:fs');
@@ -1083,9 +1085,16 @@ function currentSidequestCli() {
   const claudeHome = process.env.SIDEQUEST_CLAUDE_HOME || path.join(os.homedir(), '.claude');
   const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
   const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
-  const installs = registry.plugins?.['sidequest@eigenwise-toolshed'] || [];
+  const selectRegistry = ${selectSidequestRegistry.toString()};
+  const { pluginId, installs } = selectRegistry(registry, ${JSON.stringify(pluginRoot)}, claudeHome);
+  const args = process.argv.slice(2);
+  const projectIndex = args.indexOf('--project');
+  const project = projectIndex >= 0 ? args[projectIndex + 1] : args.find((arg) => arg.startsWith('--project='))?.slice(10) || process.cwd();
+  const normalize = (value) => typeof value === 'string' && value ? path.resolve(value).split(String.fromCharCode(92)).join('/').toLowerCase() : null;
   const candidates = installs
     .filter((install) => install?.installPath)
+    .filter((install) => pluginId === 'sidequest@eigenwise-toolshed' || install.scope === 'user'
+      || (normalize(project) !== null && normalize(install.projectPath) === normalize(project)))
     .map((install) => ({ ...install, script: path.join(install.installPath, 'bin', 'sidequest.js') }))
     .filter((install) => fs.existsSync(install.script));
   candidates.sort((left, right) => compareVersions(right.version, left.version)
@@ -1101,9 +1110,9 @@ process.exit(result.status == null ? 1 : result.status);
 `;
 }
 
-function ensureDispatchLauncher() {
-  const filePath = dispatchLauncherPath();
-  const source = dispatchLauncherSource();
+function ensureDispatchLauncher(pluginRoot?: string) {
+  const filePath = dispatchLauncherPath(pluginRoot);
+  const source = dispatchLauncherSource(pluginRoot);
   let current = null;
   try { current = fs.readFileSync(filePath, 'utf8'); } catch (_) {}
   if (current !== source) {
@@ -1159,7 +1168,7 @@ function renderDispatchStub(ticket?: any, projectPath?: any) {
   const marker = ticketRouteMarker(ticket);
   const command = [
     'node',
-    quotedShellArgument(ensureDispatchLauncher()),
+    quotedShellArgument(ensureDispatchLauncher(ticket?.dispatch?.preparedCompatibility?.servingInstall)),
     'briefing',
     String(ticket.ref),
     '--token-file',

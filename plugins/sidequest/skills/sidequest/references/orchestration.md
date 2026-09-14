@@ -152,7 +152,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   A relaunch keeps that route then counts up (`-2`, `-3`) so a reworked or resumed launch never shadows a live sibling. That label is what shows
   in the fleet view (filter `a:<name>`) and what `SendMessage {to: name}` resumes; the board retains it even when a reduced-schema spawn omits
   callable `name` and `mode`. Opt into reduced schema only after inspecting the visible Agent tool schema, pass its returned fields unchanged, and
-  require hook-reported `agent_id` plus `permission_mode: "bypassPermissions"` on first claim. `spawn.description` still leads with `<model>, <effort> ·`
+  require hook-reported `agent_id` plus `permission_mode` of `auto` or `bypassPermissions` on first claim. `auto` leaves host tool approvals in force; never broaden permissions after a denial. `spawn.description` still leads with `<model>, <effort> ·`
   for notifications and stop lines.
   Every Agent launch must be a freshly dispatched Sidequest executor.
 - **The `--by` id is separate and must be genuinely random per session** (not the ticket ref, not a

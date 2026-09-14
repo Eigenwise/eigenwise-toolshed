@@ -6,6 +6,7 @@ const path = require("path");
 const url = require("url");
 const { spawn } = require("child_process");
 const store = require("./store");
+const { selectSidequestRegistry } = require("./sidequest-install.js");
 const DASHBOARD_DIST = path.join(__dirname, "..", "dashboard", "dist");
 let PLUGIN_VERSION = null;
 try {
@@ -1165,7 +1166,7 @@ async function findNewerInstall(options) {
     } catch (_) {
       registry = null;
     }
-    const installed = registry && registry.plugins && registry.plugins["sidequest@eigenwise-toolshed"];
+    const { installs: installed } = selectSidequestRegistry(registry, selfRoot, claudeHome);
     if (Array.isArray(installed)) {
       const entries2 = await Promise.all(installed.map(async (install) => {
         const root = install && install.installPath;

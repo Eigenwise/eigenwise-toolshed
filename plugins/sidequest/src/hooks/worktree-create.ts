@@ -130,11 +130,11 @@ function registeredProject(store: WorktreeStore, repository: string): ProjectLoo
 
 function bindCreation(repository: string, sessionId: string, worktree: string): CreationBinding {
   const store = require(runtimeModule('store')) as WorktreeStore & {
-    bindDispatchWorktreeCreation: (slug: string, sessionId: string, worktree: string) => CreationBinding;
+    bindDispatchWorktreeCreation: (slug: string, sessionId: string, worktree: string, options: { usePinnedRoot: boolean }) => CreationBinding;
   };
   const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: 'project_unavailable' };
-  return store.bindDispatchWorktreeCreation(project.slug, sessionId, worktree);
+  return store.bindDispatchWorktreeCreation(project.slug, sessionId, worktree, { usePinnedRoot: true });
 }
 
 function completeCreation(repository: string, sessionId: string, worktree: string): CreationBinding {

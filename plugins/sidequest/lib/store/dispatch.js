@@ -4,6 +4,8 @@ const { classifyVerificationKind, verificationRequirement } = require("../kernel
 const { resolveSuite } = require("../suite-resolver.js");
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationOutcome } = require("../kernel/review-binding");
 const { compareSemver } = require("../plugin-freshness.js");
+const { defaultWorktreeRoot } = require("../worktrees.js");
+const { normalizeWorktreeDirectory, configuredWorktreeRoot } = require("../worktree-placement.js");
 function unscopedWriteCannotAutoApprove(ticket, options) {
   const { dispatchReadOnly, normalizeFiles, autoApproveScope } = options;
   return !dispatchReadOnly(ticket) && !normalizeFiles(ticket?.files).length && (!Array.isArray(autoApproveScope) || !autoApproveScope.length);
@@ -675,6 +677,19 @@ function createDispatch(dependencies) {
       boundAt: state.boundAt || null,
       claimedAt: state.claimedAt || null,
       sharedTree: state.sharedTree === true,
+      ...state.integrationTarget ? { integrationTarget: state.integrationTarget } : {},
+      ...state.worktreeRoot ? { worktreeRoot: state.worktreeRoot, worktreeDirectory: state.worktreeDirectory ?? null } : {},
+      ...state.worktree ? {
+        worktree: state.worktree,
+        baseCommit: state.baseCommit || null,
+        worktreeBindingSource: state.worktreeBindingSource || null,
+        worktreeCreationCompletedAt: state.worktreeCreationCompletedAt || null,
+        worktreeGitDirectory: state.worktreeGitDirectory || null,
+        worktreeCommonGitDirectory: state.worktreeCommonGitDirectory || null,
+        worktreeCheckoutInstance: state.worktreeCheckoutInstance || null,
+        worktreeObservedRevision: state.worktreeObservedRevision || null,
+        ownedDependencyLinks: (state.ownedDependencyLinks || []).map((link) => ({ ...link }))
+      } : {},
       outcome,
       failureShape,
       source: terminalSource,
@@ -1352,7 +1367,7 @@ function createDispatch(dependencies) {
         const contractDrift = t.storyContractDrift || null;
         const configuredIntegrationMode = String(readMeta(slug)?.integrationMode || "auto").trim().toLowerCase();
         const configuredWorktreeBase = boardConfig(slug)?.worktreeBase || "auto";
-        const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
+        const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null || opts.integrationCheckout != null;
         const isolatedRepositoryDispatch = !sharedTree && !readonly && !nonRepoOutput;
         const automaticWorktreeBaseEligible = isolatedRepositoryDispatch || !sharedTree && readonly && !nonRepoOutput && configuredWorktreeBase !== "auto";
         const remoteIntegrationTarget = () => {
@@ -1375,9 +1390,15 @@ function createDispatch(dependencies) {
           return localAheadOfUpstreamWarning(projectPath2, localTarget.branch) ? localTarget : remoteIntegrationTarget();
         })() : null;
         const useIntegrationTarget = explicitIntegrationTarget || isolatedRepositoryDispatch && configuredIntegrationMode !== "auto" || Boolean(automaticWorktreeBase);
-        const integrationTargetState = explicitIntegrationTarget ? integrationTarget(slug, {
+        const retainedIntegrationTarget = current?.integrationTarget?.checkout && opts.integrationCheckout == null ? {
+          ...current.integrationTarget,
           ...opts.integrationBranch != null ? { branch: opts.integrationBranch } : {},
           ...opts.integrationMode != null ? { mode: opts.integrationMode } : {}
+        } : null;
+        const integrationTargetState = recovery && current?.integrationTarget ? integrationTarget(slug, current.integrationTarget) : retainedIntegrationTarget ? integrationTarget(slug, retainedIntegrationTarget) : explicitIntegrationTarget ? integrationTarget(slug, {
+          ...opts.integrationBranch != null ? { branch: opts.integrationBranch } : {},
+          ...opts.integrationMode != null ? { mode: opts.integrationMode } : {},
+          ...opts.integrationCheckout != null ? { checkoutPath: opts.integrationCheckout } : {}
         }) : automaticWorktreeBase || (useIntegrationTarget ? integrationTarget(slug) : null);
         const localAheadWarning = !sharedTree && integrationTargetState ? localAheadOfUpstreamWarning(
           readMeta(slug)?.path || "",
@@ -1396,6 +1417,8 @@ function createDispatch(dependencies) {
         if (releaseTip) {
           throw new Error(`prepare dispatch: ${t.ref} refused; baseline ${releaseTip.commit} is an unpublished release commit, tagged ${releaseTip.tags.join(", ")} and not yet on the remote branch. A direct release cut tags its commit before running its suites, so this is either a direct cut still in flight or one that failed and left its commit live. The prepare/finalize flow never reaches this state: preparation creates no tag, and finalize only tags a commit the remote branch already has. Wait for the cut to finish and push, or tear it down (delete those tags and reset the branch), then dispatch again.`);
         }
+        const placementDirectory = sharedTree ? null : normalizeWorktreeDirectory(readMeta(slug)?.worktreeDirectory);
+        const placementRoot = sharedTree ? null : configuredWorktreeRoot(projectPath, placementDirectory) || defaultWorktreeRoot(projectPath);
         const dispatchBaseline = dispatchBaselineForProject(slug, t, now, baseCommit, nonRepoOutput, snapshotPreflight);
         t.dispatchNonce = mintDispatchToken();
         t.dispatch = {
@@ -1411,6 +1434,7 @@ function createDispatch(dependencies) {
           preparedBy: dispatchPreparationAttribution(opts),
           ...preparedCompatibility ? { preparedCompatibility } : {},
           sharedTree,
+          ...!sharedTree ? { worktreeRoot: placementRoot, worktreeDirectory: placementDirectory } : {},
           ...reducedAgentSchema ? { reducedAgentSchema: true } : {},
           ...worktreeWarning ? { worktreeWarning } : {},
           ...pythonIoEncoding.written ? { pythonIoEncoding } : {},
@@ -1726,6 +1750,9 @@ function createDispatch(dependencies) {
         sessionId: opts.sessionId ? String(opts.sessionId) : state.sessionId || null,
         preparedBy: dispatchPreparationAttribution(opts),
         sharedTree: state.sharedTree === true,
+        ...state.integrationTarget ? { integrationTarget: state.integrationTarget } : {},
+        ...state.baseCommit ? { baseCommit: state.baseCommit } : {},
+        ...state.worktreeRoot ? { worktreeRoot: state.worktreeRoot, worktreeDirectory: state.worktreeDirectory ?? null } : {},
         ...state.reducedAgentSchema === true ? { reducedAgentSchema: true } : {},
         declaredFiles: Array.isArray(state.declaredFiles) ? state.declaredFiles.slice() : effectiveScope(slug, t),
         artifactMode: state.artifactMode === true,
@@ -1807,7 +1834,14 @@ function createDispatch(dependencies) {
       }
     };
   }
-  function bindDispatchWorktreeCreation(slug, sessionId, worktree) {
+  function dispatchCreationTarget(repository, state, requested) {
+    const root = state.worktreeRoot || defaultWorktreeRoot(repository);
+    if (state.worktreeDirectory != null && configuredWorktreeRoot(repository, state.worktreeDirectory) !== root) {
+      throw new Error("worktreeDirectory no longer matches the dispatch-pinned placement root.");
+    }
+    return canonicalPath(path.join(root, path.basename(requested)));
+  }
+  function bindDispatchWorktreeCreation(slug, sessionId, worktree, opts) {
     const normalizedSessionId = String(sessionId || "").trim();
     const target = String(worktree || "").trim();
     const meta = readMeta(slug);
@@ -1817,14 +1851,16 @@ function createDispatch(dependencies) {
     const bindingCandidates = listTickets(slug).map((candidate) => ({ candidate, state: dispatchState(candidate) })).filter(({ state }) => Boolean(state));
     for (const candidate of listTickets(slug)) {
       const state = dispatchState(candidate);
-      if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false || state.outcome !== "launched" || state.terminalAt || state.worktreeBindingSource !== "worktree-create" || !state.worktree || canonicalPath(state.worktree) !== boundWorktree) continue;
+      if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false || state.outcome !== "launched" || state.terminalAt || state.worktreeBindingSource !== "worktree-create" || !state.worktree || path.basename(state.worktree) !== path.basename(target)) continue;
+      const boundWorktree2 = opts?.usePinnedRoot ? dispatchCreationTarget(repository, state, target) : canonicalPath(target);
+      if (canonicalPath(state.worktree) !== boundWorktree2) continue;
       const baseline = String(state.baseCommit || "").trim();
       if (baseline) return {
         ok: true,
         ref: candidate.ref,
         baseline,
         repository,
-        worktree: boundWorktree,
+        worktree: boundWorktree2,
         creationCompleted: Boolean(state.worktreeCreationCompletedAt),
         expectedGitDirectory: state.worktreeGitDirectory || null,
         expectedCommonGitDirectory: state.worktreeCommonGitDirectory || null,
@@ -1838,14 +1874,15 @@ function createDispatch(dependencies) {
         const ticket = getTicket(slug, candidate.id);
         const state = dispatchState(ticket);
         if (!dispatchCreationCandidate(state, normalizedSessionId)) return { ok: false, reason: "already_bound" };
+        const boundWorktree2 = opts?.usePinnedRoot ? dispatchCreationTarget(repository, state, target) : canonicalPath(target);
         const baseline = String(state.baseCommit || "").trim();
         if (!baseline) return { ok: false, reason: "baseline_unavailable" };
-        state.worktree = boundWorktree;
+        state.worktree = boundWorktree2;
         state.worktreeBindingSource = "worktree-create";
         state.worktreeBoundAt = (/* @__PURE__ */ new Date()).toISOString();
         stampDispatchEvent(ticket, "worktree-create-binding", state.worktreeBoundAt);
         putTicket(slug, ticket);
-        return { ok: true, ref: ticket.ref, baseline, repository, worktree: boundWorktree };
+        return { ok: true, ref: ticket.ref, baseline, repository, worktree: boundWorktree2 };
       });
       if (result?.ok) return result;
     }

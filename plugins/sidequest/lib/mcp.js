@@ -10,7 +10,7 @@ const { tools: collaborationTools } = require("./mcp-collaboration");
 const { tools: routingTools } = require("./mcp-routing");
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 24e3;
+const MCP_TOOLS_LIST_MAX_BYTES = 24350;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
@@ -72,7 +72,7 @@ function toolMutates(name, args) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === "new_board_profile") return args.profile !== void 0;
   if (name === "global_fallback") return args.model !== void 0 || args.effort !== void 0;
-  if (name === "board_config") return args.name !== void 0 || args.alwaysInScope != null || args.generatedPairs !== void 0 || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== void 0 || args.worktreeBase !== void 0 || args.notIntegratedSalvageAgeHours !== void 0 || args.worktreeRecoveryRetentionAgeHours !== void 0 || args.worktreeRecoveryRetentionMaxPerAgent !== void 0 || args.autoApproveTestScope !== void 0 || args.autoApproveScope !== void 0 || args.worktreeSetup !== void 0 || args.worktreeDependencyPaths !== void 0;
+  if (name === "board_config") return args.name !== void 0 || args.alwaysInScope != null || args.generatedPairs !== void 0 || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== void 0 || args.worktreeBase !== void 0 || args.worktreeDirectory !== void 0 || args.notIntegratedSalvageAgeHours !== void 0 || args.worktreeRecoveryRetentionAgeHours !== void 0 || args.worktreeRecoveryRetentionMaxPerAgent !== void 0 || args.autoApproveTestScope !== void 0 || args.autoApproveScope !== void 0 || args.worktreeSetup !== void 0 || args.worktreeDependencyPaths !== void 0;
   return false;
 }
 function mutationQueueKey(name, args) {
@@ -224,10 +224,12 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
     outputTail: "Required blocker/contradiction output."
   },
   story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
+  board_config: { worktreeDirectory: "Existing Git-ignored, untracked repo-relative directory without symlinks; null restores external placement." },
   category_edit: { fallbackModel: "null clears fallback." },
   dispatch: {
     sharedTree: "Tree.",
-    reducedAgentSchema: "Only when name/mode missing; hook needs agent_id+bypassPermissions.",
+    integrationCheckout: "Existing clean linked target checkout; its branch must match integrationBranch.",
+    reducedAgentSchema: "Only when name/mode missing; hook needs agent_id+auto|bypassPermissions.",
     recoveryEvidence: "unbound or expired bound",
     worktree: "Checkout."
   },

@@ -270,7 +270,7 @@ function bindCreation(repository, sessionId, worktree) {
   const store = require(runtimeModule("store"));
   const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
-  return store.bindDispatchWorktreeCreation(project.slug, sessionId, worktree);
+  return store.bindDispatchWorktreeCreation(project.slug, sessionId, worktree, { usePinnedRoot: true });
 }
 function completeCreation(repository, sessionId, worktree) {
   const store = require(runtimeModule("store"));

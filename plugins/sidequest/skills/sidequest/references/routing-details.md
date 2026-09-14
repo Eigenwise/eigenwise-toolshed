@@ -59,6 +59,22 @@ for a readonly one, and it is the only name the board's claim accepts. A degrade
 flow because the read's `exec` projection is authoritative. Another session adopts work by dispatching
 the ticket again, which returns a fresh token and current spawn for the stable executor.
 
+## Reduced Agent-schema hosts
+
+When the visible Agent schema lacks `name` and `mode`, prepare with `reducedAgentSchema: true`
+and pass the returned spawn unchanged. The full-schema rules below do not authorize adding either
+missing field. First claim requires the real PreToolUse hook's `agent_id`, matching session and
+executor, valid dispatch token and effort, and observed `permission_mode` of `auto` or
+`bypassPermissions`. Settings, parent-session mode, and caller-supplied claim fields are not
+substitutes for worker-hook evidence; dispatch cannot predict the worker's mode from them.
+
+In `auto`, the host still decides tool permissions. A claim grants ticket ownership, not tool
+approval or guaranteed unattended completion. Do not change permissions or retry with broader
+permissions after a host denial. Missing or unsupported mode refuses the claim; when identity
+checks pass, Sidequest records that identity only so the exact runtime's stop can be correlated.
+The executor must stop. Keep the attempt live until its terminal hook arrives, then prepare a fresh
+dispatch if compatibility has been resolved. Never retire a live runtime merely for a refused claim.
+
 ## Spawn parameters by route
 
 The main skill's spawn rules, expanded. Every routed spawn goes through the native Agent tool with

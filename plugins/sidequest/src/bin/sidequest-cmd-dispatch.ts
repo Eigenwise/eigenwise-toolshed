@@ -33,6 +33,8 @@ async function cmdDispatch(opts: any, positional: any) {
       ...(Object.hasOwn(opts, 'reduced-agent-schema') ? { reducedAgentSchema: opts['reduced-agent-schema'] === true } : {}),
       allowRepeatFailure: !!opts['allow-repeat-failure'],
       allowUnscoped: !!opts['allow-unscoped'],
+      integrationBranch: opts['integration-branch'],
+      integrationCheckout: opts['integration-checkout'],
       recoveryEvidence: opts['recovery-evidence'],
       retireOnly: !!opts['retire-only'],
       source: 'cli',
@@ -251,6 +253,7 @@ async function cmdBoardConfig(opts: any) {
   if (opts['integration-verify-timeout-ms'] != null) patch.integrationVerifyTimeoutMs = opts['integration-verify-timeout-ms'];
   if (opts['worktree-isolation'] !== undefined) patch.worktreeIsolation = opts['worktree-isolation'];
   if (opts['worktree-base'] != null) patch.worktreeBase = opts['worktree-base'];
+  if (opts['worktree-directory'] != null) patch.worktreeDirectory = opts['worktree-directory'] === 'default' ? null : opts['worktree-directory'];
   if (opts['not-integrated-salvage-age-hours'] != null) patch.notIntegratedSalvageAgeHours = opts['not-integrated-salvage-age-hours'];
   if (opts['worktree-recovery-retention-age-hours'] != null) patch.worktreeRecoveryRetentionAgeHours = opts['worktree-recovery-retention-age-hours'];
   if (opts['worktree-recovery-retention-max-per-agent'] != null) patch.worktreeRecoveryRetentionMaxPerAgent = opts['worktree-recovery-retention-max-per-agent'];
@@ -278,6 +281,7 @@ async function cmdBoardConfig(opts: any) {
   console.log(`integration verify timeout: ${payload.integrationVerifyTimeoutMs}ms`);
   console.log(`worktree isolation: ${payload.worktreeIsolation ? 'enabled' : 'disabled'}`);
   console.log(`worktree base: ${payload.worktreeBase}`);
+  console.log(`worktree directory: ${payload.worktreeDirectory || '(external default)'}`);
   console.log(`unintegrated worktree salvage age: ${payload.notIntegratedSalvageAgeHours}h`);
   console.log(`worktree recovery retention: ${payload.worktreeRecoveryRetentionAgeHours}h, ${payload.worktreeRecoveryRetentionMaxPerAgent} entries per agent`);
   console.log(`test scope auto-approval: ${payload.autoApproveTestScope ? 'enabled' : 'disabled'}`);

@@ -427,6 +427,7 @@ const tools: ToolDefinition[] = [
         integrationVerifyTimeoutMs: { type: 'integer' },
         worktreeIsolation: { type: 'boolean', description: 'false runs executors in the shared checkout (default true).' },
         worktreeBase: { type: 'string', enum: ['auto', 'origin-main', 'local-main'], description: 'Isolated-worktree base.' },
+        worktreeDirectory: { type: ['string', 'null'], description: 'Existing Git-ignored, untracked repo-relative directory without symlinks; null restores external placement.' },
         notIntegratedSalvageAgeHours: { type: 'integer', minimum: 168, description: 'Default 168 hours.' },
         worktreeRecoveryRetentionAgeHours: { type: 'integer', minimum: 1, description: 'Hours, default 336.' },
         worktreeRecoveryRetentionMaxPerAgent: { type: 'integer', minimum: 1, description: 'Per agent, default 3.' },
@@ -460,6 +461,7 @@ const tools: ToolDefinition[] = [
       if (args.integrationVerifyTimeoutMs != null) patch.integrationVerifyTimeoutMs = args.integrationVerifyTimeoutMs;
       if (args.worktreeIsolation !== undefined) patch.worktreeIsolation = args.worktreeIsolation;
       if (args.worktreeBase !== undefined) patch.worktreeBase = args.worktreeBase;
+      if (args.worktreeDirectory !== undefined) patch.worktreeDirectory = args.worktreeDirectory;
       if (args.notIntegratedSalvageAgeHours !== undefined) patch.notIntegratedSalvageAgeHours = args.notIntegratedSalvageAgeHours;
       if (args.worktreeRecoveryRetentionAgeHours !== undefined) patch.worktreeRecoveryRetentionAgeHours = args.worktreeRecoveryRetentionAgeHours;
       if (args.worktreeRecoveryRetentionMaxPerAgent !== undefined) patch.worktreeRecoveryRetentionMaxPerAgent = args.worktreeRecoveryRetentionMaxPerAgent;

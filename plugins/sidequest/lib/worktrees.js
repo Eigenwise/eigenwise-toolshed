@@ -6,6 +6,8 @@ const fs = require("node:fs/promises");
 const nativeFs = require("node:fs");
 const { execFileSync, spawn, spawnSync } = require("node:child_process");
 const commitScope = require("./commit-scope.js");
+const { normalizeWorktreeDirectory } = require("./worktree-placement.js");
+const { integrationCheckoutPath } = require("./integration-checkout.js");
 const worktreeLease = require("./kernel/worktree.js");
 const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1e3;
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
@@ -207,7 +209,7 @@ function worktreeProjectSlug(repository) {
   const hash = crypto.createHash("sha1").update(normalized).digest("hex").slice(0, 8);
   return `${base}-${hash}`;
 }
-function worktreeRoot(repository) {
+function defaultWorktreeRoot(repository) {
   const project = canonicalPath(repository);
   const slug = worktreeProjectSlug(project);
   const preferred = path.join(sidequestHome(), "worktrees", slug);
@@ -215,6 +217,16 @@ function worktreeRoot(repository) {
   const fallback = path.join(os.tmpdir(), "sidequest", "worktrees", slug);
   if (!pathIsInside(project, fallback)) return fallback;
   throw new Error(`Sidequest cannot place an isolated worktree outside project root ${project}.`);
+}
+function placementProject(repository) {
+  const store = require("./store.js");
+  return store.findProject(store.nearestRepoRoot(canonicalPath(repository)));
+}
+function worktreeRoot(repository) {
+  const project = placementProject(repository);
+  const root = canonicalPath(project.meta?.path || repository);
+  const directory = normalizeWorktreeDirectory(project.meta?.worktreeDirectory);
+  return directory == null ? defaultWorktreeRoot(root) : path.join(root, directory);
 }
 function legacyWorktreeRoot(repository) {
   return path.join(repository, ".claude", "worktrees");
@@ -238,7 +250,10 @@ function namedWorktreePath(repository, name) {
   return path.join(worktreeRoot(repository), segment);
 }
 function agentWorktreeRoots(repository) {
-  return [worktreeRoot(repository), legacyWorktreeRoot(repository)];
+  const project = placementProject(repository);
+  const tickets = project.ok ? require("./store.js").listTickets(project.slug) : [];
+  const retained = tickets.flatMap((ticket) => [ticket.dispatch, ...ticket.dispatch?.attempts || []]).map((dispatch) => dispatch?.worktreeRoot).filter((root) => typeof root === "string" && path.isAbsolute(root));
+  return [.../* @__PURE__ */ new Set([worktreeRoot(repository), defaultWorktreeRoot(repository), legacyWorktreeRoot(repository), ...retained])];
 }
 function persistentStateFile() {
   return path.join(sidequestHome(), "worktree-sweep-failures.json");
@@ -345,11 +360,24 @@ function isAgentWorktree(repo, worktree) {
 }
 function ticketForWorktree(tickets, entry) {
   const worktree = canonicalPath(entry.worktree);
-  const matches = tickets.filter((ticket) => {
+  const currentMatches = tickets.filter((ticket) => {
     const knownWorktree = dispatchWorktreeForTicket(ticket);
-    return Boolean(knownWorktree && canonicalPath(knownWorktree) === worktree);
+    return knownWorktree && canonicalPath(knownWorktree) === worktree;
   });
-  return matches.length === 1 ? matches[0] : null;
+  const matches = currentMatches.length ? currentMatches : tickets.flatMap((ticket) => {
+    const attempts = Array.isArray(ticket.dispatch?.attempts) ? ticket.dispatch.attempts : [];
+    const attempt = attempts.findLast((state) => state?.worktree && canonicalPath(state.worktree) === worktree);
+    if (!attempt) return [];
+    return [{
+      ...ticket,
+      archived: false,
+      status: "todo",
+      submission: null,
+      dispatch: { ...attempt, attempts: [attempt] }
+    }];
+  });
+  if (matches.length > 1) return { ref: null, status: "todo", claimLive: matches.some(liveClaimTicket) };
+  return matches[0] || null;
 }
 function localBranchName(ref) {
   const match = /^refs\/heads\/(.+)$/.exec(String(ref || ""));
@@ -569,9 +597,14 @@ async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, ups
   const worktreePath2 = canonicalPath(entry.worktree);
   const current = worktreePath2 === canonicalPath(currentPath);
   if (current) return classifiedWorktreeEntry(entry, ticket, facts, "keep", "current_worktree", true);
+  const integrationTarget = tickets.some((candidate) => [candidate.dispatch, ...Array.isArray(candidate.dispatch?.attempts) ? candidate.dispatch.attempts : []].some((state) => state?.integrationTarget?.checkout?.path && canonicalPath(state.integrationTarget.checkout.path) === worktreePath2));
+  if (integrationTarget) return classifiedWorktreeEntry(entry, ticket, facts, "keep", "integration_target", false);
   const lease = await worktreeCleanupLease(repo, ticket, entry, livePaths);
   const cleanup = worktreeLease.worktreeCleanupDecision(lease, registeredWorktrees);
   if (!cleanup.allowed) {
+    if (lease.identity.status === "unknown" && pathIsInside(canonicalPath(repo), worktreePath2) && !pathIsInside(canonicalPath(legacyWorktreeRoot(repo)), worktreePath2)) {
+      return { ...classifiedWorktreeEntry(entry, ticket, facts, "keep", "unowned_worktree", false), lease, leaseDecision: cleanup.reason };
+    }
     if (lease.identity.status === "unknown" && canReclaimLegacyWorktree(ticket)) {
       if (entry.locked) return {
         ...classifiedWorktreeEntry(entry, ticket, facts, "keep", "locked", false),
@@ -817,7 +850,7 @@ async function integrationCandidates(repo, options, branchHead, submissionCommit
 }
 async function advanceIntegrationBranch(repo, options = {}) {
   try {
-    return await advanceLocalIntegrationBranch(repo, options);
+    return await advanceLocalIntegrationBranch(integrationCheckoutPath(repo, options.integrationTarget), options, repo);
   } catch (error) {
     const branch = String((options.integrationTarget || {}).branch || "").trim() || null;
     return advanceOutcome({
@@ -827,7 +860,7 @@ async function advanceIntegrationBranch(repo, options = {}) {
     });
   }
 }
-async function advanceLocalIntegrationBranch(repo, options) {
+async function advanceLocalIntegrationBranch(repo, options, repository) {
   const target = options.integrationTarget || {};
   const mode = String(target.mode || "").trim();
   const branch = String(target.branch || "").trim();
@@ -881,7 +914,7 @@ async function advanceLocalIntegrationBranch(repo, options) {
       message: `${branch} already carries ${shortCommit(submissionCommit)} at ${shortCommit(branchHead)}; nothing to advance.`
     });
   }
-  const candidates = await integrationCandidates(repo, options, branchHead, submissionCommit);
+  const candidates = await integrationCandidates(repository, options, branchHead, submissionCommit);
   const carrying = candidates.filter((candidate) => candidate.carriesWork);
   const advanceable = carrying.filter((candidate) => candidate.fastForward);
   if (!carrying.length) {
@@ -953,6 +986,7 @@ async function advanceLocalIntegrationBranch(repo, options) {
       command: mergeCommand(repo, to)
     }, common));
   }
+  integrationCheckoutPath(repository, target);
   const merged = await git(repo, ["merge", "--ff-only", to]);
   if (!merged.ok) {
     return advanceOutcome(Object.assign({
@@ -1668,4 +1702,4 @@ async function sweep(repo, tickets, options = {}) {
     failures
   };
 }
-module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };
+module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT, gitBashPath, canonicalPath, worktreeRoot, defaultWorktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };

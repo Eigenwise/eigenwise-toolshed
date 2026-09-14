@@ -18,6 +18,14 @@ Reload Claude Code or start a new session after installing. Sidequest packages i
 
 Sidequest is local. The dashboard runs on your machine and ticket data stays in the local Sidequest store.
 
+### Install a reviewed private build
+
+A private marketplace may distribute the plugin as `sidequest@<marketplace>`. Install through Claude Code's supported marketplace and plugin commands, not by editing its cache or registry. Keep the plugin's name `sidequest`. For a machine-local project installation, use `--scope local`; disable the other Sidequest entry in that same scope before starting a fresh session, so only the intended build is enabled.
+
+Sidequest identifies a private installation by its canonical serving path, its marketplace-specific Claude cache family, or a registered directory marketplace whose manifest declares that exact serving source. Direct-source launches require the registered directory and catalog identity to agree, and the relative plugin source must remain inside that directory; a catalog alone is not installation authority. Preflight and freshness require the matching project/local scope or a user-scoped install; an unrelated path or another project's local entry does not qualify. Version changes stay within that cache family. Briefing launchers use runtime-specific files, including for legacy packets without a recorded serving path, and do not switch to a newer build from another marketplace. Unregistered source and session-local ZIP overrides without a private catalog association retain the official-install fallback. Ambiguous or unreadable installation evidence gets source-neutral repair guidance. The dashboard is shared across boards; its update discovery considers installs across projects within the same marketplace.
+
+Keep the reviewed recovery artifact before cutover. Re-enabling a plugin restores configuration, not older code; removing a marketplace can remove its installation record. Recover a faulty build by explicitly loading the retained reviewed artifact from a real terminal. Quartermaster's separate official-marketplace checks are not changed by this private-install support.
+
 ## Your first workflow
 
 1. Open the board with `/sidequest:board`, or tell Claude to show your Sidequest board.
@@ -37,6 +45,12 @@ Claude take afterwards. When the project has an `origin` remote, Sidequest addit
 `origin/<branch>` as evidence about what already landed, which is how it recognizes work that someone merged
 outside the board. That only affects what counts as proof; the merge and the check still run locally, and a
 recorded delivery always names the branch that actually carried it.
+
+### Select an isolated integration checkout
+
+To keep delivery out of the registered shared checkout, prepare a clean linked worktree with the intended branch checked out. Dispatch with `integrationCheckout: "/absolute/path/to/checkout"` and `integrationBranch: "feature-branch"`, or use CLI `--integration-checkout` and `--integration-branch`. The checkout must belong to the same Git repository and cannot be the shared main checkout. Sidequest records its canonical path, Git directories, checkout-instance marker and starting revision; it creates the marker in the linked checkout's Git metadata when needed, not in project files.
+
+Delivery, merged-tree verification, reconciliation and rollback use that recorded checkout. Missing, replaced, wrong-branch or history-rewritten targets refuse without falling back to shared main. Normal head advancement is allowed. Ordinary redispatch retains the pin unless `integrationCheckout` is supplied again; changing only `integrationBranch` must still match the retained checkout. Waves must share the same checkout identity and target branch; recorded integration targets are excluded from worker cleanup. In `auto` mode, an explicitly selected checkout whose branch has no `origin/<branch>` ref uses local evidence; explicitly configured `remote` mode still requires its remote-tracking ref. Omitting `integrationCheckout` preserves the existing registered-checkout behavior. Selecting a checkout does not fetch, push, deploy, or grant permission to deliver.
 
 ### Choose the planning depth
 
@@ -146,11 +160,13 @@ These read-only reports work independently. If Sidequest is not installed in the
 
 **Claude says an executor is missing.** Update Sidequest, reload plugins in the affected session, and ask Claude to dispatch again. Do not create replacement agents or disable the dispatch guard.
 
-**Claude's Agent tool rejects `name` or `mode`.** Ask Claude to inspect the Agent schema it can see, then use Sidequest's reduced-schema dispatch only when those two fields are absent. Sidequest keeps the board label separately and refuses the first claim unless the host hook reports both the real agent identity and `bypassPermissions`; reload into a host that reports those facts instead of adding unsupported fields or changing permissions.
+**Claude's Agent tool rejects `name` or `mode`.** Ask Claude to inspect the Agent schema it can see, then use Sidequest's reduced-schema dispatch only when those two fields are absent. Sidequest keeps the board label separately. First claim requires the host hook's real agent identity and a permission mode of `auto` or `bypassPermissions`, alongside the normal token and session checks. In `auto`, host tool approvals remain in force: claiming a ticket does not guarantee unattended execution. Never add unsupported fields or change permissions to make a claim succeed. Missing or unsupported hook evidence refuses the claim; stop that executor and wait for its terminal hook before preparing a replacement.
 
 **A ticket will not dispatch.** Ask Claude to diagnose the ticket. Common causes are an incomplete work description, a blocked dependency, or an unavailable configured route. Claude reports the specific recovery instead of silently changing the work's route. A refused dispatch leaves the ticket's current token working, so the executor that already holds it keeps running: Sidequest only replaces the token once the new dispatch is saved. For a non-Git project it also captures the filesystem snapshot before the final checks, and a project registration change rejects that capture rather than recording it. That snapshot is bounded by a path count, a byte total, and a wall clock, and it refuses with the limit it hit instead of hanging. A deadline refusal names the file it was reading when the clock ran out, which is the whole diagnostic when a sync client or network share is the thing blocking.
 
 **A read-only ticket cannot start in a new repository.** Claude reports the checkout choice and keeps the ticket read-only. You do not need to commit notes or change board settings.
+
+**Your repository requires worker worktrees inside it.** Create the target directory and make Git ignore the directory itself, not just selected children. Then set `board_config` with `worktreeDirectory: ".worktrees"`, or run `sidequest board-config --worktree-directory .worktrees`. The path must already exist, remain below the repository, contain no tracked content, and have no symlink components. Sidequest does not create it or edit ignore rules during configuration. New dispatches pin the chosen root; later configuration changes do not relocate those workers. A missing current default does not block discovery or creation under a different, still-valid pin. Dispatch and creation still validate the directory they will use. Cleanup retains unowned operator worktrees in custom directories; historical paths alone do not authorize deletion, and retained checkout identity must match the current instance. Clear the setting with `worktreeDirectory: null` or `--worktree-directory default` to restore external placement for new dispatches.
 
 **A worktree-isolated executor cannot write.** Ask Claude to redispatch if the recorded checkout is missing or does not match the assigned checkout.
 

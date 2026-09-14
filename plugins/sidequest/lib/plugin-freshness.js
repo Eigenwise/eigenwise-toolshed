@@ -44,6 +44,7 @@ var import_node_crypto = __toESM(require("node:crypto"));
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path = __toESM(require("node:path"));
+var import_sidequest_install = require("./sidequest-install.js");
 const SIDEQUEST_PLUGIN_ID = "sidequest@eigenwise-toolshed";
 const CLAIM_SELF_HEAL_VERSION = "4.48.1";
 function claudeHome(options = {}) {
@@ -91,7 +92,7 @@ function registryInstalls(projectPath, options = {}) {
   } catch (_) {
     return [];
   }
-  const installs = registry.plugins?.[SIDEQUEST_PLUGIN_ID];
+  const { pluginId, installs } = (0, import_sidequest_install.selectSidequestRegistry)(registry, options.pluginRoot || process.env.CLAUDE_PLUGIN_ROOT || import_node_path.default.resolve(__dirname, ".."), claudeHome(options));
   if (!Array.isArray(installs)) return [];
   const currentPath = normalizedPath(projectPath);
   if (!currentPath) return [];
@@ -99,7 +100,7 @@ function registryInstalls(projectPath, options = {}) {
     if (!install || typeof install !== "object") return false;
     if (install.scope === "user") return true;
     const installedProject = normalizedPath(install.projectPath);
-    return installedProject !== null && pathsOverlap(currentPath, installedProject);
+    return installedProject !== null && (pluginId === SIDEQUEST_PLUGIN_ID ? pathsOverlap(currentPath, installedProject) : currentPath === installedProject);
   });
 }
 function loadedPluginVersion(pluginRoot = process.env.CLAUDE_PLUGIN_ROOT) {

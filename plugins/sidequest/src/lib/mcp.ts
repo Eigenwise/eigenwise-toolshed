@@ -53,7 +53,9 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // attestation grammar alone. Everything that can wait for the second call went to the skill instead.
 // Raised from 23600 for recovery-retention board configuration (SQ-2453) while preserving the 2.5KB reserve.
 // Raised from 23800 for the reduced Agent-schema contract: callers need the visible-schema condition and first-claim evidence before dispatch.
-const MCP_TOOLS_LIST_MAX_BYTES = 24000;
+// worktreeDirectory plus its first-call setup contract adds 171 bytes; preserve the 2.5KB reserve.
+// integrationCheckout adds 136 bytes including its first-call contract; retain the same reserve.
+const MCP_TOOLS_LIST_MAX_BYTES = 24350;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -95,7 +97,7 @@ function toolMutates(name?: any, args?: any) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === 'new_board_profile') return args.profile !== undefined;
   if (name === 'global_fallback') return args.model !== undefined || args.effort !== undefined;
-  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.generatedPairs !== undefined || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.worktreeBase !== undefined || args.notIntegratedSalvageAgeHours !== undefined || args.worktreeRecoveryRetentionAgeHours !== undefined || args.worktreeRecoveryRetentionMaxPerAgent !== undefined || args.autoApproveTestScope !== undefined || args.autoApproveScope !== undefined || args.worktreeSetup !== undefined || args.worktreeDependencyPaths !== undefined;
+  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.generatedPairs !== undefined || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.worktreeBase !== undefined || args.worktreeDirectory !== undefined || args.notIntegratedSalvageAgeHours !== undefined || args.worktreeRecoveryRetentionAgeHours !== undefined || args.worktreeRecoveryRetentionMaxPerAgent !== undefined || args.autoApproveTestScope !== undefined || args.autoApproveScope !== undefined || args.worktreeSetup !== undefined || args.worktreeDependencyPaths !== undefined;
   return false;
 }
 
@@ -267,10 +269,12 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
     outputTail: 'Required blocker/contradiction output.',
   },
   story_log: { entry: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes.' },
+  board_config: { worktreeDirectory: 'Existing Git-ignored, untracked repo-relative directory without symlinks; null restores external placement.' },
   category_edit: { fallbackModel: 'null clears fallback.' },
   dispatch: {
     sharedTree: 'Tree.',
-    reducedAgentSchema: 'Only when name/mode missing; hook needs agent_id+bypassPermissions.',
+    integrationCheckout: 'Existing clean linked target checkout; its branch must match integrationBranch.',
+    reducedAgentSchema: 'Only when name/mode missing; hook needs agent_id+auto|bypassPermissions.',
     recoveryEvidence: 'unbound or expired bound',
     worktree: 'Checkout.',
   },

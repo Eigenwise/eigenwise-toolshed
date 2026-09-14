@@ -58,14 +58,14 @@ const COMMAND_FLAGS = {
   ready: ["model", "category", "brief"],
   archive: ["done"],
   unarchive: [],
-  dispatch: ["shared-tree", "reduced-agent-schema", "allow-repeat-failure", "allow-unscoped", "session", "unverified-transport", "recovery-evidence", "retire-only"],
+  dispatch: ["shared-tree", "reduced-agent-schema", "allow-repeat-failure", "allow-unscoped", "integration-branch", "integration-checkout", "session", "unverified-transport", "recovery-evidence", "retire-only"],
   briefing: ["token-file"],
   temp: ["root"],
   "cleanup-temp": ["root"],
   "native-agent": ["prompt", "shared-tree", "unverified-transport", "session", "dir", "name"],
   models: ["full"],
   route: ["ticket"],
-  "board-config": ["name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-branch", "delivery", "integration-verify-timeout-ms", "worktree-isolation", "worktree-base", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "worktree-recovery-retention-max-per-agent", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"],
+  "board-config": ["name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-branch", "delivery", "integration-verify-timeout-ms", "worktree-isolation", "worktree-base", "worktree-directory", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "worktree-recovery-retention-max-per-agent", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"],
   projects: ["archived"],
   routing: ["enabled", "disabled"],
   "archive-board": [],
@@ -141,7 +141,7 @@ function commandMutates(command, opts, positional) {
   }
   if (command === "story") return ["add", "update", "edit", "log", "rotate"].includes(String(positional[0] || "").toLowerCase());
   if (command === "board-config" || command === "board_config") {
-    return ["name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-branch", "worktree-isolation", "worktree-base", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "worktree-recovery-retention-max-per-agent", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"].some((key) => Object.hasOwn(opts, key));
+    return ["name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-branch", "worktree-isolation", "worktree-base", "worktree-directory", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "worktree-recovery-retention-max-per-agent", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"].some((key) => Object.hasOwn(opts, key));
   }
   return false;
 }
@@ -277,14 +277,14 @@ const HELP_COMMANDS = {
   ready: "sidequest ready [--model <model>] [--category <id>] [--json] [--brief]",
   archive: "sidequest archive [<id|SQ-n>] [--done]",
   unarchive: "sidequest unarchive <id|SQ-n>",
-  dispatch: 'sidequest dispatch <SQ-n> [--shared-tree] [--reduced-agent-schema] [--allow-repeat-failure] [--allow-unscoped] [--project <path-or-slug>] [--session id] [--unverified-transport] [--recovery-evidence "<observed failure evidence>" --retire-only]',
+  dispatch: 'sidequest dispatch <SQ-n> [--shared-tree] [--reduced-agent-schema] [--allow-repeat-failure] [--allow-unscoped] [--integration-branch <branch>] [--integration-checkout <path>] [--project <path-or-slug>] [--session id] [--unverified-transport] [--recovery-evidence "<observed failure evidence>" --retire-only]',
   briefing: "sidequest briefing <SQ-n> --token-file <path> [--project <path-or-slug>]",
   "native-agent": 'sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json] [--unverified-transport]',
   temp: "sidequest temp cleanup [--root <path>] [--json]",
   "cleanup-temp": "sidequest cleanup-temp [--root <path>] [--json]",
   models: "sidequest models [--project <path-or-slug>] [--full] [--json]",
   route: "sidequest route <category> [--ticket SQ-n] [--project <path-or-slug>] --json",
-  "board-config": 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base origin-main|local-main] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--worktree-recovery-retention-max-per-agent <count>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--worktree-dependency-paths <json>] [--json]',
+  "board-config": 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base origin-main|local-main] [--worktree-directory path|default] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--worktree-recovery-retention-max-per-agent <count>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--worktree-dependency-paths <json>] [--json]',
   projects: "sidequest projects [--archived] [--json]",
   routing: "sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]",
   "archive-board": "sidequest archive-board <board-ref> [--json]",
@@ -411,7 +411,8 @@ Complexity is legacy input. Category routing chooses the concrete model and effo
   Ticket model and effort are resolved from its category. Use category add/edit to change routing policy.
 
 Native Agent dispatch (routed work stays in this conversation):
-  sidequest dispatch <SQ-n> [--shared-tree] [--reduced-agent-schema] [--allow-repeat-failure] [--allow-unscoped] [--project <path-or-slug>] [--session id] [--unverified-transport] [--recovery-evidence "<observed failure evidence>" [--retire-only]]  prepare a token-gated dispatch: declared-file tickets use worktrees by default; shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout; --reduced-agent-schema is only for a visible Agent schema that lacks name and mode, omits both fields, and refuses the first claim unless hooks report agent_id plus permission_mode bypassPermissions; executors with a live claim cannot dispatch child work; --recovery-evidence retires a known-gone unclaimed attempt; --retire-only stops after retirement instead of preparing a replacement identity, and accepts the same evidence-retirable shapes: an unclaimed prepared or launched attempt before runtime binding, or a bound and unclaimed attempt past the claim-idle backstop
+  sidequest dispatch <SQ-n> [--shared-tree] [--reduced-agent-schema] [--allow-repeat-failure] [--allow-unscoped] [--integration-branch <branch>] [--integration-checkout <path>] [--project <path-or-slug>] [--session id] [--unverified-transport] [--recovery-evidence "<observed failure evidence>" [--retire-only]]  prepare a token-gated dispatch: declared-file tickets use worktrees by default; shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout; --reduced-agent-schema is only for a visible Agent schema that lacks name and mode, omits both fields, and refuses the first claim unless hooks report agent_id plus permission_mode auto or bypassPermissions; host tool permissions remain unchanged; executors with a live claim cannot dispatch child work; --recovery-evidence retires a known-gone unclaimed attempt; --retire-only stops after retirement instead of preparing a replacement identity, and accepts the same evidence-retirable shapes: an unclaimed prepared or launched attempt before runtime binding, or a bound and unclaimed attempt past the claim-idle backstop
+  --integration-checkout pins an existing clean linked checkout of this repository for delivery, verification and rollback. Its checked-out branch must match --integration-branch (or the board default); replaced or missing checkouts refuse without fallback. Ordinary redispatch retains this pin unless --integration-checkout is supplied again; a branch-only override must match the retained checkout. In auto mode, an explicitly selected checkout whose branch has no origin/<branch> ref uses local evidence.
   sidequest briefing <SQ-n> --token-file <path> [--project <path-or-slug>]  print the current token-gated executor briefing
   sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json] [--unverified-transport]  return an already-registered native Agent spawn spec + bounded prompt; CLI transport refuses unless --unverified-transport
   sidequest native-agent cleanup --name <name>        clean up any legacy temporary native Agent definition
@@ -480,7 +481,7 @@ Project selection:
     A slug or display name must already be registered. An absolute path to a real
     directory is created on first use, so you can file into another repo's board
     (even one that doesn't exist yet) from anywhere by passing its full path.
-  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--auto-approve-scope <glob>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base <origin-main|local-main>] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--worktree-recovery-retention-max-per-agent <count>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>] [--worktree-dependency-paths <json>]
+  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--auto-approve-scope <glob>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base <origin-main|local-main>] [--worktree-directory <path|default>] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--worktree-recovery-retention-max-per-agent <count>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>] [--worktree-dependency-paths <json>]
     View or update board settings. --name changes only the display name; the slug, path, tickets, claims, and refs stay put.
     --worktree-base picks which side of --integration-branch isolated dispatches fork: origin-main uses its
     remote ref and refuses the dispatch when that ref does not exist, local-main uses the local branch.

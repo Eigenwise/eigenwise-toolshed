@@ -1,5 +1,6 @@
 "use strict";
 const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require("../kernel/verification.js");
+const { integrationCheckoutPath } = require("../integration-checkout.js");
 const { runProcessVerification } = require("../ports/process.js");
 const { worktreeSetupDeadlineMs } = require("../hook-timeouts.js");
 const { decideSubmissionAdmission } = require("../kernel/submission");
@@ -623,12 +624,20 @@ ${captureCommandDetails(pinnedCommand, capturedCommand)}`;
       };
     }
     const timeoutMilliseconds = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
-    return runProcessVerification(requirement, {
-      cwd: readMeta(slug)?.path,
+    const result = runProcessVerification(requirement, {
+      cwd: integrationCheckoutPath(readMeta(slug)?.path, ticket.dispatch?.integrationTarget),
       timeoutMilliseconds,
       logPath: integrationVerifyLogPath(slug, ticket),
       outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES
     });
+    if (verificationAccepted(result)) {
+      try {
+        integrationCheckoutPath(readMeta(slug)?.path, ticket.dispatch?.integrationTarget);
+      } catch (error) {
+        return { ...result, status: "could_not_run", evidence: integrationGitError(error), failureIdentities: ["could_not_run:integration-checkout-unavailable"] };
+      }
+    }
+    return result;
   }
   function verificationFailureComment(verify) {
     return [
@@ -644,6 +653,11 @@ ${verify.outputTail}` : null
     const ticket = getTicket(slug, idOrRef);
     if (!ticket || !ticket.submission?.integration || ticket.submission.integration.outcome !== "delivered") {
       return { ok: false, reason: "delivery_required", ticket };
+    }
+    try {
+      integrationCheckoutPath(readMeta(slug)?.path, ticket.dispatch?.integrationTarget);
+    } catch (error) {
+      return { ok: false, reason: "integration_target_unavailable", ticket, message: integrationGitError(error) };
     }
     const verify = ticket.submission.integration?.verify || verifyDeliveredSubmission(slug, ticket, opts);
     const accepted = verificationAccepted(verify);
@@ -807,7 +821,12 @@ ${verify.outputTail}` : null
     return withTicketLock(slug, id, () => {
       const ticket = getTicket(slug, id);
       if (!ticket || !ticket.submission) return { ok: false, reason: "submission_required", ticket };
-      ticket.submission.integration = Object.assign({}, ticket.submission.integration || {}, patch);
+      ticket.submission.integration = Object.assign(
+        {},
+        ticket.submission.integration || {},
+        patch,
+        ticket.dispatch?.integrationTarget?.checkout ? { targetCheckout: ticket.dispatch.integrationTarget.checkout } : {}
+      );
       if (submissionPatch) Object.assign(ticket.submission, submissionPatch);
       ticket.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
       putTicket(slug, ticket);
@@ -848,7 +867,8 @@ ${verify.outputTail}` : null
       return fs.existsSync(operationPath);
     });
   }
-  function restoreCleanIntegrationCheckout(repo, before) {
+  function restoreCleanIntegrationCheckout(repo, before, target) {
+    integrationCheckoutPath(repo, target);
     integrationGit(repo, ["reset", "--merge", before]);
     const resultingHead = integrationGit(repo, ["rev-parse", "HEAD"]);
     const checkoutState = integrationTargetCheckoutState(repo);
@@ -903,6 +923,7 @@ ${verify.outputTail}` : null
   function postMergeVerificationFailure(slug, ticket, verify, repo, mode, before, deliveryHead, targetBranch) {
     const verificationMessage = `${ticket.ref} verification returned ${verify.status} after ${mode} delivery: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || "not created"}.`;
     try {
+      integrationCheckoutPath(repo, ticket.dispatch?.integrationTarget);
       const rollback = restorePostMergeVerificationCheckout(repo, before, deliveryHead, targetBranch, mode);
       return integrationFailure(slug, ticket, {
         reason: `${verificationOutcome(verify)}_post_merge`,
@@ -919,7 +940,7 @@ ${verify.outputTail}` : null
         deliveryHead,
         rollback: { strategy: "refused", before, deliveryHead, targetBranch },
         verify,
-        message: `${verificationMessage} Rollback failed: ${integrationGitError(error)}`
+        message: `${verificationMessage} Rollback failed: ${integrationGitError(error)}. Delivery ${deliveryHead} may still be present on ${targetBranch}; inspect it before retrying (pre-delivery head ${before}).`
       });
     }
   }
@@ -1113,10 +1134,12 @@ ${verify.outputTail}` : null
     const requestedCommit = String(opts.deliveryCommit || "").trim();
     if (!reason) return { ok: false, reason: "evidence_required", ticket, message: `${ticket.ref} reconciliation requires delivery evidence.` };
     if (!SUBMISSION_COMMIT_RE.test(requestedCommit)) return { ok: false, reason: "delivery_commit_required", ticket, message: `${ticket.ref} reconciliation requires the delivery commit hash.` };
-    const repo = String(readMeta(slug)?.path || "").trim();
-    const target = opts.target;
-    if (!repo || !target?.branch) return { ok: false, reason: "integration_target_unavailable", ticket };
+    const repository = String(readMeta(slug)?.path || "").trim();
+    if (!repository) return { ok: false, reason: "integration_target_unavailable", ticket };
     try {
+      const target = ticket.dispatch?.integrationTarget ? ticketIntegrationTarget(slug, ticket) : opts.target;
+      if (!target?.branch) return { ok: false, reason: "integration_target_unavailable", ticket };
+      const repo = integrationCheckoutPath(repository, target);
       const currentBranch = integrationGit(repo, ["branch", "--show-current"]);
       if (currentBranch !== target.branch) {
         return { ok: false, reason: "branch_not_checked_out", ticket, message: `${target.branch} must be checked out before recording an external delivery; currently on ${currentBranch || "detached HEAD"}.` };
@@ -1260,6 +1283,7 @@ ${verify.outputTail}` : null
         },
         targetBranch: target.branch,
         targetUpstream: target.upstream,
+        ...target.checkout ? { targetCheckout: target.checkout } : {},
         changedPaths,
         deliveredFiles: changedPaths,
         evidence: reason,
@@ -1281,9 +1305,16 @@ ${verify.outputTail}` : null
     const reason = String(opts.reason || "").trim();
     if (!reason) return { ok: false, reason: "evidence_required", ticket: found, message: `${found.ref} abandonment requires evidence that the candidate never landed.` };
     if (!pendingSubmission(found)) return { ok: false, reason: "submission_required", ticket: found, message: `${found.ref} has no pending submission to abandon.` };
-    const target = opts.target;
-    const repo = String(readMeta(slug)?.path || "").trim();
-    if (!repo || !target?.branch) return { ok: false, reason: "integration_target_unavailable", ticket: found };
+    let target;
+    let repo = String(readMeta(slug)?.path || "").trim();
+    if (!repo) return { ok: false, reason: "integration_target_unavailable", ticket: found };
+    try {
+      target = found.dispatch?.integrationTarget ? ticketIntegrationTarget(slug, found) : opts.target;
+      if (!target?.branch) return { ok: false, reason: "integration_target_unavailable", ticket: found };
+      repo = integrationCheckoutPath(repo, target);
+    } catch (error) {
+      return { ok: false, reason: "integration_target_unavailable", ticket: found, message: integrationGitError(error) };
+    }
     const candidate = String(found.submission?.commit || "").trim();
     let candidateState = "unresolvable";
     let landedCandidate = null;
@@ -1355,10 +1386,11 @@ ${verify.outputTail}` : null
       return admitted.ok ? integrateArtifactSubmission(slug, admitted.ticket, opts) : admitted;
     }
     const project = readMeta(slug);
-    const repo = project?.path;
+    let repo = project?.path;
     let target;
     try {
       target = ticketIntegrationTarget(slug, ticket);
+      repo = integrationCheckoutPath(repo, target);
     } catch (error) {
       return { ok: false, reason: "integration_target_unavailable", ticket, message: integrationGitError(error) };
     }
@@ -1447,12 +1479,13 @@ ${verify.outputTail}` : null
       };
     }
     const project = readMeta(slug);
-    const repo = project?.path;
+    let repo = project?.path;
     let target;
     try {
       const resolvedTargets = ticketIntegrationTargets(slug, assembled.tickets);
       if (!resolvedTargets.ok) return Object.assign({ tickets: assembled.tickets }, resolvedTargets);
       target = resolvedTargets.target;
+      repo = integrationCheckoutPath(repo, target);
     } catch (error) {
       return { ok: false, reason: "integration_target_unavailable", tickets: assembled.tickets, message: integrationGitError(error) };
     }
@@ -1507,7 +1540,7 @@ ${verify.outputTail}` : null
         const conflictedPaths = unmergedIntegrationPaths(repo);
         const message = integrationConflictMessage(error, conflictedPaths);
         try {
-          restoreCleanIntegrationCheckout(repo, before);
+          restoreCleanIntegrationCheckout(repo, before, target);
         } catch (rollbackError) {
           return { ok: false, reason: "wave_delivery_rollback_failed", tickets: assembled.tickets, before, conflictedPaths, message: `${message} Rollback failed: ${integrationGitError(rollbackError)}` };
         }
@@ -1517,9 +1550,18 @@ ${verify.outputTail}` : null
       const verification = verifyDeliveredSubmission(slug, assembled.tickets[0], opts);
       if (!verificationAccepted(verification)) {
         try {
-          restoreCleanIntegrationCheckout(repo, before);
+          restoreCleanIntegrationCheckout(repo, before, target);
         } catch (rollbackError) {
-          return { ok: false, reason: `${verificationOutcome(verification)}_wave_delivery_rollback_failed`, tickets: assembled.tickets, before, verify: verification, message: `Wave ${assembled.wave.id} verification failed and rollback failed: ${integrationGitError(rollbackError)}` };
+          return {
+            ok: false,
+            reason: `${verificationOutcome(verification)}_wave_delivery_rollback_failed`,
+            tickets: assembled.tickets,
+            before,
+            deliveryHead: resultingHead,
+            rollback: { strategy: "refused", before, deliveryHead: resultingHead, targetBranch: target.branch },
+            verify: verification,
+            message: `Wave ${assembled.wave.id} verification failed and rollback failed: ${integrationGitError(rollbackError)}. Delivery ${resultingHead} may still be present on ${target.branch}; inspect it before retrying (pre-delivery head ${before}).`
+          };
         }
         return { ok: false, reason: `${verificationOutcome(verification)}_wave_delivery`, tickets: assembled.tickets, before, verify: verification, message: `Wave ${assembled.wave.id} delivery verification returned ${verification.status}.` };
       }
@@ -1570,11 +1612,12 @@ ${verify.outputTail}` : null
     if (!preflight.ok) return preflight;
     let ticket = preflight.ticket;
     const project = readMeta(slug);
-    const repo = project?.path;
+    let repo = project?.path;
     const mode = normalizeDeliveryMode(opts.mode);
     let target;
     try {
       target = ticketIntegrationTarget(slug, ticket);
+      repo = integrationCheckoutPath(repo, target);
     } catch (error) {
       return { ok: false, reason: "integration_target_unavailable", ticket, message: integrationGitError(error) };
     }
@@ -1663,7 +1706,7 @@ ${verify.outputTail}` : null
           const conflictedPaths = unmergedIntegrationPaths(repo);
           const message = integrationConflictMessage(error, conflictedPaths);
           try {
-            restoreCleanIntegrationCheckout(repo, before);
+            restoreCleanIntegrationCheckout(repo, before, target);
           } catch (rollbackError) {
             return integrationFailure(slug, ticket, {
               reason: "merge_failed_rollback_failed",
@@ -1682,7 +1725,7 @@ ${verify.outputTail}` : null
             const conflictedPaths = unmergedIntegrationPaths(repo);
             const message = integrationConflictMessage(error, conflictedPaths);
             try {
-              restoreCleanIntegrationCheckout(repo, before);
+              restoreCleanIntegrationCheckout(repo, before, target);
             } catch (rollbackError) {
               return integrationFailure(slug, ticket, {
                 reason: `${mode}_failed_rollback_failed`,

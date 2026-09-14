@@ -43,6 +43,7 @@ var import_node_crypto = require("node:crypto");
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path = __toESM(require("node:path"));
+var import_sidequest_install = require("./sidequest-install.js");
 function localAheadOfUpstreamWarning(projectPath, branch, worktreeFork) {
   try {
     const upstream = (0, import_node_child_process.execFileSync)("git", ["rev-parse", "--abbrev-ref", `${branch}@{upstream}`], {
@@ -206,15 +207,19 @@ function installRuntimeSnapshot(installPath, version) {
 function checkSidequestInstall(projectPath, opts = {}) {
   const claudeHome = claudeHomeDir(opts);
   const registryPath = import_node_path.default.join(claudeHome, "plugins", "installed_plugins.json");
-  let registry;
+  const pluginRoot = opts.pluginRoot || servingSidequestInstall()?.installPath || "";
+  let selected = (0, import_sidequest_install.selectSidequestRegistry)(null, pluginRoot, claudeHome);
+  const provenance = () => selected.pluginId !== PLUGIN_ID ? { pluginId: selected.pluginId } : {};
   try {
-    registry = JSON.parse(readFileSyncWithRetry(registryPath, "utf8"));
+    const registry = JSON.parse(readFileSyncWithRetry(registryPath, "utf8"));
+    selected = (0, import_sidequest_install.selectSidequestRegistry)(registry, pluginRoot, claudeHome);
   } catch (err) {
-    if (err && err.code === "ENOENT") return { ok: false, reason: "missing", registryPath };
-    return { ok: false, reason: "registry_unreadable", registryPath, detail: String(err && err.message || err) };
+    const source = { pluginId: selected.pluginId === PLUGIN_ID ? null : selected.pluginId };
+    if (err && err.code === "ENOENT") return { ok: false, reason: "missing", registryPath, ...source };
+    return { ok: false, reason: "registry_unreadable", registryPath, ...source, detail: String(err && err.message || err) };
   }
-  const installs = registry?.plugins?.[PLUGIN_ID];
-  if (!Array.isArray(installs) || !installs.length) return { ok: false, reason: "missing", registryPath };
+  const { installs } = selected;
+  if (!Array.isArray(installs) || !installs.length) return { ok: false, reason: "missing", registryPath, ...provenance() };
   const target = normalizeDir(projectPath);
   const matching = installs.filter((install) => {
     if (!install) return false;
@@ -222,7 +227,7 @@ function checkSidequestInstall(projectPath, opts = {}) {
     if (!target) return false;
     return normalizeDir(install.projectPath) === target;
   });
-  if (!matching.length) return { ok: false, reason: "missing", registryPath };
+  if (!matching.length) return { ok: false, reason: "missing", registryPath, ...provenance() };
   for (const install of matching) {
     const snapshot = installRuntimeSnapshot(install.installPath, install.version);
     if ("detail" in snapshot) {
@@ -230,20 +235,24 @@ function checkSidequestInstall(projectPath, opts = {}) {
         ok: false,
         reason: "runtime_unreadable",
         registryPath,
+        ...provenance(),
         ...typeof install.installPath === "string" ? { installPath: install.installPath } : {},
         detail: snapshot.detail
       };
     }
     if (snapshot.advertisesBoardMcp) {
-      return { ok: true, registryPath, installPath: install.installPath, version: install.version.trim(), identity: snapshot.identity };
+      return { ok: true, registryPath, ...provenance(), installPath: install.installPath, version: install.version.trim(), identity: snapshot.identity };
     }
   }
-  return { ok: false, reason: "stale", registryPath, detail: "the .mcp.json snapshot declares no MCP server" };
+  return { ok: false, reason: "stale", registryPath, ...provenance(), detail: "the .mcp.json snapshot declares no MCP server" };
 }
 function repairGuidance() {
   return `Run \`${REPAIR_COMMAND}\` from / for the target project, then start a new session or run \`/reload-plugins\` before dispatching again.`;
 }
 function installRefusalMessage(check, projectPath) {
+  if (check.pluginId !== void 0 && check.pluginId !== PLUGIN_ID) {
+    return `Dispatch refused: ${check.pluginId || "Sidequest (marketplace unresolved)"} has no install with a lifecycle-compatible runtime for ${projectPath} (registry ${check.registryPath}; ${check.reason}${check.detail ? `: ${check.detail}` : ""}). Inspect the intended marketplace in /plugin and repair its install, then run /reload-plugins or start a new session. Do not replace a private build with a different marketplace to clear this check.`;
+  }
   if (check.reason === "registry_unreadable") {
     return `Dispatch refused: could not read Claude Code's plugin registry at ${check.registryPath} (${check.detail}). Fix or remove the corrupt registry, confirm sidequest@eigenwise-toolshed is installed for ${projectPath}, then dispatch again.`;
   }
