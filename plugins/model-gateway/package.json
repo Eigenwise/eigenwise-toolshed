@@ -3,7 +3,8 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "test": "node --test --test-concurrency=2 --test-timeout=300000 \"test/*.test.js\""
+    "test": "node --test --test-concurrency=2 --test-timeout=300000 \"test/*.test.js\"",
+    "coverage": "node -e \"const { spawnSync } = require('node:child_process'); const result = spawnSync(process.execPath, ['--test', '--test-concurrency=2', '--test-timeout=300000', 'test/*.test.js'], { env: { ...process.env, NODE_V8_COVERAGE: process.env.NODE_V8_COVERAGE || 'coverage' }, stdio: 'inherit' }); process.exit(result.status ?? 1)\""
   },
   "engines": {
     "node": ">=22.5.0"

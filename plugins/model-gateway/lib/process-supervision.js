@@ -9,6 +9,7 @@ const path = require('node:path');
 const { CLI_PATH, LOGS, PROXY_BIN, PROXY_PORT, PUBLIC_SHIM_PORT, resolveNewestInstalledCliPath, SHIM_PORT, STATE, WIN } = require('./runtime.js');
 const { recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
 const { controlRequestHeaders } = require('./control-auth.js');
+const PROCESS_STOP_TIMEOUT_MS = 3000;
 
 function fetchUrl(url, { timeout = 15000, headers = {}, agent } = {}) {
   return new Promise((resolve, reject) => {
@@ -169,9 +170,16 @@ function recordedGatewayPid(name, {
 function recordedGatewayPids(options) {
   return [...new Set(['guardian', 'shim', 'proxy'].map((name) => recordedGatewayPid(name, options)).filter(Boolean))];
 }
+// Windows has no graceful stop to offer these children. Measured: `taskkill /pid N /T`
+// without /F on a detached windowless node process exits 255 with "can only be terminated
+// forcefully" and the process keeps running, so the two differ on POSIX only.
 function terminateProcess(pid) {
   if (WIN) return spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).status === 0;
   try { process.kill(pid, 'SIGTERM'); return true; } catch { return false; }
+}
+function forceTerminateProcess(pid) {
+  if (WIN) return spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).status === 0;
+  try { process.kill(pid, 'SIGKILL'); return true; } catch { return false; }
 }
 function killPid(pid, { terminate = terminateProcess, ...ownershipOptions } = {}) {
   if (!pid || !processIsOwnedByThisInstall(pid, ownershipOptions)) return false;
@@ -181,6 +189,12 @@ function stopProcess(name, options) {
   const pid = recordedGatewayPid(name, options);
   if (!pid) return true;
   if (!killPid(pid, { name, record: readPidRecord(name) })) return false;
+  return removePid(name);
+}
+async function stopProcessAsync(name) {
+  const pid = recordedGatewayPid(name);
+  if (!pid) return true;
+  if (await killPidAsync(pid, { name, record: readPidRecord(name) }) !== true) return false;
   return removePid(name);
 }
 function recordStopRequest(operation, name) {
@@ -582,8 +596,15 @@ async function killPidAsync(pid, { trusted = false, terminate = null, ...ownersh
   const owned = trusted ? true : await processIsOwnedByThisInstallAsync(pid, ownershipOptions);
   if (owned !== true) return owned;
   if (terminate) return terminate(pid);
+  // Asking first is what lets V8 write the child's coverage file before it goes, and on
+  // POSIX SIGTERM delivers that. Windows would only spend the wait and force it anyway,
+  // so it keeps going straight to taskkill /F.
   if (WIN) return waitForTaskkill(pid);
-  try { process.kill(pid, 'SIGTERM'); return true; } catch { return false; }
+  if (!terminateProcess(pid)) return false;
+  if (await waitForProcessExit(pid, PROCESS_STOP_TIMEOUT_MS)) return true;
+  const stillOwned = trusted ? true : await processIsOwnedByThisInstallAsync(pid, ownershipOptions);
+  if (stillOwned !== true) return stillOwned;
+  return forceTerminateProcess(pid);
 }
 function reapGatewayOrphans(supervisorPid = null) {
   const reaped = [];
@@ -610,9 +631,9 @@ async function stopAll({ report = console.log, resolveOwner = resolvePortOwner }
   }
   for (const name of ['shim', 'guardian', 'proxy']) recordStopRequest('stop', name);
   for (const name of ['shim', 'guardian', 'proxy']) {
-    if (!stopProcess(name)) return { ok: false, reason: stopFailureReason(readPid(name), PUBLIC_SHIM_PORT) };
+    if (!(await stopProcessAsync(name))) return { ok: false, reason: stopFailureReason(readPid(name), PUBLIC_SHIM_PORT) };
   }
-  if (owner.pid && processInfoSync(owner.pid) && !killPid(owner.pid)) return { ok: false, reason: stopFailureReason(owner.pid, PUBLIC_SHIM_PORT) };
+  if (owner.pid && processInfoSync(owner.pid) && !(await killPidAsync(owner.pid))) return { ok: false, reason: stopFailureReason(owner.pid, PUBLIC_SHIM_PORT) };
   reapGatewayOrphans(null);
   return { ok: true };
 }
@@ -634,8 +655,8 @@ async function stopRunningSupervisor({ quiet = false, operation = 'restart', rep
       signal: WIN ? 'TASKKILL' : 'SIGTERM',
     });
   }
-  if (pid && !killPid(pid, { name: 'guardian', record: readPidRecord('guardian') })) return { ok: false, reason: stopFailureReason(pid, PUBLIC_SHIM_PORT) };
-  if (!pid && !stopProcess('guardian')) return { ok: false, reason: stopFailureReason(targetPid, PUBLIC_SHIM_PORT) };
+  if (pid && !(await killPidAsync(pid, { name: 'guardian', record: readPidRecord('guardian') }))) return { ok: false, reason: stopFailureReason(pid, PUBLIC_SHIM_PORT) };
+  if (!pid && !(await stopProcessAsync('guardian'))) return { ok: false, reason: stopFailureReason(targetPid, PUBLIC_SHIM_PORT) };
   if (!((await waitForProcessExit(targetPid, 3000)) && (await waitForShimExit(3000)))) {
     return { ok: false, reason: `could not stop the shim supervisor on :${PUBLIC_SHIM_PORT}${pid ? ` (PID ${pid})` : ''}; run node "${CLI_PATH}" stop, then ensure` };
   }
@@ -690,7 +711,7 @@ async function stopShimWithDrain({ quiet = false, timeout = Number(process.env.C
     if (response.status !== 202) throw new Error(`drain endpoint returned ${response.status}`);
   } catch (error) {
     if (!quiet) report(`model-gateway: could not ask the shim to drain (${error.message}); force-stopping it.`);
-    if (!stopProcess('shim')) return { ok: false, drained: false, reason: stopFailureReason(readPid('shim'), SHIM_PORT, 'shim worker') };
+    if (!(await stopProcessAsync('shim'))) return { ok: false, drained: false, reason: stopFailureReason(readPid('shim'), SHIM_PORT, 'shim worker') };
     return { ok: true, drained: false, forced: true, reason: error.message };
   }
   if (await waitForShimExit(timeout)) {
@@ -699,7 +720,7 @@ async function stopShimWithDrain({ quiet = false, timeout = Number(process.env.C
     return { ok: true, drained: true };
   }
   if (!quiet) report(`model-gateway: shim drain timed out after ${Math.ceil(timeout / 1000)}s; force-stopping it.`);
-  if (!stopProcess('shim')) return { ok: false, drained: false, reason: stopFailureReason(readPid('shim'), SHIM_PORT, 'shim worker') };
+  if (!(await stopProcessAsync('shim'))) return { ok: false, drained: false, reason: stopFailureReason(readPid('shim'), SHIM_PORT, 'shim worker') };
   return { ok: true, drained: false, forced: true, reason: 'drain timeout' };
 }
 async function restartWorkerWithDrain({ quiet = false, timeout = Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000, report = console.log, resolveOwner = resolvePortOwner } = {}) {
@@ -933,5 +954,5 @@ module.exports = {
   commandIncludesFile, commandResultAsync, commandResultSync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, killPidAsync, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
   probeTimeoutMs, processInfoAsync, processInfoSync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync, processTableSync, resolvePortOwner, unknownPortOwnerReason,
   proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPid, recordedGatewayPids, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
-  spawnSupervisedProxy, stopAll, stopProcess, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit, writePidRecord, writePidRecordAsync,
+  spawnSupervisedProxy, stopAll, stopProcess, stopProcessAsync, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit, writePidRecord, writePidRecordAsync,
 };

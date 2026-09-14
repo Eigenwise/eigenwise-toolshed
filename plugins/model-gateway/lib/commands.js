@@ -206,7 +206,7 @@ function mkdirs() { for (const d of [STATE, LOGS, BIN_DIR]) fs.mkdirSync(d, { re
 
 const {
   createProbeChildRegistry, createProxyRecovery, fetchUrl, killPidAsync, portListening, postJson, processOwningPortAsync, recordedGatewayPids, reapGatewayOrphans, resolvePortOwner, unknownPortOwnerReason,
-  removePid, restartWorkerWithDrain, shimHealthy, spawnDetached, stopAll, stopProcess, stopRunningSupervisor,
+  removePid, restartWorkerWithDrain, shimHealthy, spawnDetached, stopAll, stopProcessAsync, stopRunningSupervisor,
   stopShimWithDrain, waitForShimExit, writePidRecordAsync,
 } = require('./process-supervision.js');
 
@@ -443,11 +443,11 @@ async function waitForProxyExit({ listening = portListening, attempts = 7, delay
 async function restartProxyForVersionChange({
   previousVersion,
   listening = portListening,
-  stop = stopProcess,
+  stop = stopProcessAsync,
   supervisorRunning = async () => (await resolvePortOwner(PUBLIC_SHIM_PORT)).state === 'same-install',
 } = {}) {
   if (previousVersion) writeProxyServingVersion(previousVersion);
-  if (await listening(PROXY_PORT)) stop('proxy');
+  if (await listening(PROXY_PORT)) await stop('proxy');
   if (!(await waitForProxyExit({ listening }))) return false;
   return supervisorRunning();
 }
@@ -1970,11 +1970,19 @@ function runShim() {
     activeCompatibilityProbe?.finish({ status: 'unknown', code: 'ESHUTDOWN' });
   }
 
-  function waitForWorkerExit(child) {
+  function waitForWorkerExit(child, timeout = 3000) {
     return new Promise((resolve) => {
-      if (!child || child.exitCode != null) return resolve();
-      child.once('exit', resolve);
-      child.once('error', resolve);
+      if (!child || child.exitCode != null) return resolve(true);
+      const timer = setTimeout(() => finish(false), timeout);
+      const finish = (exited) => {
+        clearTimeout(timer);
+        child.off('exit', onExit);
+        child.off('error', onExit);
+        resolve(exited);
+      };
+      const onExit = () => finish(true);
+      child.once('exit', onExit);
+      child.once('error', onExit);
     });
   }
 
@@ -2005,8 +2013,13 @@ function runShim() {
       await proxyRecovery.stop();
       await Promise.all([...pendingSupervisorWrites]);
       await compatibilityActions;
-      await killPidAsync(stoppingWorker?.pid, { trusted: true });
-      await waitForWorkerExit(stoppingWorker);
+      if (stoppingWorker?.connected) {
+        try { stoppingWorker.disconnect(); } catch {}
+      }
+      if (!(await waitForWorkerExit(stoppingWorker))) {
+        await killPidAsync(stoppingWorker?.pid, { trusted: true });
+        await waitForWorkerExit(stoppingWorker);
+      }
       await Promise.all([closeServer(compatServer), closeServer(main)]);
       process.exit(exitCode);
     })();
