@@ -8,6 +8,46 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.567.0 (2026-09-14)
+
+### model-gateway 0.51.0 → 0.51.1
+
+#### Fixes
+
+- A streaming answer that dies mid-flight now ends instead of hanging (SQ-2855)
+  When the gateway's worker died partway through streaming an answer, the client kept an open response that never completed: no error, no end, just a request that sat there. The supervisor now closes that connection, so Claude Code sees the stream break and can decide whether to ask again instead of waiting forever. A healthy stream is untouched.
+- Test the shim's worker resend decision directly (SQ-2856)
+  The shim's worker resend decision now has direct regression coverage for replaying to a replacement worker and returning 503 without replaying while the current worker remains alive.
+- Gateway processes now shut down gracefully before forced termination (SQ-2869)
+  The model gateway now requests a graceful shutdown and waits for its workers to exit before using forced termination as a last resort. This lets worker processes flush their V8 coverage and avoids interrupting normal gateway cleanup.
+
+### sidequest 5.1.18 → 5.1.19
+
+#### Fixes
+
+- Recover stuck verify captures (SQ-2809)
+  Full-suite verification now shares a repository slot across linked worktrees and clears dead capture owners.
+- A dead launch frees its ticket in seconds instead of waiting out the backstop (SQ-2864)
+  An executor that died before claiming used to hold its ticket far longer than it should, and both
+  reasons were in the SubagentStop path.
+
+  It arrived too late. Finding the attempt that just stopped meant reading every ticket in every
+  project, which on a board of 28 projects and 5190 tickets cost 2.0 seconds of the 5 the host allows
+  that hook when an agent dies mid-query, and grew with the board forever. The board now narrows the
+  candidates in SQLite first, so the hook costs 238ms instead of 2307ms on that same board and stops
+  caring how big the board gets. SubagentStart's binding got the same treatment, because that hook
+  being cancelled is what causes the second problem.
+
+  It often could not tell which attempt had stopped. SubagentStop carries the host's agent id but no
+  name, so an attempt whose SubagentStart was cancelled before it recorded that id was unreachable by
+  its own terminal hook: 36 such attempts on this board waited a median of 2 minutes and up to 3.2
+  hours for someone to retire them by hand. The hook now reads the launch name out of the sidecar the
+  host writes next to the agent's transcript, and uses it only when the id found nothing, so a stop
+  that already matched keeps matching exactly as before. The declared hook timeout also stops asking
+  for 10 seconds where the host waits 5.
+- Add source CRAP delta measurement (SQ-2879)
+  Add a rerunnable source-level CRAP report that merges coverage from direct TypeScript and compiled child-process execution, then gates only regressions from the merge base. The base defaults to `develop` so a branch is measured against what it actually forked from, and `--base` overrides it.
+
 ## v3.566.0 (2026-09-14)
 
 ### model-gateway 0.50.25 → 0.51.0
