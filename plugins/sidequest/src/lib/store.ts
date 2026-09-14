@@ -1042,7 +1042,6 @@ const {
   completionTreeCheck,
   dispatchDelta,
   dispatchState,
-  isolatedDispatchWorktreeMissing,
   getTicket,
   putTicket,
   withTicketLock,
@@ -1232,14 +1231,12 @@ const {
   unregisterClaim,
 } = createWorkers({
   acquireLock,
-  addComment,
   dispatchState,
   getTicket,
   path,
   projectsRoot,
   readGlobal,
   releaseLock,
-  releaseTicket,
   transaction,
   writeGlobal,
 });
@@ -1385,11 +1382,33 @@ function refreshRoutingProfileSeeds(handle?: any) {
   invalidateStoreCaches();
 }
 
+// A profile entry is keyed by the id inside its stored category; a project layer row carries its own.
+function categoryNeedingReadonlyFlag(readonlyIds: Set<string>, data: string, rowId?: string) {
+  let category: any;
+  try { category = JSON.parse(data); } catch (_: any) { return null; }
+  if (!readonlyIds.has(rowId ?? category?.id) || category?.readonly !== undefined) return null;
+  return category;
+}
+
+function readonlyCategorySeedsAreStale(handle: any, readonlyIds: Set<string>) {
+  for (const row of handle.prepare('SELECT data FROM routing_profile_entries').all()) {
+    if (categoryNeedingReadonlyFlag(readonlyIds, row.data)) return true;
+  }
+  for (const row of handle.prepare('SELECT id, data FROM project_categories').all()) {
+    if (categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id)) return true;
+  }
+  return false;
+}
+
 function refreshReadonlyCategorySeeds(handle?: any) {
   const readonlyIds = new Set([
     ...DEFAULT_CATEGORIES.filter((category: any) => category.readonly === true).map((category: any) => category.id),
     'hand-analysis',
   ]);
+  // Scanning first means a settled store never opens a write transaction, which is the whole cost
+  // of this refresher on process start. The scan inside the transaction stays authoritative so the
+  // decision is never acted on from outside the lock.
+  if (!readonlyCategorySeedsAreStale(handle, readonlyIds)) return;
   const affected = new Set<string>();
   let changed = false;
   withinTransaction(handle, () => {
@@ -1397,18 +1416,16 @@ function refreshReadonlyCategorySeeds(handle?: any) {
     const updateProjectEntry = handle.prepare('UPDATE project_categories SET data = ? WHERE project = ? AND id = ?');
     const now = new Date().toISOString();
     for (const row of handle.prepare('SELECT profile_id, category_id, data FROM routing_profile_entries').all()) {
-      let category: any;
-      try { category = JSON.parse(row.data); } catch (_: any) { continue; }
-      if (!readonlyIds.has(category?.id) || category.readonly !== undefined) continue;
+      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data);
+      if (!category) continue;
       category.readonly = true;
       updateProfileEntry.run(JSON.stringify(category), now, row.profile_id, row.category_id);
       for (const project of handle.prepare('SELECT project FROM project_routing_profiles WHERE profile_id = ?').all(row.profile_id)) affected.add(String(project.project));
       changed = true;
     }
     for (const row of handle.prepare('SELECT project, id, data FROM project_categories').all()) {
-      let category: any;
-      try { category = JSON.parse(row.data); } catch (_: any) { continue; }
-      if (!readonlyIds.has(row.id) || category.readonly !== undefined) continue;
+      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id);
+      if (!category) continue;
       category.readonly = true;
       updateProjectEntry.run(JSON.stringify(category), row.project, row.id);
       affected.add(String(row.project));
@@ -2138,8 +2155,10 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       t.updatedAt = now;
     }
     putTicket(slug, t);
-    // Tie this claim to the worker's session so a SessionEnd/SubagentStop hook can
-    // release it immediately instead of waiting out the TTL. No-op without a session id.
+    // Tie this claim to the worker's session so an attested terminal hook can release
+    // it immediately instead of waiting out the backstop. SessionEnd alone does not
+    // attest anything: it carries a bare session id and is replayable against a live
+    // claim, so reconcile only forgets these registrations. No-op without a session id.
     if (opts.sessionId) registerWorker(opts.sessionId, slug, t.id, by);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return { ok: true, ticket: t, ...(compatibilityAdvisory ? { advisory: compatibilityAdvisory } : {}) };
@@ -3426,21 +3445,24 @@ function claimPulse(ticket?: any, now?: any) {
 /* ------------------------------------------------------------------ *
  *  Worker registry (session -> the claims it holds)
  *
- *  The claim TTL (default 60 min) is the backstop that frees a crashed worker's
- *  ticket. But when a *session* ends cleanly, we know its claims are dead right
- *  then — no reason to make a dependent wait out the TTL. The SessionEnd hook
- *  fires on that boundary; it has the session id but a claim is tagged
- *  only with an opaque `--by`. This tiny registry is the missing link: it maps a
- *  session id to the claims taken under it, so reconcileSession() can release
- *  exactly those (and only those — never another live session's) on the spot.
+ *  The activity backstops are what free a crashed worker's ticket. This registry
+ *  maps a session id to the claims taken under it, because a claim is tagged only
+ *  with an opaque `--by` and a hook knows only the session id.
+ *
+ *  It deliberately does NOT release anything. A SessionEnd payload is a bare
+ *  session id with no generation or owning pid, two of its own reasons fire while
+ *  the process keeps running, and the hook is replayable against a live claim, so
+ *  "the session ended" cannot stand in for "the executor is gone". Treating it as
+ *  death swept live claims and minted permanent `died` records from a guess.
+ *  reconcileSession() therefore only forgets these registrations; recovery comes
+ *  from an attested terminal hook, or from the backstops.
  *
  *  One file, projects/workers.json, a sibling to notifications.json:
  *    { sessions: { <sessionId>: { updatedAt, claims: [{ slug, ticketId, by, at }] } } }
  *
- *  Fail-soft throughout: a missing/garbage file degrades to an empty registry,
- *  and any hiccup here must never break a claim (the TTL still covers us). The
- *  registry is an OPTIMIZATION over the TTL, not a new source of truth — nothing
- *  reads it to decide whether a claim is valid, only to speed up releasing it.
+ *  Fail-soft throughout: a missing/garbage file degrades to an empty registry, and
+ *  any hiccup here must never break a claim. Nothing reads it to decide whether a
+ *  claim is valid.
  * ------------------------------------------------------------------ */
 
 // Sessions untouched for this long with no live claims are pruned on write, so

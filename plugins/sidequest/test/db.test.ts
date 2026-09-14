@@ -39,9 +39,41 @@ const databaseApi = require('../lib/db.js') as {
   prepareCached(database: DatabaseSync, sql: string): StatementSync;
   txn<T>(database: DatabaseSync, fn: () => T): T;
   SQLITE_BUSY_TIMEOUT_MS: number;
+  SQLITE_MIGRATION_BUSY_TIMEOUT_MS: number;
+  SQLITE_BUSY_RETRY_ATTEMPTS: number;
+  SQLITE_BUSY_RETRY_DELAYS_MS: readonly number[];
+  CURRENT_SCHEMA_VERSION: number;
 };
 
-const { openDb, getRow, putRow, deleteRow, listRows, listRowsPage, countRows, selectRows, prepareCached, txn, SQLITE_BUSY_TIMEOUT_MS } = databaseApi;
+const {
+  openDb, getRow, putRow, deleteRow, listRows, listRowsPage, countRows, selectRows, prepareCached, txn,
+  SQLITE_BUSY_TIMEOUT_MS, SQLITE_MIGRATION_BUSY_TIMEOUT_MS, SQLITE_BUSY_RETRY_ATTEMPTS, SQLITE_BUSY_RETRY_DELAYS_MS, CURRENT_SCHEMA_VERSION,
+} = databaseApi;
+
+function stampedSchemaVersion(database: DatabaseSync): number {
+  return Number(JSON.parse(String(database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value)));
+}
+
+function runChild(code: string, env?: Record<string, string>): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', code], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      env: env ? Object.assign({}, process.env, env) : process.env,
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+    child.stderr.on('data', (chunk: string) => { stderr += chunk; });
+    child.once('error', reject);
+    child.once('close', (status) => resolve({ status, stdout: stdout.trim(), stderr: stderr.trim() }));
+  });
+}
+
+const DB_MODULE = JSON.stringify(path.join(__dirname, '..', 'lib', 'db.js'));
+const STORE_MODULE = JSON.stringify(path.join(__dirname, '..', 'lib', 'store.js'));
 
 function makeDb(): { db: SidequestDatabase; homeRoot: string } {
   const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-db-test-'));
@@ -253,6 +285,150 @@ test('txn reports a timed-out SQLite lock with retry diagnostics', async () => {
     childProcess.kill();
     await waitForProcessExit(childProcess);
     db.close();
+  }
+});
+
+test('openDb takes no write lock on an already-migrated store', async () => {
+  const { db, homeRoot } = makeDb();
+  db.close();
+  const childProcess = await holdWriteLock(homeRoot, 1500);
+  const startedAt = Date.now();
+
+  const reopened = openDb(homeRoot);
+
+  const elapsedMs = Date.now() - startedAt;
+  assert.strictEqual(stampedSchemaVersion(reopened), CURRENT_SCHEMA_VERSION);
+  assert.ok(elapsedMs < 1000, `opening a migrated store must not queue behind a writer, took ${elapsedMs}ms`);
+  reopened.close();
+  childProcess.kill();
+  await waitForProcessExit(childProcess);
+});
+
+test('openDb stamps and migrates an empty home', () => {
+  const { db } = makeDb();
+
+  assert.strictEqual(stampedSchemaVersion(db), CURRENT_SCHEMA_VERSION);
+  assert.ok(countRows(db, 'routing_profiles') > 0, 'the v7 migration must seed routing profiles');
+  db.close();
+});
+
+test('openDb recreates a dropped table, including behind a writer', async () => {
+  const { db, homeRoot } = makeDb();
+  db.exec('DROP TABLE stories');
+  db.close();
+
+  const repaired = openDb(homeRoot);
+  assert.strictEqual(countRows(repaired, 'stories'), 0);
+  repaired.close();
+
+  const lockedHome = makeDb();
+  lockedHome.db.exec('DROP TABLE stories');
+  lockedHome.db.close();
+  const childProcess = await holdWriteLock(lockedHome.homeRoot, 250);
+
+  const repairedUnderLock = openDb(lockedHome.homeRoot);
+
+  assert.strictEqual(countRows(repairedUnderLock, 'stories'), 0);
+  assert.strictEqual(stampedSchemaVersion(repairedUnderLock), CURRENT_SCHEMA_VERSION);
+  repairedUnderLock.close();
+  await waitForProcessExit(childProcess);
+});
+
+test('SQLite busy budgets separate hook and migration waits', () => {
+  const retryDelaysMs = SQLITE_BUSY_RETRY_DELAYS_MS.reduce((total, delay) => total + delay, 0);
+  const hookBusyBudgetMs = SQLITE_BUSY_RETRY_ATTEMPTS * SQLITE_BUSY_TIMEOUT_MS + retryDelaysMs;
+
+  assert.ok(
+    hookBusyBudgetMs < 10_000,
+    `${SQLITE_BUSY_RETRY_ATTEMPTS} attempts of ${SQLITE_BUSY_TIMEOUT_MS}ms plus ${retryDelaysMs}ms of delays must stay under the 10s hook budget`,
+  );
+  assert.ok(
+    SQLITE_MIGRATION_BUSY_TIMEOUT_MS > 10_183,
+    `the migration wait of ${SQLITE_MIGRATION_BUSY_TIMEOUT_MS}ms must cover the measured 10,183ms v7 migration`,
+  );
+});
+
+// A real v6 store, not a current store with v7's tables removed: v7 also creates the legacy
+// read-only triggers, and leaving those behind makes the ladder fail on `already exists` the
+// moment it actually runs, which hides whether the wait was the point or the refusal was.
+function makeBelowCurrentDb(): string {
+  const { db, homeRoot } = makeDb();
+  db.exec(`
+    PRAGMA foreign_keys=OFF;
+    DROP TRIGGER categories_legacy_read_only_insert;
+    DROP TRIGGER categories_legacy_read_only_update;
+    DROP TRIGGER categories_legacy_read_only_delete;
+    DROP TABLE project_routing_profiles;
+    DROP TABLE routing_profile_settings;
+    DROP TABLE routing_profile_entries;
+    DROP TABLE routing_profiles;
+    DROP TABLE project_categories;
+    CREATE TABLE project_categories (project TEXT, id TEXT, kind TEXT, data TEXT, PRIMARY KEY (project, id));
+    UPDATE meta SET value = '6' WHERE key = 'schema_version';
+  `);
+  db.close();
+  return homeRoot;
+}
+
+test('a below-current store outwaits the hook budget and still migrates', async () => {
+  const homeRoot = makeBelowCurrentDb();
+  const retryDelaysMs = SQLITE_BUSY_RETRY_DELAYS_MS.reduce((total, delay) => total + delay, 0);
+  const hookBusyBudgetMs = SQLITE_BUSY_RETRY_ATTEMPTS * SQLITE_BUSY_TIMEOUT_MS + retryDelaysMs;
+  // Outlasting the whole hook budget is the proof: on the steady-state timeout this open would
+  // have given up at hookBusyBudgetMs instead of reaching the ladder at all. Waiting out the full
+  // migration budget would prove the same thing and cost 45 seconds of suite time.
+  const childProcess = await holdWriteLock(homeRoot, hookBusyBudgetMs + 2_000);
+  const startedAt = Date.now();
+
+  try {
+    const migrated = openDb(homeRoot);
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.ok(elapsedMs > hookBusyBudgetMs, `a below-current open must outlast the ${hookBusyBudgetMs}ms hook budget, took ${elapsedMs}ms`);
+    assert.strictEqual(stampedSchemaVersion(migrated), CURRENT_SCHEMA_VERSION);
+    assert.ok(countRows(migrated, 'routing_profiles') > 0, 'the v7 migration must run, not merely be waited for');
+    migrated.close();
+  } finally {
+    childProcess.kill();
+    await waitForProcessExit(childProcess);
+  }
+});
+
+test('a store read completes while a writer holds the lock', async () => {
+  const { db, homeRoot } = makeDb();
+  db.close();
+  const readProbe = `
+    const store = require(${STORE_MODULE});
+    const startedAt = Date.now();
+    const projects = store.listProjects({ all: true });
+    process.stdout.write(JSON.stringify({ readMs: Date.now() - startedAt, projectCount: projects.length }));
+  `;
+  const settle = await runChild(readProbe, { SIDEQUEST_HOME: homeRoot });
+  assert.strictEqual(settle.status, 0, settle.stderr);
+
+  const childProcess = await holdWriteLock(homeRoot, 1500);
+  const locked = await runChild(readProbe, { SIDEQUEST_HOME: homeRoot });
+
+  assert.strictEqual(locked.status, 0, `a read must not need the write lock: ${locked.stderr}`);
+  const { readMs } = JSON.parse(locked.stdout) as { readMs: number };
+  assert.ok(readMs < 1000, `the store read queued behind the writer for ${readMs}ms`);
+  childProcess.kill();
+  await waitForProcessExit(childProcess);
+});
+
+test('openDb is safe when processes race an uninitialized store', async () => {
+  const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-db-race-'));
+  const openProbe = `
+    const { openDb } = require(${DB_MODULE});
+    const database = openDb(${JSON.stringify(homeRoot)});
+    process.stdout.write(String(JSON.parse(database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value)));
+  `;
+
+  const openers = await Promise.all([runChild(openProbe), runChild(openProbe), runChild(openProbe), runChild(openProbe)]);
+
+  for (const opener of openers) {
+    assert.strictEqual(opener.status, 0, `a racing opener failed: ${opener.stderr}`);
+    assert.strictEqual(opener.stdout, String(CURRENT_SCHEMA_VERSION));
   }
 });
 

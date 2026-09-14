@@ -38,6 +38,8 @@ const os = require('node:os');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const { writeFileAtomically } = require('./atomic-file.js');
+const { authenticatedControlRequest, controlRequestHeaders, ensureControlToken } = require('./control-auth.js');
+const { downloadVerifiedArchive } = require('./release-verification.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
 const {
@@ -477,25 +479,13 @@ async function setup() {
   const rel = await fetchUrl(`https://api.github.com/repos/${REPO}/releases/latest`);
   if (rel.status !== 200) die(`GitHub API returned ${rel.status}`);
   const release = JSON.parse(rel.body.toString());
-  const asset = (release.assets || []).find((a) => a.name === assetName);
-  if (!asset) die(`no asset ${assetName} in release ${release.tag_name}`);
-  const shaAsset = (release.assets || []).find((a) => a.name === assetName.replace(/\.(zip|tar\.gz)$/, '.sha256'));
-
-  log(`downloading ${assetName} (${release.tag_name})...`);
-  const archive = await fetchUrl(asset.browser_download_url, { timeout: 120000 });
-  if (archive.status !== 200) die(`download failed with ${archive.status}`);
-
-  if (shaAsset) {
-    const shaBody = (await fetchUrl(shaAsset.browser_download_url)).body.toString();
-    const want = (shaBody.match(/[0-9a-f]{64}/i) || [])[0];
-    const got = crypto.createHash('sha256').update(archive.body).digest('hex');
-    if (want && want.toLowerCase() !== got) die(`sha256 mismatch: expected ${want}, got ${got}`);
-    log('sha256 verified');
-  }
+  let archive;
+  try { archive = await downloadVerifiedArchive(release, assetName, { fetchUrl, log }); }
+  catch (error) { die(error.message); }
 
   const stage = fs.mkdtempSync(path.join(BIN_DIR, 'stage-'));
   const archiveFile = path.join(stage, assetName);
-  fs.writeFileSync(archiveFile, archive.body);
+  fs.writeFileSync(archiveFile, archive);
   const tarBin = WIN
     ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe')
     : 'tar';
@@ -1297,96 +1287,6 @@ const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 // spelling, chosen from the same context table used for max_input_tokens. The
 // worker sentry retains backend headroom because that spelling is a 1M client
 // window rather than the backend's exact 920k limit.
-const CODEX_SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
-const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
-const CODEX_COMPACT_HEADROOM = 40000;
-const configuredSseHeartbeatSeconds = Number(process.env.CODEX_GATEWAY_SSE_HEARTBEAT_S);
-const SSE_HEARTBEAT_MS = Number.isFinite(configuredSseHeartbeatSeconds) && configuredSseHeartbeatSeconds >= 0
-  ? configuredSseHeartbeatSeconds * 1000
-  : 20000;
-const configuredWebSocketUpgradeRetries = Number(process.env.CODEX_GATEWAY_WS_UPGRADE_RETRIES);
-const WEBSOCKET_UPGRADE_RETRIES = Number.isInteger(configuredWebSocketUpgradeRetries) && configuredWebSocketUpgradeRetries >= 0
-  ? configuredWebSocketUpgradeRetries
-  : 2;
-const configuredWebSocketUpgradeRetryDelayMs = Number(process.env.CODEX_GATEWAY_WS_UPGRADE_RETRY_DELAY_MS);
-const WEBSOCKET_UPGRADE_RETRY_DELAY_MS = Number.isFinite(configuredWebSocketUpgradeRetryDelayMs) && configuredWebSocketUpgradeRetryDelayMs >= 0
-  ? configuredWebSocketUpgradeRetryDelayMs
-  : 250;
-
-// Claude Code's own compaction system prompt, verbatim from the querySource:
-// "compact" call site in CLI 2.1.220. claude-code-proxy keys its compaction
-// handling off the same literal, so the two stay in step.
-const COMPACTION_SYSTEM_PROMPT = 'You are a helpful AI assistant tasked with summarizing conversations.';
-// A Codex compaction turn dies mid-stream far more often than a normal turn,
-// and claude-code-proxy cannot recover it. Its streaming path is WebSocket-only
-// (config.rs codex_transport() defaults to WebSocket; mod.rs routes every
-// stream:true request to live_stream_response), and that path can only retry
-// BEFORE its first non-empty chunk. After that, an upstream socket that closes
-// without a terminal event becomes an SSE error carrying the raw detail slug
-// websocket_missing_terminal (websocket.rs missing_terminal_error), which
-// Claude Code surfaces as a failed compaction. Compaction is one long
-// single-shot generation over the largest body in the session, so it sits in
-// that unrecoverable window for minutes. Buffering the translated stream for
-// compaction only lets us retry the whole turn while the client has seen
-// nothing; normal turns keep streaming live.
-const COMPACT_STREAM_GUARD = process.env.CODEX_GATEWAY_COMPACT_STREAM_GUARD !== '0';
-const configuredCompactStreamRetries = Number(process.env.CODEX_GATEWAY_COMPACT_STREAM_RETRIES);
-const COMPACT_STREAM_RETRIES = Number.isInteger(configuredCompactStreamRetries) && configuredCompactStreamRetries >= 0
-  ? configuredCompactStreamRetries
-  : 2;
-const configuredCompactStreamRetryDelayMs = Number(process.env.CODEX_GATEWAY_COMPACT_STREAM_RETRY_DELAY_MS);
-const COMPACT_STREAM_RETRY_DELAY_MS = Number.isFinite(configuredCompactStreamRetryDelayMs) && configuredCompactStreamRetryDelayMs >= 0
-  ? configuredCompactStreamRetryDelayMs
-  : 250;
-const configuredCompactStreamMaxBytes = Number(process.env.CODEX_GATEWAY_COMPACT_STREAM_MAX_BYTES);
-const COMPACT_STREAM_MAX_BYTES = Number.isFinite(configuredCompactStreamMaxBytes) && configuredCompactStreamMaxBytes > 0
-  ? configuredCompactStreamMaxBytes
-  : 16 * 1024 * 1024;
-// Retrying these would re-send a body the backend has already refused on its
-// merits; they pass straight through to the client instead.
-const COMPACT_FATAL_ERROR_TYPES = new Set([
-  'invalid_request_error',
-  'authentication_error',
-  'permission_error',
-  'not_found_error',
-  'request_too_large',
-  'rate_limit_error',
-  'billing_error',
-]);
-
-function systemPromptText(system) {
-  if (typeof system === 'string') return system;
-  if (!Array.isArray(system)) return '';
-  return system.map((block) => (block && typeof block.text === 'string' ? block.text : '')).join('\n');
-}
-
-function isCompactionRequest(payload) {
-  return !!payload && payload.stream === true
-    && systemPromptText(payload.system).includes(COMPACTION_SYSTEM_PROMPT);
-}
-
-function sseErrorFrame(type, message) {
-  const event = { type: 'error', error: { type, message } };
-  return `event: error\ndata: ${JSON.stringify(event)}\n\n`;
-}
-
-function upstreamErrorMessage(body, statusCode) {
-  try {
-    const parsed = JSON.parse(body.toString());
-    const detail = parsed?.error?.message || parsed?.message;
-    if (typeof detail === 'string' && detail) return `model-gateway: upstream returned ${statusCode}: ${detail}`;
-  } catch { /* not JSON */ }
-  return `model-gateway: upstream returned ${statusCode} with no readable error body`;
-}
-
-function noteCompactEvent(attempt, event) {
-  if (!event || typeof event !== 'object') return;
-  if (event.type === 'message_stop') attempt.terminal = true;
-  if (event.type !== 'error') return;
-  attempt.sawError = true;
-  if (COMPACT_FATAL_ERROR_TYPES.has(event.error?.type)) attempt.fatal = true;
-}
-
 function gatewayModel(id, backend = 'codex') {
   const policy = id === 'auto' ? null : resolveGatewayModelPolicy(id);
   if (id !== 'auto' && policy?.backend !== backend) return null;
@@ -1984,6 +1884,7 @@ function requestHeader(req, name) {
 const { effectiveCodexSentryPolicy, runWorker } = require('./request-worker.js');
 function runShim() {
   mkdirs();
+  const controlToken = ensureControlToken();
   const supervisorStartedAt = new Date().toISOString();
   const probeChildren = createProbeChildRegistry();
   let proxyRecovery = null;
@@ -2019,6 +1920,12 @@ function runShim() {
   const hostsEntry = detectHostsCompat();
   const compatState = { hostsDetected: !!hostsEntry, hostsLine: hostsEntry?.line ?? null, port80Bound: false, reason: null };
   let worker = null;
+  // One connection per request. A pooled keep-alive socket the worker closed at
+  // the same moment fails after the body is written even though the worker never
+  // read it, which is indistinguishable from a worker that took the body and
+  // went quiet: measured 4 requests over 1 socket on the default agent, so three
+  // of four would have been misread that way (verification/SQ-2861).
+  const workerAgent = new http.Agent({ keepAlive: false });
   let workerScript = CLI_PATH;
   let workerPortReportTimeout = null;
   let restarting = false;
@@ -2167,20 +2074,62 @@ function runShim() {
     return portListening(workerPort, 100);
   }
 
-  function requestWorker(req, body, retry = 0) {
+  // A worker that already took the body may have spent it upstream, so only
+  // the loss of that worker justifies sending the request again: a resend to a
+  // live worker is a second inference, billed to the user's subscription, that
+  // the caller never sees.
+  function requestWorker(req, body) {
     return new Promise((resolve, reject) => {
-      if (!workerPort) {
-        if (retry < 80 && !stopped) return setTimeout(() => requestWorker(req, body, retry + 1).then(resolve, reject), 50);
-        return reject(new Error('shim worker did not report a listener port'));
-      }
-      const upstream = http.request({
-        host: '127.0.0.1', port: workerPort, method: req.method, path: req.url, headers: req.headers,
-      }, (response) => resolve(response));
-      upstream.once('error', (error) => {
-        if (retry < 80 && !stopped) return setTimeout(() => requestWorker(req, body, retry + 1).then(resolve, reject), 50);
-        reject(error);
-      });
-      upstream.end(body);
+      let settled = false;
+      const settle = (finish, value) => {
+        if (settled) return;
+        settled = true;
+        finish(value);
+      };
+      const lostWorkerRequest = (error, workerThatTookBody) => {
+        recordGatewayLifecycle('worker-request-lost', {
+          component: 'supervisor',
+          pid: process.pid,
+          startedAt: supervisorStartedAt,
+          ...(workerThatTookBody?.pid ? { child: { component: 'worker', pid: workerThatTookBody.pid } } : {}),
+          outcome: 'response-lost',
+          errorType: error.code || error.name,
+        });
+        return Object.assign(error, { bodyTakenByWorker: true });
+      };
+      const attempt = (attemptsLeft, acceptingWorker) => {
+        if (settled) return;
+        const canWait = () => attemptsLeft > 0 && !stopped;
+        const waitForAnotherAttempt = (nextAcceptingWorker) => setTimeout(
+          () => attempt(attemptsLeft - 1, nextAcceptingWorker), 50,
+        );
+        if (acceptingWorker && worker === acceptingWorker) {
+          if (!canWait()) return settle(reject, lostWorkerRequest(new Error('shim worker never answered the request it had accepted'), acceptingWorker));
+          return waitForAnotherAttempt(acceptingWorker);
+        }
+        if (!workerPort) {
+          if (!canWait()) return settle(reject, new Error('shim worker did not report a listener port'));
+          return waitForAnotherAttempt(null);
+        }
+        let deliveredToWorker = null;
+        const upstream = http.request({
+          host: '127.0.0.1', port: workerPort, method: req.method, path: req.url,
+          headers: { ...req.headers, host: `127.0.0.1:${workerPort}` },
+          agent: workerAgent,
+        }, (response) => settle(resolve, response));
+        upstream.once('socket', (socket) => {
+          const noteDelivered = () => { deliveredToWorker = worker; };
+          if (socket.connecting) socket.once('connect', noteDelivered);
+          else noteDelivered();
+        });
+        upstream.once('error', (error) => {
+          if (settled) return;
+          if (!canWait()) return settle(reject, deliveredToWorker ? lostWorkerRequest(error, deliveredToWorker) : error);
+          waitForAnotherAttempt(deliveredToWorker);
+        });
+        upstream.end(body);
+      };
+      attempt(80, null);
     });
   }
 
@@ -2206,9 +2155,27 @@ function runShim() {
       }
       res.writeHead(upstream.statusCode || 502, upstream.headers);
       upstream.pipe(res);
-    } catch {
-      res.writeHead(503, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'model-gateway is restarting; retry this request shortly' } }));
+    } catch (error) {
+      // Claude Code resends any retryable status without telling the user:
+      // measured at five identical resends of one 503, and `x-should-retry:
+      // false` cuts that to none (verification/SQ-2861). So the answer depends
+      // on whether a worker took the body: if it did, that inference is
+      // already being paid for upstream and a resend silently buys a second
+      // one, and if it did not, the resend is free and wanted.
+      const bodyTakenByWorker = error?.bodyTakenByWorker === true;
+      res.writeHead(503, {
+        'content-type': 'application/json',
+        ...(bodyTakenByWorker ? { 'x-should-retry': 'false' } : {}),
+      });
+      res.end(JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'api_error',
+          message: bodyTakenByWorker
+            ? 'model-gateway lost the shim worker connection after this request reached the model; that answer cannot be recovered, and retrying automatically would pay for a second inference, so send it again yourself if you still want one'
+            : 'model-gateway could not deliver this request to the shim worker; retry it shortly',
+        },
+      }));
     }
   }
 
@@ -2227,7 +2194,7 @@ function runShim() {
       startWorker();
       return;
     }
-    try { await postJson(`http://127.0.0.1:${workerPort}/drain`, { timeout }, timeout + 1000); } catch {}
+    try { await postJson(`http://127.0.0.1:${workerPort}/drain`, { timeout }, timeout + 1000, controlRequestHeaders()); } catch {}
     setTimeout(() => {
       if (worker === current && current.exitCode == null) {
         console.error(`model-gateway: shim drain timed out after ${Math.ceil(timeout / 1000)}s; force-stopping it.`);
@@ -2335,6 +2302,13 @@ function runShim() {
 
   function handle(req, res, compatibilityListener = false) {
     const pathOnly = req.url.split('?')[0];
+    if (pathOnly === '/restart' || pathOnly === '/drain') {
+      if (!authenticatedControlRequest(req, controlToken, [req.socket.localPort], compatibilityListener)) {
+        res.writeHead(403);
+        res.end();
+        return;
+      }
+    }
     if (pathOnly === RC_CONTROL_PATH) {
       if (!controlRequestAllowed(req, compatibilityListener)) {
         res.writeHead(404);
@@ -2346,10 +2320,25 @@ function runShim() {
     }
     if (req.method === 'POST' && pathOnly === '/restart') {
       const chunks = [];
-      req.on('data', (chunk) => chunks.push(chunk));
+      let size = 0;
+      req.on('data', (chunk) => {
+        size += chunk.length;
+        if (size <= 4096) chunks.push(chunk);
+        else if (!res.writableEnded) { res.writeHead(413); res.end(); }
+      });
       req.on('end', () => {
+        if (res.writableEnded) return;
         let script;
-        try { script = JSON.parse(Buffer.concat(chunks).toString()).script; } catch {}
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString());
+          if (!body || Array.isArray(body) || typeof body !== 'object') throw new Error('invalid restart body');
+          script = body.script;
+          if (script !== undefined && !canReplaceInstalledCliPath(workerScript, script)) throw new Error('untrusted worker path');
+        } catch {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, reason: 'restart requires this CLI or a non-older sibling in the same plugin cache' }));
+          return;
+        }
         restartWorker(script);
         res.writeHead(202, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true, restarting: true }));

@@ -22,10 +22,13 @@ try {
 }
 
 export const CURRENT_SCHEMA_VERSION = 7;
-// Board writers normally finish in milliseconds; fifteen-second SQLite waits avoid failing on ordinary handoffs without hiding a wedged writer forever.
-export const SQLITE_BUSY_TIMEOUT_MS = 15_000;
-const SQLITE_BUSY_RETRY_ATTEMPTS = 3;
-const SQLITE_BUSY_RETRY_DELAYS_MS = [50, 100] as const;
+// Board writers normally finish in milliseconds, so three two-second waits ride out an ordinary
+// handoff and still fit inside the 10s hook budget instead of being tree-killed mid-answer.
+export const SQLITE_BUSY_TIMEOUT_MS = 2_000;
+// A below-current store waits for the active migrator because refusing leaves a usable board unavailable.
+export const SQLITE_MIGRATION_BUSY_TIMEOUT_MS = 15_000;
+export const SQLITE_BUSY_RETRY_ATTEMPTS = 3;
+export const SQLITE_BUSY_RETRY_DELAYS_MS = [50, 100] as const;
 const busySleep = new Int32Array(new SharedArrayBuffer(4));
 
 // Pre-v5 default text; the v5 migration only refreshes rows the user never customized.
@@ -201,23 +204,23 @@ function isSqliteBusy(error: unknown): boolean {
   return isSqliteBusy(Reflect.get(error, 'cause'));
 }
 
-function sqliteBusyError(operation: string, startedAt: number, cause: unknown): Error {
+function sqliteBusyError(operation: string, startedAt: number, cause: unknown, timeoutMs: number): Error {
   const elapsedMs = Date.now() - startedAt;
   const originalMessage = cause instanceof Error ? cause.message : String(cause);
   return new Error(
-    `Sidequest database stayed locked while ${operation} for ${elapsedMs}ms after ${SQLITE_BUSY_RETRY_ATTEMPTS} attempts, each waiting up to ${SQLITE_BUSY_TIMEOUT_MS}ms. SQLite does not expose the locking process or claim identity. Check active Sidequest writers, then retry. Original SQLite error: ${originalMessage}`,
+    `Sidequest database stayed locked while ${operation} for ${elapsedMs}ms after ${SQLITE_BUSY_RETRY_ATTEMPTS} attempts, each waiting up to ${timeoutMs}ms. SQLite does not expose the locking process or claim identity. Check active Sidequest writers, then retry. Original SQLite error: ${originalMessage}`,
     { cause },
   );
 }
 
-function retryWhenSqliteBusy<T>(operation: string, work: () => T): T {
+function retryWhenSqliteBusy<T>(operation: string, work: () => T, timeoutMs = SQLITE_BUSY_TIMEOUT_MS): T {
   const startedAt = Date.now();
   for (let attempt = 0; attempt < SQLITE_BUSY_RETRY_ATTEMPTS; attempt += 1) {
     try {
       return work();
     } catch (error) {
       if (!isSqliteBusy(error) || attempt === SQLITE_BUSY_RETRY_ATTEMPTS - 1) {
-        if (isSqliteBusy(error)) throw sqliteBusyError(operation, startedAt, error);
+        if (isSqliteBusy(error)) throw sqliteBusyError(operation, startedAt, error, timeoutMs);
         throw error;
       }
       Atomics.wait(busySleep, 0, 0, SQLITE_BUSY_RETRY_DELAYS_MS[attempt] ?? 0);
@@ -388,6 +391,18 @@ function validateGeneral(profileId: string, categories: readonly Record<string, 
   if (!general || general.enabled === false) throw new Error(`Routing profile "${profileId}" requires an enabled general category.`);
 }
 
+// Two processes can open an uninitialized store at once and both read a stamp that is still behind,
+// and the v7 block below cannot run twice (`CREATE TABLE routing_profiles` is not IF NOT EXISTS).
+// Re-reading the stamp inside the transaction is what makes the ladder safe to enter twice.
+function migrateWhenBelow(database: DatabaseSync, targetVersion: number, apply: () => void): void {
+  txn(database, () => {
+    const row = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
+    if (Number(row && JSON.parse(row.value as string)) >= targetVersion) return;
+    apply();
+    prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(targetVersion));
+  }, SQLITE_MIGRATION_BUSY_TIMEOUT_MS);
+}
+
 function applyCategoryRows(
   baseCategories: readonly Record<string, unknown>[],
   rows: readonly { id: string; kind: string; data: Record<string, unknown> }[],
@@ -403,6 +418,13 @@ function applyCategoryRows(
   return [...categories.values()];
 }
 
+// Opening is deliberately read-only on a store that is already at the current schema: every
+// `CREATE ... IF NOT EXISTS` below is a true no-op that takes no write lock, so a reader (most
+// hooks) never queues behind a board writer. The DDL doubles as the only repair this path
+// performs, recreating missing v1-level objects. Damage that postdates v1 (a dropped column,
+// unique index, or trigger) is not detected, not repaired, and not refused here: three candidates
+// died proving no cheap oracle for it survives adversarial input, so openDb defers to SQLite's own
+// named error at first use, and a damaged store is a repair ticket rather than a startup path.
 export function openDb(homeRoot: string): SidequestDatabase {
   fs.mkdirSync(homeRoot, { recursive: true });
   const database = new DatabaseSyncConstructor(path.join(homeRoot, 'sidequest.db'), { timeout: SQLITE_BUSY_TIMEOUT_MS });
@@ -440,14 +462,32 @@ export function openDb(homeRoot: string): SidequestDatabase {
       key TEXT PRIMARY KEY,
       value TEXT
     );
-    INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1');
   `));
 
-  const schemaRow = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
-  let schemaVersion = Number(schemaRow && JSON.parse(schemaRow.value as string));
+  const stampedSchemaVersion = () => {
+    const row = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
+    return Number(row && JSON.parse(row.value as string));
+  };
+  let schemaVersion = stampedSchemaVersion();
+  // A store already at the current stamp has no migration block left below, so opening it needs no
+  // write at all: that is what keeps a reader (most hooks) off the write lock entirely. Anything
+  // lower may migrate, and the v7 block is not re-runnable, so first take the write lock exactly as
+  // the unconditional `INSERT OR IGNORE` used to. Blocking on it is what holds a second opener back
+  // until the first opener's ladder has committed, so re-read the stamp it may have advanced.
+  // Measured: reading the stamp before that wait failed 37 of 48 racing cold opens on
+  // `table routing_profiles already exists`.
+  if (!Number.isInteger(schemaVersion) || schemaVersion < CURRENT_SCHEMA_VERSION) {
+    database.exec(`PRAGMA busy_timeout=${SQLITE_MIGRATION_BUSY_TIMEOUT_MS}`);
+    retryWhenSqliteBusy(
+      'preparing a schema migration',
+      () => prepareCached(database, "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')").run(),
+      SQLITE_MIGRATION_BUSY_TIMEOUT_MS,
+    );
+    schemaVersion = stampedSchemaVersion();
+  }
   if (!Number.isInteger(schemaVersion) || schemaVersion < 1) schemaVersion = 1;
   if (schemaVersion < 2) {
-    txn(database, () => {
+    migrateWhenBelow(database, 2, () => {
       database.exec(`
         CREATE TABLE IF NOT EXISTS categories (
           id TEXT PRIMARY KEY,
@@ -457,7 +497,6 @@ export function openDb(homeRoot: string): SidequestDatabase {
       for (const category of DEFAULT_CATEGORIES) {
         prepareCached(database, 'INSERT OR IGNORE INTO categories (id, data) VALUES (?, ?)').run(category.id, JSON.stringify(category));
       }
-      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(2));
     });
     schemaVersion = 2;
   }
@@ -465,7 +504,7 @@ export function openDb(homeRoot: string): SidequestDatabase {
     throw new Error(`Sidequest database schema ${schemaVersion} is newer than supported schema ${CURRENT_SCHEMA_VERSION}.`);
   }
   if (schemaVersion < 3) {
-    txn(database, () => {
+    migrateWhenBelow(database, 3, () => {
       const prefsRow = prepareCached(database, "SELECT data FROM globals WHERE key = 'model-prefs'").get();
       const prefs = parseStoredRecord(prefsRow?.data);
       const discovered = discoverExternalModels();
@@ -504,12 +543,11 @@ export function openDb(homeRoot: string): SidequestDatabase {
         prepareCached(database, "INSERT INTO globals (key, data) VALUES ('routing-fallback', ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data")
           .run(JSON.stringify(ROUTING_FALLBACK_DEFAULT));
       }
-      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(3));
     });
     schemaVersion = 3;
   }
   if (schemaVersion < 4) {
-    txn(database, () => {
+    migrateWhenBelow(database, 4, () => {
       database.exec(`
         CREATE TABLE IF NOT EXISTS project_categories (
           project TEXT,
@@ -520,12 +558,11 @@ export function openDb(homeRoot: string): SidequestDatabase {
         );
         CREATE INDEX IF NOT EXISTS project_categories_project_idx ON project_categories(project);
       `);
-      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(4));
     });
     schemaVersion = 4;
   }
   if (schemaVersion < 5) {
-    txn(database, () => {
+    migrateWhenBelow(database, 5, () => {
       const row = prepareCached(database, "SELECT data FROM categories WHERE id = 'codebase-exploration'").get();
       let category: Record<string, unknown> | null = null;
       try {
@@ -544,12 +581,11 @@ export function openDb(homeRoot: string): SidequestDatabase {
           prepareCached(database, "UPDATE categories SET data = ? WHERE id = 'codebase-exploration'").run(JSON.stringify(category));
         }
       }
-      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(5));
     });
     schemaVersion = 5;
   }
   if (schemaVersion < 6) {
-    txn(database, () => {
+    migrateWhenBelow(database, 6, () => {
       const row = prepareCached(database, "SELECT data FROM categories WHERE id = 'codebase-exploration'").get();
       let category: Record<string, unknown> | null = null;
       try {
@@ -569,12 +605,11 @@ export function openDb(homeRoot: string): SidequestDatabase {
           prepareCached(database, "UPDATE categories SET data = ? WHERE id = 'codebase-exploration'").run(JSON.stringify(category));
         }
       }
-      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(6));
     });
     schemaVersion = 6;
   }
   if (schemaVersion < 7) {
-    txn(database, () => {
+    migrateWhenBelow(database, 7, () => {
       const migratedAt = new Date().toISOString();
       const legacyCategories = categoryRows(database);
       validateGeneral('coding', legacyCategories);
@@ -765,10 +800,10 @@ export function openDb(homeRoot: string): SidequestDatabase {
         CREATE TRIGGER categories_legacy_read_only_delete BEFORE DELETE ON categories
           BEGIN SELECT RAISE(ABORT, 'categories is a read-only legacy snapshot'); END;
       `);
-      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(7));
     });
     schemaVersion = 7;
   }
+  database.exec(`PRAGMA busy_timeout=${SQLITE_BUSY_TIMEOUT_MS}`);
   database.exec('PRAGMA foreign_keys=ON');
   const sidequestDatabase = database as SidequestDatabase;
   sidequestDatabase.__sidequestSchemaVersion = CURRENT_SCHEMA_VERSION;
@@ -862,8 +897,8 @@ export function hasRow<N extends TableName>(database: DatabaseSync, table: N, ke
   return retryWhenSqliteBusy(`checking ${table}`, () => prepareCached(database, `SELECT 1 FROM ${table} WHERE ${keyWhere(spec)} LIMIT 1`).get(...keyValues(spec, key)) !== undefined);
 }
 
-export function txn<T>(database: DatabaseSync, fn: () => T): T {
-  const row = retryWhenSqliteBusy('checking schema version before a transaction', () => prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get());
+export function txn<T>(database: DatabaseSync, fn: () => T, timeoutMs = SQLITE_BUSY_TIMEOUT_MS): T {
+  const row = retryWhenSqliteBusy('checking schema version before a transaction', () => prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get(), timeoutMs);
   if (row) assertWritable(database);
   return retryWhenSqliteBusy('writing transaction', () => {
     database.exec('BEGIN IMMEDIATE');
@@ -882,5 +917,5 @@ export function txn<T>(database: DatabaseSync, fn: () => T): T {
       }
       throw error;
     }
-  });
+  }, timeoutMs);
 }

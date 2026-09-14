@@ -4,7 +4,6 @@ function createClaims(dependencies) {
     completionTreeCheck,
     dispatchDelta,
     dispatchState,
-    isolatedDispatchWorktreeMissing,
     getTicket,
     putTicket,
     withTicketLock
@@ -196,13 +195,6 @@ ${evidence.outputTail}`;
     if (!Number.isFinite(stoppedMs)) return false;
     return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
   }
-  function missingIsolatedWorktree(dispatch) {
-    try {
-      return isolatedDispatchWorktreeMissing(dispatch);
-    } catch (_) {
-      return false;
-    }
-  }
   function claimReleaseBlocker(slug, ticket) {
     const dispatch = dispatchState(ticket);
     if (!dispatch || dispatch.sharedTree !== true) return null;
@@ -232,9 +224,6 @@ ${evidence.outputTail}`;
     const verification = claimVerification(ticket);
     if (observedStop(dispatch, claim)) {
       return { kind: "observed_stop", idleMs, at: dispatch.terminalAt, reason: "its executor has a durable died outcome while still holding the claim" };
-    }
-    if (missingIsolatedWorktree(dispatch)) {
-      return { kind: "missing_worktree", idleMs, reason: "its isolated executor worktree no longer exists" };
     }
     if (verification) {
       if (idleMs > claimAbandonMs()) {
@@ -276,9 +265,6 @@ ${evidence.outputTail}`;
     if (verdict.kind === "abandoned_verifying") {
       return `↩️ Auto-released to **todo**: verification from \`${by}\` never completed for ${idle}, past the unobserved-death backstop.`;
     }
-    if (verdict.kind === "missing_worktree") {
-      return `↩️ Auto-released to **todo**: the isolated executor worktree for \`${by}\` no longer exists.`;
-    }
     if (verdict.kind === "idle") {
       return `↩️ Auto-released to **todo**: no board activity from \`${by}\` for ${idle}, and this claim has no executor dispatch.`;
     }
@@ -317,7 +303,6 @@ ${evidence.outputTail}`;
     claimReleaseVerdict,
     claimVerification,
     hasNoOpReleaseProof,
-    missingIsolatedWorktree,
     observedStop,
     preparedDispatchTtlMs,
     recordClaimVerification,

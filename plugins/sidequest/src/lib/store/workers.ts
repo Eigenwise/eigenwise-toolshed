@@ -3,14 +3,12 @@
 function createWorkers(dependencies: any) {
   const {
     acquireLock,
-    addComment,
     dispatchState,
     getTicket,
     path,
     projectsRoot,
     readGlobal,
     releaseLock,
-    releaseTicket,
     transaction,
     writeGlobal,
   } = dependencies;
@@ -121,19 +119,32 @@ function markLongRunFlagged(sessionId?: any, slug?: any, ticketId?: any, claimAt
   return first;
 }
 
-// Release every claim registered to `sessionId` that is still genuinely held by
-// that session's worker and not finished — moving each ticket back to `todo` and
-// leaving a note. This is what the SessionEnd hook calls. Safe by construction:
-// it only touches tickets the registry attributes to THIS session,
-// and skips any that were completed or re-claimed by someone else in the interim.
-// Idempotent — the session's registry entry is cleared as part of the pass, so a
-// second call finds nothing. Returns { ok, released: [ref...] }.
+// Forget every claim registered to `sessionId`, and report the ones still held.
+// This is what the SessionEnd hook calls.
+//
+// It used to release those claims — move each ticket to `todo` and stamp a durable
+// `died` dispatch outcome — on the strength of the session id alone. A session id is
+// an identifier, not a liveness authority: Claude Code's SessionEnd payload carries
+// only the common fields plus `reason` (clear | resume | logout | prompt_input_exit |
+// other), with no generation, nonce, sequence or owning pid, and the host exposes no
+// way to ask whether an id is still live. So the assertion is replayable, and two of
+// its own reasons (`clear`, `resume`) fire while the process keeps running. SQ-2859
+// replayed it against a live executor claim and watched a replacement take the ticket
+// while the original runtime went on writing; the false `died` record it left behind
+// then reads as observed death forever. Nothing local corroborates it either — a
+// stopped turn is explicitly NOT death here (an executor between turns survives the
+// sweep and can still submit), so there is no second fact to pair with. A liveness
+// question that cannot be answered leaves the claim held (SQ-2862): the unobserved-death
+// and idle backstops recover a genuinely abandoned claim, and the ticket's own terminal
+// records recover an observed one.
+//
+// Clearing the registry entry stays, so the assertion cannot accumulate and a second
+// call finds nothing. Returns { ok, released: [], held: [ref...] }.
 function reconcileSession(sessionId?: any, opts?: any) {
   opts = opts || {};
-  const reason = opts.reason ? String(opts.reason) : 'worker session ended';
-  const source = opts.source ? String(opts.source) : 'cli';
   const released: any[] = [];
-  if (!sessionId) return { ok: true, released };
+  const held: any[] = [];
+  if (!sessionId) return { ok: true, released, held };
 
   // Snapshot this session's claims and clear its registry entry in one locked
   // step, so a concurrent reconcile of the same session can't double-release.
@@ -149,7 +160,7 @@ function reconcileSession(sessionId?: any, opts?: any) {
       }
     });
   } catch (_: any) {
-    return { ok: true, released };
+    return { ok: true, released, held };
   }
 
   for (const c of claims) {
@@ -161,31 +172,10 @@ function reconcileSession(sessionId?: any, opts?: any) {
     }
     if (!t || t.archived || t.status === 'done') continue; // finished work is left alone
     if (!t.claim || !t.claim.by) continue; // already released
-    if (c.by && t.claim.by !== c.by) continue; // re-claimed by someone else since — not ours to touch
-    try {
-      const res = releaseTicket(c.slug, c.ticketId, t.claim.by, {
-        status: 'todo',
-        source,
-        claimRelease: { kind: 'session_ended', reason },
-      });
-      if (res && res.ok) {
-        released.push(t.ref);
-        try {
-          addComment(c.slug, c.ticketId, {
-            by: 'sidequest',
-            kind: 'comment',
-            source,
-            body: `↩️ Auto-released to **todo**: ${reason} (was claimed by \`${t.claim.by}\`). It's back in the ready pool for another worker.`,
-          });
-        } catch (_: any) {
-          /* the release is what matters; the note is a courtesy */
-        }
-      }
-    } catch (_: any) {
-      /* one bad ticket must not abort the rest of the reconcile */
-    }
+    if (c.by && t.claim.by !== c.by) continue; // re-claimed by someone else since — not ours to report
+    held.push(t.ref);
   }
-  return { ok: true, released };
+  return { ok: true, released, held };
 }
 
 // Read-only view of the claims the registry attributes to `sessionId`, each with

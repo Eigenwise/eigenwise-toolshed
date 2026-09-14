@@ -222,11 +222,12 @@ async function cmdWork(opts: any) {
   fail(`work${ref} is disabled: routed work must use \`native-agent\` followed by the current conversation's Agent tool.${detail}`);
 }
 
-// Release every claim a session left behind (moving each ticket back to todo),
-// immediately instead of waiting out the claim TTL. Called by the SessionEnd
-// hook with the ending session's id; safe to run by hand too.
-// Session-scoped by construction (see store.reconcileSession) — it only touches
-// claims the registry attributes to THIS session. No session id -> a clean no-op.
+// Forget a session's claim registrations and report the claims it still holds.
+// Called by the SessionEnd hook with the ending session's id; safe to run by hand.
+// It does NOT release those claims: a session id proves nothing about whether that
+// session's runtime stopped, so a replayed assertion would hand live work to a
+// replacement (see store.reconcileSession). Recovery stays with the ticket's own
+// terminal records and the claim backstops. No session id -> a clean no-op.
 async function cmdReconcile(opts: any) {
   const sid = sessionId(opts);
   const reason = opts.reason || 'worker session ended';
@@ -239,8 +240,9 @@ async function cmdReconcile(opts: any) {
     console.log('reconcile: no session id (pass --session or set CLAUDE_SESSION_ID) — nothing to do.');
     return;
   }
-  if (res.released.length) console.log(`✓ reconciled ${sid}: released ${res.released.join(', ')} back to todo.`);
-  else console.log(`✓ reconciled ${sid}: no outstanding claims to release.`);
+  if (res.held.length) {
+    console.log(`✓ reconciled ${sid}: forgot its claim registrations. ${res.held.join(', ')} stay claimed — a session id is not evidence its runtime stopped, so recovery waits for a terminal record or the claim backstop.`);
+  } else console.log(`✓ reconciled ${sid}: no outstanding claims.`);
 }
 
 // Assign a ticket to someone (defaults to the human "you"), or clear it with

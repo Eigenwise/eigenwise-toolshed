@@ -11,6 +11,7 @@ const net = require('node:net');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const { writeFileAtomically } = require('./atomic-file.js');
+const { CONTROL_HEADER, authenticatedControlRequest, ensureControlToken } = require('./control-auth.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
 const { fetchUrl } = require('./process-supervision.js');
@@ -268,6 +269,17 @@ const COMPACT_FATAL_ERROR_TYPES = new Set([
   'rate_limit_error',
   'billing_error',
 ]);
+// Only these end a generation. `max_tokens`, `refusal` and `pause_turn` all mean
+// the summary stopped short, so they retry. `tool_use` is excluded on purpose: a
+// compaction request carries no tools, so a tool_use stop on one is upstream
+// answering a different question, not a finished summary. `stop_sequence` is a
+// real end of generation, so it counts even though the compaction path never
+// sends stop sequences today. Anything unrecognized retries, which is the safe
+// direction: a re-inferred compaction costs one request, a truncated one costs
+// the conversation.
+const GENERATION_END_STOP_REASONS = new Set(['end_turn', 'stop_sequence']);
+const CONTENT_BLOCK_EVENTS = new Set(['content_block_start', 'content_block_delta', 'content_block_stop']);
+const SYNTHESIZED_MESSAGE_STOP = 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
 const COMPACT_OUTCOMES = new Set(['completed', 'aborted', 'incomplete', 'empty_summary', 'upstream_error', 'unknown_error']);
 const COMPACT_ERROR_CODES = new Set([...COMPACT_FATAL_ERROR_TYPES, 'websocket_missing_terminal', 'upstream_http_error', 'unknown_error']);
 const COMPACT_USAGE_FIELDS = ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_creation_tokens'];
@@ -335,26 +347,68 @@ function mergeCompactUsage(previous, next) {
     next?.[field] ?? previous?.[field] ?? null]));
 }
 
-function noteCompactEvent(attempt, event) {
-  if (!event || typeof event !== 'object') return;
+function newCompactAttempt() {
+  return {
+    chunks: [], bytes: 0, terminal: false, terminalCode: null, errorCode: null, hasVisibleText: false,
+    fatal: false, sawError: false, degraded: false,
+    endOfGenerationStop: false, contentAfterStop: false, openBlocks: 0,
+  };
+}
+
+function noteContentBlock(attempt, type) {
+  if (attempt.endOfGenerationStop) attempt.contentAfterStop = true;
+  if (type === 'content_block_start') attempt.openBlocks++;
+  if (type === 'content_block_stop') attempt.openBlocks--;
+}
+
+function noteStreamStructure(attempt, event) {
   if (event.type === 'message_stop') {
     attempt.terminal = true;
     attempt.terminalCode = 'message_stop';
+  } else if (event.type === 'message_delta') {
+    if (GENERATION_END_STOP_REASONS.has(event.delta?.stop_reason)) attempt.endOfGenerationStop = true;
+  } else if (CONTENT_BLOCK_EVENTS.has(event.type)) {
+    noteContentBlock(attempt, event.type);
   }
-  if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta'
-      && typeof event.delta.text === 'string' && event.delta.text.trim()) {
-    attempt.hasVisibleText = true;
-  }
+}
+
+function visibleTextDelta(event) {
+  return event.type === 'content_block_delta' && event.delta?.type === 'text_delta'
+    && typeof event.delta.text === 'string' && event.delta.text.trim() !== '';
+}
+
+function noteCompactEvent(attempt, event) {
+  if (!event || typeof event !== 'object') return;
+  noteStreamStructure(attempt, event);
+  if (visibleTextDelta(event)) attempt.hasVisibleText = true;
   if (event.type !== 'error') return;
   attempt.sawError = true;
   attempt.errorCode = compactErrorCode(event.error);
   if (COMPACT_FATAL_ERROR_TYPES.has(event.error?.type)) attempt.fatal = true;
 }
 
+// The value alone is not enough: a stop reason followed by more content, or with
+// a content block still open, is proof the generation was still moving when the
+// stream said it had stopped.
+function generationFinished(attempt) {
+  if (attempt.terminal) return true;
+  return attempt.endOfGenerationStop && !attempt.contentAfterStop && attempt.openBlocks === 0;
+}
+
+// An explicit upstream error frame still retries even after the model finished:
+// upstream observed something the shim did not.
+function deliverableAttempt(attempt) {
+  return generationFinished(attempt) && !attempt.sawError;
+}
+
+function isSuccessStatus(statusCode) {
+  return statusCode >= 200 && statusCode < 300;
+}
+
 function compactOutcome(attempt, statusCode, statusOverride) {
-  if (!Number.isInteger(statusCode) || statusCode < 200 || statusCode >= 300) return 'upstream_error';
+  if (!isSuccessStatus(statusCode)) return 'upstream_error';
+  if (deliverableAttempt(attempt)) return attempt.hasVisibleText ? 'completed' : 'empty_summary';
   if (statusOverride === 'upstream_aborted') return 'aborted';
-  if (attempt.terminal && !attempt.sawError) return attempt.hasVisibleText ? 'completed' : 'empty_summary';
   return attempt.errorCode === 'unknown_error' ? 'unknown_error' : 'incomplete';
 }
 
@@ -1013,6 +1067,7 @@ function requestHeader(req, name) {
 
 
 function runWorker() {
+  const controlToken = ensureControlToken();
   process.once('disconnect', () => process.exit(0));
   let modelCache = {
     at: 0,
@@ -1499,7 +1554,7 @@ function runWorker() {
     if (usageCapture) clientRes.once('finish', () => finishUsage());
     const isHttps = url.protocol === 'https:';
     const headers = { ...clientReq.headers };
-    for (const h of ['host', 'connection', 'content-length', 'keep-alive', ...TRACE_HEADERS, ...extraHeaderDrop]) delete headers[h];
+    for (const h of ['host', 'connection', 'content-length', 'keep-alive', CONTROL_HEADER, ...TRACE_HEADERS, ...extraHeaderDrop]) delete headers[h];
     if (body != null) headers['content-length'] = Buffer.byteLength(body);
     const reqOptions = {
       method: clientReq.method,
@@ -1719,10 +1774,8 @@ function runWorker() {
           if (!compactGuard?.headWritten) clientRes.writeHead(upRes.statusCode, resHeaders);
           if (compactGuard) compactGuard.headWritten = true;
           keepSseAlive(upRes, clientRes);
-          const attempt = compactGuard
-            ? { chunks: [], bytes: 0, terminal: false, terminalCode: null, errorCode: null, hasVisibleText: false, fatal: false, sawError: false, degraded: false }
-            : null;
-          const inference = attempt || { terminal: false, sawError: false };
+          const attempt = compactGuard ? newCompactAttempt() : null;
+          const inference = attempt || newCompactAttempt();
           const observeEvent = (event) => {
             noteCompactEvent(inference, event);
             if (filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId)) recordSentryUsage(sessionId, event, contextModel);
@@ -1750,7 +1803,7 @@ function runWorker() {
           if (!attempt) {
             upRes.on('end', () => {
               filter.end();
-              routeTelemetry?.finish(upRes.statusCode, inference.terminal && !inference.sawError ? null : 'upstream_error');
+              routeTelemetry?.finish(upRes.statusCode, deliverableAttempt(inference) ? null : 'upstream_error');
               clientRes.end();
             });
             upRes.on('error', () => {
@@ -1769,7 +1822,8 @@ function runWorker() {
             settled = true;
             filter.end();
             if (clientRes.destroyed || !clientRes.writable) return;
-            const recoverable = !attempt.terminal && !attempt.fatal && !attempt.degraded;
+            const deliverable = deliverableAttempt(attempt);
+            const recoverable = !deliverable && !attempt.fatal && !attempt.degraded;
             if (recoverable && compactGuard.attempts < COMPACT_STREAM_RETRIES) {
               compactGuard.observedUsage = mergeCompactUsage(compactGuard.observedUsage, usageCapture?.snapshot());
               usageCapture?.resetUsage();
@@ -1795,10 +1849,14 @@ function runWorker() {
             routeTelemetry?.finish(upRes.statusCode,
               statusOverride || (completed ? null : 'upstream_error'));
             for (const buffered of attempt.chunks) clientRes.write(buffered);
-            if (!attempt.terminal && !attempt.sawError) {
+            // The model finished but the terminal frame was lost in transit;
+            // close the turn the client is holding open rather than re-inferring
+            // the largest request of the session.
+            if (deliverable && !attempt.terminal) clientRes.write(SYNTHESIZED_MESSAGE_STOP);
+            if (!deliverable && !attempt.sawError) {
               const attempts = compactGuard.attempts + 1;
               clientRes.write(sseErrorFrame('api_error',
-                `model-gateway: the Codex compaction stream ended without a terminal message_stop event after ${attempts} attempt(s); the summary above is incomplete`));
+                `model-gateway: the Codex compaction stream ended without a completed generation after ${attempts} attempt(s); the summary above is incomplete`));
             }
             clientRes.end();
           };
@@ -2001,6 +2059,10 @@ function runWorker() {
     const pathOnly = req.url.split('?')[0];
 
     if (req.method === 'POST' && pathOnly === '/drain') {
+      if (!authenticatedControlRequest(req, controlToken, [req.socket.localPort], compatState.port80Bound && req.socket.localPort === COMPAT_PORT)) {
+        res.writeHead(403);
+        return res.end();
+      }
       draining = true;
       res.once('finish', () => setImmediate(beginDrain));
       res.writeHead(202, { 'content-type': 'application/json' });

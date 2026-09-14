@@ -1074,7 +1074,6 @@ const {
   completionTreeCheck,
   dispatchDelta,
   dispatchState,
-  isolatedDispatchWorktreeMissing,
   getTicket,
   putTicket,
   withTicketLock
@@ -1254,14 +1253,12 @@ const {
   unregisterClaim
 } = createWorkers({
   acquireLock,
-  addComment,
   dispatchState,
   getTicket,
   path,
   projectsRoot,
   readGlobal,
   releaseLock,
-  releaseTicket,
   transaction,
   writeGlobal
 });
@@ -1398,11 +1395,31 @@ function refreshRoutingProfileSeeds(handle) {
   });
   invalidateStoreCaches();
 }
+function categoryNeedingReadonlyFlag(readonlyIds, data, rowId) {
+  let category;
+  try {
+    category = JSON.parse(data);
+  } catch (_) {
+    return null;
+  }
+  if (!readonlyIds.has(rowId ?? category?.id) || category?.readonly !== void 0) return null;
+  return category;
+}
+function readonlyCategorySeedsAreStale(handle, readonlyIds) {
+  for (const row of handle.prepare("SELECT data FROM routing_profile_entries").all()) {
+    if (categoryNeedingReadonlyFlag(readonlyIds, row.data)) return true;
+  }
+  for (const row of handle.prepare("SELECT id, data FROM project_categories").all()) {
+    if (categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id)) return true;
+  }
+  return false;
+}
 function refreshReadonlyCategorySeeds(handle) {
   const readonlyIds = /* @__PURE__ */ new Set([
     ...DEFAULT_CATEGORIES.filter((category) => category.readonly === true).map((category) => category.id),
     "hand-analysis"
   ]);
+  if (!readonlyCategorySeedsAreStale(handle, readonlyIds)) return;
   const affected = /* @__PURE__ */ new Set();
   let changed = false;
   withinTransaction(handle, () => {
@@ -1410,26 +1427,16 @@ function refreshReadonlyCategorySeeds(handle) {
     const updateProjectEntry = handle.prepare("UPDATE project_categories SET data = ? WHERE project = ? AND id = ?");
     const now = (/* @__PURE__ */ new Date()).toISOString();
     for (const row of handle.prepare("SELECT profile_id, category_id, data FROM routing_profile_entries").all()) {
-      let category;
-      try {
-        category = JSON.parse(row.data);
-      } catch (_) {
-        continue;
-      }
-      if (!readonlyIds.has(category?.id) || category.readonly !== void 0) continue;
+      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data);
+      if (!category) continue;
       category.readonly = true;
       updateProfileEntry.run(JSON.stringify(category), now, row.profile_id, row.category_id);
       for (const project of handle.prepare("SELECT project FROM project_routing_profiles WHERE profile_id = ?").all(row.profile_id)) affected.add(String(project.project));
       changed = true;
     }
     for (const row of handle.prepare("SELECT project, id, data FROM project_categories").all()) {
-      let category;
-      try {
-        category = JSON.parse(row.data);
-      } catch (_) {
-        continue;
-      }
-      if (!readonlyIds.has(row.id) || category.readonly !== void 0) continue;
+      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id);
+      if (!category) continue;
       category.readonly = true;
       updateProjectEntry.run(JSON.stringify(category), row.project, row.id);
       affected.add(String(row.project));

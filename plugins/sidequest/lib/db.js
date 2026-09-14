@@ -29,7 +29,10 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var db_exports = {};
 __export(db_exports, {
   CURRENT_SCHEMA_VERSION: () => CURRENT_SCHEMA_VERSION,
+  SQLITE_BUSY_RETRY_ATTEMPTS: () => SQLITE_BUSY_RETRY_ATTEMPTS,
+  SQLITE_BUSY_RETRY_DELAYS_MS: () => SQLITE_BUSY_RETRY_DELAYS_MS,
   SQLITE_BUSY_TIMEOUT_MS: () => SQLITE_BUSY_TIMEOUT_MS,
+  SQLITE_MIGRATION_BUSY_TIMEOUT_MS: () => SQLITE_MIGRATION_BUSY_TIMEOUT_MS,
   assertWritable: () => assertWritable,
   countRows: () => countRows,
   deleteRow: () => deleteRow,
@@ -64,7 +67,8 @@ try {
   process.emitWarning = originalEmitWarning;
 }
 const CURRENT_SCHEMA_VERSION = 7;
-const SQLITE_BUSY_TIMEOUT_MS = 15e3;
+const SQLITE_BUSY_TIMEOUT_MS = 2e3;
+const SQLITE_MIGRATION_BUSY_TIMEOUT_MS = 15e3;
 const SQLITE_BUSY_RETRY_ATTEMPTS = 3;
 const SQLITE_BUSY_RETRY_DELAYS_MS = [50, 100];
 const busySleep = new Int32Array(new SharedArrayBuffer(4));
@@ -108,22 +112,22 @@ function isSqliteBusy(error) {
   if (/database is (?:locked|busy)/i.test(error.message)) return true;
   return isSqliteBusy(Reflect.get(error, "cause"));
 }
-function sqliteBusyError(operation, startedAt, cause) {
+function sqliteBusyError(operation, startedAt, cause, timeoutMs) {
   const elapsedMs = Date.now() - startedAt;
   const originalMessage = cause instanceof Error ? cause.message : String(cause);
   return new Error(
-    `Sidequest database stayed locked while ${operation} for ${elapsedMs}ms after ${SQLITE_BUSY_RETRY_ATTEMPTS} attempts, each waiting up to ${SQLITE_BUSY_TIMEOUT_MS}ms. SQLite does not expose the locking process or claim identity. Check active Sidequest writers, then retry. Original SQLite error: ${originalMessage}`,
+    `Sidequest database stayed locked while ${operation} for ${elapsedMs}ms after ${SQLITE_BUSY_RETRY_ATTEMPTS} attempts, each waiting up to ${timeoutMs}ms. SQLite does not expose the locking process or claim identity. Check active Sidequest writers, then retry. Original SQLite error: ${originalMessage}`,
     { cause }
   );
 }
-function retryWhenSqliteBusy(operation, work) {
+function retryWhenSqliteBusy(operation, work, timeoutMs = SQLITE_BUSY_TIMEOUT_MS) {
   const startedAt = Date.now();
   for (let attempt = 0; attempt < SQLITE_BUSY_RETRY_ATTEMPTS; attempt += 1) {
     try {
       return work();
     } catch (error) {
       if (!isSqliteBusy(error) || attempt === SQLITE_BUSY_RETRY_ATTEMPTS - 1) {
-        if (isSqliteBusy(error)) throw sqliteBusyError(operation, startedAt, error);
+        if (isSqliteBusy(error)) throw sqliteBusyError(operation, startedAt, error, timeoutMs);
         throw error;
       }
       Atomics.wait(busySleep, 0, 0, SQLITE_BUSY_RETRY_DELAYS_MS[attempt] ?? 0);
@@ -258,6 +262,14 @@ function validateGeneral(profileId, categories) {
   const general = categories.find((category) => String(category.id).trim().toLowerCase() === "general");
   if (!general || general.enabled === false) throw new Error(`Routing profile "${profileId}" requires an enabled general category.`);
 }
+function migrateWhenBelow(database, targetVersion, apply) {
+  txn(database, () => {
+    const row = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
+    if (Number(row && JSON.parse(row.value)) >= targetVersion) return;
+    apply();
+    prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(targetVersion));
+  }, SQLITE_MIGRATION_BUSY_TIMEOUT_MS);
+}
 function applyCategoryRows(baseCategories, rows) {
   const categories = new Map(baseCategories.map((category) => [String(category.id).trim().toLowerCase(), category]));
   for (const row of rows) {
@@ -306,13 +318,24 @@ function openDb(homeRoot) {
       key TEXT PRIMARY KEY,
       value TEXT
     );
-    INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1');
   `));
-  const schemaRow = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
-  let schemaVersion = Number(schemaRow && JSON.parse(schemaRow.value));
+  const stampedSchemaVersion = () => {
+    const row = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
+    return Number(row && JSON.parse(row.value));
+  };
+  let schemaVersion = stampedSchemaVersion();
+  if (!Number.isInteger(schemaVersion) || schemaVersion < CURRENT_SCHEMA_VERSION) {
+    database.exec(`PRAGMA busy_timeout=${SQLITE_MIGRATION_BUSY_TIMEOUT_MS}`);
+    retryWhenSqliteBusy(
+      "preparing a schema migration",
+      () => prepareCached(database, "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1')").run(),
+      SQLITE_MIGRATION_BUSY_TIMEOUT_MS
+    );
+    schemaVersion = stampedSchemaVersion();
+  }
   if (!Number.isInteger(schemaVersion) || schemaVersion < 1) schemaVersion = 1;
   if (schemaVersion < 2) {
-    txn(database, () => {
+    migrateWhenBelow(database, 2, () => {
       database.exec(`
         CREATE TABLE IF NOT EXISTS categories (
           id TEXT PRIMARY KEY,
@@ -322,7 +345,6 @@ function openDb(homeRoot) {
       for (const category of import_category_defaults.DEFAULT_CATEGORIES) {
         prepareCached(database, "INSERT OR IGNORE INTO categories (id, data) VALUES (?, ?)").run(category.id, JSON.stringify(category));
       }
-      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(2));
     });
     schemaVersion = 2;
   }
@@ -330,7 +352,7 @@ function openDb(homeRoot) {
     throw new Error(`Sidequest database schema ${schemaVersion} is newer than supported schema ${CURRENT_SCHEMA_VERSION}.`);
   }
   if (schemaVersion < 3) {
-    txn(database, () => {
+    migrateWhenBelow(database, 3, () => {
       const prefsRow = prepareCached(database, "SELECT data FROM globals WHERE key = 'model-prefs'").get();
       const prefs = parseStoredRecord(prefsRow?.data);
       const discovered = (0, import_discovery.discoverExternalModels)();
@@ -367,12 +389,11 @@ function openDb(homeRoot) {
       if (!validFallback) {
         prepareCached(database, "INSERT INTO globals (key, data) VALUES ('routing-fallback', ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data").run(JSON.stringify(ROUTING_FALLBACK_DEFAULT));
       }
-      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(3));
     });
     schemaVersion = 3;
   }
   if (schemaVersion < 4) {
-    txn(database, () => {
+    migrateWhenBelow(database, 4, () => {
       database.exec(`
         CREATE TABLE IF NOT EXISTS project_categories (
           project TEXT,
@@ -383,12 +404,11 @@ function openDb(homeRoot) {
         );
         CREATE INDEX IF NOT EXISTS project_categories_project_idx ON project_categories(project);
       `);
-      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(4));
     });
     schemaVersion = 4;
   }
   if (schemaVersion < 5) {
-    txn(database, () => {
+    migrateWhenBelow(database, 5, () => {
       const row = prepareCached(database, "SELECT data FROM categories WHERE id = 'codebase-exploration'").get();
       let category = null;
       try {
@@ -405,12 +425,11 @@ function openDb(homeRoot) {
           prepareCached(database, "UPDATE categories SET data = ? WHERE id = 'codebase-exploration'").run(JSON.stringify(category));
         }
       }
-      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(5));
     });
     schemaVersion = 5;
   }
   if (schemaVersion < 6) {
-    txn(database, () => {
+    migrateWhenBelow(database, 6, () => {
       const row = prepareCached(database, "SELECT data FROM categories WHERE id = 'codebase-exploration'").get();
       let category = null;
       try {
@@ -427,12 +446,11 @@ function openDb(homeRoot) {
           prepareCached(database, "UPDATE categories SET data = ? WHERE id = 'codebase-exploration'").run(JSON.stringify(category));
         }
       }
-      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(6));
     });
     schemaVersion = 6;
   }
   if (schemaVersion < 7) {
-    txn(database, () => {
+    migrateWhenBelow(database, 7, () => {
       const migratedAt = (/* @__PURE__ */ new Date()).toISOString();
       const legacyCategories = categoryRows(database);
       validateGeneral("coding", legacyCategories);
@@ -611,10 +629,10 @@ function openDb(homeRoot) {
         CREATE TRIGGER categories_legacy_read_only_delete BEFORE DELETE ON categories
           BEGIN SELECT RAISE(ABORT, 'categories is a read-only legacy snapshot'); END;
       `);
-      prepareCached(database, "UPDATE meta SET value = ? WHERE key = 'schema_version'").run(JSON.stringify(7));
     });
     schemaVersion = 7;
   }
+  database.exec(`PRAGMA busy_timeout=${SQLITE_BUSY_TIMEOUT_MS}`);
   database.exec("PRAGMA foreign_keys=ON");
   const sidequestDatabase = database;
   sidequestDatabase.__sidequestSchemaVersion = CURRENT_SCHEMA_VERSION;
@@ -680,8 +698,8 @@ function hasRow(database, table, key) {
   const spec = tableSpec(table);
   return retryWhenSqliteBusy(`checking ${table}`, () => prepareCached(database, `SELECT 1 FROM ${table} WHERE ${keyWhere(spec)} LIMIT 1`).get(...keyValues(spec, key)) !== void 0);
 }
-function txn(database, fn) {
-  const row = retryWhenSqliteBusy("checking schema version before a transaction", () => prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get());
+function txn(database, fn, timeoutMs = SQLITE_BUSY_TIMEOUT_MS) {
+  const row = retryWhenSqliteBusy("checking schema version before a transaction", () => prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get(), timeoutMs);
   if (row) assertWritable(database);
   return retryWhenSqliteBusy("writing transaction", () => {
     database.exec("BEGIN IMMEDIATE");
@@ -699,12 +717,15 @@ function txn(database, fn) {
       }
       throw error;
     }
-  });
+  }, timeoutMs);
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   CURRENT_SCHEMA_VERSION,
+  SQLITE_BUSY_RETRY_ATTEMPTS,
+  SQLITE_BUSY_RETRY_DELAYS_MS,
   SQLITE_BUSY_TIMEOUT_MS,
+  SQLITE_MIGRATION_BUSY_TIMEOUT_MS,
   assertWritable,
   countRows,
   deleteRow,
