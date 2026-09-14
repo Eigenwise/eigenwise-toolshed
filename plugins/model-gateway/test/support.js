@@ -79,14 +79,15 @@ function forceStopGatewayProcess(pid) {
   else { try { process.kill(pid, 'SIGKILL'); } catch {} }
 }
 
+// A recorded pid is not a child of this process, so IPC is not available and SIGTERM is
+// the only graceful stop there is. Windows has none: taskkill without /F refuses outright
+// on a windowless child, so asking would only spend the wait before forcing it anyway.
 function requestGatewayProcessStop(pid) {
   if (!processIsRunning(pid)) return true;
-  if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/pid', String(pid), '/T'], { stdio: 'ignore', windowsHide: true });
-  } else {
+  if (process.platform !== 'win32') {
     try { process.kill(pid, 'SIGTERM'); } catch {}
+    if (waitForProcessExit(pid)) return true;
   }
-  if (waitForProcessExit(pid)) return true;
   forceStopGatewayProcess(pid);
   return waitForProcessExit(pid);
 }

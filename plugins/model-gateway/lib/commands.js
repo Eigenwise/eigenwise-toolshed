@@ -447,7 +447,7 @@ async function restartProxyForVersionChange({
   supervisorRunning = async () => (await resolvePortOwner(PUBLIC_SHIM_PORT)).state === 'same-install',
 } = {}) {
   if (previousVersion) writeProxyServingVersion(previousVersion);
-  if (await listening(PROXY_PORT)) stop('proxy');
+  if (await listening(PROXY_PORT)) await stop('proxy');
   if (!(await waitForProxyExit({ listening }))) return false;
   return supervisorRunning();
 }

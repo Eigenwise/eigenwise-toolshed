@@ -170,13 +170,16 @@ function recordedGatewayPid(name, {
 function recordedGatewayPids(options) {
   return [...new Set(['guardian', 'shim', 'proxy'].map((name) => recordedGatewayPid(name, options)).filter(Boolean))];
 }
+// Windows has no graceful stop to offer these children. Measured: `taskkill /pid N /T`
+// without /F on a detached windowless node process exits 255 with "can only be terminated
+// forcefully" and the process keeps running, so the two differ on POSIX only.
 function terminateProcess(pid) {
-  if (WIN) return spawnSync('taskkill', ['/pid', String(pid), '/T'], { stdio: 'ignore', windowsHide: true }).status === 0;
+  if (WIN) return spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).status === 0;
   try { process.kill(pid, 'SIGTERM'); return true; } catch { return false; }
 }
 function forceTerminateProcess(pid) {
   if (WIN) return spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).status === 0;
-  try { process.kill(-pid, 'SIGKILL'); return true; } catch { try { process.kill(pid, 'SIGKILL'); return true; } catch { return false; } }
+  try { process.kill(pid, 'SIGKILL'); return true; } catch { return false; }
 }
 function killPid(pid, { terminate = terminateProcess, ...ownershipOptions } = {}) {
   if (!pid || !processIsOwnedByThisInstall(pid, ownershipOptions)) return false;
@@ -593,7 +596,11 @@ async function killPidAsync(pid, { trusted = false, terminate = null, ...ownersh
   const owned = trusted ? true : await processIsOwnedByThisInstallAsync(pid, ownershipOptions);
   if (owned !== true) return owned;
   if (terminate) return terminate(pid);
-  terminateProcess(pid);
+  // Asking first is what lets V8 write the child's coverage file before it goes, and on
+  // POSIX SIGTERM delivers that. Windows would only spend the wait and force it anyway,
+  // so it keeps going straight to taskkill /F.
+  if (WIN) return waitForTaskkill(pid);
+  if (!terminateProcess(pid)) return false;
   if (await waitForProcessExit(pid, PROCESS_STOP_TIMEOUT_MS)) return true;
   const stillOwned = trusted ? true : await processIsOwnedByThisInstallAsync(pid, ownershipOptions);
   if (stillOwned !== true) return stillOwned;
