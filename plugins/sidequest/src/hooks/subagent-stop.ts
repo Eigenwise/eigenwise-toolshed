@@ -46,7 +46,7 @@ interface Store {
   getTicket: (slug: string, ticketId: string) => Ticket | null;
   claimActivityMs: (ticket?: Ticket) => number;
   submissionReadiness: (submission?: Ticket['submission']) => SubmissionReadiness;
-  markDispatchStopped: (sessionId: string, executor: string, agentId: string | null, agentName: string | null) => {
+  markDispatchStopped: (sessionId: string, executor: string, agentId: string | null, agentName: string | null, launchName?: string | null) => {
     ok?: boolean;
     stopped?: boolean;
     tickets?: Ticket[];
@@ -212,6 +212,21 @@ function stopVerdict(
   return null;
 }
 
+// SubagentStop delivers agent_id and never agent_name, so an attempt whose cancellable
+// SubagentStart never recorded an agentId cannot be matched by either. The host writes the launch
+// identity into agent-<id>.meta.json beside agent_transcript_path under exactly this derivation
+// (verified 509/509 paired sidecars, no orphans), and its `name` is the teammate name the board
+// already recorded at launch. The board applies it only after the id-keyed match found nothing.
+function launchNameFromTranscriptSidecar(transcriptPath: string): string {
+  if (!/\.jsonl$/i.test(transcriptPath)) return '';
+  try {
+    const sidecar = JSON.parse(fs.readFileSync(transcriptPath.replace(/\.jsonl$/i, '.meta.json'), 'utf8'));
+    return String(sidecar?.name || '').trim();
+  } catch (_) {
+    return '';
+  }
+}
+
 function clearNearTurnCapCounter(agentId: string): void {
   if (!agentId) return;
   const counter = path.join(os.tmpdir(), 'sidequest-near-turn-cap', encodeURIComponent(agentId));
@@ -225,6 +240,7 @@ function main(): void {
   if (!data) return;
   const agentId = stringField(data, 'agent_id', 'agentId');
   const agentName = stringField(data, 'agent_name', 'agentName', 'name');
+  const launchName = agentName || launchNameFromTranscriptSidecar(stringField(data, 'agent_transcript_path', 'agentTranscriptPath'));
   clearNearTurnCapCounter(agentId);
 
   const agentType = stringField(data, 'agent_type', 'agentType');
@@ -258,7 +274,7 @@ function main(): void {
   let terminalTickets: Ticket[] = [];
   let terminalAttempts: { ref: string; outcome?: string; agentName?: string }[] = [];
   try {
-    const result = store.markDispatchStopped(sessionId, agentType, agentId || null, agentName || null);
+    const result = store.markDispatchStopped(sessionId, agentType, agentId || null, agentName || null, launchName || null);
     dispatchStopped = Boolean(result.ok && result.stopped !== false);
     terminalTickets = Array.isArray(result.tickets) ? result.tickets : [];
     terminalAttempts = Array.isArray(result.terminalAttempts) ? result.terminalAttempts : [];
@@ -268,8 +284,8 @@ function main(): void {
   try {
     const terminalAttempt = terminalAttempts[0];
     verdict = terminalAttempt
-      ? `exec FINISHED after superseded terminal ${terminalAttempt.outcome || 'attempt'}: ${terminalAttempt.ref}. Preserve recovery evidence before a replacement.${retirementInstruction(null, terminalAttempt.agentName || agentName)}`
-      : stopVerdict(store, claims, classification, dispatchStopped, terminalTickets, agentName);
+      ? `exec FINISHED after superseded terminal ${terminalAttempt.outcome || 'attempt'}: ${terminalAttempt.ref}. Preserve recovery evidence before a replacement.${retirementInstruction(null, terminalAttempt.agentName || launchName)}`
+      : stopVerdict(store, claims, classification, dispatchStopped, terminalTickets, launchName);
   } catch (_) {
     return;
   }
