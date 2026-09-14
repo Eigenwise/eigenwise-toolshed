@@ -1,0 +1,359 @@
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath, fileURLToPath as fromFileUrl, pathToFileURL } from 'node:url';
+
+const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
+const repositoryRoot = path.resolve(scriptDirectory, '..', '..');
+const pluginRoot = path.join(repositoryRoot, 'plugins', 'sidequest');
+const sourceRoot = path.join(pluginRoot, 'src');
+const require = createRequire(path.join(pluginRoot, 'package.json'));
+const ast = await import(pathToFileURL(require.resolve('typescript/unstable/ast')).href);
+const { API } = await import(pathToFileURL(require.resolve('typescript/unstable/sync')).href);
+const { createVirtualFileSystem } = await import(pathToFileURL(require.resolve('typescript/unstable/fs')).href);
+
+function parseArguments(argumentsList) {
+  const options = { coverageDirectory: null, base: null, all: false };
+  for (let index = 0; index < argumentsList.length; index += 1) {
+    const argument = argumentsList[index];
+    if (argument === '--coverage') options.coverageDirectory = path.resolve(argumentsList[++index] ?? '');
+    else if (argument === '--base') options.base = argumentsList[++index] ?? '';
+    else if (argument === '--all') options.all = true;
+    else throw new Error(`Unknown argument: ${argument}`);
+  }
+  return options;
+}
+
+async function filesBelow(directory) {
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  const nested = await Promise.all(entries.map(async (entry) => {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) return filesBelow(entryPath);
+    return entry.isFile() && entry.name.endsWith('.ts') ? [entryPath] : [];
+  }));
+  return nested.flat().sort();
+}
+
+function functionName(node) {
+  if ('name' in node && node.name) return node.name.getText();
+  const parent = node.parent;
+  if (ast.isVariableDeclaration(parent)) return parent.name.getText();
+  if (ast.isPropertyAssignment(parent)) return parent.name.getText();
+  if (ast.isBinaryExpression(parent)) return parent.left.getText();
+  if (ast.isPropertyDeclaration(parent) && parent.name) return parent.name.getText();
+  return '<anonymous>';
+}
+
+function functionKind(node) {
+  return ast.SyntaxKind[node.kind];
+}
+
+function cyclomaticComplexity(node) {
+  let complexity = 1;
+  function visit(child) {
+    if (child !== node && ast.isFunctionLikeDeclaration(child)) return;
+    if (
+      ast.isIfStatement(child)
+      || ast.isConditionalExpression(child)
+      || ast.isForStatement(child)
+      || ast.isForInStatement(child)
+      || ast.isForOfStatement(child)
+      || ast.isWhileStatement(child)
+      || ast.isDoStatement(child)
+      || ast.isCatchClause(child)
+      || ast.isCaseClause(child)
+    ) complexity += 1;
+    if (
+      ast.isBinaryExpression(child)
+      && (
+        child.operatorToken.kind === ast.SyntaxKind.AmpersandAmpersandToken
+        || child.operatorToken.kind === ast.SyntaxKind.BarBarToken
+        || child.operatorToken.kind === ast.SyntaxKind.QuestionQuestionToken
+      )
+    ) complexity += 1;
+    child.forEachChild(visit);
+  }
+  visit(node);
+  return complexity;
+}
+
+export async function collectFunctions(text, fileName) {
+  const virtualFile = fileName.endsWith('.js') ? '/source.js' : '/source.ts';
+  const virtualFileSystem = createVirtualFileSystem({
+    '/tsconfig.json': JSON.stringify({ compilerOptions: { allowJs: true }, files: [virtualFile] }),
+    [virtualFile]: text,
+  });
+  const api = new API({ cwd: '/', fs: virtualFileSystem });
+  try {
+    const snapshot = api.updateSnapshot({ openProject: '/tsconfig.json' });
+    const sourceFile = snapshot.getProject('/tsconfig.json').program.getSourceFile(virtualFile);
+    if (!sourceFile) throw new Error(`TypeScript could not parse ${fileName}.`);
+    const functions = [];
+    const childCounts = new Map();
+
+    function visit(node, parentId = '<root>') {
+      if (ast.isFunctionLikeDeclaration(node) && node.body) {
+        const name = functionName(node);
+        const countKey = `${parentId}\u0000${functionKind(node)}\u0000${name}`;
+        const ordinal = childCounts.get(countKey) ?? 0;
+        childCounts.set(countKey, ordinal + 1);
+        const identity = `${parentId}/${functionKind(node)}:${name}#${ordinal}`;
+        functions.push({
+          identity,
+          name,
+          start: node.getStart(),
+          end: node.end,
+          line: sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1,
+          complexity: cyclomaticComplexity(node),
+        });
+        node.forEachChild((child) => visit(child, identity));
+        return;
+      }
+      node.forEachChild((child) => visit(child, parentId));
+    }
+
+    visit(sourceFile);
+    return functions;
+  } finally {
+    api.close();
+  }
+}
+
+function normalizedPath(filePath) {
+  return path.resolve(filePath).replaceAll('\\', '/').toLowerCase();
+}
+
+function pathFromCoverageUrl(url) {
+  try {
+    return normalizedPath(fromFileUrl(url));
+  } catch {
+    return null;
+  }
+}
+
+function coverageIntervals(ranges) {
+  const boundaries = [...new Set(ranges.flatMap((range) => [range.startOffset, range.endOffset]))].sort((left, right) => left - right);
+  const intervals = [];
+  for (let index = 0; index < boundaries.length - 1; index += 1) {
+    const start = boundaries[index];
+    const end = boundaries[index + 1];
+    const candidates = ranges.filter((range) => range.startOffset <= start && range.endOffset >= end);
+    if (!candidates.length) continue;
+    candidates.sort((left, right) => (left.endOffset - left.startOffset) - (right.endOffset - right.startOffset));
+    if (candidates[0].count > 0) intervals.push([start, end]);
+  }
+  return intervals;
+}
+
+function projectIntervals(ranges, targetDescriptor) {
+  const primaryRange = ranges[0];
+  const sourceLength = primaryRange.endOffset - primaryRange.startOffset;
+  const targetLength = targetDescriptor.end - targetDescriptor.start;
+  if (sourceLength <= 0 || targetLength <= 0) return [];
+  return coverageIntervals(ranges).map(([start, end]) => [
+    targetDescriptor.start + ((start - primaryRange.startOffset) / sourceLength) * targetLength,
+    targetDescriptor.start + ((end - primaryRange.startOffset) / sourceLength) * targetLength,
+  ]);
+}
+
+function mergeIntervals(intervals) {
+  const merged = [];
+  for (const [start, end] of intervals.sort((left, right) => left[0] - right[0])) {
+    const previous = merged.at(-1);
+    if (previous && start <= previous[1]) previous[1] = Math.max(previous[1], end);
+    else merged.push([start, end]);
+  }
+  return merged;
+}
+
+async function readCoverage(coverageDirectory) {
+  const reports = await Promise.all((await fs.readdir(coverageDirectory))
+    .filter((file) => file.endsWith('.json'))
+    .map(async (file) => JSON.parse(await fs.readFile(path.join(coverageDirectory, file), 'utf8'))));
+  const scripts = new Map();
+  for (const report of reports) {
+    for (const script of report.result ?? []) {
+      const scriptPath = pathFromCoverageUrl(script.url);
+      if (!scriptPath) continue;
+      const records = scripts.get(scriptPath) ?? [];
+      records.push(...script.functions);
+      scripts.set(scriptPath, records);
+    }
+  }
+  return scripts;
+}
+
+function outputPathForSource(sourcePath) {
+  const relativePath = path.relative(sourceRoot, sourcePath).replaceAll('\\', '/');
+  if (relativePath.startsWith('lib/') || relativePath.startsWith('bin/')) {
+    return path.join(pluginRoot, relativePath.replace(/\.ts$/, '.js'));
+  }
+  if (relativePath.startsWith('hooks/') && !relativePath.slice('hooks/'.length).includes('/')) {
+    return path.join(pluginRoot, 'hooks', path.basename(relativePath, '.ts') + '.js');
+  }
+  return null;
+}
+
+function matchingCoverage(records, descriptor) {
+  return records.filter((record) => {
+    const primaryRange = record.ranges[0];
+    return primaryRange && primaryRange.startOffset === descriptor.start && primaryRange.endOffset === descriptor.end;
+  });
+}
+
+function directSourceCoverage(records, sourceDescriptors) {
+  const recordsByName = new Map();
+  for (const record of records ?? []) {
+    const primaryRange = record.ranges[0];
+    if (!record.functionName || !primaryRange || primaryRange.endOffset - primaryRange.startOffset < 40) continue;
+    const values = recordsByName.get(record.functionName) ?? [];
+    values.push(record);
+    recordsByName.set(record.functionName, values);
+  }
+  const seenNames = new Map();
+  const coverage = new Map();
+  for (const descriptor of sourceDescriptors) {
+    if (descriptor.name === '<anonymous>') continue;
+    const ordinal = seenNames.get(descriptor.name) ?? 0;
+    seenNames.set(descriptor.name, ordinal + 1);
+    const record = recordsByName.get(descriptor.name)?.[ordinal];
+    if (record) coverage.set(descriptor.identity, [record]);
+  }
+  return coverage;
+}
+
+async function sourceMetrics(sourcePath, coverageScripts) {
+  const sourceText = await fs.readFile(sourcePath, 'utf8');
+  const sourceFunctions = await collectFunctions(sourceText, sourcePath);
+  const sourceCoverage = directSourceCoverage(coverageScripts.get(normalizedPath(sourcePath)), sourceFunctions);
+  const outputPath = outputPathForSource(sourcePath);
+  let outputFunctions = new Map();
+  let outputCoverage = [];
+  if (outputPath) {
+    try {
+      const outputText = await fs.readFile(outputPath, 'utf8');
+      outputFunctions = new Map((await collectFunctions(outputText, outputPath)).map((descriptor) => [descriptor.identity, descriptor]));
+      outputCoverage = coverageScripts.get(normalizedPath(outputPath)) ?? [];
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+
+  return sourceFunctions.map((descriptor) => {
+    const intervals = [];
+    for (const record of sourceCoverage.get(descriptor.identity) ?? []) {
+      intervals.push(...projectIntervals(record.ranges, descriptor));
+    }
+    const outputDescriptor = outputFunctions.get(descriptor.identity);
+    if (outputDescriptor) {
+      for (const record of matchingCoverage(outputCoverage, outputDescriptor)) {
+        intervals.push(...projectIntervals(record.ranges, descriptor));
+      }
+    }
+    const coveredLength = mergeIntervals(intervals).reduce((total, [start, end]) => total + end - start, 0);
+    const coverage = Math.min(1, coveredLength / (descriptor.end - descriptor.start));
+    const complexity = descriptor.complexity;
+    return {
+      coverage,
+      complexity,
+      crap: complexity ** 2 * (1 - coverage) ** 3 + complexity,
+      identity: descriptor.identity,
+      line: descriptor.line,
+      name: descriptor.name,
+      relativePath: path.relative(pluginRoot, sourcePath).replaceAll('\\', '/'),
+    };
+  });
+}
+
+function runGit(argumentsList) {
+  const result = spawnSync('git', argumentsList, { cwd: repositoryRoot, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(result.stderr.trim() || `git ${argumentsList.join(' ')} failed`);
+  return result.stdout.trim();
+}
+
+// Feature branches fork from develop, so a main merge-base would charge this branch with
+// every function another already-merged ticket worsened since the last release.
+function integrationBranch() {
+  return spawnSync('git', ['rev-parse', '--verify', '--quiet', 'develop'], { cwd: repositoryRoot }).status === 0 ? 'develop' : 'main';
+}
+
+function mergeBase(base) {
+  return base || runGit(['merge-base', 'HEAD', integrationBranch()]);
+}
+
+async function baselineFunctions(base, relativePath) {
+  const text = runGit(['show', `${base}:plugins/sidequest/${relativePath}`]);
+  return new Map((await collectFunctions(text, relativePath)).map((descriptor) => [descriptor.identity, descriptor.complexity]));
+}
+
+export async function compareAgainstBase(metrics, changedPaths, base, readBaseline = baselineFunctions) {
+  const changed = new Set(changedPaths);
+  const failures = [];
+  const byPath = Map.groupBy(metrics, (metric) => metric.relativePath);
+  for (const [relativePath, fileMetrics] of byPath) {
+    if (!changed.has(relativePath)) continue;
+    let baseline = new Map();
+    try {
+      baseline = await readBaseline(base, relativePath);
+    } catch (error) {
+      if (!String(error.message).includes(`path 'plugins/sidequest/${relativePath}' does not exist`)) throw error;
+    }
+    for (const metric of fileMetrics) {
+      const baselineComplexity = baseline.get(metric.identity);
+      if (baselineComplexity === undefined) {
+        if (metric.crap >= 8) failures.push(`${metric.relativePath}:${metric.line} ${metric.name} is new at ${metric.crap.toFixed(4)}.`);
+        continue;
+      }
+      const baselineCrap = baselineComplexity ** 2 * (1 - metric.coverage) ** 3 + baselineComplexity;
+      if (metric.crap > baselineCrap + 0.000001) {
+        failures.push(`${metric.relativePath}:${metric.line} ${metric.name} rose from ${baselineCrap.toFixed(4)} to ${metric.crap.toFixed(4)}.`);
+      }
+    }
+  }
+  return failures;
+}
+
+function formatMetric(metric) {
+  return `${metric.relativePath}:${metric.line} ${metric.name} | cc=${metric.complexity} coverage=${(metric.coverage * 100).toFixed(2)}% CRAP=${metric.crap.toFixed(4)}`;
+}
+
+async function captureCoverage() {
+  const coverageDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'sidequest-crap-'));
+  const command = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const result = spawnSync(command, ['run', 'test:full'], {
+    cwd: pluginRoot,
+    env: { ...process.env, NODE_V8_COVERAGE: coverageDirectory },
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
+  if (result.status !== 0) throw new Error(`npm run test:full failed with exit ${result.status ?? 'signal'}`);
+  return coverageDirectory;
+}
+
+export async function run(options = parseArguments(process.argv.slice(2))) {
+  const coverageDirectory = options.coverageDirectory ?? await captureCoverage();
+  try {
+    const coverageScripts = await readCoverage(coverageDirectory);
+    const metrics = (await Promise.all((await filesBelow(sourceRoot)).map((sourcePath) => sourceMetrics(sourcePath, coverageScripts)))).flat();
+    for (const metric of metrics.filter((item) => options.all || item.crap >= 8).sort((left, right) => right.crap - left.crap)) {
+      process.stdout.write(`${formatMetric(metric)}\n`);
+    }
+    const base = mergeBase(options.base);
+    const changedPaths = runGit(['diff', '--name-only', base, '--', 'plugins/sidequest/src'])
+      .split('\n')
+      .filter(Boolean)
+      .map((file) => file.replace(/^plugins\/sidequest\//, ''));
+    const failures = await compareAgainstBase(metrics, changedPaths, base);
+    if (failures.length) {
+      process.stderr.write(`CRAP delta gate failed against ${base}:\n${failures.map((failure) => `- ${failure}`).join('\n')}\n`);
+      process.exitCode = 1;
+    } else process.stdout.write(`CRAP delta gate passed against ${base}.\n`);
+    return { metrics, failures };
+  } finally {
+    if (!options.coverageDirectory) await fs.rm(coverageDirectory, { recursive: true, force: true });
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await run();
