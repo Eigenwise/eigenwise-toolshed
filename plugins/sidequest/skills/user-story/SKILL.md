@@ -89,8 +89,8 @@ or three bounded proposals only when the approach is genuinely contested.
 ## The shape
 
 1. Frame the outcome, check this flow applies, and state the size.
-2. Recon, bounded, at the depth the size calls for.
-3. One question round, or none.
+2. List the unknowns, then recon: sub-agents resolve what the code can answer.
+3. One question round for what they could not, or none.
 4. Design: write the contract, or run a panel and merge the winner.
 5. Story plus the complete backlog for every planned wave, filed before anything dispatches.
 6. Dispatch each ready wave in full, go quiet, re-plan between waves.
@@ -114,12 +114,20 @@ Drop out of this flow when it does not fit, and say so plainly:
 - A trivial edit to one or two files the user named, with no investigation: edit inline.
 - A single bug with a known cause: that is one ticket, not a user-story flow.
 
-## 2. Recon, bounded
+## 2. Unknowns first, then recon, bounded
+
+Before any reading, write down what the request leaves unclear: the outcome itself, which existing
+behavior it replaces, who consumes the result, what "done" looks like, and anything the user said in a
+way that has two readings. Then sort each unknown by who can answer it. The codebase, the git history,
+or an external source answers most of them; only the user answers the rest. That sort decides the next
+two steps: unknowns the code can answer become exploration tickets, and unknowns only the user can
+answer become the question round. Do not guess at either kind and call the guess a contract.
 
 Recon answers exactly one question: **what does the contract need to say?** Stop the moment you can
 write the shared interfaces, the file boundaries, and a verify command per piece.
 
-In the orchestrator, bounded recon may `Read`, `Glob`, or `Grep` named anchors and make one narrow location sweep. Route unfamiliar path tracing, deep investigation, or multi-angle research through the live taxonomy: use a read-only `codebase-exploration` ticket for repository behavior, `source-lookup` for a bounded external question, or `evidence-research` when sources need reconciliation. Give each ticket one distinct angle and run independent investigations in parallel. At
+Launch one read-only sub-agent per code-answerable unknown, in parallel, and let them run while you
+write the contract skeleton. In the orchestrator, bounded recon may `Read`, `Glob`, or `Grep` named anchors and make one narrow location sweep. Route unfamiliar path tracing, deep investigation, or multi-angle research through the live taxonomy: use a read-only `codebase-exploration` ticket for repository behavior, `source-lookup` for a bounded external question, or `evidence-research` when sources need reconciliation. Give each ticket one distinct angle and run independent investigations in parallel. At
 multi-wave size the angles that earn their keep are the closest existing feature traced end to end,
 the extension point and who else depends on it, and the convention plus test pattern to match.
 
@@ -135,11 +143,15 @@ ticket, not the orchestrator crawling the tree itself.
 
 ## 3. One question round, or none
 
-Collect every genuinely contract-changing ambiguity and ask them together in a single
-`AskUserQuestion` (up to four). Ask only when the answer changes user-visible behavior,
-compatibility, migration, public API, dependencies, or expensive-to-reverse scope. One round respects
-the user's attention and gets better answers, because they see the whole shape of the decision at once.
-Asking one question per ambiguity trains them to stop reading.
+The question round is what is left of the unknowns list after the sub-agents report: the ambiguities
+that neither the code nor the sources could settle. Ask them together in a single `AskUserQuestion`
+(up to four), each carrying what the investigation found so the user decides from evidence instead of
+from the same uncertainty you started with. Ask when the answer changes user-visible behavior,
+compatibility, migration, public API, dependencies, or expensive-to-reverse scope, and ask when the
+request itself is unclear enough that two careful readers would build different things. One round
+respects the user's attention and gets better answers, because they see the whole shape of the decision
+at once. Asking one question per ambiguity trains them to stop reading. Asking before the sub-agents
+report wastes the round on things the code would have answered.
 
 Worth asking: a user-visible behavior with two defensible answers, a scope boundary that changes how
 much gets built, a compatibility break, a data migration, anything else expensive to reverse.
@@ -151,7 +163,9 @@ record the pick, and move on. They do not create a durable standing preference.
 
 This is where the generic flow is deliberately narrowed. It waits for answers before designing;
 Sidequest defaults autonomous, because a stalled feature costs the user more than a decision they can
-correct at review.
+correct at review. That default covers calls you can make and change later. It never covers an unclear
+outcome: a contract guessed from a request nobody understood is a full wave of work in the wrong
+direction, and one question is cheaper than that.
 
 ## 4. Design: contract, or a panel
 
@@ -322,6 +336,8 @@ Same beats, different owner for each, and every one of them sized:
 - **A panel that picks a winner and discards the rest.** Merge, or do not run the panel.
 - **Reading the whole subsystem before filing anything.** Recon has a stopping condition: the contract
   is writable.
+- **Guessing past an unclear request.** An unknown the code could have answered gets a sub-agent; one
+  only the user can answer gets asked. Neither gets an assumption dressed up as a contract.
 - **A backlog that grows one ticket at a time.** Nobody can steer a plan they cannot see.
 - **Polling.** Pulses, worktree peeks, or a shell loop waiting on an executor. Reports arrive on their
   own.
