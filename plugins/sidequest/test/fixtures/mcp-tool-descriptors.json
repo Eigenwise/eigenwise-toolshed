@@ -182,7 +182,7 @@
   },
   {
     "name": "story_log",
-    "description": "",
+    "description": "Story log.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -214,7 +214,7 @@
   },
   {
     "name": "ready",
-    "description": "",
+    "description": "List ready ticket refs.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -238,7 +238,7 @@
   },
   {
     "name": "add",
-    "description": "Ticket.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -403,7 +403,7 @@
   },
   {
     "name": "update",
-    "description": "Update.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -617,7 +617,7 @@
   },
   {
     "name": "archive",
-    "description": "Archive.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -653,7 +653,7 @@
   },
   {
     "name": "claim",
-    "description": "Claim before work.",
+    "description": "Claim before work; proceed only on ok:true.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -756,7 +756,7 @@
   },
   {
     "name": "sweepClaims",
-    "description": "Sweep claims.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -995,7 +995,7 @@
   },
   {
     "name": "verdict",
-    "description": "Verdict.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1063,7 +1063,7 @@
   },
   {
     "name": "commit",
-    "description": "Commit.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1458,7 +1458,7 @@
   },
   {
     "name": "unlink",
-    "description": "Unlink.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1480,7 +1480,7 @@
   },
   {
     "name": "assign",
-    "description": "Assign.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1501,7 +1501,7 @@
   },
   {
     "name": "dispatch",
-    "description": "Tree.",
+    "description": "Tree. token and spawn spec; retireOnly.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1756,7 +1756,7 @@
   },
   {
     "name": "category_list",
-    "description": "Taxonomy.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
