@@ -1,6 +1,6 @@
 'use strict';
 
-const { canonicalPreparedDispatchExecutor } = require('../prepared-dispatch.js');
+const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require('../prepared-dispatch.js');
 const { classifyVerificationKind, verificationRequirement } = require('../kernel/verification.js');
 const { resolveSuite } = require('../suite-resolver.js');
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationOutcome } = require('../kernel/review-binding');
@@ -2585,6 +2585,24 @@ function dispatchDelta(slug?: any, ticket?: any) {
   }
 }
 
+// The runtime hooks all match on a session id that is stored verbatim inside the ticket record, so
+// SQLite can discard every other ticket without JS parsing it. Walking listTickets() over every
+// project instead cost 2.0s of the 5000ms the host hardcodes for SubagentStop on its interrupted
+// -query path, over 5190 tickets, and grew with the board forever (SQ-2864). The narrowed rows are
+// read-only match candidates: every mutation still re-reads its ticket with getTicket under the
+// ticket lock, which is where the normalization this skips (derived routing) actually matters.
+function ticketsMentioningSession(sessionId: string) {
+  const pattern = `%${sessionId.replace(/[\\%_]/g, (character: string) => `\\${character}`)}%`;
+  const candidates: { slug: string; ticket: any }[] = [];
+  for (const row of db.selectRows(database(), "SELECT project, data FROM tickets WHERE data LIKE ? ESCAPE '\\'", [pattern])) {
+    try {
+      const ticket = normalizePreparedDispatch(JSON.parse(row.data));
+      if (ticket?.id) candidates.push({ slug: String(row.project), ticket });
+    } catch (_) { /* an unreadable row cannot carry a matchable identity */ }
+  }
+  return candidates;
+}
+
 function activeSharedTreeClaim(identity?: any) {
   const agentId = String(identity?.agentId || '').trim();
   const executor = String(identity?.executor || '').trim();
@@ -2734,15 +2752,13 @@ function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agent
   }
   let matches: any[] = [];
   const unclaimedCreationReservations: any[] = [];
-  for (const project of listProjects({ all: true })) {
-    for (const ticket of listTickets(project.slug)) {
-      const state = dispatchState(ticket);
-      if (state?.executor === normalizedExecutor && unclaimedCreationReservation(ticket, state, normalizedSessionId)) {
-        unclaimedCreationReservations.push({ slug: project.slug, id: ticket.id, sharedTree: state.sharedTree, state });
-      }
-      if (!dispatchCanBindRuntimeIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) continue;
-      matches.push({ slug: project.slug, id: ticket.id, sharedTree: state.sharedTree, state });
+  for (const { slug, ticket } of ticketsMentioningSession(normalizedSessionId)) {
+    const state = dispatchState(ticket);
+    if (state?.executor === normalizedExecutor && unclaimedCreationReservation(ticket, state, normalizedSessionId)) {
+      unclaimedCreationReservations.push({ slug, id: ticket.id, sharedTree: state.sharedTree, state });
     }
+    if (!dispatchCanBindRuntimeIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) continue;
+    matches.push({ slug, id: ticket.id, sharedTree: state.sharedTree, state });
   }
   if (!matches.length && normalizedAgentId && normalizedWorktree && unclaimedCreationReservations.length === 1) {
     const reservation = unclaimedCreationReservations[0];
@@ -2853,25 +2869,38 @@ function terminalAttemptMatchesStopIdentity(state?: any, sessionId?: any, execut
   }) || null;
 }
 
-function markDispatchStopped(sessionId?: any, executor?: any, agentId?: any, agentName?: any) {
+// SubagentStop carries agent_id and never agent_name, so an attempt whose cancellable SubagentStart
+// never recorded an agentId is unreachable by its own terminal hook: 36 attempts on this board were
+// stranded that way, median 129s and worst 3.2 hours before an orchestrator retired them by hand.
+// The host writes the launch name into agent-<id>.meta.json beside the transcript, so the hook can
+// recover it. It is applied strictly second, and only when the id-keyed pass found nothing to touch,
+// so every stop that matches on agent_id today takes the identical path it takes now.
+function markDispatchStopped(sessionId?: any, executor?: any, agentId?: any, agentName?: any, launchName?: any) {
   const normalizedSessionId = String(sessionId || '').trim();
   const normalizedExecutor = String(executor || '').trim();
   const normalizedAgentId = String(agentId || '').trim();
   const normalizedAgentName = String(agentName || '').trim();
+  const normalizedLaunchName = String(launchName || '').trim();
   if (!normalizedSessionId || !normalizedExecutor) return { ok: false, reason: 'missing_identity' };
+  const candidates = ticketsMentioningSession(normalizedSessionId);
+  const byRuntimeIdentity = stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName);
+  if (byRuntimeIdentity.ok || !normalizedLaunchName || normalizedLaunchName === normalizedAgentName) return byRuntimeIdentity;
+  const byLaunchName = stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedLaunchName);
+  return byLaunchName.ok ? byLaunchName : byRuntimeIdentity;
+}
+
+function stopMatchingDispatches(candidates: any[], normalizedSessionId: string, normalizedExecutor: string, normalizedAgentId: string, normalizedAgentName: string) {
   const matches: any[] = [];
   const terminalAttempts: any[] = [];
-  for (const project of listProjects({ all: true })) {
-    for (const ticket of listTickets(project.slug)) {
-      const state = dispatchState(ticket);
-      const terminalAttempt = ticket.claim?.by
-        ? null
-        : terminalAttemptMatchesStopIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName);
-      if (terminalAttempt) terminalAttempts.push({ ref: ticket.ref, outcome: terminalAttempt.outcome, agentName: terminalAttempt.agentName });
-      if (!dispatchMatchesStopIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) continue;
-      const active = state.outcome === 'prepared' || state.outcome === 'launched' || state.outcome === 'claimed';
-      if (active || state.terminalAt) matches.push({ slug: project.slug, id: ticket.id, sharedTree: state.sharedTree });
-    }
+  for (const { slug, ticket } of candidates) {
+    const state = dispatchState(ticket);
+    const terminalAttempt = ticket.claim?.by
+      ? null
+      : terminalAttemptMatchesStopIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName);
+    if (terminalAttempt) terminalAttempts.push({ ref: ticket.ref, outcome: terminalAttempt.outcome, agentName: terminalAttempt.agentName });
+    if (!dispatchMatchesStopIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) continue;
+    const active = state.outcome === 'prepared' || state.outcome === 'launched' || state.outcome === 'claimed';
+    if (active || state.terminalAt) matches.push({ slug, id: ticket.id, sharedTree: state.sharedTree });
   }
   if (!matches.length && terminalAttempts.length === 1) {
     return { ok: true, stopped: false, tickets: [], terminalAttempts };
