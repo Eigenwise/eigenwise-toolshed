@@ -10,8 +10,11 @@ function deleteArguments(command: string): string[] {
 }
 
 function hasProtectedRecursiveDelete(command: string): boolean {
-  const recursive = /(?:--recursive\b|-[a-z]*r[a-z]*\b|-recurse\b|\/s\b)/i;
-  return deleteArguments(command).some((argumentsAfterDelete) => recursive.test(argumentsAfterDelete) && isProtectedPath(argumentsAfterDelete));
+  const recursive = /^(?:--recursive|-[a-z]*r[a-z]*|-recurse|\/s)$/i;
+  return deleteArguments(command).some((argumentsAfterDelete) => (
+    argumentsAfterDelete.replace(/["']/g, '').split(/\s+/).some((argument) => recursive.test(argument))
+    && isProtectedPath(argumentsAfterDelete)
+  ));
 }
 
 function normalizePath(value: string): string {

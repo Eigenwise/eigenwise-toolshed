@@ -2364,6 +2364,31 @@ test('home-delete guard: blocks a parent traversal from .claude', () => {
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
 });
 
+test('home-delete guard: allows non-recursive hyphenated files under home', () => {
+  for (const command of [
+    'rm -f ~/my-report.txt',
+    'rm -f ~/sq-2809-scratch.log',
+    'rm -f ~/agent-transcript.json',
+    'rm -f ~/.claude-recover.json',
+  ]) {
+    assert.strictEqual(runHomeDeleteGuard('Bash', command), null, command);
+  }
+});
+
+test('home-delete guard: preserves protected recursive deletes', () => {
+  const commands = [
+    'rm -rf ~',
+    'rm -rf $HOME',
+    'Remove-Item -Recurse ~/.claude',
+    'rd /s %USERPROFILE%',
+    'rm -rf /',
+  ];
+  if (process.platform === 'win32') commands.push('rm -rf D:/');
+  for (const command of commands) {
+    assert.equal(runHomeDeleteGuard('Bash', command).hookSpecificOutput.permissionDecision, 'deny', command);
+  }
+});
+
 test('home-delete guard: allows forced non-recursive and continued scoped deletes', () => {
   for (const command of [
     'rm -f C:/Users/x/AppData/Local/Temp/observability/file',
