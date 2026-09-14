@@ -3182,7 +3182,7 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
       return {
         ok: false,
         reason: 'active_dispatch',
-        message: `${ticket.ref} still has a live claim or an open dispatch, so grooming cannot close it. Do not force-take it. After the host records a terminal failure and the claim is released, close it as plain grooming with the shipped commit as evidence, without --integration. Releasing does not discard work already committed.`,
+        message: `${ticket.ref} still has a live claim or an open dispatch, so grooming cannot close it. Do not force-take it. After trusted host terminal evidence, release it with \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : '<claim holder>'}\`, then close it as plain grooming with the shipped commit as evidence, without --integration. Releasing does not discard work already committed.`,
         ticket,
       };
     }
