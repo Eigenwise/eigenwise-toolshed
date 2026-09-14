@@ -1391,3 +1391,105 @@ test('an unbound claimed dispatch reports a binding fault and stays claimed with
   assert.equal(pulse.claim.reclaimable, null);
   assert.equal(store.getTicket(slug, ticket.ref).claim.by, 'unbound-executor');
 });
+
+// SQ-2868: `dead` is what sends an orchestrator looking for recovery evidence to retire an attempt,
+// so pulse answering it from a died record that belongs to some OTHER attempt aims that at a live
+// executor. Both shapes below reported dead over a working runtime, and only the claim guard refused
+// to free the ticket. The third case is why the fix cannot just report everything alive.
+test('a died record only reports dead for the attempt that is actually being asked about', () => {
+  const superseded = addRouted('historical died attempt');
+  const firstSession = 'session-historical-death-first';
+  const first = claimRouted(superseded, 'sq2868-first-executor', { sessionId: firstSession });
+  assert.equal(store.recordDispatchAgentFailure(slug, superseded.ref, {
+    token: first.token,
+    executor: first.ticket.dispatchExecutor,
+    sessionId: firstSession,
+    taskName: first.ticket.dispatch.launchName,
+    error: 'Prompt is too long',
+  }).ok, true);
+  assert.equal(store.getTicket(slug, superseded.ref).dispatch.attempts.at(-1).outcome, 'died');
+
+  const secondSession = 'session-historical-death-second';
+  const second = store.prepareDispatch(slug, superseded.ref, { sharedTree: true, sessionId: secondSession });
+  const secondAgent = second.ticket.dispatch.launchName;
+  assert.equal(store.recordDispatchLaunch(slug, superseded.ref, {
+    token: second.token, executor: second.ticket.dispatchExecutor, sessionId: secondSession, agentName: secondAgent,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(secondSession, second.ticket.dispatchExecutor, secondAgent, secondAgent).ok, true);
+  assert.equal(store.claimTicket(slug, superseded.ref, 'sq2868-replacement-executor', {
+    token: second.token, executor: second.ticket.dispatchExecutor, sessionId: secondSession,
+  }).ok, true);
+
+  const freshPulse = store.pulsePayload(slug, superseded.ref);
+  assert.equal(freshPulse.died, null, 'a died attempt the live dispatch superseded is not this attempt’s death');
+  assert.equal(freshPulse.liveness, 'unknown');
+  assert.match(freshPulse.livenessEvidence, /no process heartbeat/);
+  assert.equal(store.getTicket(slug, superseded.ref).claim.by, 'sq2868-replacement-executor');
+
+  // The second shape: the terminal record is the current dispatch's own, but it predates the claim
+  // now holding the ticket, so it is about the launch that died rather than the runtime working now.
+  const reclaimed = addRouted('died record predates the claim');
+  const staleSession = 'session-stale-death';
+  const stale = claimRouted(reclaimed, 'sq2868-stopped-executor', { sessionId: staleSession });
+  assert.equal(store.recordDispatchAgentFailure(slug, reclaimed.ref, {
+    token: stale.token,
+    executor: stale.ticket.dispatchExecutor,
+    sessionId: staleSession,
+    taskName: stale.ticket.dispatch.launchName,
+    error: 'Prompt is too long',
+  }).ok, true);
+  const freed = store.getTicket(slug, reclaimed.ref);
+  assert.equal(freed.claim, null);
+  freed.labels = ['direct-ok'];
+  persist(freed);
+  assert.equal(store.claimTicket(slug, reclaimed.ref, 'sq2868-direct-executor', {
+    direct: true, reason: 'A direct claim picks the ticket up after the previous launch died.',
+  }).ok, true);
+
+  const directPulse = store.pulsePayload(slug, reclaimed.ref);
+  const directState = store.getTicket(slug, reclaimed.ref);
+  assert.ok(Date.parse(directState.dispatch.terminalAt) < Date.parse(directState.claim.at), 'the fixture keeps the death older than the claim');
+  assert.equal(directPulse.died, null, 'a death recorded before this claim says nothing about the runtime holding it');
+  assert.notEqual(directPulse.liveness, 'dead');
+  assert.equal(store.getTicket(slug, reclaimed.ref).claim.by, 'sq2868-direct-executor');
+
+  // Negative case: the attempt holding the claim genuinely died, and that still frees the ticket.
+  const gone = addRouted('genuinely dead current attempt');
+  const dyingSession = 'session-genuine-death';
+  const dyingPrepared = store.prepareDispatch(slug, gone.ref, { sharedTree: true, sessionId: dyingSession });
+  const dyingClaim = store.claimTicket(slug, gone.ref, 'sq2868-dying-executor', {
+    token: dyingPrepared.token, executor: dyingPrepared.ticket.dispatchExecutor, sessionId: dyingSession,
+  });
+  assert.equal(dyingClaim.ok, true, JSON.stringify(dyingClaim));
+  const dying = store.getTicket(slug, gone.ref);
+  dying.dispatch.outcome = 'died';
+  dying.dispatch.terminalAt = new Date().toISOString();
+  dying.dispatch.terminalSource = 'test-stop-hook';
+  persist(dying);
+
+  const deadPulse = store.pulsePayload(slug, gone.ref);
+  assert.equal(deadPulse.liveness, 'dead');
+  assert.equal(deadPulse.died.source, 'test-stop-hook');
+  assert.equal(store.claimReleaseVerdict(store.getTicket(slug, gone.ref)).kind, 'observed_stop');
+});
+
+test('the died-record predicate keys on attempt identity and record age, not on presence', () => {
+  const { diedRecordAttestsAttempt } = require('../lib/store/pulse.js');
+  const dispatch = { preparedAt: '2026-09-01T10:00:00.000Z', tokenPrefix: 'aaaa-bbbb-cc' };
+  const claim = { at: '2026-09-01T10:05:00.000Z' };
+  const ownRecord = (fields?: any) => Object.assign({}, dispatch, { outcome: 'died', terminalSource: 'stop-hook' }, fields);
+  const rows = [
+    ['its own death after the claim', ownRecord({ terminalAt: '2026-09-01T10:06:00.000Z' }), claim, true],
+    ['its own death at the claim instant', ownRecord({ terminalAt: claim.at }), claim, true],
+    ['its own death with no claim to outlive', ownRecord({ terminalAt: '2026-09-01T10:01:00.000Z' }), null, true],
+    ['its own death before the claim', ownRecord({ terminalAt: '2026-09-01T10:04:59.999Z' }), claim, false],
+    ['a superseded attempt that died after the claim', ownRecord({
+      preparedAt: '2026-09-01T09:00:00.000Z', tokenPrefix: 'zzzz-yyyy-xx', terminalAt: '2026-09-01T10:06:00.000Z',
+    }), claim, false],
+    ['a non-died terminal record', ownRecord({ outcome: 'failed', terminalAt: '2026-09-01T10:06:00.000Z' }), claim, false],
+    ['a died record with no terminal time', ownRecord({ terminalAt: null }), claim, false],
+  ];
+  for (const [label, record, claimRow, expected] of rows) {
+    assert.equal(diedRecordAttestsAttempt(dispatch, record, claimRow), expected, label as string);
+  }
+});
