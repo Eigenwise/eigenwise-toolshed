@@ -1882,6 +1882,124 @@ function requestHeader(req, name) {
 }
 
 const { effectiveCodexSentryPolicy, runWorker } = require('./request-worker.js');
+function createShimRelay({
+  httpClient = http,
+  getWorker = () => null,
+  getWorkerPort = () => 0,
+  isStopped = () => false,
+  agent,
+  getHealthMetadata = () => ({}),
+  onWorkerRequestLost = () => {},
+} = {}) {
+  // A worker that already took the body may have spent it upstream, so only
+  // the loss of that worker justifies sending the request again: a resend to a
+  // live worker is a second inference, billed to the user's subscription, that
+  // the caller never sees.
+  function requestWorker(req, body) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const settle = (finish, value) => {
+        if (settled) return;
+        settled = true;
+        finish(value);
+      };
+      const lostWorkerRequest = (error, workerThatTookBody) => {
+        onWorkerRequestLost(error, workerThatTookBody);
+        return Object.assign(error, { bodyTakenByWorker: true });
+      };
+      const attempt = (attemptsLeft, acceptingWorker) => {
+        if (settled) return;
+        const canWait = () => attemptsLeft > 0 && !isStopped();
+        const waitForAnotherAttempt = (nextAcceptingWorker) => setTimeout(
+          () => attempt(attemptsLeft - 1, nextAcceptingWorker), 50,
+        );
+        if (acceptingWorker && getWorker() === acceptingWorker) {
+          if (!canWait()) return settle(reject, lostWorkerRequest(new Error('shim worker never answered the request it had accepted'), acceptingWorker));
+          return waitForAnotherAttempt(acceptingWorker);
+        }
+        const workerPort = getWorkerPort();
+        if (!workerPort) {
+          if (!canWait()) return settle(reject, new Error('shim worker did not report a listener port'));
+          return waitForAnotherAttempt(null);
+        }
+        let deliveredToWorker = null;
+        const upstream = httpClient.request({
+          host: '127.0.0.1', port: workerPort, method: req.method, path: req.url,
+          headers: { ...req.headers, host: `127.0.0.1:${workerPort}` }, agent,
+        }, (response) => settle(resolve, response));
+        upstream.once('socket', (socket) => {
+          const noteDelivered = () => { deliveredToWorker = getWorker(); };
+          if (socket.connecting) socket.once('connect', noteDelivered);
+          else noteDelivered();
+        });
+        upstream.once('error', (error) => {
+          if (settled) return;
+          if (!canWait()) return settle(reject, deliveredToWorker ? lostWorkerRequest(error, deliveredToWorker) : error);
+          waitForAnotherAttempt(deliveredToWorker);
+        });
+        upstream.end(body);
+      };
+      attempt(80, null);
+    });
+  }
+
+  async function relay(req, res) {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = Buffer.concat(chunks);
+    try {
+      const upstream = await requestWorker(req, body);
+      // Once the worker's headers are out this can no longer become an HTTP
+      // error, and `pipe` forwards neither an error nor an abort, so a worker
+      // that dies mid-answer would leave the client holding an open response
+      // that never completes. Break the connection instead, the way the worker
+      // already does when its own upstream dies, so the client sees ECONNRESET
+      // and decides for itself whether to ask again.
+      upstream.on('error', () => res.destroy());
+      upstream.on('aborted', () => res.destroy());
+      if (req.url.split('?')[0] === '/healthz') {
+        const response = [];
+        upstream.on('data', (chunk) => response.push(chunk));
+        upstream.once('end', () => {
+          const health = JSON.parse(Buffer.concat(response).toString());
+          health.supervisorVersion = PLUGIN_VERSION;
+          health.supervisorPid = process.pid;
+          health.proxyRecovery = true;
+          health.compat = getHealthMetadata();
+          res.writeHead(upstream.statusCode || 502, upstream.headers);
+          res.end(JSON.stringify(health));
+        });
+        return;
+      }
+      res.writeHead(upstream.statusCode || 502, upstream.headers);
+      upstream.pipe(res);
+    } catch (error) {
+      // Claude Code resends any retryable status without telling the user:
+      // measured at five identical resends of one 503, and `x-should-retry:
+      // false` cuts that to none (verification/SQ-2861). So the answer depends
+      // on whether a worker took the body: if it did, that inference is
+      // already being paid for upstream and a resend silently buys a second
+      // one, and if it did not, the resend is free and wanted.
+      const bodyTakenByWorker = error?.bodyTakenByWorker === true;
+      res.writeHead(503, {
+        'content-type': 'application/json',
+        ...(bodyTakenByWorker ? { 'x-should-retry': 'false' } : {}),
+      });
+      res.end(JSON.stringify({
+        type: 'error',
+        error: {
+          type: 'api_error',
+          message: bodyTakenByWorker
+            ? 'model-gateway lost the shim worker connection after this request reached the model; that answer cannot be recovered, and retrying automatically would pay for a second inference, so send it again yourself if you still want one'
+            : 'model-gateway could not deliver this request to the shim worker; retry it shortly',
+        },
+      }));
+    }
+  }
+
+  return { relay, requestWorker };
+}
+
 function runShim() {
   mkdirs();
   const controlToken = ensureControlToken();
@@ -2087,118 +2205,24 @@ function runShim() {
     return portListening(workerPort, 100);
   }
 
-  // A worker that already took the body may have spent it upstream, so only
-  // the loss of that worker justifies sending the request again: a resend to a
-  // live worker is a second inference, billed to the user's subscription, that
-  // the caller never sees.
-  function requestWorker(req, body) {
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const settle = (finish, value) => {
-        if (settled) return;
-        settled = true;
-        finish(value);
-      };
-      const lostWorkerRequest = (error, workerThatTookBody) => {
-        recordGatewayLifecycle('worker-request-lost', {
-          component: 'supervisor',
-          pid: process.pid,
-          startedAt: supervisorStartedAt,
-          ...(workerThatTookBody?.pid ? { child: { component: 'worker', pid: workerThatTookBody.pid } } : {}),
-          outcome: 'response-lost',
-          errorType: error.code || error.name,
-        });
-        return Object.assign(error, { bodyTakenByWorker: true });
-      };
-      const attempt = (attemptsLeft, acceptingWorker) => {
-        if (settled) return;
-        const canWait = () => attemptsLeft > 0 && !stopped;
-        const waitForAnotherAttempt = (nextAcceptingWorker) => setTimeout(
-          () => attempt(attemptsLeft - 1, nextAcceptingWorker), 50,
-        );
-        if (acceptingWorker && worker === acceptingWorker) {
-          if (!canWait()) return settle(reject, lostWorkerRequest(new Error('shim worker never answered the request it had accepted'), acceptingWorker));
-          return waitForAnotherAttempt(acceptingWorker);
-        }
-        if (!workerPort) {
-          if (!canWait()) return settle(reject, new Error('shim worker did not report a listener port'));
-          return waitForAnotherAttempt(null);
-        }
-        let deliveredToWorker = null;
-        const upstream = http.request({
-          host: '127.0.0.1', port: workerPort, method: req.method, path: req.url,
-          headers: { ...req.headers, host: `127.0.0.1:${workerPort}` },
-          agent: workerAgent,
-        }, (response) => settle(resolve, response));
-        upstream.once('socket', (socket) => {
-          const noteDelivered = () => { deliveredToWorker = worker; };
-          if (socket.connecting) socket.once('connect', noteDelivered);
-          else noteDelivered();
-        });
-        upstream.once('error', (error) => {
-          if (settled) return;
-          if (!canWait()) return settle(reject, deliveredToWorker ? lostWorkerRequest(error, deliveredToWorker) : error);
-          waitForAnotherAttempt(deliveredToWorker);
-        });
-        upstream.end(body);
-      };
-      attempt(80, null);
-    });
-  }
-
-  async function relay(req, res) {
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const body = Buffer.concat(chunks);
-    try {
-      const upstream = await requestWorker(req, body);
-      // Once the worker's headers are out this can no longer become an HTTP
-      // error, and `pipe` forwards neither an error nor an abort, so a worker
-      // that dies mid-answer would leave the client holding an open response
-      // that never completes. Break the connection instead, the way the worker
-      // already does when its own upstream dies, so the client sees ECONNRESET
-      // and decides for itself whether to ask again.
-      upstream.on('error', () => res.destroy());
-      upstream.on('aborted', () => res.destroy());
-      if (req.url.split('?')[0] === '/healthz') {
-        const response = [];
-        upstream.on('data', (chunk) => response.push(chunk));
-        upstream.once('end', () => {
-          const health = JSON.parse(Buffer.concat(response).toString());
-          health.supervisorVersion = PLUGIN_VERSION;
-          health.supervisorPid = process.pid;
-          health.proxyRecovery = true;
-          health.compat = { ...compatState };
-          res.writeHead(upstream.statusCode || 502, upstream.headers);
-          res.end(JSON.stringify(health));
-        });
-        return;
-      }
-      res.writeHead(upstream.statusCode || 502, upstream.headers);
-      upstream.pipe(res);
-    } catch (error) {
-      // Claude Code resends any retryable status without telling the user:
-      // measured at five identical resends of one 503, and `x-should-retry:
-      // false` cuts that to none (verification/SQ-2861). So the answer depends
-      // on whether a worker took the body: if it did, that inference is
-      // already being paid for upstream and a resend silently buys a second
-      // one, and if it did not, the resend is free and wanted.
-      const bodyTakenByWorker = error?.bodyTakenByWorker === true;
-      res.writeHead(503, {
-        'content-type': 'application/json',
-        ...(bodyTakenByWorker ? { 'x-should-retry': 'false' } : {}),
+  const shimRelay = createShimRelay({
+    httpClient: http,
+    getWorker: () => worker,
+    getWorkerPort: () => workerPort,
+    isStopped: () => stopped,
+    agent: workerAgent,
+    getHealthMetadata: () => ({ ...compatState }),
+    onWorkerRequestLost: (error, workerThatTookBody) => {
+      recordGatewayLifecycle('worker-request-lost', {
+        component: 'supervisor',
+        pid: process.pid,
+        startedAt: supervisorStartedAt,
+        ...(workerThatTookBody?.pid ? { child: { component: 'worker', pid: workerThatTookBody.pid } } : {}),
+        outcome: 'response-lost',
+        errorType: error.code || error.name,
       });
-      res.end(JSON.stringify({
-        type: 'error',
-        error: {
-          type: 'api_error',
-          message: bodyTakenByWorker
-            ? 'model-gateway lost the shim worker connection after this request reached the model; that answer cannot be recovered, and retrying automatically would pay for a second inference, so send it again yourself if you still want one'
-            : 'model-gateway could not deliver this request to the shim worker; retry it shortly',
-        },
-      }));
-    }
-  }
+    },
+  });
 
   async function restartWorker(script) {
     if (script && path.isAbsolute(script) && canReplaceInstalledCliPath(workerScript, script)) workerScript = script;
@@ -2366,7 +2390,7 @@ function runShim() {
       });
       return;
     }
-    return relay(req, res);
+    return shimRelay.relay(req, res);
   }
 
   function monitorProxy() {
@@ -2617,4 +2641,5 @@ module.exports = {
   modelWindowPolicyRows,
   expectedShimModelIds,
   modelIdDifference,
+  createShimRelay,
 };
