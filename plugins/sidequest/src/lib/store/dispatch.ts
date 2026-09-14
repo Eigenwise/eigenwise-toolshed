@@ -245,19 +245,23 @@ function repositoryIdentity(cwd?: any) {
   }
 }
 
-// An isolated dispatch is created by the spawning session's WorktreeCreate hook,
-// and that hook resolves the board from its own checkout. A dispatch prepared for
-// a different repository therefore hands back a spawn spec whose lease can never
-// bind, and the executor dies before it starts (SQ-2570). Refuse while the caller
-// can still choose sharedTree, rather than after the Agent fails. Linked worktrees
-// of the project share its common git dir, so they are NOT a mismatch; that case
-// is the existing stale-cwd warning's.
-function isolatedTreeRuntimeRefusal(ticket?: any, projectPath?: any, runtimeCwd?: any) {
+// An isolated dispatch is created by the spawning session's WorktreeCreate hook.
+// That hook follows the session id to the board that reserved the creation, so a
+// sibling project's ticket does get a worktree cut from its own repository. It
+// cannot tell WHICH ticket it is creating for, though, so while this session owns
+// launched isolated dispatches on more than one board it falls back to the
+// spawning checkout, the lease never binds, and the executor dies before it
+// starts (SQ-2570, SQ-2884). Refuse that case while the caller can still wait or
+// choose sharedTree. Linked worktrees of the project share its common git dir, so
+// they are NOT a mismatch; that case is the existing stale-cwd warning's.
+function isolatedTreeRuntimeRefusal(ticket?: any, projectPath?: any, runtimeCwd?: any, slug?: any, sessionId?: any) {
   if (!runtimeCwd || !projectPath) return null;
   const project = repositoryIdentity(projectPath);
   const runtime = repositoryIdentity(runtimeCwd);
   if (!project || !runtime || project === runtime) return null;
-  return `prepare dispatch: refused ${ticket.ref}; an isolated worktree is created by this session's WorktreeCreate hook, which resolves the board from the spawning checkout ${runtimeCwd} rather than from ${projectPath}. Its worktree lease would refuse creation with dispatch_binding_unavailable and the executor would never start. Dispatch it with sharedTree:true, or from a session rooted in ${projectPath}.`;
+  const competing = launchedIsolatedSessionProjects(String(sessionId || '').trim(), slug);
+  if (!competing.length) return null;
+  return `prepare dispatch: refused ${ticket.ref}; its project ${projectPath} is a different repository from this session's checkout ${runtimeCwd}, and this session already owns launched isolated dispatches on another board (${competing.map((entry: any) => entry.path).join(', ')}). WorktreeCreate follows the session id to one board, so with several live it cannot tell which ticket it is creating for and would cut this worktree from the wrong repository. Dispatch ${ticket.ref} once those are terminal, leaving ${projectPath} as this session's only isolated board. sharedTree:true stays available but runs the executor and its commit in ${runtimeCwd}; only its verification is redirected to ${projectPath}.`;
 }
 
 function dispatchPreparationAttribution(opts?: any) {
@@ -1558,7 +1562,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     }
     const runtimeRefusal = sharedTree
       ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd)
-      : isolatedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd);
+      : isolatedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd, slug, opts.sessionId);
     if (runtimeRefusal) throw new Error(runtimeRefusal);
     const workingTreeDelivery = sharedTree && t.workingTreeDelivery === true && effectiveFiles.length > 0;
     const verificationRequirement = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ''));
@@ -2074,17 +2078,36 @@ function bindingFailurePredicate(state?: any, sessionId?: string, worktree?: str
   return 'dispatch_binding_unavailable';
 }
 
-function launchedIsolatedDispatchOnAnotherProject(slug?: any, sessionId?: string) {
+// One entry per board this session still owns a launched isolated dispatch on.
+// WorktreeCreate learns only the spawning checkout's cwd, so the session id is the
+// only thing that can point it at a sibling project's board (SQ-2884).
+function launchedIsolatedSessionProjects(sessionId?: string, skipSlug?: any) {
+  const owned: { slug: string; path: string; state: any }[] = [];
+  if (!sessionId) return owned;
   for (const project of listProjects({ all: true })) {
-    if (project.slug === slug) continue;
+    if (!project?.slug || !project.path || project.slug === skipSlug) continue;
     for (const candidate of listTickets(project.slug)) {
       const state = dispatchState(candidate);
       if (state?.sessionId === sessionId && state.sharedTree === false && state.outcome === 'launched' && !state.terminalAt) {
-        return state;
+        owned.push({ slug: project.slug, path: String(project.path), state });
+        break;
       }
     }
   }
-  return null;
+  return owned;
+}
+
+function launchedIsolatedDispatchOnAnotherProject(slug?: any, sessionId?: string) {
+  return launchedIsolatedSessionProjects(sessionId, slug)[0]?.state || null;
+}
+
+// The repository WorktreeCreate should cut this session's next isolated worktree
+// from. Guessing between boards would check out the wrong repository, so an
+// ambiguous session resolves to nothing and the hook keeps its spawning-checkout
+// fallback; prepareDispatch refuses that combination up front.
+function isolatedDispatchRepositoryForSession(sessionId?: any) {
+  const boards = launchedIsolatedSessionProjects(String(sessionId || '').trim());
+  return boards.length === 1 ? boards[0]!.path : null;
 }
 
 function unavailableWorktreeBinding(slug?: any, candidates: any[] = [], sessionId?: string, worktree?: string) {
@@ -2975,6 +2998,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     dispatchState,
     executorClaimDispatchRefusal,
     sharedTreeRuntimeRefusal,
+    isolatedDispatchRepositoryForSession,
     sharedTreeArtifactRequested,
     categoryArtifactRoot,
     sharedTreeArtifactMode,

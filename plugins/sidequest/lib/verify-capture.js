@@ -28,22 +28,22 @@ async function runVerifyCapture(command, cwd = process.cwd(), timeoutMillisecond
 function isFullSuiteCommand(command) {
   return /(?:^|[\s&;()])npm\s+run\s+test:full(?:\s|$)/.test(command);
 }
-function captureSlotProjectRoot(project) {
+function repositoryRoot(directory) {
   try {
     const commonGitDirectory = String(execFileSync("git", ["rev-parse", "--git-common-dir"], {
-      cwd: project,
+      cwd: directory,
       encoding: "utf8",
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"]
     })).trim();
-    const commonGitPath = path.resolve(project, commonGitDirectory);
-    return canonicalPath(path.basename(commonGitPath).toLowerCase() === ".git" ? path.dirname(commonGitPath) : project);
+    const commonGitPath = path.resolve(directory, commonGitDirectory);
+    return canonicalPath(path.basename(commonGitPath).toLowerCase() === ".git" ? path.dirname(commonGitPath) : directory);
   } catch {
-    return canonicalPath(project);
+    return canonicalPath(directory);
   }
 }
 function captureSlotDirectory(project) {
-  const projectHash = createHash("sha256").update(captureSlotProjectRoot(project)).digest("hex");
+  const projectHash = createHash("sha256").update(repositoryRoot(project)).digest("hex");
   return path.join(os.tmpdir(), "sidequest-verify-capture-slots", projectHash);
 }
 function captureSlotWaiterPath(slotDirectory, fileSystem = fs) {
@@ -269,7 +269,8 @@ function captureWorkingDirectory(target, cwd) {
   if (!project) return cwd;
   const store = require("./store.js");
   const ticket = store.getTicket(project.slug, target.ticket);
-  return store.workingTreeDeliveryCandidate(project.slug, ticket) ? project.path : cwd;
+  if (store.workingTreeDeliveryCandidate(project.slug, ticket)) return project.path;
+  return repositoryRoot(cwd) === repositoryRoot(project.path) ? cwd : project.path;
 }
 async function runCapturedVerification(command, target, cwd = process.cwd(), fileSystem = fs) {
   const captureCwd = target ? captureWorkingDirectory(target, cwd) : cwd;
@@ -300,10 +301,23 @@ function verifiedWorktreeIsClean(cwd) {
     return false;
   }
 }
+function foreignCaptureRepository(projectPath, cwd) {
+  const ticketRepository = repositoryRoot(projectPath);
+  return repositoryRoot(cwd) === ticketRepository ? null : ticketRepository;
+}
 function recordCapture(target, capture, cwd) {
   const store = require("./store.js");
   const project = store.findProject(target.project);
   if (!project.ok || !project.slug) return { ok: false, reason: "project_not_found" };
+  const projectPath = String(project.meta?.path || "").trim();
+  const ticketRepository = projectPath ? foreignCaptureRepository(projectPath, cwd) : null;
+  if (ticketRepository) {
+    return {
+      ok: false,
+      reason: "verification_capture_foreign_repository",
+      message: `Verification capture for ${target.ticket} ran in ${cwd}, which is not the ticket's repository ${ticketRepository}. A verify that never saw the ticket's files proves nothing about them, so nothing is recorded. Run the pinned verifier from the ticket's own checkout.`
+    };
+  }
   const ticket = store.getTicket(project.slug, target.ticket);
   const workingTreeCandidate = store.workingTreeDeliveryCandidate(project.slug, ticket);
   const candidate = workingTreeCandidate?.candidate || verifiedRevision(cwd);
