@@ -435,6 +435,8 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.ok(groomClose.inputSchema.properties.deliveryCommit, 'groomClose records hand-delivered commits');
   assert.match(groomClose.description, /reset\/working-tree\/manual: pinned candidate/i);
   assert.ok(groomClose.inputSchema.properties.recoveryEvidence, 'groomClose requires terminal-agent evidence before clearing an unclaimed dispatch');
+  assert.deepEqual(groomClose.inputSchema.properties.verificationSupersession.required, ['verifyKind', 'verify'], 'groomClose requires a typed replacement verifier');
+  assert.deepEqual(groomClose.inputSchema.properties.verificationSupersession.properties.verifyKind.enum, ['command', 'suite'], 'groomClose only runs executable verifier replacements');
   const release = resp.result.tools.find((tool: any) => tool.name === 'release');
   assert.ok(release.inputSchema.properties.oracle, 'release exposes an oracle ask');
   assert.deepEqual(release.inputSchema.properties.kind.enum, ['technical_blocker', 'contradiction', 'oracle', 'handback'], 'release classifies reasoned handoffs');
@@ -798,6 +800,41 @@ test('update amends a claimed dispatch verifier and its next capture uses the am
   } finally {
     fs.rmSync(capture.logPath, { force: true });
   }
+});
+
+test('update refuses a verifier amendment after terminal submission without changing the ticket', async () => {
+  const repository = committedRepo('sq-mcp-sealed-verify-');
+  const project = store.ensureProject(repository).slug;
+  const pinnedCommand = 'node -e "process.exit(1)"';
+  const replacementCommand = 'node -e "process.exit(0)"';
+  const added = await callTool('add', {
+    project,
+    title: 'sealed verifier amendment',
+    description: DISPATCH_DESCRIPTION,
+    category: 'general',
+    files: ['src/fixture.js'],
+    verifyKind: 'command',
+    verify: pinnedCommand,
+  });
+  const recorded = store.getTicket(project, added.ref);
+  recorded.submission = { commit: '0123456789abcdef0123456789abcdef01234567' };
+  recorded.dispatch = {
+    attempts: [{ outcome: 'submitted', terminalAt: new Date().toISOString() }],
+  };
+  persistTicket(project, recorded);
+
+  const updated = await callTool('update', {
+    project,
+    ref: added.ref,
+    by: 'orchestrator',
+    verifyKind: 'command',
+    verify: replacementCommand,
+  });
+
+  assert.equal(updated.ok, false);
+  assert.equal(updated.reason, 'verification_amendment_not_applied');
+  assert.match(updated.message, /verificationSupersession/);
+  assert.equal(store.getTicket(project, added.ref).executorVerify, pinnedCommand);
 });
 
 // SQ-900: a 25- and then 28-entry files array both returned ok:true and persisted

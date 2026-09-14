@@ -1,7 +1,7 @@
 [
   {
     "name": "context_page",
-    "description": "Continue.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -76,7 +76,7 @@
   },
   {
     "name": "pulse",
-    "description": "Live.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -112,7 +112,7 @@
   },
   {
     "name": "story",
-    "description": "Story.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -149,7 +149,7 @@
   },
   {
     "name": "story_contract",
-    "description": "Contract.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -182,7 +182,7 @@
   },
   {
     "name": "story_log",
-    "description": "Story log.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -214,7 +214,7 @@
   },
   {
     "name": "ready",
-    "description": "List ready ticket refs.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -238,7 +238,7 @@
   },
   {
     "name": "add",
-    "description": "Ticket; review binds candidate.",
+    "description": "Ticket.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -596,7 +596,7 @@
   },
   {
     "name": "remove",
-    "description": "Delete; force.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -653,7 +653,7 @@
   },
   {
     "name": "claim",
-    "description": "Claim before work; proceed only on ok:true.",
+    "description": "Claim before work.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -704,7 +704,7 @@
   },
   {
     "name": "checkpoint",
-    "description": "Hold.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -768,7 +768,7 @@
   },
   {
     "name": "next",
-    "description": "Next.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -856,7 +856,7 @@
   },
   {
     "name": "groomClose",
-    "description": "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; reviewed interaction.",
+    "description": "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; verifier replacement; reviewed interaction.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -893,6 +893,26 @@
             "manual"
           ]
         },
+        "verificationSupersession": {
+          "type": "object",
+          "properties": {
+            "verifyKind": {
+              "type": "string",
+              "enum": [
+                "command",
+                "suite"
+              ]
+            },
+            "verify": {
+              "type": "string",
+              "maxLength": 1000
+            }
+          },
+          "required": [
+            "verifyKind",
+            "verify"
+          ]
+        },
         "abandonSubmission": {
           "type": "boolean"
         },
@@ -909,7 +929,7 @@
   },
   {
     "name": "release",
-    "description": "Release; reason required. oracle handoff needs ask until verdict.",
+    "description": "reason required; oracle handoff.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1013,7 +1033,7 @@
   },
   {
     "name": "scopeRequest",
-    "description": "Scope.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1106,7 +1126,7 @@
   },
   {
     "name": "submit",
-    "description": "Submit verified work; clear/force need owner.",
+    "description": "clear/force need owner.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1322,7 +1342,7 @@
   },
   {
     "name": "comment",
-    "description": "Handoff.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1347,7 +1367,7 @@
   },
   {
     "name": "plan",
-    "description": "Plan.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1407,7 +1427,7 @@
   },
   {
     "name": "link",
-    "description": "Link.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1481,7 +1501,7 @@
   },
   {
     "name": "dispatch",
-    "description": "token and spawn spec; retireOnly.",
+    "description": "Tree.",
     "inputSchema": {
       "type": "object",
       "properties": {

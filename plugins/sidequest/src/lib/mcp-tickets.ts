@@ -103,6 +103,17 @@ function liveVerificationAmendment(ticket: any) {
   };
 }
 
+function recordedSubmissionVerificationAmendmentRefusal(ticket: any) {
+  const terminalSubmission = ticket.dispatch?.terminalAt
+    || ticket.dispatch?.attempts?.some((attempt: any) => attempt?.outcome === 'submitted' && attempt.terminalAt);
+  if (!ticket.submission || !terminalSubmission) return null;
+  return {
+    ok: false,
+    reason: 'verification_amendment_not_applied',
+    message: `${ticket.ref} has a terminal recorded submission, so update cannot amend its sealed verifier. Keep the recorded verifier immutable. To record a delivered verifier replacement, use groomClose with deliveryCommit and verificationSupersession; that runs the replacement and records both requirements and the result.`,
+  };
+}
+
 const REVIEW_TARGET_PROP = {
   type: 'object',
   properties: {
@@ -215,7 +226,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'update',
-    description: 'Update ticket fields by scope. A live claim permits closeout-affecting fields only from the runtime session that prepared its dispatch; by is a label, not proof. Executors must use scopeRequest for files. A control-plane verifier amendment updates the live dispatch requirement and records the old and new command on the ticket. Any omitted field is left unchanged. Set route only for a one-ticket model override, or "none" to clear it. Editing a category route repoints future tickets too. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
+    description: 'Update ticket fields by scope. A live claim permits closeout-affecting fields only from the runtime session that prepared its dispatch; by is a label, not proof. Executors must use scopeRequest for files. A control-plane verifier amendment updates the live dispatch requirement and records the old and new command on the ticket. A terminal recorded submission keeps its verifier sealed: update refuses its amendment, and groomClose verificationSupersession records the distinct delivered replacement after it passes. Any omitted field is left unchanged. Set route only for a one-ticket model override, or "none" to clear it. Editing a category route repoints future tickets too. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -286,6 +297,10 @@ const tools: ToolDefinition[] = [
       const verificationWasAmended = (args.verify !== undefined && args.verify !== existing.executorVerify)
         || (args.verifyKind !== undefined && args.verifyKind !== existing.executorVerifyKind)
         || (args.attestationArtifact !== undefined && args.attestationArtifact !== existing.executorAttestationArtifact);
+      const verificationAmendmentRefusal = verificationWasAmended
+        ? recordedSubmissionVerificationAmendmentRefusal(existing)
+        : null;
+      if (verificationAmendmentRefusal) return Object.assign({ project: slug }, verificationAmendmentRefusal);
       const patch: any = { source: 'mcp', by: String(args.by || '').trim() || null };
       for (const k of ['title', 'description', 'priority', 'status', 'highStakes', 'labels', 'files', 'complexity']) {
         if (args[k] !== undefined) patch[k] = args[k];
