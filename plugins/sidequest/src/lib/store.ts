@@ -1906,6 +1906,18 @@ function claimAdmission(slug?: any, idOrRef?: any, opts?: any) {
   return { ok: true, ticket, token };
 }
 
+// A reduced-schema spawn cannot carry `mode`, so force-exec-bypass deliberately
+// omits it and the executor inherits the parent session's mode. Demanding
+// bypassPermissions here asked for evidence that path is forbidden from
+// producing, and every dispatch on such a host died at its first action
+// (SQ-2881, public issue 69). What the mode can still prove is the one thing
+// worth proving: an unattended executor that will not stall on a prompt. `plan`
+// cannot edit at all, and `default`/`acceptEdits` stop at the first unapproved
+// Bash — which is the pinned verifier. These two run a ticket through.
+function reducedPermissionModeSupported(mode: unknown): boolean {
+  return mode === 'auto' || mode === 'bypassPermissions';
+}
+
 function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
   const agentId = String(opts?.agentId || '').trim();
   const observedPermissionMode = String(opts?.permissionMode || '').trim();
@@ -1916,7 +1928,7 @@ function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
     reason: 'missing_identity',
     ticket: found,
     ...(found.dispatch?.reducedAgentSchema === true ? {
-      message: `${found.ref} reduced Agent-schema dispatch requires hook-reported agent_id before the first claim. Reload into a host that reports agent_id and permission_mode "bypassPermissions" to PreToolUse, then dispatch again without adding unsupported Agent fields or changing permissions.`,
+      message: `${found.ref} reduced Agent-schema dispatch requires hook-reported agent_id before the first claim. Stop without claiming; use a host that reports agent_id and permission_mode ("auto" or "bypassPermissions") to PreToolUse. Do not add unsupported Agent fields or change permissions.`,
     } : {}),
   };
   return withTicketLock(slug, found.id, () => {
@@ -1927,15 +1939,6 @@ function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
     const state = dispatchState(ticket);
     if (!state || state.terminalAt || !['prepared', 'launched', 'claimed'].includes(state.outcome)) {
       return { ok: false, reason: 'dispatch_unavailable', ticket };
-    }
-    if (state.reducedAgentSchema === true && observedPermissionMode !== 'bypassPermissions') {
-      const observed = observedPermissionMode || 'missing';
-      return {
-        ok: false,
-        reason: 'permission_mode_unverified',
-        ticket,
-        message: `${ticket.ref} reduced Agent-schema dispatch requires hook-reported permission_mode "bypassPermissions" before the first claim; observed ${JSON.stringify(observed)}. Use a host that reports that field to PreToolUse, then dispatch again without adding unsupported Agent fields or changing permissions.`,
-      };
     }
     // What binds here is the runtime the harness reported (agent_id from hook
     // stdin) to the claim the dispatch token authorizes. The token is the
@@ -1960,8 +1963,21 @@ function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
     }
     state.bindSource = 'claim_runtime_identity';
     if (state.reducedAgentSchema === true) state.observedPermissionMode = observedPermissionMode;
-    stampDispatchEvent(ticket, 'claim-runtime-identity', now);
+    // A reduced-schema attempt has no agentName, so SubagentStop can only reach
+    // it by agent_id. Recording identity before refusing keeps a refused attempt
+    // retirable by its own terminal hook instead of stranding it until the
+    // claim-idle backstop. Identity is not permission: claimTicket re-checks.
+    const permissionRefused = state.reducedAgentSchema === true && !reducedPermissionModeSupported(observedPermissionMode);
+    stampDispatchEvent(ticket, permissionRefused ? 'claim-permission-refused' : 'claim-runtime-identity', now);
     putTicket(slug, ticket);
+    if (permissionRefused) {
+      return {
+        ok: false,
+        reason: observedPermissionMode ? 'permission_mode_unsupported' : 'permission_mode_missing',
+        ticket,
+        message: `${ticket.ref} reduced Agent-schema dispatch has ${observedPermissionMode ? 'an unsupported' : 'no'} hook-reported permission_mode; observed ${JSON.stringify(observedPermissionMode || 'missing')}. An unattended executor can only finish under "auto" or "bypassPermissions". Stop without claiming or changing permissions; once this runtime's terminal hook is recorded, the orchestrator can prepare a fresh dispatch.`,
+      };
+    }
     return { ok: true, ticket };
   });
 }
@@ -1995,13 +2011,13 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     const currentDispatch = dispatchState(t);
     if (currentDispatch?.reducedAgentSchema === true && (
       !String(currentDispatch.agentId || '').trim()
-      || currentDispatch.observedPermissionMode !== 'bypassPermissions'
+      || !reducedPermissionModeSupported(currentDispatch.observedPermissionMode)
     )) {
       return {
         ok: false,
         reason: 'reduced_runtime_unverified',
         ticket: t,
-        message: `claim: refused ${t.ref}; this reduced Agent-schema dispatch needs hook-reported agent_id and permission_mode "bypassPermissions" before it can claim. Reload into a host that reports both fields to PreToolUse, then dispatch again without adding unsupported Agent fields or changing permissions.`,
+        message: `claim: refused ${t.ref}; this reduced Agent-schema dispatch needs hook-reported agent_id and permission_mode ("auto" or "bypassPermissions") before it can claim. Stop without claiming or changing permissions; caller-supplied fields cannot replace hook evidence.`,
       };
     }
     const terminalDispatch = Boolean(currentDispatch?.terminalAt && currentDispatch?.outcome);

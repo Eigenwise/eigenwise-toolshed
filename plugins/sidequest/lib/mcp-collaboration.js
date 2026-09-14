@@ -263,7 +263,7 @@ const tools = [
         ref: { type: "string" },
         project: PROJECT_PROP,
         sharedTree: { type: "boolean", description: "Use the declared shared checkout only when the spawning runtime is already rooted there. Executors with a live claim cannot use this to dispatch child work." },
-        reducedAgentSchema: { type: "boolean", description: 'Omit name/mode; hook needs agent_id and permission_mode "bypassPermissions".' },
+        reducedAgentSchema: { type: "boolean", description: 'Omit name/mode; hook needs agent_id and permission_mode "auto" or "bypassPermissions".' },
         allowRepeatFailure: { type: "boolean" },
         allowUnscoped: { type: "boolean", description: "Explicitly allow a write ticket with no declared file scope." },
         integrationBranch: { type: "string", description: "Ticket delivery target branch. Dispatch records it for submit, wave assembly, and integration even if the board target later changes." },
@@ -346,7 +346,7 @@ const tools = [
         // The agent list's own model label always reads claude-codex-auto for gateway
         // routes and cannot be changed (SQ-1350), so a paraphrased description is the
         // only thing standing between the reader and an unidentifiable running agent.
-        spawnDescriptionNote: dispatchState.reducedAgentSchema === true ? `Copy spawn.description byte-for-byte into the Agent call. This reduced-schema spawn intentionally omits name and mode; the board retains launch label "${dispatchState.launchName}" separately, and its first claim requires hook-reported agent_id plus permission_mode "bypassPermissions".` : `Copy spawn.description byte-for-byte into the Agent call. It leads with "${description.split(" · ")[0]}" for notifications, while the stable spawn.name ends with the resolved route token and effort.`
+        spawnDescriptionNote: dispatchState.reducedAgentSchema === true ? `Copy spawn.description byte-for-byte into the Agent call. This reduced-schema spawn intentionally omits name and mode; the board retains launch label "${dispatchState.launchName}" separately, and its first claim requires hook-reported agent_id plus a permission_mode of "auto" or "bypassPermissions" (the executor inherits this session's mode, so do not change it).` : `Copy spawn.description byte-for-byte into the Agent call. It leads with "${description.split(" · ")[0]}" for notifications, while the stable spawn.name ends with the resolved route token and effort.`
       };
     }
   },
