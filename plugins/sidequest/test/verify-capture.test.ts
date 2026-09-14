@@ -89,6 +89,7 @@ test('full-suite capture retries EPERM while a sibling releases its slot', async
   const observedSiblingCaptures = path.join(project, 'observed-sibling-captures');
   const slotDirectory = captureSlotDirectory(project);
   const activeDirectory = path.join(slotDirectory, 'active');
+  const siblingWaiterPath = path.join(slotDirectory, 'waiting', `000000000000001-${process.pid}-sibling.json`);
   const siblingTombstoneDirectory = `${activeDirectory}.sibling-release`;
   let releaseTimer: NodeJS.Timeout | undefined;
 
@@ -103,6 +104,8 @@ test('full-suite capture retries EPERM while a sibling releases its slot', async
     executorVerifyKind: 'command',
     executorVerify: 'npm run test:full',
   });
+  fs.mkdirSync(path.dirname(siblingWaiterPath), { recursive: true });
+  fs.writeFileSync(siblingWaiterPath, '');
   fs.mkdirSync(activeDirectory, { recursive: true });
 
   let activeMkdirAttempts = 0;
@@ -119,6 +122,7 @@ test('full-suite capture retries EPERM while a sibling releases its slot', async
     releaseTimer = setTimeout(() => {
       fs.renameSync(activeDirectory, siblingTombstoneDirectory);
       fs.rmSync(siblingTombstoneDirectory, { recursive: true, force: true });
+      fs.rmSync(siblingWaiterPath, { force: true });
     }, 50);
     const { capture, recorded } = await runCapturedVerification('npm run test:full', { project, ticket: ticket.ref }, project, fileSystem);
 
@@ -132,6 +136,64 @@ test('full-suite capture retries EPERM while a sibling releases its slot', async
     assert.ok(recordedWait, 'the EPERM-retried capture records its slot queue position');
   } finally {
     if (releaseTimer) clearTimeout(releaseTimer);
+    fs.rmSync(project, { recursive: true, force: true });
+    fs.rmSync(slotDirectory, { recursive: true, force: true });
+  }
+});
+
+test('full-suite slots resolve linked worktrees to their common repository root', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-capture-worktree-'));
+  const worktree = `${project}-linked`;
+  try {
+    fs.writeFileSync(path.join(project, 'fixture'), 'fixture');
+    execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: project, windowsHide: true });
+    execFileSync('git', ['add', '--all'], { cwd: project, windowsHide: true });
+    execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'fixture'], { cwd: project, windowsHide: true });
+    execFileSync('git', ['worktree', 'add', '--detach', '--quiet', worktree], { cwd: project, windowsHide: true });
+
+    assert.equal(captureSlotDirectory(worktree), captureSlotDirectory(project));
+  } finally {
+    fs.rmSync(worktree, { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test('full-suite capture reclaims a killed owner without waiting for the slot timeout', async () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-capture-stale-'));
+  const slotDirectory = captureSlotDirectory(project);
+  const activeDirectory = path.join(slotDirectory, 'active');
+  let staleWaiterPath = '';
+  try {
+    fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node blocker.js' } }));
+    fs.writeFileSync(path.join(project, 'blocker.js'), '');
+    execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: project, windowsHide: true });
+    execFileSync('git', ['add', '--all'], { cwd: project, windowsHide: true });
+    execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'fixture'], { cwd: project, windowsHide: true });
+    const boardProject = store.ensureProject(project);
+    const ticket = store.createTicket(boardProject.slug, {
+      title: 'reclaim stale full-suite capture owner',
+      executorVerifyKind: 'command',
+      executorVerify: 'npm run test:full',
+    });
+    const killedOwner = spawn(process.execPath, ['--eval', ''], { windowsHide: true });
+    const killedOwnerProcessId = await new Promise<number>((resolve, reject) => {
+      killedOwner.once('error', reject);
+      killedOwner.once('close', () => resolve(killedOwner.pid || 0));
+    });
+    assert.ok(killedOwnerProcessId > 0);
+    fs.mkdirSync(path.join(slotDirectory, 'waiting'), { recursive: true });
+    staleWaiterPath = path.join(slotDirectory, 'waiting', `000000000000001-${killedOwnerProcessId}-stale.json`);
+    fs.writeFileSync(staleWaiterPath, '');
+    fs.mkdirSync(activeDirectory);
+
+    const { capture, recorded } = await runCapturedVerification('npm run test:full', { project, ticket: ticket.ref }, project);
+
+    assert.deepEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 });
+    assert.equal(capture.queuePosition, 1);
+    assert.ok(capture.waitedForSlotMs < 1_000, `waited ${capture.waitedForSlotMs}ms`);
+    assert.equal(fs.existsSync(staleWaiterPath), false);
+    assert.ok(recorded?.ok, recorded?.reason);
+  } finally {
     fs.rmSync(project, { recursive: true, force: true });
     fs.rmSync(slotDirectory, { recursive: true, force: true });
   }
