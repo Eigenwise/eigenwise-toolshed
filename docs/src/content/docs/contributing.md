@@ -34,4 +34,16 @@ The build regenerates the reference pages before Astro checks and builds the sit
 
 For plugin-specific contracts, read that plugin's `README.md` before changing a guide. Source changes and documentation changes should land together when the user-visible workflow changes.
 
+## CRAP delta gate
+
+Run the Sidequest CRAP measurement from `plugins/sidequest`:
+
+```text
+npm run quality:crap
+```
+
+It runs the full suite with V8 coverage, scores only `src/` TypeScript, and compares changed functions with the merge base against `develop` (or `main` in a checkout without `develop`). Pass `--base <ref>` to compare against something else. Existing debt does not fail an unchanged branch. The report merges direct `tsx` coverage with the compiled child-process counterpart, so generated build helpers never appear as source findings. Use `node ../../scripts/quality/crap.mjs --all` when you need every score rather than the functions at or above the threshold.
+
+The gate compares complexity at a fixed coverage, so it catches a function that gained branches and not one that only lost test coverage. That second arm needs coverage from the base tree as well, which is a separate measurement pass.
+
 See [release process](../release-process/) for publishing changes.

@@ -203,7 +203,8 @@ function main() {
   const outcomes = failed.map(({ ref, failureShape }) => `${ref} (${failureShape})`).join(", ");
   const released = failed.filter((failure) => failure.claimReleased).map((failure) => failure.ref);
   const cleared = failed.filter((failure) => failure.dispatchBindingCleared).map((failure) => failure.ref);
-  const message = released.length || cleared.length ? `sidequest: Agent terminated with an observed terminal failure for ${outcomes}. Released ${released.concat(cleared).join(", ")} immediately; re-dispatch to continue from its preserved checkpoint or worktree.` : `sidequest: Agent terminated with an observed terminal failure for ${outcomes}. Its terminal evidence is recorded, but the claim still needs recovery before it can be dispatched again.`;
+  const scope = " Only a failed Agent call reaches this hook; a spawn that returned ok and died later is retired by its own SubagentStop.";
+  const message = released.length || cleared.length ? `sidequest: Agent terminated with an observed terminal failure for ${outcomes}. Released ${released.concat(cleared).join(", ")} immediately; re-dispatch to continue from its preserved checkpoint or worktree.${scope}` : `sidequest: Agent terminated with an observed terminal failure for ${outcomes}. Its terminal evidence is recorded, but the claim still needs recovery before it can be dispatched again.${scope}`;
   writeSystemMessage("PostToolUseFailure", message);
 }
 try {

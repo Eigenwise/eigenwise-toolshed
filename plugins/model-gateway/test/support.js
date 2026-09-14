@@ -76,19 +76,43 @@ function requestFixtureSupervisorStop(child) {
 function forceStopGatewayProcess(pid) {
   if (!processIsRunning(pid)) return;
   if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-  else { try { process.kill(pid, 'SIGTERM'); } catch {} }
+  else { try { process.kill(pid, 'SIGKILL'); } catch {} }
+}
+
+// A recorded pid is not a child of this process, so IPC is not available and SIGTERM is
+// the only graceful stop there is. Windows has none: taskkill without /F refuses outright
+// on a windowless child, so asking would only spend the wait before forcing it anyway.
+function requestGatewayProcessStop(pid) {
+  if (!processIsRunning(pid)) return true;
+  if (process.platform !== 'win32') {
+    try { process.kill(pid, 'SIGTERM'); } catch {}
+    if (waitForProcessExit(pid)) return true;
+  }
+  forceStopGatewayProcess(pid);
+  return waitForProcessExit(pid);
+}
+
+function stopGatewayChild(child) {
+  if (child.stopPromise) return child.stopPromise;
+  const stopping = (async () => {
+    if (!child?.pid || child.exitCode != null) return true;
+    if (child.fixtureShutdown) await requestFixtureSupervisorStop(child);
+    else if (child.gracefulShutdown && child.connected && typeof child.disconnect === 'function') {
+      try { child.disconnect(); } catch {}
+    }
+    if (await waitForChildExit(child)) return true;
+    forceStopGatewayProcess(child.pid);
+    return waitForChildExit(child);
+  })();
+  child.stopPromise = stopping;
+  return stopping;
 }
 
 async function stopGatewayFixtureProcess(home) {
   const child = gatewayFixtureProcesses.get(home);
   gatewayFixtureProcesses.delete(home);
   if (!child?.pid || child.exitCode != null) return child?.pid ? [child.pid] : [];
-  if (child.fixtureShutdown) {
-    await requestFixtureSupervisorStop(child);
-    if (await waitForChildExit(child)) return [child.pid];
-  }
-  forceStopGatewayProcess(child.pid);
-  waitForProcessExit(child.pid);
+  await stopGatewayChild(child);
   return [child.pid];
 }
 
@@ -98,9 +122,8 @@ function stopRecordedGatewayProcesses(home, pids = []) {
     try { pid = Number(fs.readFileSync(gatewayPidFile(home, name), 'utf8').trim()) || null; } catch { pid = null; }
     if (!pid || pids.includes(pid)) continue;
     pids.push(pid);
-    forceStopGatewayProcess(pid);
+    requestGatewayProcessStop(pid);
   }
-  for (const pid of pids) waitForProcessExit(pid);
   return pids;
 }
 
@@ -303,10 +326,11 @@ function startGateway(t, command, environment, { cliPath = CLI, isolatedOverride
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
     child.fixtureShutdown = command === 'serve-shim';
+    child.gracefulShutdown = child.fixtureShutdown || command === 'serve-worker';
     let output = '';
     let listening = false;
     const listenerTimeout = setTimeout(() => {
-      child.kill();
+      void stopGatewayChild(child);
       reject(new Error(`${command} did not report an ephemeral listener within ${START_TIMEOUT_MS}ms: ${output}`));
     }, START_TIMEOUT_MS);
     const settle = (callback) => {
@@ -323,7 +347,7 @@ function startGateway(t, command, environment, { cliPath = CLI, isolatedOverride
       waitForHealth(port).then(
         () => settle(() => resolve({ child, port })),
         (error) => settle(() => {
-          child.kill();
+          void stopGatewayChild(child);
           reject(new Error(`${error.message}: ${output}`));
         }),
       );
@@ -331,12 +355,7 @@ function startGateway(t, command, environment, { cliPath = CLI, isolatedOverride
     child.stderr.on('data', (chunk) => { output += chunk; });
     child.once('error', (error) => settle(() => reject(error)));
     child.once('exit', (code, signal) => settle(() => reject(new Error(`${command} exited before listening (${code ?? signal}): ${output}`))));
-    t.after(() => new Promise((done) => {
-      if (child.exitCode != null || child.killed) return done();
-      child.once('exit', done);
-      child.once('error', done);
-      child.kill();
-    }));
+    t.after(() => stopGatewayChild(child));
   });
 }
 
