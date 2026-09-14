@@ -2152,6 +2152,14 @@ function runShim() {
     const body = Buffer.concat(chunks);
     try {
       const upstream = await requestWorker(req, body);
+      // Once the worker's headers are out this can no longer become an HTTP
+      // error, and `pipe` forwards neither an error nor an abort, so a worker
+      // that dies mid-answer would leave the client holding an open response
+      // that never completes. Break the connection instead, the way the worker
+      // already does when its own upstream dies, so the client sees ECONNRESET
+      // and decides for itself whether to ask again.
+      upstream.on('error', () => res.destroy());
+      upstream.on('aborted', () => res.destroy());
       if (req.url.split('?')[0] === '/healthz') {
         const response = [];
         upstream.on('data', (chunk) => response.push(chunk));
