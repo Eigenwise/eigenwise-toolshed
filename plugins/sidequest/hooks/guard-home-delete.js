@@ -146,8 +146,8 @@ function deleteArguments(command) {
   return [...command.matchAll(commands)].map((match) => match[1] || "");
 }
 function hasProtectedRecursiveDelete(command) {
-  const recursive = /(?:--recursive\b|-[a-z]*r[a-z]*\b|-recurse\b|\/s\b)/i;
-  return deleteArguments(command).some((argumentsAfterDelete) => recursive.test(argumentsAfterDelete) && isProtectedPath(argumentsAfterDelete));
+  const recursive = /^(?:--recursive|-[a-z]*r[a-z]*|-recurse|\/s)$/i;
+  return deleteArguments(command).some((argumentsAfterDelete) => argumentsAfterDelete.replace(/["']/g, "").split(/\s+/).some((argument) => recursive.test(argument)) && isProtectedPath(argumentsAfterDelete));
 }
 function normalizePath(value) {
   return value.toLowerCase().replace(/[\\/]+$/, "");
