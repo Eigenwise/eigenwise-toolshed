@@ -2875,21 +2875,22 @@ function terminalAttemptMatchesStopIdentity(state?: any, sessionId?: any, execut
 // The host writes the launch name into agent-<id>.meta.json beside the transcript, so the hook can
 // recover it. It is applied strictly second, and only when the id-keyed pass found nothing to touch,
 // so every stop that matches on agent_id today takes the identical path it takes now.
-function markDispatchStopped(sessionId?: any, executor?: any, agentId?: any, agentName?: any, launchName?: any) {
+function markDispatchStopped(sessionId?: any, executor?: any, agentId?: any, agentName?: any, launchName?: any, terminalReason?: any) {
   const normalizedSessionId = String(sessionId || '').trim();
   const normalizedExecutor = String(executor || '').trim();
   const normalizedAgentId = String(agentId || '').trim();
   const normalizedAgentName = String(agentName || '').trim();
   const normalizedLaunchName = String(launchName || '').trim();
+  const normalizedTerminalReason = String(terminalReason || '').trim();
   if (!normalizedSessionId || !normalizedExecutor) return { ok: false, reason: 'missing_identity' };
   const candidates = ticketsMentioningSession(normalizedSessionId);
-  const byRuntimeIdentity = stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName);
+  const byRuntimeIdentity = stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName, normalizedTerminalReason);
   if (byRuntimeIdentity.ok || !normalizedLaunchName || normalizedLaunchName === normalizedAgentName) return byRuntimeIdentity;
-  const byLaunchName = stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedLaunchName);
+  const byLaunchName = stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedLaunchName, normalizedTerminalReason);
   return byLaunchName.ok ? byLaunchName : byRuntimeIdentity;
 }
 
-function stopMatchingDispatches(candidates: any[], normalizedSessionId: string, normalizedExecutor: string, normalizedAgentId: string, normalizedAgentName: string) {
+function stopMatchingDispatches(candidates: any[], normalizedSessionId: string, normalizedExecutor: string, normalizedAgentId: string, normalizedAgentName: string, terminalReason: string) {
   const matches: any[] = [];
   const terminalAttempts: any[] = [];
   for (const { slug, ticket } of candidates) {
@@ -2909,6 +2910,7 @@ function stopMatchingDispatches(candidates: any[], normalizedSessionId: string, 
     return { ok: false, reason: matches.length ? 'ambiguous' : 'not_found' };
   }
   const tickets: any[] = [];
+  const terminalFailure = terminalAgentFailure(terminalReason);
   let stopped = false;
   for (const match of matches) {
     const result = withTicketLock(match.slug, match.id, () => {
@@ -2928,6 +2930,8 @@ function stopMatchingDispatches(candidates: any[], normalizedSessionId: string, 
         t.dispatchNonce = null;
         t.dispatchExecutor = null;
         stopped = true;
+      } else if (active && t.claim?.by && terminalFailure) {
+        setDispatchTerminal(t, 'failed', 'subagent-stop', { slug: match.slug, error: terminalReason, failureShape: terminalFailure });
       } else if (active) {
         state.turnEndedAt = now;
       }
