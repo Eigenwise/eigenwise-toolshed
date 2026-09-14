@@ -8,6 +8,136 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.566.0 (2026-09-14)
+
+### model-gateway 0.50.25 → 0.51.0
+
+#### Features
+
+- Gateway lifecycle controls now need a token, and proxy downloads are checksum-verified (PR-59)
+  The local shim exposes /restart and /drain so the gateway can recover a stuck worker. Both used to accept any request that reached the loopback port, which means anything else running on the machine could restart your gateway or drain a worker out from under an in-flight request. They now require a token the supervisor generates for itself, and the request has to arrive on loopback with a matching Host header.
+
+  The proxy binary download is also verified against its published checksum before anything is extracted. A mismatch is refused instead of unpacked.
+
+  Thanks to zlDev for both halves and for the test fix.
+
+#### Fixes
+
+- Reliable gateway startup checks (SQ-2844)
+  Give a started gateway its own health-check window so loaded Windows runners do not report a missing listener after one was found.
+- Gateway no longer resends a request the worker already took (SQ-2846)
+  The gateway shim runs a supervisor in front of a worker process, and the
+  supervisor retried a request whenever its connection to the worker failed
+  before an answer came back. It had no way to tell "the worker never got this"
+  from "the worker got it, forwarded it upstream, and then the connection died",
+  so it resent the body in both cases. The second case means a second inference
+  billed to your ChatGPT subscription for a request you made once, and you would
+  never see it: the client still gets exactly one response.
+
+  The supervisor now tracks which worker took the body and only resends once that
+  worker is gone. A worker that crashes or gets restarted still has its in-flight
+  request replayed to the replacement, same as before.
+- Lost shim worker requests now say what failed (SQ-2854)
+  When the supervisor cannot deliver a request to its shim worker, its retryable
+  503 now says that rather than looking like an upstream or authentication failure.
+  If the worker accepted the body and its response was lost, the supervisor also
+  records the worker, supervisor, and error in the lifecycle log for `doctor`.
+- A lost worker connection no longer buys a second inference behind your back (SQ-2861)
+  SQ-2846 stopped the gateway supervisor resending a request its worker had
+  already taken, and answered 503 instead. That moved the duplicate rather than
+  removing it: Claude Code treats 503 as retryable and resent the identical body
+  on its own, measured here at five resends of one request, so the second
+  inference still happened and you still paid for it.
+
+  When a worker took the body and then went quiet, the shim now answers 503 with
+  `x-should-retry: false`, which the client honours: measured at one attempt
+  instead of six against the same status and body. You get one visible error
+  saying the answer is gone and that a retry is a second inference, and you decide
+  whether to resend. Nothing recovers that first answer, which is the honest
+  outcome: once the request is upstream, the gateway cannot get it back and cannot
+  un-bill it. Holding the worker's answer for collection would avoid the loss
+  entirely and is filed separately.
+
+  The supervisor also opens its own connection per request to the worker instead
+  of reusing a pooled one. A pooled connection the worker closes at the same
+  moment fails after the body is written even though the worker never read it, and
+  that is indistinguishable from a worker that took the body: measured four
+  requests over one socket, so three of four hiccups would have been reported as
+  unrecoverable and refused a retry they should have got.
+- A finished Codex compaction is no longer re-run when its terminal frame is lost (SQ-2867)
+  A compaction stream that delivered the whole summary and an `end_turn` stop reason but lost only the
+  `message_stop` frame used to be re-inferred, so the largest request in the session was paid for twice and the
+  finished summary was thrown away. The gateway now treats the generation as finished when the model says so:
+  an `end_turn` or `stop_sequence` stop reason with no content after it and no content block left open, or the
+  `message_stop` frame itself. It closes the client's turn with a `message_stop` of its own when that frame was
+  lost.
+
+  Stop reasons that truncate (`max_tokens`, `refusal`, `pause_turn`, `tool_use`, and anything unrecognized)
+  still re-run the compaction, as does an upstream error frame after the stop, so a truncated summary is never
+  delivered as a complete one. A stream that contradicts its own stop reason is never counted as a success, so
+  it cannot clear an attributed 429.
+- Delivered compactions report completed after a late socket abort (SQ-2870)
+  When the gateway had already received and delivered a completed compaction, a later upstream socket abort could still label its route diagnostic as `aborted`. Completed compactions now retain their completed diagnostic outcome. Removed the unused compaction implementation left in the command process after compaction handling moved to the request worker.
+
+### sidequest 5.1.17 → 5.1.18
+
+#### Fixes
+
+- A removed worktree or a replayed session end no longer frees a live executor's claim (SQ-2862)
+  Two things could hand a ticket to a replacement executor while the original was
+  still working on it, and both came from treating a fact as proof of something it
+  never showed.
+
+  The first was a missing checkout. If an isolated executor's worktree stopped
+  existing, the claim sweep freed the ticket on the spot. People assumed the
+  filesystem protected this, because a process holding a directory as its working
+  directory blocks removal on Windows. Claude's native agents are loops inside the
+  session process and hold no directory, so `git worktree remove --force` succeeds
+  under a working executor and its runtime carries right on writing. Sidequest's
+  own sweep never removes a checkout whose ticket is claimed, so any removal under
+  a live claim is unsanctioned by definition. A gone checkout now reports nothing
+  about liveness.
+
+  The second was the session id. The SessionEnd hook released every claim
+  registered to the id it was handed, and stamped a durable `died` record on the
+  dispatch. Nothing in that payload binds the id to a live session: there is no
+  generation, nonce or owning pid, two of the event's own reasons (`clear`,
+  `resume`) fire while the process keeps running, and there is no way to ask
+  whether an id is still in use. So the assertion was replayable, and a replay
+  freed live work and left behind a death record that reads as observed forever.
+  `reconcile` now forgets the session's claim registrations and reports which
+  claims it left held, without releasing any of them.
+
+  The cost is slower recovery in the cases that no longer have evidence. An
+  executor whose checkout was removed, and one whose session genuinely ended
+  mid-turn, used to be recovered instantly and now wait for the unobserved-death
+  backstop at 24 hours (1 hour for a hand claim with no dispatch). Everything with
+  real evidence is unchanged and still instant: a durable died or stopped outcome
+  from that runtime's own terminal record frees the claim immediately, whether or
+  not its checkout still exists. Recovering a live executor's work costs far more
+  than a ticket waiting, so that is the right way round.
+
+  Worth knowing if you lean on that backstop: both windows are exclusive, so the
+  first release is a moment past them rather than exactly on them, and the
+  24-hour one does not check whether the executor is alive. An executor that runs
+  that long without writing anything to the board loses its claim, same as before
+  this change. Long work should keep leaving a trail.
+- Opening the board no longer queues a hook behind a board writer (SQ-2876)
+  Every Sidequest hook opens the board database, and opening it used to take the
+  write lock whether or not there was anything to write. A hook that only reads
+  would queue behind whichever writer held the lock, and Claude Code kills a hook
+  at ten seconds, so a busy moment could take a read-only hook down with it.
+
+  Opening a database already at the current schema is now read-only and takes no
+  lock at all, so those hooks no longer wait on writers.
+
+  A store that is behind still migrates, and that genuinely needs the lock. It
+  gets its own longer budget rather than the short one a hook has to live inside:
+  a migration runs once per store, in a process doing real work, and refusing
+  early there just leaves you without a usable board. On a large store the v7
+  migration holds the lock for around ten seconds, which the migration budget
+  covers and a hook budget would not.
+
 ## v3.565.0 (2026-09-13)
 
 ### model-gateway 0.50.24 → 0.50.25
