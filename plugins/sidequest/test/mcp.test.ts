@@ -4348,18 +4348,30 @@ test('reduced Agent-schema claims require hook identity and permission evidence,
     tool_input: claimInput(fixture, `worker-${agentId}`),
   });
 
+  // SQ-2881: the reduced path is structurally unable to inject `mode`, so the
+  // executor inherits the spawning session's. `auto` is what such a host reports,
+  // and it has to be admitted or every dispatch there is dead on arrival.
+  const autoMode = await launchReduced('reduced schema auto mode');
+  assert.equal(runRuntimeIdentityBind(hookInput(autoMode, 'auto-mode-agent', 'auto')), null);
+  assert.equal((await callTool('claim', claimInput(autoMode, 'auto-mode-worker'))).ok, true);
+  const autoState = store.getTicket(autoMode.ticket.project, autoMode.ticket.ref).dispatch;
+  assert.equal(autoState.agentId, 'auto-mode-agent');
+  assert.equal(autoState.observedPermissionMode, 'auto');
+
   const missingMode = await launchReduced('reduced schema missing mode');
   const missingModeDeny = runRuntimeIdentityBind(hookInput(missingMode, 'missing-mode-agent'));
   assert.equal(missingModeDeny.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(missingModeDeny.hookSpecificOutput.permissionDecisionReason, /permission_mode "bypassPermissions"/);
-  assert.equal(store.getTicket(missingMode.ticket.project, missingMode.ticket.ref).dispatch.agentId, undefined);
+  assert.match(missingModeDeny.hookSpecificOutput.permissionDecisionReason, /"auto" or "bypassPermissions"/);
+  // A refused attempt keeps its identity: a reduced spawn has no agentName, so
+  // agent_id is the only handle its own SubagentStop can retire it by.
+  assert.equal(store.getTicket(missingMode.ticket.project, missingMode.ticket.ref).dispatch.agentId, 'missing-mode-agent');
   assert.equal((await callTool('claim', claimInput(missingMode, 'missing-mode-worker'))).reason, 'reduced_runtime_unverified');
 
   const wrongMode = await launchReduced('reduced schema wrong mode');
   const wrongModeDeny = runRuntimeIdentityBind(hookInput(wrongMode, 'wrong-mode-agent', 'acceptEdits'));
   assert.equal(wrongModeDeny.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(wrongModeDeny.hookSpecificOutput.permissionDecisionReason, /observed "acceptEdits"/);
-  assert.equal(store.getTicket(wrongMode.ticket.project, wrongMode.ticket.ref).dispatch.agentId, undefined);
+  assert.equal(store.getTicket(wrongMode.ticket.project, wrongMode.ticket.ref).dispatch.agentId, 'wrong-mode-agent');
   assert.equal((await callTool('claim', claimInput(wrongMode, 'wrong-mode-worker'))).reason, 'reduced_runtime_unverified');
 
   const missingIdentity = await launchReduced('reduced schema missing identity');
@@ -4386,6 +4398,19 @@ test('reduced Agent-schema claims require hook identity and permission evidence,
   assert.equal((await callTool('claim', claimInput(second, 'second-unnamed-worker'))).ok, true);
   assert.equal(store.getTicket(first.ticket.project, first.ticket.ref).dispatch.agentId, 'first-unnamed-agent');
   assert.equal(store.getTicket(second.ticket.project, second.ticket.ref).dispatch.agentId, 'second-unnamed-agent');
+
+  // The permission gate is reduced-schema only. A full-schema spawn carries an
+  // injected mode, so the observed session mode never gates its claim.
+  const fullTicket = await callTool('add', {
+    title: 'full schema permission mode', description: DISPATCH_DESCRIPTION, category: 'reduced-agent-schema', files: ['plugins/sidequest'],
+  });
+  const fullDispatch = await callTool('dispatch', { ref: fullTicket.ref, full: true });
+  const fullLaunch = runForceBypass({ session_id: MCP_SESSION_ID, cwd: PROJ, tool_name: 'Agent', tool_input: fullDispatch.spawn });
+  assert.equal(fullLaunch.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+  const full = { ticket: fullTicket, dispatch: fullDispatch, state: store.getTicket(fullTicket.project, fullTicket.ref).dispatch };
+  assert.equal(runRuntimeIdentityBind(hookInput(full, 'full-schema-agent', 'acceptEdits')), null);
+  assert.equal((await callTool('claim', claimInput(full, 'full-schema-worker'))).ok, true);
+  assert.equal(runRuntimeIdentityBind({ ...hookInput(full, 'full-schema-agent', 'auto'), agent_id: '' }), null);
 });
 
 test('MCP dispatch records the runtime session and the Agent lifecycle binds it', async () => {
