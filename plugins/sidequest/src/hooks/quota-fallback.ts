@@ -85,9 +85,14 @@ function main(): void {
   const outcomes = failed.map(({ ref, failureShape }) => `${ref} (${failureShape})`).join(', ');
   const released = failed.filter((failure) => failure.claimReleased).map((failure) => failure.ref);
   const cleared = failed.filter((failure) => failure.dispatchBindingCleared).map((failure) => failure.ref);
+  // Reached only when the Agent tool call itself failed. A dispatch spawn returns ok, so a child
+  // that dies later never arrives here: across 10,716 recorded terminal attempts this hook has
+  // fired zero times, and SubagentStop did all 41 of the automatic retirements. Say so, rather
+  // than letting the message read as the route a dead launch takes (SQ-2864).
+  const scope = ' Only a failed Agent call reaches this hook; a spawn that returned ok and died later is retired by its own SubagentStop.';
   const message = released.length || cleared.length
-    ? `sidequest: Agent terminated with an observed terminal failure for ${outcomes}. Released ${released.concat(cleared).join(', ')} immediately; re-dispatch to continue from its preserved checkpoint or worktree.`
-    : `sidequest: Agent terminated with an observed terminal failure for ${outcomes}. Its terminal evidence is recorded, but the claim still needs recovery before it can be dispatched again.`;
+    ? `sidequest: Agent terminated with an observed terminal failure for ${outcomes}. Released ${released.concat(cleared).join(', ')} immediately; re-dispatch to continue from its preserved checkpoint or worktree.${scope}`
+    : `sidequest: Agent terminated with an observed terminal failure for ${outcomes}. Its terminal evidence is recorded, but the claim still needs recovery before it can be dispatched again.${scope}`;
   writeSystemMessage('PostToolUseFailure', message);
 }
 

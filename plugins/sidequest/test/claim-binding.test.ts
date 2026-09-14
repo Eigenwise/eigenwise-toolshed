@@ -172,6 +172,87 @@ test('bundled plugin types survive launch, runtime binding and claim without cha
   }
 });
 
+// SubagentStop carries agent_id and never agent_name, so an attempt whose cancellable SubagentStart
+// never recorded an agentId used to be unreachable by its own terminal hook and waited out the
+// claim-idle backstop instead. The host's agent-<id>.meta.json sidecar carries the launch name, and
+// it must name exactly one attempt: a sibling's sidecar may not retire this one (SQ-2864).
+test('a launched attempt with no recorded agentId is retired by its own transcript sidecar name only', () => {
+  const pluginRoot = path.resolve(__dirname, '..');
+  const transcripts = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-claim-binding-transcripts-'));
+  const sessionId = 'sidecar-launch-identity';
+
+  function launchUnbound(ref: string) {
+    const prepared = store.prepareDispatch(slug, ref, { sessionId, sharedTree: true });
+    const launchName = prepared.ticket.dispatch.launchName;
+    const launched = store.recordDispatchLaunch(slug, ref, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+      agentName: launchName,
+    });
+    assert.equal(launched.ok, true, JSON.stringify(launched));
+    const state = store.getTicket(slug, ref).dispatch;
+    assert.equal(state.outcome, 'launched');
+    assert.equal(state.agentName, launchName);
+    assert.equal(state.agentId ?? null, null);
+    assert.equal(state.boundAt ?? null, null);
+    return { ref, executor: prepared.ticket.dispatchExecutor, launchName };
+  }
+
+  function stop(agentId: string, executor: string, transcript: string | null) {
+    execFileSync(process.execPath, [path.join(pluginRoot, 'hooks', 'subagent-stop.js')], {
+      cwd: PROJECT,
+      input: JSON.stringify({ cwd: PROJECT, session_id: sessionId, agent_id: agentId, agent_type: executor, agent_transcript_path: transcript }),
+      encoding: 'utf8',
+      windowsHide: true,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: pluginRoot, CLAUDE_CODE_SUBAGENT_MODEL: '' },
+    });
+  }
+
+  function stopWithSidecarNaming(agentId: string, executor: string, launchName: string) {
+    const transcript = path.join(transcripts, `agent-${agentId}.jsonl`);
+    fs.writeFileSync(transcript.replace(/\.jsonl$/, '.meta.json'), JSON.stringify({
+      agentType: `sidequest:${executor}`, name: launchName, toolUseId: `toolu_${agentId}`,
+    }));
+    stop(agentId, executor, transcript);
+  }
+
+  const stranded = launchUnbound(createFixture('stranded unbound launch').ref);
+  const sibling = launchUnbound(createFixture('sibling unbound launch').ref);
+
+  // The payload the host actually sends carries no name at all, which is the whole defect: without
+  // the sidecar there is nothing to match a launch that never recorded an agentId.
+  stop('astranded0000000', stranded.executor, null);
+  assert.equal(store.getTicket(slug, stranded.ref).dispatch.outcome, 'launched');
+
+  stopWithSidecarNaming('astranded0000001', stranded.executor, sibling.launchName);
+  const untouched = store.getTicket(slug, stranded.ref).dispatch;
+  assert.equal(untouched.outcome, 'launched');
+  assert.equal(untouched.terminalAt ?? null, null);
+  const retiredSibling = store.getTicket(slug, sibling.ref).dispatch;
+  assert.equal(retiredSibling.failureShape, 'stopped_before_claim');
+
+  stopWithSidecarNaming('astranded0000002', stranded.executor, stranded.launchName);
+  const retired = store.getTicket(slug, stranded.ref).dispatch;
+  assert.equal(retired.outcome, 'failed');
+  assert.equal(retired.terminalSource, 'subagent-stop');
+  assert.equal(retired.failureShape, 'stopped_before_claim');
+  assert.equal(retired.agentId, 'astranded0000002');
+  assert.equal(store.getTicket(slug, stranded.ref).dispatchNonce ?? null, null);
+
+  // A replacement's launch name carries the incremented launchSeq, so a late stop naming the
+  // superseded launch reaches the terminal-attempt path and must leave the live replacement alone.
+  const replacement = launchUnbound(stranded.ref);
+  assert.notEqual(replacement.launchName, stranded.launchName);
+  const bound = store.bindDispatchAgent(sessionId, replacement.executor, 'areplacement001', replacement.launchName);
+  assert.equal(bound.ok, true, JSON.stringify(bound));
+  stopWithSidecarNaming('alatestop0000001', stranded.executor, stranded.launchName);
+  const live = store.getTicket(slug, replacement.ref).dispatch;
+  assert.equal(live.outcome, 'launched');
+  assert.equal(live.terminalAt ?? null, null);
+  assert.equal(live.agentId, 'areplacement001');
+});
+
 test('plugin namespace normalization recognizes only the shipped definitions', () => {
   const names = require('../lib/exec-names.js');
   for (const filename of agentsync.bundledExecutorSources().keys()) {

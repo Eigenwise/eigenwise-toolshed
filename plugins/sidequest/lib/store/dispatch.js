@@ -1,5 +1,5 @@
 "use strict";
-const { canonicalPreparedDispatchExecutor } = require("../prepared-dispatch.js");
+const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require("../prepared-dispatch.js");
 const { classifyVerificationKind, verificationRequirement } = require("../kernel/verification.js");
 const { resolveSuite } = require("../suite-resolver.js");
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationOutcome } = require("../kernel/review-binding");
@@ -2210,6 +2210,18 @@ function createDispatch(dependencies) {
       return { ok: false, reason: "git_error", message: error?.message || String(error) };
     }
   }
+  function ticketsMentioningSession(sessionId) {
+    const pattern = `%${sessionId.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
+    const candidates = [];
+    for (const row of db.selectRows(database(), "SELECT project, data FROM tickets WHERE data LIKE ? ESCAPE '\\'", [pattern])) {
+      try {
+        const ticket = normalizePreparedDispatch(JSON.parse(row.data));
+        if (ticket?.id) candidates.push({ slug: String(row.project), ticket });
+      } catch (_) {
+      }
+    }
+    return candidates;
+  }
   function activeSharedTreeClaim(identity) {
     const agentId = String(identity?.agentId || "").trim();
     const executor = String(identity?.executor || "").trim();
@@ -2329,15 +2341,13 @@ function createDispatch(dependencies) {
     }
     let matches = [];
     const unclaimedCreationReservations = [];
-    for (const project of listProjects({ all: true })) {
-      for (const ticket of listTickets(project.slug)) {
-        const state = dispatchState(ticket);
-        if (state?.executor === normalizedExecutor && unclaimedCreationReservation(ticket, state, normalizedSessionId)) {
-          unclaimedCreationReservations.push({ slug: project.slug, id: ticket.id, sharedTree: state.sharedTree, state });
-        }
-        if (!dispatchCanBindRuntimeIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) continue;
-        matches.push({ slug: project.slug, id: ticket.id, sharedTree: state.sharedTree, state });
+    for (const { slug, ticket } of ticketsMentioningSession(normalizedSessionId)) {
+      const state = dispatchState(ticket);
+      if (state?.executor === normalizedExecutor && unclaimedCreationReservation(ticket, state, normalizedSessionId)) {
+        unclaimedCreationReservations.push({ slug, id: ticket.id, sharedTree: state.sharedTree, state });
       }
+      if (!dispatchCanBindRuntimeIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) continue;
+      matches.push({ slug, id: ticket.id, sharedTree: state.sharedTree, state });
     }
     if (!matches.length && normalizedAgentId && normalizedWorktree && unclaimedCreationReservations.length === 1) {
       const reservation = unclaimedCreationReservations[0];
@@ -2428,23 +2438,29 @@ function createDispatch(dependencies) {
       return Boolean(agentName && attempt.agentName === agentName);
     }) || null;
   }
-  function markDispatchStopped(sessionId, executor, agentId, agentName) {
+  function markDispatchStopped(sessionId, executor, agentId, agentName, launchName) {
     const normalizedSessionId = String(sessionId || "").trim();
     const normalizedExecutor = String(executor || "").trim();
     const normalizedAgentId = String(agentId || "").trim();
     const normalizedAgentName = String(agentName || "").trim();
+    const normalizedLaunchName = String(launchName || "").trim();
     if (!normalizedSessionId || !normalizedExecutor) return { ok: false, reason: "missing_identity" };
+    const candidates = ticketsMentioningSession(normalizedSessionId);
+    const byRuntimeIdentity = stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName);
+    if (byRuntimeIdentity.ok || !normalizedLaunchName || normalizedLaunchName === normalizedAgentName) return byRuntimeIdentity;
+    const byLaunchName = stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedLaunchName);
+    return byLaunchName.ok ? byLaunchName : byRuntimeIdentity;
+  }
+  function stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName) {
     const matches = [];
     const terminalAttempts = [];
-    for (const project of listProjects({ all: true })) {
-      for (const ticket of listTickets(project.slug)) {
-        const state = dispatchState(ticket);
-        const terminalAttempt = ticket.claim?.by ? null : terminalAttemptMatchesStopIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName);
-        if (terminalAttempt) terminalAttempts.push({ ref: ticket.ref, outcome: terminalAttempt.outcome, agentName: terminalAttempt.agentName });
-        if (!dispatchMatchesStopIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) continue;
-        const active = state.outcome === "prepared" || state.outcome === "launched" || state.outcome === "claimed";
-        if (active || state.terminalAt) matches.push({ slug: project.slug, id: ticket.id, sharedTree: state.sharedTree });
-      }
+    for (const { slug, ticket } of candidates) {
+      const state = dispatchState(ticket);
+      const terminalAttempt = ticket.claim?.by ? null : terminalAttemptMatchesStopIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName);
+      if (terminalAttempt) terminalAttempts.push({ ref: ticket.ref, outcome: terminalAttempt.outcome, agentName: terminalAttempt.agentName });
+      if (!dispatchMatchesStopIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) continue;
+      const active = state.outcome === "prepared" || state.outcome === "launched" || state.outcome === "claimed";
+      if (active || state.terminalAt) matches.push({ slug, id: ticket.id, sharedTree: state.sharedTree });
     }
     if (!matches.length && terminalAttempts.length === 1) {
       return { ok: true, stopped: false, tickets: [], terminalAttempts };

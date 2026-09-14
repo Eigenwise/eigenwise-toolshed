@@ -279,6 +279,15 @@ function stopVerdict(store, claims, classification, dispatchStopped, terminalTic
   }
   return null;
 }
+function launchNameFromTranscriptSidecar(transcriptPath) {
+  if (!/\.jsonl$/i.test(transcriptPath)) return "";
+  try {
+    const sidecar = JSON.parse(import_node_fs2.default.readFileSync(transcriptPath.replace(/\.jsonl$/i, ".meta.json"), "utf8"));
+    return String(sidecar?.name || "").trim();
+  } catch (_) {
+    return "";
+  }
+}
 function clearNearTurnCapCounter(agentId) {
   if (!agentId) return;
   const counter = import_node_path2.default.join(import_node_os.default.tmpdir(), "sidequest-near-turn-cap", encodeURIComponent(agentId));
@@ -292,6 +301,7 @@ function main() {
   if (!data) return;
   const agentId = stringField(data, "agent_id", "agentId");
   const agentName = stringField(data, "agent_name", "agentName", "name");
+  const launchName = agentName || launchNameFromTranscriptSidecar(stringField(data, "agent_transcript_path", "agentTranscriptPath"));
   clearNearTurnCapCounter(agentId);
   const agentType = stringField(data, "agent_type", "agentType");
   const classification = classifyExecutor(agentType);
@@ -320,7 +330,7 @@ function main() {
   let terminalTickets = [];
   let terminalAttempts = [];
   try {
-    const result = store.markDispatchStopped(sessionId, agentType, agentId || null, agentName || null);
+    const result = store.markDispatchStopped(sessionId, agentType, agentId || null, agentName || null, launchName || null);
     dispatchStopped = Boolean(result.ok && result.stopped !== false);
     terminalTickets = Array.isArray(result.tickets) ? result.tickets : [];
     terminalAttempts = Array.isArray(result.terminalAttempts) ? result.terminalAttempts : [];
@@ -329,7 +339,7 @@ function main() {
   let verdict;
   try {
     const terminalAttempt = terminalAttempts[0];
-    verdict = terminalAttempt ? `exec FINISHED after superseded terminal ${terminalAttempt.outcome || "attempt"}: ${terminalAttempt.ref}. Preserve recovery evidence before a replacement.${retirementInstruction(null, terminalAttempt.agentName || agentName)}` : stopVerdict(store, claims, classification, dispatchStopped, terminalTickets, agentName);
+    verdict = terminalAttempt ? `exec FINISHED after superseded terminal ${terminalAttempt.outcome || "attempt"}: ${terminalAttempt.ref}. Preserve recovery evidence before a replacement.${retirementInstruction(null, terminalAttempt.agentName || launchName)}` : stopVerdict(store, claims, classification, dispatchStopped, terminalTickets, launchName);
   } catch (_) {
     return;
   }

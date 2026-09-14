@@ -21,7 +21,10 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-perf-home-'));
 const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-perf-projects-'));
 const discoveryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-perf-discovery-'));
 const catalogPath = path.join(discoveryRoot, 'model-gateway', 'catalog.json');
-const projectPaths = Array.from({ length: 12 }, (_, index: number) => path.join(fixtureRoot, `project-${index + 1}`));
+// Sized to a real board rather than a token one: the live store this fixture stands in for carried
+// 28 projects and 5190 tickets, where the unnarrowed SubagentStop scan cost 2.0s of the 5000ms the
+// host hardcodes for that hook on its interrupted-query path. At 12 projects it stayed invisible.
+const projectPaths = Array.from({ length: 25 }, (_, index: number) => path.join(fixtureRoot, `project-${index + 1}`));
 for (const projectPath of projectPaths) fs.mkdirSync(projectPath, { recursive: true });
 
 function writeDiscoveryCatalog(generation: string): void {
@@ -58,11 +61,15 @@ const startTicket = store.createTicket(slugs[0], {
 const stopTicket = store.createTicket(slugs[0], {
   title: 'Subagent stop fixture', category: 'perf.fixture', files: ['fixture.txt'], source: 'test',
 });
+// Parse cost tracks bytes, not row count: the live store this fixture stands in for held 103 MiB
+// over 5190 tickets, a mean of 19.9 KiB each. Seeding ~400-byte rows made a full-board scan look 50x
+// cheaper than it is, which is the other half of why SubagentStop's budget stayed invisible.
+const ticketBody = 'Fixed hook performance fixture. '.repeat(620);
 const database = db.openDb(home);
 let backgroundId = 0;
 db.txn(database, () => {
   for (let projectIndex = 0; projectIndex < slugs.length; projectIndex += 1) {
-    const count = projectIndex === 0 ? 154 : 156;
+    const count = projectIndex === 0 ? 198 : 200;
     for (let index = 0; index < count; index += 1) {
       backgroundId += 1;
       const id = `perf-${backgroundId}`;
@@ -72,7 +79,7 @@ db.txn(database, () => {
         ref,
         project: slugs[projectIndex],
         title: `Performance ticket ${backgroundId}`,
-        description: 'Fixed hook performance fixture.',
+        description: ticketBody,
         category: 'perf.fixture',
         status: 'todo',
         archived: false,
@@ -95,7 +102,7 @@ db.txn(database, () => {
     }
   }
 });
-assert.equal(db.countRows(database, 'tickets'), 1872);
+assert.equal(db.countRows(database, 'tickets'), 5000);
 
 const startSession = 'perf-subagent-start';
 const startDispatch = store.prepareDispatch(slugs[0], startTicket.ref, { sessionId: startSession });
@@ -231,4 +238,23 @@ test('fresh-process hook latency reports benchmark measurements', (context: any)
   ] as const) {
     context.diagnostic(`${name}: ${measured.median.toFixed(1)}ms median, ${measured.p95.toFixed(1)}ms p95; control ${measured.control.median.toFixed(1)}ms median, ${measured.control.p95.toFixed(1)}ms p95`);
   }
+
+  // The only hook whose budget the host hardcodes: runAgent's interrupted-query fallback gives
+  // SubagentStop 5000ms instead of the usual 600000ms, and a launched attempt that misses it waits
+  // out the claim-idle backstop instead. A diagnostic line alone kept that invisible (SQ-2864).
+  assert.ok(
+    subagentStop.p95 < 1500,
+    `SubagentStop fresh-process p95 ${subagentStop.p95.toFixed(1)}ms exceeds the 1500ms bound inside the host's 5000ms failure-path wait`,
+  );
+  // The absolute bound alone does not discriminate: the whole-board scan this replaced measures
+  // 837.8ms p95 on this fixture, which still fits 1500ms. What must not come back is a cost that
+  // grows with the board, so bound the work ABOVE a bare `node -e ''` instead, which also keeps this
+  // honest on a slow runner where node's own start dominates. Measured here: 175.4ms with the
+  // narrowed query against 786.4ms without it, so 400ms sits 2.3x over the cost and 2.0x under the
+  // regression. The narrowed cost holds as the board grows; the scan's does not.
+  const subagentStopWork = subagentStop.p95 - subagentStop.control.p95;
+  assert.ok(
+    subagentStopWork < 400,
+    `SubagentStop spends ${subagentStopWork.toFixed(1)}ms above bare node start; a whole-board scan is back`,
+  );
 });
