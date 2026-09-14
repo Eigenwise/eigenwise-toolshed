@@ -133,7 +133,9 @@ export function candidateReviewRequiredGuidance(): string {
     + ' If it reviewed a different candidate, that candidate needs its own bound review.'
     + ' If the review attempt carries no hook-bound agent id, its executor never bound a runtime: re-dispatch the review on a host whose PreToolUse hook reports agent_id, and let that attempt close normally.'
     + ' If the submitting attempt recorded no identity and no bind time at all, it bound nothing and nothing recovers it: re-dispatch that ticket so the replacement attempt binds, then review the resubmitted candidate.'
-    + ' Do not assert an identity, hand-edit the attempt, or route around this with a manual delivery: the manual and groomClose routes enforce the same check.';
+    + ' Do not assert an identity or hand-edit the attempt, and do not use a manual delivery to put unreviewed work on the target: integration enforces this check whichever delivery method it is given.'
+    + ' One case cannot be recovered by re-dispatching anything: the hook-bound review DID complete on this exact candidate, only the submitting attempt cannot say which runtime it was, and the candidate ALREADY landed. Record that with groomClose and its deliveryCommit: the board itself checks the commit is reachable from the recorded integration target and every declared candidate path is byte-identical there, refuses and names any path that is not, then closes with outcome `delivered-without-review-provenance` carrying this refusal.'
+    + ' That door is open for no other refusal here, it is audit-visible, and it is not a review: never use it for work a review could still cover, and keep `abandonSubmission: true` for a candidate genuinely discarded.';
 }
 
 export function negativeControlRecoveryGuidance(): string {

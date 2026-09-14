@@ -3578,6 +3578,133 @@ test('SQ-2169: integrate records an already delivered reviewed candidate or a re
   }
 });
 
+// SQ-2778. SQ-2756 shipped and released, and the board had no way to say so: its
+// submitting attempt recorded no runtime identity at all, so the provenance gate
+// refused every closure and the only alternative on offer recorded the candidate as
+// abandoned, which was false. Delivery by evidence is the truthful terminal state,
+// and it proves the landing itself instead of trusting the caller's deliveryCommit.
+function landedGateRefusedCandidate(title: string, file: string, contents: string, agentId: string) {
+  const ticket = addTicket(title, { files: [file] });
+  fs.mkdirSync(path.dirname(path.join(PROJECT_DIR, file)), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, file), contents);
+  git(['add', file]);
+  git(['commit', '-m', `${title} candidate`]);
+  const candidate = git(['rev-parse', 'HEAD']);
+  const base = git(['rev-parse', `${candidate}^`]);
+  const branch = git(['branch', '--show-current']);
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, `${agentId}-source`, {
+    direct: true,
+    reason: 'The submission fixture requires a local direct claim.',
+  }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, ticket.ref, `${agentId}-source`, {
+    commit: candidate,
+    verify: 'node -e "process.exit(0)"',
+  }).ok, true);
+  pin(ticket, candidate);
+  const submitted = store.getTicket(slug, ticket.ref);
+  const terminalAt = new Date(Date.now() - 60_000).toISOString();
+  Object.assign(submitted.submission, {
+    base,
+    upstream: branch,
+    upstreamCommit: base,
+    integrationBranch: branch,
+    commits: [candidate],
+    changedPaths: [file],
+  });
+  // The exact SQ-2756 attempt shape: bound through its claim token, so no hook-bound
+  // agent id, and older than bindSource recording, so no fallback identity either.
+  submitted.dispatch = {
+    outcome: 'submitted',
+    terminalAt,
+    attempts: [{
+      outcome: 'submitted',
+      commit: candidate,
+      agentId: null,
+      agentName: `${agentId}-dispatch`,
+      tokenPrefix: 'udck-p7rj-ky',
+      terminalAt,
+    }],
+  };
+  persist(submitted);
+  completeIsolatedReview(dispatchedIsolatedReview(`${title} review`, ticket.ref, candidate, agentId), true);
+  const refused = store.validateIntegrationSubmission(slug, ticket.ref, {});
+  assert.strictEqual(refused.reason, 'candidate_review_required', refused.message);
+  return { ticket: store.getTicket(slug, ticket.ref), candidate, refusal: String(refused.message) };
+}
+
+test('SQ-2778: a gate-refused candidate closes as delivered without review provenance only when its declared paths are byte-identical on the target', () => {
+  const originalConfig = store.boardConfig(slug);
+  try {
+    cleanBranch();
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']) });
+    const landedFile = 'lib/sq2778-landed.js';
+    const landed = landedGateRefusedCandidate('delivered without review provenance', landedFile, 'landed\n', 'sq2778-landed');
+    assert.match(landed.refusal, /Record that with groomClose and its deliveryCommit/, 'the gate names the delivery-by-evidence path, not only abandonment');
+    assert.match(landed.refusal, /delivered-without-review-provenance/);
+    assert.strictEqual(integrateOnCurrentTestBranch(landed.ticket.ref).reason, 'candidate_review_required', 'integration still enforces the provenance gate');
+
+    const target = store.integrationTarget(slug);
+    const recorded = store.recordDeliveredSubmission(slug, landed.ticket.ref, {
+      target,
+      deliveryCommit: landed.candidate,
+      reason: 'Candidate landed on the integration branch and shipped in a release.',
+    });
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.integration.outcome, 'delivered-without-review-provenance');
+    assert.strictEqual(recorded.integration.mode, 'recorded-without-review-provenance');
+    assert.strictEqual(recorded.integration.contentEvidence, 'candidate_ancestor:target_paths_identical');
+    assert.strictEqual(recorded.integration.deliveryIdentity.kind, 'landed-without-review-provenance');
+    assert.strictEqual(recorded.integration.reviewProvenance.refused, 'candidate_review_required');
+    assert.match(recorded.integration.reviewProvenance.detail, /recorded no runtime binding/);
+    assert.deepStrictEqual(recorded.integration.reviewProvenance.verified.identicalPaths, [landedFile]);
+    assert.strictEqual(recorded.integration.reviewProvenance.verified.reachability, 'ancestor_of_target');
+
+    const closed = store.completeTicketAsControlPlane(slug, landed.ticket.ref, {
+      by: 'sq2778-integrator',
+      purpose: 'delivery',
+      deliveryCommit: landed.candidate,
+      reason: 'Candidate landed on the integration branch and shipped in a release.',
+    });
+    assert.strictEqual(closed.ok, true, closed.message);
+    assert.strictEqual(closed.ticket.status, 'done');
+    assert.strictEqual(closed.ticket.submission.integration.outcome, 'delivered-without-review-provenance');
+
+    const divergedFile = 'lib/sq2778-diverged.js';
+    const diverged = landedGateRefusedCandidate('partially landed candidate', divergedFile, 'candidate\n', 'sq2778-diverged');
+    fs.writeFileSync(path.join(PROJECT_DIR, divergedFile), 'reverted on the target\n');
+    git(['add', divergedFile]);
+    git(['commit', '-m', 'rewrite the candidate path on the target']);
+    const refusedDivergence = store.recordDeliveredSubmission(slug, diverged.ticket.ref, {
+      target: store.integrationTarget(slug),
+      deliveryCommit: diverged.candidate,
+      reason: 'The candidate commit is an ancestor of the integration branch.',
+    });
+    assert.strictEqual(refusedDivergence.ok, false);
+    assert.strictEqual(refusedDivergence.reason, 'delivery_diverged_from_target');
+    assert.deepStrictEqual(refusedDivergence.divergedPaths, [divergedFile]);
+    assert.match(refusedDivergence.message, new RegExp(`not byte-identical there: ${divergedFile.replace('.', '\\.')}`));
+
+    const strandedFile = 'lib/sq2778-stranded.js';
+    // Its own branch off origin/main, so the later branch switch strands only the
+    // candidate commit: its base stays reachable and the refusal is about delivery.
+    cleanBranch();
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']) });
+    const stranded = landedGateRefusedCandidate('stranded candidate', strandedFile, 'stranded\n', 'sq2778-stranded');
+    cleanBranch();
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']) });
+    const refusedUnreachable = store.recordDeliveredSubmission(slug, stranded.ticket.ref, {
+      target: store.integrationTarget(slug),
+      deliveryCommit: stranded.candidate,
+      reason: 'The candidate never reached this integration branch.',
+    });
+    assert.strictEqual(refusedUnreachable.ok, false);
+    assert.strictEqual(refusedUnreachable.reason, 'delivery_not_reachable');
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
 test('SQ-2369: reachable manual delivery survives a later folder rename while non-reachable manual delivery requires working-tree content', () => {
   const originalConfig = store.boardConfig(slug);
   try {

@@ -176,6 +176,8 @@ These read-only reports work independently. If Sidequest is not installed in the
 
 **Integration stops because the work already landed on the remote.** Your local target branch is behind a commit that already contains the candidate, usually because someone merged it outside the board. Sidequest refuses instead of merging, and it does not move your branch, fetch, or run the check. For a group, it checks every participant before touching anything, so nothing is half delivered. Fetch and bring the local branch forward yourself, then ask Claude to retry the closure.
 
+**The work shipped, but the board refuses to close it because the candidate cannot prove who submitted it.** This happens when the review really did run, independently, on that exact candidate, and only the submitting attempt recorded no runtime identity for Sidequest to compare against the reviewer. Nothing recovers that attempt, and abandoning the candidate would record a falsehood about released work. Ask Claude to close it by delivery evidence instead: Sidequest itself checks that the commit is reachable from the recorded integration branch and that every declared candidate path is byte-identical there, names any path that is not, and closes with an outcome that says the work was delivered without review provenance, carrying the original refusal. That outcome stays visible as its own thing so these closures can be audited later, and it is not available for a candidate a review could still cover.
+
 **A submission sat so long it can no longer be integrated.** Ask Claude to check whether the requested behavior already reached the intended branch. If it did, Claude records that evidence; if it did not, the work needs a fresh ticket against current source.
 
 ## Support

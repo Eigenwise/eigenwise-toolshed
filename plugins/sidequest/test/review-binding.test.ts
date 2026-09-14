@@ -1245,6 +1245,33 @@ test('integration stays blocked when a matching attempt, an identity, or a disti
   }
 });
 
+// SQ-2778. Delivery by evidence exists for one refusal only: the review really ran,
+// independently, on this exact candidate, and the submitting attempt is the single
+// half that cannot be identified. Every other refusal is recoverable by running or
+// re-running a review, so opening the door for any of them would let a manual merge
+// stand in for a review that never happened.
+test('only a missing submitter identity under a hook-bound reviewer can close on delivery evidence', () => {
+  const cases: Array<[string, any, boolean]> = [
+    ['hook-bound reviewer, unidentifiable submitter', { outcome: 'done', agentId: 'hook-bound-reviewer', agentName: 'sq-review-evidence', terminalAt: '2026-01-02T00:00:00.000Z' }, true],
+    ['reviewer never bound a runtime', { outcome: 'done', agentId: null, agentName: 'sq-review-unhooked', tokenPrefix: 'review-tk', bindSource: 'claim_token', terminalAt: '2026-01-02T00:00:00.000Z' }, false],
+    ['review never reached a done attempt', { outcome: 'released', agentId: 'hook-bound-reviewer', terminalAt: '2026-01-02T00:00:00.000Z' }, false],
+  ];
+  for (const [label, reviewAttempt, evidenceDoorOpen] of cases) {
+    const candidate = claimTokenCandidate(`evidence-${label.replace(/\W+/g, '-')}`, reviewAttempt);
+    const source = store.getTicket(candidate.slug, candidate.sourceRef);
+    // The SQ-2756 shape: bound through its claim token before bindSource was
+    // recorded and with no bind time either, so nothing identifies the submitter.
+    delete source.dispatch.attempts[0].bindSource;
+    persist(candidate.slug, source);
+    const provenance = reviewBinding.reviewProvenance(
+      store.getTicket(candidate.slug, candidate.sourceRef),
+      store.getTicket(candidate.slug, candidate.reviewRef),
+    );
+    assert.equal(store.validateIntegrationSubmission(candidate.slug, candidate.sourceRef, {}).reason, 'candidate_review_required', `${label} still refuses integration`);
+    assert.equal(reviewBinding.onlySubmitterProvenanceMissing(provenance), evidenceDoorOpen, label);
+  }
+});
+
 test('dispatch pins a bound review to the exact candidate in an isolated checkout', () => {
   const { repository, slug, commit } = board('dispatch');
   const source = submittedSource(slug, commit, 'dispatch');

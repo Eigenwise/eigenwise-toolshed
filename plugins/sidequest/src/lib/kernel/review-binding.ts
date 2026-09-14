@@ -213,6 +213,16 @@ export function reviewProvenance(sourceTicket?: any, reviewTicket?: any): Review
   return Object.freeze({ source, reviewer, reason: 'ok' as ReviewProvenanceReason });
 }
 
+// The one provenance refusal a landed candidate can never recover from. Its bound
+// review DID terminally complete on this exact candidate from a hook-bound reviewer,
+// and only the submitting attempt cannot say which runtime it was. That attempt is
+// immutable and the work already shipped, so no re-dispatch can produce the missing
+// half (SQ-2778). Every other refusal is recoverable by running or re-running a
+// review, so none of them may close on evidence instead.
+export function onlySubmitterProvenanceMissing(provenance?: ReviewProvenance | null): boolean {
+  return provenance?.reason === 'agent_identity_missing' && !provenance.source && Boolean(provenance.reviewer);
+}
+
 export function reviewRelationRef(relation?: ReviewRelation | null): string {
   return relation?.reviewTicket?.ref || relation?.mirror?.ref || 'a candidate review';
 }

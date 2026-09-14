@@ -20,6 +20,7 @@ var review_binding_exports = {};
 __export(review_binding_exports, {
   completedReviewAttempt: () => completedReviewAttempt,
   isReviewCommit: () => isReviewCommit,
+  onlySubmitterProvenanceMissing: () => onlySubmitterProvenanceMissing,
   reviewCandidateFromSubmission: () => reviewCandidateFromSubmission,
   reviewLockMessage: () => reviewLockMessage,
   reviewOutcomeFromOracleVerdict: () => reviewOutcomeFromOracleVerdict,
@@ -137,6 +138,9 @@ function reviewProvenance(sourceTicket, reviewTicket) {
   if (sameRuntimeIdentity(source, reviewer)) return Object.freeze({ source, reviewer, reason: "shared_agent_identity" });
   return Object.freeze({ source, reviewer, reason: "ok" });
 }
+function onlySubmitterProvenanceMissing(provenance) {
+  return provenance?.reason === "agent_identity_missing" && !provenance.source && Boolean(provenance.reviewer);
+}
 function reviewRelationRef(relation) {
   return relation?.reviewTicket?.ref || relation?.mirror?.ref || "a candidate review";
 }
@@ -154,6 +158,7 @@ function reviewLockMessage(operation, ticket, relation) {
 0 && (module.exports = {
   completedReviewAttempt,
   isReviewCommit,
+  onlySubmitterProvenanceMissing,
   reviewCandidateFromSubmission,
   reviewLockMessage,
   reviewOutcomeFromOracleVerdict,

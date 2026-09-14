@@ -5,7 +5,7 @@ const { runProcessVerification } = require('../ports/process.js');
 const { worktreeSetupDeadlineMs } = require('../hook-timeouts.js');
 const { decideSubmissionAdmission } = require('../kernel/submission');
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require('../source-revision-capability.js');
-const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require('../kernel/review-binding');
+const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance, onlySubmitterProvenanceMissing } = require('../kernel/review-binding');
 const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require('../kernel/wave');
 const { isInScope, scopedPaths } = require('../scope-match');
 const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance } = require('../refusal-guidance.js');
@@ -205,25 +205,29 @@ function candidateReviewLocked(slug: any, ticket: any, operation: string) {
 
 // Both identities come from the immutable terminal attempt snapshots rather than
 // the live dispatch record, which a later prepared attempt rewrites in place.
-function terminalReviewFailure(ticket: any, relation: any) {
+// Returns the refusal text plus whether it is the one unrecoverable shape: a
+// completed independent review of this exact candidate that only the submitting
+// attempt cannot be matched against. Delivery by evidence keys on that (SQ-2778).
+function reviewFailureWithProvenance(ticket: any, relation: any): { failure: string | null; submitterProvenanceOnly: boolean } {
   const reviewTicket = relation.reviewTicket;
   if (relation.conflict || !reviewTicket || reviewTicket.status !== 'done') {
-    return `${reviewRelationRef(relation)} has not terminally completed its bound review of ${ticket.ref}`;
+    return { failure: `${reviewRelationRef(relation)} has not terminally completed its bound review of ${ticket.ref}`, submitterProvenanceOnly: false };
   }
   const target = reviewTicket.reviewTarget;
   const submitted = reviewCandidateFromSubmission(ticket.submission);
   if (target?.ticketId !== ticket.id || target?.candidate?.source !== submitted?.source || target?.candidate?.value !== submitted?.value) {
-    return `${reviewRelationRef(relation)} is not the review of this exact candidate`;
+    return { failure: `${reviewRelationRef(relation)} is not the review of this exact candidate`, submitterProvenanceOnly: false };
   }
   const provenance = reviewProvenance(ticket, reviewTicket);
+  const submitterProvenanceOnly = onlySubmitterProvenanceMissing(provenance);
   if (provenance.reason === 'source_attempt_missing') {
-    return `${ticket.ref} has no terminal dispatch attempt that submitted candidate ${submitted?.value || 'under review'}`;
+    return { failure: `${ticket.ref} has no terminal dispatch attempt that submitted candidate ${submitted?.value || 'under review'}`, submitterProvenanceOnly };
   }
   if (provenance.reason === 'review_attempt_missing') {
-    return `${reviewRelationRef(relation)} has no terminal done dispatch attempt for its bound review of ${ticket.ref}`;
+    return { failure: `${reviewRelationRef(relation)} has no terminal done dispatch attempt for its bound review of ${ticket.ref}`, submitterProvenanceOnly };
   }
   if (provenance.reason === 'agent_identity_missing') {
-    return [
+    const failure = [
       !provenance.source && `${ticket.ref} recorded no runtime binding on the terminal attempt that submitted the candidate:`
         + ' no hook-bound agent id, and no recorded bind time carrying the token prefix and agent name to stand in for one.'
         + ' An attempt older than bind-source recording still resolves through that bind time, so this one bound nothing at all and no retry changes it:'
@@ -231,11 +235,12 @@ function terminalReviewFailure(ticket: any, relation: any) {
       !provenance.reviewer && `${reviewRelationRef(relation)} recorded no hook-bound agent id on its terminal review attempt:`
         + ' a dispatch token and agent name authenticate a dispatch, not the runtime that ran it, so they cannot establish a reviewer independent of the submitter',
     ].filter(Boolean).join('; ');
+    return { failure, submitterProvenanceOnly };
   }
   if (provenance.reason === 'shared_agent_identity') {
-    return `${reviewRelationRef(relation)} was completed by the same runtime identity that submitted ${ticket.ref} (${provenance.source?.identity})`;
+    return { failure: `${reviewRelationRef(relation)} was completed by the same runtime identity that submitted ${ticket.ref} (${provenance.source?.identity})`, submitterProvenanceOnly };
   }
-  return null;
+  return { failure: null, submitterProvenanceOnly };
 }
 
 function rejectionQuarantineRef(ticket: any, rejectionNumber: number) {
@@ -832,6 +837,12 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
     return { ok: false, reason: 'submission_required', ticket, message: `${ticket.ref} has no submission to integrate.` };
   }
   const candidateReview = candidateReviewRelation(slug, ticket);
+  // A candidate the gate refuses can still have shipped, and every other terminal
+  // state then lies about it (SQ-2778). Delivery-by-evidence carries the refusal
+  // forward instead of clearing it, so the caller records what actually happened
+  // and an audit can find it. The refusal still stops integration itself: only the
+  // delivery closure asks to continue past it, and only after proving the landing.
+  let reviewProvenanceRefusal: any = null;
   if (candidateReview) {
     if (reviewRelationOutcome(candidateReview) === 'rejected') {
       return {
@@ -841,14 +852,18 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
         message: `${ticket.ref} candidate was rejected by ${reviewRelationRef(candidateReview)}. Integration is permanently blocked; repair needs fresh ticket, attempt, candidate, and review identities.`,
       };
     }
-    const reviewFailure = terminalReviewFailure(ticket, candidateReview);
-    if (reviewFailure) {
-      return {
+    const review = reviewFailureWithProvenance(ticket, candidateReview);
+    if (review.failure) {
+      const refusal = {
         ok: false,
         reason: 'candidate_review_required',
         ticket,
-        message: `${ticket.ref} integration refused; ${reviewFailure}. ${candidateReviewRequiredGuidance()}`,
+        reviewFailure: review.failure,
+        reviewRef: reviewRelationRef(candidateReview),
+        message: `${ticket.ref} integration refused; ${review.failure}. ${candidateReviewRequiredGuidance()}`,
       };
+      if (!review.submitterProvenanceOnly || opts?.landedDeliveryWithoutReviewProvenance !== true) return refusal;
+      reviewProvenanceRefusal = refusal;
     }
   }
   const requiredVerification = pinnedVerificationRequirement(ticket);
@@ -942,7 +957,7 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
       message: `${ticket.ref} requires recorded delivery from its passing assembled wave before integration closure.`,
     };
   }
-  return { ok: true, ticket, scopeValidation };
+  return { ok: true, ticket, scopeValidation, reviewProvenanceRefusal };
 }
 
 function reconciledDeliveryWave(slug: any, ticket: any, revision: any, verification: any) {
@@ -1173,6 +1188,33 @@ function deliveryContainsSubmittedContent(repo: string, submission: any, deliver
     : { ok: true, evidence: 'equivalent_patches' };
 }
 
+// Only the admitted validation carries this, and only when the caller asked to
+// continue past the provenance gate; every refusing branch simply lacks the key.
+function reviewProvenanceRefusalFrom(validation: { ok: boolean; reviewProvenanceRefusal?: any }) {
+  return validation.reviewProvenanceRefusal || null;
+}
+
+function blobIdAt(repo: string, commit: string, file: string): string | null {
+  try {
+    return integrationGit(repo, ['rev-parse', '--verify', `${commit}:${file}`]).toLowerCase();
+  } catch (error: any) {
+    // Git answers 128 for a path that does not exist in that tree. Absent in both
+    // trees is still agreement, so the caller compares nulls rather than guessing.
+    if (error?.status === 128) return null;
+    throw error;
+  }
+}
+
+// Ancestry proves a commit reached the branch, never that its content survived
+// there: a later commit can revert or rewrite every line and leave the original an
+// ancestor. So this is the load-bearing half of delivery-by-evidence (SQ-2778) and
+// it compares bytes, through the blob id git already hashes from the content.
+function candidatePathsIdenticalOnTarget(repo: string, submission: any, deliveryCommit: string, targetCommit: string) {
+  const compared = changedIntegrationPaths(repo, submission);
+  const diverged = compared.filter((file: string) => blobIdAt(repo, deliveryCommit, file) !== blobIdAt(repo, targetCommit, file));
+  return diverged.length ? { ok: false, compared, diverged } : { ok: true, compared, diverged };
+}
+
 function reviewedMergedTreeInteraction(repo: string, ticket: any, sourceCommit: string, resultingHead: string, requestedInteraction: any) {
   const interaction = String(requestedInteraction || '').trim();
   if (!interaction) return { ok: true, interaction: null };
@@ -1284,8 +1326,16 @@ function workingTreeDeliveryMethod(value: any) {
 
 function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
-  const preflight = validateIntegrationSubmission(slug, idOrRef, { deliveryInteractionCommit: opts.deliveryInteractionCommit });
+  // Integration itself still refuses a gate-failed candidate: the MCP integrate
+  // handler validates before it reaches here, and every integration closure
+  // re-validates without this option. Recording a delivery is the one caller that
+  // may continue, because the branch already contains the work.
+  const preflight = validateIntegrationSubmission(slug, idOrRef, {
+    deliveryInteractionCommit: opts.deliveryInteractionCommit,
+    landedDeliveryWithoutReviewProvenance: true,
+  });
   if (!preflight.ok) return preflight;
+  const provenanceRefusal = reviewProvenanceRefusalFrom(preflight);
   const preflightTicket = preflight.ticket;
   if (opts.skipVerify === true) return { ok: false, reason: 'delivery_verify_required', ticket: preflightTicket, message: `${preflightTicket.ref} reconciliation requires a passing merged-tree verification; skipVerify is not allowed.` };
   const ticket = preflightTicket;
@@ -1369,6 +1419,27 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
         message: `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${content.missing.join(', ')}.`,
       };
     }
+    let landedPaths: any = null;
+    if (provenanceRefusal) {
+      if (workingTreeDelivery) {
+        return {
+          ok: false,
+          reason: 'delivery_without_review_provenance_requires_landed_commit',
+          ticket,
+          message: `${ticket.ref} cannot be recorded as delivered without review provenance from a pinned ${deliveryMethod} delivery: its content is only in the working tree, so nothing has landed on ${target.branch}. ${provenanceRefusal.reviewFailure}.`,
+        };
+      }
+      landedPaths = candidatePathsIdenticalOnTarget(repo, ticket.submission, deliveryCommit, resultingHead);
+      if (!landedPaths.ok) {
+        return {
+          ok: false,
+          reason: 'delivery_diverged_from_target',
+          ticket,
+          divergedPaths: landedPaths.diverged,
+          message: `${ticket.ref} cannot be recorded as delivered without review provenance: ${deliveryCommit} is reachable from ${target.branch} at ${resultingHead}, but these candidate paths are not byte-identical there: ${landedPaths.diverged.join(', ')}. Only a candidate whose declared paths still match on the target closes by evidence; a partially landed one needs a bound review of what actually shipped. ${provenanceRefusal.reviewFailure}.`,
+        };
+      }
+    }
     const interaction = workingTreeDelivery
       ? { ok: true, interaction: null }
       : reviewedMergedTreeInteraction(repo, ticket, deliveryCommit, resultingHead, opts.deliveryInteractionCommit);
@@ -1386,16 +1457,31 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
       : interaction.interaction
         ? Array.from(new Set([...deliveredCommitPaths(repo, deliveryCommit), ...interaction.interaction.paths]))
         : deliveredCommitPaths(repo, deliveryCommit);
+    // Deliberately its own kind and outcome, never an alias for a reviewed delivery,
+    // so an audit can list every candidate that closed on evidence alone.
+    const reviewProvenance = provenanceRefusal ? {
+      refused: 'candidate_review_required',
+      reviewRef: provenanceRefusal.reviewRef,
+      detail: provenanceRefusal.reviewFailure,
+      verified: {
+        deliveryCommit,
+        targetBranch: target.branch,
+        targetCommit: resultingHead,
+        reachability: 'ancestor_of_target',
+        identicalPaths: landedPaths.compared,
+      },
+    } : null;
     const deliveryIdentity = {
-      kind: interaction.interaction ? 'reviewed-merged-tree-interaction' : workingTreeDelivery ? 'pinned-working-tree' : 'reachable-commit',
+      kind: reviewProvenance ? 'landed-without-review-provenance' : interaction.interaction ? 'reviewed-merged-tree-interaction' : workingTreeDelivery ? 'pinned-working-tree' : 'reachable-commit',
       pinnedRef: submissionGitRef(ticket),
       candidate: ticket.submission.commit,
       sourceRevision: deliveryRevision,
       ...(interaction.interaction ? { sourceCommit: deliveryCommit, interaction: interaction.interaction } : {}),
       ...(workingTreeDelivery ? { method: deliveryMethod } : {}),
+      ...(reviewProvenance ? { reviewProvenance } : {}),
     };
     const recorded = updateSubmissionIntegration(slug, ticket.id, {
-      mode: interaction.interaction ? 'recorded-reviewed-interaction' : workingTreeDelivery ? 'recorded-working-tree' : 'recorded',
+      mode: reviewProvenance ? 'recorded-without-review-provenance' : interaction.interaction ? 'recorded-reviewed-interaction' : workingTreeDelivery ? 'recorded-working-tree' : 'recorded',
       pinnedRef: submissionGitRef(ticket),
       pinnedCommit: ticket.submission.commit,
       deliveryCommit,
@@ -1409,8 +1495,9 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
       deliveredFiles,
       verify,
       evidence: reason,
-      contentEvidence: interaction.interaction ? `${content.evidence}:reviewed_merged_tree_interaction` : content.evidence,
-      outcome: 'verified',
+      contentEvidence: interaction.interaction ? `${content.evidence}:reviewed_merged_tree_interaction` : reviewProvenance ? `${content.evidence}:target_paths_identical` : content.evidence,
+      outcome: reviewProvenance ? 'delivered-without-review-provenance' : 'verified',
+      ...(reviewProvenance ? { reviewProvenance } : {}),
       recordedAt: new Date().toISOString(),
       deliveredAt: new Date().toISOString(),
       verifiedAt: new Date().toISOString(),
