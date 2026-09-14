@@ -1,6 +1,6 @@
 # Directory structure
 
-Last Updated: 2026-09-13
+Last Updated: 2026-09-14
 
 - `.claude/`: project settings, live rules, and generated codebase map.
 - `.claude-plugin/`: marketplace manifest and published plugin entries.
@@ -14,6 +14,7 @@ Last Updated: 2026-09-13
 - `docs/`: Astro/Starlight prose, generated reference source, scripts, and synthetic screenshots.
 - `sandbox/windows/`: maintainer-only, gitignored Windows Sandbox launcher, guest bootstrap, and PowerShell contract test — never committed, no public docs page.
 - `scripts/release/`: release note, plan, cut, finalize, guard, manifest, promotion/publication helpers, and release tests. Protected publication prepares an unprotected release branch, promotes it to `main` through a reviewed PR, then tags the exact merged commit and prints a `main`-to-`develop` sync PR.
+- `scripts/quality/`: the CRAP delta gate. `crap.mjs` runs the Sidequest suite under V8 coverage, scores only `src/` TypeScript, merges direct `tsx` coverage with the compiled child-process counterpart, and fails a changed function whose complexity rose against the merge base with `develop`. Run it as `npm run quality:crap` from `plugins/sidequest`; it is a local gate, not wired into CI. `crap.test.mjs` covers the scorer and the gate through an injectable baseline reader.
 - `.github/workflows/`: test, release guard, release cut, and docs deployment automation.
 - `examples/`: small example projects, not production plugin runtime.
 
