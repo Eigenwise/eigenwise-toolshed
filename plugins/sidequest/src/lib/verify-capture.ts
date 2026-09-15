@@ -504,7 +504,9 @@ function dispatchBoundWorktree(target: CaptureTarget): string | null {
 
 function isWithinWorktree(root: string, candidate: string): boolean {
   const relative = path.relative(root, canonicalPath(candidate));
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  if (relative === '') return true;
+  const climbsOut = relative === '..' || relative.startsWith(`..${path.sep}`);
+  return !climbsOut && !path.isAbsolute(relative);
 }
 
 type CaptureCwdResolution = Readonly<{ cwd: string; refusal: string | null }>;
@@ -515,22 +517,29 @@ function resolveCaptureCwd(target: CaptureTarget | null, cwd: string, explicitWo
   if (target && isWorkingTreeDeliveryTarget(target)) {
     return Object.freeze({ cwd: captureWorkingDirectory(target, cwd), refusal: null });
   }
+  const bound = target ? dispatchBoundWorktree(target) : null;
+  const canonicalBound = bound ? canonicalPath(bound) : null;
   if (explicitWorktree) {
     const canonicalWorktree = canonicalPath(explicitWorktree);
+    // The flag is as caller-controlled as cwd was, so it may only name the worktree the
+    // dispatch record already bound; any other tree with the same HEAD but different
+    // ignored build state could otherwise certify the bound candidate.
+    if (canonicalBound && canonicalWorktree !== canonicalBound) {
+      return Object.freeze({
+        cwd,
+        refusal: `verify-capture: ${target!.ticket}'s dispatch is bound to worktree ${canonicalBound}, but --worktree names ${canonicalWorktree}. Only the bound worktree can verify this ticket; run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`,
+      });
+    }
     if (!isWithinWorktree(canonicalWorktree, cwd)) {
       process.stdout.write(`verify-capture: running from ${cwd}, but --worktree names ${canonicalWorktree}; continuing in the bound worktree.\n`);
     }
     return Object.freeze({ cwd: canonicalWorktree, refusal: null });
   }
-  const bound = target ? dispatchBoundWorktree(target) : null;
-  if (bound) {
-    const canonicalWorktree = canonicalPath(bound);
-    if (!isWithinWorktree(canonicalWorktree, cwd)) {
-      return Object.freeze({
-        cwd,
-        refusal: `verify-capture: ${target!.ticket}'s dispatch is bound to worktree ${canonicalWorktree}, but this command ran from ${cwd}. Run it from ${canonicalWorktree}, or pass --worktree ${canonicalWorktree}.`,
-      });
-    }
+  if (canonicalBound && !isWithinWorktree(canonicalBound, cwd)) {
+    return Object.freeze({
+      cwd,
+      refusal: `verify-capture: ${target!.ticket}'s dispatch is bound to worktree ${canonicalBound}, but this command ran from ${cwd}. Run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`,
+    });
   }
   return Object.freeze({ cwd: target ? captureWorkingDirectory(target, cwd) : cwd, refusal: null });
 }

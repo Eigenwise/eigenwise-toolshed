@@ -613,6 +613,38 @@ test('(c) without --worktree, cwd already inside the ticket\'s bound worktree re
   }
 });
 
+test('(e) --worktree naming any tree other than the bound one refuses and records nothing, even with the same HEAD', async () => {
+  const fixture = setupIsolatedDispatch('worktree-flag-mismatch');
+  try {
+    assert.equal(commitHead(fixture.project), commitHead(fixture.worktree), 'fixture must share HEAD so only the tree identity distinguishes the runs');
+    const { status, output } = await runCaptureProcess(ISOLATED_DISPATCH_VERIFY_COMMAND, fixture.project, fixture.ticket.ref, {
+      worktree: fixture.project,
+      cwd: fixture.worktree,
+    });
+    assert.notEqual(status, 0, output);
+    assert.ok(output.includes(worktreeLease.canonicalPath(fixture.worktree)), output);
+    assert.ok(output.includes(worktreeLease.canonicalPath(fixture.project)), output);
+    assert.equal(recordedCaptureCount(fixture.project, fixture.ticket.ref), 0);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('(f) a bound-worktree child directory whose name starts with two dots still counts as inside', async () => {
+  const fixture = setupIsolatedDispatch('worktree-dotdot-child');
+  try {
+    const child = path.join(fixture.worktree, '..valid');
+    fs.mkdirSync(child);
+    const { status, output } = await runCaptureProcess(ISOLATED_DISPATCH_VERIFY_COMMAND, fixture.project, fixture.ticket.ref, {
+      cwd: child,
+    });
+    assert.equal(status, 0, output);
+    assert.equal(recordedCaptureCount(fixture.project, fixture.ticket.ref), 1);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test('(d) a working-tree-delivery ticket keeps its shared-checkout override unchanged', async () => {
   const project = initGitRepo('sq-verify-capture-wtd-fixture-');
   const { slug } = store.ensureProject(project);
