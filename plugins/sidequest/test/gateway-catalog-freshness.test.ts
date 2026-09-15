@@ -2,10 +2,9 @@ import './_temp-cleanup.js';
 import './_gateway-catalog-freshness.js';
 'use strict';
 /**
- * SQ-2199. Long suites seed one fake model-gateway catalog at module load and then run for longer than
- * CATALOG_STALE_MS, so by their later tests the catalog reads as absent and every codex route starts
- * refusing. This file reproduces that end state directly, by stamping its catalog outside the window
- * before any test runs, and proves the shared freshness hook puts it back inside.
+ * SQ-2937. Fixture catalogs have no gateway refresh source, so their recorded catalog remains usable even
+ * after the installed gateway's freshness window. The isolated Claude home in _gateway-catalog-freshness.ts
+ * keeps this test from touching the developer's gateway install.
  *
  * Run: node --import tsx --test plugins/sidequest/test/gateway-catalog-freshness.test.ts
  */
@@ -38,7 +37,25 @@ test('SQ-2199: a fixture catalog that aged out of the stale window is usable aga
   assert.deepEqual(discovery.discoverExternalModels().map((model: { slug: string }) => model.slug), ['codex-gpt-5-6-terra']);
 });
 
-test('SQ-2199: re-stamping does not invent a catalog where a test asked for none', () => {
+test('SQ-2937: a fixture catalog never invokes the installed gateway refresh command', (t) => {
+  const previousClaudeHome = process.env.SIDEQUEST_CLAUDE_HOME;
+  const gatewayHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-catalog-refresh-probe-'));
+  const marker = path.join(gatewayHome, 'refresh-called');
+  const command = path.join(gatewayHome, 'plugins', 'model-gateway', 'bin', 'model-gateway.js');
+  fs.mkdirSync(path.dirname(command), { recursive: true });
+  fs.writeFileSync(command, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'called');`);
+  fs.mkdirSync(path.join(gatewayHome, 'plugins'), { recursive: true });
+  fs.writeFileSync(path.join(gatewayHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    plugins: { 'model-gateway@eigenwise-toolshed': [{ installPath: path.dirname(path.dirname(command)), version: '0.1.0' }] },
+  }));
+  process.env.SIDEQUEST_CLAUDE_HOME = gatewayHome;
+  t.after(() => { process.env.SIDEQUEST_CLAUDE_HOME = previousClaudeHome; });
+
+  assert.deepEqual(discovery.discoverExternalModels().map((model: { slug: string }) => model.slug), ['codex-gpt-5-6-terra']);
+  assert.equal(fs.existsSync(marker), false);
+});
+
+test('SQ-2937: an empty fixture root does not invent a catalog', () => {
   const emptyDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-catalog-freshness-none-'));
   process.env.SIDEQUEST_DISCOVERY_DIRS = emptyDirectory;
   assert.equal(discovery.providerReadiness('codex'), null);

@@ -46,12 +46,21 @@ export const CATALOG_SOURCES: readonly CatalogSource[] = [
   { source: 'model-gateway', relPath: path.join('model-gateway', 'catalog.json'), schemas: new Set([2, 3, 4]) },
 ];
 
+function claudeHome(): string {
+  return path.resolve(process.env.SIDEQUEST_CLAUDE_HOME || path.join(os.homedir(), '.claude'));
+}
+
 function discoveryRoots(): string[] {
+  const defaultRoot = claudeHome();
   const override = process.env.SIDEQUEST_DISCOVERY_DIRS;
-  if (override?.trim()) {
-    return override.split(',').map((value) => value.trim()).filter(Boolean).map((value) => path.resolve(value));
-  }
-  return [path.join(os.homedir(), '.claude')];
+  if (!override?.trim()) return [defaultRoot];
+  return [...override.split(',').map((value) => value.trim()).filter(Boolean).map((value) => path.resolve(value)), defaultRoot]
+    .filter((root, index, roots) => roots.indexOf(root) === index);
+}
+
+function catalogCanRefresh(catalogPath: string): boolean {
+  return path.resolve(catalogPath) === path.join(claudeHome(), 'model-gateway', 'catalog.json')
+    && newestGatewayCatalogCommand() !== null;
 }
 
 function readJsonSafe(file: string): unknown {
@@ -105,8 +114,7 @@ function isNewerVersion(candidate: [number, number, number], current: [number, n
 }
 
 function newestGatewayCatalogCommand(): string | null {
-  if (process.env.SIDEQUEST_DISCOVERY_DIRS?.trim()) return null;
-  const registry = readJsonSafe(path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json'));
+  const registry = readJsonSafe(path.join(claudeHome(), 'plugins', 'installed_plugins.json'));
   if (!isRecord(registry) || !isRecord(registry.plugins)) return null;
   const entries = registry.plugins['model-gateway@eigenwise-toolshed'];
   if (!Array.isArray(entries)) return null;
@@ -145,6 +153,7 @@ const gatewayRefreshAttempts = new Map<string, { at: number; refreshed: boolean 
 // file it left behind is current. Attempts are remembered per catalog file, so readiness and model listing
 // share one child process rather than spawning one each.
 function refreshGatewayCatalog(catalogPath: string): CatalogData | null {
+  if (!catalogCanRefresh(catalogPath)) return null;
   const attempt = gatewayRefreshAttempts.get(catalogPath);
   const window = attempt?.refreshed ? CATALOG_STALE_MS : REFRESH_RETRY_MS;
   if (!attempt || Date.now() - attempt.at > window) {
@@ -166,13 +175,13 @@ function catalogWithinFreshnessWindow(data: unknown): boolean {
 export function catalogStateFingerprint(): string {
   return discoveryRoots().flatMap((root) => CATALOG_SOURCES.map(({ relPath }) => {
     const catalogPath = path.resolve(root, relPath);
-    const freshness = catalogWithinFreshnessWindow(readCatalogSafe(catalogPath)) ? 'fresh' : 'stale';
+    const freshness = !catalogCanRefresh(catalogPath) || catalogWithinFreshnessWindow(readCatalogSafe(catalogPath)) ? 'fresh' : 'stale';
     return `${catalogPath}:${catalogFileFingerprint(catalogPath) ?? 'missing'}:${freshness}`;
   })).join('|');
 }
 
-function usableCatalog(data: unknown, schemas: ReadonlySet<number>): CatalogData | null {
-  if (!isRecord(data) || !catalogWithinFreshnessWindow(data)) return null;
+function usableCatalog(data: unknown, schemas: ReadonlySet<number>, catalogPath: string): CatalogData | null {
+  if (!isRecord(data) || (catalogCanRefresh(catalogPath) && !catalogWithinFreshnessWindow(data))) return null;
   const catalog = data as CatalogData;
   const schema = catalog.schemaVersion ?? catalog.schema;
   return typeof schema === 'number' && schemas.has(schema) && Array.isArray(catalog.models) ? catalog : null;
@@ -202,10 +211,10 @@ export function providerReadiness(provider: string): ProviderReadiness | null {
     for (const { relPath, schemas } of CATALOG_SOURCES) {
       const catalogPath = path.join(root, relPath);
       const storedCatalog = readCatalogSafe(catalogPath);
-      let catalog = usableCatalog(storedCatalog, schemas);
+      let catalog = usableCatalog(storedCatalog, schemas, catalogPath);
       let readiness = catalog && catalogProviderReadiness(catalog, provider);
       if (provider === 'codex' && isRecord(storedCatalog) && (!catalog || !readiness?.ready)) {
-        const refreshedCatalog = usableCatalog(refreshGatewayCatalog(catalogPath), schemas);
+        const refreshedCatalog = usableCatalog(refreshGatewayCatalog(catalogPath), schemas, catalogPath);
         if (refreshedCatalog) {
           catalog = refreshedCatalog;
           readiness = catalogProviderReadiness(catalog, provider);
@@ -217,15 +226,11 @@ export function providerReadiness(provider: string): ProviderReadiness | null {
   return null;
 }
 
-// Nothing writes the catalog on its own, so once the stored one ages past CATALOG_STALE_MS every model in it
-// disappeared from the board while the gateway was perfectly healthy, and stayed gone until some unrelated
-// command happened to rewrite the file. Readiness already refreshed itself; the model list has to too, or a
-// board routing to Codex categories stops dispatching for no stated reason (SQ-2208).
 function currentCatalog(catalogPath: string, schemas: ReadonlySet<number>): CatalogData | null {
   const storedCatalog = readCatalogSafe(catalogPath);
-  const usable = usableCatalog(storedCatalog, schemas);
+  const usable = usableCatalog(storedCatalog, schemas, catalogPath);
   if (usable || !isRecord(storedCatalog)) return usable;
-  return usableCatalog(refreshGatewayCatalog(catalogPath), schemas);
+  return usableCatalog(refreshGatewayCatalog(catalogPath), schemas, catalogPath);
 }
 
 function validateEntry(raw: unknown, source: string, schema: number): ExternalModel | null {
