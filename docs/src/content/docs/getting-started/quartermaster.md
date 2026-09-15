@@ -28,6 +28,22 @@ Before it names a plugin in that plan, setup can check current sources for wheth
 
 Setup installs the approved plugins and writes the approved project files, then pauses at the activation boundary. Run `/reload-plugins`, or restart Claude Code when the change affects the process environment, and tell Claude `continue`. Setup verifies the selected plugins and project configuration after that boundary.
 
+### Keep complex code tested
+
+Setup proposes a CRAP gate for a codebase. CRAP combines a function's branching complexity and test
+coverage, so a large function with little coverage gets a high score. The default ceiling is 6: keep
+each function small or cover it well.
+
+When you approve it, setup writes `.claude/quartermaster/crap.json` and a live rule that runs:
+
+```text
+node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"
+```
+
+It also shows the coverage command for your stack and asks you to pick the threshold. The gate needs
+[lizard](https://github.com/terryyin/lizard) for complexity measurement. Setup never installs it. Exit
+2 means a prerequisite or coverage input is missing. Follow the printed hint, then run the gate again.
+
 When setup wires Model Gateway or Sidequest routing, Quartermaster can offer the optional `325000` `autoCompactWindow` setting for a consistent Codex compaction point. Setup asks before writing it. If user or project settings already has a value, it reports which one wins and preserves that value.
 
 If you choose telemetry, Claude hands the setup to Observability and tells you when a restart is needed. You can also decline and continue without it.

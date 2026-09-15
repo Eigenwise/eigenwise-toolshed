@@ -154,6 +154,23 @@ nothing to build here. A project shipping small changes against a check that alr
 need an instrument invented for it, and proposing one anyway spends the user's attention on your
 guess instead of their evidence.
 
+A codebase with tests but no `.claude/quartermaster/crap.json` has a measurement it cannot run yet.
+When `decisions.rejected` does not include `rule:crap-gate`, propose the CRAP gate: it scores each
+function's branching complexity and test coverage together, so big untested functions stand out.
+Quartermaster starts at 6, which means every function stays small or tested. For a new project,
+apply 6 to every function. For an existing project, ratchet against the default branch and apply 6
+to new functions, then show the current count at or above 6 before asking whether the user wants
+another ceiling. Show the detected stack's exact LCOV command, the config, and the derived live rule
+from [setup's CRAP reference](../setup/references/crap-gate.md), plus the gate command:
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" crap --project "${CLAUDE_PROJECT_DIR}"
+```
+
+The proposal names `lizard` as the prerequisite and its install choices, `uv tool install lizard`,
+`pipx install lizard`, or `pip install lizard`. Quartermaster never installs it. An exit 2 means a
+prerequisite or coverage input needs attention, not that the gate should be skipped.
+
 #### 4b. What is being done by hand that the workspace should own?
 
 Repeated command sequences, hand-rolled scripts written more than once, the same multi-step chore
