@@ -506,7 +506,9 @@ const WORKTREE_SETUP_MAX_LENGTH = 1000;
 const SHARED_TREE_ARTIFACT_MARKER = 'Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.';
 const CONTROL_PLANE_COMPLETION = Symbol('sidequest.control-plane-completion');
 const DELIVERY_MODES = ['merge', 'replay', 'apply'];
-const DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS = 10 * 60 * 1000;
+// Above the 20-minute full-suite phase budget in scripts/test-full.mjs, so the phase's own
+// failure line (which names the sibling capture count) fires before this outer kill.
+const DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS = 25 * 60 * 1000;
 const MAX_INTEGRATION_VERIFY_TIMEOUT_MS = 60 * 60 * 1000;
 const INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES = 8 * 1024;
 const EXECUTOR_ANCHORS_MAX = 4000;
@@ -517,6 +519,7 @@ const {
   dispatchTokenPrefix,
   executorClaimDispatchRefusal,
   sharedTreeRuntimeRefusal,
+  isolatedDispatchRepositoryForSession,
   sharedTreeArtifactRequested,
   categoryArtifactRoot,
   sharedTreeArtifactMode,
@@ -2490,9 +2493,11 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     }
     const terminalOutcome = opts.status === 'done'
       ? 'done'
-      : dispatch?.outcome === 'died' || opts.claimRelease?.kind === 'session_ended'
-        ? 'died'
-        : 'released';
+      : dispatch?.terminalAt
+        ? dispatch.outcome
+        : opts.claimRelease?.kind === 'session_ended'
+          ? 'died'
+          : 'released';
     const release = opts.releaseKind ? {
       kind: String(opts.releaseKind),
       reason: String(opts.releaseReason || '').trim() || null,
@@ -3177,11 +3182,10 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
   const state = dispatchState(ticket);
   if (purpose === 'grooming') {
     if ((ticket.claim && ticket.claim.by && !claimReclaimable(ticket)) || ticket.dispatchNonce || (state && !state.terminalAt)) {
-      const holder = ticket.claim && ticket.claim.by ? String(ticket.claim.by) : '<claim holder>';
       return {
         ok: false,
         reason: 'active_dispatch',
-        message: `${ticket.ref} still has a live claim or an open dispatch, so grooming cannot close it. Release it first: \`sidequest release ${ticket.ref} --by ${holder}\`, then re-run this closure with the same evidence. Releasing does not discard work already committed.`,
+        message: `${ticket.ref} still has a live claim or an open dispatch, so grooming cannot close it. Do not force-take it. After trusted host terminal evidence, release it with \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : '<claim holder>'}\`, then close it as plain grooming with the shipped commit as evidence, without --integration. Releasing does not discard work already committed.`,
         ticket,
       };
     }
@@ -3709,6 +3713,7 @@ module.exports = {
   canonicalPreparedDispatchExecutor,
   executorClaimDispatchRefusal,
   sharedTreeRuntimeRefusal,
+  isolatedDispatchRepositoryForSession,
   prepareDispatch,
   syncLiveDispatchVerification,
   readDispatchBriefing,

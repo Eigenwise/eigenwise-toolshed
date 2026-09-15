@@ -2349,7 +2349,9 @@ test('MCP groomClose abandons an unconsumed prepared dispatch without waiting fo
     project, ref: liveTicket.ref, by: 'groomer', reason: 'The live ticket is obsolete.',
   });
   assert.equal(refused.reason, 'active_dispatch');
-  assert.match(refused.message, new RegExp(`sidequest release ${liveTicket.ref} --by ${holder}`));
+  assert.match(refused.message, /Do not force-take it/);
+  assert.match(refused.message, /plain grooming/i);
+  assert.match(refused.message, /without --integration/i);
 });
 
 test('MCP delivery closure points live claims at the owning release command', async () => {

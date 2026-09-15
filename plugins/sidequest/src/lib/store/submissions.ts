@@ -2,6 +2,7 @@
 
 const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require('../kernel/verification.js');
 const { runProcessVerification } = require('../ports/process.js');
+const { isFullSuiteCommand, runFullSuiteVerification } = require('../verify-capture.js');
 const { worktreeSetupDeadlineMs } = require('../hook-timeouts.js');
 const { decideSubmissionAdmission } = require('../kernel/submission');
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require('../source-revision-capability.js');
@@ -751,12 +752,17 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
     };
   }
   const timeoutMilliseconds = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
-  return runProcessVerification(requirement, {
-    cwd: readMeta(slug)?.path,
+  const project = readMeta(slug)?.path;
+  const verify = (environment: NodeJS.ProcessEnv) => runProcessVerification(requirement, {
+    cwd: project,
     timeoutMilliseconds,
     logPath: integrationVerifyLogPath(slug, ticket),
     outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
+    environment,
   });
+  return isFullSuiteCommand(requirement.command)
+    ? runFullSuiteVerification(requirement.command, project, verify)
+    : verify(process.env);
 }
 
 function verificationFailureComment(verify: any) {
@@ -765,6 +771,7 @@ function verificationFailureComment(verify: any) {
     verify.command ? `Command: ${verify.command}` : null,
     verify.logPath ? `Log: ${verify.logPath}` : null,
     Array.isArray(verify.failureIdentities) && verify.failureIdentities.length ? `Failures: ${verify.failureIdentities.join(', ')}` : null,
+    typeof verify.waitedForSlotMs === 'number' ? `Capture slot: waited ${verify.waitedForSlotMs}ms at queue position ${verify.queuePosition ?? 1}` : null,
     verify.outputTail ? `Output tail:\n${verify.outputTail}` : null,
   ].filter(Boolean).join('\n');
 }

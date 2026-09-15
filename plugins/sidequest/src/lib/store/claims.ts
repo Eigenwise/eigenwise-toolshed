@@ -1,5 +1,20 @@
 'use strict';
 
+// A stop only attests the claim's current runtime when nothing the claim did came after it: a stop
+// before claim.at belongs to an earlier launch, and a stop at or before claim.activeAt was outlived by
+// the runtime it claims to have ended. The activeAt boundary is inclusive because touchClaimActivity
+// resumes a dispatch on activity at the same instant as its stop, and the retained attempt record
+// keeps that stop; a rule that still accepted it would say dead over a runtime the sweep refuses to
+// free (SQ-2917, SQ-2918).
+function stopOutlivesClaim(terminalAt?: unknown, claim?: any): boolean {
+  const stoppedMs = Date.parse(String(terminalAt ?? ''));
+  if (!Number.isFinite(stoppedMs)) return false;
+  const claimedMs = Date.parse(claim && claim.at);
+  const activeMs = Date.parse(claim && claim.activeAt);
+  if (Number.isFinite(activeMs) && activeMs >= stoppedMs) return false;
+  return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
+}
+
 function createClaims(dependencies: any) {
   const {
     completionTreeCheck,
@@ -206,11 +221,11 @@ function createClaims(dependencies: any) {
   }
 
   function observedStop(dispatch?: any, claim?: any) {
-    if (!dispatch || !['died', 'stopped_claimed'].includes(dispatch.outcome) || !dispatch.terminalAt) return false;
-    const stoppedMs = Date.parse(dispatch.terminalAt);
-    const claimedMs = Date.parse(claim && claim.at);
-    if (!Number.isFinite(stoppedMs)) return false;
-    return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
+    const hostReportedFailure = dispatch?.outcome === 'failed'
+      && dispatch?.terminalSource === 'subagent-stop'
+      && Boolean(dispatch.failureShape);
+    if (!dispatch || !['died', 'stopped_claimed'].includes(dispatch.outcome) && !hostReportedFailure || !dispatch.terminalAt) return false;
+    return stopOutlivesClaim(dispatch.terminalAt, claim);
   }
 
   function claimReleaseBlocker(slug?: any, ticket?: any) {
@@ -242,7 +257,7 @@ function createClaims(dependencies: any) {
     const dispatch = dispatchState(ticket);
     const verification = claimVerification(ticket);
     if (observedStop(dispatch, claim)) {
-      return { kind: 'observed_stop', idleMs, at: dispatch.terminalAt, reason: 'its executor has a durable died outcome while still holding the claim' };
+      return { kind: 'observed_stop', idleMs, at: dispatch.terminalAt, reason: 'its executor has a durable terminal record while still holding the claim' };
     }
     // A missing isolated checkout used to free the claim on the spot. It never proved the
     // executor was gone: a native agent is a loop inside its session process and holds no
@@ -305,7 +320,16 @@ function createClaims(dependencies: any) {
   function touchClaimActivity(ticket?: any, by?: any, now?: any) {
     const claim = ticket && ticket.claim;
     if (!claim || !claim.by || (by != null && claim.by !== by)) return false;
-    claim.activeAt = now || new Date().toISOString();
+    const activeAt = now || new Date().toISOString();
+    const dispatch = dispatchState(ticket);
+    if (observedStop(dispatch, claim) && Date.parse(activeAt) >= Date.parse(dispatch.terminalAt)) {
+      dispatch.outcome = 'claimed';
+      delete dispatch.failureShape;
+      delete dispatch.terminalAt;
+      delete dispatch.terminalSource;
+      dispatch.resumedAt = activeAt;
+    }
+    claim.activeAt = activeAt;
     return true;
   }
 
@@ -349,4 +373,4 @@ function createClaims(dependencies: any) {
   };
 }
 
-module.exports = { createClaims };
+module.exports = { createClaims, stopOutlivesClaim };

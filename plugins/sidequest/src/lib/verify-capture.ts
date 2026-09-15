@@ -51,6 +51,11 @@ type CaptureSlotFailure = Readonly<{
   reason: string;
   errorCode: string;
 }>;
+type SynchronousCaptureSlotLease = Readonly<{
+  waitedForSlotMs: number;
+  queuePosition: number;
+  release(): CaptureSlotFailure | null;
+}>;
 
 function captureRequirement(command: string) {
   return Object.freeze({ kind: 'command' as const, command, evidenceContract: 'command output' });
@@ -73,24 +78,24 @@ function isFullSuiteCommand(command: string): boolean {
   return /(?:^|[\s&;()])npm\s+run\s+test:full(?:\s|$)/.test(command);
 }
 
-function captureSlotProjectRoot(project: string): string {
+function repositoryRoot(directory: string): string {
   try {
     const commonGitDirectory = String(execFileSync('git', ['rev-parse', '--git-common-dir'], {
-      cwd: project,
+      cwd: directory,
       encoding: 'utf8',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],
     })).trim();
-    const commonGitPath = path.resolve(project, commonGitDirectory);
-    return canonicalPath(path.basename(commonGitPath).toLowerCase() === '.git' ? path.dirname(commonGitPath) : project);
+    const commonGitPath = path.resolve(directory, commonGitDirectory);
+    return canonicalPath(path.basename(commonGitPath).toLowerCase() === '.git' ? path.dirname(commonGitPath) : directory);
   } catch {
-    return canonicalPath(project);
+    return canonicalPath(directory);
   }
 }
 
 function captureSlotDirectory(project: string): string {
   // Linked worktrees share one repository runtime, so their full-suite captures share a slot.
-  const projectHash = createHash('sha256').update(captureSlotProjectRoot(project)).digest('hex');
+  const projectHash = createHash('sha256').update(repositoryRoot(project)).digest('hex');
   return path.join(os.tmpdir(), 'sidequest-verify-capture-slots', projectHash);
 }
 
@@ -142,6 +147,10 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function waitSynchronously(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)), 0, 0, milliseconds);
+}
+
 function captureSlotErrorCode(error: unknown): string {
   if (error instanceof Error && 'code' in error && typeof error.code === 'string') return error.code;
   return error instanceof Error ? error.name : String(error);
@@ -171,16 +180,104 @@ async function retryCaptureSlotOperation(operation: string, slotPath: string, ex
   throw new Error('Capture slot operation retry loop completed unexpectedly.');
 }
 
+// The waiter is removed even when the active directory cannot be released. A waiter left
+// behind by a still-running process (the board serving integrate) stays "alive" to
+// queuedWaiters by PID and would park every later capture behind it (SQ-2916).
 async function releaseCaptureSlot(activeDirectory: string, fileSystem: CaptureSlotFileSystem, waiterPath?: string): Promise<CaptureSlotFailure | null> {
   const tombstoneDirectory = `${activeDirectory}.released-${process.pid}-${randomUUID()}`;
   const renameFailure = await retryCaptureSlotOperation('rename', activeDirectory, () => fileSystem.renameSync(activeDirectory, tombstoneDirectory));
-  if (renameFailure) {
-    if (renameFailure.errorCode !== 'ENOENT') return renameFailure;
-    return waiterPath ? retryCaptureSlotOperation('remove', waiterPath, () => fileSystem.rmSync(waiterPath, { force: true })) : null;
+  const activeFailure = renameFailure
+    ? (renameFailure.errorCode === 'ENOENT' ? null : renameFailure)
+    : await retryCaptureSlotOperation('remove', tombstoneDirectory, () => fileSystem.rmSync(tombstoneDirectory, { recursive: true, force: true }));
+  const waiterFailure = waiterPath
+    ? await retryCaptureSlotOperation('remove', waiterPath, () => fileSystem.rmSync(waiterPath, { force: true }))
+    : null;
+  return activeFailure || waiterFailure;
+}
+
+function retryCaptureSlotOperationSynchronously(operation: string, slotPath: string, execute: () => void): CaptureSlotFailure | null {
+  for (let attempts = 1; attempts <= captureSlotOperationRetryLimit; attempts += 1) {
+    try {
+      execute();
+      return null;
+    } catch (error: unknown) {
+      const errorCode = captureSlotErrorCode(error);
+      if (!captureSlotContentionErrorCodes.has(errorCode) || attempts === captureSlotOperationRetryLimit) {
+        return captureSlotOperationFailure(operation, slotPath, attempts, error);
+      }
+      waitSynchronously(captureSlotRetryMilliseconds);
+    }
   }
-  const removeFailure = await retryCaptureSlotOperation('remove', tombstoneDirectory, () => fileSystem.rmSync(tombstoneDirectory, { recursive: true, force: true }));
-  if (removeFailure || !waiterPath) return removeFailure;
-  return retryCaptureSlotOperation('remove', waiterPath, () => fileSystem.rmSync(waiterPath, { force: true }));
+  throw new Error('Capture slot operation retry loop completed unexpectedly.');
+}
+
+function releaseCaptureSlotSynchronously(activeDirectory: string, fileSystem: CaptureSlotFileSystem, waiterPath?: string): CaptureSlotFailure | null {
+  const tombstoneDirectory = `${activeDirectory}.released-${process.pid}-${randomUUID()}`;
+  const renameFailure = retryCaptureSlotOperationSynchronously('rename', activeDirectory, () => fileSystem.renameSync(activeDirectory, tombstoneDirectory));
+  const activeFailure = renameFailure
+    ? (renameFailure.errorCode === 'ENOENT' ? null : renameFailure)
+    : retryCaptureSlotOperationSynchronously('remove', tombstoneDirectory, () => fileSystem.rmSync(tombstoneDirectory, { recursive: true, force: true }));
+  const waiterFailure = waiterPath
+    ? retryCaptureSlotOperationSynchronously('remove', waiterPath, () => fileSystem.rmSync(waiterPath, { force: true }))
+    : null;
+  return activeFailure || waiterFailure;
+}
+
+function acquireCaptureSlotSynchronously(project: string, timeoutMilliseconds = captureSlotTimeoutMilliseconds, fileSystem: CaptureSlotFileSystem = fs): SynchronousCaptureSlotLease | CaptureSlotTimeout | CaptureSlotFailure {
+  const slotDirectory = captureSlotDirectory(project);
+  const activeDirectory = path.join(slotDirectory, 'active');
+  const startedAt = Date.now();
+  const waiterPath = captureSlotWaiterPath(slotDirectory, fileSystem);
+  const waiterName = path.basename(waiterPath);
+  fileSystem.writeFileSync(waiterPath, '', { encoding: 'utf8', flag: 'wx' });
+  let queuePosition = 1;
+  let acquireContentionAttempts = 0;
+
+  for (;;) {
+    const waiters = queuedWaiters(slotDirectory, fileSystem);
+    const waiterIndex = waiters.indexOf(waiterName);
+    const active = fileSystem.existsSync(activeDirectory);
+    if (active && (waiters.length === 0 || waiters[0] === waiterName)) {
+      const releaseFailure = releaseCaptureSlotSynchronously(activeDirectory, fileSystem);
+      if (releaseFailure) {
+        fileSystem.rmSync(waiterPath, { force: true });
+        return releaseFailure;
+      }
+      continue;
+    }
+    queuePosition = Math.max(queuePosition, waiterIndex + 1);
+    if (!active && waiterIndex === 0) {
+      try {
+        fileSystem.mkdirSync(activeDirectory);
+        return Object.freeze({
+          waitedForSlotMs: Date.now() - startedAt,
+          queuePosition,
+          release: () => releaseCaptureSlotSynchronously(activeDirectory, fileSystem, waiterPath),
+        });
+      } catch (error: unknown) {
+        const errorCode = captureSlotErrorCode(error);
+        if (!captureSlotContentionErrorCodes.has(errorCode)) {
+          fileSystem.rmSync(waiterPath, { force: true });
+          return captureSlotOperationFailure('create', activeDirectory, 1, error);
+        }
+        acquireContentionAttempts += 1;
+        if (acquireContentionAttempts === captureSlotOperationRetryLimit) {
+          fileSystem.rmSync(waiterPath, { force: true });
+          return captureSlotOperationFailure('create', activeDirectory, acquireContentionAttempts, error);
+        }
+      }
+    }
+    const waitedForSlotMs = Date.now() - startedAt;
+    if (waitedForSlotMs >= timeoutMilliseconds) {
+      fileSystem.rmSync(waiterPath, { force: true });
+      return Object.freeze({
+        waitedForSlotMs,
+        queuePosition,
+        reason: `Verification capture waited ${waitedForSlotMs}ms for the repository full-suite slot at queue position ${queuePosition}; sibling capture contention exceeded the ${timeoutMilliseconds}ms limit.`,
+      });
+    }
+    waitSynchronously(captureSlotRetryMilliseconds);
+  }
 }
 
 async function acquireCaptureSlot(project: string, timeoutMilliseconds = captureSlotTimeoutMilliseconds, fileSystem: CaptureSlotFileSystem = fs): Promise<CaptureSlotLease | CaptureSlotTimeout | CaptureSlotFailure> {
@@ -280,6 +377,39 @@ function captureSlotCouldNotRun(command: string, slot: CaptureSlotFailure): Veri
   });
 }
 
+function runFullSuiteVerification(command: string, project: string, verify: (environment: NodeJS.ProcessEnv) => VerificationResult, fileSystem: CaptureSlotFileSystem = fs): VerifyCapture {
+  let slot: SynchronousCaptureSlotLease | CaptureSlotTimeout | CaptureSlotFailure;
+  try {
+    slot = acquireCaptureSlotSynchronously(project, captureSlotTimeoutMilliseconds, fileSystem);
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return captureSlotCouldNotRun(command, Object.freeze({
+      reason: `Verification capture could not acquire its repository full-suite slot: ${reason}`,
+      errorCode: captureSlotErrorCode(error),
+    }));
+  }
+  if ('reason' in slot) {
+    return 'waitedForSlotMs' in slot ? captureSlotTimeout(command, slot) : captureSlotCouldNotRun(command, slot);
+  }
+  let capture: VerifyCapture;
+  let releaseFailure: CaptureSlotFailure | null = null;
+  try {
+    const result = verify({
+      ...process.env,
+      SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT: String(slot.queuePosition - 1),
+    });
+    capture = Object.freeze({ ...result, exitCode: result.exitCode ?? null });
+  } finally {
+    releaseFailure = slot.release();
+  }
+  if (releaseFailure) return captureSlotCouldNotRun(command, releaseFailure);
+  return Object.freeze({
+    ...capture,
+    waitedForSlotMs: slot.waitedForSlotMs,
+    queuePosition: slot.queuePosition,
+  });
+}
+
 async function runFullSuiteCapture(command: string, project: string, cwd: string, fileSystem: CaptureSlotFileSystem = fs): Promise<VerifyCapture> {
   let slot: CaptureSlotLease | CaptureSlotTimeout | CaptureSlotFailure;
   try {
@@ -332,7 +462,13 @@ function captureWorkingDirectory(target: CaptureTarget, cwd: string): string {
   if (!project) return cwd;
   const store = require('./store.js') as VerificationCaptureStore;
   const ticket = store.getTicket(project.slug, target.ticket);
-  return store.workingTreeDeliveryCandidate(project.slug, ticket) ? project.path : cwd;
+  if (store.workingTreeDeliveryCandidate(project.slug, ticket)) return project.path;
+  // A cross-project dispatch runs its executor in the spawning checkout, where the
+  // ticket's files do not exist. A doc- or lint-style verify built from negated
+  // greps then matches nothing, every negation succeeds, and the capture records a
+  // pass that proves nothing (SQ-2884). Verification belongs to the ticket's own
+  // repository; linked worktrees of it share that repository and stay put.
+  return repositoryRoot(cwd) === repositoryRoot(project.path) ? cwd : project.path;
 }
 
 async function runCapturedVerification(command: string, target: CaptureTarget | null, cwd = process.cwd(), fileSystem: CaptureSlotFileSystem = fs) {
@@ -372,10 +508,27 @@ function verifiedWorktreeIsClean(cwd: string) {
   }
 }
 
+function foreignCaptureRepository(projectPath: string, cwd: string): string | null {
+  const ticketRepository = repositoryRoot(projectPath);
+  return repositoryRoot(cwd) === ticketRepository ? null : ticketRepository;
+}
+
 function recordCapture(target: CaptureTarget, capture: VerifyCapture, cwd: string) {
   const store = require('./store.js') as VerificationCaptureStore;
   const project = store.findProject(target.project);
   if (!project.ok || !project.slug) return { ok: false, reason: 'project_not_found' };
+  const projectPath = String(project.meta?.path || '').trim();
+  // The capture's own status says nothing about where it ran, so a run outside the
+  // ticket's repository is refused rather than certified: it never saw the files
+  // the ticket changed (SQ-2884).
+  const ticketRepository = projectPath ? foreignCaptureRepository(projectPath, cwd) : null;
+  if (ticketRepository) {
+    return {
+      ok: false,
+      reason: 'verification_capture_foreign_repository',
+      message: `Verification capture for ${target.ticket} ran in ${cwd}, which is not the ticket's repository ${ticketRepository}. A verify that never saw the ticket's files proves nothing about them, so nothing is recorded. Run the pinned verifier from the ticket's own checkout.`,
+    };
+  }
   const ticket = store.getTicket(project.slug, target.ticket);
   const workingTreeCandidate = store.workingTreeDeliveryCandidate(project.slug, ticket);
   const candidate = workingTreeCandidate?.candidate || verifiedRevision(cwd);
@@ -429,6 +582,6 @@ async function main() {
   process.exitCode = capture.exitCode === 0 && (!target || recorded?.ok) ? 0 : 2;
 }
 
-module.exports = { runVerifyCapture, runCapturedVerification, shellCommand, captureTarget, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
+module.exports = { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureTarget, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
 
 if (require.main === module) void main();

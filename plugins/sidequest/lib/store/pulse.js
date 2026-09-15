@@ -1,6 +1,7 @@
 "use strict";
 const { execFileSync } = require("node:child_process");
 const { canonicalPreparedDispatchExecutor } = require("../prepared-dispatch.js");
+const { stopOutlivesClaim } = require("./claims.js");
 function createGitHubCiRunsProvider(projectPath, execute = execFileSync) {
   const command = (program, arguments_) => execute(program, arguments_, {
     cwd: projectPath,
@@ -43,6 +44,14 @@ function createGitHubCiRunsProvider(projectPath, execute = execFileSync) {
   } catch (_error) {
     return null;
   }
+}
+function sameDispatchAttempt(left, right) {
+  return String(left?.preparedAt ?? "") === String(right?.preparedAt ?? "") && String(left?.tokenPrefix ?? "") === String(right?.tokenPrefix ?? "");
+}
+function diedRecordAttestsAttempt(dispatch, record, claim) {
+  if (record?.outcome !== "died") return false;
+  if (!sameDispatchAttempt(record, dispatch)) return false;
+  return stopOutlivesClaim(record.terminalAt, claim);
 }
 function createPulse(dependencies) {
   const {
@@ -158,13 +167,11 @@ function createPulse(dependencies) {
       lastBoardActivityAt: boardQuietMs == null ? null : new Date(now - boardQuietMs).toISOString()
     };
   }
-  function dispatchDeath(dispatch) {
+  function dispatchDeath(dispatch, claim) {
     if (!dispatch) return null;
-    if (dispatch.outcome === "died" && dispatch.terminalAt) {
-      return { at: dispatch.terminalAt, source: dispatch.terminalSource || null };
-    }
-    const attempt = (Array.isArray(dispatch.attempts) ? dispatch.attempts : []).slice().reverse().find((entry) => entry?.outcome === "died" && entry.terminalAt);
-    return attempt ? { at: attempt.terminalAt, source: attempt.terminalSource || null } : null;
+    const history = (Array.isArray(dispatch.attempts) ? dispatch.attempts : []).slice().reverse();
+    const record = [dispatch, ...history].find((entry) => diedRecordAttestsAttempt(dispatch, entry, claim));
+    return record ? { at: record.terminalAt, source: record.terminalSource || null } : null;
   }
   function livenessPulse(ticket, dispatch, claim, death) {
     if (death) return { state: "dead", evidence: `died outcome recorded${death.source ? ` by ${death.source}` : ""}` };
@@ -230,7 +237,7 @@ function createPulse(dependencies) {
     const dispatch = dispatchState(ticket);
     const now = Date.now();
     const claim = projectedClaim(ticket, now);
-    const died = dispatchDeath(dispatch);
+    const died = dispatchDeath(dispatch, ticket.claim);
     const liveness = livenessPulse(ticket, dispatch, claim, died);
     const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug), ...scopeDriftWarnings(slug, ticket)];
     return {
@@ -294,7 +301,7 @@ function createPulse(dependencies) {
       const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug)];
       const dispatch = dispatchState(ticket);
       const claim = claimPulse(ticket, nowMs);
-      const liveness = livenessPulse(ticket, dispatch, claim, dispatchDeath(dispatch));
+      const liveness = livenessPulse(ticket, dispatch, claim, dispatchDeath(dispatch, ticket.claim));
       return {
         ref: ticket.ref,
         title: ticket.title,
@@ -429,4 +436,4 @@ function createBoardWatch(dependencies) {
   }
   return { poll, start };
 }
-module.exports = { createPulse, createBoardWatch, createGitHubCiRunsProvider };
+module.exports = { createPulse, createBoardWatch, createGitHubCiRunsProvider, diedRecordAttestsAttempt };
