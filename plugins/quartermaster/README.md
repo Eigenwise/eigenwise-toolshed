@@ -55,16 +55,16 @@ Setup installs the approved plugins and writes the approved workspace files. It 
 ## CLI
 
 ```text
-node bin/quartermaster.js mine [--project <path>] [--days 30] [--sessions 40] [--all-projects]
+node bin/quartermaster.js mine [--project <path>] [--days 30] [--sessions 40] [--all-projects] [--no-subagents]
 node bin/quartermaster.js status [--project <path>]
 node bin/quartermaster.js catalog [--query <terms>] [--installed]
 node bin/quartermaster.js decisions list
-node bin/quartermaster.js decisions add --title <t> --fingerprint <f> --status applied|rejected ...
+node bin/quartermaster.js decisions add --title <t> --fingerprint <f> --status applied|rejected|deferred ...
 node bin/quartermaster.js verify [--project <path>]
 node bin/quartermaster.js mark-resupply [--project <path>]
 node bin/quartermaster.js decline-resupply [--project <path>]
 node bin/quartermaster.js allowlist [--project <path>] [--days 30] [--sessions 40] [--blocked]
-node bin/quartermaster.js enable-auto-allowlist --project <path>
+node bin/quartermaster.js enable-auto-allowlist [--project <path>]
 node bin/quartermaster.js crap [--project <path>] [--max 6] [--ratchet <git-ref>] [--lcov <path>] [--complexity <lizard.csv>] [--coverage-command "<cmd>"] [--json]
 ```
 
