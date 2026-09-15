@@ -44,12 +44,17 @@ const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 const CATALOG_SOURCES = [
   { source: "model-gateway", relPath: import_node_path.default.join("model-gateway", "catalog.json"), schemas: /* @__PURE__ */ new Set([2, 3, 4]) }
 ];
+function claudeHome() {
+  return import_node_path.default.resolve(process.env.SIDEQUEST_CLAUDE_HOME || import_node_path.default.join(import_node_os.default.homedir(), ".claude"));
+}
 function discoveryRoots() {
+  const defaultRoot = claudeHome();
   const override = process.env.SIDEQUEST_DISCOVERY_DIRS;
-  if (override?.trim()) {
-    return override.split(",").map((value) => value.trim()).filter(Boolean).map((value) => import_node_path.default.resolve(value));
-  }
-  return [import_node_path.default.join(import_node_os.default.homedir(), ".claude")];
+  if (!override?.trim()) return [defaultRoot];
+  return [...override.split(",").map((value) => value.trim()).filter(Boolean).map((value) => import_node_path.default.resolve(value)), defaultRoot].filter((root, index, roots) => roots.indexOf(root) === index);
+}
+function installedGatewayCatalog(catalogPath) {
+  return import_node_path.default.resolve(catalogPath) === import_node_path.default.join(claudeHome(), "model-gateway", "catalog.json");
 }
 function readJsonSafe(file) {
   try {
@@ -90,8 +95,7 @@ function isNewerVersion(candidate, current) {
   return false;
 }
 function newestGatewayCatalogCommand() {
-  if (process.env.SIDEQUEST_DISCOVERY_DIRS?.trim()) return null;
-  const registry = readJsonSafe(import_node_path.default.join(import_node_os.default.homedir(), ".claude", "plugins", "installed_plugins.json"));
+  const registry = readJsonSafe(import_node_path.default.join(claudeHome(), "plugins", "installed_plugins.json"));
   if (!isRecord(registry) || !isRecord(registry.plugins)) return null;
   const entries = registry.plugins["model-gateway@eigenwise-toolshed"];
   if (!Array.isArray(entries)) return null;
@@ -120,6 +124,7 @@ const CATALOG_STALE_MS = 5 * 60 * 1e3;
 const REFRESH_RETRY_MS = 30 * 1e3;
 const gatewayRefreshAttempts = /* @__PURE__ */ new Map();
 function refreshGatewayCatalog(catalogPath) {
+  if (!installedGatewayCatalog(catalogPath)) return null;
   const attempt = gatewayRefreshAttempts.get(catalogPath);
   const window = attempt?.refreshed ? CATALOG_STALE_MS : REFRESH_RETRY_MS;
   if (!attempt || Date.now() - attempt.at > window) {
@@ -139,12 +144,12 @@ function catalogWithinFreshnessWindow(data) {
 function catalogStateFingerprint() {
   return discoveryRoots().flatMap((root) => CATALOG_SOURCES.map(({ relPath }) => {
     const catalogPath = import_node_path.default.resolve(root, relPath);
-    const freshness = catalogWithinFreshnessWindow(readCatalogSafe(catalogPath)) ? "fresh" : "stale";
+    const freshness = !installedGatewayCatalog(catalogPath) || catalogWithinFreshnessWindow(readCatalogSafe(catalogPath)) ? "fresh" : "stale";
     return `${catalogPath}:${catalogFileFingerprint(catalogPath) ?? "missing"}:${freshness}`;
   })).join("|");
 }
-function usableCatalog(data, schemas) {
-  if (!isRecord(data) || !catalogWithinFreshnessWindow(data)) return null;
+function usableCatalog(data, schemas, catalogPath) {
+  if (!isRecord(data) || installedGatewayCatalog(catalogPath) && !catalogWithinFreshnessWindow(data)) return null;
   const catalog = data;
   const schema = catalog.schemaVersion ?? catalog.schema;
   return typeof schema === "number" && schemas.has(schema) && Array.isArray(catalog.models) ? catalog : null;
@@ -168,10 +173,10 @@ function providerReadiness(provider) {
     for (const { relPath, schemas } of CATALOG_SOURCES) {
       const catalogPath = import_node_path.default.join(root, relPath);
       const storedCatalog = readCatalogSafe(catalogPath);
-      let catalog = usableCatalog(storedCatalog, schemas);
+      let catalog = usableCatalog(storedCatalog, schemas, catalogPath);
       let readiness = catalog && catalogProviderReadiness(catalog, provider);
       if (provider === "codex" && isRecord(storedCatalog) && (!catalog || !readiness?.ready)) {
-        const refreshedCatalog = usableCatalog(refreshGatewayCatalog(catalogPath), schemas);
+        const refreshedCatalog = usableCatalog(refreshGatewayCatalog(catalogPath), schemas, catalogPath);
         if (refreshedCatalog) {
           catalog = refreshedCatalog;
           readiness = catalogProviderReadiness(catalog, provider);
@@ -184,9 +189,9 @@ function providerReadiness(provider) {
 }
 function currentCatalog(catalogPath, schemas) {
   const storedCatalog = readCatalogSafe(catalogPath);
-  const usable = usableCatalog(storedCatalog, schemas);
+  const usable = usableCatalog(storedCatalog, schemas, catalogPath);
   if (usable || !isRecord(storedCatalog)) return usable;
-  return usableCatalog(refreshGatewayCatalog(catalogPath), schemas);
+  return usableCatalog(refreshGatewayCatalog(catalogPath), schemas, catalogPath);
 }
 function validateEntry(raw, source, schema) {
   if (!isRecord(raw)) return null;

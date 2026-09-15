@@ -2348,6 +2348,105 @@ test('dirty released worktrees without commits resume in place for a continuatio
   }
 });
 
+// SQ-2938 / GH-125. Baseline A, preserved candidate B on A, newer main C from A. The recovery dispatch
+// cherry-picked B into a checkout at C, the cherry-pick conflicted, and the executor released on the
+// conflict. Redispatching with an explicit recovery base at A then handed that conflicted checkout to the
+// replacement executor: HEAD was C, A was an ancestor of it, so the briefing read the old base's ancestry
+// as proof the candidate had been recovered and told the executor to change nothing.
+test('a retained checkout with unmerged entries is refused as a continuation even with an explicit recovery base', () => {
+  const ticket = createFixture('conflicted recovery checkout fixture');
+  const marker = `sq2938-${Date.now()}`;
+  const sessionId = `conflicted-recovery-${marker}`;
+  const agentId = `conflicted-recovery-${marker}`;
+  const branch = `worktree-agent-${agentId}`;
+  const candidateBranch = `${marker}-candidate`;
+  const recoveryBaseBranch = `${marker}-recovery-base`;
+  const manifest = `${marker}-manifest.json`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, agentId);
+  const project = (args: string[]) => execFileSync('git', args, { cwd: PROJECT, encoding: 'utf8', windowsHide: true });
+  const baselineA = project(['rev-parse', 'HEAD']).trim();
+  project(['branch', recoveryBaseBranch, baselineA]);
+  project(['checkout', '--quiet', '-b', candidateBranch, baselineA]);
+  fs.writeFileSync(path.join(PROJECT, manifest), '{"generated":"B"}\n');
+  project(['add', manifest]);
+  project(['commit', '--quiet', '-m', 'candidate B']);
+  project(['checkout', '--quiet', 'main']);
+  fs.writeFileSync(path.join(PROJECT, manifest), '{"generated":"C"}\n');
+  project(['add', manifest]);
+  project(['commit', '--quiet', '-m', 'newer main C']);
+
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  try {
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId,
+      token: prepared.token,
+      executor,
+      agentName: agentId,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+    markCheckoutInstance(worktree);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, 'conflicted-recovery-worker', {
+      sessionId,
+      token: prepared.token,
+      executor,
+    }).ok, true);
+
+    // The replay the previous recovery attempt was dispatched to run. It conflicts and leaves HEAD where it
+    // was, which is exactly why the checkout still looks like a healthy dirty continuation.
+    assert.equal(spawnSync('git', ['cherry-pick', candidateBranch], { cwd: worktree, encoding: 'utf8', windowsHide: true }).status === 0, false);
+    const conflicted = execFileSync('git', ['status', '--porcelain'], { cwd: worktree, encoding: 'utf8', windowsHide: true });
+    assert.match(conflicted, new RegExp(`^AA ${manifest}$`, 'm'));
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'conflicted-recovery-worker', {
+      status: 'todo',
+      source: 'test',
+      releaseKind: 'technical_blocker',
+      releaseReason: 'the cherry-pick conflicted, so nothing was resolved',
+    }).ok, true);
+
+    const continued = store.prepareDispatch(slug, ticket.ref, {
+      sessionId: `${sessionId}-next`,
+      integrationMode: 'local',
+      integrationBranch: recoveryBaseBranch,
+      allowRepeatFailure: true,
+    });
+    assert.equal(continued.ticket.dispatch.continuation, undefined, 'the conflicted checkout is never handed out');
+    const fallback = continued.ticket.dispatch.continuationFallback;
+    assert.equal(fallback.reason, 'released_worktree_lease_refused');
+    assert.ok(fallback.cause.includes(worktrees.canonicalPath(worktree)), 'names the checkout');
+    assert.match(fallback.cause, new RegExp(`unmerged paths: ${manifest}`));
+    assert.match(fallback.cause, /unfinished cherry-pick/);
+    assert.match(fallback.cause, /worktree isolation/);
+    assert.match(fallback.cause, /do not auto-resolve or discard/);
+
+    const spawn = agentsync.agentSpawn(
+      continued.ticket.dispatch.launchName,
+      agentsync.ticketIsolation(continued.ticket, continued.ticket.dispatch.sharedTree),
+      null,
+      continued.ticket.dispatchExecutor,
+      agentsync.renderDispatchStub(continued.ticket, PROJECT),
+      'conflicted recovery checkout fixture',
+    );
+    assert.equal(spawn.isolation, 'worktree', 'the replacement runs in a fresh checkout, not the conflicted one');
+    const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
+    assert.doesNotMatch(briefing, /change nothing if it passes/);
+    assert.match(briefing, /Validation evidence: the retained checkout/);
+
+    // Never auto-resolve or discard: the conflicted checkout and its staged replay stay exactly as released.
+    assert.match(execFileSync('git', ['status', '--porcelain'], { cwd: worktree, encoding: 'utf8', windowsHide: true }), new RegExp(`^AA ${manifest}$`, 'm'));
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'conflicted-recovery-cleanup', { status: 'todo', source: 'test', force: true });
+    execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+    execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT });
+    project(['reset', '--hard', baselineA]);
+    project(['branch', '-D', candidateBranch, recoveryBaseBranch]);
+  }
+});
+
 test('dirty released worktrees with checkpoints fall back to cherry-picking the commit range', () => {
   const ticket = createFixture('dirty checkpoint fallback fixture');
   const sessionId = `dirty-checkpoint-${Date.now()}`;

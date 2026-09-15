@@ -41,10 +41,10 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('node:child_process');
 const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME, bundledAgentType } = require('./exec-names.js');
-const { createWorktreeLease, worktreeResumeDecision, canonicalPath } = require('./kernel/worktree.js');
+const { createWorktreeLease, canonicalPath } = require('./kernel/worktree.js');
 const crypto = require('crypto');
 const store = require('./store.js');
-const { worktreeRoot } = require('./worktrees.js');
+const { worktreeRoot, retainedWorktreeResumeDecision } = require('./worktrees.js');
 const { spawnDescription } = store;
 const { compileContextProjection } = require('./context-packet.js');
 const { canonicalPreparedDispatchExecutor } = require('./prepared-dispatch.js');
@@ -497,7 +497,7 @@ function continuationResumeDecision(continuation?: any) {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-    return worktreeResumeDecision(createWorktreeLease({ ...continuation.lease, observedRevision }));
+    return retainedWorktreeResumeDecision(createWorktreeLease({ ...continuation.lease, observedRevision }));
   } catch (_) {
     return { allowed: false, reason: 'the retained worktree revision could not be observed.' };
   }
@@ -594,14 +594,19 @@ function ticketWorktreeSync(ticket?: any, projectPath?: any) {
   // continuation was created to resume. An executor followed the discard wording as far as reading it and
   // stopped to ask rather than lose 11 uncommitted files (SQ-2180).
   if (continuation?.mode === 'dirty_worktree_resume') {
+    // Ancestry of the dispatch base is not a recovery proof. A recovery dispatch that names an older base
+    // through integrationBranch makes `--is-ancestor` pass against a checkout that never held the candidate,
+    // and this line then told the executor to change nothing (SQ-2938, GH-125). The candidate here is the
+    // retained revision plus the retained uncommitted changes, so both have to be observed first.
+    const candidateCheck = `Worktree synchronization (run before work): this worktree holds uncommitted work retained from the previous attempt. Base ancestry alone never proves the retained candidate is here, so confirm the candidate first: \`git rev-parse HEAD\` must be ${continuation.commit} and \`git status --porcelain\` must still list the retained changes with no unmerged (\`UU\`, \`AA\`, \`DU\`, \`UD\`, \`AU\`, \`UA\`, \`DD\`) entries. If any of that fails, stop and report that this checkout is not the retained candidate. Only then check \`git merge-base --is-ancestor ${commit} HEAD\`, and change nothing if it passes.`;
     if (!checkpointBase) {
       return [
-        `Worktree synchronization (run before work): this worktree holds uncommitted work retained from the previous attempt. Check \`git merge-base --is-ancestor ${commit} HEAD\` and change nothing if it passes.`,
+        candidateCheck,
         'If it fails, stop and report that the retained base was not recorded. Do not move the base or discard anything: the retained changes exist nowhere else.',
       ].join(' ');
     }
     return [
-      `Worktree synchronization (run before work): this worktree holds uncommitted work retained from the previous attempt. Check \`git merge-base --is-ancestor ${commit} HEAD\` and change nothing if it passes.`,
+      candidateCheck,
       `If it fails, preserve before moving: commit every retained change on this worktree's own branch with \`git add -A && git commit\`, confirm \`git status --porcelain\` is empty and \`git show --stat HEAD\` lists every file you expected, then run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` and \`git rebase --onto ${commit} ${checkpointBase}\`.`,
       'Never check out or discard over the retained changes, and never use `git stash`: the stash stack is shared across worktrees and concurrent sessions on this machine, so a pop can take an entry that is not yours.',
       'Rebase, never merge. Cutting a release deletes the `.release/unreleased/*.md` fragments it consumed, and merging an older base forward resurrects them, which re-ships changelog entries for already-released work.',

@@ -1024,7 +1024,8 @@ function dispatchWarnings(ticket?: any, slug?: any) {
   }
   const continuationFallback = dispatchState(ticket)?.continuationFallback;
   if (continuationFallback?.reason) {
-    warnings.push(`Continuation fallback: previous released worktree was not carried (${String(continuationFallback.reason).replace(/_/g, ' ')}); dispatching a fresh worktree.`);
+    const cause = typeof continuationFallback.cause === 'string' && continuationFallback.cause.trim() ? ` ${continuationFallback.cause.trim()}` : '';
+    warnings.push(`Continuation fallback: previous released worktree was not carried (${String(continuationFallback.reason).replace(/_/g, ' ')}); dispatching a fresh worktree.${cause}`);
   }
   const categoryId = ticket && (ticket.categoryId || (ticket.category && ticket.category.id));
   if (/^(?:coding(?:\.|$)|debugging$)/.test(String(categoryId || '')) && !String(ticket.executorVerify || '').trim()) {
