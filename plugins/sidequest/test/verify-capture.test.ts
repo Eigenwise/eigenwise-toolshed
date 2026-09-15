@@ -8,7 +8,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 
-const { runVerifyCapture, runCapturedVerification, shellCommand, captureSlotDirectory } = require('../lib/verify-capture.js');
+const { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureSlotDirectory } = require('../lib/verify-capture.js');
+const { runProcessVerification } = require('../lib/ports/process.js');
 const store = require('../lib/store.js');
 const SIDEQUEST_DIR = path.resolve(__dirname, '..');
 
@@ -81,6 +82,34 @@ test('full-suite capture serializes sibling captures and records the queue wait'
     assert.ok(waitedCapture.waitedForSlotMs >= 500, `waited ${waitedCapture.waitedForSlotMs}ms`);
   } finally {
     fs.rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test('synchronous full-suite verification uses the capture slot', async () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-capture-integration-slot-'));
+  const started = path.join(project, 'started');
+  const observedSiblingCaptures = path.join(project, 'observed-sibling-captures');
+  fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node blocker.js' } }));
+  fs.writeFileSync(path.join(project, 'blocker.js'), `const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(started)}, 'started'); fs.appendFileSync(${JSON.stringify(observedSiblingCaptures)}, process.env.SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT + '\\n'); setTimeout(() => {}, 700);`);
+  execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: project, windowsHide: true });
+
+  try {
+    const first = runCaptureProcess('npm run test:full', project, 'SQ-1');
+    await waitForFile(started);
+    const capture = runFullSuiteVerification('npm run test:full', project, (environment: NodeJS.ProcessEnv) => runProcessVerification(
+      { kind: 'command', command: 'npm run test:full', evidenceContract: 'command output' },
+      { cwd: project, environment },
+    ));
+    const firstResult = await first;
+
+    assert.equal(firstResult.status, 2, firstResult.output);
+    assert.deepEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 });
+    assert.equal(capture.queuePosition, 2);
+    assert.ok(capture.waitedForSlotMs >= 500, `waited ${capture.waitedForSlotMs}ms`);
+    assert.deepEqual(fs.readFileSync(observedSiblingCaptures, 'utf8').trim().split(/\r?\n/).sort(), ['0', '1']);
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+    fs.rmSync(captureSlotDirectory(project), { recursive: true, force: true });
   }
 });
 

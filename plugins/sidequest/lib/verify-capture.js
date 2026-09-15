@@ -89,6 +89,9 @@ function queuedWaiters(slotDirectory, fileSystem = fs) {
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
+function waitSynchronously(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)), 0, 0, milliseconds);
+}
 function captureSlotErrorCode(error) {
   if (error instanceof Error && "code" in error && typeof error.code === "string") return error.code;
   return error instanceof Error ? error.name : String(error);
@@ -125,6 +128,87 @@ async function releaseCaptureSlot(activeDirectory, fileSystem, waiterPath) {
   const removeFailure = await retryCaptureSlotOperation("remove", tombstoneDirectory, () => fileSystem.rmSync(tombstoneDirectory, { recursive: true, force: true }));
   if (removeFailure || !waiterPath) return removeFailure;
   return retryCaptureSlotOperation("remove", waiterPath, () => fileSystem.rmSync(waiterPath, { force: true }));
+}
+function retryCaptureSlotOperationSynchronously(operation, slotPath, execute) {
+  for (let attempts = 1; attempts <= captureSlotOperationRetryLimit; attempts += 1) {
+    try {
+      execute();
+      return null;
+    } catch (error) {
+      const errorCode = captureSlotErrorCode(error);
+      if (!captureSlotContentionErrorCodes.has(errorCode) || attempts === captureSlotOperationRetryLimit) {
+        return captureSlotOperationFailure(operation, slotPath, attempts, error);
+      }
+      waitSynchronously(captureSlotRetryMilliseconds);
+    }
+  }
+  throw new Error("Capture slot operation retry loop completed unexpectedly.");
+}
+function releaseCaptureSlotSynchronously(activeDirectory, fileSystem, waiterPath) {
+  const tombstoneDirectory = `${activeDirectory}.released-${process.pid}-${randomUUID()}`;
+  const renameFailure = retryCaptureSlotOperationSynchronously("rename", activeDirectory, () => fileSystem.renameSync(activeDirectory, tombstoneDirectory));
+  if (renameFailure) {
+    if (renameFailure.errorCode !== "ENOENT") return renameFailure;
+    return waiterPath ? retryCaptureSlotOperationSynchronously("remove", waiterPath, () => fileSystem.rmSync(waiterPath, { force: true })) : null;
+  }
+  const removeFailure = retryCaptureSlotOperationSynchronously("remove", tombstoneDirectory, () => fileSystem.rmSync(tombstoneDirectory, { recursive: true, force: true }));
+  if (removeFailure || !waiterPath) return removeFailure;
+  return retryCaptureSlotOperationSynchronously("remove", waiterPath, () => fileSystem.rmSync(waiterPath, { force: true }));
+}
+function acquireCaptureSlotSynchronously(project, timeoutMilliseconds = captureSlotTimeoutMilliseconds, fileSystem = fs) {
+  const slotDirectory = captureSlotDirectory(project);
+  const activeDirectory = path.join(slotDirectory, "active");
+  const startedAt = Date.now();
+  const waiterPath = captureSlotWaiterPath(slotDirectory, fileSystem);
+  const waiterName = path.basename(waiterPath);
+  fileSystem.writeFileSync(waiterPath, "", { encoding: "utf8", flag: "wx" });
+  let queuePosition = 1;
+  let acquireContentionAttempts = 0;
+  for (; ; ) {
+    const waiters = queuedWaiters(slotDirectory, fileSystem);
+    const waiterIndex = waiters.indexOf(waiterName);
+    const active = fileSystem.existsSync(activeDirectory);
+    if (active && (waiters.length === 0 || waiters[0] === waiterName)) {
+      const releaseFailure = releaseCaptureSlotSynchronously(activeDirectory, fileSystem);
+      if (releaseFailure) {
+        fileSystem.rmSync(waiterPath, { force: true });
+        return releaseFailure;
+      }
+      continue;
+    }
+    queuePosition = Math.max(queuePosition, waiterIndex + 1);
+    if (!active && waiterIndex === 0) {
+      try {
+        fileSystem.mkdirSync(activeDirectory);
+        return Object.freeze({
+          waitedForSlotMs: Date.now() - startedAt,
+          queuePosition,
+          release: () => releaseCaptureSlotSynchronously(activeDirectory, fileSystem, waiterPath)
+        });
+      } catch (error) {
+        const errorCode = captureSlotErrorCode(error);
+        if (!captureSlotContentionErrorCodes.has(errorCode)) {
+          fileSystem.rmSync(waiterPath, { force: true });
+          return captureSlotOperationFailure("create", activeDirectory, 1, error);
+        }
+        acquireContentionAttempts += 1;
+        if (acquireContentionAttempts === captureSlotOperationRetryLimit) {
+          fileSystem.rmSync(waiterPath, { force: true });
+          return captureSlotOperationFailure("create", activeDirectory, acquireContentionAttempts, error);
+        }
+      }
+    }
+    const waitedForSlotMs = Date.now() - startedAt;
+    if (waitedForSlotMs >= timeoutMilliseconds) {
+      fileSystem.rmSync(waiterPath, { force: true });
+      return Object.freeze({
+        waitedForSlotMs,
+        queuePosition,
+        reason: `Verification capture waited ${waitedForSlotMs}ms for the repository full-suite slot at queue position ${queuePosition}; sibling capture contention exceeded the ${timeoutMilliseconds}ms limit.`
+      });
+    }
+    waitSynchronously(captureSlotRetryMilliseconds);
+  }
 }
 async function acquireCaptureSlot(project, timeoutMilliseconds = captureSlotTimeoutMilliseconds, fileSystem = fs) {
   const slotDirectory = captureSlotDirectory(project);
@@ -218,6 +302,38 @@ function captureSlotCouldNotRun(command, slot) {
     outputTail: null,
     failureIdentities: Object.freeze(["could_not_run:capture-slot"]),
     reason: slot.reason
+  });
+}
+function runFullSuiteVerification(command, project, verify, fileSystem = fs) {
+  let slot;
+  try {
+    slot = acquireCaptureSlotSynchronously(project, captureSlotTimeoutMilliseconds, fileSystem);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return captureSlotCouldNotRun(command, Object.freeze({
+      reason: `Verification capture could not acquire its repository full-suite slot: ${reason}`,
+      errorCode: captureSlotErrorCode(error)
+    }));
+  }
+  if ("reason" in slot) {
+    return "waitedForSlotMs" in slot ? captureSlotTimeout(command, slot) : captureSlotCouldNotRun(command, slot);
+  }
+  let capture;
+  let releaseFailure = null;
+  try {
+    const result = verify({
+      ...process.env,
+      SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT: String(slot.queuePosition - 1)
+    });
+    capture = Object.freeze({ ...result, exitCode: result.exitCode ?? null });
+  } finally {
+    releaseFailure = slot.release();
+  }
+  if (releaseFailure) return captureSlotCouldNotRun(command, releaseFailure);
+  return Object.freeze({
+    ...capture,
+    waitedForSlotMs: slot.waitedForSlotMs,
+    queuePosition: slot.queuePosition
   });
 }
 async function runFullSuiteCapture(command, project, cwd, fileSystem = fs) {
@@ -358,5 +474,5 @@ async function main() {
   report(capture, recorded);
   process.exitCode = capture.exitCode === 0 && (!target || recorded?.ok) ? 0 : 2;
 }
-module.exports = { runVerifyCapture, runCapturedVerification, shellCommand, captureTarget, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
+module.exports = { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureTarget, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
 if (require.main === module) void main();

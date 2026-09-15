@@ -1,6 +1,7 @@
 "use strict";
 const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require("../kernel/verification.js");
 const { runProcessVerification } = require("../ports/process.js");
+const { isFullSuiteCommand, runFullSuiteVerification } = require("../verify-capture.js");
 const { worktreeSetupDeadlineMs } = require("../hook-timeouts.js");
 const { decideSubmissionAdmission } = require("../kernel/submission");
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require("../source-revision-capability.js");
@@ -623,12 +624,15 @@ ${captureCommandDetails(pinnedCommand, capturedCommand)}`;
       };
     }
     const timeoutMilliseconds = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
-    return runProcessVerification(requirement, {
-      cwd: readMeta(slug)?.path,
+    const project = readMeta(slug)?.path;
+    const verify = (environment) => runProcessVerification(requirement, {
+      cwd: project,
       timeoutMilliseconds,
       logPath: integrationVerifyLogPath(slug, ticket),
-      outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES
+      outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
+      environment
     });
+    return isFullSuiteCommand(requirement.command) ? runFullSuiteVerification(requirement.command, project, verify) : verify(process.env);
   }
   function verificationFailureComment(verify) {
     return [

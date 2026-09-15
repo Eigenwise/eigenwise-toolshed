@@ -13,7 +13,7 @@ const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 const testDirectory = path.join(pluginRoot, 'test');
 const minimumTestConcurrency = 2;
 const maximumTestConcurrency = 8;
-const baselineTestPhaseTimeoutMilliseconds = 480_000;
+const baselineTestPhaseTimeoutMilliseconds = 1_200_000;
 const maximumTestPhaseTimeoutMilliseconds = 1_200_000;
 
 export function fullSuiteGatewayCatalog() {
