@@ -440,8 +440,16 @@ async function runCapturedVerification(command, target, cwd = process.cwd(), fil
   const resolution = resolveCaptureCwd(target, cwd, explicitWorktree);
   if (resolution.refusal) return Object.freeze({ capture: null, recorded: null, refusal: resolution.refusal });
   const captureCwd = resolution.cwd;
+  if (target && !verifiedWorktreeIsClean(captureCwd)) {
+    return Object.freeze({
+      capture: null,
+      recorded: null,
+      refusal: `verify-capture: capture=unrecorded reason=verification_capture_dirty_worktree
+Verification capture for ${target.ticket} ran with uncommitted changes in ${captureCwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`
+    });
+  }
   const capture = target && isFullSuiteCommand(command) ? await runFullSuiteCapture(command, target.project, captureCwd, fileSystem) : await runVerifyCapture(command, captureCwd);
-  const recorded = target ? recordCapture(target, capture, captureCwd) : null;
+  const recorded = target ? recordCapture(target, capture, captureCwd, true) : null;
   return Object.freeze({ capture, recorded, refusal: null });
 }
 function verifiedRevision(cwd) {
@@ -471,7 +479,7 @@ function foreignCaptureRepository(projectPath, cwd) {
   const ticketRepository = repositoryRoot(projectPath);
   return repositoryRoot(cwd) === ticketRepository ? null : ticketRepository;
 }
-function recordCapture(target, capture, cwd) {
+function recordCapture(target, capture, cwd, cleanWorktree = verifiedWorktreeIsClean(cwd)) {
   const store = require("./store.js");
   const project = store.findProject(target.project);
   if (!project.ok || !project.slug) return { ok: false, reason: "project_not_found" };
@@ -484,6 +492,13 @@ function recordCapture(target, capture, cwd) {
       message: `Verification capture for ${target.ticket} ran in ${cwd}, which is not the ticket's repository ${ticketRepository}. A verify that never saw the ticket's files proves nothing about them, so nothing is recorded. Run the pinned verifier from the ticket's own checkout.`
     };
   }
+  if (!cleanWorktree) {
+    return {
+      ok: false,
+      reason: "verification_capture_dirty_worktree",
+      message: `Verification capture for ${target.ticket} ran with uncommitted changes in ${cwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`
+    };
+  }
   const ticket = store.getTicket(project.slug, target.ticket);
   const workingTreeCandidate = store.workingTreeDeliveryCandidate(project.slug, ticket);
   const candidate = workingTreeCandidate?.candidate || verifiedRevision(cwd);
@@ -492,7 +507,7 @@ function recordCapture(target, capture, cwd) {
     command: capture.command || "",
     status: capture.status,
     candidate,
-    cleanWorktree: verifiedWorktreeIsClean(cwd),
+    cleanWorktree,
     completedAt: (/* @__PURE__ */ new Date()).toISOString(),
     worktree: cwd,
     logPath: capture.logPath,

@@ -2867,6 +2867,7 @@ function externalDeliverableCloseout(slug?: any, ticket?: any) {
   if (!verification.ok) return verification;
   const capture = Array.isArray(ticket.verificationCaptures)
     ? ticket.verificationCaptures.find((entry: any) => entry?.status === 'passed'
+      && entry?.cleanWorktree === true
       && entry?.candidate?.source === candidate.source
       && entry?.candidate?.value === candidate.value
       && entry?.command === verification.verification.command
