@@ -2368,7 +2368,7 @@ test('a checkout attributed to a reservation that never created one moves to the
     execFileSync('git', ['worktree', 'add', '--detach', worktree], { cwd: PROJECT, windowsHide: true });
     completeCheckoutCreation(sessionId, worktree);
     const holder = [first, second].find((reservation) => boundWorktree(reservation.ref) === canonical(worktree));
-    assert.ok(holder, 'the fixture must attribute the single checkout to one of the two reservations');
+    if (!holder) throw new Error('the fixture must attribute the single checkout to one of the two reservations');
     const reporter = holder === first ? second : first;
     assert.equal(boundWorktree(reporter.ref), null, 'the reporting reservation holds nothing to exchange');
 
