@@ -7,6 +7,7 @@ const { DEFAULT_DAYS, DEFAULT_SESSIONS } = require('../lib/scan.js');
 const { mine } = require('../lib/mine.js');
 const { applyPermissionAllowlist, enablePermissionAutomation, ruleFor } = require('../lib/permission-allowlist.js');
 const { readAvailable, readInstalled, searchAvailable } = require('../lib/catalog.js');
+const { DEFAULT_MAX, PrerequisiteError, crapReport, formatReport } = require('../lib/crap.js');
 const {
   appendDecision,
   declineResupply,
@@ -31,9 +32,15 @@ Usage:
   quartermaster decline-resupply [--project <path>]
   quartermaster allowlist [--project <path>] [--days <n>] [--sessions <n>] [--blocked]
   quartermaster enable-auto-allowlist [--project <path>]
+  quartermaster crap [--project <path>] [--max <n>] [--ratchet <git-ref>] [--lcov <path>]
+                     [--complexity <lizard.csv>] [--coverage-command "<cmd>"] [--json]
 
-Everything prints JSON. Defaults: --days ${DEFAULT_DAYS}, --sessions ${DEFAULT_SESSIONS}, project = cwd.
+Everything prints JSON except crap, which prints one line per offender plus a summary unless --json.
+Defaults: --days ${DEFAULT_DAYS}, --sessions ${DEFAULT_SESSIONS}, project = cwd.
 Blocked allowlist candidates are summarized by default; --blocked includes up to 25 detailed entries.
+crap reads .claude/quartermaster/crap.json (coverageCommand, lcov, sources, exclude, max, ratchet), needs
+lizard (lizard on PATH, else uvx lizard, else pipx run lizard), and exits 0 pass, 1 gate failed,
+2 prerequisite missing (lizard unresolvable, no lcov, coverage command failed). Default --max ${DEFAULT_MAX}.
 `;
 
 const BLOCKED_SUMMARY_LIMIT = 5;
@@ -120,6 +127,12 @@ function parseArgs(argv) {
     signal: 'any',
     detail: null,
     includeBlocked: false,
+    max: null,
+    ratchet: null,
+    lcov: null,
+    complexity: null,
+    coverageCommand: null,
+    json: false,
   };
 
   const rest = [...argv];
@@ -151,6 +164,12 @@ function parseArgs(argv) {
       case '--signal': options.signal = take(); break;
       case '--detail': options.detail = take(); break;
       case '--blocked': options.includeBlocked = true; break;
+      case '--max': options.max = Number(take()); break;
+      case '--ratchet': options.ratchet = take(); break;
+      case '--lcov': options.lcov = take(); break;
+      case '--complexity': options.complexity = take(); break;
+      case '--coverage-command': options.coverageCommand = take(); break;
+      case '--json': options.json = true; break;
       case '--help': case '-h': options.command = 'help'; break;
       default: throw new Error(`Unknown argument: ${argument}`);
     }
@@ -158,6 +177,7 @@ function parseArgs(argv) {
 
   if (!Number.isFinite(options.days) || options.days <= 0) throw new Error('--days must be a positive number');
   if (!Number.isFinite(options.sessions) || options.sessions <= 0) throw new Error('--sessions must be a positive number');
+  if (options.max !== null && (!Number.isFinite(options.max) || options.max <= 0)) throw new Error('--max must be a positive number');
   return options;
 }
 
@@ -181,6 +201,29 @@ function runDecisionsAdd(options) {
     detail: options.detail,
   });
   printJson(entry);
+}
+
+function runCrap(options) {
+  let report;
+  try {
+    report = crapReport({
+      projectDir: options.projectPath,
+      max: options.max,
+      ratchet: options.ratchet,
+      lcov: options.lcov,
+      complexity: options.complexity,
+      coverageCommand: options.coverageCommand,
+    });
+  } catch (error) {
+    if (!(error instanceof PrerequisiteError)) throw error;
+    process.stderr.write(`quartermaster crap: ${error.message}\n`);
+    if (error.hint) process.stderr.write(`${error.hint}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  if (options.json) printJson(report);
+  else process.stdout.write(formatReport(report));
+  process.exitCode = report.failures.length ? 1 : 0;
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -224,6 +267,9 @@ async function main(argv = process.argv.slice(2)) {
       printJson(permissionReport(result, options.includeBlocked));
       return;
     }
+    case 'crap':
+      runCrap(options);
+      return;
     case 'enable-auto-allowlist':
       printJson({ ok: true, enabled: enablePermissionAutomation(options.projectPath) });
       return;

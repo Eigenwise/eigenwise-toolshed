@@ -117,6 +117,18 @@ priority: 85
 - The integration owner runs the full gate once after merged changes. Do not bypass a required gate.
 ```
 
+### CRAP gate
+
+```markdown
+---
+description: Keep changed code within the CRAP ceiling
+priority: 85
+---
+Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"`.
+Keep every changed or new function under the ceiling. Cover it or split it.
+Exit 2 means a prerequisite is missing. Follow the printed install hint, then rerun the gate. Do not skip it.
+```
+
 ### House code conventions (naming over comments)
 
 ```markdown
