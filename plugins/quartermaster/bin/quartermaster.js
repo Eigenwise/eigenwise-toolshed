@@ -23,7 +23,7 @@ Usage:
   quartermaster mine [--project <path>] [--days <n>] [--sessions <n>] [--all-projects] [--no-subagents]
   quartermaster status [--project <path>]
   quartermaster catalog [--query <terms>] [--installed]
-  quartermaster decisions list
+  quartermaster decisions list [--project <path>]
   quartermaster decisions add --title <t> --fingerprint <f> --status applied|rejected|deferred
                           [--kind <k>] [--signal denials|interrupts|corrections|toolErrors|any]
                           [--project <path>] [--detail <text>]
@@ -114,6 +114,7 @@ function parseArgs(argv) {
   const options = {
     command: 'help',
     projectPath: process.cwd(),
+    projectPathGiven: false,
     days: DEFAULT_DAYS,
     sessions: DEFAULT_SESSIONS,
     allProjects: false,
@@ -150,7 +151,7 @@ function parseArgs(argv) {
       return next;
     };
     switch (argument) {
-      case '--project': options.projectPath = path.resolve(take()); break;
+      case '--project': options.projectPath = path.resolve(take()); options.projectPathGiven = true; break;
       case '--days': options.days = Number(take()); break;
       case '--sessions': options.sessions = Number(take()); break;
       case '--all-projects': options.allProjects = true; break;
@@ -244,7 +245,7 @@ async function main(argv = process.argv.slice(2)) {
       else printJson({ available: readAvailable().length, installed: readInstalled().length, hint: 'use --query <terms> to search, --installed to list installs' });
       return;
     case 'decisions-list':
-      printJson(readDecisions());
+      printJson(readDecisions(process.env, options.projectPathGiven ? options.projectPath : null));
       return;
     case 'decisions-add':
       runDecisionsAdd(options);

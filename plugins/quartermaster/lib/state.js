@@ -317,7 +317,12 @@ function appendDecision(decision, env = process.env, now = Date.now()) {
   return entry;
 }
 
-function readDecisions(env = process.env) {
+/**
+ * projectDir, when given, scopes the ledger the same way verifyDecisions does: entries whose
+ * projectDir canonicalises elsewhere are dropped, but entries with no projectDir predate the field
+ * and stay global. Omitting projectDir returns the whole ledger, unfiltered.
+ */
+function readDecisions(env = process.env, projectDir = null) {
   let raw;
   try {
     raw = fs.readFileSync(decisionsFile(env), 'utf8');
@@ -333,7 +338,9 @@ function readDecisions(env = process.env) {
       // A corrupt line loses one decision, never the ledger.
     }
   }
-  return decisions;
+  if (!projectDir) return decisions;
+  const canonicalDir = canonicalProjectDir(projectDir);
+  return decisions.filter((decision) => !decision.projectDir || canonicalProjectDir(decision.projectDir) === canonicalDir);
 }
 
 /**
