@@ -56,7 +56,7 @@ test('full-suite budget scales down-core runners and stays bounded', () => {
   const helpers = loadBudgetHelpers();
 
   assert.deepEqual(helpers.concurrency, [2, 4, 8]);
-  assert.deepEqual(helpers.timeouts, [480000, 960000, 1200000]);
+  assert.deepEqual(helpers.timeouts, [1_200_000, 1_200_000, 1_200_000]);
 });
 
 test('full-suite catalog supplies the ready Codex capability and every default Codex route', () => {

@@ -220,39 +220,67 @@ test('the assigned linked worktree remains allowed', () => {
   }
 });
 
-// SQ-2570. WorktreeCreate resolves the board from the session's own checkout, so
-// a dispatch prepared for another registered project finds nothing to bind and
-// the executor dies before it starts. The hook cannot reach across boards -- the
-// worktree it is asked to place belongs to THIS checkout -- so what it owes the
-// orchestrator is a refusal that names the cause instead of a bare reason code.
-test('a cross-project worktree creation identifies the matching dispatch', () => {
-  const other = initRepo('sq-isolation-other-project-');
-  const otherSlug = store.ensureProject(other).slug;
-  const sessionId = `cross-project-create-${Date.now()}`;
-  const ticket = store.createTicket(otherSlug, {
-    title: 'cross-project creation fixture',
-    category: 'codebase-exploration',
-    files: ['README.md'],
-  });
-  const prepared = store.prepareDispatch(otherSlug, ticket.ref, { sessionId });
-  assert.equal(store.recordDispatchLaunch(otherSlug, ticket.ref, {
+function launchIsolatedDispatch(projectSlug: string, sessionId: string, title: string, agentName: string) {
+  const ticket = store.createTicket(projectSlug, { title, category: 'codebase-exploration', files: ['README.md'] });
+  const prepared = store.prepareDispatch(projectSlug, ticket.ref, { sessionId });
+  assert.equal(prepared.ticket.dispatch.sharedTree, false);
+  assert.equal(store.recordDispatchLaunch(projectSlug, ticket.ref, {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
     sessionId,
-    agentName: 'crossproject',
+    agentName,
   }).ok, true);
+  return ticket;
+}
+
+// SQ-2570/SQ-2884. WorktreeCreate used to resolve the board from the session's own
+// checkout, so a dispatch prepared for another registered project found nothing to
+// bind and its executor died before it started. The session id names the board that
+// reserved the creation, so the hook now cuts the worktree from the ticket's own
+// repository however the spawning session is rooted.
+test('a cross-project worktree creation is cut from the ticket project', () => {
+  const other = initRepo('sq-isolation-other-project-');
+  const otherSlug = store.ensureProject(other).slug;
+  const sessionId = `cross-project-create-${Date.now()}`;
+  const ticket = launchIsolatedDispatch(otherSlug, sessionId, 'cross-project creation fixture', 'crossproject');
 
   const hubSession = createWorktree(sessionId, 'crossproject', PROJECT);
-  const ownSession = createWorktree(sessionId, 'crossproject', other);
   try {
-    assert.equal(hubSession.ok, false, 'a session rooted in another project cannot place this dispatch');
-    assert.match(hubSession.output, /dispatch_binding_unavailable/);
-    assert.match(hubSession.output, /sharedTree:true/);
-    assert.match(hubSession.output, /predicate `different_project`/);
-    assert.equal(ownSession.ok, true, 'a session rooted in the ticket project still places it');
-    assert.equal(store.getTicket(otherSlug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(ownSession.output));
+    assert.equal(hubSession.ok, true, hubSession.output);
+    assert.equal(store.getTicket(otherSlug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(hubSession.output));
+    const commonGitDirectory = execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: hubSession.output, encoding: 'utf8', windowsHide: true }).trim();
+    assert.equal(worktrees.canonicalPath(commonGitDirectory), worktrees.canonicalPath(path.join(other, '.git')));
   } finally {
-    if (ownSession.ok) execFileSync('git', ['worktree', 'remove', '--force', ownSession.output], { cwd: other, windowsHide: true });
+    if (hubSession.ok) execFileSync('git', ['worktree', 'remove', '--force', hubSession.output], { cwd: other, windowsHide: true });
+  }
+});
+
+// The hook is told a worktree name, never a ticket, so it can only follow the
+// session to a board while that session owns isolated dispatches on one of them.
+// Two live boards would make it guess, and a guess checks out the wrong
+// repository, so prepare refuses while the caller can still wait or share the tree.
+test('a cross-project dispatch is refused while another board holds this session', () => {
+  const other = initRepo('sq-isolation-ambiguous-project-');
+  const otherSlug = store.ensureProject(other).slug;
+  const sessionId = `cross-project-ambiguous-${Date.now()}`;
+  const hubTicket = launchIsolatedDispatch(slug, sessionId, 'ambiguous hub dispatch fixture', 'ambiguoushub');
+  const ticket = store.createTicket(otherSlug, {
+    title: 'ambiguous cross-project fixture',
+    category: 'codebase-exploration',
+    files: ['README.md'],
+  });
+  try {
+    assert.throws(
+      () => store.prepareDispatch(otherSlug, ticket.ref, { sessionId, runtimeCwd: PROJECT }),
+      (error: Error) => {
+        assert.match(error.message, /already owns launched isolated dispatches on another board/);
+        assert.ok(error.message.includes(PROJECT), 'the refusal names the competing board');
+        assert.doesNotMatch(error.message, /from a session rooted in/);
+        return true;
+      },
+    );
+  } finally {
+    assert.equal(store.releaseTicket(slug, hubTicket.ref, 'ambiguous-hub-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
   }
 });
 

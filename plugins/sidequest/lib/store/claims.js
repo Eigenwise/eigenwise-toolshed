@@ -1,4 +1,12 @@
 "use strict";
+function stopOutlivesClaim(terminalAt, claim) {
+  const stoppedMs = Date.parse(String(terminalAt ?? ""));
+  if (!Number.isFinite(stoppedMs)) return false;
+  const claimedMs = Date.parse(claim && claim.at);
+  const activeMs = Date.parse(claim && claim.activeAt);
+  if (Number.isFinite(activeMs) && activeMs >= stoppedMs) return false;
+  return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
+}
 function createClaims(dependencies) {
   const {
     completionTreeCheck,
@@ -189,11 +197,9 @@ ${evidence.outputTail}`;
     return completion.ok && completion.applicable === true && completion.noOp === true;
   }
   function observedStop(dispatch, claim) {
-    if (!dispatch || !["died", "stopped_claimed"].includes(dispatch.outcome) || !dispatch.terminalAt) return false;
-    const stoppedMs = Date.parse(dispatch.terminalAt);
-    const claimedMs = Date.parse(claim && claim.at);
-    if (!Number.isFinite(stoppedMs)) return false;
-    return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
+    const hostReportedFailure = dispatch?.outcome === "failed" && dispatch?.terminalSource === "subagent-stop" && Boolean(dispatch.failureShape);
+    if (!dispatch || !["died", "stopped_claimed"].includes(dispatch.outcome) && !hostReportedFailure || !dispatch.terminalAt) return false;
+    return stopOutlivesClaim(dispatch.terminalAt, claim);
   }
   function claimReleaseBlocker(slug, ticket) {
     const dispatch = dispatchState(ticket);
@@ -223,7 +229,7 @@ ${evidence.outputTail}`;
     const dispatch = dispatchState(ticket);
     const verification = claimVerification(ticket);
     if (observedStop(dispatch, claim)) {
-      return { kind: "observed_stop", idleMs, at: dispatch.terminalAt, reason: "its executor has a durable died outcome while still holding the claim" };
+      return { kind: "observed_stop", idleMs, at: dispatch.terminalAt, reason: "its executor has a durable terminal record while still holding the claim" };
     }
     if (verification) {
       if (idleMs > claimAbandonMs()) {
@@ -273,7 +279,16 @@ ${evidence.outputTail}`;
   function touchClaimActivity(ticket, by, now) {
     const claim = ticket && ticket.claim;
     if (!claim || !claim.by || by != null && claim.by !== by) return false;
-    claim.activeAt = now || (/* @__PURE__ */ new Date()).toISOString();
+    const activeAt = now || (/* @__PURE__ */ new Date()).toISOString();
+    const dispatch = dispatchState(ticket);
+    if (observedStop(dispatch, claim) && Date.parse(activeAt) >= Date.parse(dispatch.terminalAt)) {
+      dispatch.outcome = "claimed";
+      delete dispatch.failureShape;
+      delete dispatch.terminalAt;
+      delete dispatch.terminalSource;
+      dispatch.resumedAt = activeAt;
+    }
+    claim.activeAt = activeAt;
     return true;
   }
   function touchClaim(slug, idOrRef, by) {
@@ -314,4 +329,4 @@ ${evidence.outputTail}`;
     verificationCompletionCheck
   };
 }
-module.exports = { createClaims };
+module.exports = { createClaims, stopOutlivesClaim };

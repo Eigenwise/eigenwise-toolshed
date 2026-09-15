@@ -29,6 +29,8 @@ and because no friction counter will ever surface it.
 - Check for an existing one first (`ls .claude/skills/`, `catalog --installed`). Test suites,
   benchmarks, linters, and validation scripts are instruments too, and extending one beats writing
   a second that measures nearly the same thing.
+- A codebase with tests but no `.claude/quartermaster/crap.json` routes to the CRAP gate reference:
+  propose its config and live rule, then record `rule:crap-gate` after the user decides.
 - Fingerprint: `skill:<name>`.
 
 ## 2. Plugin install

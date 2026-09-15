@@ -2,6 +2,7 @@
 
 const { execFileSync } = require('node:child_process');
 const { canonicalPreparedDispatchExecutor } = require('../prepared-dispatch.js');
+const { stopOutlivesClaim } = require('./claims.js');
 
 function createGitHubCiRunsProvider(projectPath: string, execute = execFileSync) {
   const command = (program: string, arguments_: string[]) => execute(program, arguments_, {
@@ -45,6 +46,24 @@ function createGitHubCiRunsProvider(projectPath: string, execute = execFileSync)
   } catch (_error: unknown) {
     return null;
   }
+}
+
+function sameDispatchAttempt(left?: any, right?: any) {
+  return String(left?.preparedAt ?? '') === String(right?.preparedAt ?? '')
+    && String(left?.tokenPrefix ?? '') === String(right?.tokenPrefix ?? '');
+}
+
+// Pulse is what an orchestrator reads before reaching for recovery evidence, and `dead` is the answer
+// that invites it, so a died record has to prove it is about the attempt being asked about. Two records
+// cannot: one left behind by a superseded attempt, whose identity differs from the live dispatch, and
+// one whose terminal time predates the current claim, which is a fresh runtime holding a ticket an
+// older launch died on. Both used to read as dead, aiming recovery at a working executor, and only the
+// claim guard refused to free it (SQ-2868). The age rule is the one attestation claims.observedStop
+// demands, shared so the two cannot drift; it is not a second liveness authority.
+function diedRecordAttestsAttempt(dispatch?: any, record?: any, claim?: any) {
+  if (record?.outcome !== 'died') return false;
+  if (!sameDispatchAttempt(record, dispatch)) return false;
+  return stopOutlivesClaim(record.terminalAt, claim);
 }
 
 function createPulse(dependencies: any) {
@@ -167,14 +186,11 @@ function createPulse(dependencies: any) {
     };
   }
 
-  function dispatchDeath(dispatch?: any) {
+  function dispatchDeath(dispatch?: any, claim?: any) {
     if (!dispatch) return null;
-    if (dispatch.outcome === 'died' && dispatch.terminalAt) {
-      return { at: dispatch.terminalAt, source: dispatch.terminalSource || null };
-    }
-    const attempt = (Array.isArray(dispatch.attempts) ? dispatch.attempts : [])
-      .slice().reverse().find((entry: any) => entry?.outcome === 'died' && entry.terminalAt);
-    return attempt ? { at: attempt.terminalAt, source: attempt.terminalSource || null } : null;
+    const history = (Array.isArray(dispatch.attempts) ? dispatch.attempts : []).slice().reverse();
+    const record = [dispatch, ...history].find((entry: any) => diedRecordAttestsAttempt(dispatch, entry, claim));
+    return record ? { at: record.terminalAt, source: record.terminalSource || null } : null;
   }
 
   function livenessPulse(ticket?: any, dispatch?: any, claim?: any, death?: any) {
@@ -260,7 +276,8 @@ function createPulse(dependencies: any) {
     const dispatch = dispatchState(ticket);
     const now = Date.now();
     const claim = projectedClaim(ticket, now);
-    const died = dispatchDeath(dispatch);
+    // The raw claim, not the projection: the projection drops activeAt, and the age rule needs it.
+    const died = dispatchDeath(dispatch, ticket.claim);
     const liveness = livenessPulse(ticket, dispatch, claim, died);
     const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug), ...scopeDriftWarnings(slug, ticket)];
     return {
@@ -331,7 +348,7 @@ function createPulse(dependencies: any) {
         const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug)];
         const dispatch = dispatchState(ticket);
         const claim = claimPulse(ticket, nowMs);
-        const liveness = livenessPulse(ticket, dispatch, claim, dispatchDeath(dispatch));
+        const liveness = livenessPulse(ticket, dispatch, claim, dispatchDeath(dispatch, ticket.claim));
         return {
           ref: ticket.ref,
           title: ticket.title,
@@ -480,4 +497,4 @@ function createBoardWatch(dependencies: any) {
   return { poll, start };
 }
 
-module.exports = { createPulse, createBoardWatch, createGitHubCiRunsProvider };
+module.exports = { createPulse, createBoardWatch, createGitHubCiRunsProvider, diedRecordAttestsAttempt };

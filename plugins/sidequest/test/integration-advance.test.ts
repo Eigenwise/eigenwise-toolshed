@@ -44,12 +44,13 @@ function remoteRefs(repo: string) {
 // One fixture, shaped like the real loop: an executor commits in its own agent
 // worktree, the orchestrator cherry-picks that range into a separate integration
 // checkout and bumps a version on top, and local main is left behind.
-function makeRepo(label: string) {
+function makeRepo(label: string, packageScripts?: Record<string, string>) {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), `sq-advance-${label}-`));
   git(['init', '-b', 'main'], repo);
   git(['config', 'user.name', 'Sidequest Test'], repo);
   git(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
   fs.writeFileSync(path.join(repo, 'README.md'), 'advance fixture\n');
+  if (packageScripts) fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ scripts: packageScripts }));
   fs.writeFileSync(path.join(repo, '.gitignore'), '.claude/*\n');
   git(['add', '.'], repo);
   git(['commit', '-m', 'base'], repo);
@@ -364,7 +365,7 @@ test('integrate refuses loudly when the checkout is not ready', async () => {
 });
 
 function deliveryTicket(label: string, opts: any = {}) {
-  const fixture = makeRepo(label);
+  const fixture = makeRepo(label, opts.packageScripts);
   const { slug } = store.ensureProject(fixture.repo);
   if (opts.timeoutMs != null) store.setBoardConfig(slug, { integrationVerifyTimeoutMs: opts.timeoutMs });
   const ticket = store.createTicket(slug, {
@@ -851,6 +852,19 @@ test('post-merge verification refuses a hard reset after an extra main commit', 
   assert.equal(git(['status', '--porcelain=v2', '--untracked-files=all'], fixture.repo), '');
   assert.match(result.message, /main STILL CONTAINS the delivered merge/);
   assert.match(result.message, /manual recovery/i);
+});
+
+test('integrate runs full-suite commands through the capture slot', () => {
+  const { ticket, runCli } = deliveryTicket('verify-full-suite-slot', {
+    verify: 'npm run test:full',
+    packageScripts: { 'test:full': 'node -e "console.log(process.env.SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT)"' },
+  });
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.verify.status, 'passed');
+  assert.match(fs.readFileSync(payload.verify.logPath, 'utf8'), /^0$/m);
 });
 
 test('integrate finalizes after a passing recorded verification command', () => {

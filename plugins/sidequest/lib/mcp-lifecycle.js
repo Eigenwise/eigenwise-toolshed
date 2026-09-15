@@ -468,7 +468,7 @@ const tools = [
   },
   {
     name: "groomClose",
-    description: `Close with evidence. Delivery uses the ticket's prepared integration target when recorded, even if the board target or checkout changed later. For manually composed candidates with different pinned verifiers, run every pinned verifier and the full composed gate, then use deliveryCommit with deliveryMethod:"manual" and omit integration:true; integration:true is only for a matching delivered wave. An unclaimed prepared or launched dispatch before runtime binding can be recovered only with deliveryMethod:"manual" and recoveryEvidence once deliveryCommit is reachable from the recorded integration branch. A pending candidate requires verified delivery, which reconciles the delivered commit against the candidate without checking sibling declared scope; abandonSubmission: true records discard, and a candidate already contained in the recorded target (in remote mode that includes the frozen origin/<branch> ref) records already-landed delivery instead of abandoning shipped work. A recorded revision names the ref that actually contained it, so a local delivery reads git:<branch> until origin has it. A pending candidate landed only on the frozen remote ref refuses integration_target_behind_landed_candidate until that local branch is synchronized, and a frozen integration ref that no longer resolves refuses integration_target_unavailable rather than answering from the local branch. An unlaunched prepared dispatch is recorded abandoned.`,
+    description: `Close with evidence. Delivery uses the ticket's prepared integration target when recorded, even if the board target or checkout changed later. For manually composed candidates with different pinned verifiers, run every pinned verifier and the full composed gate, then use deliveryCommit with deliveryMethod:"manual" and omit integration:true; integration:true is only for a matching delivered wave. verificationSupersession is the explicit exception for a terminal recorded submission whose sealed verifier no longer runs: it runs the replacement command, and records the old requirement, replacement requirement, reason, and result as a distinct delivered outcome. An unclaimed prepared or launched dispatch before runtime binding can be recovered only with deliveryMethod:"manual" and recoveryEvidence once deliveryCommit is reachable from the recorded integration branch. A pending candidate requires verified delivery, which reconciles the delivered commit against the candidate without checking sibling declared scope; abandonSubmission: true records discard, and a candidate already contained in the recorded target (in remote mode that includes the frozen origin/<branch> ref) records already-landed delivery instead of abandoning shipped work. A recorded revision names the ref that actually contained it, so a local delivery reads git:<branch> until origin has it. A pending candidate landed only on the frozen remote ref refuses integration_target_behind_landed_candidate until that local branch is synchronized, and a frozen integration ref that no longer resolves refuses integration_target_unavailable rather than answering from the local branch. An unlaunched prepared dispatch is recorded abandoned.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -480,6 +480,15 @@ const tools = [
         deliveryCommit: { type: "string", pattern: "^[0-9a-fA-F]{7,64}$", description: "Delivered source commit reachable from this ticket's prepared integration target, or pinned working-tree candidate." },
         deliveryInteractionCommit: { type: "string", pattern: "^[0-9a-fA-F]{7,64}$", description: "A reviewed merged-tree interaction after deliveryCommit, limited to submitted candidate paths." },
         deliveryMethod: { type: "string", enum: ["reset", "working-tree", "manual"], description: "For a non-reachable pinned candidate. Use manual only after every pinned verifier and the full composed gate; omit integration:true." },
+        verificationSupersession: {
+          type: "object",
+          description: "Sealed replacement.",
+          properties: {
+            verifyKind: { type: "string", enum: ["command", "suite"] },
+            verify: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX }
+          },
+          required: ["verifyKind", "verify"]
+        },
         abandonSubmission: { type: "boolean", description: "Retire a candidate that never landed; refused while it is reachable from this ticket's prepared integration target." },
         recoveryEvidence: { type: "string", description: 'Terminal-agent evidence that clears only an unclaimed prepared or launched dispatch before runtime binding; with deliveryMethod:"manual", deliveryCommit must already be reachable from the recorded integration branch.' }
       },
@@ -490,7 +499,35 @@ const tools = [
       const by = requireBy(args, "groomClose");
       const reason = String(args.reason || "").trim();
       if (!reason) throw new Error("groomClose: reason is required.");
+      const verificationSupersession = args.verificationSupersession;
+      if (verificationSupersession !== void 0) {
+        const verifyKind = String(verificationSupersession?.verifyKind || "").trim().toLowerCase();
+        const verify = String(verificationSupersession?.verify || "").trim();
+        if (!args.deliveryCommit || args.integration || args.abandonSubmission || !["command", "suite"].includes(verifyKind)) {
+          return mutationAck(slug, {
+            ok: false,
+            reason: "invalid_verification_supersession",
+            message: "verificationSupersession requires a deliveryCommit without integration or abandonSubmission, and a command or suite verifier."
+          });
+        }
+        const verificationFailures = store.verifyOracleErrors(verifyKind, verify);
+        if (verificationFailures.length) {
+          return mutationAck(slug, {
+            ok: false,
+            reason: "invalid_verification_supersession",
+            message: verificationFailures[0]
+          });
+        }
+      }
       const ticket = store.getTicket(slug, args.ref);
+      const terminalSubmission = ticket?.dispatch?.terminalAt || ticket?.dispatch?.attempts?.some((attempt) => attempt?.outcome === "submitted" && attempt.terminalAt);
+      if (verificationSupersession !== void 0 && (!ticket?.submission || !terminalSubmission)) {
+        return mutationAck(slug, {
+          ok: false,
+          reason: "verification_supersession_not_recorded_delivery",
+          message: `${args.ref} has no terminal recorded submission whose verifier can be superseded.`
+        });
+      }
       let completionReason = reason;
       if (args.recoveryEvidence) {
         const recovered = store.clearUnclaimedDispatch(slug, args.ref, { by, evidence: args.recoveryEvidence });
@@ -506,7 +543,8 @@ const tools = [
         abandonSubmission: args.abandonSubmission === true,
         deliveryCommit: args.deliveryCommit,
         deliveryInteractionCommit: args.deliveryInteractionCommit,
-        deliveryMethod: args.deliveryMethod
+        deliveryMethod: args.deliveryMethod,
+        verificationSupersession
       });
       if (res.ok) closeDispatchExecutor(ticket);
       if (res.ok && args.integration) {
