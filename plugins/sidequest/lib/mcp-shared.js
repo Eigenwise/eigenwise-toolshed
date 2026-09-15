@@ -57,6 +57,42 @@ function resolveProject(projectArg) {
   }
   return store.ensureProject(store.sessionProjectRoot());
 }
+function resolveLifecycleProject(projectArg, args, action) {
+  if (projectArg != null && String(projectArg).trim()) return resolveProject(projectArg);
+  const sessionProject = resolveProject();
+  const ref = String(args?.ref || "").trim();
+  const sessionId = runtimeSessionId();
+  const worktree = String(args?.worktree || "").trim();
+  const candidates = /* @__PURE__ */ new Map();
+  for (const project of store.listProjects({ all: true })) {
+    for (const ticket of store.listTickets(project.slug)) {
+      if (!ticket.claim?.by) continue;
+      const dispatchWorktree = String(ticket.dispatch?.worktree || "").trim();
+      const matchingWorktree = Boolean(worktree && dispatchWorktree && worktrees.canonicalPath(worktree) === worktrees.canonicalPath(dispatchWorktree));
+      const matchingRuntime = Boolean(sessionId && ticket.claim.runtime?.sessionId === sessionId);
+      if (!matchingWorktree && !matchingRuntime) continue;
+      const candidate2 = candidates.get(project.slug) || { slug: project.slug, meta: project, refs: /* @__PURE__ */ new Set(), worktree: false };
+      candidate2.refs.add(String(ticket.ref || "").toUpperCase());
+      candidate2.worktree ||= matchingWorktree;
+      candidates.set(project.slug, candidate2);
+    }
+  }
+  const matching = [...candidates.values()].filter((candidate2) => candidate2.refs.has(ref.toUpperCase()));
+  const worktreeMatches = matching.filter((candidate2) => candidate2.worktree);
+  const resolved = worktreeMatches.length === 1 ? worktreeMatches : matching;
+  const [candidate] = resolved;
+  if (candidate && resolved.length === 1) return { slug: candidate.slug, meta: candidate.meta };
+  if (resolved.length > 1) {
+    throw new Error(`${action}: "${ref}" matches claimed executor boards ${resolved.map((candidate2) => candidate2.meta.path || candidate2.slug).join(", ")}. Pass "project" explicitly.`);
+  }
+  if (candidates.size === 1) {
+    const candidate2 = candidates.values().next().value;
+    if (candidate2.slug !== sessionProject.slug) {
+      throw new Error(`${action}: "${ref}" is not on executor board ${candidate2.meta.path || candidate2.slug}; spawning session board is ${sessionProject.meta.path || sessionProject.slug}. Pass "project" explicitly.`);
+    }
+  }
+  return sessionProject;
+}
 function runtimeSessionId() {
   const v = process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
   return String(v).trim() || null;
@@ -931,6 +967,7 @@ module.exports = {
   assertSidequestInstall,
   assertDispatchTransport,
   resolveProject,
+  resolveLifecycleProject,
   runtimeSessionId,
   sessionOf,
   controlPlaneIdentity,

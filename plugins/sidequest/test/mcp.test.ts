@@ -6656,4 +6656,142 @@ test('SQ-2717: a missing frozen remote ref refuses integration closure instead o
   assert.notEqual(artifactAdmission.reason, 'integration_target_unavailable', 'artifact submissions stay clear of frozen Git ref resolution');
 });
 
+test('SQ-2903: executor lifecycle calls follow the claimed ticket board instead of the spawning session board', async () => {
+  const executorRepository = committedRepo('sq-mcp-cross-project-');
+  let executorWorktree: string | null = null;
+  try {
+    gitAt(executorRepository, ['config', 'user.name', 'Sidequest Tests']);
+    gitAt(executorRepository, ['config', 'user.email', 'sidequest@example.invalid']);
+    const category = `sq-2903-cross-project-${process.pid}`;
+    store.setCategory({ id: category, name: 'SQ-2903 cross-project lifecycle', route: { model: 'sonnet', effort: 'medium' }, fallback: null, enabled: true });
+    const executorProject = store.ensureProject(executorRepository).slug;
+    const ticket = store.createTicket(executorProject, {
+      title: 'cross-project executor lifecycle fixture',
+      category,
+      files: ['cross-project.txt'],
+      complexity: 3,
+      labels: ['direct-ok'],
+      complexityWhy: 'exercise lifecycle board resolution from a claimed cross-project dispatch',
+    });
+    const by = `cross-project-worker-${ticket.id}`;
+    const executorSession = `mcp-delivery-${ticket.id}`;
+    executorWorktree = prepareIsolatedWorktreeDispatch(executorProject, executorRepository, ticket, by);
+
+    const crossProjectComment = await callToolAsSession(executorSession, 'comment', {
+      ref: ticket.ref,
+      by,
+      body: 'cross-project lifecycle comment',
+    });
+    assert.equal(crossProjectComment.project, executorProject);
+    const checkpoint = await callToolAsSession(executorSession, 'checkpoint', {
+      ref: ticket.ref,
+      by,
+      commit: gitAt(executorWorktree, ['rev-parse', 'HEAD']),
+      verify: 'manual: checkpoint follows the claimed cross-project board',
+    });
+    assert.equal(checkpoint.project, executorProject);
+    const scopeRequest = await callToolAsSession(executorSession, 'scopeRequest', {
+      ref: ticket.ref,
+      by,
+      files: ['cross-project.txt'],
+    });
+    assert.equal(scopeRequest.project, executorProject);
+
+    const sessionProject = store.ensureProject(PROJ).slug;
+    store.createTicket(sessionProject, {
+      title: 'session board ref collision fixture',
+      files: ['session-board-first.txt'],
+    });
+    const wrongBoardTicket = store.createTicket(sessionProject, {
+      title: 'same session board ticket',
+      files: ['session-board.txt'],
+    });
+    assert.equal(store.claimTicket(sessionProject, wrongBoardTicket.ref, 'session-board-owner', {
+      direct: true,
+      reason: 'Fixture proves a matching ref on the spawning board is not selected.',
+      sessionId: 'other-session',
+    }).ok, true);
+
+    const wrongBoard = await callToolRaw('commit', {
+      ref: wrongBoardTicket.ref,
+      by,
+      message: 'must refuse before selecting the spawning board ticket',
+      worktree: executorWorktree,
+    });
+    assert.equal(wrongBoard.isError, true);
+    assert.match(wrongBoard.content[0].text, new RegExp(executorRepository.replace(/\\/g, '\\\\')));
+    assert.match(wrongBoard.content[0].text, new RegExp(PROJ.replace(/\\/g, '\\\\')));
+
+    fs.writeFileSync(path.join(executorWorktree, 'cross-project.txt'), 'cross-project lifecycle\n');
+    const committed = await callTool('commit', {
+      ref: ticket.ref,
+      by,
+      message: 'commit cross-project executor lifecycle fixture',
+      worktree: executorWorktree,
+    });
+    assert.ok(committed.commit, committed.message || committed.reason);
+    gitAt(executorWorktree, ['update-ref', `refs/sidequest/${ticket.ref}`, committed.commit]);
+
+    const submitted = await callTool('submit', {
+      ref: ticket.ref,
+      by,
+      commit: committed.commit,
+      worktree: executorWorktree,
+      verify: 'manual: the cross-project lifecycle fixture was checked',
+      body: 'Submitted the cross-project lifecycle fixture.',
+    });
+    assert.equal(submitted.ok, true, submitted.message || submitted.reason);
+    assert.equal(store.getTicket(executorProject, ticket.ref).submission.commit, committed.commit);
+
+    const releaseTicket = store.createTicket(executorProject, {
+      title: 'cross-project release fixture',
+      category,
+      files: ['release.txt'],
+      complexity: 3,
+      labels: ['direct-ok'],
+      complexityWhy: 'exercise release board resolution from a claimed cross-project dispatch',
+    });
+    const releaseBy = `cross-project-release-${releaseTicket.id}`;
+    const releasePrepared = store.prepareDispatch(executorProject, releaseTicket.ref, {
+      allowUnscoped: true,
+      sessionId: MCP_SESSION_ID,
+    });
+    assert.equal(store.claimTicket(executorProject, releaseTicket.ref, releaseBy, {
+      token: releasePrepared.token,
+      executor: releasePrepared.ticket.dispatchExecutor,
+      sessionId: MCP_SESSION_ID,
+    }).ok, true);
+    const released = await callTool('release', {
+      ref: releaseTicket.ref,
+      by: releaseBy,
+      reason: 'cross-project lifecycle release fixture completed',
+      kind: 'handback',
+      status: 'todo',
+    });
+    assert.equal(released.ok, true, released.message || released.reason);
+    assert.equal(store.getTicket(executorProject, releaseTicket.ref).status, 'todo');
+
+    const sameBoardTicket = store.createTicket(sessionProject, {
+      title: 'same-board lifecycle fixture',
+      files: ['same-board.txt'],
+    });
+    const sameBoardBy = `same-board-worker-${sameBoardTicket.id}`;
+    assert.equal(store.claimTicket(sessionProject, sameBoardTicket.ref, sameBoardBy, {
+      direct: true,
+      reason: 'Fixture proves same-board lifecycle calls keep their default board.',
+      sessionId: MCP_SESSION_ID,
+    }).ok, true);
+    const comment = await callTool('comment', {
+      ref: sameBoardTicket.ref,
+      by: sameBoardBy,
+      body: 'same-board lifecycle call stayed on the session board',
+    });
+    assert.equal(comment.ok, true, comment.message || comment.reason);
+    assert.equal(comment.project, sessionProject);
+  } finally {
+    if (executorWorktree) removeTestWorktree(executorRepository, executorWorktree);
+    else fs.rmSync(executorRepository, { recursive: true, force: true });
+  }
+});
+
 export {};

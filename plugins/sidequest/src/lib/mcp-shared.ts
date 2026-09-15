@@ -73,6 +73,47 @@ function resolveProject(projectArg?: any) {
   return store.ensureProject(store.sessionProjectRoot());
 }
 
+function resolveLifecycleProject(projectArg?: any, args?: any, action?: any) {
+  if (projectArg != null && String(projectArg).trim()) return resolveProject(projectArg);
+  const sessionProject = resolveProject();
+  const ref = String(args?.ref || '').trim();
+  const sessionId = runtimeSessionId();
+  const worktree = String(args?.worktree || '').trim();
+  const candidates = new Map<string, { slug: string; meta: any; refs: Set<string>; worktree: boolean }>();
+
+  for (const project of store.listProjects({ all: true })) {
+    for (const ticket of store.listTickets(project.slug)) {
+      if (!ticket.claim?.by) continue;
+      const dispatchWorktree = String(ticket.dispatch?.worktree || '').trim();
+      const matchingWorktree = Boolean(worktree && dispatchWorktree
+        && worktrees.canonicalPath(worktree) === worktrees.canonicalPath(dispatchWorktree));
+      const matchingRuntime = Boolean(sessionId && ticket.claim.runtime?.sessionId === sessionId);
+      if (!matchingWorktree && !matchingRuntime) continue;
+      const candidate = candidates.get(project.slug) || { slug: project.slug, meta: project, refs: new Set<string>(), worktree: false };
+      candidate.refs.add(String(ticket.ref || '').toUpperCase());
+      candidate.worktree ||= matchingWorktree;
+      candidates.set(project.slug, candidate);
+    }
+  }
+
+  const matching = [...candidates.values()].filter((candidate) => candidate.refs.has(ref.toUpperCase()));
+  const worktreeMatches = matching.filter((candidate) => candidate.worktree);
+  const resolved = worktreeMatches.length === 1 ? worktreeMatches : matching;
+  const [candidate] = resolved;
+  if (candidate && resolved.length === 1) return { slug: candidate.slug, meta: candidate.meta };
+  if (resolved.length > 1) {
+    throw new Error(`${action}: "${ref}" matches claimed executor boards ${resolved.map((candidate) => candidate.meta.path || candidate.slug).join(', ')}. Pass "project" explicitly.`);
+  }
+
+  if (candidates.size === 1) {
+    const candidate = candidates.values().next().value!;
+    if (candidate.slug !== sessionProject.slug) {
+      throw new Error(`${action}: "${ref}" is not on executor board ${candidate.meta.path || candidate.slug}; spawning session board is ${sessionProject.meta.path || sessionProject.slug}. Pass "project" explicitly.`);
+    }
+  }
+  return sessionProject;
+}
+
 // The MCP server inherits its Claude Code session identity. Tool callers only
 // know labels, which cannot be used by the Agent lifecycle hooks.
 function runtimeSessionId() {
@@ -1037,6 +1078,7 @@ module.exports = {
   assertSidequestInstall,
   assertDispatchTransport,
   resolveProject,
+  resolveLifecycleProject,
   runtimeSessionId,
   sessionOf,
   controlPlaneIdentity,

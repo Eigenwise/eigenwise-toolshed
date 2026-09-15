@@ -13,6 +13,7 @@ const {
   assertSidequestInstall,
   assertDispatchTransport,
   resolveProject,
+  resolveLifecycleProject,
   runtimeSessionId,
   sessionOf,
   requireDispatchSession,
@@ -356,7 +357,7 @@ const tools = [
       ]
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug } = resolveLifecycleProject(args.project, args, "checkpoint");
       const by = requireBy(args, "checkpoint");
       const res = store.checkpointTicket(slug, args.ref, by, {
         commit: args.commit,
@@ -580,7 +581,7 @@ const tools = [
       required: ["ref", "by"]
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, "release");
       const by = requireBy(args, "release");
       const reason = requiredReleaseReason(args);
       const ticket = store.getTicket(slug, args.ref);
@@ -654,7 +655,7 @@ const tools = [
       required: ["ref", "by", "files"]
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug } = resolveLifecycleProject(args.project, args, "scopeRequest");
       const by = requireBy(args, "scopeRequest");
       const res = store.requestScope(slug, args.ref, by, args.files, { source: "mcp" });
       const changed = res.ok ? {
@@ -688,7 +689,7 @@ const tools = [
       required: ["ref", "by", "message", "worktree"]
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, "commit");
       const by = requireBy(args, "commit");
       const message = requiredText(args, "message", "commit");
       const ticket = store.getTicket(slug, args.ref);
@@ -817,7 +818,7 @@ const tools = [
       required: ["ref", "by"]
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, "submit");
       const by = requireBy(args, "submit");
       if (args.clear) {
         const res2 = store.clearSubmission(slug, args.ref, {
