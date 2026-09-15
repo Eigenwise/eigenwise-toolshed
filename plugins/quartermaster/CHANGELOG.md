@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.11.0 (2026-09-15)
+
+Released in v3.568.0, up from 0.10.2.
+
+### Features
+
+- quartermaster crap gate measures per-function CRAP from lcov and lizard (SQ-2904)
+  `node bin/quartermaster.js crap` scores every function with `cc^2 * (1 - coverage)^3 + cc`, taking coverage from an lcov file and complexity from lizard, so it works in any language lizard reads. A new project gets a ceiling on every function; an existing one can set `ratchet` to a git ref, which fails any function in a changed file that got worse, holds new functions to the ceiling, and reports how many pre-existing functions already sit above it. Settings live in `.claude/quartermaster/crap.json`. It exits 2 when it cannot measure, with the install hint for lizard, rather than reporting a pass it did not earn.
+
+### Fixes
+
+- Explain and install the CRAP gate (SQ-2905)
+  Explain the CRAP gate in setup, resupply, and the Quartermaster guide.
+- Fix quartermaster README CLI drift (SQ-2913)
+  The README's `mine` line was missing `--no-subagents`, `decisions add --status` was missing the `deferred` status, and `enable-auto-allowlist` showed `--project` as required when it is optional. All three now match `quartermaster --help`.
+
 ## 0.10.2 (2026-09-12)
 
 Released in v3.562.0, up from 0.10.1.
