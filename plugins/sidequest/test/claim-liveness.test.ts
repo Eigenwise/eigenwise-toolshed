@@ -118,6 +118,13 @@ function addNegativeControlTicket(title?: any, by = 'negative-control-executor')
 
 // Rewrite persisted ticket state directly: these scenarios need claims that are
 // hours or days old without the test waiting for them.
+// Fixed offsets from one clock read, so the ordering the test pins cannot depend on where in the run
+// the test lands, while the claim stays far inside the idle backstop.
+const fixtureClockMs = Date.now();
+function secondsAgo(seconds: number): string {
+  return new Date(fixtureClockMs - seconds * 1000).toISOString();
+}
+
 function persist(ticket?: any) {
   db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
     id: ticket.id,
@@ -1390,4 +1397,183 @@ test('an unbound claimed dispatch reports a binding fault and stays claimed with
   assert.equal(pulse.liveness, 'binding_fault');
   assert.equal(pulse.claim.reclaimable, null);
   assert.equal(store.getTicket(slug, ticket.ref).claim.by, 'unbound-executor');
+});
+
+// SQ-2868: `dead` is what sends an orchestrator looking for recovery evidence to retire an attempt,
+// so pulse answering it from a died record that belongs to some OTHER attempt aims that at a live
+// executor. Both shapes below reported dead over a working runtime, and only the claim guard refused
+// to free the ticket. The third case is why the fix cannot just report everything alive.
+test('a died record only reports dead for the attempt that is actually being asked about', () => {
+  const superseded = addRouted('historical died attempt');
+  const firstSession = 'session-historical-death-first';
+  const first = claimRouted(superseded, 'sq2868-first-executor', { sessionId: firstSession });
+  assert.equal(store.recordDispatchAgentFailure(slug, superseded.ref, {
+    token: first.token,
+    executor: first.ticket.dispatchExecutor,
+    sessionId: firstSession,
+    taskName: first.ticket.dispatch.launchName,
+    error: 'Prompt is too long',
+  }).ok, true);
+  assert.equal(store.getTicket(slug, superseded.ref).dispatch.attempts.at(-1).outcome, 'died');
+
+  const secondSession = 'session-historical-death-second';
+  const second = store.prepareDispatch(slug, superseded.ref, { sharedTree: true, sessionId: secondSession });
+  const secondAgent = second.ticket.dispatch.launchName;
+  assert.equal(store.recordDispatchLaunch(slug, superseded.ref, {
+    token: second.token, executor: second.ticket.dispatchExecutor, sessionId: secondSession, agentName: secondAgent,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(secondSession, second.ticket.dispatchExecutor, secondAgent, secondAgent).ok, true);
+  assert.equal(store.claimTicket(slug, superseded.ref, 'sq2868-replacement-executor', {
+    token: second.token, executor: second.ticket.dispatchExecutor, sessionId: secondSession,
+  }).ok, true);
+
+  const freshPulse = store.pulsePayload(slug, superseded.ref);
+  assert.equal(freshPulse.died, null, 'a died attempt the live dispatch superseded is not this attempt’s death');
+  assert.equal(freshPulse.liveness, 'unknown');
+  assert.match(freshPulse.livenessEvidence, /no process heartbeat/);
+  assert.equal(store.getTicket(slug, superseded.ref).claim.by, 'sq2868-replacement-executor');
+
+  // The second shape: the terminal record is the current dispatch's own, but it predates the claim
+  // now holding the ticket, so it is about the launch that died rather than the runtime working now.
+  const reclaimed = addRouted('died record predates the claim');
+  const staleSession = 'session-stale-death';
+  const stale = claimRouted(reclaimed, 'sq2868-stopped-executor', { sessionId: staleSession });
+  assert.equal(store.recordDispatchAgentFailure(slug, reclaimed.ref, {
+    token: stale.token,
+    executor: stale.ticket.dispatchExecutor,
+    sessionId: staleSession,
+    taskName: stale.ticket.dispatch.launchName,
+    error: 'Prompt is too long',
+  }).ok, true);
+  const freed = store.getTicket(slug, reclaimed.ref);
+  assert.equal(freed.claim, null);
+  freed.labels = ['direct-ok'];
+  persist(freed);
+  assert.equal(store.claimTicket(slug, reclaimed.ref, 'sq2868-direct-executor', {
+    direct: true, reason: 'A direct claim picks the ticket up after the previous launch died.',
+  }).ok, true);
+
+  // Pinned rather than live: a same-millisecond claim reads as the death's own, which is correct but
+  // is not this case, and the position of this test in the run must not decide which case it is.
+  const directState = store.getTicket(slug, reclaimed.ref);
+  for (const record of [directState.dispatch, ...(directState.dispatch.attempts ?? [])]) {
+    if (record.terminalAt) record.terminalAt = secondsAgo(2);
+  }
+  directState.claim.at = secondsAgo(1);
+  directState.claim.activeAt = directState.claim.at;
+  persist(directState);
+  const directPulse = store.pulsePayload(slug, reclaimed.ref);
+  assert.equal(directPulse.died, null, 'a death recorded before this claim says nothing about the runtime holding it');
+  assert.notEqual(directPulse.liveness, 'dead');
+  assert.equal(store.getTicket(slug, reclaimed.ref).claim.by, 'sq2868-direct-executor');
+
+  // Negative case: the attempt holding the claim genuinely died, and that still frees the ticket.
+  const gone = addRouted('genuinely dead current attempt');
+  const dyingSession = 'session-genuine-death';
+  const dyingPrepared = store.prepareDispatch(slug, gone.ref, { sharedTree: true, sessionId: dyingSession });
+  const dyingClaim = store.claimTicket(slug, gone.ref, 'sq2868-dying-executor', {
+    token: dyingPrepared.token, executor: dyingPrepared.ticket.dispatchExecutor, sessionId: dyingSession,
+  });
+  assert.equal(dyingClaim.ok, true, JSON.stringify(dyingClaim));
+  const dying = store.getTicket(slug, gone.ref);
+  dying.dispatch.outcome = 'died';
+  dying.dispatch.terminalAt = new Date().toISOString();
+  dying.dispatch.terminalSource = 'test-stop-hook';
+  persist(dying);
+
+  const deadPulse = store.pulsePayload(slug, gone.ref);
+  assert.equal(deadPulse.liveness, 'dead');
+  assert.equal(deadPulse.died.source, 'test-stop-hook');
+  assert.equal(store.claimReleaseVerdict(store.getTicket(slug, gone.ref)).kind, 'observed_stop');
+});
+
+test('the died-record predicate keys on attempt identity and record age, not on presence', () => {
+  const { diedRecordAttestsAttempt } = require('../lib/store/pulse.js');
+  const dispatch = { preparedAt: '2026-09-01T10:00:00.000Z', tokenPrefix: 'aaaa-bbbb-cc' };
+  const claim = { at: '2026-09-01T10:05:00.000Z' };
+  const ownRecord = (fields?: any) => Object.assign({}, dispatch, { outcome: 'died', terminalSource: 'stop-hook' }, fields);
+  const rows = [
+    ['its own death after the claim', ownRecord({ terminalAt: '2026-09-01T10:06:00.000Z' }), claim, true],
+    ['its own death at the claim instant', ownRecord({ terminalAt: claim.at }), claim, true],
+    ['its own death with no claim to outlive', ownRecord({ terminalAt: '2026-09-01T10:01:00.000Z' }), null, true],
+    ['its own death before the claim', ownRecord({ terminalAt: '2026-09-01T10:04:59.999Z' }), claim, false],
+    // The reclaim authority (claims.observedStop) rejects a stop the claim outlived; pulse must agree (SQ-2917).
+    ['its own death, then the claim resumed activity', ownRecord({ terminalAt: '2026-09-01T10:06:00.000Z' }), { at: claim.at, activeAt: '2026-09-01T10:07:00.000Z' }, false],
+    // touchClaimActivity resumes a dispatch on same-instant activity, so the stop cannot attest it.
+    ['its own death at the instant of the last activity', ownRecord({ terminalAt: '2026-09-01T10:06:00.000Z' }), { at: claim.at, activeAt: '2026-09-01T10:06:00.000Z' }, false],
+    ['its own death after the last activity', ownRecord({ terminalAt: '2026-09-01T10:06:00.001Z' }), { at: claim.at, activeAt: '2026-09-01T10:06:00.000Z' }, true],
+    ['its own death under a clock that stepped back one millisecond', ownRecord({ terminalAt: '2026-09-01T10:04:59.999Z' }), { at: claim.at, activeAt: claim.at }, false],
+    ['a superseded attempt that died after the claim', ownRecord({
+      preparedAt: '2026-09-01T09:00:00.000Z', tokenPrefix: 'zzzz-yyyy-xx', terminalAt: '2026-09-01T10:06:00.000Z',
+    }), claim, false],
+    ['a non-died terminal record', ownRecord({ outcome: 'failed', terminalAt: '2026-09-01T10:06:00.000Z' }), claim, false],
+    ['a died record with no terminal time', ownRecord({ terminalAt: null }), claim, false],
+  ];
+  for (const [label, record, claimRow, expected] of rows) {
+    assert.equal(diedRecordAttestsAttempt(dispatch, record, claimRow), expected, label as string);
+  }
+});
+
+// The store-level twin of the resumed-activity row: a stop hook fires, then the same runtime writes to
+// the board again. The sweep treats the claim as alive (touchClaimActivity resumed the dispatch), so
+// pulse reporting dead here would aim recovery at a runtime the sweep refuses to free.
+test('a died record the claim outlived does not read as dead once the runtime resumed activity', () => {
+  const ticket = addRouted('resumed after a stop hook');
+  const session = 'session-resumed-after-stop';
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: session });
+  assert.equal(store.claimTicket(slug, ticket.ref, 'sq2917-resumed-executor', {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: session,
+  }).ok, true);
+  const stopped = store.getTicket(slug, ticket.ref);
+  stopped.claim.at = secondsAgo(3);
+  stopped.claim.activeAt = secondsAgo(1);
+  stopped.dispatch.outcome = 'died';
+  stopped.dispatch.terminalAt = secondsAgo(2);
+  stopped.dispatch.terminalSource = 'test-stop-hook';
+  persist(stopped);
+
+  const pulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(pulse.died, null);
+  assert.notEqual(pulse.liveness, 'dead');
+  assert.equal(store.claimReleaseVerdict(store.getTicket(slug, ticket.ref)), null, 'the sweep sees a live claim, and pulse agrees');
+});
+
+// SQ-2918: the claim holder writes to the board at the same millisecond its stop was recorded.
+// touchClaimActivity resumes the dispatch, but the retained attempt keeps the stop with the current
+// identity, so pulse used to find it and report dead while the sweep held the claim.
+test('activity at the same instant as the stop resumes the dispatch and pulse does not read the retained stop as dead', () => {
+  const ticket = addRouted('same-instant resume');
+  const session = 'session-same-instant-resume';
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: session });
+  const holder = 'sq2918-same-instant-executor';
+  assert.equal(store.claimTicket(slug, ticket.ref, holder, {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: session,
+  }).ok, true);
+  const stopped = store.getTicket(slug, ticket.ref);
+  stopped.claim.at = secondsAgo(2);
+  stopped.claim.activeAt = stopped.claim.at;
+  stopped.dispatch.outcome = 'died';
+  stopped.dispatch.terminalAt = secondsAgo(1);
+  stopped.dispatch.terminalSource = 'test-stop-hook';
+  persist(stopped);
+  assert.equal(store.pulsePayload(slug, ticket.ref).liveness, 'dead', 'before the activity the stop is the attempt’s own');
+
+  const commented = store.addComment(slug, ticket.ref, { by: holder, body: 'still here' });
+  assert.equal(commented.ok, true, JSON.stringify(commented));
+  const resumed = store.getTicket(slug, ticket.ref);
+  assert.equal(resumed.dispatch.outcome, 'claimed');
+  assert.equal(resumed.dispatch.terminalAt, undefined);
+  assert.equal(resumed.claim.activeAt, commented.comment.at);
+  // addComment stamps its own clock, so the same-instant stop is written into the retained attempt
+  // afterwards: the shape touchClaimActivity leaves behind when the stop hook and the comment share
+  // a millisecond.
+  resumed.dispatch.attempts = [...(resumed.dispatch.attempts ?? []), {
+    preparedAt: resumed.dispatch.preparedAt, tokenPrefix: resumed.dispatch.tokenPrefix,
+    outcome: 'died', terminalAt: commented.comment.at, terminalSource: 'test-stop-hook',
+  }];
+  persist(resumed);
+  const pulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(pulse.died, null);
+  assert.notEqual(pulse.liveness, 'dead');
+  assert.equal(store.claimReleaseVerdict(resumed), null);
 });

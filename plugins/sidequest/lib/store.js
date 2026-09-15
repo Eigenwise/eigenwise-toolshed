@@ -598,7 +598,7 @@ const WORKTREE_SETUP_MAX_LENGTH = 1e3;
 const SHARED_TREE_ARTIFACT_MARKER = "Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.";
 const CONTROL_PLANE_COMPLETION = /* @__PURE__ */ Symbol("sidequest.control-plane-completion");
 const DELIVERY_MODES = ["merge", "replay", "apply"];
-const DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS = 10 * 60 * 1e3;
+const DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS = 25 * 60 * 1e3;
 const MAX_INTEGRATION_VERIFY_TIMEOUT_MS = 60 * 60 * 1e3;
 const INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES = 8 * 1024;
 const EXECUTOR_ANCHORS_MAX = 4e3;
@@ -608,6 +608,7 @@ const {
   dispatchTokenPrefix,
   executorClaimDispatchRefusal,
   sharedTreeRuntimeRefusal,
+  isolatedDispatchRepositoryForSession,
   sharedTreeArtifactRequested,
   categoryArtifactRoot,
   sharedTreeArtifactMode,
@@ -1828,6 +1829,9 @@ function claimAdmission(slug, idOrRef, opts) {
   }
   return { ok: true, ticket, token };
 }
+function reducedPermissionModeSupported(mode) {
+  return mode === "auto" || mode === "bypassPermissions";
+}
 function bindClaimRuntimeIdentity(slug, idOrRef, opts) {
   const agentId = String(opts?.agentId || "").trim();
   const observedPermissionMode = String(opts?.permissionMode || "").trim();
@@ -1838,7 +1842,7 @@ function bindClaimRuntimeIdentity(slug, idOrRef, opts) {
     reason: "missing_identity",
     ticket: found,
     ...found.dispatch?.reducedAgentSchema === true ? {
-      message: `${found.ref} reduced Agent-schema dispatch requires hook-reported agent_id before the first claim. Reload into a host that reports agent_id and permission_mode "bypassPermissions" to PreToolUse, then dispatch again without adding unsupported Agent fields or changing permissions.`
+      message: `${found.ref} reduced Agent-schema dispatch requires hook-reported agent_id before the first claim. Stop without claiming; use a host that reports agent_id and permission_mode ("auto" or "bypassPermissions") to PreToolUse. Do not add unsupported Agent fields or change permissions.`
     } : {}
   };
   return withTicketLock(slug, found.id, () => {
@@ -1849,15 +1853,6 @@ function bindClaimRuntimeIdentity(slug, idOrRef, opts) {
     const state = dispatchState(ticket);
     if (!state || state.terminalAt || !["prepared", "launched", "claimed"].includes(state.outcome)) {
       return { ok: false, reason: "dispatch_unavailable", ticket };
-    }
-    if (state.reducedAgentSchema === true && observedPermissionMode !== "bypassPermissions") {
-      const observed = observedPermissionMode || "missing";
-      return {
-        ok: false,
-        reason: "permission_mode_unverified",
-        ticket,
-        message: `${ticket.ref} reduced Agent-schema dispatch requires hook-reported permission_mode "bypassPermissions" before the first claim; observed ${JSON.stringify(observed)}. Use a host that reports that field to PreToolUse, then dispatch again without adding unsupported Agent fields or changing permissions.`
-      };
     }
     const sessionId = String(opts?.sessionId || "").trim();
     if (!sessionId || String(state.sessionId || "").trim() !== sessionId) {
@@ -1873,8 +1868,17 @@ function bindClaimRuntimeIdentity(slug, idOrRef, opts) {
     }
     state.bindSource = "claim_runtime_identity";
     if (state.reducedAgentSchema === true) state.observedPermissionMode = observedPermissionMode;
-    stampDispatchEvent(ticket, "claim-runtime-identity", now);
+    const permissionRefused = state.reducedAgentSchema === true && !reducedPermissionModeSupported(observedPermissionMode);
+    stampDispatchEvent(ticket, permissionRefused ? "claim-permission-refused" : "claim-runtime-identity", now);
     putTicket(slug, ticket);
+    if (permissionRefused) {
+      return {
+        ok: false,
+        reason: observedPermissionMode ? "permission_mode_unsupported" : "permission_mode_missing",
+        ticket,
+        message: `${ticket.ref} reduced Agent-schema dispatch has ${observedPermissionMode ? "an unsupported" : "no"} hook-reported permission_mode; observed ${JSON.stringify(observedPermissionMode || "missing")}. An unattended executor can only finish under "auto" or "bypassPermissions". Stop without claiming or changing permissions; once this runtime's terminal hook is recorded, the orchestrator can prepare a fresh dispatch.`
+      };
+    }
     return { ok: true, ticket };
   });
 }
@@ -1903,12 +1907,12 @@ function claimTicket(slug, idOrRef, by, opts) {
     const admission = claimAdmission(slug, found.id, opts);
     if (!admission.ok) return admission;
     const currentDispatch = dispatchState(t2);
-    if (currentDispatch?.reducedAgentSchema === true && (!String(currentDispatch.agentId || "").trim() || currentDispatch.observedPermissionMode !== "bypassPermissions")) {
+    if (currentDispatch?.reducedAgentSchema === true && (!String(currentDispatch.agentId || "").trim() || !reducedPermissionModeSupported(currentDispatch.observedPermissionMode))) {
       return {
         ok: false,
         reason: "reduced_runtime_unverified",
         ticket: t2,
-        message: `claim: refused ${t2.ref}; this reduced Agent-schema dispatch needs hook-reported agent_id and permission_mode "bypassPermissions" before it can claim. Reload into a host that reports both fields to PreToolUse, then dispatch again without adding unsupported Agent fields or changing permissions.`
+        message: `claim: refused ${t2.ref}; this reduced Agent-schema dispatch needs hook-reported agent_id and permission_mode ("auto" or "bypassPermissions") before it can claim. Stop without claiming or changing permissions; caller-supplied fields cannot replace hook evidence.`
       };
     }
     const terminalDispatch = Boolean(currentDispatch?.terminalAt && currentDispatch?.outcome);
@@ -2321,7 +2325,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
     if (opts.claimRelease) {
       t.claimRelease = Object.assign({ by, at: now, source: opts.source || "store" }, opts.claimRelease);
     }
-    const terminalOutcome = opts.status === "done" ? "done" : dispatch2?.outcome === "died" || opts.claimRelease?.kind === "session_ended" ? "died" : "released";
+    const terminalOutcome = opts.status === "done" ? "done" : dispatch2?.terminalAt ? dispatch2.outcome : opts.claimRelease?.kind === "session_ended" ? "died" : "released";
     const release = opts.releaseKind ? {
       kind: String(opts.releaseKind),
       reason: String(opts.releaseReason || "").trim() || null,
@@ -2902,11 +2906,10 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
   const state = dispatchState(ticket);
   if (purpose === "grooming") {
     if (ticket.claim && ticket.claim.by && !claimReclaimable(ticket) || ticket.dispatchNonce || state && !state.terminalAt) {
-      const holder = ticket.claim && ticket.claim.by ? String(ticket.claim.by) : "<claim holder>";
       return {
         ok: false,
         reason: "active_dispatch",
-        message: `${ticket.ref} still has a live claim or an open dispatch, so grooming cannot close it. Release it first: \`sidequest release ${ticket.ref} --by ${holder}\`, then re-run this closure with the same evidence. Releasing does not discard work already committed.`,
+        message: `${ticket.ref} still has a live claim or an open dispatch, so grooming cannot close it. Do not force-take it. After trusted host terminal evidence, release it with \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : "<claim holder>"}\`, then close it as plain grooming with the shipped commit as evidence, without --integration. Releasing does not discard work already committed.`,
         ticket
       };
     }
@@ -3365,6 +3368,7 @@ module.exports = {
   canonicalPreparedDispatchExecutor,
   executorClaimDispatchRefusal,
   sharedTreeRuntimeRefusal,
+  isolatedDispatchRepositoryForSession,
   prepareDispatch,
   syncLiveDispatchVerification,
   readDispatchBriefing,

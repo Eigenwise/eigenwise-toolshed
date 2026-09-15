@@ -28,6 +28,22 @@ Before it names a plugin in that plan, setup can check current sources for wheth
 
 Setup installs the approved plugins and writes the approved project files, then pauses at the activation boundary. Run `/reload-plugins`, or restart Claude Code when the change affects the process environment, and tell Claude `continue`. Setup verifies the selected plugins and project configuration after that boundary.
 
+### Keep complex code tested
+
+Setup proposes a CRAP gate for a codebase. CRAP combines a function's branching complexity and test
+coverage, so a large function with little coverage gets a high score. The default ceiling is 6: keep
+each function small or cover it well.
+
+When you approve it, setup writes `.claude/quartermaster/crap.json` and a live rule that runs:
+
+```text
+node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"
+```
+
+It also shows the coverage command for your stack and asks you to pick the threshold. The gate needs
+[lizard](https://github.com/terryyin/lizard) for complexity measurement. Setup never installs it. Exit
+2 means a prerequisite or coverage input is missing. Follow the printed hint, then run the gate again.
+
 When setup wires Model Gateway or Sidequest routing, Quartermaster can offer the optional `325000` `autoCompactWindow` setting for a consistent Codex compaction point. Setup asks before writing it. If user or project settings already has a value, it reports which one wins and preserves that value.
 
 If you choose telemetry, Claude hands the setup to Observability and tells you when a restart is needed. You can also decline and continue without it.
@@ -76,9 +92,9 @@ The miner reads local transcript files and emits a bounded aggregate. The active
 
 Raw transcript files are never loaded into model context, and the resupply skill is forbidden from opening them. The default pass mines the current project. Setup explicitly requests the all-projects summary, while resupply only uses `--all-projects` for a global pass. A host policy label alone never justifies a permission allowlist or hook change; existing approval requirements still apply.
 
-Automatic permission learning excludes bare `PowerShell` rules as too broad. It does not create scoped PowerShell rules or remove older bare `PowerShell` entries, which need user review. A manually approved scoped rule remains a user decision.
+Automatic permission learning stays off until the project opts in with `enable-auto-allowlist`; until then, resupply only reports what it would add. It only considers a fingerprint approved at least three times with no denial, and it never covers a destructive command such as `rm` or `git push --force`. It also excludes bare `PowerShell` rules as too broad, and it does not create scoped PowerShell rules or remove older bare `PowerShell` entries, which need user review. A manually approved scoped rule remains a user decision, and the opt-in marker and every learned rule stay in the project's own `.claude/settings.local.json`, never a user or global setting.
 
-The skill ranks findings in this order: a missing measurement, manual work, existing capabilities that underperform, knowledge being re-derived, then setup friction. It first checks whether an existing project capability can meet the goal or be improved, and only proposes a new capability when the evidence says the existing choices do not fit. It keeps what works and changes a concrete weakness, never the workspace for novelty. Before it offers a change, it identifies the benefit, smallest approach, and boundary; focused research is only for an unknown that could change that call. It never starts a resupply pass without current or standing approval. It proposes at most seven findings one at a time with evidence and an exact change. A rejected recommendation is recorded and does not return; an accepted one is checked in a later pass.
+The skill ranks findings in this order: a missing measurement, manual work, existing capabilities that underperform, knowledge being re-derived, then setup friction. It first checks whether an existing project capability can meet the goal or be improved, and only proposes a new capability when the evidence says the existing choices do not fit. It keeps what works and changes a concrete weakness, never the workspace for novelty. Before it offers a change, it identifies the benefit, smallest approach, and boundary; focused research is only for an unknown that could change that call. It never starts a resupply pass without current or standing approval. It proposes at most seven findings one at a time with evidence and an exact change. A rejected recommendation records the user's own no to a proposal actually shown to them, and it does not return in that project; an accepted one is checked in a later pass. A finding the skill itself decides to skip, rather than one the user turned down, is left unrecorded or marked deferred instead of rejected.
 
 ## How the loop closes
 

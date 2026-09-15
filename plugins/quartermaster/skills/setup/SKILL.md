@@ -127,9 +127,19 @@ handing off implementation. Draw from three sources, in this order:
     [references/rule-templates.md](references/rule-templates.md) as reference material to derive
     from, never copy (byte-identical output means it was copied; rewrite or drop it). Every workspace
     gets the reuse-first implementation baseline from
-    [references/clean-code-principles.md](references/clean-code-principles.md) and the self-improvement
-    rule from [references/self-improvement.md](references/self-improvement.md), adapted to the project
-    and included in the approved write list.
+    [references/clean-code-principles.md](references/clean-code-principles.md), the self-improvement
+    rule from [references/self-improvement.md](references/self-improvement.md), and, for every
+    codebase, a proposed CRAP gate from [references/crap-gate.md](references/crap-gate.md). Adapt
+    them to the project and include them in the approved write list. Skip the CRAP gate for a
+    not-a-codebase.
+  - **CRAP gate**: propose it for every codebase, including one short explanation: it scores each
+    function's branching complexity and test coverage together, so big untested functions stand out.
+    Quartermaster starts at 6, which means every function stays small or tested. Show the detected
+    stack's LCOV recipe from [references/crap-gate.md](references/crap-gate.md), the proposed
+    `.claude/quartermaster/crap.json`, the derived `.claude/live-rules/rules/crap-gate.md`, and the
+    threshold choice. New projects apply 6 to every function. Existing projects ratchet against the
+    default branch while applying 6 to new functions, and show the current count at or above 6 before
+    asking whether the user wants another ceiling.
 
 Before putting a named plugin or external recommendation in the plan, keep the local catalog first and
 use it as the source for installed state. Research only candidates that would lead to an install or
@@ -160,8 +170,9 @@ nothing that needs a plugin loaded happens until after the activation boundary.
 
 - Install approved plugins with `claude plugin install <name>@<marketplace> --scope project`.
 - Write the approved artifacts: live rules under `.claude/live-rules/rules/*.md` via live-rules'
-  documented atomic format (or its `add-rule` skill after reload), `permissions.allow` entries
-  in `.claude/settings.json`, a structure note for greenfield projects per
+  documented atomic format (or its `add-rule` skill after reload), `.claude/quartermaster/crap.json`
+  and `.claude/live-rules/rules/crap-gate.md` when the CRAP gate is approved, `permissions.allow`
+  entries in `.claude/settings.json`, a structure note for greenfield projects per
   [references/structure-notes.md](references/structure-notes.md), and optionally a lightweight
   CLAUDE.md seeded through the built-in `/init`.
 - Then stop once: ask the user to activate the selected installs with `/reload-plugins`, or restart
@@ -174,8 +185,11 @@ After the reload or restart: `claude plugin list --json` confirms every selected
 enabled at its requested scope. Then verify each piece is actually usable, not just present:
 build the codebase map via `map-codebase` (skip for not-a-codebase), confirm live-rules content
 is visibly injected in your context, bring up the sidequest board if selected, and check each
-LSP responds. If model-gateway is installed but unwired, point at its skill rather than wiring
-it yourself. Fix what fails and re-verify; report what you confirmed, concretely.
+LSP responds. For an approved CRAP gate, run `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" crap
+--project "${CLAUDE_PROJECT_DIR}"` once and report the real result: pass, fail with its offender
+count, or exit 2 with the missing prerequisite. Do not say the gate is live before that command ran.
+If model-gateway is installed but unwired, point at its skill rather than wiring it yourself. Fix what
+fails and re-verify; report what you confirmed, concretely.
 
 ### 7. Record and hand over
 
@@ -187,6 +201,9 @@ your own call not to propose something under it.
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" decisions add --project "${CLAUDE_PROJECT_DIR}" \
   --title "<short title>" --fingerprint "<kind>:<slug>" --status applied|rejected --kind <kind>
 ```
+
+For the CRAP gate, record its applied or rejected decision as `--fingerprint "rule:crap-gate"`
+and `--kind rule`.
 
 Close with what they got, a short next-actions list using only what was installed and verified,
 a reminder to commit `.claude/`, and a pointer to
@@ -218,6 +235,7 @@ what would make the user's current work easier and whether this setup is earning
 
 - `references/stack-plugins.md` - stack to plugins/marketplaces/LSP catalog
 - `references/rule-templates.md` - craft-baseline and stack rule reference material
+- `references/crap-gate.md` - CRAP threshold policy, LCOV recipes, config, and live-rule source
 - `references/self-improvement.md` - the self-improvement live rule every workspace gets
 - `references/structure-notes.md` - structure notes, mostly for greenfield
 - `references/clean-code-principles.md` - optional digest for the guidelines-pointer rule

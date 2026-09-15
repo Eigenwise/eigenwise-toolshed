@@ -172,6 +172,91 @@ test('bundled plugin types survive launch, runtime binding and claim without cha
   }
 });
 
+test('a host-reported stream idle timeout makes a claimed dispatch recoverable', () => {
+  const pluginRoot = path.resolve(__dirname, '..');
+  const ticket = createFixture('host-reported stream timeout');
+  const sessionId = `host-stop-${ticket.ref}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+  const agentId = `agent-${ticket.ref}`;
+  const executor = prepared.ticket.dispatchExecutor;
+  const launchName = prepared.ticket.dispatch.launchName;
+
+  function runHook(filename: string, input: Record<string, unknown>) {
+    return execFileSync(process.execPath, [path.join(pluginRoot, 'hooks', filename)], {
+      cwd: PROJECT,
+      input: JSON.stringify(input),
+      encoding: 'utf8',
+      windowsHide: true,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: pluginRoot, CLAUDE_CODE_SUBAGENT_MODEL: '' },
+    });
+  }
+
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor,
+    sessionId,
+    agentName: launchName,
+  }).ok, true);
+  runHook('subagent-start.js', { cwd: PROJECT, session_id: sessionId, agent_id: agentId, agent_type: `sidequest:${executor}`, agent_name: launchName });
+  assert.equal(store.claimTicket(slug, ticket.ref, 'timed-out-worker', { token: prepared.token, executor, effort: 'high' }).ok, true);
+  runHook('subagent-stop.js', {
+    cwd: PROJECT,
+    session_id: sessionId,
+    agent_id: agentId,
+    agent_type: `sidequest:${executor}`,
+    agent_name: launchName,
+    reason: 'API Error: stream idle timeout',
+  });
+
+  const terminal = store.getTicket(slug, ticket.ref);
+  assert.equal(terminal.dispatch.outcome, 'failed');
+  assert.equal(terminal.dispatch.terminalSource, 'subagent-stop');
+  assert.equal(terminal.dispatch.failureShape, 'stream_idle_timeout');
+  assert.equal(terminal.claim.by, 'timed-out-worker');
+  const grooming = store.completeTicketAsControlPlane(slug, ticket.ref, {
+    purpose: 'grooming',
+    by: 'recovery-orchestrator',
+    reason: 'The host reported the executor terminal.',
+  });
+  assert.equal(grooming.reason, 'active_dispatch');
+  assert.match(grooming.message, /plain grooming/i);
+  assert.match(grooming.message, /without --integration/i);
+  const released = store.releaseTicket(slug, ticket.ref, 'recovery-orchestrator', { status: 'todo', source: 'test' });
+  assert.equal(released.ok, true);
+  assert.equal(released.ticket.claim, null);
+  assert.equal(released.ticket.dispatch.outcome, 'failed');
+  assert.equal(released.ticket.dispatchNonce, null);
+});
+
+test('a claim heartbeat overrides a host terminal record before recovery', () => {
+  const ticket = createFixture('heartbeat overrides terminal record');
+  const sessionId = `heartbeat-${ticket.ref}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+  const executor = prepared.ticket.dispatchExecutor;
+  const agentId = `agent-${ticket.ref}`;
+
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor,
+    sessionId,
+    agentName: prepared.ticket.dispatch.launchName,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, prepared.ticket.dispatch.launchName).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'live-worker', { token: prepared.token, executor, effort: 'high' }).ok, true);
+  assert.equal(store.markDispatchStopped(sessionId, executor, agentId, prepared.ticket.dispatch.launchName, null, 'API Error: stream idle timeout').ok, true);
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.outcome, 'failed');
+  assert.equal(store.touchClaim(slug, ticket.ref, 'live-worker').ok, true);
+
+  const live = store.getTicket(slug, ticket.ref);
+  assert.equal(live.dispatch.outcome, 'claimed');
+  assert.equal(live.dispatch.terminalAt, undefined);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'recovery-orchestrator', { status: 'todo', source: 'test' }).reason, 'not_owner');
+  assert.throws(
+    () => store.prepareDispatch(slug, ticket.ref, { recoveryEvidence: 'A self-asserted terminal observation cannot take a heartbeating claim.' }),
+    /claimed by live-worker/,
+  );
+});
+
 // SubagentStop carries agent_id and never agent_name, so an attempt whose cancellable SubagentStart
 // never recorded an agentId used to be unreachable by its own terminal hook and waited out the
 // claim-idle backstop instead. The host's agent-<id>.meta.json sidecar carries the launch name, and

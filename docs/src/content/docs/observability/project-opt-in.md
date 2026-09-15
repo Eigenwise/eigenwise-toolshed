@@ -9,7 +9,7 @@ Observability is opt-in per repository. From anywhere inside the repository, run
 /observability:enable-project-telemetry
 ```
 
-Approve the setup when Claude asks. It handles the machine-shared local services you selected, then wires this repository for the intended metadata-only Claude Code usage and checks for incoming metrics. A bare setup keeps SQLite only; `--dashboard` explicitly requests the Docker dashboard. The current hook and ingest path can accept hook events before checking repository opt-in, so treat the per-repository policy as intended rather than a hard runtime privacy guarantee until enforcement is fixed.
+Approve the setup when Claude asks. It handles the machine-shared local services you selected, then wires this repository for the intended metadata-only Claude Code usage and checks for incoming metrics. A bare setup keeps SQLite only; `--dashboard` explicitly requests the Docker dashboard. Repository opt-in is enforced before capture: a hook event for a repository that has not opted in is gated at the spool write and never persisted.
 
 ## What one opt-in covers
 
@@ -28,6 +28,6 @@ If it is still `not-found`, restart the listed session directories and create an
 
 ## Disable one repository
 
-Run the same skill and ask Claude to disable telemetry for the current repository. It unwires the settings environment, removes the repository from the opted-in registry, and stops native Claude Code metrics for new sessions, while leaving other opted-in repositories alone. Hook events can still reach a running observer after disable. Deleting history is a separate global cleanup of the shared local store, not a per-repository disable action.
+Run the same skill and ask Claude to disable telemetry for the current repository. It unwires the settings environment, removes the repository from the opted-in registry, and stops native Claude Code metrics for new sessions, while leaving other opted-in repositories alone. Disabling stops future hook capture and future export of any rows still queued for that repository, while local history is retained; Collector traces and metrics are not covered by this gate. Deleting history is a separate global cleanup of the shared local store, not a per-repository disable action.
 
 The [dashboard guide](../dashboard/) explains how to read project and global views after verification.
