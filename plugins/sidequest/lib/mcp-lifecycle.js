@@ -59,13 +59,14 @@ const {
 } = require("./mcp-shared");
 const { sourceRevisionBaseline } = require("./source-revision-capability");
 const VERIFICATION_WAIVER_PROP = {
+  type: "object",
   description: "Required with skipVerify. Names the human authority, reason, affected gate, and a bounded scope or future expiry. Runtime validation rejects incomplete, expired, or non-object values.",
   properties: {
-    authority: { description: "Human authority granting this one waiver." },
-    reason: { description: "Why the required verification cannot run." },
-    affectedGate: { description: "Exact verification gate being waived." },
-    scope: { description: "Bounded files, artifact, or delivery scope covered by the waiver." },
-    expiresAt: { description: "Future ISO timestamp after which the waiver is invalid." }
+    authority: { type: "string", description: "Human authority granting this one waiver." },
+    reason: { type: "string", description: "Why the required verification cannot run." },
+    affectedGate: { type: "string", description: "Exact verification gate being waived." },
+    scope: { type: "string", description: "Bounded files, artifact, or delivery scope covered by the waiver." },
+    expiresAt: { type: "string", description: "Future ISO timestamp after which the waiver is invalid." }
   }
 };
 function compactIntegrationDelivery(integration) {
@@ -919,6 +920,7 @@ const tools = [
       const by = requireBy(args, "integrate");
       const refs = String(args.ref).split(",").map((ref) => ref.trim()).filter(Boolean);
       if (!refs.length) throw new Error("integrate: pass one or more ticket refs.");
+      const verificationWaiver = args.verificationWaiver;
       if (Object.hasOwn(args, "wave")) {
         if (args.wave === null || Array.isArray(args.wave) || typeof args.wave !== "object") {
           return mutationAck(slug, {
@@ -946,7 +948,7 @@ const tools = [
         const delivery2 = store.integrateSubmissionWave(slug, refs, {
           mode: mode2,
           skipVerify: args.skipVerify === true,
-          verificationWaiver: args.verificationWaiver
+          verificationWaiver
         });
         if (!delivery2.ok) return mutationAck(slug, delivery2);
         const reason2 = `Delivered assembled wave ${refs.join(", ")} via ${delivery2.integration.mode}.`;
@@ -967,7 +969,7 @@ const tools = [
         const delivery2 = store.integrateSubmission(slug, args.ref, {
           mode: args.mode == null ? store.boardConfig(slug).delivery : args.mode,
           skipVerify: args.skipVerify === true,
-          verificationWaiver: args.verificationWaiver
+          verificationWaiver
         });
         const failure = delivery2.outside?.length ? { strayPaths: delivery2.outside } : {};
         if (delivery2.verify && /^verification_[a-z_]+_post_merge(?:_rollback_failed)?$/.test(String(delivery2.reason))) failure.verifyFailed = delivery2.verify;
@@ -1010,7 +1012,7 @@ const tools = [
           deliveryMethod: args.deliveryMethod,
           reason: args.reason,
           skipVerify: args.skipVerify === true,
-          verificationWaiver: args.verificationWaiver
+          verificationWaiver
         });
         if (!recorded.ok) return mutationAck(slug, recorded);
         const deliveryTicket2 = recorded.ticket;
@@ -1033,7 +1035,7 @@ const tools = [
         mode,
         target,
         skipVerify: args.skipVerify === true,
-        verificationWaiver: args.verificationWaiver
+        verificationWaiver
       });
       if (!delivery.ok) {
         const failure = delivery.outside?.length ? { strayPaths: delivery.outside } : {};
@@ -1044,7 +1046,7 @@ const tools = [
       const verification = store.verifyIntegration(slug, args.ref, {
         by,
         skipVerify: args.skipVerify === true,
-        verificationWaiver: args.verificationWaiver
+        verificationWaiver
       });
       if (!verification.ok) {
         return Object.assign(mutationAck(slug, verification), { delivery: integration, verifyFailed: verification.verify });

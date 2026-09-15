@@ -17,6 +17,7 @@ const {
   nudgeThresholds,
   offerThresholds,
   projectStateFile,
+  readDecisions,
   readProjectState,
   recordSessionTally,
   rejectedFingerprints,
@@ -287,6 +288,19 @@ test('a rejection recorded against another project does not suppress the fingerp
 
   assert.equal(rejectedFingerprints(environment, path.resolve(os.tmpdir(), 'other-repo')).rejected.includes('permission:auto-allowlist-optin'), true);
   assert.equal(rejectedFingerprints(environment).rejected.includes('permission:auto-allowlist-optin'), true, 'unscoped keeps the whole-ledger view');
+});
+
+test('readDecisions scoped to a project keeps global entries and drops other projects', () => {
+  const otherProject = path.resolve(os.tmpdir(), 'other-repo');
+  appendDecision({ projectDir: PROJECT, fingerprint: 'rule:mine', status: 'applied', title: 'mine' }, environment);
+  appendDecision({ projectDir: otherProject, fingerprint: 'rule:theirs', status: 'applied', title: 'theirs' }, environment);
+  appendDecision({ fingerprint: 'rule:legacy', status: 'applied', title: 'legacy, no projectDir' }, environment);
+
+  const scoped = readDecisions(environment, PROJECT);
+  assert.deepEqual(scoped.map((decision) => decision.fingerprint).sort(), ['rule:legacy', 'rule:mine']);
+
+  const unscoped = readDecisions(environment);
+  assert.equal(unscoped.length, 3, 'no project filter returns the whole ledger');
 });
 
 test('verifyDecisions reports improvement against the targeted signal', () => {

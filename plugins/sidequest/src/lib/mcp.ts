@@ -53,7 +53,10 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // attestation grammar alone. Everything that can wait for the second call went to the skill instead.
 // Raised from 23600 for recovery-retention board configuration (SQ-2453) while preserving the 2.5KB reserve.
 // Raised from 23800 for the reduced Agent-schema contract: callers need the visible-schema condition and first-claim evidence before dispatch.
-const MCP_TOOLS_LIST_MAX_BYTES = 24000;
+// Raised from 24000 for VERIFICATION_WAIVER_PROP's type: 'object' (SQ-2 / GitHub #109): an MCP host that
+// enforces the declared schema type refused a top-level verificationWaiver because the property listed
+// `properties` without `type: 'object'`. +91 bytes compacted, while preserving the 2.5KB reserve.
+const MCP_TOOLS_LIST_MAX_BYTES = 24100;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {

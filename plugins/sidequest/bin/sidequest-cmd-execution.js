@@ -339,7 +339,7 @@ async function cmdCommit(opts, positional) {
   ])];
   const foreignFragments = commitScope.foreignReleaseFragmentPaths(process.cwd(), ticket.ref, rejectedRelatedReleaseFragments(slug, ticket));
   if (foreignFragments.length) {
-    fail(`commit: refused ${ticket.ref}; only ${commitScope.ticketReleaseFragment(ticket.ref)} is implicitly writable, except a deleted fragment from a related review-rejected candidate. Other release fragments: ${foreignFragments.join(", ")}.`);
+    fail(commitScope.foreignReleaseFragmentRefusalMessage("commit", ticket.ref, foreignFragments));
   }
   const result = commitScope.commitScoped(process.cwd(), opts.message, scope);
   if (!result.ok) {
