@@ -3578,6 +3578,76 @@ test('SQ-2169: integrate records an already delivered reviewed candidate or a re
   }
 });
 
+test('recorded delivery keeps its verifier sealed while an explicit replacement records only a passing result', () => {
+  cleanBranch();
+  const ticket = addTicket('recorded delivery verifier replacement', {
+    files: ['lib/recorded-verify-replacement.js'],
+  });
+  const commit = createCandidateCommit('recorded-verify-replacement.js', 'recorded verifier replacement\n');
+  pin(ticket, commit);
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, 'recorded-verify-replacement-source', {
+    direct: true,
+    reason: 'The submission fixture requires a local direct claim.',
+  }).ok, true);
+  const submission = store.submitTicket(slug, ticket.ref, 'recorded-verify-replacement-source', {
+    commit,
+    verify: 'node -e "process.exit(0)"',
+  });
+  assert.strictEqual(submission.ok, true, submission.message);
+  const submitted = store.getTicket(slug, ticket.ref);
+  submitted.executorVerify = 'node -e "process.exit(1)"';
+  const base = git(['rev-parse', `${commit}^`]);
+  Object.assign(submitted.submission, {
+    base,
+    upstream: 'origin/main',
+    upstreamCommit: base,
+    commits: [commit],
+    changedPaths: ['lib/recorded-verify-replacement.js'],
+  });
+  const terminalAt = new Date(Date.now() - 60_000).toISOString();
+  submitted.dispatch = {
+    terminalAt,
+    verificationRequirement: { kind: 'command', command: 'node -e "process.exit(1)"', evidenceContract: 'command output' },
+    attempts: [{ outcome: 'submitted', commit, agentId: 'recorded-verify-replacement-source', terminalAt }],
+  };
+  persist(submitted);
+
+  const originalConfig = store.boardConfig(slug);
+  const review = dispatchedIsolatedReview('recorded verifier replacement review', ticket.ref, commit, 'recorded-verify-replacement-review');
+  try {
+    completeIsolatedReview(review, true);
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']) });
+    const target = store.integrationTarget(slug);
+    const failed = store.recordDeliveredSubmission(slug, ticket.ref, {
+      target,
+      deliveryCommit: commit,
+      by: 'orchestrator',
+      reason: 'The recorded command intentionally became unrunnable with the delivered test contract.',
+      verificationSupersession: { verifyKind: 'command', verify: 'node -e "process.exit(1)"' },
+    });
+    assert.strictEqual(failed.ok, false);
+    assert.strictEqual(failed.reason, 'verification_failed_suite_recorded_delivery');
+    assert.strictEqual(store.getTicket(slug, ticket.ref).submission.integration.outcome, 'failed');
+
+    const recorded = store.recordDeliveredSubmission(slug, ticket.ref, {
+      target,
+      deliveryCommit: commit,
+      by: 'orchestrator',
+      reason: 'The delivered test contract requires this replacement command.',
+      verificationSupersession: { verifyKind: 'command', verify: 'node -e "process.exit(0)"' },
+    });
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.integration.mode, 'recorded-verify-superseded');
+    assert.strictEqual(recorded.integration.verify.command, 'node -e "process.exit(0)"');
+    assert.strictEqual(recorded.integration.verificationSupersession.recordedRequirement.command, 'node -e "process.exit(1)"');
+    assert.strictEqual(recorded.integration.verificationSupersession.replacementRequirement.command, 'node -e "process.exit(0)"');
+    assert.strictEqual(recorded.integration.verificationSupersession.result.status, 'passed');
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    if (fs.existsSync(review.worktree)) execFileSync('git', ['worktree', 'remove', '--force', review.worktree], { cwd: PROJECT_DIR, windowsHide: true });
+  }
+});
+
 test('SQ-2369: reachable manual delivery survives a later folder rename while non-reachable manual delivery requires working-tree content', () => {
   const originalConfig = store.boardConfig(slug);
   try {
