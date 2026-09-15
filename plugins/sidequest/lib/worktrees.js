@@ -7,6 +7,45 @@ const nativeFs = require("node:fs");
 const { execFileSync, spawn, spawnSync } = require("node:child_process");
 const commitScope = require("./commit-scope.js");
 const worktreeLease = require("./kernel/worktree.js");
+const UNMERGED_STATUS_CODES = /* @__PURE__ */ new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
+const IN_PROGRESS_GIT_OPERATION_STATE = [
+  ["CHERRY_PICK_HEAD", "cherry-pick"],
+  ["MERGE_HEAD", "merge"],
+  ["REVERT_HEAD", "revert"],
+  ["rebase-merge", "rebase"],
+  ["rebase-apply", "rebase"],
+  ["BISECT_LOG", "bisect"]
+];
+function unmergedCheckoutPaths(worktree) {
+  return execFileSync("git", ["status", "--porcelain"], { cwd: worktree, encoding: "utf8", windowsHide: true }).split(/\r?\n/).filter((line) => UNMERGED_STATUS_CODES.has(line.slice(0, 2))).map((line) => line.slice(3).trim()).filter(Boolean);
+}
+function inProgressGitOperation(worktree) {
+  const reported = execFileSync("git", ["rev-parse", "--git-dir"], { cwd: worktree, encoding: "utf8", windowsHide: true }).trim();
+  const gitDirectory = path.isAbsolute(reported) ? reported : path.resolve(worktree, reported);
+  const found = IN_PROGRESS_GIT_OPERATION_STATE.find(([stateName]) => nativeFs.existsSync(path.join(gitDirectory, stateName)));
+  return found ? found[1] : null;
+}
+function retainedWorktreeResumeDecision(lease) {
+  const decision = worktreeLease.worktreeResumeDecision(lease);
+  if (!decision.allowed) return decision;
+  const worktree = lease?.canonicalWorktree || lease?.observedWorktree;
+  if (!worktree) return decision;
+  let unmerged = [];
+  let operation = null;
+  try {
+    unmerged = unmergedCheckoutPaths(worktree);
+    operation = inProgressGitOperation(worktree);
+  } catch (error) {
+    return { allowed: false, reason: `the retained checkout ${worktree} could not be read for unmerged entries or an in-progress Git operation: ${String(error?.message || error).replace(/\s+/g, " ").trim().slice(0, 200)}` };
+  }
+  if (!unmerged.length && !operation) return decision;
+  const shown = unmerged.slice(0, 10);
+  const paths = unmerged.length ? `unmerged paths: ${shown.join(", ")}${unmerged.length > shown.length ? ` (+${unmerged.length - shown.length} more)` : ""}` : "no unmerged paths";
+  return {
+    allowed: false,
+    reason: `the retained checkout ${worktree} is stuck mid-recovery${operation ? ` in an unfinished ${operation}` : ""} (${paths}), so it holds a partial replay rather than the candidate. Preserve it as failed-replay evidence and do not auto-resolve or discard it: dispatch this ticket with worktree isolation so the replacement executor gets a fresh checkout, or, once the evidence is copied out, reset the retained checkout (abort the ${operation || "in-progress"} operation and hard-reset it) before resuming it.`
+  };
+}
 const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1e3;
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 const DEFAULT_RECOVERY_RETENTION_AGE_MS = 14 * 24 * 60 * 60 * 1e3;
@@ -1668,4 +1707,4 @@ async function sweep(repo, tickets, options = {}) {
     failures
   };
 }
-module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };
+module.exports = { retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };

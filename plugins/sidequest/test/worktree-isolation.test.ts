@@ -2439,3 +2439,59 @@ test('a recovery fact naming a sibling agent checkout does not block the retry',
     removeWorktreeBranch(worktree, branch);
   }
 });
+
+// SQ-2938 / GH-125. A recovery dispatch cherry-picked the preserved candidate into a fresh checkout, the
+// cherry-pick conflicted, and the executor released on the conflict. The lease then read that checkout as a
+// healthy retained one: identity matched, so resume was allowed and the replacement executor was bound to a
+// tree holding a `UU` path and no candidate.
+test('resume refuses a retained checkout stuck in a conflicted cherry-pick', () => {
+  const repo = initRepo('sq2938-conflicted-');
+  const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true });
+  fs.writeFileSync(path.join(repo, 'manifest.json'), '{"generated":"A"}\n');
+  git(['add', '.']);
+  git(['commit', '--quiet', '-m', 'baseline A']);
+  const baseline = git(['rev-parse', 'HEAD']).trim();
+  git(['checkout', '--quiet', '-b', 'candidate']);
+  fs.writeFileSync(path.join(repo, 'manifest.json'), '{"generated":"B"}\n');
+  git(['commit', '--quiet', '-am', 'candidate B']);
+  git(['checkout', '--quiet', 'main']);
+  fs.writeFileSync(path.join(repo, 'manifest.json'), '{"generated":"C"}\n');
+  git(['commit', '--quiet', '-am', 'newer main C']);
+  const head = git(['rev-parse', 'HEAD']).trim();
+  let cherryPickConflicted = false;
+  try { git(['cherry-pick', 'candidate']); } catch (_) { cherryPickConflicted = true; }
+  assert.equal(cherryPickConflicted, true);
+  assert.match(git(['status', '--porcelain']), /^UU manifest\.json$/m);
+
+  const lease = worktreeLease.createWorktreeLease({
+    repository: repo,
+    gitDirectory: path.join(repo, '.git'),
+    commonGitDirectory: path.join(repo, '.git'),
+    dispatchRef: 'SQ-2938',
+    dispatchBaseline: baseline,
+    observedRevision: head,
+    observedWorktree: repo,
+    boundRevision: head,
+    boundWorktree: repo,
+    identity: { status: 'bound', agentId: 'sq2938-agent' },
+    phase: 'terminal',
+    locked: false,
+    liveness: { status: 'terminal', evidence: 'released on the cherry-pick conflict' },
+    provisioning: 'host',
+  });
+
+  assert.equal(worktreeLease.worktreeResumeDecision(lease).allowed, true, 'lease identity alone still reads as healthy');
+  const decision = worktrees.retainedWorktreeResumeDecision(lease);
+  assert.equal(decision.allowed, false);
+  assert.ok(decision.reason.includes(worktrees.canonicalPath(repo)), 'names the checkout');
+  assert.match(decision.reason, /unmerged paths: manifest\.json/);
+  assert.match(decision.reason, /unfinished cherry-pick/);
+  assert.match(decision.reason, /worktree isolation/);
+  assert.match(decision.reason, /do not auto-resolve or discard/);
+
+  // Ordinary retained uncommitted work is exactly what dirty-worktree continuation exists to carry, so the
+  // refusal stays narrow: only unmerged entries and in-progress operations.
+  git(['cherry-pick', '--abort']);
+  fs.writeFileSync(path.join(repo, 'manifest.json'), '{"generated":"C"}\nretained edit\n');
+  assert.equal(worktrees.retainedWorktreeResumeDecision(lease).allowed, true);
+});
