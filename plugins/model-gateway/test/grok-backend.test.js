@@ -89,6 +89,13 @@ test('reads the current Grok catalog from the CLI cache', (t) => {
   const file = path.join(directory, 'models_cache.json');
   fs.writeFileSync(file, JSON.stringify({
     models: {
+      'grok-4.6': {
+        info: {
+          id: 'grok-4.6',
+          context_window: 500000,
+          supports_reasoning_effort: true,
+        },
+      },
       'grok-4.5': {
         info: {
           id: 'grok-4.5',
@@ -100,10 +107,14 @@ test('reads the current Grok catalog from the CLI cache', (t) => {
   }));
 
   assert.deepEqual(grok.grokModelsFromCache({ file }), [
+    { id: 'grok-4.6', context: 500000, reasoning: true },
     { id: 'grok-4.5', context: 500000, reasoning: true },
   ]);
-  assert.deepEqual(grok.grokModelIdsFromCache({ file }), ['grok-4.5']);
-  assert.deepEqual(grok.GROK_MODELS, [{ id: 'grok-4.5', context: 500000, reasoning: true }]);
+  assert.deepEqual(grok.grokModelIdsFromCache({ file }), ['grok-4.6', 'grok-4.5']);
+  assert.deepEqual(grok.GROK_MODELS, [
+    { id: 'grok-4.6', context: 500000, reasoning: true },
+    { id: 'grok-4.5', context: 500000, reasoning: true },
+  ]);
 });
 
 test('translates Responses completions and stream events to Anthropic messages', () => {
@@ -284,6 +295,9 @@ test('the shim lists and routes Grok 1M picker aliases', async (t) => {
   }));
   fs.writeFileSync(path.join(authDirectory, 'models_cache.json'), JSON.stringify({
     models: {
+      'grok-4.6': {
+        info: { id: 'grok-4.6', context_window: 500000, supports_reasoning_effort: true },
+      },
       'grok-4.5': {
         info: { id: 'grok-4.5', context_window: 500000, supports_reasoning_effort: true },
       },
@@ -320,11 +334,11 @@ test('the shim lists and routes Grok 1M picker aliases', async (t) => {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  assert.deepEqual(models.data.filter((model) => model.id.startsWith('claude-grok-')).map((model) => model.id), ['claude-grok-4.5[1m]']);
-  const response = await request(shimPort, JSON.stringify({ model: 'claude-grok-4.5[1m]', max_tokens: 10, output_config: { effort: 'high' }, messages: [{ role: 'user', content: 'hello' }] }));
+  assert.deepEqual(models.data.filter((model) => model.id.startsWith('claude-grok-')).map((model) => model.id), ['claude-grok-4.6[1m]', 'claude-grok-4.5[1m]']);
+  const response = await request(shimPort, JSON.stringify({ model: 'claude-grok-4.6[1m]', max_tokens: 10, output_config: { effort: 'high' }, messages: [{ role: 'user', content: 'hello' }] }));
   assert.equal(response.status, 200);
   assert.equal(JSON.parse(response.body).content[0].text, 'hello');
-  assert.equal(observed[0].headers['x-grok-model-override'], 'grok-4.5');
+  assert.equal(observed[0].headers['x-grok-model-override'], 'grok-4.6');
   assert.equal(observed[0].headers['x-grok-client-version'], '0.2.112');
   assert.deepEqual(observed[0].body.reasoning, { effort: 'high' });
 });

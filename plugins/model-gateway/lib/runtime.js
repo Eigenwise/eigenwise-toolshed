@@ -94,6 +94,15 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     advertisedWindow: 920000,
     sentry: 'codex-synthetic-413',
   }),
+  'grok-4.6': Object.freeze({
+    backend: 'grok',
+    backendId: 'grok-4.6',
+    backendWindow: 500000,
+    measurement: 'measured 2026-09-15 from Grok CLI models_cache.json (context_window 500000)',
+    pickerAlias: 'claude-grok-4.6[1m]',
+    advertisedWindow: 500000,
+    sentry: 'none',
+  }),
   'grok-4.5': Object.freeze({
     backend: 'grok',
     backendId: 'grok-4.5',
