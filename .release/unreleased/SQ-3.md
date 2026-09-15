@@ -1,0 +1,8 @@
+---
+ref: SQ-3
+title: verify-capture binds the capture to the dispatch worktree
+bump: patch
+plugins: [sidequest]
+---
+
+The pinned verify-capture wrapper now binds its capture to the dispatch's own worktree instead of trusting process.cwd(): the briefing command passes --worktree for isolated-worktree dispatches, the wrapper runs there even when invoked from elsewhere, and it refuses (rather than silently certifying the wrong revision) when no flag is given and cwd sits outside the ticket's bound worktree. Shared-tree and working-tree-delivery dispatches are unaffected.
