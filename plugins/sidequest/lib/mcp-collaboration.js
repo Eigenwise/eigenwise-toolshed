@@ -12,7 +12,7 @@ const {
   claimRefusalMessage,
   assertSidequestInstall,
   assertDispatchTransport,
-  resolveProject,
+  resolveLifecycleProject,
   runtimeSessionId,
   sessionOf,
   controlPlaneIdentity,
@@ -91,7 +91,7 @@ const tools = [
       required: ["ref", "by", "supersededBy", "reason"]
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug } = resolveLifecycleProject(args.project, args, "supersede_submission");
       const by = requireBy(args, "supersede_submission");
       const result = store.closeSubmissionAsSuperseded(slug, args.ref, {
         by,
@@ -112,7 +112,7 @@ const tools = [
       required: ["ref", "body"]
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug } = resolveLifecycleProject(args.project, args, "comment");
       const ticket = store.getTicket(slug, args.ref);
       const sessionId = sessionOf(args);
       const claimSessionId = ticket?.claim?.runtime?.sessionId;
@@ -138,7 +138,7 @@ const tools = [
       required: ["ref", "body"]
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug } = resolveLifecycleProject(args.project, args, "plan");
       const res = store.writeTicketPlan(slug, args.ref, args.by || "agent", args.body);
       return mutationAck(slug, res, res.ok ? { path: res.path, revision: res.plan.revision } : null);
     }
@@ -159,7 +159,7 @@ const tools = [
       required: ["ref"]
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug } = resolveLifecycleProject(args.project, args, "comments");
       const t = store.getTicket(slug, args.ref);
       if (!t) throw new Error(`comments: no ticket "${args.ref}".`);
       const full = !!args.full;
@@ -212,7 +212,7 @@ const tools = [
       required: ["from", "verb", "to"]
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, "link");
       const res = store.linkTickets(slug, args.from, args.verb, args.to);
       if (!res.ok) {
         if (res.reason === "bad_type") {
@@ -232,7 +232,7 @@ const tools = [
       required: ["a", "b"]
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, "unlink");
       const res = store.unlinkTickets(slug, args.a, args.b);
       if (!res.ok) throw new Error(`unlink: ${res.reason}`);
       return { ok: true, project: slug, a: args.a, b: args.b };
@@ -247,7 +247,7 @@ const tools = [
       required: ["ref"]
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, "assign");
       const who = args.to == null ? "you" : String(args.to).toLowerCase() === "none" ? null : args.to;
       const res = store.assignTicket(slug, args.ref, who, { source: "mcp" });
       if (!res.ok) throw new Error(`assign: no ticket "${args.ref}".`);
@@ -276,7 +276,7 @@ const tools = [
       required: ["ref"]
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, "dispatch");
       const freshness = sidequestMutationFreshness(meta.path, { pluginRoot: path.join(__dirname, "..") });
       if (freshness.refusal) throw new Error(freshness.refusal);
       const descriptionError = store.dispatchDescriptionError(store.getTicket(slug, args.ref));
@@ -365,7 +365,7 @@ const tools = [
       required: ["ref", "prompt"]
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, "native_agent");
       const freshness = sidequestMutationFreshness(meta.path, { pluginRoot: path.join(__dirname, "..") });
       if (freshness.refusal) throw new Error(freshness.refusal);
       if (meta.path) {
