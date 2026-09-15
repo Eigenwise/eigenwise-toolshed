@@ -118,6 +118,13 @@ function addNegativeControlTicket(title?: any, by = 'negative-control-executor')
 
 // Rewrite persisted ticket state directly: these scenarios need claims that are
 // hours or days old without the test waiting for them.
+// Fixed offsets from one clock read, so the ordering the test pins cannot depend on where in the run
+// the test lands, while the claim stays far inside the idle backstop.
+const fixtureClockMs = Date.now();
+function secondsAgo(seconds: number): string {
+  return new Date(fixtureClockMs - seconds * 1000).toISOString();
+}
+
 function persist(ticket?: any) {
   db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
     id: ticket.id,
@@ -1446,9 +1453,16 @@ test('a died record only reports dead for the attempt that is actually being ask
     direct: true, reason: 'A direct claim picks the ticket up after the previous launch died.',
   }).ok, true);
 
-  const directPulse = store.pulsePayload(slug, reclaimed.ref);
+  // Pinned rather than live: a same-millisecond claim reads as the death's own, which is correct but
+  // is not this case, and the position of this test in the run must not decide which case it is.
   const directState = store.getTicket(slug, reclaimed.ref);
-  assert.ok(Date.parse(directState.dispatch.terminalAt) < Date.parse(directState.claim.at), 'the fixture keeps the death older than the claim');
+  for (const record of [directState.dispatch, ...(directState.dispatch.attempts ?? [])]) {
+    if (record.terminalAt) record.terminalAt = secondsAgo(2);
+  }
+  directState.claim.at = secondsAgo(1);
+  directState.claim.activeAt = directState.claim.at;
+  persist(directState);
+  const directPulse = store.pulsePayload(slug, reclaimed.ref);
   assert.equal(directPulse.died, null, 'a death recorded before this claim says nothing about the runtime holding it');
   assert.notEqual(directPulse.liveness, 'dead');
   assert.equal(store.getTicket(slug, reclaimed.ref).claim.by, 'sq2868-direct-executor');
@@ -1483,6 +1497,11 @@ test('the died-record predicate keys on attempt identity and record age, not on 
     ['its own death at the claim instant', ownRecord({ terminalAt: claim.at }), claim, true],
     ['its own death with no claim to outlive', ownRecord({ terminalAt: '2026-09-01T10:01:00.000Z' }), null, true],
     ['its own death before the claim', ownRecord({ terminalAt: '2026-09-01T10:04:59.999Z' }), claim, false],
+    // The reclaim authority (claims.observedStop) rejects a stop the claim outlived; pulse must agree (SQ-2917).
+    ['its own death, then the claim resumed activity', ownRecord({ terminalAt: '2026-09-01T10:06:00.000Z' }), { at: claim.at, activeAt: '2026-09-01T10:07:00.000Z' }, false],
+    ['its own death at the instant of the last activity', ownRecord({ terminalAt: '2026-09-01T10:06:00.000Z' }), { at: claim.at, activeAt: '2026-09-01T10:06:00.000Z' }, true],
+    ['its own death after the last activity', ownRecord({ terminalAt: '2026-09-01T10:06:00.001Z' }), { at: claim.at, activeAt: '2026-09-01T10:06:00.000Z' }, true],
+    ['its own death under a clock that stepped back one millisecond', ownRecord({ terminalAt: '2026-09-01T10:04:59.999Z' }), { at: claim.at, activeAt: claim.at }, false],
     ['a superseded attempt that died after the claim', ownRecord({
       preparedAt: '2026-09-01T09:00:00.000Z', tokenPrefix: 'zzzz-yyyy-xx', terminalAt: '2026-09-01T10:06:00.000Z',
     }), claim, false],
@@ -1492,4 +1511,28 @@ test('the died-record predicate keys on attempt identity and record age, not on 
   for (const [label, record, claimRow, expected] of rows) {
     assert.equal(diedRecordAttestsAttempt(dispatch, record, claimRow), expected, label as string);
   }
+});
+
+// The store-level twin of the resumed-activity row: a stop hook fires, then the same runtime writes to
+// the board again. The sweep treats the claim as alive (touchClaimActivity resumed the dispatch), so
+// pulse reporting dead here would aim recovery at a runtime the sweep refuses to free.
+test('a died record the claim outlived does not read as dead once the runtime resumed activity', () => {
+  const ticket = addRouted('resumed after a stop hook');
+  const session = 'session-resumed-after-stop';
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: session });
+  assert.equal(store.claimTicket(slug, ticket.ref, 'sq2917-resumed-executor', {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: session,
+  }).ok, true);
+  const stopped = store.getTicket(slug, ticket.ref);
+  stopped.claim.at = secondsAgo(3);
+  stopped.claim.activeAt = secondsAgo(1);
+  stopped.dispatch.outcome = 'died';
+  stopped.dispatch.terminalAt = secondsAgo(2);
+  stopped.dispatch.terminalSource = 'test-stop-hook';
+  persist(stopped);
+
+  const pulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(pulse.died, null);
+  assert.notEqual(pulse.liveness, 'dead');
+  assert.equal(store.claimReleaseVerdict(store.getTicket(slug, ticket.ref)), null, 'the sweep sees a live claim, and pulse agrees');
 });

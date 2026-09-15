@@ -2,6 +2,7 @@
 
 const { execFileSync } = require('node:child_process');
 const { canonicalPreparedDispatchExecutor } = require('../prepared-dispatch.js');
+const { stopOutlivesClaim } = require('./claims.js');
 
 function createGitHubCiRunsProvider(projectPath: string, execute = execFileSync) {
   const command = (program: string, arguments_: string[]) => execute(program, arguments_, {
@@ -57,15 +58,12 @@ function sameDispatchAttempt(left?: any, right?: any) {
 // cannot: one left behind by a superseded attempt, whose identity differs from the live dispatch, and
 // one whose terminal time predates the current claim, which is a fresh runtime holding a ticket an
 // older launch died on. Both used to read as dead, aiming recovery at a working executor, and only the
-// claim guard refused to free it (SQ-2868). The age rule here is the attestation claims.observedStop
-// already demands; it is not a second liveness authority.
+// claim guard refused to free it (SQ-2868). The age rule is the one attestation claims.observedStop
+// demands, shared so the two cannot drift; it is not a second liveness authority.
 function diedRecordAttestsAttempt(dispatch?: any, record?: any, claim?: any) {
   if (record?.outcome !== 'died') return false;
   if (!sameDispatchAttempt(record, dispatch)) return false;
-  const terminalMs = Date.parse(record.terminalAt);
-  if (!Number.isFinite(terminalMs)) return false;
-  const claimedMs = Date.parse(claim?.at);
-  return !Number.isFinite(claimedMs) || terminalMs >= claimedMs;
+  return stopOutlivesClaim(record.terminalAt, claim);
 }
 
 function createPulse(dependencies: any) {
@@ -278,7 +276,8 @@ function createPulse(dependencies: any) {
     const dispatch = dispatchState(ticket);
     const now = Date.now();
     const claim = projectedClaim(ticket, now);
-    const died = dispatchDeath(dispatch, claim);
+    // The raw claim, not the projection: the projection drops activeAt, and the age rule needs it.
+    const died = dispatchDeath(dispatch, ticket.claim);
     const liveness = livenessPulse(ticket, dispatch, claim, died);
     const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug), ...scopeDriftWarnings(slug, ticket)];
     return {
@@ -349,7 +348,7 @@ function createPulse(dependencies: any) {
         const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug)];
         const dispatch = dispatchState(ticket);
         const claim = claimPulse(ticket, nowMs);
-        const liveness = livenessPulse(ticket, dispatch, claim, dispatchDeath(dispatch, claim));
+        const liveness = livenessPulse(ticket, dispatch, claim, dispatchDeath(dispatch, ticket.claim));
         return {
           ref: ticket.ref,
           title: ticket.title,

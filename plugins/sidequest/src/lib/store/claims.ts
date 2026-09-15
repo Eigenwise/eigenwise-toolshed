@@ -1,5 +1,19 @@
 'use strict';
 
+// A stop only attests the claim's current runtime when nothing the claim did came after it: a stop
+// before claim.at belongs to an earlier launch, and a stop before claim.activeAt was outlived by the
+// runtime it claims to have ended (touchClaimActivity resumes such a dispatch). Pulse's died-record
+// predicate and the reclaim authority below must agree on this, or pulse says dead over a runtime the
+// sweep refuses to free (SQ-2917).
+function stopOutlivesClaim(terminalAt?: unknown, claim?: any): boolean {
+  const stoppedMs = Date.parse(String(terminalAt ?? ''));
+  if (!Number.isFinite(stoppedMs)) return false;
+  const claimedMs = Date.parse(claim && claim.at);
+  const activeMs = Date.parse(claim && claim.activeAt);
+  if (Number.isFinite(activeMs) && activeMs > stoppedMs) return false;
+  return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
+}
+
 function createClaims(dependencies: any) {
   const {
     completionTreeCheck,
@@ -210,12 +224,7 @@ function createClaims(dependencies: any) {
       && dispatch?.terminalSource === 'subagent-stop'
       && Boolean(dispatch.failureShape);
     if (!dispatch || !['died', 'stopped_claimed'].includes(dispatch.outcome) && !hostReportedFailure || !dispatch.terminalAt) return false;
-    const stoppedMs = Date.parse(dispatch.terminalAt);
-    const claimedMs = Date.parse(claim && claim.at);
-    const activeMs = Date.parse(claim && claim.activeAt);
-    if (!Number.isFinite(stoppedMs)) return false;
-    if (Number.isFinite(activeMs) && activeMs > stoppedMs) return false;
-    return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
+    return stopOutlivesClaim(dispatch.terminalAt, claim);
   }
 
   function claimReleaseBlocker(slug?: any, ticket?: any) {
@@ -363,4 +372,4 @@ function createClaims(dependencies: any) {
   };
 }
 
-module.exports = { createClaims };
+module.exports = { createClaims, stopOutlivesClaim };

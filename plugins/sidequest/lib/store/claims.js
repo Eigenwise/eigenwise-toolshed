@@ -1,4 +1,12 @@
 "use strict";
+function stopOutlivesClaim(terminalAt, claim) {
+  const stoppedMs = Date.parse(String(terminalAt ?? ""));
+  if (!Number.isFinite(stoppedMs)) return false;
+  const claimedMs = Date.parse(claim && claim.at);
+  const activeMs = Date.parse(claim && claim.activeAt);
+  if (Number.isFinite(activeMs) && activeMs > stoppedMs) return false;
+  return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
+}
 function createClaims(dependencies) {
   const {
     completionTreeCheck,
@@ -191,12 +199,7 @@ ${evidence.outputTail}`;
   function observedStop(dispatch, claim) {
     const hostReportedFailure = dispatch?.outcome === "failed" && dispatch?.terminalSource === "subagent-stop" && Boolean(dispatch.failureShape);
     if (!dispatch || !["died", "stopped_claimed"].includes(dispatch.outcome) && !hostReportedFailure || !dispatch.terminalAt) return false;
-    const stoppedMs = Date.parse(dispatch.terminalAt);
-    const claimedMs = Date.parse(claim && claim.at);
-    const activeMs = Date.parse(claim && claim.activeAt);
-    if (!Number.isFinite(stoppedMs)) return false;
-    if (Number.isFinite(activeMs) && activeMs > stoppedMs) return false;
-    return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
+    return stopOutlivesClaim(dispatch.terminalAt, claim);
   }
   function claimReleaseBlocker(slug, ticket) {
     const dispatch = dispatchState(ticket);
@@ -326,4 +329,4 @@ ${evidence.outputTail}`;
     verificationCompletionCheck
   };
 }
-module.exports = { createClaims };
+module.exports = { createClaims, stopOutlivesClaim };

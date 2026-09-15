@@ -1,6 +1,7 @@
 "use strict";
 const { execFileSync } = require("node:child_process");
 const { canonicalPreparedDispatchExecutor } = require("../prepared-dispatch.js");
+const { stopOutlivesClaim } = require("./claims.js");
 function createGitHubCiRunsProvider(projectPath, execute = execFileSync) {
   const command = (program, arguments_) => execute(program, arguments_, {
     cwd: projectPath,
@@ -50,10 +51,7 @@ function sameDispatchAttempt(left, right) {
 function diedRecordAttestsAttempt(dispatch, record, claim) {
   if (record?.outcome !== "died") return false;
   if (!sameDispatchAttempt(record, dispatch)) return false;
-  const terminalMs = Date.parse(record.terminalAt);
-  if (!Number.isFinite(terminalMs)) return false;
-  const claimedMs = Date.parse(claim?.at);
-  return !Number.isFinite(claimedMs) || terminalMs >= claimedMs;
+  return stopOutlivesClaim(record.terminalAt, claim);
 }
 function createPulse(dependencies) {
   const {
@@ -239,7 +237,7 @@ function createPulse(dependencies) {
     const dispatch = dispatchState(ticket);
     const now = Date.now();
     const claim = projectedClaim(ticket, now);
-    const died = dispatchDeath(dispatch, claim);
+    const died = dispatchDeath(dispatch, ticket.claim);
     const liveness = livenessPulse(ticket, dispatch, claim, died);
     const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug), ...scopeDriftWarnings(slug, ticket)];
     return {
@@ -303,7 +301,7 @@ function createPulse(dependencies) {
       const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug)];
       const dispatch = dispatchState(ticket);
       const claim = claimPulse(ticket, nowMs);
-      const liveness = livenessPulse(ticket, dispatch, claim, dispatchDeath(dispatch, claim));
+      const liveness = livenessPulse(ticket, dispatch, claim, dispatchDeath(dispatch, ticket.claim));
       return {
         ref: ticket.ref,
         title: ticket.title,
