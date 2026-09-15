@@ -6752,16 +6752,17 @@ test('SQ-2903: executor lifecycle calls follow the claimed ticket board instead 
       complexityWhy: 'exercise release board resolution from a claimed cross-project dispatch',
     });
     const releaseBy = `cross-project-release-${releaseTicket.id}`;
+    const releaseSession = `sq-2903-release-${releaseTicket.id}`;
     const releasePrepared = store.prepareDispatch(executorProject, releaseTicket.ref, {
       allowUnscoped: true,
-      sessionId: MCP_SESSION_ID,
+      sessionId: releaseSession,
     });
     assert.equal(store.claimTicket(executorProject, releaseTicket.ref, releaseBy, {
       token: releasePrepared.token,
       executor: releasePrepared.ticket.dispatchExecutor,
-      sessionId: MCP_SESSION_ID,
+      sessionId: releaseSession,
     }).ok, true);
-    const released = await callTool('release', {
+    const released = await callToolAsSession(releaseSession, 'release', {
       ref: releaseTicket.ref,
       by: releaseBy,
       reason: 'cross-project lifecycle release fixture completed',
