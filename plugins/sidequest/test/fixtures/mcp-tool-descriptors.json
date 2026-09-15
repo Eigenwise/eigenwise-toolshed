@@ -1269,12 +1269,23 @@
           "type": "boolean"
         },
         "verificationWaiver": {
+          "type": "object",
           "properties": {
-            "authority": {},
-            "reason": {},
-            "affectedGate": {},
-            "scope": {},
-            "expiresAt": {}
+            "authority": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "affectedGate": {
+              "type": "string"
+            },
+            "scope": {
+              "type": "string"
+            },
+            "expiresAt": {
+              "type": "string"
+            }
           }
         },
         "session": {
