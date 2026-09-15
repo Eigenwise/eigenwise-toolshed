@@ -771,6 +771,7 @@ function verificationFailureComment(verify: any) {
     verify.command ? `Command: ${verify.command}` : null,
     verify.logPath ? `Log: ${verify.logPath}` : null,
     Array.isArray(verify.failureIdentities) && verify.failureIdentities.length ? `Failures: ${verify.failureIdentities.join(', ')}` : null,
+    typeof verify.waitedForSlotMs === 'number' ? `Capture slot: waited ${verify.waitedForSlotMs}ms at queue position ${verify.queuePosition ?? 1}` : null,
     verify.outputTail ? `Output tail:\n${verify.outputTail}` : null,
   ].filter(Boolean).join('\n');
 }

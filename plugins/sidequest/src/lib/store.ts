@@ -506,7 +506,9 @@ const WORKTREE_SETUP_MAX_LENGTH = 1000;
 const SHARED_TREE_ARTIFACT_MARKER = 'Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.';
 const CONTROL_PLANE_COMPLETION = Symbol('sidequest.control-plane-completion');
 const DELIVERY_MODES = ['merge', 'replay', 'apply'];
-const DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS = 10 * 60 * 1000;
+// Above the 20-minute full-suite phase budget in scripts/test-full.mjs, so the phase's own
+// failure line (which names the sibling capture count) fires before this outer kill.
+const DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS = 25 * 60 * 1000;
 const MAX_INTEGRATION_VERIFY_TIMEOUT_MS = 60 * 60 * 1000;
 const INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES = 8 * 1024;
 const EXECUTOR_ANCHORS_MAX = 4000;

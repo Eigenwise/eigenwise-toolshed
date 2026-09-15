@@ -44,6 +44,19 @@ async function waitForFile(filePath: string): Promise<void> {
   throw new Error(`Timed out waiting for ${filePath}`);
 }
 
+// The blocker holds the slot until a second waiter has joined, then 700ms more, so the
+// sibling's recorded wait starts after its own process startup instead of racing it.
+function slotBlockerScript(started: string, observedSiblingCaptures: string, waitingDirectory: string): string {
+  return [
+    `const fs = require('node:fs');`,
+    `fs.writeFileSync(${JSON.stringify(started)}, 'started');`,
+    `fs.appendFileSync(${JSON.stringify(observedSiblingCaptures)}, process.env.SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT + '\\n');`,
+    `const deadline = Date.now() + 10000;`,
+    `function waiters() { try { return fs.readdirSync(${JSON.stringify(waitingDirectory)}).length; } catch { return 0; } }`,
+    `(function hold() { if (waiters() >= 2 || Date.now() > deadline) return setTimeout(() => {}, 700); setTimeout(hold, 20); })();`,
+  ].join(' ');
+}
+
 function readRecordedCaptures(project: string, ticket: string) {
   const reader = `const store = require(${JSON.stringify(path.join(SIDEQUEST_DIR, 'lib', 'store.js'))}); const target = store.findProject(process.argv.at(-2)); console.log(JSON.stringify(store.getTicket(target.slug, process.argv.at(-1)).verificationCaptures));`;
   return JSON.parse(execFileSync(process.execPath, ['--eval', reader, project, ticket], { encoding: 'utf8', env: process.env, windowsHide: true }));
@@ -54,8 +67,8 @@ test('full-suite capture serializes sibling captures and records the queue wait'
   const started = path.join(project, 'started');
   const observedSiblingCaptures = path.join(project, 'observed-sibling-captures');
   fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node blocker.js' } }));
-  fs.writeFileSync(path.join(project, 'blocker.js'), `const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(started)}, 'started'); fs.appendFileSync(${JSON.stringify(observedSiblingCaptures)}, process.env.SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT + '\\n'); setTimeout(() => {}, 700);`);
   execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: project, windowsHide: true });
+  fs.writeFileSync(path.join(project, 'blocker.js'), slotBlockerScript(started, observedSiblingCaptures, path.join(captureSlotDirectory(project), 'waiting')));
   execFileSync('git', ['add', '--all'], { cwd: project, windowsHide: true });
   execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'fixture'], { cwd: project, windowsHide: true });
   const boardProject = store.ensureProject(project);
@@ -90,8 +103,8 @@ test('synchronous full-suite verification uses the capture slot', async () => {
   const started = path.join(project, 'started');
   const observedSiblingCaptures = path.join(project, 'observed-sibling-captures');
   fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node blocker.js' } }));
-  fs.writeFileSync(path.join(project, 'blocker.js'), `const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(started)}, 'started'); fs.appendFileSync(${JSON.stringify(observedSiblingCaptures)}, process.env.SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT + '\\n'); setTimeout(() => {}, 700);`);
   execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: project, windowsHide: true });
+  fs.writeFileSync(path.join(project, 'blocker.js'), slotBlockerScript(started, observedSiblingCaptures, path.join(captureSlotDirectory(project), 'waiting')));
 
   try {
     const first = runCaptureProcess('npm run test:full', project, 'SQ-1');
@@ -110,6 +123,30 @@ test('synchronous full-suite verification uses the capture slot', async () => {
   } finally {
     fs.rmSync(project, { recursive: true, force: true });
     fs.rmSync(captureSlotDirectory(project), { recursive: true, force: true });
+  }
+});
+
+test('a failed synchronous slot release still removes its own waiter', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-capture-release-failure-'));
+  execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: project, windowsHide: true });
+  const slotDirectory = captureSlotDirectory(project);
+  const activeDirectory = path.join(slotDirectory, 'active');
+  const fileSystem = Object.create(fs);
+  fileSystem.renameSync = (source: string, target: string) => {
+    if (source === activeDirectory) throw Object.assign(new Error('held by scanner'), { code: 'EPERM' });
+    return fs.renameSync(source, target);
+  };
+
+  try {
+    const capture = runFullSuiteVerification('npm run test:full', project, () => ({
+      kind: 'command', status: 'passed', evidence: 'probe passed', command: 'npm run test:full', logPath: null, exitCode: 0, outputTail: null, failureIdentities: [],
+    }), fileSystem);
+
+    assert.equal(capture.status, 'could_not_run');
+    assert.deepEqual(fs.readdirSync(path.join(slotDirectory, 'waiting')), [], 'the board process must not leave a live-PID waiter behind');
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+    fs.rmSync(slotDirectory, { recursive: true, force: true });
   }
 });
 

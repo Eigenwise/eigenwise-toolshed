@@ -180,16 +180,19 @@ async function retryCaptureSlotOperation(operation: string, slotPath: string, ex
   throw new Error('Capture slot operation retry loop completed unexpectedly.');
 }
 
+// The waiter is removed even when the active directory cannot be released. A waiter left
+// behind by a still-running process (the board serving integrate) stays "alive" to
+// queuedWaiters by PID and would park every later capture behind it (SQ-2916).
 async function releaseCaptureSlot(activeDirectory: string, fileSystem: CaptureSlotFileSystem, waiterPath?: string): Promise<CaptureSlotFailure | null> {
   const tombstoneDirectory = `${activeDirectory}.released-${process.pid}-${randomUUID()}`;
   const renameFailure = await retryCaptureSlotOperation('rename', activeDirectory, () => fileSystem.renameSync(activeDirectory, tombstoneDirectory));
-  if (renameFailure) {
-    if (renameFailure.errorCode !== 'ENOENT') return renameFailure;
-    return waiterPath ? retryCaptureSlotOperation('remove', waiterPath, () => fileSystem.rmSync(waiterPath, { force: true })) : null;
-  }
-  const removeFailure = await retryCaptureSlotOperation('remove', tombstoneDirectory, () => fileSystem.rmSync(tombstoneDirectory, { recursive: true, force: true }));
-  if (removeFailure || !waiterPath) return removeFailure;
-  return retryCaptureSlotOperation('remove', waiterPath, () => fileSystem.rmSync(waiterPath, { force: true }));
+  const activeFailure = renameFailure
+    ? (renameFailure.errorCode === 'ENOENT' ? null : renameFailure)
+    : await retryCaptureSlotOperation('remove', tombstoneDirectory, () => fileSystem.rmSync(tombstoneDirectory, { recursive: true, force: true }));
+  const waiterFailure = waiterPath
+    ? await retryCaptureSlotOperation('remove', waiterPath, () => fileSystem.rmSync(waiterPath, { force: true }))
+    : null;
+  return activeFailure || waiterFailure;
 }
 
 function retryCaptureSlotOperationSynchronously(operation: string, slotPath: string, execute: () => void): CaptureSlotFailure | null {
@@ -211,13 +214,13 @@ function retryCaptureSlotOperationSynchronously(operation: string, slotPath: str
 function releaseCaptureSlotSynchronously(activeDirectory: string, fileSystem: CaptureSlotFileSystem, waiterPath?: string): CaptureSlotFailure | null {
   const tombstoneDirectory = `${activeDirectory}.released-${process.pid}-${randomUUID()}`;
   const renameFailure = retryCaptureSlotOperationSynchronously('rename', activeDirectory, () => fileSystem.renameSync(activeDirectory, tombstoneDirectory));
-  if (renameFailure) {
-    if (renameFailure.errorCode !== 'ENOENT') return renameFailure;
-    return waiterPath ? retryCaptureSlotOperationSynchronously('remove', waiterPath, () => fileSystem.rmSync(waiterPath, { force: true })) : null;
-  }
-  const removeFailure = retryCaptureSlotOperationSynchronously('remove', tombstoneDirectory, () => fileSystem.rmSync(tombstoneDirectory, { recursive: true, force: true }));
-  if (removeFailure || !waiterPath) return removeFailure;
-  return retryCaptureSlotOperationSynchronously('remove', waiterPath, () => fileSystem.rmSync(waiterPath, { force: true }));
+  const activeFailure = renameFailure
+    ? (renameFailure.errorCode === 'ENOENT' ? null : renameFailure)
+    : retryCaptureSlotOperationSynchronously('remove', tombstoneDirectory, () => fileSystem.rmSync(tombstoneDirectory, { recursive: true, force: true }));
+  const waiterFailure = waiterPath
+    ? retryCaptureSlotOperationSynchronously('remove', waiterPath, () => fileSystem.rmSync(waiterPath, { force: true }))
+    : null;
+  return activeFailure || waiterFailure;
 }
 
 function acquireCaptureSlotSynchronously(project: string, timeoutMilliseconds = captureSlotTimeoutMilliseconds, fileSystem: CaptureSlotFileSystem = fs): SynchronousCaptureSlotLease | CaptureSlotTimeout | CaptureSlotFailure {

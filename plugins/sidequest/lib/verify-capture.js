@@ -121,13 +121,9 @@ async function retryCaptureSlotOperation(operation, slotPath, execute) {
 async function releaseCaptureSlot(activeDirectory, fileSystem, waiterPath) {
   const tombstoneDirectory = `${activeDirectory}.released-${process.pid}-${randomUUID()}`;
   const renameFailure = await retryCaptureSlotOperation("rename", activeDirectory, () => fileSystem.renameSync(activeDirectory, tombstoneDirectory));
-  if (renameFailure) {
-    if (renameFailure.errorCode !== "ENOENT") return renameFailure;
-    return waiterPath ? retryCaptureSlotOperation("remove", waiterPath, () => fileSystem.rmSync(waiterPath, { force: true })) : null;
-  }
-  const removeFailure = await retryCaptureSlotOperation("remove", tombstoneDirectory, () => fileSystem.rmSync(tombstoneDirectory, { recursive: true, force: true }));
-  if (removeFailure || !waiterPath) return removeFailure;
-  return retryCaptureSlotOperation("remove", waiterPath, () => fileSystem.rmSync(waiterPath, { force: true }));
+  const activeFailure = renameFailure ? renameFailure.errorCode === "ENOENT" ? null : renameFailure : await retryCaptureSlotOperation("remove", tombstoneDirectory, () => fileSystem.rmSync(tombstoneDirectory, { recursive: true, force: true }));
+  const waiterFailure = waiterPath ? await retryCaptureSlotOperation("remove", waiterPath, () => fileSystem.rmSync(waiterPath, { force: true })) : null;
+  return activeFailure || waiterFailure;
 }
 function retryCaptureSlotOperationSynchronously(operation, slotPath, execute) {
   for (let attempts = 1; attempts <= captureSlotOperationRetryLimit; attempts += 1) {
@@ -147,13 +143,9 @@ function retryCaptureSlotOperationSynchronously(operation, slotPath, execute) {
 function releaseCaptureSlotSynchronously(activeDirectory, fileSystem, waiterPath) {
   const tombstoneDirectory = `${activeDirectory}.released-${process.pid}-${randomUUID()}`;
   const renameFailure = retryCaptureSlotOperationSynchronously("rename", activeDirectory, () => fileSystem.renameSync(activeDirectory, tombstoneDirectory));
-  if (renameFailure) {
-    if (renameFailure.errorCode !== "ENOENT") return renameFailure;
-    return waiterPath ? retryCaptureSlotOperationSynchronously("remove", waiterPath, () => fileSystem.rmSync(waiterPath, { force: true })) : null;
-  }
-  const removeFailure = retryCaptureSlotOperationSynchronously("remove", tombstoneDirectory, () => fileSystem.rmSync(tombstoneDirectory, { recursive: true, force: true }));
-  if (removeFailure || !waiterPath) return removeFailure;
-  return retryCaptureSlotOperationSynchronously("remove", waiterPath, () => fileSystem.rmSync(waiterPath, { force: true }));
+  const activeFailure = renameFailure ? renameFailure.errorCode === "ENOENT" ? null : renameFailure : retryCaptureSlotOperationSynchronously("remove", tombstoneDirectory, () => fileSystem.rmSync(tombstoneDirectory, { recursive: true, force: true }));
+  const waiterFailure = waiterPath ? retryCaptureSlotOperationSynchronously("remove", waiterPath, () => fileSystem.rmSync(waiterPath, { force: true })) : null;
+  return activeFailure || waiterFailure;
 }
 function acquireCaptureSlotSynchronously(project, timeoutMilliseconds = captureSlotTimeoutMilliseconds, fileSystem = fs) {
   const slotDirectory = captureSlotDirectory(project);
