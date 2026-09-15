@@ -77,18 +77,27 @@ function resolveLifecycleProject(projectArg, args, action) {
       candidates.set(project.slug, candidate2);
     }
   }
+  const worktreeCandidates = [...candidates.values()].filter((candidate2) => candidate2.worktree);
+  const [worktreeCandidate] = worktreeCandidates;
+  if (worktreeCandidate && worktreeCandidates.length === 1) {
+    if (!worktreeCandidate.refs.has(ref.toUpperCase())) {
+      throw new Error(`${action}: "${ref}" is not on executor board ${worktreeCandidate.meta.path || worktreeCandidate.slug}; spawning session board is ${sessionProject.meta.path || sessionProject.slug}. Pass "project" explicitly.`);
+    }
+    return { slug: worktreeCandidate.slug, meta: worktreeCandidate.meta };
+  }
+  if (worktreeCandidates.length > 1) {
+    throw new Error(`${action}: worktree matches claimed executor boards ${worktreeCandidates.map((candidate2) => candidate2.meta.path || candidate2.slug).join(", ")}. Pass "project" explicitly.`);
+  }
   const matching = [...candidates.values()].filter((candidate2) => candidate2.refs.has(ref.toUpperCase()));
-  const worktreeMatches = matching.filter((candidate2) => candidate2.worktree);
-  const resolved = worktreeMatches.length === 1 ? worktreeMatches : matching;
-  const [candidate] = resolved;
-  if (candidate && resolved.length === 1) return { slug: candidate.slug, meta: candidate.meta };
-  if (resolved.length > 1) {
-    throw new Error(`${action}: "${ref}" matches claimed executor boards ${resolved.map((candidate2) => candidate2.meta.path || candidate2.slug).join(", ")}. Pass "project" explicitly.`);
+  const [candidate] = matching;
+  if (candidate && matching.length === 1) return { slug: candidate.slug, meta: candidate.meta };
+  if (matching.length > 1) {
+    throw new Error(`${action}: "${ref}" matches claimed executor boards ${matching.map((candidate2) => candidate2.meta.path || candidate2.slug).join(", ")}. Pass "project" explicitly.`);
   }
   if (candidates.size === 1) {
-    const candidate2 = candidates.values().next().value;
-    if (candidate2.slug !== sessionProject.slug) {
-      throw new Error(`${action}: "${ref}" is not on executor board ${candidate2.meta.path || candidate2.slug}; spawning session board is ${sessionProject.meta.path || sessionProject.slug}. Pass "project" explicitly.`);
+    const loneCandidate = candidates.values().next().value;
+    if (loneCandidate.slug !== sessionProject.slug) {
+      throw new Error(`${action}: "${ref}" is not on executor board ${loneCandidate.meta.path || loneCandidate.slug}; spawning session board is ${sessionProject.meta.path || sessionProject.slug}. Pass "project" explicitly.`);
     }
   }
   return sessionProject;
