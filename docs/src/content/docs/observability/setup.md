@@ -3,7 +3,7 @@ title: Observability setup
 description: Install Observability and start local usage tracking for a repository.
 ---
 
-Observability installs separately from Quartermaster. The intended policy is per-repository opt-in, with a separate machine-shared service consent for the observer and Collector. Current hook and ingest enforcement does not fully enforce that boundary, so do not present opt-in as a hard runtime privacy guarantee until the runtime fix lands.
+Observability installs separately from Quartermaster. The intended policy is per-repository opt-in, with a separate machine-shared service consent for the observer and Collector. Repository opt-in is enforced on the local capture path and the single export path: hook capture is gated before the spool write, and the observer's outbox is the only route by which a log record reaches a configured sink. Traces and metrics still reach a configured sink through the Collector without this gate.
 
 ## Prerequisite
 
@@ -44,7 +44,7 @@ The Docker probe has a 1500 ms budget. Local SQLite observability continues when
 
 ## What you can expect
 
-- Per-repository opt-in remains the intended policy, but the current hook and ingest path can accept hook events before checking that opt-in. Do not treat the policy as a hard runtime collection guarantee.
+- Per-repository opt-in is enforced before capture and before export: a hook event for a repository that has not opted in is gated at the spool write, and the observer's outbox is the only route to a configured sink. Traces and metrics still reach a configured sink through the Collector without this gate.
 - The telemetry schema is designed to exclude prompt and response text, code and file contents, tool inputs and results, credentials, and environment values. Sink configuration you provide stays in the private local observability config.
 - The local dashboard is optional. Local reports still work when Docker is unavailable.
 - Hook events from a linked worktree can resolve to the main repository identity. Native Claude Code metrics still require wiring in the exact directory where the session starts.
