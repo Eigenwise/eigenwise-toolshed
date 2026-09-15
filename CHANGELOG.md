@@ -8,6 +8,86 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.568.0 (2026-09-15)
+
+### model-gateway 0.51.1 → 0.51.2
+
+#### Fixes
+
+- Fix stale RC-compatibility diagnosis wording in the model-gateway README (SQ-2909)
+  The README described RC-compatibility diagnosis as a plain port-80 check. It now matches the actual `bound`/`bindable`/`unavailable (CODE)`/`unknown` serving-supervisor states the CLI reports.
+
+### observability 0.7.31 → 0.7.32
+
+#### Fixes
+
+- Correct observability README dashboard claims (SQ-2911)
+  Drop the README's claim that the local dashboard shows Sidequest costs; that breakdown comes from the separate token-usage-report CLI, not any Grafana panel.
+
+### quartermaster 0.10.2 → 0.11.0
+
+#### Features
+
+- quartermaster crap gate measures per-function CRAP from lcov and lizard (SQ-2904)
+  `node bin/quartermaster.js crap` scores every function with `cc^2 * (1 - coverage)^3 + cc`, taking coverage from an lcov file and complexity from lizard, so it works in any language lizard reads. A new project gets a ceiling on every function; an existing one can set `ratchet` to a git ref, which fails any function in a changed file that got worse, holds new functions to the ceiling, and reports how many pre-existing functions already sit above it. Settings live in `.claude/quartermaster/crap.json`. It exits 2 when it cannot measure, with the install hint for lizard, rather than reporting a pass it did not earn.
+
+#### Fixes
+
+- Explain and install the CRAP gate (SQ-2905)
+  Explain the CRAP gate in setup, resupply, and the Quartermaster guide.
+- Fix quartermaster README CLI drift (SQ-2913)
+  The README's `mine` line was missing `--no-subagents`, `decisions add --status` was missing the `deferred` status, and `enable-auto-allowlist` showed `--project` as required when it is optional. All three now match `quartermaster --help`.
+
+### sidequest 5.1.19 → 5.1.20
+
+#### Fixes
+
+- pulse stops calling a live executor dead over an old attempt's death (SQ-2868)
+  `pulse` answered `dead` from any died record it could find in a ticket's dispatch
+  history. So a ticket whose earlier attempt died and was then claimed fresh reported
+  its live executor as dead, and so did a current died record whose terminal time
+  predates the claim now holding the ticket. `dead` is what sends an orchestrator
+  looking for recovery evidence to retire an attempt, so the wrong label pointed
+  recovery at a runtime that was still working.
+
+  A died record now has to belong to the attempt being asked about: matching attempt
+  identity, and a terminal time no older than the current claim. An attempt that
+  genuinely died while holding its claim still reports dead, and the claim guard that
+  refuses to free a held claim without attested termination is unchanged.
+- Let a reduced-schema dispatch claim on the host it exists for (SQ-2881)
+  A reduced Agent-schema dispatch cannot pass `mode`, so its executor inherits the spawning session's permission mode. The first claim now accepts `auto` alongside `bypassPermissions` and records which one it observed, instead of demanding a value that path could never produce. A refused mode keeps the runtime's `agent_id` so its own terminal hook can retire the attempt.
+- Fix home delete guard flag parsing (SQ-2883)
+  Fix the home-delete guard so hyphens in non-recursive filenames do not read as recursive flags.
+- Cross-project dispatch cuts its worktree and verifies in the ticket's own repository (SQ-2884)
+  Dispatching a ticket whose project is a different repository from the session's checkout used to be a dead end. Worktree isolation was refused with a remedy the refused caller couldn't take, and `sharedTree:true` recorded verification that proved nothing: a doc verify built from negated greps, run from the parent checkout, matched no files, so every negation succeeded and the capture was recorded as passed.
+
+  Now the WorktreeCreate hook falls back to the board that reserved the creation, so an isolated cross-project dispatch is cut from the ticket's own repository. Verification runs in the ticket's project when the executor's cwd is a different repository, and a capture that ran outside the ticket's repository is refused with `verification_capture_foreign_repository` instead of being certified. The prepare-time refusal now fires only for the case that's genuinely ambiguous, a session holding launched isolated dispatches on two boards at once, and its remedy is one the caller can actually take.
+- Recover host-reported executor timeouts (SQ-2886)
+  Sidequest can recover a claimed executor after the host reports a stream idle timeout, while a later live heartbeat keeps the claim protected.
+- user-story lists unknowns and investigates them before asking (SQ-2901)
+  The user-story skill now starts by listing what the request leaves unclear, sends each code-answerable unknown to a parallel read-only sub-agent, and asks the user only what the investigation could not settle, with the findings attached to the question.
+- Serialize full-suite verification gates (SQ-2902)
+  Serialize full-suite captures and integration gates so machine load does not fail passing verification.
+- A failed capture-slot release no longer parks every later full-suite gate behind a live waiter (SQ-2916)
+  When the board process could not release the full-suite capture slot (its `active` lease rename
+  refused with `EPERM` while a scanner held the directory), it gave up before removing its own
+  waiter file. The board process stays alive, so that waiter kept looking live to every later
+  capture, and each one queued behind a slot nobody would release. Both release paths now remove
+  the waiter regardless of whether the lease could be released, and report the first failure.
+
+  The integrate outer timeout default is now 25 minutes, above the 20-minute phase budget a full
+  suite can legitimately spend, and a verification failure comment says how long the capture waited
+  for the slot and at which queue position.
+- pulse and the claim sweep now agree on which stop attests a claim's runtime (SQ-2917)
+  `pulse` accepted a died record for the current attempt whenever it was no older than the claim.
+  The sweep authority also rejects a stop the claim outlived: activity recorded at or after the stop,
+  which is exactly what a runtime writing to the board again after its stop hook fired produces. So
+  `pulse` could say `dead` over a runtime the sweep kept holding, and the projection `pulse` read the
+  claim through did not even carry the last activity time.
+
+  The ordering rule now lives in one place, both sides call it, `pulse` reads the raw claim, and a
+  stop at the same instant as the claim's last activity counts as outlived, matching the resume rule.
+
 ## v3.567.0 (2026-09-14)
 
 ### model-gateway 0.51.0 → 0.51.1
