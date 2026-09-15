@@ -26,6 +26,10 @@ function createClaims(dependencies: any) {
   } = dependencies;
 
   const DEFAULT_CLAIM_IDLE_MIN = 60;
+  // A bound runtime's first board call is its tokened claim, so this window covers the whole span in
+  // which a healthy executor is still reading its briefing. Past it an unclaimed attempt is not a slow
+  // executor, and an orchestrator holding host terminal evidence may retire it without the backstop.
+  const DEFAULT_CLAIM_GRACE_MIN = 5;
   const DEFAULT_CLAIM_ABANDON_MIN = 24 * 60;
   const DEFAULT_PREPARED_DISPATCH_TTL_HOURS = 6;
   const VERIFY_START_COMMENT = '[sidequest:verify-start] ';
@@ -117,6 +121,10 @@ function createClaims(dependencies: any) {
 
   function claimIdleMs() {
     return envMinutesMs(DEFAULT_CLAIM_IDLE_MIN, 'SIDEQUEST_CLAIM_IDLE_MIN', 'SIDEQUEST_CLAIM_TTL_MIN');
+  }
+
+  function claimGraceMs() {
+    return Math.min(envMinutesMs(DEFAULT_CLAIM_GRACE_MIN, 'SIDEQUEST_CLAIM_GRACE_MIN'), claimIdleMs());
   }
 
   function claimAbandonMs() {
@@ -347,11 +355,13 @@ function createClaims(dependencies: any) {
 
   return {
     DEFAULT_CLAIM_ABANDON_MIN,
+    DEFAULT_CLAIM_GRACE_MIN,
     DEFAULT_CLAIM_IDLE_MIN,
     DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
     autoReleasedClaimMessage,
     claimAbandonMs,
     claimActivityMs,
+    claimGraceMs,
     claimIdleAge,
     claimIdleMs,
     claimMaySubmit,

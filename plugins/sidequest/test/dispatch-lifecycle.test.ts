@@ -1032,10 +1032,10 @@ test('a bound runtime without a claim keeps its recovery-evidence backstop', () 
   }).ok, true);
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).ok, true);
 
-  const recoveryEvidence = 'The bound runtime has not claimed and must remain protected during the configured backstop.';
+  const recoveryEvidence = 'The bound runtime has not claimed and must remain protected during the configured grace.';
   assert.throws(
     () => store.prepareDispatch(slug, ticket.ref, { recoveryEvidence }),
-    /bound to a runtime .* ago and still unclaimed, which becomes retirable on evidence in/,
+    /bound to a runtime .* ago and still unclaimed, which becomes retirable on evidence at .*, in \d+ minutes?, unless/,
   );
   const protectedAttempt = store.getTicket(slug, ticket.ref);
   assert.equal(protectedAttempt.dispatchNonce, prepared.token);
@@ -1050,6 +1050,142 @@ test('a bound runtime without a claim keeps its recovery-evidence backstop', () 
     if (originalIdleMinutes === undefined) delete process.env.SIDEQUEST_CLAIM_IDLE_MIN;
     else process.env.SIDEQUEST_CLAIM_IDLE_MIN = originalIdleMinutes;
     store.releaseTicket(slug, ticket.ref, 'bound-unclaimed-recovery-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+function bindUnclaimedFixture(label: string) {
+  const ticket = createFixture(`${label} fixture`);
+  const sessionId = `${label}-${Date.now()}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+  const agentName = `${label}-worker-${ticket.id}`;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+    agentName,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).ok, true);
+  return { ticket, prepared, sessionId, agentName, executor: prepared.ticket.dispatchExecutor };
+}
+
+// Backdating boundAt is the fake clock: every retirement decision and every printed deadline is measured
+// from it, so moving it is indistinguishable from letting that much wall time pass.
+function backdateBoundAt(ticketId: string, elapsedMs: number) {
+  const dispatch = store.getTicket(slug, ticketId).dispatch;
+  const boundAt = new Date(Date.now() - elapsedMs).toISOString();
+  dispatch.boundAt = boundAt;
+  const attempt = Array.isArray(dispatch.attempts) ? dispatch.attempts.at(-1) : null;
+  if (attempt && attempt.boundAt) attempt.boundAt = boundAt;
+  independentTicketWrite(slug, ticketId, { dispatch });
+  return boundAt;
+}
+
+// Pinned rather than read back from the store: the shipped default IS the contract an orchestrator
+// plans around, so changing it should fail here and be changed on purpose.
+const CLAIM_GRACE_MS = 5 * 60 * 1000;
+
+function retireOnGrace(ref: string, recoveryEvidence: string) {
+  try {
+    return store.prepareDispatch(slug, ref, { recoveryEvidence, retireOnly: true });
+  } catch (error: any) {
+    return { refusal: String(error.message) };
+  }
+}
+
+test('SQ-2922: the bound-unclaimed countdown names the instant retirement is actually accepted', () => {
+  const { ticket } = bindUnclaimedFixture('grace-countdown');
+  const recoveryEvidence = 'The host reported this agent terminated before its first claim.';
+  let previousRemaining = Number.POSITIVE_INFINITY;
+
+  try {
+    for (let elapsedMinutes = 0; elapsedMinutes * 60000 < CLAIM_GRACE_MS; elapsedMinutes += 1) {
+      const boundAt = backdateBoundAt(ticket.id, elapsedMinutes * 60000);
+      const refused = retireOnGrace(ticket.ref, recoveryEvidence);
+      assert.ok(refused.refusal, `inside the grace retirement must be refused, got ${JSON.stringify(refused)}`);
+      const printed = /becomes retirable on evidence at (\S+?), in (\d+) minutes?, unless/.exec(refused.refusal);
+      assert.ok(printed, `the refusal must print its deadline and countdown, got: ${refused.refusal}`);
+      assert.equal(
+        Date.parse(printed[1]),
+        Date.parse(boundAt) + CLAIM_GRACE_MS,
+        'the printed deadline must be the same instant the gate uses, not a second computation',
+      );
+      const remaining = Number(printed[2]);
+      assert.ok(remaining < previousRemaining, `the countdown must fall, got ${remaining} after ${previousRemaining}`);
+      assert.equal(remaining, Math.ceil((CLAIM_GRACE_MS - elapsedMinutes * 60000) / 60000));
+      previousRemaining = remaining;
+      assert.equal(store.getTicket(slug, ticket.ref).dispatch.terminalAt, null);
+    }
+    assert.equal(previousRemaining, 1, 'the last refusal before the deadline must read one minute, not a clamped floor');
+
+    backdateBoundAt(ticket.id, CLAIM_GRACE_MS);
+    const retired = retireOnGrace(ticket.ref, recoveryEvidence);
+    assert.equal(retired.retired, true, 'the refusal must flip to acceptance at the instant it printed');
+    assert.equal(retired.ticket.dispatch.failureShape, 'stranded_bound_launch_superseded');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'grace-countdown-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('SQ-2922: an attested bound-unclaimed attempt retires past the grace, and a claimed one still does not', () => {
+  const recoveryEvidence = 'Host task notification: the agent ended with status failed before its first claim.';
+  const stranded = bindUnclaimedFixture('grace-retire');
+  backdateBoundAt(stranded.ticket.id, CLAIM_GRACE_MS);
+  const retired = retireOnGrace(stranded.ticket.ref, recoveryEvidence);
+  assert.equal(retired.retired, true);
+  assert.equal(retired.ticket.dispatchNonce, null);
+  assert.equal(retired.ticket.dispatch.failureShape, 'stranded_bound_launch_superseded');
+  assert.equal(retired.ticket.dispatch.attempts.at(-1).recoveryEvidence, recoveryEvidence);
+  const retirement = retired.ticket.dispatch.terminalAt;
+
+  // The stop hook that never fired may still arrive late. It must find the retirement already recorded
+  // and leave it alone rather than writing a second terminal outcome over the same attempt.
+  const lateStop = store.markDispatchStopped(stranded.sessionId, stranded.executor, stranded.agentName, stranded.agentName);
+  assert.notEqual(lateStop.stopped, true);
+  const afterStop = store.getTicket(slug, stranded.ticket.ref);
+  assert.equal(afterStop.dispatch.terminalAt, retirement);
+  assert.equal(afterStop.dispatch.failureShape, 'stranded_bound_launch_superseded');
+
+  const replacement = store.prepareDispatch(slug, stranded.ticket.ref, { sessionId: `grace-retire-replacement-${Date.now()}` });
+  assert.notEqual(replacement.token, stranded.prepared.token);
+  assert.equal(replacement.ticket.dispatch.terminalAt, null);
+  store.releaseTicket(slug, stranded.ticket.ref, 'grace-retire-cleanup', { status: 'todo', source: 'test', force: true });
+
+  // The reporter's dead end: work delivered by hand could not be closed while the attempt stayed bound.
+  const delivered = bindUnclaimedFixture('grace-delivery');
+  backdateBoundAt(delivered.ticket.id, CLAIM_GRACE_MS);
+  commitFixtureChange();
+  const deliveredCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  const closeOptions = {
+    purpose: 'delivery',
+    by: 'control-plane',
+    reason: 'The contract shipped by hand after the runtime died unclaimed.',
+    deliveryCommit: deliveredCommit,
+    deliveryMethod: 'manual',
+  };
+  const blocked = store.completeTicketAsControlPlane(slug, delivered.ticket.ref, closeOptions);
+  assert.equal(blocked.reason, 'active_dispatch');
+  assert.match(blocked.message, /retire it with `sidequest dispatch .* --retire-only`/);
+  assert.equal(retireOnGrace(delivered.ticket.ref, recoveryEvidence).retired, true);
+  assert.equal(store.completeTicketAsControlPlane(slug, delivered.ticket.ref, closeOptions).ok, true);
+  assert.equal(store.getTicket(slug, delivered.ticket.ref).status, 'done');
+
+  const claimed = createFixture('grace-claimed fixture');
+  const claimedSession = `grace-claimed-${Date.now()}`;
+  const claimedPrepared = store.prepareDispatch(slug, claimed.ref, { sessionId: claimedSession, sharedTree: true });
+  assert.equal(store.claimTicket(slug, claimed.ref, 'grace-claimed-worker', {
+    sessionId: claimedSession,
+    token: claimedPrepared.token,
+    executor: claimedPrepared.ticket.dispatchExecutor,
+  }).ok, true);
+  backdateBoundAt(claimed.id, CLAIM_GRACE_MS * 10);
+  try {
+    assert.throws(
+      () => store.prepareDispatch(slug, claimed.ref, { recoveryEvidence, retireOnly: true }),
+      /claimed by grace-claimed-worker/,
+      'the grace must never shorten the backstop for an attempt that did claim',
+    );
+  } finally {
+    store.releaseTicket(slug, claimed.ref, 'grace-claimed-cleanup', { status: 'todo', source: 'test', force: true });
   }
 });
 

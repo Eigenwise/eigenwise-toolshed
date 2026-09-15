@@ -17,6 +17,7 @@ function createClaims(dependencies) {
     withTicketLock
   } = dependencies;
   const DEFAULT_CLAIM_IDLE_MIN = 60;
+  const DEFAULT_CLAIM_GRACE_MIN = 5;
   const DEFAULT_CLAIM_ABANDON_MIN = 24 * 60;
   const DEFAULT_PREPARED_DISPATCH_TTL_HOURS = 6;
   const VERIFY_START_COMMENT = "[sidequest:verify-start] ";
@@ -104,6 +105,9 @@ ${evidence.outputTail}`;
   }
   function claimIdleMs() {
     return envMinutesMs(DEFAULT_CLAIM_IDLE_MIN, "SIDEQUEST_CLAIM_IDLE_MIN", "SIDEQUEST_CLAIM_TTL_MIN");
+  }
+  function claimGraceMs() {
+    return Math.min(envMinutesMs(DEFAULT_CLAIM_GRACE_MIN, "SIDEQUEST_CLAIM_GRACE_MIN"), claimIdleMs());
   }
   function claimAbandonMs() {
     return envMinutesMs(DEFAULT_CLAIM_ABANDON_MIN, "SIDEQUEST_CLAIM_ABANDON_MIN");
@@ -304,11 +308,13 @@ ${evidence.outputTail}`;
   }
   return {
     DEFAULT_CLAIM_ABANDON_MIN,
+    DEFAULT_CLAIM_GRACE_MIN,
     DEFAULT_CLAIM_IDLE_MIN,
     DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
     autoReleasedClaimMessage,
     claimAbandonMs,
     claimActivityMs,
+    claimGraceMs,
     claimIdleAge,
     claimIdleMs,
     claimMaySubmit,

@@ -70,7 +70,7 @@ function createPulse(dependencies: any) {
   const {
     boardConfig,
     checkpointProjection,
-    claimIdleMs,
+    claimGraceMs,
     claimPulse,
     commitScope,
     dispatchState,
@@ -203,8 +203,8 @@ function createPulse(dependencies: any) {
     // A claim is a bound runtime's first action, so silence this long means the runtime is gone and its stop
     // hook never fired. Saying so is what lets the orchestrator reach for recovery evidence (SQ-2206).
     if (dispatch?.outcome === 'launched' && dispatch.boundAt && !dispatch.claimedAt && !claim && !ticket?.checkpoint
-      && Date.now() - Date.parse(dispatch.boundAt) >= claimIdleMs()) {
-      return { state: 'stalled', evidence: 'dispatch bound a runtime that never claimed, past the claim-idle backstop' };
+      && Date.now() - Date.parse(dispatch.boundAt) >= claimGraceMs()) {
+      return { state: 'stalled', evidence: 'dispatch bound a runtime that never claimed, past the claim grace' };
     }
     if (claim && dispatch && !dispatch.terminalAt && (dispatch.agentId || dispatch.boundAt)) {
       return { state: 'unknown', evidence: 'a runtime identity was bound, but Sidequest has no process heartbeat' };

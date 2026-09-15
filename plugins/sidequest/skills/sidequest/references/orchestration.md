@@ -206,19 +206,27 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 - **Retire an attempt no runtime will finish.** Two shapes qualify. When `pulse` reports the dispatch
   `prepared` or `launched` with no bound runtime identity, no claim, and no checkpoint, there is nothing to
   wait for: the spawn never started or never bound. And when it reports `stalled` with "bound a runtime that
-  never claimed, past the claim-idle backstop", that runtime is gone: a claim is a bound executor's FIRST
-  action, and its stop hook never fired, so nothing else will ever retire the attempt. Retire either in one
+  never claimed, past the claim grace", that runtime is gone: a claim is a bound executor's FIRST
+  action, and its stop hook never fired, so nothing else will ever retire the attempt. The grace is a few
+  minutes (default 5), not the hour-long idle backstop: an attempt bound longer than that with no claim, no
+  checkpoint, and no claim activity is not a slow executor. Retire either in one
   call with `sidequest dispatch <ref> --recovery-evidence "<observed failure evidence>"` (MCP
   `recoveryEvidence`). Add `--retire-only` (MCP `retireOnly:true`) when the attempt should be retired without
   preparing a replacement; it accepts those same two recovery-evidence shapes. A tokened claim refused as
   `prepared_compatibility_stale` is already terminal: that refusal retires its own stale attempt, so the executor
   stops without claiming and the orchestrator dispatches a fresh token. That records the evidence on the failed
   attempt, keeps it in `dispatch.attempts` as history, and prepares exactly one fresh identity when replacement
-  is requested. It refuses while a bound attempt is still inside the backstop, and once the attempt is
-  checkpointed or terminal; the refusal names which of those it found and, for a bound one, how long is left.
+  is requested. It refuses while a bound attempt is still inside the grace, and once the attempt is claimed,
+  checkpointed, or terminal; the refusal names which of those it found and, for a bound one, the exact instant
+  it becomes retirable plus the minutes left until then. An attempt that DID claim is untouched by the grace
+  and still waits for the hour-long idle backstop.
   TaskStop output and host task notifications do not include the dispatch token, attempt generation, and immutable
-  ticket binding, so they cannot record a terminal dispatch. The backstop remains the only recovery route when
-  a bound unclaimed runtime dies without SubagentStop or PostToolUseFailure. A claimed executor that is provably
+  ticket binding, so they cannot record a terminal dispatch, but they are exactly the evidence `--recovery-evidence`
+  wants: you spawned the runtime, so you are the authority that can attest the host reported it gone. The host is
+  not documented to fire SubagentStop for an agent that ends with `status: failed`, and SubagentStop carries no
+  terminal status field, so do not wait for a stop hook that may never arrive. A ticket whose bound attempt never
+  claimed also cannot be closed by `groomClose --deliveryCommit` until it is retired: retire first, then close.
+  A claimed executor that is provably
   dead goes through claim release or `groomClose --recoveryEvidence`. The exception is a live claimed executor
   that resumed into its original linked checkout but lost only the board binding: it uses `dispatch` with
   `recoveryEvidence`, `claimHolder`, and `worktree`; the board verifies the stored executor and restores that

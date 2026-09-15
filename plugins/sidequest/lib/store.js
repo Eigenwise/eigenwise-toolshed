@@ -696,6 +696,7 @@ const {
   localAheadOfUpstreamWarning,
   availableRoute: (...args) => availableRoute(...args),
   boardConfig,
+  claimGraceMs: () => claimGraceMs(),
   claimIdleMs: () => claimIdleMs(),
   claimReclaimable: (...args) => claimReclaimable(...args),
   claimVerification: (...args) => claimVerification(...args),
@@ -1050,11 +1051,13 @@ function completionTreeCheck(slug, ticket, opts) {
 }
 const {
   DEFAULT_CLAIM_ABANDON_MIN,
+  DEFAULT_CLAIM_GRACE_MIN,
   DEFAULT_CLAIM_IDLE_MIN,
   DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
   autoReleasedClaimMessage,
   claimAbandonMs,
   claimActivityMs,
+  claimGraceMs,
   claimIdleAge,
   claimIdleMs,
   claimMaySubmit,
@@ -2814,7 +2817,15 @@ function unclaimedPreRuntimeDispatch(ticket, state) {
     ticket?.dispatchNonce && state && ["prepared", "launched"].includes(state.outcome) && !state.terminalAt && !state.boundAt && !state.claimedAt && !ticket.claim?.by
   );
 }
+function boundUnclaimedDispatch(ticket, state) {
+  return Boolean(
+    ticket?.dispatchNonce && state && ["prepared", "launched"].includes(state.outcome) && !state.terminalAt && state.boundAt && !state.claimedAt && !ticket.claim?.by && !ticket.checkpoint
+  );
+}
 function unclaimedPreRuntimeDeliveryGuidance(ticket, state) {
+  if (boundUnclaimedDispatch(ticket, state)) {
+    return ` This attempt bound a runtime that never claimed. Once the claim grace has passed with no claim, no checkpoint, and no claim activity, retire it with \`sidequest dispatch ${ticket.ref} --recovery-evidence "<the host notification that the runtime terminated>" --retire-only\` (MCP \`recoveryEvidence\` with \`retireOnly: true\`), then re-run this closure. Inside the grace that call refuses and names the exact instant it becomes retirable.`;
+  }
   if (!unclaimedPreRuntimeDispatch(ticket, state)) return "";
   return ` This attempt is unclaimed and unbound. Once the delivery commit is reachable from the recorded integration branch, close it with \`groomClose ${ticket.ref} --deliveryCommit <sha> --deliveryMethod manual --recoveryEvidence "<why the attempt is dead>"\` (include by and reason). If the commit is not reachable from that branch, grooming still refuses until delivery reaches it. To retire without preparing a replacement first, dispatch with recoveryEvidence and retireOnly:true.`;
 }
@@ -3207,7 +3218,7 @@ const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createP
   boardConfig,
   checkpointProjection,
   claimPulse,
-  claimIdleMs,
+  claimGraceMs,
   claimReleaseVerdict,
   claimVerification,
   commitScope,
@@ -3491,9 +3502,11 @@ module.exports = {
   technicalBlockerRelease,
   touchClaim,
   claimIdleMs,
+  claimGraceMs,
   claimAbandonMs,
   preparedDispatchTtlMs,
   DEFAULT_CLAIM_IDLE_MIN,
+  DEFAULT_CLAIM_GRACE_MIN,
   DEFAULT_CLAIM_ABANDON_MIN,
   DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
   sweepStaleClaims,

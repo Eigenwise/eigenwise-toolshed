@@ -37,7 +37,7 @@ function requirementsMatch(left, right) {
   return JSON.stringify(left || null) === JSON.stringify(right || null);
 }
 function createDispatch(dependencies) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimGraceMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
   function syncLiveDispatchVerification(slug, ticket, amendment) {
     const state = dispatchState(ticket);
     if (!state || state.terminalAt) return null;
@@ -489,31 +489,45 @@ function createDispatch(dependencies) {
       state && PRE_RUNTIME_DISPATCH_OUTCOMES.has(state.outcome) && !state.terminalAt && !state.boundAt && !state.agentId && !state.claimedAt && !(ticket?.claim && ticket.claim.by) && !ticket?.checkpoint && ticket?.dispatchNonce
     );
   }
-  function strandedBoundAttempt(ticket, state) {
+  function boundUnclaimedRetirableAt(state) {
+    const boundMs = Date.parse(state?.boundAt);
+    return Number.isFinite(boundMs) ? boundMs + claimGraceMs() : Number.NaN;
+  }
+  function strandedBoundAttempt(ticket, state, now = Date.now()) {
     if (!state || !ticket?.dispatchNonce || !PRE_RUNTIME_DISPATCH_OUTCOMES.has(state.outcome)) return false;
     if (state.terminalAt || state.claimedAt || ticket.claim?.by || ticket.checkpoint) return false;
     if (state.worktreeBindingSource === "worktree-create" && state.worktree && !state.worktreeCreationCompletedAt) return true;
-    const boundMs = Date.parse(state.boundAt);
-    return Number.isFinite(boundMs) && Date.now() - boundMs >= claimIdleMs();
+    const retirableAt = boundUnclaimedRetirableAt(state);
+    return Number.isFinite(retirableAt) && now >= retirableAt;
   }
   const EVIDENCE_SUPERSEDED_FAILURE_SHAPES = /* @__PURE__ */ new Set(["unclaimed_launch_superseded", "stranded_bound_launch_superseded"]);
-  function evidenceRetirableAttempt(ticket, state) {
-    return supersedableUnboundAttempt(ticket, state) || strandedBoundAttempt(ticket, state);
+  function evidenceRetirableAttempt(ticket, state, now = Date.now()) {
+    return supersedableUnboundAttempt(ticket, state) || strandedBoundAttempt(ticket, state, now);
   }
-  function describeMinutes(ms) {
-    const minutes = Math.max(1, Math.round(ms / 6e4));
+  function minuteCount(minutes) {
     return `${minutes} minute${minutes === 1 ? "" : "s"}`;
   }
-  function boundRuntimeBlocker(state) {
+  function describeElapsed(ms) {
+    return minuteCount(Math.max(0, Math.floor(ms / 6e4)));
+  }
+  function describeRemaining(ms) {
+    return minuteCount(Math.ceil(ms / 6e4));
+  }
+  function boundRuntimeBlocker(state, now = Date.now()) {
     if (state?.worktreeBindingSource === "worktree-create" && state.worktree && !state.worktreeCreationCompletedAt) {
       return "bound by WorktreeCreate without a completed checkout identity and is immediately retirable on recovery evidence";
     }
     const boundMs = Date.parse(state?.boundAt);
     if (!Number.isFinite(boundMs)) return "bound to a runtime";
-    const waited = Date.now() - boundMs;
-    return `bound to a runtime ${describeMinutes(waited)} ago and still unclaimed, which becomes retirable on evidence in ${describeMinutes(claimIdleMs() - waited)} unless its terminal hook fires first`;
+    const retirableAt = boundUnclaimedRetirableAt(state);
+    const remaining = retirableAt - now;
+    const waited = `bound to a runtime ${describeElapsed(now - boundMs)} ago and still unclaimed, which`;
+    if (remaining > 0) {
+      return `${waited} becomes retirable on evidence at ${new Date(retirableAt).toISOString()}, in ${describeRemaining(remaining)}, unless its terminal hook fires first`;
+    }
+    return `${waited} passed its claim grace at ${new Date(retirableAt).toISOString()} but is not retirable in dispatch state ${pulseDispatchState(state)}`;
   }
-  function evidenceSupersessionBlocker(ticket, state) {
+  function evidenceSupersessionBlocker(ticket, state, now = Date.now()) {
     if (state?.terminalAt && EVIDENCE_SUPERSEDED_FAILURE_SHAPES.has(state.failureShape)) {
       return `already retired on recovery evidence at ${state.terminalAt}, so dispatch again without recoveryEvidence to prepare the replacement`;
     }
@@ -522,7 +536,7 @@ function createDispatch(dependencies) {
     if (ticket.claim?.by) return `claimed by ${ticket.claim.by}`;
     if (state.claimedAt) return "claimed";
     if (ticket.checkpoint) return "checkpointed";
-    if (state.boundAt || state.agentId) return boundRuntimeBlocker(state);
+    if (state.boundAt || state.agentId) return boundRuntimeBlocker(state, now);
     return `in unrecognized state ${pulseDispatchState(state)}`;
   }
   function retirePreparedCompatibilityStaleAttempt(slug, ticket, source = "tokened-claim-refusal") {
@@ -568,15 +582,16 @@ function createDispatch(dependencies) {
     return withTicketLock(slug, found.id, () => {
       const ticket = getTicket(slug, found.id);
       const state = dispatchState(ticket);
-      if (!evidenceRetirableAttempt(ticket, state)) {
+      const now = Date.now();
+      if (!evidenceRetirableAttempt(ticket, state, now)) {
         return {
           ok: false,
           reason: "unclaimed_launch_not_supersedable",
           ticket,
-          message: `${ticket?.ref || idOrRef} cannot be superseded on recovery evidence because its dispatch is ${evidenceSupersessionBlocker(ticket, state)}. Evidence retires an attempt whose runtime is gone: one that minted a token and never reached a runtime, or one bound and unclaimed past the claim-idle backstop. Anything past that waits for its own terminal record.`
+          message: `${ticket?.ref || idOrRef} cannot be superseded on recovery evidence because its dispatch is ${evidenceSupersessionBlocker(ticket, state, now)}. Evidence retires an attempt whose runtime is gone: one that minted a token and never reached a runtime, or one bound and unclaimed past the claim grace. Anything past that waits for its own terminal record.`
         };
       }
-      const strandedBound = strandedBoundAttempt(ticket, state);
+      const strandedBound = strandedBoundAttempt(ticket, state, now);
       setDispatchTerminal(ticket, "failed", opts?.source || "control-plane-unclaimed-launch-supersession", {
         slug,
         failureShape: strandedBound ? "stranded_bound_launch_superseded" : "unclaimed_launch_superseded"
@@ -1140,8 +1155,9 @@ function createDispatch(dependencies) {
     if (opts.retireOnly === true) {
       const ticket = getTicket(slug, idOrRef);
       const state = dispatchState(ticket);
-      if (!evidenceRetirableAttempt(ticket, state)) {
-        throw new Error(`prepare dispatch: ${idOrRef} cannot retire only because its dispatch is ${evidenceSupersessionBlocker(ticket, state)}. retireOnly accepts the same unclaimed attempt shapes as recovery evidence: prepared or launched before runtime binding, or bound and unclaimed past the claim-idle backstop.`);
+      const now = Date.now();
+      if (!evidenceRetirableAttempt(ticket, state, now)) {
+        throw new Error(`prepare dispatch: ${idOrRef} cannot retire only because its dispatch is ${evidenceSupersessionBlocker(ticket, state, now)}. retireOnly accepts the same unclaimed attempt shapes as recovery evidence: prepared or launched before runtime binding, or bound and unclaimed past the claim grace.`);
       }
       const superseded = supersedeUnboundAttempt(slug, idOrRef, {
         evidence: opts.recoveryEvidence,
