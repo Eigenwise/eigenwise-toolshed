@@ -272,6 +272,7 @@ function stopVerdict(store, claims, classification, dispatchStopped, terminalTic
     }
     const label = held.ref || held.ticketId || "a ticket";
     if (ticket?.dispatch?.outcome === "died" && ticket.dispatch.terminalAt) return diedVerdict(store, held, ticket);
+    if (ticket?.dispatch?.outcome === "failed" && ticket.dispatch.terminalSource === "subagent-stop" && ticket.dispatch.terminalAt) return diedVerdict(store, held, ticket);
     return `exec WAITING: ${label} ended a turn while holding its claim; it may resume. Do not re-dispatch or release it without a recorded terminal Agent failure.`;
   }
   if (dispatchStopped && classification.kind !== "unknown") {
@@ -301,6 +302,7 @@ function main() {
   if (!data) return;
   const agentId = stringField(data, "agent_id", "agentId");
   const agentName = stringField(data, "agent_name", "agentName", "name");
+  const terminalReason = stringField(data, "reason");
   const launchName = agentName || launchNameFromTranscriptSidecar(stringField(data, "agent_transcript_path", "agentTranscriptPath"));
   clearNearTurnCapCounter(agentId);
   const agentType = stringField(data, "agent_type", "agentType");
@@ -330,7 +332,7 @@ function main() {
   let terminalTickets = [];
   let terminalAttempts = [];
   try {
-    const result = store.markDispatchStopped(sessionId, agentType, agentId || null, agentName || null, launchName || null);
+    const result = store.markDispatchStopped(sessionId, agentType, agentId || null, agentName || null, launchName || null, terminalReason || null);
     dispatchStopped = Boolean(result.ok && result.stopped !== false);
     terminalTickets = Array.isArray(result.tickets) ? result.tickets : [];
     terminalAttempts = Array.isArray(result.terminalAttempts) ? result.terminalAttempts : [];

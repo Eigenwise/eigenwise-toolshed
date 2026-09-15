@@ -2450,20 +2450,21 @@ function createDispatch(dependencies) {
       return Boolean(agentName && attempt.agentName === agentName);
     }) || null;
   }
-  function markDispatchStopped(sessionId, executor, agentId, agentName, launchName) {
+  function markDispatchStopped(sessionId, executor, agentId, agentName, launchName, terminalReason) {
     const normalizedSessionId = String(sessionId || "").trim();
     const normalizedExecutor = String(executor || "").trim();
     const normalizedAgentId = String(agentId || "").trim();
     const normalizedAgentName = String(agentName || "").trim();
     const normalizedLaunchName = String(launchName || "").trim();
+    const normalizedTerminalReason = String(terminalReason || "").trim();
     if (!normalizedSessionId || !normalizedExecutor) return { ok: false, reason: "missing_identity" };
     const candidates = ticketsMentioningSession(normalizedSessionId);
-    const byRuntimeIdentity = stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName);
+    const byRuntimeIdentity = stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName, normalizedTerminalReason);
     if (byRuntimeIdentity.ok || !normalizedLaunchName || normalizedLaunchName === normalizedAgentName) return byRuntimeIdentity;
-    const byLaunchName = stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedLaunchName);
+    const byLaunchName = stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedLaunchName, normalizedTerminalReason);
     return byLaunchName.ok ? byLaunchName : byRuntimeIdentity;
   }
-  function stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName) {
+  function stopMatchingDispatches(candidates, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName, terminalReason) {
     const matches = [];
     const terminalAttempts = [];
     for (const { slug, ticket } of candidates) {
@@ -2481,6 +2482,7 @@ function createDispatch(dependencies) {
       return { ok: false, reason: matches.length ? "ambiguous" : "not_found" };
     }
     const tickets = [];
+    const terminalFailure = terminalAgentFailure(terminalReason);
     let stopped = false;
     for (const match of matches) {
       const result = withTicketLock(match.slug, match.id, () => {
@@ -2499,6 +2501,8 @@ function createDispatch(dependencies) {
           t.dispatchNonce = null;
           t.dispatchExecutor = null;
           stopped = true;
+        } else if (active && t.claim?.by && terminalFailure) {
+          setDispatchTerminal(t, "failed", "subagent-stop", { slug: match.slug, error: terminalReason, failureShape: terminalFailure });
         } else if (active) {
           state.turnEndedAt = now;
         }

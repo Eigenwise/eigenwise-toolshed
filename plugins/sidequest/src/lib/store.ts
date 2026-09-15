@@ -2491,9 +2491,11 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     }
     const terminalOutcome = opts.status === 'done'
       ? 'done'
-      : dispatch?.outcome === 'died' || opts.claimRelease?.kind === 'session_ended'
-        ? 'died'
-        : 'released';
+      : dispatch?.terminalAt
+        ? dispatch.outcome
+        : opts.claimRelease?.kind === 'session_ended'
+          ? 'died'
+          : 'released';
     const release = opts.releaseKind ? {
       kind: String(opts.releaseKind),
       reason: String(opts.releaseReason || '').trim() || null,
@@ -3178,11 +3180,10 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
   const state = dispatchState(ticket);
   if (purpose === 'grooming') {
     if ((ticket.claim && ticket.claim.by && !claimReclaimable(ticket)) || ticket.dispatchNonce || (state && !state.terminalAt)) {
-      const holder = ticket.claim && ticket.claim.by ? String(ticket.claim.by) : '<claim holder>';
       return {
         ok: false,
         reason: 'active_dispatch',
-        message: `${ticket.ref} still has a live claim or an open dispatch, so grooming cannot close it. Release it first: \`sidequest release ${ticket.ref} --by ${holder}\`, then re-run this closure with the same evidence. Releasing does not discard work already committed.`,
+        message: `${ticket.ref} still has a live claim or an open dispatch, so grooming cannot close it. Do not force-take it. After trusted host terminal evidence, release it with \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : '<claim holder>'}\`, then close it as plain grooming with the shipped commit as evidence, without --integration. Releasing does not discard work already committed.`,
         ticket,
       };
     }
