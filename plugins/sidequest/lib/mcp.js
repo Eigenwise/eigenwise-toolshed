@@ -56,7 +56,7 @@ function isBoardMcpLive(sessionId) {
 }
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 24100;
+const MCP_TOOLS_LIST_MAX_BYTES = 25e3;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
@@ -248,6 +248,8 @@ async function runTool(tool, rawArgs) {
   return enqueueMutation(board, async () => acknowledgeAliases(await tool.handler(args), aliases));
 }
 const ATTESTATION_VERIFY_CONTRACT = "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.";
+const DELIVERY_REVISION_CONTRACT = "Landed revision reachable from the target; proves each submitted path at its tree, not the working tree. Ignored when reachable.";
+const RESOLVED_PATHS_CONTRACT = "Diverging submitted paths resolved by hand; needs deliveryRevision. reason is the evidence.";
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   context_page: {
     limit: "UTF-8 bytes.",
@@ -277,10 +279,16 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
     recoveryEvidence: "unbound or expired bound",
     worktree: "Checkout."
   },
-  integrate: { deliveryInteractionCommit: "Reviewed descendant, submitted paths only." },
+  integrate: {
+    deliveryInteractionCommit: "Reviewed descendant, submitted paths only.",
+    deliveryRevision: DELIVERY_REVISION_CONTRACT,
+    resolvedPaths: RESOLVED_PATHS_CONTRACT
+  },
   groomClose: {
     deliveryCommit: "Prepared integration target.",
-    deliveryInteractionCommit: "Reviewed descendant, submitted paths only."
+    deliveryInteractionCommit: "Reviewed descendant, submitted paths only.",
+    deliveryRevision: DELIVERY_REVISION_CONTRACT,
+    resolvedPaths: RESOLVED_PATHS_CONTRACT
   },
   verdict: {
     outcome: "Candidate, not reviewer prose."

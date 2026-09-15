@@ -538,7 +538,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'groomClose',
-    description: 'Close with evidence. Delivery uses the ticket\'s prepared integration target when recorded, even if the board target or checkout changed later. For manually composed candidates with different pinned verifiers, run every pinned verifier and the full composed gate, then use deliveryCommit with deliveryMethod:"manual" and omit integration:true; integration:true is only for a matching delivered wave. verificationSupersession is the explicit exception for a terminal recorded submission whose sealed verifier no longer runs: it runs the replacement command, and records the old requirement, replacement requirement, reason, and result as a distinct delivered outcome. An unclaimed prepared or launched dispatch before runtime binding can be recovered only with deliveryMethod:"manual" and recoveryEvidence once deliveryCommit is reachable from the recorded integration branch. A pending candidate requires verified delivery, which reconciles the delivered commit against the candidate without checking sibling declared scope; abandonSubmission: true records discard, and a candidate already contained in the recorded target (in remote mode that includes the frozen origin/<branch> ref) records already-landed delivery instead of abandoning shipped work. A recorded revision names the ref that actually contained it, so a local delivery reads git:<branch> until origin has it. A pending candidate landed only on the frozen remote ref refuses integration_target_behind_landed_candidate until that local branch is synchronized, and a frozen integration ref that no longer resolves refuses integration_target_unavailable rather than answering from the local branch. An unlaunched prepared dispatch is recorded abandoned.',
+    description: 'Close with evidence. Delivery uses the ticket\'s prepared integration target when recorded, even if the board target or checkout changed later. For manually composed candidates with different pinned verifiers, run every pinned verifier and the full composed gate, then use deliveryCommit with deliveryMethod:"manual" and omit integration:true; integration:true is only for a matching delivered wave. verificationSupersession is the explicit exception for a terminal recorded submission whose sealed verifier no longer runs: it runs the replacement command, and records the old requirement, replacement requirement, reason, and result as a distinct delivered outcome. A non-reachable pinned candidate proves its content in the integration working tree, or — when it was rebased, squash-merged, or conflict-resolved before landing — at a deliveryRevision reachable from the target, per submitted path: identical blob, candidate deletion absent there, or the candidate patch reverse-applying onto that tree. Anything left over refuses delivery_content_diverged until resolvedPaths attests exactly those paths, and the record keeps the per-path contentProof. An unclaimed prepared or launched dispatch before runtime binding can be recovered only with deliveryMethod:"manual" and recoveryEvidence once deliveryCommit is reachable from the recorded integration branch. A pending candidate requires verified delivery, which reconciles the delivered commit against the candidate without checking sibling declared scope; abandonSubmission: true records discard, and a candidate already contained in the recorded target (in remote mode that includes the frozen origin/<branch> ref) records already-landed delivery instead of abandoning shipped work. A recorded revision names the ref that actually contained it, so a local delivery reads git:<branch> until origin has it. A pending candidate landed only on the frozen remote ref refuses integration_target_behind_landed_candidate until that local branch is synchronized, and a frozen integration ref that no longer resolves refuses integration_target_unavailable rather than answering from the local branch. An unlaunched prepared dispatch is recorded abandoned.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -550,6 +550,8 @@ const tools: ToolDefinition[] = [
         deliveryCommit: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'Delivered source commit reachable from this ticket\'s prepared integration target, or pinned working-tree candidate.' },
         deliveryInteractionCommit: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'A reviewed merged-tree interaction after deliveryCommit, limited to submitted candidate paths.' },
         deliveryMethod: { type: 'string', enum: ['reset', 'working-tree', 'manual'], description: 'For a non-reachable pinned candidate. Use manual only after every pinned verifier and the full composed gate; omit integration:true.' },
+        deliveryRevision: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'Landed revision, reachable from the target: proves each submitted path at its tree instead of the working tree, for a candidate rebased or squash-merged before landing. Ignored on a reachable delivery.' },
+        resolvedPaths: { type: 'array', items: { type: 'string' }, description: 'Submitted paths the deliveryRevision proof found diverging, attested as resolved by hand; reason records the evidence. Requires deliveryRevision.' },
         verificationSupersession: {
           type: 'object',
           description: 'Sealed replacement.',
@@ -615,6 +617,8 @@ const tools: ToolDefinition[] = [
         deliveryCommit: args.deliveryCommit,
         deliveryInteractionCommit: args.deliveryInteractionCommit,
         deliveryMethod: args.deliveryMethod,
+        deliveryRevision: args.deliveryRevision,
+        resolvedPaths: args.resolvedPaths,
         verificationSupersession,
       });
       if (res.ok) closeDispatchExecutor(ticket);
@@ -1007,6 +1011,8 @@ const tools: ToolDefinition[] = [
         deliveryCommit: { type: 'string', description: 'Reachable delivered source commit or pinned working-tree candidate.' },
         deliveryInteractionCommit: { type: 'string', description: 'Reviewed descendant interaction, limited to submitted paths; the wave gate and merged-tree verifier still pass.' },
         deliveryMethod: { type: 'string', enum: ['reset', 'working-tree', 'manual'], description: 'For a non-reachable pinned candidate.' },
+        deliveryRevision: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'Landed revision, reachable from the target: proves each submitted path at its tree instead of the working tree, for a candidate rebased or squash-merged before landing. Ignored on a reachable delivery.' },
+        resolvedPaths: { type: 'array', items: { type: 'string' }, description: 'Submitted paths the deliveryRevision proof found diverging, attested as resolved by hand; reason records the evidence. Requires deliveryRevision.' },
         reason: { type: 'string' },
         skipVerify: { type: 'boolean', description: 'Skip the pinned verifier only when verificationWaiver carries an authorized bounded waiver.' },
         verificationWaiver: VERIFICATION_WAIVER_PROP,
@@ -1109,6 +1115,9 @@ const tools: ToolDefinition[] = [
           deliveryCommit: args.deliveryCommit,
           deliveryInteractionCommit: args.deliveryInteractionCommit,
           deliveryMethod: args.deliveryMethod,
+          deliveryRevision: args.deliveryRevision,
+          resolvedPaths: args.resolvedPaths,
+          by,
           reason: args.reason,
           skipVerify: args.skipVerify === true,
           verificationWaiver,

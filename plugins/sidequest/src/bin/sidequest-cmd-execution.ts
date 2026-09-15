@@ -268,6 +268,8 @@ async function cmdGroomClose(opts: any, positional: any) {
     deliveryCommit: opts['delivery-commit'],
     deliveryInteractionCommit: opts['delivery-interaction-commit'],
     deliveryMethod: opts['delivery-method'],
+    deliveryRevision: opts['delivery-revision'],
+    resolvedPaths: opts['resolved-path'],
   });
   if (res.ok && !res.idempotent) closeDispatchExecutor(ticket);
   if (res.ok && opts.integration) {
@@ -701,6 +703,9 @@ async function cmdIntegrate(opts: any, positional: any) {
       deliveryCommit: opts['delivery-commit'],
       deliveryInteractionCommit: opts['delivery-interaction-commit'],
       deliveryMethod: opts['delivery-method'],
+      deliveryRevision: opts['delivery-revision'],
+      resolvedPaths: opts['resolved-path'],
+      by,
       reason: opts.reason,
       skipVerify: !!opts['skip-verify'],
       verificationWaiver,
