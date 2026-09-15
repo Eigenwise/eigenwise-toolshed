@@ -69,16 +69,6 @@ const VERIFICATION_WAIVER_PROP = {
     expiresAt: { type: "string", description: "Future ISO timestamp after which the waiver is invalid." }
   }
 };
-function coerceVerificationWaiver(value) {
-  if (typeof value !== "string") return value;
-  let parsed;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return value;
-  }
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : value;
-}
 function compactIntegrationDelivery(integration) {
   const { verify: _verify, ...delivery } = integration;
   return delivery;
@@ -930,7 +920,7 @@ const tools = [
       const by = requireBy(args, "integrate");
       const refs = String(args.ref).split(",").map((ref) => ref.trim()).filter(Boolean);
       if (!refs.length) throw new Error("integrate: pass one or more ticket refs.");
-      const verificationWaiver = coerceVerificationWaiver(args.verificationWaiver);
+      const verificationWaiver = args.verificationWaiver;
       if (Object.hasOwn(args, "wave")) {
         if (args.wave === null || Array.isArray(args.wave) || typeof args.wave !== "object") {
           return mutationAck(slug, {

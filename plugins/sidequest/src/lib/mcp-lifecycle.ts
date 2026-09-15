@@ -84,22 +84,6 @@ const VERIFICATION_WAIVER_PROP = {
   },
 };
 
-// Some MCP hosts stringify an object-typed property whose declared schema type
-// they don't otherwise honor (GitHub #109). Tolerate exactly that one shape —
-// a JSON string that parses to a plain object — before verificationWaiver
-// reaches store/kernel validation; anything else passes through unchanged so
-// validateVerificationWaiver still refuses it.
-function coerceVerificationWaiver(value: any): any {
-  if (typeof value !== 'string') return value;
-  let parsed: any;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return value;
-  }
-  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : value;
-}
-
 function compactIntegrationDelivery(integration: any) {
   const { verify: _verify, ...delivery } = integration;
   return delivery;
@@ -1035,7 +1019,7 @@ const tools: ToolDefinition[] = [
       const by = requireBy(args, 'integrate');
       const refs = String(args.ref).split(',').map((ref: string) => ref.trim()).filter(Boolean);
       if (!refs.length) throw new Error('integrate: pass one or more ticket refs.');
-      const verificationWaiver = coerceVerificationWaiver(args.verificationWaiver);
+      const verificationWaiver = args.verificationWaiver;
       if (Object.hasOwn(args, 'wave')) {
         if (args.wave === null || Array.isArray(args.wave) || typeof args.wave !== 'object') {
           return mutationAck(slug, {
