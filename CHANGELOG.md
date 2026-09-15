@@ -8,6 +8,35 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.570.0 (2026-09-15)
+
+### quartermaster 0.11.0 → 0.11.1
+
+#### Fixes
+
+- quartermaster: decisions list now respects --project (SQ-2920) [`e91abdf`](https://github.com/Eigenwise/eigenwise-toolshed/commit/e91abdf037f2f51105a315212dce314dce3d438a)
+
+### sidequest 5.1.21 → 5.1.22
+
+#### Fixes
+
+- integrate accepts a top-level verificationWaiver over MCP (GH-109)
+  The `integrate` tool's `verificationWaiver` property now declares `type: object` with typed fields, so an MCP host that only honors typed schemas sends it as an object instead of stringifying or dropping it. A JSON string in that position stays refused: the typed schema is the fix, and the authority that skips verification keeps one grammar.
+- verify-capture binds the capture to the dispatch worktree (GH-110)
+  The pinned verify-capture wrapper now binds its capture to the dispatch's own worktree instead of trusting process.cwd(): the briefing command passes --worktree for isolated-worktree dispatches, the wrapper runs there even when invoked from elsewhere, the flag is refused when it names any tree other than the one the dispatch bound (a same-HEAD checkout with different ignored build state must not certify the candidate), and it refuses (rather than silently certifying the wrong revision) when no flag is given and cwd sits outside the ticket's bound worktree. Shared-tree and working-tree-delivery dispatches are unaffected.
+- Direct Board MCP outages to the user (SQ-2921)
+  Tell agents to report a disconnected Board MCP server so the user can reconnect it from /mcp or restart Claude Code.
+- Fix scopeRequest refusal printing "refused undefined; only null is implicitly writable" (SQ-2925)
+  Fixed a scopeRequest auto-approval bug where a ticket that had already declared its own
+  release fragment could get its scope request refused with "refused undefined; only null is
+  implicitly writable" and no path named. The shared refusal formatter now throws a clear
+  internal error if it's ever called without a ticket ref, instead of interpolating
+  undefined/null into the message. The executor briefing also now tells executors to call
+  scopeRequest and wait when the pinned verifier needs paths outside declared scope, instead
+  of releasing a verified candidate.
+- Stop a sibling's checkout from blocking a failed dispatch's retry (SQ-2926)
+  Worktree creation attributes a new checkout in creation order, so a sibling whose own WorktreeCreate died left the surviving checkout recorded against a reservation that never created one. The agent now takes that binding back even when it holds nothing to swap, and a retry honours an immutable recovery fact only for a checkout this attempt's own agent ran in, so a ticket already carrying the crossed fact can be dispatched again.
+
 ## v3.569.0 (2026-09-15)
 
 ### sidequest 5.1.20 → 5.1.21

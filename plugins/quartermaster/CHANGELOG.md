@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.1 (2026-09-15)
+
+Released in v3.570.0, up from 0.11.0.
+
+### Fixes
+
+- quartermaster: decisions list now respects --project (SQ-2920) [`e91abdf`](https://github.com/Eigenwise/eigenwise-toolshed/commit/e91abdf037f2f51105a315212dce314dce3d438a)
+
 ## 0.11.0 (2026-09-15)
 
 Released in v3.568.0, up from 0.10.2.
