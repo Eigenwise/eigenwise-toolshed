@@ -440,7 +440,8 @@ async function runCapturedVerification(command, target, cwd = process.cwd(), fil
   const resolution = resolveCaptureCwd(target, cwd, explicitWorktree);
   if (resolution.refusal) return Object.freeze({ capture: null, recorded: null, refusal: resolution.refusal });
   const captureCwd = resolution.cwd;
-  if (target && !verifiedWorktreeIsClean(captureCwd)) {
+  const cleanWorktree = target ? verifiedWorktreeIsClean(captureCwd) : true;
+  if (target && !cleanWorktree && !isWorkingTreeDeliveryTarget(target)) {
     return Object.freeze({
       capture: null,
       recorded: null,
@@ -449,7 +450,7 @@ Verification capture for ${target.ticket} ran with uncommitted changes in ${capt
     });
   }
   const capture = target && isFullSuiteCommand(command) ? await runFullSuiteCapture(command, target.project, captureCwd, fileSystem) : await runVerifyCapture(command, captureCwd);
-  const recorded = target ? recordCapture(target, capture, captureCwd, true) : null;
+  const recorded = target ? recordCapture(target, capture, captureCwd, cleanWorktree) : null;
   return Object.freeze({ capture, recorded, refusal: null });
 }
 function verifiedRevision(cwd) {
@@ -492,15 +493,15 @@ function recordCapture(target, capture, cwd, cleanWorktree = verifiedWorktreeIsC
       message: `Verification capture for ${target.ticket} ran in ${cwd}, which is not the ticket's repository ${ticketRepository}. A verify that never saw the ticket's files proves nothing about them, so nothing is recorded. Run the pinned verifier from the ticket's own checkout.`
     };
   }
-  if (!cleanWorktree) {
+  const ticket = store.getTicket(project.slug, target.ticket);
+  const workingTreeCandidate = store.workingTreeDeliveryCandidate(project.slug, ticket);
+  if (!cleanWorktree && !workingTreeCandidate) {
     return {
       ok: false,
       reason: "verification_capture_dirty_worktree",
       message: `Verification capture for ${target.ticket} ran with uncommitted changes in ${cwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`
     };
   }
-  const ticket = store.getTicket(project.slug, target.ticket);
-  const workingTreeCandidate = store.workingTreeDeliveryCandidate(project.slug, ticket);
   const candidate = workingTreeCandidate?.candidate || verifiedRevision(cwd);
   if (!candidate) return { ok: false, reason: "verified_revision_unavailable" };
   return store.recordVerificationCapture(project.slug, target.ticket, {

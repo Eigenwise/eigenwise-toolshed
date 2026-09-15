@@ -186,7 +186,8 @@ export function commandVerificationResult(requirement: VerificationRequirement, 
     && capture.candidate.source === candidate.source
     && capture.candidate.value === candidate.value
     && capture.dispatchNonce === dispatchNonce;
-  const completedCapture = captures.find((capture) => matchingCapture(capture) && capture.cleanWorktree === true);
+  const provesCandidate = (capture: CompletedVerificationCapture) => capture.candidate.source === 'working-tree' || capture.cleanWorktree === true;
+  const completedCapture = captures.find((capture) => matchingCapture(capture) && provesCandidate(capture));
   if (!completedCapture) {
     const dirtyCapture = captures.find((capture) => matchingCapture(capture) && capture.cleanWorktree === false);
     const message = dirtyCapture
