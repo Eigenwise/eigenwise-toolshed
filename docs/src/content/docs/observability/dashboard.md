@@ -13,7 +13,7 @@ Use the dashboard to answer three practical questions:
 
 - Which models and projects account for token use and estimated cost?
 - Which tools and MCP servers are active?
-- Which Sidequest stories are consuming the most work?
+- Are hooks, the gateway, or telemetry sources failing right now?
 
 The global view is organized into four rows: **At a glance**, **Where the spend goes**, **Failures and source activity**, and **Context recharge**. It includes total spend, work routed to Codex, tool failure rate, hook and gateway failures, source activity, and context recharge. Choose a smaller time bucket for investigation, then use the legend or data inspection view for exact series values.
 

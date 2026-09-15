@@ -136,7 +136,7 @@ function worktreeBindingComparison(failure) {
   const count = `${candidates} dispatch record${candidates === 1 ? "" : "s"}`;
   const comparison = `hook session id ${abbreviatedSessionId(failure?.suppliedSessionId)} against recorded session id ${abbreviatedSessionId(failure?.recordedSessionId)}; hook canonical worktree ${recordedWorktree(failure?.suppliedWorktree)} against recorded canonical worktree ${recordedWorktree(failure?.recordedWorktree)}`;
   if (failure?.crossProject) {
-    return `Considered ${count} on this board. The nearest dispatch failed predicate \`different_project\`: ${comparison}. The matching launched isolated dispatch is recorded for a different project, so WorktreeCreate cannot bind it here: dispatch it with sharedTree:true, or from a session rooted in that project.`;
+    return `Considered ${count} on this board. The nearest dispatch failed predicate \`different_project\`: ${comparison}. WorktreeCreate follows the session id to the board that reserved the creation, but this session owns launched isolated dispatches on more than one board, so it could not tell which and fell back to the spawning checkout. Let the other boards' isolated dispatches reach a terminal state, then re-dispatch this one so the session owns isolated dispatches on a single board.`;
   }
   if (failure?.predicate) {
     return `Considered ${count}. The nearest dispatch failed predicate \`${failure.predicate}\`: ${comparison}. Run \`sidequest pulse <ref>\` and re-dispatch with recovery evidence.`;
@@ -218,6 +218,15 @@ function gitSucceeds(repository, args) {
 }
 function repositoryFor(cwd) {
   return import_node_path2.default.resolve(git(cwd, ["rev-parse", "--show-toplevel"]));
+}
+function reservedDispatchRepository(sessionId) {
+  try {
+    const store = require(runtimeModule("store"));
+    const reserved = store.isolatedDispatchRepositoryForSession(sessionId);
+    return reserved ? import_node_path2.default.resolve(reserved) : null;
+  } catch (_) {
+    return null;
+  }
 }
 function samePath(left, right) {
   return leaseKernel.canonicalPath(left) === leaseKernel.canonicalPath(right);
@@ -340,10 +349,19 @@ async function createWorktreeMain() {
   const cwd = stringField(input, "cwd") || process.cwd();
   if (!name) throw new Error("WorktreeCreate requires a worktree name.");
   if (!sessionId) throw new Error("WorktreeCreate requires a dispatch session binding.");
-  const repository = repositoryFor(cwd);
+  let repository = repositoryFor(cwd);
   const worktrees = require(runtimeModule("worktrees"));
-  const target = worktrees.namedWorktreePath(repository, name);
-  const binding = bindCreation(repository, sessionId, target);
+  let binding = bindCreation(repository, sessionId, worktrees.namedWorktreePath(repository, name));
+  if (!binding.ok) {
+    const reserved = reservedDispatchRepository(sessionId);
+    if (reserved && !samePath(reserved, repository)) {
+      const reservedBinding = bindCreation(reserved, sessionId, worktrees.namedWorktreePath(reserved, name));
+      if (reservedBinding.ok) {
+        repository = reserved;
+        binding = reservedBinding;
+      }
+    }
+  }
   if (!binding.ok || !binding.ref || !binding.baseline || !binding.repository || !binding.worktree) {
     throw new Error(worktreeCreationRefusalMessage(String(binding.reason || ""), repository, binding.binding));
   }

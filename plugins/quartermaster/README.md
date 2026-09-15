@@ -55,19 +55,39 @@ Setup installs the approved plugins and writes the approved workspace files. It 
 ## CLI
 
 ```text
-node bin/quartermaster.js mine [--project <path>] [--days 30] [--sessions 40] [--all-projects]
+node bin/quartermaster.js mine [--project <path>] [--days 30] [--sessions 40] [--all-projects] [--no-subagents]
 node bin/quartermaster.js status [--project <path>]
 node bin/quartermaster.js catalog [--query <terms>] [--installed]
 node bin/quartermaster.js decisions list
-node bin/quartermaster.js decisions add --title <t> --fingerprint <f> --status applied|rejected ...
+node bin/quartermaster.js decisions add --title <t> --fingerprint <f> --status applied|rejected|deferred ...
 node bin/quartermaster.js verify [--project <path>]
 node bin/quartermaster.js mark-resupply [--project <path>]
 node bin/quartermaster.js decline-resupply [--project <path>]
 node bin/quartermaster.js allowlist [--project <path>] [--days 30] [--sessions 40] [--blocked]
-node bin/quartermaster.js enable-auto-allowlist --project <path>
+node bin/quartermaster.js enable-auto-allowlist [--project <path>]
+node bin/quartermaster.js crap [--project <path>] [--max 6] [--ratchet <git-ref>] [--lcov <path>] [--complexity <lizard.csv>] [--coverage-command "<cmd>"] [--json]
 ```
 
-Everything prints JSON. Node standard library only, no dependencies, cross-platform.
+Everything prints JSON except `crap`. Node standard library only, no dependencies, cross-platform.
+
+`crap` scores every function in the project with CRAP (Change Risk Anti-Patterns), `cc^2 * (1 - coverage)^3 + cc`, so a function is either simple or covered. Coverage comes from an lcov file, complexity from [lizard](https://github.com/terryyin/lizard), which reads C/C++, C#, Java, JavaScript, TypeScript, Python, Go, Rust, Ruby, PHP, Swift, Kotlin, Scala, Lua and more. It prints one line per offender plus a summary, or the whole report with `--json`.
+
+Settings come from `.claude/quartermaster/crap.json`, and flags override it:
+
+```json
+{
+  "coverageCommand": "npx c8 --reporter=lcov npm test",
+  "lcov": "coverage/lcov.info",
+  "sources": ["src"],
+  "exclude": ["**/*.test.*"],
+  "max": 6,
+  "ratchet": "main"
+}
+```
+
+Without `ratchet` every function has to stay under `max`. With it, functions in files changed against `git merge-base HEAD <ratchet>` may not get worse than they were, new functions still have to clear `max`, and the summary reports how many pre-existing functions are already at or above it.
+
+Exit codes: 0 the gate passed, 1 the gate failed, 2 a prerequisite is missing (lizard is not resolvable, there is no lcov file, or the coverage command failed). Quartermaster looks for `lizard` on PATH, then `uvx lizard`, then `pipx run lizard`; it never installs it, it prints the install hint (`uv tool install lizard`, `pipx install lizard`, or `pip install lizard`).
 
 ## Configuration
 

@@ -34,7 +34,7 @@ interface Ticket {
   files?: string[];
   claim?: { by?: string; verification?: { startedAt?: string; command?: string } } | null;
   checkpoint?: { id?: string; commit?: string; at?: string } | null;
-  dispatch?: { outcome?: string; terminalAt?: string; terminalSource?: string; turnEndedAt?: string; worktree?: string; agentName?: string };
+  dispatch?: { outcome?: string; terminalAt?: string; terminalSource?: string; failureShape?: string; turnEndedAt?: string; worktree?: string; agentName?: string };
   submission?: { commit?: string; integratedAt?: string; unscopedPaths?: string[] };
   effort?: string;
 }
@@ -46,7 +46,7 @@ interface Store {
   getTicket: (slug: string, ticketId: string) => Ticket | null;
   claimActivityMs: (ticket?: Ticket) => number;
   submissionReadiness: (submission?: Ticket['submission']) => SubmissionReadiness;
-  markDispatchStopped: (sessionId: string, executor: string, agentId: string | null, agentName: string | null, launchName?: string | null) => {
+  markDispatchStopped: (sessionId: string, executor: string, agentId: string | null, agentName: string | null, launchName?: string | null, terminalReason?: string | null) => {
     ok?: boolean;
     stopped?: boolean;
     tickets?: Ticket[];
@@ -203,6 +203,7 @@ function stopVerdict(
     } catch (_) {}
     const label = held.ref || held.ticketId || 'a ticket';
     if (ticket?.dispatch?.outcome === 'died' && ticket.dispatch.terminalAt) return diedVerdict(store, held, ticket);
+    if (ticket?.dispatch?.outcome === 'failed' && ticket.dispatch.terminalSource === 'subagent-stop' && ticket.dispatch.terminalAt) return diedVerdict(store, held, ticket);
     return `exec WAITING: ${label} ended a turn while holding its claim; it may resume. Do not re-dispatch or release it without a recorded terminal Agent failure.`;
   }
 
@@ -240,6 +241,7 @@ function main(): void {
   if (!data) return;
   const agentId = stringField(data, 'agent_id', 'agentId');
   const agentName = stringField(data, 'agent_name', 'agentName', 'name');
+  const terminalReason = stringField(data, 'reason');
   const launchName = agentName || launchNameFromTranscriptSidecar(stringField(data, 'agent_transcript_path', 'agentTranscriptPath'));
   clearNearTurnCapCounter(agentId);
 
@@ -274,7 +276,7 @@ function main(): void {
   let terminalTickets: Ticket[] = [];
   let terminalAttempts: { ref: string; outcome?: string; agentName?: string }[] = [];
   try {
-    const result = store.markDispatchStopped(sessionId, agentType, agentId || null, agentName || null, launchName || null);
+    const result = store.markDispatchStopped(sessionId, agentType, agentId || null, agentName || null, launchName || null, terminalReason || null);
     dispatchStopped = Boolean(result.ok && result.stopped !== false);
     terminalTickets = Array.isArray(result.tickets) ? result.tickets : [];
     terminalAttempts = Array.isArray(result.terminalAttempts) ? result.terminalAttempts : [];

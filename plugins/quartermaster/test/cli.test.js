@@ -65,6 +65,16 @@ test('the retired mark-retro command stays unavailable', () => {
   assert.equal(JSON.parse(current.stdout).ok, true);
 });
 
+test('help documents the crap gate, its config file, and its exit codes', () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-test-'));
+
+  const result = run('help', projectPath);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /quartermaster crap \[--project <path>\] \[--max <n>\] \[--ratchet <git-ref>\] \[--lcov <path>\]/);
+  assert.match(result.stdout, /\.claude\/quartermaster\/crap\.json/);
+  assert.match(result.stdout, /2 prerequisite missing/);
+});
+
 test('decline-resupply records the decline without clearing the current accumulation', () => {
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-cli-test-'));
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-state-test-'));
