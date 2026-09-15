@@ -58,3 +58,24 @@ test('researches plugin recommendations within privacy and approval bounds', () 
     assert.match(skill, /`WebSearch` and `WebFetch` are not in your tool roster.*?(?:mark|label).*?unresearched/s);
   }
 });
+
+test('proposes and documents the CRAP gate', () => {
+  const setup = readSkill('setup');
+  const resupply = readSkill('resupply');
+  assert.match(setup, /a proposed CRAP gate from\s+\[references\/crap-gate\.md\]/);
+  assert.match(setup, /--fingerprint "rule:crap-gate"/);
+
+  const crapGate = fs.readFileSync(path.join(__dirname, '..', 'skills', 'setup', 'references', 'crap-gate.md'), 'utf8');
+  const ruleTemplates = fs.readFileSync(path.join(__dirname, '..', 'skills', 'setup', 'references', 'rule-templates.md'), 'utf8');
+  const routing = fs.readFileSync(path.join(__dirname, '..', 'skills', 'resupply', 'references', 'routing.md'), 'utf8');
+
+  assert.match(crapGate, /crap = cc\^2 \* \(1 - coverage\)\^3 \+ cc/);
+  assert.match(crapGate, /"coverageCommand": "npx c8 --reporter=lcov npm test"/);
+  assert.match(crapGate, /coverage run -m pytest && coverage lcov -o coverage\/lcov\.info/);
+  assert.match(crapGate, /Exit 2 also covers a missing LCOV file/);
+  assert.match(ruleTemplates, /description: Keep changed code within the CRAP ceiling/);
+  assert.match(ruleTemplates, /priority: 85/);
+  assert.match(resupply, /no `\.claude\/quartermaster\/crap\.json`/);
+  assert.match(resupply, /`rule:crap-gate`/);
+  assert.match(routing, /routes to the CRAP gate reference/);
+});
