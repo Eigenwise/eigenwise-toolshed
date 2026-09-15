@@ -4,10 +4,10 @@ const os = require("os");
 const path = require("path");
 const { execFileSync } = require("node:child_process");
 const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME, bundledAgentType } = require("./exec-names.js");
-const { createWorktreeLease, worktreeResumeDecision, canonicalPath } = require("./kernel/worktree.js");
+const { createWorktreeLease, canonicalPath } = require("./kernel/worktree.js");
 const crypto = require("crypto");
 const store = require("./store.js");
-const { worktreeRoot } = require("./worktrees.js");
+const { worktreeRoot, retainedWorktreeResumeDecision } = require("./worktrees.js");
 const { spawnDescription } = store;
 const { compileContextProjection } = require("./context-packet.js");
 const { canonicalPreparedDispatchExecutor } = require("./prepared-dispatch.js");
@@ -339,7 +339,7 @@ function continuationResumeDecision(continuation) {
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"]
     }).trim();
-    return worktreeResumeDecision(createWorktreeLease({ ...continuation.lease, observedRevision }));
+    return retainedWorktreeResumeDecision(createWorktreeLease({ ...continuation.lease, observedRevision }));
   } catch (_) {
     return { allowed: false, reason: "the retained worktree revision could not be observed." };
   }
@@ -415,14 +415,15 @@ function ticketWorktreeSync(ticket, projectPath) {
     ].join(" ");
   }
   if (continuation?.mode === "dirty_worktree_resume") {
+    const candidateCheck = `Worktree synchronization (run before work): this worktree holds uncommitted work retained from the previous attempt. Base ancestry alone never proves the retained candidate is here, so confirm the candidate first: \`git rev-parse HEAD\` must be ${continuation.commit} and \`git status --porcelain\` must still list the retained changes with no unmerged (\`UU\`, \`AA\`, \`DU\`, \`UD\`, \`AU\`, \`UA\`, \`DD\`) entries. If any of that fails, stop and report that this checkout is not the retained candidate. Only then check \`git merge-base --is-ancestor ${commit} HEAD\`, and change nothing if it passes.`;
     if (!checkpointBase) {
       return [
-        `Worktree synchronization (run before work): this worktree holds uncommitted work retained from the previous attempt. Check \`git merge-base --is-ancestor ${commit} HEAD\` and change nothing if it passes.`,
+        candidateCheck,
         "If it fails, stop and report that the retained base was not recorded. Do not move the base or discard anything: the retained changes exist nowhere else."
       ].join(" ");
     }
     return [
-      `Worktree synchronization (run before work): this worktree holds uncommitted work retained from the previous attempt. Check \`git merge-base --is-ancestor ${commit} HEAD\` and change nothing if it passes.`,
+      candidateCheck,
       `If it fails, preserve before moving: commit every retained change on this worktree's own branch with \`git add -A && git commit\`, confirm \`git status --porcelain\` is empty and \`git show --stat HEAD\` lists every file you expected, then run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` and \`git rebase --onto ${commit} ${checkpointBase}\`.`,
       "Never check out or discard over the retained changes, and never use `git stash`: the stash stack is shared across worktrees and concurrent sessions on this machine, so a pop can take an entry that is not yours.",
       "Rebase, never merge. Cutting a release deletes the `.release/unreleased/*.md` fragments it consumed, and merging an older base forward resurrects them, which re-ships changelog entries for already-released work.",
@@ -627,7 +628,7 @@ function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeou
     ...worktreeSync ? [worktreeSync] : [],
     ...ticketIsolationContract(ticket, project) || [],
     verify,
-    verifierCommand ? "Run it through " + capturedVerifyCommand(verifierCommand, ticket?.ref, project, dispatchBoundWorktree(ticket)) + " in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. A successful wrapper run records its completed capture identity against this ticket and the checked Git revision, and submit refuses prose or a retyped command without that matching record. A backgrounded verify's completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. When the pinned verifier needs paths outside declared scope, call scopeRequest with those paths and wait; do not release a verified candidate instead. Executors may report evidence only; they cannot replace, skip, or weaken this verifier." : "Record evidence for the pinned verifier. Executors may not replace, skip, or weaken it; skipping requires an authorized bounded waiver recorded as a Diagnostic.",
+    verifierCommand ? "Run it through " + capturedVerifyCommand(verifierCommand, ticket?.ref, project, dispatchBoundWorktree(ticket)) + " in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. Run it only over a clean worktree: a successful wrapper run records its completed capture identity against this ticket and the checked Git revision, and submit refuses prose or a retyped command without that matching record. A backgrounded verify's completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. When the pinned verifier needs paths outside declared scope, call scopeRequest with those paths and wait; do not release a verified candidate instead. Executors may report evidence only; they cannot replace, skip, or weaken this verifier." : "Record evidence for the pinned verifier. Executors may not replace, skip, or weaken it; skipping requires an authorized bounded waiver recorded as a Diagnostic.",
     evidenceGuidance || "",
     "Execution survival: Budget tool calls and run the declared verify command early, rather than only at the end. If the budget nears exhaustion after partly completing the contract, commit and submit the verified portion with evidence and plainly name what remains: a partial submission with proof beats a dead run. Never leave verified work uncommitted. Board MCP is the executor lifecycle authority. If the Board MCP server is unavailable, stop and report it to the user instead of retrying. The user must run /mcp and reconnect plugin:sidequest:board, or restart Claude Code. Do not use the Sidequest CLI or raw Agent as a fallback.",
     "If Sidequest itself misbehaves, such as a refusal that contradicts observed state, a dead retrieval handle, a guard loop, or a reproducible tool error, report it to the user with the reproducing evidence and treat it as an upstream defect. Executors also put that evidence in a ticket comment so the orchestrator sees it. Do not encode a workaround in project rules, hooks, or memory; any unavoidable stopgap must be marked temporary and name the defect it awaits.",

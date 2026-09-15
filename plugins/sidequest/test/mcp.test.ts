@@ -2938,6 +2938,7 @@ test('MCP carries a derived release scope through a released continuation and in
     command: ticket.executorVerify,
     status: 'passed',
     candidate: { source: 'git', value: committed.commit },
+    cleanWorktree: true,
     completedAt: new Date().toISOString(),
   }).ok, true);
   assert.equal((await callTool('submit', {

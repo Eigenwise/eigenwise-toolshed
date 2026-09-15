@@ -1047,6 +1047,7 @@ test('the pinned verify-capture command carries the dispatch bound worktree, and
     dispatch: { sharedTree: true },
   }), 'shared-token', undefined, root);
   const sharedCommand = commandLine(shared);
+  assert.match(shared, /Run it only over a clean worktree/);
   assert.doesNotMatch(sharedCommand, /--worktree/);
 
   const linked = agentsync.renderTicketBriefing(Object.assign({}, base, {
@@ -1155,6 +1156,36 @@ test('briefings synchronize stale worktrees to their recorded integration target
   assert.ok(briefing.includes(`git reset --hard ${commit}`));
   assert.doesNotMatch(briefing, /\[sidequest:worktree-sync\]/);
   assert.ok(briefing.includes('If fetching or resetting fails, stop and report the failure instead of working from the stale base.'));
+});
+
+// SQ-2938 / GH-125. A recovery dispatch that names an older base through integrationBranch makes
+// `--is-ancestor` pass against a checkout that never held the candidate, and this step then told the
+// executor to change nothing.
+test('a dirty-worktree continuation proves the retained candidate before it trusts base ancestry', () => {
+  const root = tmpDir();
+  const base = 'a'.repeat(40);
+  const retained = 'c'.repeat(40);
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-2938', title: 'Explicit recovery base', model: 'opus', effort: 'high', category: {},
+    dispatch: {
+      sharedTree: false,
+      baseCommit: base,
+      integrationTarget: { mode: 'local', branch: 'main' },
+      continuation: {
+        mode: 'dirty_worktree_resume',
+        sourceWorktree: path.join(root, 'retained'),
+        commit: retained,
+        baseCommit: retained,
+      },
+    },
+  }, 'recovery-base-token', undefined, root);
+
+  assert.match(briefing, /Base ancestry alone never proves the retained candidate is here/);
+  assert.ok(briefing.includes(`\`git rev-parse HEAD\` must be ${retained}`));
+  assert.match(briefing, /must still list the retained changes with no unmerged \(`UU`/);
+  assert.match(briefing, /stop and report that this checkout is not the retained candidate/);
+  assert.match(briefing, /Only then check `git merge-base --is-ancestor/);
+  assert.ok(!briefing.includes(`--is-ancestor ${base} HEAD\` and change nothing if it passes`));
 });
 
 test('small-ticket lifecycle retires three optional board round trips', () => {

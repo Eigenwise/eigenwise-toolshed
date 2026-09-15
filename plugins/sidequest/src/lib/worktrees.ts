@@ -13,8 +13,64 @@ const worktreeLease = require('./kernel/worktree.js') as {
   createCheckoutInstanceMarker: (gitDirectory: string) => string;
   createWorktreeLease: (facts: any) => any;
   worktreeCleanupDecision: (lease: any, registered: readonly string[]) => { allowed: boolean; reason: string };
+  worktreeResumeDecision: (lease: any) => { allowed: boolean; reason: string };
   legacyWorktreeCleanupDecision: (facts: { registered: boolean; clean: boolean; oldEnough: boolean; settled: boolean }) => { allowed: boolean; reason: string };
 };
+
+const UNMERGED_STATUS_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
+const IN_PROGRESS_GIT_OPERATION_STATE: ReadonlyArray<readonly [string, string]> = [
+  ['CHERRY_PICK_HEAD', 'cherry-pick'],
+  ['MERGE_HEAD', 'merge'],
+  ['REVERT_HEAD', 'revert'],
+  ['rebase-merge', 'rebase'],
+  ['rebase-apply', 'rebase'],
+  ['BISECT_LOG', 'bisect'],
+];
+
+function unmergedCheckoutPaths(worktree: string): string[] {
+  return execFileSync('git', ['status', '--porcelain'], { cwd: worktree, encoding: 'utf8', windowsHide: true })
+    .split(/\r?\n/)
+    .filter((line: string) => UNMERGED_STATUS_CODES.has(line.slice(0, 2)))
+    .map((line: string) => line.slice(3).trim())
+    .filter(Boolean);
+}
+
+function inProgressGitOperation(worktree: string): string | null {
+  const reported = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
+  const gitDirectory = path.isAbsolute(reported) ? reported : path.resolve(worktree, reported);
+  const found = IN_PROGRESS_GIT_OPERATION_STATE.find(([stateName]) => nativeFs.existsSync(path.join(gitDirectory, stateName)));
+  return found ? found[1] : null;
+}
+
+// A retained checkout is handed to the replacement executor as the recovered candidate, so a checkout that
+// is stuck mid-replay is the one thing it must never be. A conflicted cherry-pick leaves `UU` entries and a
+// half-staged mixture of two candidates, and the old resume decision looked only at lease identity: it saw
+// a matching bound revision, allowed the resume, and bound the replacement executor to a tree that held no
+// candidate at all (SQ-2938, GH-125). The reachability half of that incident lives in the briefing, which
+// used to read old-base ancestry as proof the candidate had been recovered.
+function retainedWorktreeResumeDecision(lease: any): { allowed: boolean; reason: string } {
+  const decision = worktreeLease.worktreeResumeDecision(lease);
+  if (!decision.allowed) return decision;
+  const worktree = lease?.canonicalWorktree || lease?.observedWorktree;
+  if (!worktree) return decision;
+  let unmerged: string[] = [];
+  let operation: string | null = null;
+  try {
+    unmerged = unmergedCheckoutPaths(worktree);
+    operation = inProgressGitOperation(worktree);
+  } catch (error: any) {
+    return { allowed: false, reason: `the retained checkout ${worktree} could not be read for unmerged entries or an in-progress Git operation: ${String(error?.message || error).replace(/\s+/g, ' ').trim().slice(0, 200)}` };
+  }
+  if (!unmerged.length && !operation) return decision;
+  const shown = unmerged.slice(0, 10);
+  const paths = unmerged.length
+    ? `unmerged paths: ${shown.join(', ')}${unmerged.length > shown.length ? ` (+${unmerged.length - shown.length} more)` : ''}`
+    : 'no unmerged paths';
+  return {
+    allowed: false,
+    reason: `the retained checkout ${worktree} is stuck mid-recovery${operation ? ` in an unfinished ${operation}` : ''} (${paths}), so it holds a partial replay rather than the candidate. Preserve it as failed-replay evidence and do not auto-resolve or discard it: dispatch this ticket with worktree isolation so the replacement executor gets a fresh checkout, or, once the evidence is copied out, reset the retained checkout (abort the ${operation || 'in-progress'} operation and hard-reset it) before resuming it.`,
+  };
+}
 
 const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1000;
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -2009,4 +2065,4 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   };
 }
 
-module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };
+module.exports = { retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };

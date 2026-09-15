@@ -63,7 +63,7 @@ function slotBlockerScript(started: string, observedSiblingCaptures: string, wai
 }
 
 function readRecordedCaptures(project: string, ticket: string) {
-  const reader = `const store = require(${JSON.stringify(path.join(SIDEQUEST_DIR, 'lib', 'store.js'))}); const target = store.findProject(process.argv.at(-2)); console.log(JSON.stringify(store.getTicket(target.slug, process.argv.at(-1)).verificationCaptures));`;
+  const reader = `const store = require(${JSON.stringify(path.join(SIDEQUEST_DIR, 'lib', 'store.js'))}); const target = store.findProject(process.argv.at(-2)); const list = store.getTicket(target.slug, process.argv.at(-1)).verificationCaptures; console.log(JSON.stringify(Array.isArray(list) ? list : []));`;
   return JSON.parse(execFileSync(process.execPath, ['--eval', reader, project, ticket], { encoding: 'utf8', env: process.env, windowsHide: true }));
 }
 
@@ -139,6 +139,7 @@ test('full-suite capture serializes sibling captures and records the queue wait'
   fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node blocker.js' } }));
   execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: project, windowsHide: true });
   fs.writeFileSync(path.join(project, 'blocker.js'), slotBlockerScript(started, observedSiblingCaptures, path.join(captureSlotDirectory(project), 'waiting')));
+  fs.writeFileSync(path.join(project, '.gitignore'), 'started\nobserved-sibling-captures\n');
   execFileSync('git', ['add', '--all'], { cwd: project, windowsHide: true });
   execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'fixture'], { cwd: project, windowsHide: true });
   const boardProject = store.ensureProject(project);
@@ -175,6 +176,8 @@ test('synchronous full-suite verification uses the capture slot', async () => {
   fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node blocker.js' } }));
   execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: project, windowsHide: true });
   fs.writeFileSync(path.join(project, 'blocker.js'), slotBlockerScript(started, observedSiblingCaptures, path.join(captureSlotDirectory(project), 'waiting')));
+  execFileSync('git', ['add', '--all'], { cwd: project, windowsHide: true });
+  execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'fixture'], { cwd: project, windowsHide: true });
 
   try {
     const first = runCaptureProcess('npm run test:full', project, 'SQ-1');
@@ -481,6 +484,8 @@ function siblingRepositories(prefix: string) {
 function negatedGrepTicket(child: string, phrase: string) {
   fs.mkdirSync(path.join(child, 'docs'), { recursive: true });
   fs.writeFileSync(path.join(child, 'docs', 'NOTES.md'), `the ${phrase} is documented here\n`);
+  execFileSync('git', ['add', '--all'], { cwd: child, windowsHide: true });
+  execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'verification fixture'], { cwd: child, windowsHide: true });
   const boardProject = store.ensureProject(child);
   const command = `cd . && ! grep -rn "${phrase}" docs/`;
   const ticket = store.createTicket(boardProject.slug, {
@@ -512,6 +517,23 @@ test('a negated-grep verify runs in the ticket repository, not the spawning chec
     } finally {
       deleteLog(capture);
     }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a capture over uncommitted tracked changes is not recorded', () => {
+  const { root, child } = siblingRepositories('sq-verify-capture-dirty-worktree-');
+  const { command, ticket } = negatedGrepTicket(child, 'dirty-worktree-phrase');
+  const target = { project: child, ticket: ticket.ref };
+  const passing = { command, status: 'passed', exitCode: 0, logPath: null, shell: 'fixture' };
+  try {
+    fs.writeFileSync(path.join(child, 'seed'), 'dirty\n');
+    const refused = recordCapture(target, passing, child);
+    assert.equal(refused.ok, false);
+    assert.equal(refused.reason, 'verification_capture_dirty_worktree');
+    assert.match(refused.message, /Commit or discard/);
+    assert.deepEqual(readRecordedCaptures(child, ticket.ref), []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
