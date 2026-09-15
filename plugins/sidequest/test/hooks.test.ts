@@ -41,6 +41,7 @@ const { WORKTREE_CREATE_HOOK_TIMEOUT_SECONDS } = require('../src/lib/hook-timeou
 const db = require('../lib/db.js');
 const { EFFORTS, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('../lib/exec-names.js');
 const agentsync = require('../lib/agentsync.js');
+const { writeBoardMcpLiveness, clearBoardMcpLiveness } = require('../lib/mcp.js');
 const BOARD_PATH = path.join(os.tmpdir(), 'sq-hooks-fixtures', 'board');
 const { slug } = store.ensureProject(BOARD_PATH);
 const database = db.openDb(SIDEQUEST_HOME);
@@ -116,6 +117,8 @@ function ensurePinnedPluginRoot() {
 ensurePinnedPluginRoot();
 
 const RETIRED_SCOUT = `sidequest-${'scout'}`;
+const GENERIC_AGENT_DENY_REASON = 'sidequest: implementation-agent is a generic Agent, not a Sidequest ticket executor. ' +
+  'For a tiny lookup, use Read, Glob, Grep, or WebFetch inline, not WebSearch. A usable route needs a fresh Board MCP dispatch and its exact returned executor. Board MCP is the lifecycle authority: reload or reconnect Sidequest, then re-dispatch. Do not use a raw Agent or Sidequest CLI fallback. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor. The blocked work still gates any dependent action: do not proceed to a PR, merge, publish, or ship until its ticket is filed, dispatched, and closed; rerouting around this block is a violation.';
 
 // Run a hook with the given stdin payload and return the injected
 // additionalContext string (or '' when the hook stays silent).
@@ -741,6 +744,35 @@ test('pre-tool hook: arbitrary implementation agents are denied and directed to 
   assert.match(malformedExecutor.hookSpecificOutput.permissionDecisionReason, /looks like a Sidequest executor name but is invalid or retired/);
   assert.doesNotMatch(malformedExecutor.hookSpecificOutput.permissionDecisionReason, /update\+reload|version mismatch/);
   assert.doesNotMatch(mismatch.hookSpecificOutput.permissionDecisionReason, new RegExp(RETIRED_SCOUT));
+});
+
+test('pre-tool hook: an unavailable Board MCP server tells the agent to report it to the user', () => {
+  const session_id = `board-mcp-unavailable-${Date.now()}`;
+  const out = runHookOutput(FORCE_BYPASS, {
+    session_id, cwd: BOARD_PATH, tool_name: 'Agent',
+    tool_input: { subagent_type: 'implementation-agent', isolation: 'worktree', prompt: 'Implement the new flow.' },
+  });
+  const reason = out.hookSpecificOutput.permissionDecisionReason;
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(reason, /Board MCP server for this session is not running/);
+  assert.match(reason, /Stop and report this to the user instead of retrying/);
+  assert.match(reason, /The user must run \/mcp and reconnect plugin:sidequest:board, or restart Claude Code/);
+  assert.doesNotMatch(reason, /reload or reconnect Sidequest/);
+});
+
+test('pre-tool hook: a live Board MCP server keeps the generic Agent refusal unchanged', () => {
+  const session_id = `board-mcp-live-${Date.now()}`;
+  writeBoardMcpLiveness(session_id);
+  try {
+    const out = runHookOutput(FORCE_BYPASS, {
+      session_id, cwd: BOARD_PATH, tool_name: 'Agent',
+      tool_input: { subagent_type: 'implementation-agent', isolation: 'worktree', prompt: 'Implement the new flow.' },
+    });
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal(out.hookSpecificOutput.permissionDecisionReason, GENERIC_AGENT_DENY_REASON);
+  } finally {
+    clearBoardMcpLiveness(session_id);
+  }
 });
 
 test('pre-tool hook: executor helpers allow mechanical sweeps with parent-tree safeguards', () => {
@@ -3205,7 +3237,7 @@ test('session-start: bounds oversized workforces and preserves each briefing tai
     assert.match(
       context,
       source
-        ? /Board MCP is the lifecycle authority; no Sidequest CLI or raw Agent fallback\./
+        ? /If Board MCP is unavailable, stop and report it to the user instead of retrying\./
         : /Workers own claimed work and report conflicts, verification, and cleanup\./,
     );
   }
@@ -3541,7 +3573,8 @@ test('negative control: session-start recovery rejects the retired CLI fallback 
   for (const source of ['compact', 'resume']) {
     const ctx = runHookForBudget(SESSION, { session_id: 't', source });
     assert.match(ctx, /never\s+TaskOutput/i, `${source} must ban native Agent TaskOutput polling`);
-    assert.match(ctx, /Reconnect Board MCP, re-dispatch, and spawn the exact returned executor/i, `${source} must reconnect before lifecycle recovery`);
+    assert.match(ctx, /If Board MCP is unavailable, stop and report it to the user instead of retrying/i, `${source} must direct unavailable-board recovery to the user`);
+    assert.match(ctx, /The user must run \/mcp and reconnect plugin:sidequest:board, or restart Claude Code/i, `${source} must name the user recovery action`);
     assert.match(ctx, /Board MCP is the lifecycle authority; no Sidequest CLI or raw Agent fallback/i, `${source} must reject lifecycle fallbacks`);
     assert.doesNotMatch(ctx, /list --status(?: |=)doing.*MCP is absent/i, `${source} must reject the retired SessionStart fallback`);
     assert.ok(!ctx.includes('external tracker'), `${source} must not inject the full block`);
@@ -3553,7 +3586,8 @@ test('negative control: session-start recovery rejects the retired CLI fallback 
 test('session-start source excludes the retired lifecycle CLI fallback', () => {
   const source = fs.readFileSync(SESSION, 'utf8');
   assert.doesNotMatch(source, /list --status=doing only if MCP is absent/);
-  assert.match(source, /Reconnect Board MCP, re-dispatch, and spawn the exact returned executor/);
+  assert.match(source, /If Board MCP is unavailable, stop and report it to the user instead of retrying/);
+  assert.match(source, /The user must run \/mcp and reconnect plugin:sidequest:board, or restart Claude Code/);
 });
 
 test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
