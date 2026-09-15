@@ -450,6 +450,12 @@ function captureTarget(args: readonly string[]): CaptureTarget | null {
   return project && ticket ? Object.freeze({ project, ticket }) : null;
 }
 
+function explicitWorktreeArgument(args: readonly string[]): string | undefined {
+  const index = args.indexOf('--worktree');
+  const value = index >= 0 ? String(args[index + 1] || '').trim() : '';
+  return value || undefined;
+}
+
 function captureProject(target: CaptureTarget): CaptureProject | null {
   const store = require('./store.js') as VerificationCaptureStore;
   const project = store.findProject(target.project);
@@ -471,13 +477,82 @@ function captureWorkingDirectory(target: CaptureTarget, cwd: string): string {
   return repositoryRoot(cwd) === repositoryRoot(project.path) ? cwd : project.path;
 }
 
-async function runCapturedVerification(command: string, target: CaptureTarget | null, cwd = process.cwd(), fileSystem: CaptureSlotFileSystem = fs) {
-  const captureCwd = target ? captureWorkingDirectory(target, cwd) : cwd;
+function isWorkingTreeDeliveryTarget(target: CaptureTarget): boolean {
+  const project = captureProject(target);
+  if (!project) return false;
+  const store = require('./store.js') as VerificationCaptureStore;
+  const ticket = store.getTicket(project.slug, target.ticket);
+  return Boolean(store.workingTreeDeliveryCandidate(project.slug, ticket));
+}
+
+// GitHub #110: the briefing command names --project/--ticket but never the
+// dispatch's bound worktree, so an executor that runs it from the wrong
+// checkout (the shared registered one instead of its isolated worktree) got a
+// capture recorded against a revision it never touched. Only the ticket's own
+// dispatch record -- not a second, invented source -- knows which worktree it
+// promised.
+function dispatchBoundWorktree(target: CaptureTarget): string | null {
+  const project = captureProject(target);
+  if (!project) return null;
+  const store = require('./store.js') as VerificationCaptureStore;
+  const ticket = store.getTicket(project.slug, target.ticket) as { dispatch?: { sharedTree?: boolean; worktree?: string } } | null;
+  const dispatch = ticket?.dispatch;
+  if (!dispatch || dispatch.sharedTree === true) return null;
+  const worktree = String(dispatch.worktree || '').trim();
+  return worktree || null;
+}
+
+function isWithinWorktree(root: string, candidate: string): boolean {
+  const relative = path.relative(root, canonicalPath(candidate));
+  if (relative === '') return true;
+  const climbsOut = relative === '..' || relative.startsWith(`..${path.sep}`);
+  return !climbsOut && !path.isAbsolute(relative);
+}
+
+type CaptureCwdResolution = Readonly<{ cwd: string; refusal: string | null }>;
+
+function resolveCaptureCwd(target: CaptureTarget | null, cwd: string, explicitWorktree?: string): CaptureCwdResolution {
+  // The working-tree-delivery override runs the shared checkout by design, so it
+  // outranks both the --worktree flag and the bound-worktree refusal below.
+  if (target && isWorkingTreeDeliveryTarget(target)) {
+    return Object.freeze({ cwd: captureWorkingDirectory(target, cwd), refusal: null });
+  }
+  const bound = target ? dispatchBoundWorktree(target) : null;
+  const canonicalBound = bound ? canonicalPath(bound) : null;
+  if (explicitWorktree) {
+    const canonicalWorktree = canonicalPath(explicitWorktree);
+    // The flag is as caller-controlled as cwd was, so it may only name the worktree the
+    // dispatch record already bound; any other tree with the same HEAD but different
+    // ignored build state could otherwise certify the bound candidate.
+    if (canonicalBound && canonicalWorktree !== canonicalBound) {
+      return Object.freeze({
+        cwd,
+        refusal: `verify-capture: ${target!.ticket}'s dispatch is bound to worktree ${canonicalBound}, but --worktree names ${canonicalWorktree}. Only the bound worktree can verify this ticket; run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`,
+      });
+    }
+    if (!isWithinWorktree(canonicalWorktree, cwd)) {
+      process.stdout.write(`verify-capture: running from ${cwd}, but --worktree names ${canonicalWorktree}; continuing in the bound worktree.\n`);
+    }
+    return Object.freeze({ cwd: canonicalWorktree, refusal: null });
+  }
+  if (canonicalBound && !isWithinWorktree(canonicalBound, cwd)) {
+    return Object.freeze({
+      cwd,
+      refusal: `verify-capture: ${target!.ticket}'s dispatch is bound to worktree ${canonicalBound}, but this command ran from ${cwd}. Run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`,
+    });
+  }
+  return Object.freeze({ cwd: target ? captureWorkingDirectory(target, cwd) : cwd, refusal: null });
+}
+
+async function runCapturedVerification(command: string, target: CaptureTarget | null, cwd = process.cwd(), fileSystem: CaptureSlotFileSystem = fs, explicitWorktree?: string) {
+  const resolution = resolveCaptureCwd(target, cwd, explicitWorktree);
+  if (resolution.refusal) return Object.freeze({ capture: null, recorded: null, refusal: resolution.refusal });
+  const captureCwd = resolution.cwd;
   const capture = target && isFullSuiteCommand(command)
     ? await runFullSuiteCapture(command, target.project, captureCwd, fileSystem)
     : await runVerifyCapture(command, captureCwd);
   const recorded = target ? recordCapture(target, capture, captureCwd) : null;
-  return Object.freeze({ capture, recorded });
+  return Object.freeze({ capture, recorded, refusal: null });
 }
 
 function verifiedRevision(cwd: string) {
@@ -572,16 +647,22 @@ async function main() {
   const encoded = args[0] === '--base64' ? args[1] : '';
   const command = encoded ? Buffer.from(encoded, 'base64').toString('utf8').trim() : '';
   if (!command) {
-    process.stderr.write('Usage: node verify-capture.js --base64 <base64 verify command> [--project <path> --ticket <ref>]\n');
+    process.stderr.write('Usage: node verify-capture.js --base64 <base64 verify command> [--project <path> --ticket <ref>] [--worktree <path>]\n');
     process.exitCode = 2;
     return;
   }
   const target = captureTarget(args);
-  const { capture, recorded } = await runCapturedVerification(command, target);
-  report(capture, recorded);
-  process.exitCode = capture.exitCode === 0 && (!target || recorded?.ok) ? 0 : 2;
+  const explicitWorktree = explicitWorktreeArgument(args);
+  const { capture, recorded, refusal } = await runCapturedVerification(command, target, process.cwd(), fs, explicitWorktree);
+  if (refusal) {
+    process.stderr.write(`${refusal}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  report(capture!, recorded);
+  process.exitCode = capture!.exitCode === 0 && (!target || recorded?.ok) ? 0 : 2;
 }
 
-module.exports = { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureTarget, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
+module.exports = { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureTarget, explicitWorktreeArgument, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
 
 if (require.main === module) void main();

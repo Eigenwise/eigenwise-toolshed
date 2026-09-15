@@ -1115,6 +1115,23 @@ function createDispatch(dependencies) {
       return false;
     }
   }
+  function checkoutBelongsToAnotherDispatchAgent(slug, projectPath, ticket, state) {
+    const repository = String(projectPath || "").trim();
+    const recorded = String(state?.worktree || "").trim();
+    if (!repository || !recorded) return false;
+    const target = canonicalPath(recorded);
+    const namesCheckout = (agentId) => {
+      const id = String(agentId || "").trim();
+      return Boolean(id && agentWorktreeCandidates(repository, id).some((candidate) => canonicalPath(candidate) === target));
+    };
+    if (namesCheckout(state.agentId)) return false;
+    return listTickets(slug).some((candidate) => {
+      if (!candidate || candidate.id === ticket?.id) return false;
+      const other = dispatchState(candidate);
+      const attempts = Array.isArray(other?.attempts) ? other.attempts : [];
+      return Boolean(other) && [other.agentId, ...attempts.map((attempt) => attempt?.agentId)].some(namesCheckout);
+    });
+  }
   function unclaimedWorktreeRecoveryFacts(projectPath, ticket, state) {
     const checkpointCommit = String(ticket?.checkpoint?.commit || ticket?.submission?.commit || "").trim();
     if (!checkpointCommit || !releaseFragmentOnlyCheckpoint(projectPath, ticket, checkpointCommit, state?.baseCommit)) {
@@ -1209,7 +1226,7 @@ function createDispatch(dependencies) {
           const candidate = String(t.submission.commit || t.submission.sourceRevision?.value || "").trim();
           throw new Error(`prepare dispatch: ${t.ref} has a pending submission${candidate ? ` (${candidate})` : ""} waiting on integration, so it is parked for the publish transaction rather than for another executor. Integrate it (\`sidequest integrate ${t.ref} --by <who>\`), send it back for repair and dispatch the replacement (\`sidequest rework ${t.ref} --by ${t.submission.by || "<candidate-owner>"} --review <review-ticket-or-evidence> --reason "what needs repair"\`), or close it as abandoned (\`sidequest groom-close ${t.ref} --abandon-submission --reason "<evidence it never landed>"\`).`);
         }
-        if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by)) {
+        if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by) && !checkoutBelongsToAnotherDispatchAgent(slug, projectPath, t, current)) {
           const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
           const recovery2 = reclaimUnclaimedDispatchWorktree(projectPath, recoveryFacts.state, {
             checkpointCommit: recoveryFacts.checkpointCommit
@@ -2297,11 +2314,35 @@ function createDispatch(dependencies) {
     state.bindSource = "claim_token";
     return boundAttempt;
   }
+  function attributableCreationReservation(ticket, state, sessionId) {
+    return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && !state.terminalAt && !state.continuation?.sourceWorktree && !state.agentId && !state.claimedAt && !ticket?.claim?.by);
+  }
   function unclaimedCreationReservation(ticket, state, sessionId) {
-    return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && !state.terminalAt && !state.continuation?.sourceWorktree && state.worktreeBindingSource === "worktree-create" && state.worktree && !state.agentId && !state.claimedAt && !ticket?.claim?.by);
+    return Boolean(attributableCreationReservation(ticket, state, sessionId) && state.worktreeBindingSource === "worktree-create" && state.worktree);
+  }
+  function movedCreationRecord(state) {
+    return {
+      worktreeBindingSource: "worktree-create",
+      worktreeCreationCompletedAt: state?.worktreeCreationCompletedAt || null,
+      ownedDependencyLinks: Array.isArray(state?.ownedDependencyLinks) ? state.ownedDependencyLinks : [],
+      worktreeProvisioningFailure: state?.worktreeProvisioningFailure || null
+    };
+  }
+  function releaseCrossedCreationBinding(state, otherRef, now) {
+    const from = canonicalPath(state.worktree);
+    Object.assign(state, movedCreationRecord(null), {
+      worktreeBindingSource: null,
+      worktree: null,
+      worktreeGitDirectory: null,
+      worktreeCommonGitDirectory: null,
+      worktreeCheckoutInstance: null,
+      worktreeObservedRevision: null,
+      worktreeBoundAt: null,
+      worktreeBindingExchange: { at: now, from, with: otherRef, reason: "creation_order" }
+    });
   }
   function applyExchangedCreationBinding(state, facts, otherRef, now) {
-    const from = canonicalPath(state.worktree);
+    const from = state.worktree ? canonicalPath(state.worktree) : null;
     state.worktree = facts.worktree;
     state.worktreeGitDirectory = facts.gitDirectory;
     state.worktreeCommonGitDirectory = facts.commonGitDirectory;
@@ -2314,28 +2355,33 @@ function createDispatch(dependencies) {
     const reported = canonicalPath(String(reportedWorktree || "").trim());
     const target = getTicket(slug, ticketId);
     const targetState = dispatchState(target);
-    if (!reported || !unclaimedCreationReservation(target, targetState, sessionId)) return null;
-    const held = canonicalPath(targetState.worktree);
+    if (!reported || !attributableCreationReservation(target, targetState, sessionId)) return null;
+    const held = targetState.worktree ? canonicalPath(targetState.worktree) : "";
     if (held === reported) return null;
     const holder = listTickets(slug).find((candidate) => candidate.id !== target.id && unclaimedCreationReservation(candidate, dispatchState(candidate), sessionId) && canonicalPath(dispatchState(candidate).worktree) === reported);
     if (!holder) return null;
     const baseline = String(targetState.baseCommit || "").trim();
     if (!baseline || baseline !== String(dispatchState(holder).baseCommit || "").trim()) return null;
     const reportedFacts = immutableWorktreeFacts(slug, reported);
-    const heldFacts = immutableWorktreeFacts(slug, held);
-    if (!reportedFacts || !heldFacts || reportedFacts.revision !== baseline || heldFacts.revision !== baseline) return null;
+    if (!reportedFacts || reportedFacts.revision !== baseline) return null;
+    const heldFacts = held ? immutableWorktreeFacts(slug, held) : null;
+    if (held && (!heldFacts || heldFacts.revision !== baseline)) return null;
     const [firstId, secondId] = [target.id, holder.id].sort();
     const factsFor = /* @__PURE__ */ new Map([[target.id, reportedFacts], [holder.id, heldFacts]]);
     const refFor = /* @__PURE__ */ new Map([[target.id, holder.ref], [holder.id, target.ref]]);
     return withTicketLock(slug, firstId, () => withTicketLock(slug, secondId, () => {
       const now = (/* @__PURE__ */ new Date()).toISOString();
+      const movedRecord = heldFacts ? null : movedCreationRecord(dispatchState(getTicket(slug, holder.id)));
       for (const id of [firstId, secondId]) {
         const ticket = getTicket(slug, id);
         const state = dispatchState(ticket);
-        if (!unclaimedCreationReservation(ticket, state, sessionId)) return null;
+        const eligible = id === target.id ? attributableCreationReservation(ticket, state, sessionId) : unclaimedCreationReservation(ticket, state, sessionId);
+        if (!eligible) return null;
         const facts = factsFor.get(id);
-        if (!facts || canonicalPath(state.worktree) === facts.worktree) return null;
-        applyExchangedCreationBinding(state, facts, refFor.get(id), now);
+        if (facts && state.worktree && canonicalPath(state.worktree) === facts.worktree) return null;
+        if (facts) applyExchangedCreationBinding(state, facts, refFor.get(id), now);
+        else releaseCrossedCreationBinding(state, refFor.get(id), now);
+        if (facts && movedRecord) Object.assign(state, movedRecord);
         stampDispatchEvent(ticket, "worktree-create-exchange", now);
         putTicket(slug, ticket);
       }

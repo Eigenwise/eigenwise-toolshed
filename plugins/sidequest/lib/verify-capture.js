@@ -366,6 +366,11 @@ function captureTarget(args) {
   const ticket = ticketIndex >= 0 ? String(args[ticketIndex + 1] || "").trim() : "";
   return project && ticket ? Object.freeze({ project, ticket }) : null;
 }
+function explicitWorktreeArgument(args) {
+  const index = args.indexOf("--worktree");
+  const value = index >= 0 ? String(args[index + 1] || "").trim() : "";
+  return value || void 0;
+}
 function captureProject(target) {
   const store = require("./store.js");
   const project = store.findProject(target.project);
@@ -380,11 +385,64 @@ function captureWorkingDirectory(target, cwd) {
   if (store.workingTreeDeliveryCandidate(project.slug, ticket)) return project.path;
   return repositoryRoot(cwd) === repositoryRoot(project.path) ? cwd : project.path;
 }
-async function runCapturedVerification(command, target, cwd = process.cwd(), fileSystem = fs) {
-  const captureCwd = target ? captureWorkingDirectory(target, cwd) : cwd;
+function isWorkingTreeDeliveryTarget(target) {
+  const project = captureProject(target);
+  if (!project) return false;
+  const store = require("./store.js");
+  const ticket = store.getTicket(project.slug, target.ticket);
+  return Boolean(store.workingTreeDeliveryCandidate(project.slug, ticket));
+}
+function dispatchBoundWorktree(target) {
+  const project = captureProject(target);
+  if (!project) return null;
+  const store = require("./store.js");
+  const ticket = store.getTicket(project.slug, target.ticket);
+  const dispatch = ticket?.dispatch;
+  if (!dispatch || dispatch.sharedTree === true) return null;
+  const worktree = String(dispatch.worktree || "").trim();
+  return worktree || null;
+}
+function isWithinWorktree(root, candidate) {
+  const relative = path.relative(root, canonicalPath(candidate));
+  if (relative === "") return true;
+  const climbsOut = relative === ".." || relative.startsWith(`..${path.sep}`);
+  return !climbsOut && !path.isAbsolute(relative);
+}
+function resolveCaptureCwd(target, cwd, explicitWorktree) {
+  if (target && isWorkingTreeDeliveryTarget(target)) {
+    return Object.freeze({ cwd: captureWorkingDirectory(target, cwd), refusal: null });
+  }
+  const bound = target ? dispatchBoundWorktree(target) : null;
+  const canonicalBound = bound ? canonicalPath(bound) : null;
+  if (explicitWorktree) {
+    const canonicalWorktree = canonicalPath(explicitWorktree);
+    if (canonicalBound && canonicalWorktree !== canonicalBound) {
+      return Object.freeze({
+        cwd,
+        refusal: `verify-capture: ${target.ticket}'s dispatch is bound to worktree ${canonicalBound}, but --worktree names ${canonicalWorktree}. Only the bound worktree can verify this ticket; run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`
+      });
+    }
+    if (!isWithinWorktree(canonicalWorktree, cwd)) {
+      process.stdout.write(`verify-capture: running from ${cwd}, but --worktree names ${canonicalWorktree}; continuing in the bound worktree.
+`);
+    }
+    return Object.freeze({ cwd: canonicalWorktree, refusal: null });
+  }
+  if (canonicalBound && !isWithinWorktree(canonicalBound, cwd)) {
+    return Object.freeze({
+      cwd,
+      refusal: `verify-capture: ${target.ticket}'s dispatch is bound to worktree ${canonicalBound}, but this command ran from ${cwd}. Run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`
+    });
+  }
+  return Object.freeze({ cwd: target ? captureWorkingDirectory(target, cwd) : cwd, refusal: null });
+}
+async function runCapturedVerification(command, target, cwd = process.cwd(), fileSystem = fs, explicitWorktree) {
+  const resolution = resolveCaptureCwd(target, cwd, explicitWorktree);
+  if (resolution.refusal) return Object.freeze({ capture: null, recorded: null, refusal: resolution.refusal });
+  const captureCwd = resolution.cwd;
   const capture = target && isFullSuiteCommand(command) ? await runFullSuiteCapture(command, target.project, captureCwd, fileSystem) : await runVerifyCapture(command, captureCwd);
   const recorded = target ? recordCapture(target, capture, captureCwd) : null;
-  return Object.freeze({ capture, recorded });
+  return Object.freeze({ capture, recorded, refusal: null });
 }
 function verifiedRevision(cwd) {
   try {
@@ -471,14 +529,21 @@ async function main() {
   const encoded = args[0] === "--base64" ? args[1] : "";
   const command = encoded ? Buffer.from(encoded, "base64").toString("utf8").trim() : "";
   if (!command) {
-    process.stderr.write("Usage: node verify-capture.js --base64 <base64 verify command> [--project <path> --ticket <ref>]\n");
+    process.stderr.write("Usage: node verify-capture.js --base64 <base64 verify command> [--project <path> --ticket <ref>] [--worktree <path>]\n");
     process.exitCode = 2;
     return;
   }
   const target = captureTarget(args);
-  const { capture, recorded } = await runCapturedVerification(command, target);
+  const explicitWorktree = explicitWorktreeArgument(args);
+  const { capture, recorded, refusal } = await runCapturedVerification(command, target, process.cwd(), fs, explicitWorktree);
+  if (refusal) {
+    process.stderr.write(`${refusal}
+`);
+    process.exitCode = 2;
+    return;
+  }
   report(capture, recorded);
   process.exitCode = capture.exitCode === 0 && (!target || recorded?.ok) ? 0 : 2;
 }
-module.exports = { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureTarget, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
+module.exports = { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureTarget, explicitWorktreeArgument, captureProject, captureSlotDirectory, isFullSuiteCommand, recordCapture, verifiedRevision };
 if (require.main === module) void main();

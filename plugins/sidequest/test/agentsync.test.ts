@@ -105,13 +105,14 @@ test('repair briefings include the complete rejection history', () => {
   ]);
 });
 
-test('executor briefings require Board MCP reconnect and re-dispatch when unavailable', () => {
+test('executor briefings tell the agent how to report an unavailable Board MCP server', () => {
   const briefing = agentsync.renderTicketBriefing({
     ref: 'SQ-CLI-FALLBACK', model: 'sonnet', effort: 'medium', dispatchExecutor: 'sidequest-exec-medium', category: {},
   }, 'cli-fallback-token');
   assert.match(briefing, /Board MCP is the executor lifecycle authority/);
-  assert.match(briefing, /reload or reconnect Sidequest, then re-dispatch/);
-  assert.doesNotMatch(briefing, /version-pinned CLI fallback/);
+  assert.match(briefing, /stop and report it to the user instead of retrying/);
+  assert.match(briefing, /The user must run \/mcp and reconnect plugin:sidequest:board, or restart Claude Code/);
+  assert.doesNotMatch(briefing, /reload or reconnect Sidequest|version-pinned CLI fallback/);
 });
 
 test('executor briefings preserve orchestrator-owned improvement decisions', () => {
@@ -1022,6 +1023,45 @@ test('briefings surface resolved worktree identities for linked and shared dispa
   assert.ok(shared.includes('redispatch alone does not repair that state.'));
   assert.ok(shared.includes('Before any git or file operation, confirm `git rev-parse --show-toplevel` prints `' + root + '`.'));
   assert.match(shared, /If it differs, stop and report to the orchestrator\. Do not release or write anything in the wrong tree\./);
+});
+
+// GitHub #110: an isolated-worktree executor that ran the pinned verify-capture
+// wrapper from the shared registered checkout got a passing capture recorded
+// against the wrong revision, because the briefing command never told the
+// wrapper which worktree the dispatch actually promised.
+test('the pinned verify-capture command carries the dispatch bound worktree, and only when one exists', () => {
+  const worktreeLease = require('../lib/kernel/worktree.js');
+  const root = tmpDir();
+  const linkedWorktree = path.join(root, '.claude', 'worktrees', 'agent-verify-capture-worker');
+  const base = {
+    ref: 'SQ-1200', title: 'Bind verify-capture to the worktree', model: 'opus', effort: 'high', category: {},
+    executorVerifyKind: 'command', executorVerify: 'npm run typecheck',
+  };
+  const commandLine = (briefing: string) => {
+    const match = /^Run it through (node .*)$/m.exec(briefing);
+    assert.ok(match, 'briefing includes the pinned verify-capture command line');
+    return match![1]!;
+  };
+
+  const shared = agentsync.renderTicketBriefing(Object.assign({}, base, {
+    dispatch: { sharedTree: true },
+  }), 'shared-token', undefined, root);
+  const sharedCommand = commandLine(shared);
+  assert.doesNotMatch(sharedCommand, /--worktree/);
+
+  const linked = agentsync.renderTicketBriefing(Object.assign({}, base, {
+    dispatch: { sharedTree: false, worktree: linkedWorktree },
+  }), 'linked-token', undefined, root);
+  const linkedCommand = commandLine(linked);
+  const canonicalWorktree = worktreeLease.canonicalPath(linkedWorktree);
+  assert.ok(linkedCommand.includes(`--worktree ${JSON.stringify(canonicalWorktree)}`));
+
+  // Without a bound worktree the command is byte-identical to today's: the only
+  // difference is the appended --worktree flag.
+  assert.equal(linkedCommand.replace(` --worktree ${JSON.stringify(canonicalWorktree)}`, ''), sharedCommand);
+
+  const noDispatch = agentsync.renderTicketBriefing(Object.assign({}, base), 'no-dispatch-token', undefined, root);
+  assert.equal(commandLine(noDispatch), sharedCommand);
 });
 
 test('stale worktree cwd warnings identify dispatch-specific consequences', () => {

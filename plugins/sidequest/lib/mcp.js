@@ -1,4 +1,6 @@
 "use strict";
+const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const store = require("./store");
 const { compactSchema, conciseDescription, resolveProject, TOOL_DESCRIPTION_OVERRIDES, boundedReadPayload } = require("./mcp-shared");
@@ -8,9 +10,53 @@ const { tools: ticketTools } = require("./mcp-tickets");
 const { tools: lifecycleTools } = require("./mcp-lifecycle");
 const { tools: collaborationTools } = require("./mcp-collaboration");
 const { tools: routingTools } = require("./mcp-routing");
+function boardMcpSessionId() {
+  return String(process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "").trim();
+}
+function boardMcpLivenessFile(sessionId) {
+  const home = process.env.SIDEQUEST_HOME || path.join(os.homedir(), ".claude", "sidequest");
+  return path.join(home, "tmp", "state", `board-mcp-${encodeURIComponent(sessionId)}.json`);
+}
+function isBoardMcpLiveness(value) {
+  return value !== null && typeof value === "object" && Object.hasOwn(value, "pid") && Number.isInteger(Reflect.get(value, "pid")) && Reflect.get(value, "pid") > 0;
+}
+function readBoardMcpLiveness(sessionId) {
+  try {
+    const value = JSON.parse(fs.readFileSync(boardMcpLivenessFile(sessionId), "utf8"));
+    return isBoardMcpLiveness(value) ? value : null;
+  } catch (_) {
+    return null;
+  }
+}
+function writeBoardMcpLiveness(sessionId = boardMcpSessionId()) {
+  if (!sessionId) return;
+  const file = boardMcpLivenessFile(sessionId);
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ pid: process.pid }));
+  } catch (_) {
+  }
+}
+function clearBoardMcpLiveness(sessionId = boardMcpSessionId()) {
+  if (!sessionId || readBoardMcpLiveness(sessionId)?.pid !== process.pid) return;
+  try {
+    fs.rmSync(boardMcpLivenessFile(sessionId), { force: true });
+  } catch (_) {
+  }
+}
+function isBoardMcpLive(sessionId) {
+  const marker = sessionId ? readBoardMcpLiveness(sessionId) : null;
+  if (!marker) return false;
+  try {
+    process.kill(marker.pid, 0);
+    return true;
+  } catch (error) {
+    return !(error instanceof Error && "code" in error && error.code === "ESRCH");
+  }
+}
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 24e3;
+const MCP_TOOLS_LIST_MAX_BYTES = 24100;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
@@ -311,6 +357,10 @@ async function handleRequest(msg) {
 module.exports = {
   SERVER_NAME,
   DEFAULT_PROTOCOL_VERSION,
+  boardMcpSessionId,
+  writeBoardMcpLiveness,
+  clearBoardMcpLiveness,
+  isBoardMcpLive,
   MCP_TOOLS_LIST_MAX_BYTES,
   MCP_TOOLS_LIST_HEADROOM_BYTES,
   ARGUMENT_ALIASES,

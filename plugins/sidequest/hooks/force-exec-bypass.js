@@ -356,12 +356,15 @@ function isDiagnosticProbe(type, toolInput) {
 function diagnosticProbeDenyReason() {
   return `sidequest: ${DIAGNOSTIC_PROBE_NAME} is reserved for a foreground dispatch self-test. Use description "Sidequest dispatch self-test." and prompt "Diagnose Sidequest dispatch machinery. Read package.json, then report whether the Agent spawn can use a read-only tool." Omit model, ticket refs, isolation, and background mode. Ordinary work needs a ticket.`;
 }
-function agentDenyReason(type, classification) {
+function agentDenyReason(input, type, classification) {
   if (type.startsWith("sidequest-")) {
     if (classification.kind === "ticket" || classification.kind === "legacy_ticket") {
       return `sidequest: ${type} looks like a Sidequest executor name but is invalid or retired. Re-run dispatch and spawn the returned executor.`;
     }
     return `sidequest: ${type} is an unknown Sidequest agent type. Use the executor returned by dispatch.`;
+  }
+  if (!boardMcpAvailable(input)) {
+    return "sidequest: the Board MCP server for this session is not running. Stop and report this to the user instead of retrying. The user must run /mcp and reconnect plugin:sidequest:board, or restart Claude Code. Do not use a raw Agent or Sidequest CLI fallback.";
   }
   return `sidequest: ${type || "custom"} is a generic Agent, not a Sidequest ticket executor. For a tiny lookup, use Read, Glob, Grep, or WebFetch inline, not WebSearch. A usable route needs a fresh Board MCP dispatch and its exact returned executor. Board MCP is the lifecycle authority: reload or reconnect Sidequest, then re-dispatch. Do not use a raw Agent or Sidequest CLI fallback. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor. The blocked work still gates any dependent action: do not proceed to a PR, merge, publish, or ship until its ticket is filed, dispatched, and closed; rerouting around this block is a violation.`;
 }
@@ -370,6 +373,18 @@ var DENIED_WORK_PROMPT_PREFIX_CHARS = 160;
 var DENIED_WORK_MAX_RECORDS = 20;
 function guardSessionId(input) {
   return (stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "").trim();
+}
+function boardMcpAvailable(input) {
+  const sessionId = stringField(input, "session_id", "sessionId").trim();
+  if (!sessionId) return true;
+  try {
+    const mcp = require(runtimeModule("mcp"));
+    if (mcp === null || typeof mcp !== "object") return false;
+    const isLive = Reflect.get(mcp, "isBoardMcpLive");
+    return typeof isLive === "function" && Boolean(Reflect.apply(isLive, mcp, [sessionId]));
+  } catch (_) {
+    return false;
+  }
 }
 function normalizedWork(value) {
   return String(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -1038,7 +1053,7 @@ function main() {
   }
   if (!isCurrentExecutor(classification)) {
     if (!type.startsWith("sidequest-") && admission.status === "routed") recordDeniedGenericWork(input, toolInput);
-    writeDeny("PreToolUse", agentDenyReason(type, classification));
+    writeDeny("PreToolUse", agentDenyReason(input, type, classification));
     return;
   }
   const subagentOverride = String(process.env.CLAUDE_CODE_SUBAGENT_MODEL || "").trim();

@@ -1302,6 +1302,29 @@ function releaseFragmentOnlyCheckpoint(projectPath?: any, ticket?: any, checkpoi
   }
 }
 
+// Creation attributes a checkout in creation order, so a board can still carry a record naming a checkout a
+// sibling's agent actually ran in. Everything the recovery fact then reports about that checkout is the
+// sibling's work, and the fact is immutable, so it refused every retry of a ticket whose own spawn never
+// created anything (SQ-2926). A linked checkout is named agent-<agentId>, so an agent id another dispatch
+// bound is proof this attempt never created this one.
+function checkoutBelongsToAnotherDispatchAgent(slug?: any, projectPath?: any, ticket?: any, state?: any) {
+  const repository = String(projectPath || '').trim();
+  const recorded = String(state?.worktree || '').trim();
+  if (!repository || !recorded) return false;
+  const target = canonicalPath(recorded);
+  const namesCheckout = (agentId?: any) => {
+    const id = String(agentId || '').trim();
+    return Boolean(id && agentWorktreeCandidates(repository, id).some((candidate: string) => canonicalPath(candidate) === target));
+  };
+  if (namesCheckout(state.agentId)) return false;
+  return listTickets(slug).some((candidate?: any) => {
+    if (!candidate || candidate.id === ticket?.id) return false;
+    const other = dispatchState(candidate);
+    const attempts = Array.isArray(other?.attempts) ? other.attempts : [];
+    return Boolean(other) && [other.agentId, ...attempts.map((attempt: any) => attempt?.agentId)].some(namesCheckout);
+  });
+}
+
 function unclaimedWorktreeRecoveryFacts(projectPath?: any, ticket?: any, state?: any) {
   const checkpointCommit = String(ticket?.checkpoint?.commit || ticket?.submission?.commit || '').trim();
   if (!checkpointCommit || !releaseFragmentOnlyCheckpoint(projectPath, ticket, checkpointCommit, state?.baseCommit)) {
@@ -1417,7 +1440,8 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       const candidate = String(t.submission.commit || t.submission.sourceRevision?.value || '').trim();
       throw new Error(`prepare dispatch: ${t.ref} has a pending submission${candidate ? ` (${candidate})` : ''} waiting on integration, so it is parked for the publish transaction rather than for another executor. Integrate it (\`sidequest integrate ${t.ref} --by <who>\`), send it back for repair and dispatch the replacement (\`sidequest rework ${t.ref} --by ${t.submission.by || '<candidate-owner>'} --review <review-ticket-or-evidence> --reason "what needs repair"\`), or close it as abandoned (\`sidequest groom-close ${t.ref} --abandon-submission --reason "<evidence it never landed>"\`).`);
     }
-    if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by)) {
+    if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by)
+      && !checkoutBelongsToAnotherDispatchAgent(slug, projectPath, t, current)) {
       const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
       const recovery = reclaimUnclaimedDispatchWorktree(projectPath, recoveryFacts.state, {
         checkpointCommit: recoveryFacts.checkpointCommit,
@@ -2702,14 +2726,46 @@ function bindDispatchClaimToken(state?: any, attempt?: any, sessionId?: any, exe
   return boundAttempt;
 }
 
-function unclaimedCreationReservation(ticket?: any, state?: any, sessionId?: any) {
+// The shape a reported checkout can still be attributed to: this session's isolated reservation, with no
+// agent, claim or terminal outcome of its own. Whether it already holds a creation-order binding is what
+// separates an exchange from a one-sided move.
+function attributableCreationReservation(ticket?: any, state?: any, sessionId?: any) {
   return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && !state.terminalAt
-    && !state.continuation?.sourceWorktree && state.worktreeBindingSource === 'worktree-create' && state.worktree
-    && !state.agentId && !state.claimedAt && !ticket?.claim?.by);
+    && !state.continuation?.sourceWorktree && !state.agentId && !state.claimedAt && !ticket?.claim?.by);
+}
+
+function unclaimedCreationReservation(ticket?: any, state?: any, sessionId?: any) {
+  return Boolean(attributableCreationReservation(ticket, state, sessionId)
+    && state.worktreeBindingSource === 'worktree-create' && state.worktree);
+}
+
+// What the checkout carries rather than the record: the completion stamp downstream binds require, and the
+// links provisioning made inside it, which cleanup reads from whichever dispatch owns the checkout.
+function movedCreationRecord(state?: any) {
+  return {
+    worktreeBindingSource: 'worktree-create',
+    worktreeCreationCompletedAt: state?.worktreeCreationCompletedAt || null,
+    ownedDependencyLinks: Array.isArray(state?.ownedDependencyLinks) ? state.ownedDependencyLinks : [],
+    worktreeProvisioningFailure: state?.worktreeProvisioningFailure || null,
+  };
+}
+
+function releaseCrossedCreationBinding(state?: any, otherRef?: any, now?: any) {
+  const from = canonicalPath(state.worktree);
+  Object.assign(state, movedCreationRecord(null), {
+    worktreeBindingSource: null,
+    worktree: null,
+    worktreeGitDirectory: null,
+    worktreeCommonGitDirectory: null,
+    worktreeCheckoutInstance: null,
+    worktreeObservedRevision: null,
+    worktreeBoundAt: null,
+    worktreeBindingExchange: { at: now, from, with: otherRef, reason: 'creation_order' },
+  });
 }
 
 function applyExchangedCreationBinding(state?: any, facts?: any, otherRef?: any, now?: any) {
-  const from = canonicalPath(state.worktree);
+  const from = state.worktree ? canonicalPath(state.worktree) : null;
   state.worktree = facts.worktree;
   state.worktreeGitDirectory = facts.gitDirectory;
   state.worktreeCommonGitDirectory = facts.commonGitDirectory;
@@ -2729,12 +2785,17 @@ function applyExchangedCreationBinding(state?: any, facts?: any, otherRef?: any,
 // checkout is never taken from an executor that has proven it owns one, and a path no reservation in this session
 // created still matches nothing and is still refused. Both records are rewritten under one transaction, with the
 // locks taken in id order so two siblings exchanging at once cannot deadlock and the loser finds nothing to do.
+//
+// The crossing is not always a pair. When a sibling's WorktreeCreate died before it reserved anything, creation
+// attributed the surviving checkout to a reservation that never created one, and the reporting agent holds
+// nothing to give back, so the move is one-sided. Refusing that left a sibling's checkout recorded as the
+// stalled attempt's own, and that fact is immutable: it then refused every retry of the stalled ticket (SQ-2926).
 function exchangeCrossedCreationBinding(slug?: any, ticketId?: any, sessionId?: any, reportedWorktree?: any) {
   const reported = canonicalPath(String(reportedWorktree || '').trim());
   const target = getTicket(slug, ticketId);
   const targetState = dispatchState(target);
-  if (!reported || !unclaimedCreationReservation(target, targetState, sessionId)) return null;
-  const held = canonicalPath(targetState.worktree);
+  if (!reported || !attributableCreationReservation(target, targetState, sessionId)) return null;
+  const held = targetState.worktree ? canonicalPath(targetState.worktree) : '';
   if (held === reported) return null;
   const holder = listTickets(slug).find((candidate?: any) => candidate.id !== target.id
     && unclaimedCreationReservation(candidate, dispatchState(candidate), sessionId)
@@ -2743,20 +2804,27 @@ function exchangeCrossedCreationBinding(slug?: any, ticketId?: any, sessionId?: 
   const baseline = String(targetState.baseCommit || '').trim();
   if (!baseline || baseline !== String(dispatchState(holder).baseCommit || '').trim()) return null;
   const reportedFacts = immutableWorktreeFacts(slug, reported);
-  const heldFacts = immutableWorktreeFacts(slug, held);
-  if (!reportedFacts || !heldFacts || reportedFacts.revision !== baseline || heldFacts.revision !== baseline) return null;
+  if (!reportedFacts || reportedFacts.revision !== baseline) return null;
+  const heldFacts = held ? immutableWorktreeFacts(slug, held) : null;
+  if (held && (!heldFacts || heldFacts.revision !== baseline)) return null;
   const [firstId, secondId] = [target.id, holder.id].sort();
   const factsFor = new Map([[target.id, reportedFacts], [holder.id, heldFacts]]);
   const refFor = new Map([[target.id, holder.ref], [holder.id, target.ref]]);
   return withTicketLock(slug, firstId, () => withTicketLock(slug, secondId, () => {
     const now = new Date().toISOString();
+    const movedRecord = heldFacts ? null : movedCreationRecord(dispatchState(getTicket(slug, holder.id)));
     for (const id of [firstId, secondId]) {
       const ticket = getTicket(slug, id);
       const state = dispatchState(ticket);
-      if (!unclaimedCreationReservation(ticket, state, sessionId)) return null;
+      const eligible = id === target.id
+        ? attributableCreationReservation(ticket, state, sessionId)
+        : unclaimedCreationReservation(ticket, state, sessionId);
+      if (!eligible) return null;
       const facts = factsFor.get(id);
-      if (!facts || canonicalPath(state.worktree) === facts.worktree) return null;
-      applyExchangedCreationBinding(state, facts, refFor.get(id), now);
+      if (facts && state.worktree && canonicalPath(state.worktree) === facts.worktree) return null;
+      if (facts) applyExchangedCreationBinding(state, facts, refFor.get(id), now);
+      else releaseCrossedCreationBinding(state, refFor.get(id), now);
+      if (facts && movedRecord) Object.assign(state, movedRecord);
       stampDispatchEvent(ticket, 'worktree-create-exchange', now);
       putTicket(slug, ticket);
     }

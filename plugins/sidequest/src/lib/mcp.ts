@@ -22,6 +22,8 @@
  * on the same store.
  */
 
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const store = require('./store');
 const { compactSchema, conciseDescription, resolveProject, TOOL_DESCRIPTION_OVERRIDES, boundedReadPayload } = require('./mcp-shared');
@@ -41,6 +43,58 @@ type ToolDefinition = {
 type RpcId = string | number | null | undefined;
 type RpcMessage = { jsonrpc?: string; id?: RpcId; method?: string; params?: any };
 
+type BoardMcpLiveness = { pid: number };
+
+function boardMcpSessionId(): string {
+  return String(process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '').trim();
+}
+
+function boardMcpLivenessFile(sessionId: string): string {
+  const home = process.env.SIDEQUEST_HOME || path.join(os.homedir(), '.claude', 'sidequest');
+  return path.join(home, 'tmp', 'state', `board-mcp-${encodeURIComponent(sessionId)}.json`);
+}
+
+function isBoardMcpLiveness(value: unknown): value is BoardMcpLiveness {
+  return value !== null && typeof value === 'object'
+    && Object.hasOwn(value, 'pid') && Number.isInteger(Reflect.get(value, 'pid')) && Reflect.get(value, 'pid') > 0;
+}
+
+function readBoardMcpLiveness(sessionId: string): BoardMcpLiveness | null {
+  try {
+    const value: unknown = JSON.parse(fs.readFileSync(boardMcpLivenessFile(sessionId), 'utf8'));
+    return isBoardMcpLiveness(value) ? value : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeBoardMcpLiveness(sessionId = boardMcpSessionId()): void {
+  if (!sessionId) return;
+  const file = boardMcpLivenessFile(sessionId);
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ pid: process.pid } satisfies BoardMcpLiveness));
+  } catch (_) {}
+}
+
+function clearBoardMcpLiveness(sessionId = boardMcpSessionId()): void {
+  if (!sessionId || readBoardMcpLiveness(sessionId)?.pid !== process.pid) return;
+  try {
+    fs.rmSync(boardMcpLivenessFile(sessionId), { force: true });
+  } catch (_) {}
+}
+
+function isBoardMcpLive(sessionId: string): boolean {
+  const marker = sessionId ? readBoardMcpLiveness(sessionId) : null;
+  if (!marker) return false;
+  try {
+    process.kill(marker.pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
+  }
+}
+
 const SERVER_NAME = 'sidequest';
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // The listing is loaded into every MCP session. Keep a distinct reserve for
@@ -53,7 +107,10 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // attestation grammar alone. Everything that can wait for the second call went to the skill instead.
 // Raised from 23600 for recovery-retention board configuration (SQ-2453) while preserving the 2.5KB reserve.
 // Raised from 23800 for the reduced Agent-schema contract: callers need the visible-schema condition and first-claim evidence before dispatch.
-const MCP_TOOLS_LIST_MAX_BYTES = 24000;
+// Raised from 24000 for VERIFICATION_WAIVER_PROP's type: 'object' (SQ-2 / GitHub #109): an MCP host that
+// enforces the declared schema type refused a top-level verificationWaiver because the property listed
+// `properties` without `type: 'object'`. +91 bytes compacted, while preserving the 2.5KB reserve.
+const MCP_TOOLS_LIST_MAX_BYTES = 24100;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -381,6 +438,10 @@ async function handleRequest(msg?: RpcMessage) {
 module.exports = {
   SERVER_NAME,
   DEFAULT_PROTOCOL_VERSION,
+  boardMcpSessionId,
+  writeBoardMcpLiveness,
+  clearBoardMcpLiveness,
+  isBoardMcpLive,
   MCP_TOOLS_LIST_MAX_BYTES,
   MCP_TOOLS_LIST_HEADROOM_BYTES,
   ARGUMENT_ALIASES,
