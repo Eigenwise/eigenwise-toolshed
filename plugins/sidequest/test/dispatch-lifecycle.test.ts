@@ -1104,12 +1104,14 @@ test('SQ-2922: the bound-unclaimed countdown names the instant retirement is act
       assert.ok(refused.refusal, `inside the grace retirement must be refused, got ${JSON.stringify(refused)}`);
       const printed = /becomes retirable on evidence at (\S+?), in (\d+) minutes?, unless/.exec(refused.refusal);
       assert.ok(printed, `the refusal must print its deadline and countdown, got: ${refused.refusal}`);
+      const printedDeadline = printed?.[1] ?? '';
+      const printedRemaining = printed?.[2] ?? '';
       assert.equal(
-        Date.parse(printed[1]),
+        Date.parse(printedDeadline),
         Date.parse(boundAt) + CLAIM_GRACE_MS,
         'the printed deadline must be the same instant the gate uses, not a second computation',
       );
-      const remaining = Number(printed[2]);
+      const remaining = Number(printedRemaining);
       assert.ok(remaining < previousRemaining, `the countdown must fall, got ${remaining} after ${previousRemaining}`);
       assert.equal(remaining, Math.ceil((CLAIM_GRACE_MS - elapsedMinutes * 60000) / 60000));
       previousRemaining = remaining;
