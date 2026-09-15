@@ -105,13 +105,14 @@ test('repair briefings include the complete rejection history', () => {
   ]);
 });
 
-test('executor briefings require Board MCP reconnect and re-dispatch when unavailable', () => {
+test('executor briefings tell the agent how to report an unavailable Board MCP server', () => {
   const briefing = agentsync.renderTicketBriefing({
     ref: 'SQ-CLI-FALLBACK', model: 'sonnet', effort: 'medium', dispatchExecutor: 'sidequest-exec-medium', category: {},
   }, 'cli-fallback-token');
   assert.match(briefing, /Board MCP is the executor lifecycle authority/);
-  assert.match(briefing, /reload or reconnect Sidequest, then re-dispatch/);
-  assert.doesNotMatch(briefing, /version-pinned CLI fallback/);
+  assert.match(briefing, /stop and report it to the user instead of retrying/);
+  assert.match(briefing, /The user must run \/mcp and reconnect plugin:sidequest:board, or restart Claude Code/);
+  assert.doesNotMatch(briefing, /reload or reconnect Sidequest|version-pinned CLI fallback/);
 });
 
 test('executor briefings preserve orchestrator-owned improvement decisions', () => {
