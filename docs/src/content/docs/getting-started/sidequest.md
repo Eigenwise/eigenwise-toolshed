@@ -126,6 +126,10 @@ Sidequest keeps ticket activity visible in the board. Ask Claude to check active
 
 CI watch alerts exclude completed runs marked `skipped` or `neutral`. Neither conclusion proves that the required checks passed; release verification still needs successful checks on the exact commit.
 
+### Boards in sibling repositories
+
+If you run one session from a parent directory holding several independent repos, each registered as its own board, an executor working a sibling repo's ticket no longer has to name the board on every call. Sidequest resolves the board from the executor's own binding: the ticket ref plus the worktree its dispatch reserved for it, or, for a shared-tree dispatch, the ref plus the claim owner. Nothing else selects a board, so a caller without a claim stays on the session's own board and gets that board's usual refusal. Passing `project` explicitly still wins, and two boards that both fit the same binding are refused by name rather than picked for you.
+
 ## Read-only reports
 
 Use Sidequest for independent candidate reviews, repository audits, and shortcut debt scans. They use the existing read-only review route and only report findings.

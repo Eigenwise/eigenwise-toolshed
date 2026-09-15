@@ -57,6 +57,43 @@ function resolveProject(projectArg) {
   }
   return store.ensureProject(store.sessionProjectRoot());
 }
+function callerWorktreePath(args) {
+  const supplied = String(args?.worktree || "").trim();
+  try {
+    return worktrees.canonicalPath(commitScope.repoRoot(supplied || process.cwd()));
+  } catch (_) {
+    return null;
+  }
+}
+function boardBindsCaller(ticket, args, callerWorktree) {
+  const dispatch = ticket?.dispatch;
+  if (!dispatch) return false;
+  if (dispatch.sharedTree === false) {
+    const recorded = String(dispatch.worktree || "").trim();
+    if (!recorded) return false;
+    const caller = callerWorktree();
+    return Boolean(caller) && worktrees.canonicalPath(recorded) === caller;
+  }
+  const by = String(args?.by || "").trim();
+  return Boolean(by) && ticket.claim?.by === by;
+}
+function resolveLifecycleProject(projectArg, args, action) {
+  const explicit = projectArg == null ? "" : String(projectArg).trim();
+  if (explicit) return resolveProject(explicit);
+  const sessionProject = resolveProject();
+  const ref = String(args?.ref || "").trim();
+  if (!ref) return sessionProject;
+  const boards = store.listProjects({ all: true });
+  if (boards.length < 2) return sessionProject;
+  let derived;
+  const callerWorktree = () => derived === void 0 ? derived = callerWorktreePath(args) : derived;
+  const bound = boards.filter((board) => boardBindsCaller(store.getTicket(board.slug, ref), args, callerWorktree));
+  if (bound.length === 1) return resolveProject(bound[0].path || bound[0].slug);
+  if (bound.length > 1) {
+    throw new Error(`${action}: "${ref}" binds this caller to ${bound.length} registered boards (${bound.map((board) => board.path || board.slug).join(", ")}). Pass "project" explicitly.`);
+  }
+  return sessionProject;
+}
 function runtimeSessionId() {
   const v = process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
   return String(v).trim() || null;
@@ -931,6 +968,7 @@ module.exports = {
   assertSidequestInstall,
   assertDispatchTransport,
   resolveProject,
+  resolveLifecycleProject,
   runtimeSessionId,
   sessionOf,
   controlPlaneIdentity,

@@ -13,7 +13,7 @@ const {
   claimRefusalMessage,
   assertSidequestInstall,
   assertDispatchTransport,
-  resolveProject,
+  resolveLifecycleProject,
   runtimeSessionId,
   sessionOf,
   requireDispatchSession,
@@ -407,7 +407,7 @@ const tools: ToolDefinition[] = [
       required: ['ref', 'by'],
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, 'claim');
       const by = requireBy(args, 'claim');
       const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, reason: args.reason, tokenFile: args.tokenFile, executor: args.executor, effort: args.effort, source: 'mcp', sessionId: sessionOf(args), requireBoundAgent: true });
       if (!res.ok) res.message = res.reason === 'executor_mismatch'
@@ -437,7 +437,7 @@ const tools: ToolDefinition[] = [
       ],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug } = resolveLifecycleProject(args.project, args, 'checkpoint');
       const by = requireBy(args, 'checkpoint');
       const res = store.checkpointTicket(slug, args.ref, by, {
         commit: args.commit,
@@ -457,7 +457,7 @@ const tools: ToolDefinition[] = [
       properties: { project: PROJECT_PROP },
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, 'sweepClaims');
       return store.sweepStaleClaims({ project: slug, source: 'mcp' });
     },
   },
@@ -479,7 +479,7 @@ const tools: ToolDefinition[] = [
       required: ['by'],
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, 'next');
       const by = requireBy(args, 'next');
       requireKnownModelFilter('next', args.model);
       const res = store.claimNext(slug, by, { priority: args.priority, model: args.model, category: args.category, direct: !!args.direct, reason: args.reason, source: 'mcp', sessionId: sessionOf(args) });
@@ -505,7 +505,7 @@ const tools: ToolDefinition[] = [
       required: ['ref', 'by', 'body'],
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, 'done');
       const by = requireBy(args, 'done');
       const body = requiredFinalReport(args, 'done');
       const ticket = store.getTicket(slug, args.ref);
@@ -565,7 +565,7 @@ const tools: ToolDefinition[] = [
       required: ['ref', 'by', 'reason'],
     },
     async handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, 'groomClose');
       const by = requireBy(args, 'groomClose');
       const reason = String(args.reason || '').trim();
       if (!reason) throw new Error('groomClose: reason is required.');
@@ -666,7 +666,7 @@ const tools: ToolDefinition[] = [
       required: ['ref', 'by'],
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, 'release');
       const by = requireBy(args, 'release');
       const reason = requiredReleaseReason(args);
       const ticket = store.getTicket(slug, args.ref);
@@ -708,7 +708,7 @@ const tools: ToolDefinition[] = [
       required: ['ref', 'text', 'outcome'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug } = resolveLifecycleProject(args.project, args, 'verdict');
       const result = store.applyExperimentVerdict(slug, args.ref, {
         text: args.text,
         outcome: args.outcome,
@@ -740,7 +740,7 @@ const tools: ToolDefinition[] = [
       required: ['ref', 'by', 'files'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug } = resolveLifecycleProject(args.project, args, 'scopeRequest');
       const by = requireBy(args, 'scopeRequest');
       const res = store.requestScope(slug, args.ref, by, args.files, { source: 'mcp' });
       const changed = res.ok ? {
@@ -774,7 +774,7 @@ const tools: ToolDefinition[] = [
       required: ['ref', 'by', 'message', 'worktree'],
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, 'commit');
       const by = requireBy(args, 'commit');
       const message = requiredText(args, 'message', 'commit');
       const ticket = store.getTicket(slug, args.ref);
@@ -860,7 +860,7 @@ const tools: ToolDefinition[] = [
       required: ['ref', 'by', 'review', 'reason'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug } = resolveLifecycleProject(args.project, args, 'rework');
       const by = requireBy(args, 'rework');
       return mutationAck(slug, store.reworkSubmission(slug, args.ref, {
         by,
@@ -913,7 +913,7 @@ const tools: ToolDefinition[] = [
       required: ['ref', 'by'],
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, 'submit');
       const by = requireBy(args, 'submit');
       if (args.clear) {
         const res = store.clearSubmission(slug, args.ref, {
@@ -1015,7 +1015,7 @@ const tools: ToolDefinition[] = [
       required: ['ref', 'by'],
     },
     async handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug, meta } = resolveLifecycleProject(args.project, args, 'integrate');
       const by = requireBy(args, 'integrate');
       const refs = String(args.ref).split(',').map((ref: string) => ref.trim()).filter(Boolean);
       if (!refs.length) throw new Error('integrate: pass one or more ticket refs.');

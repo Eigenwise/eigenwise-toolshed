@@ -314,8 +314,7 @@ function claimDispatchedTicket(project?: any, ticket?: any, by?: any, sharedTree
   }).ok, true);
 }
 
-function prepareIsolatedWorktreeDispatch(project: string, primary: string, ticket: any, by: string) {
-  const sessionId = `mcp-delivery-${ticket.id}`;
+function prepareIsolatedWorktreeDispatch(project: string, primary: string, ticket: any, by: string, sessionId = `mcp-delivery-${ticket.id}`) {
   const prepared = store.prepareDispatch(project, ticket.ref, {
     allowUnscoped: true,
     sharedTree: false,
@@ -6654,6 +6653,142 @@ test('SQ-2717: a missing frozen remote ref refuses integration closure instead o
   });
   const artifactAdmission = store.validateIntegrationSubmission(project, artifact.ref);
   assert.notEqual(artifactAdmission.reason, 'integration_target_unavailable', 'artifact submissions stay clear of frozen Git ref resolution');
+});
+
+const SQ_2939_CATEGORY = 'sq-2939-lifecycle-board';
+
+// GH-84: an executor working a sibling repository's board wrote its lifecycle calls
+// to the spawning session's board. The board now follows the caller's own (ref,
+// worktree) binding, and nothing else — a shared runtime session id selects no board
+// (the rejected SQ-2903 candidate let an unclaimed caller reach a foreign board).
+test('SQ-2939: lifecycle calls follow the caller\'s own (ref, worktree) binding across boards', async () => {
+  const spawningRepository = committedRepo('sq-mcp-spawning-board-');
+  const executorRepository = committedRepo('sq-mcp-executor-board-');
+  const previousProjectDir = process.env.CLAUDE_PROJECT_DIR;
+  let spawningWorktree: string | null = null;
+  let executorWorktree: string | null = null;
+  let siblingWorktree: string | null = null;
+  try {
+    store.setCategory({ id: SQ_2939_CATEGORY, name: 'SQ-2939 lifecycle board resolution', route: { model: 'sonnet', effort: 'medium' }, fallback: null, enabled: true });
+    for (const repository of [spawningRepository, executorRepository]) {
+      gitAt(repository, ['config', 'user.name', 'Sidequest Tests']);
+      gitAt(repository, ['config', 'user.email', 'sidequest@example.invalid']);
+    }
+    const spawningProject = store.ensureProject(spawningRepository).slug;
+    const executorProject = store.ensureProject(executorRepository).slug;
+    process.env.CLAUDE_PROJECT_DIR = spawningRepository;
+
+    // Both boards are fresh, so both number their first ticket the same.
+    const spawningTicket = store.createTicket(spawningProject, { title: 'spawning board collision fixture', category: SQ_2939_CATEGORY, files: ['collision.txt'] });
+    const executorTicket = store.createTicket(executorProject, { title: 'cross-project executor fixture', category: SQ_2939_CATEGORY, files: ['cross-project.txt'] });
+    assert.equal(spawningTicket.ref, executorTicket.ref, 'the fixture needs one ref on both boards');
+    const siblingTicket = store.createTicket(executorProject, { title: 'cross-project sibling fixture', category: SQ_2939_CATEGORY, files: ['sibling.txt'] });
+
+    const spawningBy = `sq-2939-spawning-${spawningTicket.id}`;
+    const executorBy = `sq-2939-executor-${executorTicket.id}`;
+    const siblingBy = `sq-2939-sibling-${siblingTicket.id}`;
+    const sharedRuntime = `sq-2939-shared-runtime-${process.pid}`;
+    spawningWorktree = prepareIsolatedWorktreeDispatch(spawningProject, spawningRepository, spawningTicket, spawningBy);
+    executorWorktree = prepareIsolatedWorktreeDispatch(executorProject, executorRepository, executorTicket, executorBy, sharedRuntime);
+    siblingWorktree = prepareIsolatedWorktreeDispatch(executorProject, executorRepository, siblingTicket, siblingBy, sharedRuntime);
+
+    fs.writeFileSync(path.join(executorWorktree, 'cross-project.txt'), 'cross-project lifecycle\n');
+    const committed = await callToolAsSession(sharedRuntime, 'commit', {
+      ref: executorTicket.ref,
+      by: executorBy,
+      message: 'commit the cross-project executor fixture',
+      worktree: executorWorktree,
+    });
+    assert.equal(committed.project, executorProject, 'the bound worktree selects the ticket\'s own board');
+    gitAt(executorWorktree, ['update-ref', `refs/sidequest/${executorTicket.ref}`, committed.commit]);
+    const submitted = await callToolAsSession(sharedRuntime, 'submit', {
+      ref: executorTicket.ref,
+      by: executorBy,
+      commit: committed.commit,
+      worktree: executorWorktree,
+      verify: 'manual: the cross-project lifecycle fixture was checked',
+      body: 'Submitted the cross-project lifecycle fixture.',
+    });
+    assert.equal(submitted.ok, true, submitted.message || submitted.reason);
+    assert.equal(submitted.project, executorProject);
+    const delivered = store.getTicket(executorProject, executorTicket.ref);
+    assert.equal(delivered.submission.commit, committed.commit);
+    assert.equal(worktrees.canonicalPath(delivered.submission.worktree), worktrees.canonicalPath(executorWorktree));
+
+    // The same ref exists on the spawning board: the caller bound to ITS worktree writes it.
+    fs.writeFileSync(path.join(spawningWorktree, 'collision.txt'), 'spawning board\n');
+    const spawningCommit = await callTool('commit', {
+      ref: spawningTicket.ref,
+      by: spawningBy,
+      message: 'commit the spawning board fixture',
+      worktree: spawningWorktree,
+    });
+    assert.equal(spawningCommit.project, spawningProject);
+
+    // One executor's worktree is not authority over its sibling's ticket.
+    const crossed = await callToolRawAsSession(sharedRuntime, 'commit', {
+      ref: siblingTicket.ref,
+      by: siblingBy,
+      message: 'must not commit a sibling ticket from this worktree',
+      worktree: executorWorktree,
+    });
+    assert.equal(crossed.isError, true, 'a foreign worktree cannot select the sibling ticket\'s board');
+    assert.ok(crossed.content[0].text.includes(`no ticket "${siblingTicket.ref}"`), crossed.content[0].text);
+    assert.equal(store.getTicket(executorProject, siblingTicket.ref).submission, undefined);
+
+    // No claim, no bound worktree: a shared runtime session buys nothing.
+    const strayComment = await callToolAsSession(sharedRuntime, 'comment', {
+      ref: siblingTicket.ref,
+      body: 'must not reach the executor board',
+    });
+    assert.equal(strayComment.ok, false, 'an unclaimed caller stays on the spawning board');
+    assert.equal(strayComment.project, spawningProject);
+    assert.doesNotMatch(JSON.stringify(strayComment), new RegExp(siblingBy), 'no foreign claim metadata leaks');
+    const strayCheckpoint = await callToolAsSession(sharedRuntime, 'checkpoint', {
+      ref: siblingTicket.ref,
+      by: 'sq-2939-no-claim',
+      commit: gitAt(siblingWorktree, ['rev-parse', 'HEAD']),
+      verify: 'manual: the stray checkpoint must not reach the executor board',
+    });
+    assert.equal(strayCheckpoint.ok, false);
+    assert.equal(strayCheckpoint.project, spawningProject);
+    assert.equal(strayCheckpoint.reason, 'not_found');
+    assert.doesNotMatch(JSON.stringify(strayCheckpoint), new RegExp(siblingBy), 'no foreign claim metadata leaks');
+  } finally {
+    if (previousProjectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = previousProjectDir;
+    for (const worktree of [siblingWorktree, executorWorktree]) {
+      if (worktree && fs.existsSync(worktree)) {
+        try { gitAt(executorRepository, ['worktree', 'remove', '--force', worktree]); } catch {}
+      }
+    }
+    if (spawningWorktree) removeTestWorktree(spawningRepository, spawningWorktree);
+    else fs.rmSync(spawningRepository, { recursive: true, force: true });
+    fs.rmSync(executorRepository, { recursive: true, force: true });
+  }
+});
+
+test('SQ-2939: a same-board isolated wrong-ref commit keeps its base refusal wording', async () => {
+  store.setCategory({ id: SQ_2939_CATEGORY, name: 'SQ-2939 lifecycle board resolution', route: { model: 'sonnet', effort: 'medium' }, fallback: null, enabled: true });
+  const project = store.ensureProject(PROJ).slug;
+  const ticket = store.createTicket(project, { title: 'same-board wrong-ref fixture', category: SQ_2939_CATEGORY, files: ['same-board.txt'] });
+  const by = `sq-2939-same-board-${ticket.id}`;
+  const worktree = prepareIsolatedWorktreeDispatch(project, PROJ, ticket, by);
+  try {
+    const refused = await callToolRaw('commit', {
+      ref: 'SQ-999',
+      by,
+      message: 'a ref that exists on no board',
+      worktree,
+    });
+    assert.equal(refused.isError, true);
+    assert.ok(refused.content[0].text.includes('no ticket "SQ-999" in board.'), refused.content[0].text);
+    assert.doesNotMatch(refused.content[0].text, /board.*board/, 'the same-board refusal names one board, once');
+  } finally {
+    if (fs.existsSync(worktree)) {
+      try { gitAt(PROJ, ['worktree', 'remove', '--force', worktree]); } catch {}
+    }
+  }
 });
 
 export {};
