@@ -1,16 +1,17 @@
 'use strict';
 
 // A stop only attests the claim's current runtime when nothing the claim did came after it: a stop
-// before claim.at belongs to an earlier launch, and a stop before claim.activeAt was outlived by the
-// runtime it claims to have ended (touchClaimActivity resumes such a dispatch). Pulse's died-record
-// predicate and the reclaim authority below must agree on this, or pulse says dead over a runtime the
-// sweep refuses to free (SQ-2917).
+// before claim.at belongs to an earlier launch, and a stop at or before claim.activeAt was outlived by
+// the runtime it claims to have ended. The activeAt boundary is inclusive because touchClaimActivity
+// resumes a dispatch on activity at the same instant as its stop, and the retained attempt record
+// keeps that stop; a rule that still accepted it would say dead over a runtime the sweep refuses to
+// free (SQ-2917, SQ-2918).
 function stopOutlivesClaim(terminalAt?: unknown, claim?: any): boolean {
   const stoppedMs = Date.parse(String(terminalAt ?? ''));
   if (!Number.isFinite(stoppedMs)) return false;
   const claimedMs = Date.parse(claim && claim.at);
   const activeMs = Date.parse(claim && claim.activeAt);
-  if (Number.isFinite(activeMs) && activeMs > stoppedMs) return false;
+  if (Number.isFinite(activeMs) && activeMs >= stoppedMs) return false;
   return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
 }
 

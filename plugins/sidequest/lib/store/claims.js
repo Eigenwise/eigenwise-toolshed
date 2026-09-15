@@ -4,7 +4,7 @@ function stopOutlivesClaim(terminalAt, claim) {
   if (!Number.isFinite(stoppedMs)) return false;
   const claimedMs = Date.parse(claim && claim.at);
   const activeMs = Date.parse(claim && claim.activeAt);
-  if (Number.isFinite(activeMs) && activeMs > stoppedMs) return false;
+  if (Number.isFinite(activeMs) && activeMs >= stoppedMs) return false;
   return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
 }
 function createClaims(dependencies) {

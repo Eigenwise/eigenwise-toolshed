@@ -1499,7 +1499,8 @@ test('the died-record predicate keys on attempt identity and record age, not on 
     ['its own death before the claim', ownRecord({ terminalAt: '2026-09-01T10:04:59.999Z' }), claim, false],
     // The reclaim authority (claims.observedStop) rejects a stop the claim outlived; pulse must agree (SQ-2917).
     ['its own death, then the claim resumed activity', ownRecord({ terminalAt: '2026-09-01T10:06:00.000Z' }), { at: claim.at, activeAt: '2026-09-01T10:07:00.000Z' }, false],
-    ['its own death at the instant of the last activity', ownRecord({ terminalAt: '2026-09-01T10:06:00.000Z' }), { at: claim.at, activeAt: '2026-09-01T10:06:00.000Z' }, true],
+    // touchClaimActivity resumes a dispatch on same-instant activity, so the stop cannot attest it.
+    ['its own death at the instant of the last activity', ownRecord({ terminalAt: '2026-09-01T10:06:00.000Z' }), { at: claim.at, activeAt: '2026-09-01T10:06:00.000Z' }, false],
     ['its own death after the last activity', ownRecord({ terminalAt: '2026-09-01T10:06:00.001Z' }), { at: claim.at, activeAt: '2026-09-01T10:06:00.000Z' }, true],
     ['its own death under a clock that stepped back one millisecond', ownRecord({ terminalAt: '2026-09-01T10:04:59.999Z' }), { at: claim.at, activeAt: claim.at }, false],
     ['a superseded attempt that died after the claim', ownRecord({
@@ -1535,4 +1536,44 @@ test('a died record the claim outlived does not read as dead once the runtime re
   assert.equal(pulse.died, null);
   assert.notEqual(pulse.liveness, 'dead');
   assert.equal(store.claimReleaseVerdict(store.getTicket(slug, ticket.ref)), null, 'the sweep sees a live claim, and pulse agrees');
+});
+
+// SQ-2918: the claim holder writes to the board at the same millisecond its stop was recorded.
+// touchClaimActivity resumes the dispatch, but the retained attempt keeps the stop with the current
+// identity, so pulse used to find it and report dead while the sweep held the claim.
+test('activity at the same instant as the stop resumes the dispatch and pulse does not read the retained stop as dead', () => {
+  const ticket = addRouted('same-instant resume');
+  const session = 'session-same-instant-resume';
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: session });
+  const holder = 'sq2918-same-instant-executor';
+  assert.equal(store.claimTicket(slug, ticket.ref, holder, {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: session,
+  }).ok, true);
+  const stopped = store.getTicket(slug, ticket.ref);
+  stopped.claim.at = secondsAgo(2);
+  stopped.claim.activeAt = stopped.claim.at;
+  stopped.dispatch.outcome = 'died';
+  stopped.dispatch.terminalAt = secondsAgo(1);
+  stopped.dispatch.terminalSource = 'test-stop-hook';
+  persist(stopped);
+  assert.equal(store.pulsePayload(slug, ticket.ref).liveness, 'dead', 'before the activity the stop is the attempt’s own');
+
+  const commented = store.addComment(slug, ticket.ref, { by: holder, body: 'still here' });
+  assert.equal(commented.ok, true, JSON.stringify(commented));
+  const resumed = store.getTicket(slug, ticket.ref);
+  assert.equal(resumed.dispatch.outcome, 'claimed');
+  assert.equal(resumed.dispatch.terminalAt, undefined);
+  assert.equal(resumed.claim.activeAt, commented.comment.at);
+  // addComment stamps its own clock, so the same-instant stop is written into the retained attempt
+  // afterwards: the shape touchClaimActivity leaves behind when the stop hook and the comment share
+  // a millisecond.
+  resumed.dispatch.attempts = [...(resumed.dispatch.attempts ?? []), {
+    preparedAt: resumed.dispatch.preparedAt, tokenPrefix: resumed.dispatch.tokenPrefix,
+    outcome: 'died', terminalAt: commented.comment.at, terminalSource: 'test-stop-hook',
+  }];
+  persist(resumed);
+  const pulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(pulse.died, null);
+  assert.notEqual(pulse.liveness, 'dead');
+  assert.equal(store.claimReleaseVerdict(resumed), null);
 });
