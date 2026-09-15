@@ -2643,7 +2643,7 @@ function externalDeliverableCloseout(slug, ticket) {
   const candidate = { source: "git", value: revision };
   const verification = workingTreeVerification(ticket, candidate);
   if (!verification.ok) return verification;
-  const capture = Array.isArray(ticket.verificationCaptures) ? ticket.verificationCaptures.find((entry) => entry?.status === "passed" && entry?.candidate?.source === candidate.source && entry?.candidate?.value === candidate.value && entry?.command === verification.verification.command && entry?.dispatchNonce === ticket.dispatchNonce) : null;
+  const capture = Array.isArray(ticket.verificationCaptures) ? ticket.verificationCaptures.find((entry) => entry?.status === "passed" && entry?.cleanWorktree === true && entry?.candidate?.source === candidate.source && entry?.candidate?.value === candidate.value && entry?.command === verification.verification.command && entry?.dispatchNonce === ticket.dispatchNonce) : null;
   return { ok: true, worktree: workspace.root, candidate, verification: verification.verification, capture: capture || null };
 }
 function completeTicket(slug, idOrRef, by, opts) {

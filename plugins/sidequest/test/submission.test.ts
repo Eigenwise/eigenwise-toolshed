@@ -299,9 +299,7 @@ test('integration rejects legacy invalid submission verify before delivery', () 
 });
 
 test('MCP submit requires a completed capture for the declared executor verifier', async () => {
-  fs.mkdirSync(path.join(PROJECT_DIR, 'test'), { recursive: true });
-  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'scoped-surface.test.js'), '');
-  const command = 'node --test test/scoped-surface.test.js';
+  const command = 'node -e "process.exit(0)"';
   const t = addTicket('declared scoped verify', { executorVerify: command, files: ['README.md'] });
   const by = 'scoped-verify-worker';
   const pinnedCommit = git(['rev-parse', 'origin/main']);
@@ -322,7 +320,7 @@ test('MCP submit requires a completed capture for the declared executor verifier
   assert.strictEqual(missingCapture.ok, false);
   assert.strictEqual(missingCapture.reason, 'verification_capture_required');
   assert.match(missingCapture.message, /No completed passed verification capture exists/);
-  assert.match(missingCapture.message, /node --test test\/scoped-surface\.test\.js/);
+  assert.match(missingCapture.message, /node -e/);
   assert.strictEqual(store.getTicket(slug, t.ref).claim.by, by);
 
   const capture = await runVerifyCapture(command, PROJECT_DIR);
@@ -4725,7 +4723,6 @@ test('SQ-2789: a capture taken over uncommitted edits is not reused, and the sin
   const gate = fileContentGate('dirty', gatedFile, 'dirty-pass');
   const captureLogs: string[] = [];
   try {
-    const baseline = git(['rev-parse', 'HEAD']);
     const ticket = addTicket('capture taken over uncommitted edits', { executorVerify: gate.command, files: ['lib/dirty-capture.js'] });
     assert.strictEqual(store.claimTicket(slug, ticket.ref, 'dirty-capture-worker', { direct: true, reason: 'The dirty capture fixture requires a local direct claim.' }).ok, true);
     fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
@@ -4741,28 +4738,10 @@ test('SQ-2789: a capture taken over uncommitted edits is not reused, and the sin
     if (capture.logPath) captureLogs.push(capture.logPath);
     assert.strictEqual(capture.status, 'passed');
     const recorded = recordCapture({ project: PROJECT_DIR, ticket: ticket.ref }, capture, PROJECT_DIR);
-    assert.strictEqual(recorded.ok, true, recorded.message);
-    assert.strictEqual(recorded.capture.candidate.value, candidate, 'the capture still binds to the committed HEAD it never read');
-    assert.strictEqual(recorded.capture.cleanWorktree, undefined, 'a dirty capture is never marked as proving the committed content');
-
-    git(['checkout', '--', 'lib/dirty-capture.js']);
-    assert.strictEqual(fs.readFileSync(gatedFile, 'utf8').trim(), 'clean-fail');
-    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'dirty-capture-worker', { commit: candidate, verify: gate.command }).ok, true);
-    const submitted = store.getTicket(slug, ticket.ref);
-    Object.assign(submitted.submission, {
-      baseline: { revision: { source: 'git', value: baseline, observedAt: new Date().toISOString() }, purpose: 'dispatch' },
-      changedPaths: ['lib/dirty-capture.js'],
-    });
-    persist(submitted);
-    assert.strictEqual(gate.runs(), 1, 'only the executor capture has run the command so far');
-
-    const refused = store.assembleSubmissionWave(slug, [ticket.ref]);
-    assert.strictEqual(refused.ok, false, 'the gate must not certify content the capture never read');
-    assert.strictEqual(refused.reason, 'assembled_wave_gate_failed');
-    assert.strictEqual(refused.gate.verification.status, 'failed_suite');
-    assert.strictEqual(refused.gate.verification.reusedCapture, undefined);
-    assert.strictEqual(gate.runs(), 2, 'assembly reran the command against the committed candidate');
-    assert.strictEqual(store.pendingSubmission(store.getTicket(slug, ticket.ref)), true);
+    assert.strictEqual(recorded.ok, false);
+    assert.strictEqual(recorded.reason, 'verification_capture_dirty_worktree');
+    assert.match(recorded.message, /Commit or discard/);
+    assert.deepStrictEqual(store.getTicket(slug, ticket.ref).verificationCaptures, undefined);
   } finally {
     for (const logPath of captureLogs) fs.rmSync(logPath, { force: true });
     gate.remove();
@@ -4771,7 +4750,7 @@ test('SQ-2789: a capture taken over uncommitted edits is not reused, and the sin
   }
 });
 
-test('SQ-2789: a capture recorded without the clean-worktree proof is not reused', () => {
+test('SQ-2936: a dirty capture cannot submit the committed candidate', () => {
   cleanBranch();
   const originalConfig = store.boardConfig(slug);
   const integrationBranch = git(['branch', '--show-current']);
@@ -4779,7 +4758,6 @@ test('SQ-2789: a capture recorded without the clean-worktree proof is not reused
   const gatedFile = path.join(PROJECT_DIR, 'lib', 'unproven-capture.js');
   const gate = fileContentGate('unproven', gatedFile, 'candidate');
   try {
-    const baseline = git(['rev-parse', 'HEAD']);
     const ticket = addTicket('capture predating the clean-worktree proof', { executorVerify: gate.command, files: ['lib/unproven-capture.js'] });
     assert.strictEqual(store.claimTicket(slug, ticket.ref, 'unproven-capture-worker', { direct: true, reason: 'The unproven capture fixture requires a local direct claim.' }).ok, true);
     fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
@@ -4789,8 +4767,7 @@ test('SQ-2789: a capture recorded without the clean-worktree proof is not reused
     const candidate = git(['rev-parse', 'HEAD']);
     pin(ticket, candidate);
 
-    // Exactly the shape captures recorded before SQ-2789 carry: passing, bound to the candidate,
-    // and silent about whether the worktree it ran in was clean.
+    // This models a capture persisted before the wrapper rejected dirty trees.
     const recorded = store.recordVerificationCapture(slug, ticket.ref, {
       command: gate.command,
       status: 'passed',
@@ -4798,21 +4775,14 @@ test('SQ-2789: a capture recorded without the clean-worktree proof is not reused
       completedAt: new Date().toISOString(),
     });
     assert.strictEqual(recorded.ok, true, recorded.message);
-    assert.strictEqual(recorded.capture.cleanWorktree, undefined);
-    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'unproven-capture-worker', { commit: candidate, verify: gate.command }).ok, true);
-    const submitted = store.getTicket(slug, ticket.ref);
-    Object.assign(submitted.submission, {
-      baseline: { revision: { source: 'git', value: baseline, observedAt: new Date().toISOString() }, purpose: 'dispatch' },
-      changedPaths: ['lib/unproven-capture.js'],
-    });
-    persist(submitted);
-    assert.strictEqual(gate.runs(), 0, 'the unproven capture was recorded without running anything');
-
-    const assembled = store.assembleSubmissionWave(slug, [ticket.ref]);
-    assert.strictEqual(assembled.ok, true, assembled.message);
-    assert.strictEqual(assembled.gate.state, 'gate_passed');
-    assert.strictEqual(assembled.gate.verification.reusedCapture, undefined, 'an unmarked capture is not assumed clean');
-    assert.strictEqual(gate.runs(), 1, 'the gate ran the command itself instead of reusing the unproven capture');
+    const dirtyCaptureTicket = store.getTicket(slug, ticket.ref);
+    dirtyCaptureTicket.verificationCaptures = [{ ...recorded.capture, cleanWorktree: false }];
+    persist(dirtyCaptureTicket);
+    const refused = store.submitTicket(slug, ticket.ref, 'unproven-capture-worker', { commit: candidate, verify: gate.command });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'verification_capture_dirty_worktree');
+    assert.match(refused.message, /dirty worktree/);
+    assert.strictEqual(gate.runs(), 0, 'submission did not treat the dirty capture as a passing verifier');
   } finally {
     gate.remove();
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });

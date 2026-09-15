@@ -1047,6 +1047,7 @@ test('the pinned verify-capture command carries the dispatch bound worktree, and
     dispatch: { sharedTree: true },
   }), 'shared-token', undefined, root);
   const sharedCommand = commandLine(shared);
+  assert.match(shared, /Run it only over a clean worktree/);
   assert.doesNotMatch(sharedCommand, /--worktree/);
 
   const linked = agentsync.renderTicketBriefing(Object.assign({}, base, {
