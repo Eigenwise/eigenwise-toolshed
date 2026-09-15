@@ -3237,7 +3237,7 @@ test('session-start: bounds oversized workforces and preserves each briefing tai
     assert.match(
       context,
       source
-        ? /If Board MCP is unavailable, stop and report it to the user instead of retrying\./
+        ? /If Board MCP is unavailable, stop and tell the user to run \/mcp/
         : /Workers own claimed work and report conflicts, verification, and cleanup\./,
     );
   }
@@ -3573,8 +3573,8 @@ test('negative control: session-start recovery rejects the retired CLI fallback 
   for (const source of ['compact', 'resume']) {
     const ctx = runHookForBudget(SESSION, { session_id: 't', source });
     assert.match(ctx, /never\s+TaskOutput/i, `${source} must ban native Agent TaskOutput polling`);
-    assert.match(ctx, /If Board MCP is unavailable, stop and report it to the user instead of retrying/i, `${source} must direct unavailable-board recovery to the user`);
-    assert.match(ctx, /The user must run \/mcp and reconnect plugin:sidequest:board, or restart Claude Code/i, `${source} must name the user recovery action`);
+    assert.match(ctx, /If Board MCP is unavailable, stop and tell the user to run \/mcp/i, `${source} must direct unavailable-board recovery to the user`);
+    assert.match(ctx, /reconnect plugin:sidequest:board, or restart Claude Code; do not retry/i, `${source} must name the user recovery action`);
     assert.match(ctx, /Board MCP is the lifecycle authority; no Sidequest CLI or raw Agent fallback/i, `${source} must reject lifecycle fallbacks`);
     assert.doesNotMatch(ctx, /list --status(?: |=)doing.*MCP is absent/i, `${source} must reject the retired SessionStart fallback`);
     assert.ok(!ctx.includes('external tracker'), `${source} must not inject the full block`);
@@ -3586,8 +3586,8 @@ test('negative control: session-start recovery rejects the retired CLI fallback 
 test('session-start source excludes the retired lifecycle CLI fallback', () => {
   const source = fs.readFileSync(SESSION, 'utf8');
   assert.doesNotMatch(source, /list --status=doing only if MCP is absent/);
-  assert.match(source, /If Board MCP is unavailable, stop and report it to the user instead of retrying/);
-  assert.match(source, /The user must run \/mcp and reconnect plugin:sidequest:board, or restart Claude Code/);
+  assert.match(source, /If Board MCP is unavailable, stop and tell the user to run \/mcp/);
+  assert.match(source, /reconnect plugin:sidequest:board, or restart Claude Code; do not retry/);
 });
 
 test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
