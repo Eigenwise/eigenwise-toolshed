@@ -53,8 +53,8 @@ function discoveryRoots() {
   if (!override?.trim()) return [defaultRoot];
   return [...override.split(",").map((value) => value.trim()).filter(Boolean).map((value) => import_node_path.default.resolve(value)), defaultRoot].filter((root, index, roots) => roots.indexOf(root) === index);
 }
-function catalogCanRefresh(catalogPath) {
-  return import_node_path.default.resolve(catalogPath) === import_node_path.default.join(claudeHome(), "model-gateway", "catalog.json") && newestGatewayCatalogCommand() !== null;
+function installedGatewayCatalog(catalogPath) {
+  return import_node_path.default.resolve(catalogPath) === import_node_path.default.join(claudeHome(), "model-gateway", "catalog.json");
 }
 function readJsonSafe(file) {
   try {
@@ -124,7 +124,7 @@ const CATALOG_STALE_MS = 5 * 60 * 1e3;
 const REFRESH_RETRY_MS = 30 * 1e3;
 const gatewayRefreshAttempts = /* @__PURE__ */ new Map();
 function refreshGatewayCatalog(catalogPath) {
-  if (!catalogCanRefresh(catalogPath)) return null;
+  if (!installedGatewayCatalog(catalogPath)) return null;
   const attempt = gatewayRefreshAttempts.get(catalogPath);
   const window = attempt?.refreshed ? CATALOG_STALE_MS : REFRESH_RETRY_MS;
   if (!attempt || Date.now() - attempt.at > window) {
@@ -144,12 +144,12 @@ function catalogWithinFreshnessWindow(data) {
 function catalogStateFingerprint() {
   return discoveryRoots().flatMap((root) => CATALOG_SOURCES.map(({ relPath }) => {
     const catalogPath = import_node_path.default.resolve(root, relPath);
-    const freshness = !catalogCanRefresh(catalogPath) || catalogWithinFreshnessWindow(readCatalogSafe(catalogPath)) ? "fresh" : "stale";
+    const freshness = !installedGatewayCatalog(catalogPath) || catalogWithinFreshnessWindow(readCatalogSafe(catalogPath)) ? "fresh" : "stale";
     return `${catalogPath}:${catalogFileFingerprint(catalogPath) ?? "missing"}:${freshness}`;
   })).join("|");
 }
 function usableCatalog(data, schemas, catalogPath) {
-  if (!isRecord(data) || catalogCanRefresh(catalogPath) && !catalogWithinFreshnessWindow(data)) return null;
+  if (!isRecord(data) || installedGatewayCatalog(catalogPath) && !catalogWithinFreshnessWindow(data)) return null;
   const catalog = data;
   const schema = catalog.schemaVersion ?? catalog.schema;
   return typeof schema === "number" && schemas.has(schema) && Array.isArray(catalog.models) ? catalog : null;

@@ -192,6 +192,14 @@ test('SQ-2937: discovery override adds fixture roots without hiding the gateway 
   assert.equal(discovery.providerReadiness('codex')?.ready, true);
 });
 
+test('SQ-2937: a stale installed gateway catalog with no refresh command is still suppressed', (t) => {
+  const agedOut = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+  seedGatewayHome(t, readyCatalog(agedOut), {});
+
+  assert.deepEqual(discovery.discoverExternalModels(), []);
+  assert.equal(discovery.providerReadiness('codex'), null);
+});
+
 test('discovery validates concrete catalog identity and drops routing hints', () => {
   writeCatalog([
     { slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', suggestedTier: 'ignored' },

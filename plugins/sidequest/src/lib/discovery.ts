@@ -58,9 +58,11 @@ function discoveryRoots(): string[] {
     .filter((root, index, roots) => roots.indexOf(root) === index);
 }
 
-function catalogCanRefresh(catalogPath: string): boolean {
-  return path.resolve(catalogPath) === path.join(claudeHome(), 'model-gateway', 'catalog.json')
-    && newestGatewayCatalogCommand() !== null;
+// Only the installed gateway catalog has a writer, so only it is held to the freshness window; a catalog
+// under an extra discovery root is read as recorded. The window still applies when the gateway plugin is
+// gone: a leftover catalog must not advertise routes nothing can serve.
+function installedGatewayCatalog(catalogPath: string): boolean {
+  return path.resolve(catalogPath) === path.join(claudeHome(), 'model-gateway', 'catalog.json');
 }
 
 function readJsonSafe(file: string): unknown {
@@ -153,7 +155,7 @@ const gatewayRefreshAttempts = new Map<string, { at: number; refreshed: boolean 
 // file it left behind is current. Attempts are remembered per catalog file, so readiness and model listing
 // share one child process rather than spawning one each.
 function refreshGatewayCatalog(catalogPath: string): CatalogData | null {
-  if (!catalogCanRefresh(catalogPath)) return null;
+  if (!installedGatewayCatalog(catalogPath)) return null;
   const attempt = gatewayRefreshAttempts.get(catalogPath);
   const window = attempt?.refreshed ? CATALOG_STALE_MS : REFRESH_RETRY_MS;
   if (!attempt || Date.now() - attempt.at > window) {
@@ -175,13 +177,13 @@ function catalogWithinFreshnessWindow(data: unknown): boolean {
 export function catalogStateFingerprint(): string {
   return discoveryRoots().flatMap((root) => CATALOG_SOURCES.map(({ relPath }) => {
     const catalogPath = path.resolve(root, relPath);
-    const freshness = !catalogCanRefresh(catalogPath) || catalogWithinFreshnessWindow(readCatalogSafe(catalogPath)) ? 'fresh' : 'stale';
+    const freshness = !installedGatewayCatalog(catalogPath) || catalogWithinFreshnessWindow(readCatalogSafe(catalogPath)) ? 'fresh' : 'stale';
     return `${catalogPath}:${catalogFileFingerprint(catalogPath) ?? 'missing'}:${freshness}`;
   })).join('|');
 }
 
 function usableCatalog(data: unknown, schemas: ReadonlySet<number>, catalogPath: string): CatalogData | null {
-  if (!isRecord(data) || (catalogCanRefresh(catalogPath) && !catalogWithinFreshnessWindow(data))) return null;
+  if (!isRecord(data) || (installedGatewayCatalog(catalogPath) && !catalogWithinFreshnessWindow(data))) return null;
   const catalog = data as CatalogData;
   const schema = catalog.schemaVersion ?? catalog.schema;
   return typeof schema === 'number' && schemas.has(schema) && Array.isArray(catalog.models) ? catalog : null;

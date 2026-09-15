@@ -37,7 +37,7 @@ test('SQ-2199: a fixture catalog that aged out of the stale window is usable aga
   assert.deepEqual(discovery.discoverExternalModels().map((model: { slug: string }) => model.slug), ['codex-gpt-5-6-terra']);
 });
 
-test('SQ-2937: a fixture catalog never invokes the installed gateway refresh command', (t) => {
+test('SQ-2937: a fixture catalog never invokes the installed gateway refresh command', (t: import('node:test').TestContext) => {
   const previousClaudeHome = process.env.SIDEQUEST_CLAUDE_HOME;
   const gatewayHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-catalog-refresh-probe-'));
   const marker = path.join(gatewayHome, 'refresh-called');
