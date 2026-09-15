@@ -2326,3 +2326,116 @@ test('a checkout the attempt reserved itself still blocks the retry, and repeati
     removeWorktreeBranch(worktree, branch);
   }
 });
+
+// SQ-2926. Under a wave, one sibling's WorktreeCreate died in the board before it reserved anything, so creation
+// attributed the next sibling's checkout to the stalled reservation. The pair exchange had nothing to hand back
+// and refused, the stalled ticket kept a record naming its sibling's checkout, and that immutable recovery fact
+// then refused every re-dispatch of a ticket whose own spawn never created a checkout at all.
+test('a checkout attributed to a reservation that never created one moves to the agent reporting it', () => {
+  const sequence = `sq2926-cross-${process.pid}-${Date.now()}`;
+  const sessionId = `${sequence}-session`;
+  const worktree = path.join(SIDEQUEST_HOME, 'sq2926-targets', sequence);
+  const canonical = (target: string) => worktrees.canonicalPath(target);
+  const boundWorktree = (ref: string) => store.getTicket(slug, ref).dispatch.worktree || null;
+  const reserved: string[] = [];
+  const reserve = (label: string) => {
+    const ticket = store.createTicket(slug, {
+      title: `one-sided crossing fixture ${label} ${sequence}`,
+      category: 'codebase-exploration',
+      description: 'One of several dispatches launched from a single orchestrator session.',
+      files: ['README.md'],
+    });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    const agentName = `${sequence}-${label}-agent`;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+      agentName,
+    }).ok, true);
+    reserved.push(ticket.ref);
+    return { ref: ticket.ref, executor: prepared.ticket.dispatchExecutor, agentName, agentId: `${label}${sequence}`.replace(/[^a-z0-9]/g, '') };
+  };
+
+  try {
+    const first = reserve('first');
+    const second = reserve('second');
+
+    // Two reservations, one creation: the sibling whose own WorktreeCreate never reached the board leaves
+    // creation nothing to tell them apart, so it attributes the single checkout in board order.
+    fs.mkdirSync(path.dirname(worktree), { recursive: true });
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '--detach', worktree], { cwd: PROJECT, windowsHide: true });
+    completeCheckoutCreation(sessionId, worktree);
+    const holder = [first, second].find((reservation) => boundWorktree(reservation.ref) === canonical(worktree));
+    if (!holder) throw new Error('the fixture must attribute the single checkout to one of the two reservations');
+    const reporter = holder === first ? second : first;
+    assert.equal(boundWorktree(reporter.ref), null, 'the reporting reservation holds nothing to exchange');
+
+    const bound = store.bindDispatchAgent(sessionId, reporter.executor, reporter.agentId, reporter.agentName, worktree);
+    assert.equal(bound.ok, true, `the agent running in the checkout outranks the creation-order guess: ${bound.reason}`);
+    assert.equal(boundWorktree(reporter.ref), canonical(worktree));
+    assert.equal(store.getTicket(slug, reporter.ref).dispatch.worktreeBindingSource, 'worktree-create', 'downstream reads still require the creation source');
+    assert.ok(store.getTicket(slug, reporter.ref).dispatch.worktreeCreationCompletedAt, 'the completed creation follows the checkout');
+
+    // The stalled attempt created nothing, so it records nothing, and its retirement cannot capture a
+    // checkout its sibling's executor is still writing in.
+    const stalled = store.getTicket(slug, holder.ref).dispatch;
+    assert.equal(stalled.worktree, null);
+    assert.equal(stalled.worktreeCreationCompletedAt, null);
+    fs.writeFileSync(path.join(worktree, 'uncommitted.txt'), 'the sibling executor is still working\n');
+    const retried = store.prepareDispatch(slug, holder.ref, {
+      sessionId: `${sequence}-retry`,
+      recoveryEvidence: 'the Agent call died in WorktreeCreate and no executor ran',
+    });
+    assert.equal(retried.ok, true);
+    assert.equal(retried.ticket.dispatch.worktree || null, null);
+    assert.equal(fs.existsSync(path.join(worktree, 'uncommitted.txt')), true, "the sibling's work is untouched");
+  } finally {
+    for (const ref of reserved) store.releaseTicket(slug, ref, 'sq2926-cross-cleanup', { status: 'todo', source: 'test', force: true });
+    if (fs.existsSync(worktree)) execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT, windowsHide: true });
+  }
+});
+
+// SQ-2926. A board that already carries the crossed fact still has to become dispatchable, and the fact itself
+// is immutable, so the retry checks whether the checkout is one this attempt's own agent ever ran in.
+test('a recovery fact naming a sibling agent checkout does not block the retry', () => {
+  const sequence = `sq2926-fact-${process.pid}-${Date.now()}`;
+  const siblingAgentId = `sq2926sibling${process.pid}`;
+  const sibling = dispatched(siblingAgentId);
+  const worktree = worktrees.resolvedAgentWorktree(PROJECT, siblingAgentId);
+  const branch = `sq2926-sibling-${sequence}`;
+  const sessionId = `${sequence}-session`;
+  const ticket = store.createTicket(slug, {
+    title: `crossed recovery fact fixture ${sequence}`,
+    category: 'codebase-exploration',
+    description: 'Its spawn died in WorktreeCreate; the board had already attributed a sibling checkout to it.',
+    files: ['README.md'],
+  });
+  try {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+      agentName: `${sequence}-agent`,
+    }).ok, true);
+
+    // The crossed fact: this reservation is recorded against the checkout the sibling's agent runs in.
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT, windowsHide: true });
+    fs.writeFileSync(path.join(worktree, 'uncommitted.txt'), 'the sibling executor is still working\n');
+
+    const retried = store.prepareDispatch(slug, ticket.ref, {
+      sessionId: `${sequence}-retry`,
+      recoveryEvidence: 'the Agent call died in WorktreeCreate and no executor ran',
+    });
+    assert.equal(retried.ok, true);
+    assert.equal(retried.ticket.dispatch.worktree || null, null);
+    assert.equal(fs.existsSync(path.join(worktree, 'uncommitted.txt')), true, "the sibling's work is untouched");
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'sq2926-fact-cleanup', { status: 'todo', source: 'test', force: true });
+    store.releaseTicket(slug, sibling.ticket.ref, 'sq2926-fact-cleanup', { status: 'todo', source: 'test', force: true });
+    removeWorktreeBranch(worktree, branch);
+  }
+});
