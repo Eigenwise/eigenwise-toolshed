@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.569.0 (2026-09-15)
+
+### sidequest 5.1.20 → 5.1.21
+
+#### Fixes
+
+- Record replacements for obsolete delivery verifiers (SQ-2885)
+  Delivered tickets can record a passing replacement verifier when their sealed command no longer runs, while retaining the original requirement and its evidence.
+
 ## v3.568.0 (2026-09-15)
 
 ### model-gateway 0.51.1 → 0.51.2
