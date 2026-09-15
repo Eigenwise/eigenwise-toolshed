@@ -624,6 +624,14 @@ function pinnedVerificationRequirement(ticket: any) {
   });
 }
 
+function replacementVerificationRequirement(value: any) {
+  if (!value || typeof value !== 'object') return null;
+  const kind = String(value.verifyKind || '').trim().toLowerCase();
+  const command = String(value.verify || '').trim();
+  if (!['command', 'suite'].includes(kind) || !command) return null;
+  return verificationRequirement({ kind, command, evidence: command });
+}
+
 function recordedVerificationCaptures(ticket: any) {
   return Array.isArray(ticket?.verificationCaptures) ? ticket.verificationCaptures : [];
 }
@@ -717,7 +725,7 @@ function skippedVerification(requirement: any, waiver: any) {
 }
 
 function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
-  const requirement = pinnedVerificationRequirement(ticket);
+  const requirement = opts?.requirement || pinnedVerificationRequirement(ticket);
   const submitted = ticket.submission?.verificationResult;
   if (submitted && typeof submitted === 'object' && !requirement.command) return submitted;
   if (opts?.skipVerify === true) return skippedVerification(requirement, opts.verificationWaiver);
@@ -1296,6 +1304,16 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
   const preflightTicket = preflight.ticket;
   if (opts.skipVerify === true) return { ok: false, reason: 'delivery_verify_required', ticket: preflightTicket, message: `${preflightTicket.ref} reconciliation requires a passing merged-tree verification; skipVerify is not allowed.` };
   const ticket = preflightTicket;
+  const terminalSubmission = ticket.dispatch?.terminalAt
+    || ticket.dispatch?.attempts?.some((attempt: any) => attempt?.outcome === 'submitted' && attempt.terminalAt);
+  if (opts.verificationSupersession !== undefined && (!ticket.submission || !terminalSubmission)) {
+    return {
+      ok: false,
+      reason: 'verification_supersession_not_recorded_delivery',
+      ticket,
+      message: `${ticket.ref} delivery refused: verificationSupersession only applies to a terminal recorded submission.`,
+    };
+  }
   if (!submissionUsesGit(ticket)) return { ok: false, reason: 'git_delivery_required', ticket, message: `${ticket.ref} has no Git candidate to reconcile.` };
   const reason = String(opts.reason || '').trim();
   const requestedCommit = String(opts.deliveryCommit || '').trim();
@@ -1380,7 +1398,19 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
       ? { ok: true, interaction: null }
       : reviewedMergedTreeInteraction(repo, ticket, deliveryCommit, resultingHead, opts.deliveryInteractionCommit);
     if (!interaction.ok) return Object.assign({ ticket }, interaction);
-    const verify = verifyDeliveredSubmission(slug, ticket);
+    const recordedRequirement = pinnedVerificationRequirement(ticket);
+    const replacementRequirement = opts.verificationSupersession === undefined
+      ? null
+      : replacementVerificationRequirement(opts.verificationSupersession);
+    if (opts.verificationSupersession !== undefined && !replacementRequirement) {
+      return {
+        ok: false,
+        reason: 'invalid_verification_supersession',
+        ticket,
+        message: `${ticket.ref} delivery refused: verificationSupersession requires a runnable command or suite verifier.`,
+      };
+    }
+    const verify = verifyDeliveredSubmission(slug, ticket, replacementRequirement ? { requirement: replacementRequirement } : undefined);
     if (!verificationAccepted(verify)) {
       return integrationFailure(slug, ticket, {
         reason: `${verificationOutcome(verify)}_recorded_delivery`,
@@ -1402,7 +1432,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
       ...(workingTreeDelivery ? { method: deliveryMethod } : {}),
     };
     const recorded = updateSubmissionIntegration(slug, ticket.id, {
-      mode: interaction.interaction ? 'recorded-reviewed-interaction' : workingTreeDelivery ? 'recorded-working-tree' : 'recorded',
+      mode: interaction.interaction ? 'recorded-reviewed-interaction' : workingTreeDelivery ? 'recorded-working-tree' : replacementRequirement ? 'recorded-verify-superseded' : 'recorded',
       pinnedRef: submissionGitRef(ticket),
       pinnedCommit: ticket.submission.commit,
       deliveryCommit,
@@ -1415,6 +1445,16 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
       changedPaths: changedIntegrationPaths(repo, ticket.submission),
       deliveredFiles,
       verify,
+      ...(replacementRequirement ? {
+        verificationSupersession: {
+          at: new Date().toISOString(),
+          by: String(opts.by || '').trim() || null,
+          reason,
+          recordedRequirement,
+          replacementRequirement,
+          result: verify,
+        },
+      } : {}),
       evidence: reason,
       contentEvidence: interaction.interaction ? `${content.evidence}:reviewed_merged_tree_interaction` : content.evidence,
       outcome: 'verified',
