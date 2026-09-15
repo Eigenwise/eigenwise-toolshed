@@ -296,7 +296,11 @@ export function foreignReleaseFragmentScopePaths(files: unknown, ticketRef: unkn
 }
 
 export function foreignReleaseFragmentRefusalMessage(operation: string, ticketRef: unknown, fragments: readonly string[]): string {
-  return `${operation}: refused ${ticketRef}; only ${ticketReleaseFragment(ticketRef)} is implicitly writable, except a deleted fragment from a related review-rejected candidate. Other release fragments: ${fragments.join(', ')}.`;
+  const ownFragment = ticketReleaseFragment(ticketRef);
+  if (!ownFragment) {
+    throw new Error(`foreignReleaseFragmentRefusalMessage: missing or invalid ticket ref (received ${JSON.stringify(ticketRef)}); every caller must pass the ticket's own ref instead of interpolating it`);
+  }
+  return `${operation}: refused ${ticketRef}; only ${ownFragment} is implicitly writable, except a deleted fragment from a related review-rejected candidate. Other release fragments: ${fragments.join(', ')}.`;
 }
 
 export function ticketCommitScope(effectiveFiles: unknown, declaredFiles: unknown, ticketRef: unknown): string[] {

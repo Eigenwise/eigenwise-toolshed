@@ -660,7 +660,13 @@ function createTickets(dependencies) {
       const packageScope = autoApprovedPackageScope(t, remainingAfterDerivedScope, slug);
       const approved = normalizeFiles([...derivedScope, ...packageScope]);
       if (approved.length) {
-        t.files = boundedFiles(scopeExpansionFiles(t, approved));
+        t.files = boundedFiles(scopeExpansionFiles(t, approved), {
+          category: t.category,
+          readonlyOverride: t.readonlyOverride,
+          slug,
+          ticketRef: t.ref,
+          operation: "scopeRequest"
+        });
         syncLiveDispatchScope(slug, t);
       }
       const refused = normalizeFiles([

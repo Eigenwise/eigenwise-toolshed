@@ -5,6 +5,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { stubSidequestInstall } from './_sidequest-install-fixture.js';
+
+stubSidequestInstall();
 
 function createClaimedDispatch() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-scope-source-home-'));
