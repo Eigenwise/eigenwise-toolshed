@@ -14,6 +14,7 @@ const {
   assertSidequestInstall,
   assertDispatchTransport,
   resolveProject,
+  resolveLifecycleProject,
   runtimeSessionId,
   sessionOf,
   controlPlaneIdentity,
@@ -121,7 +122,7 @@ const tools: ToolDefinition[] = [
       required: ['ref', 'body'],
     },
     handler(args) {
-      const { slug } = resolveProject(args.project);
+      const { slug } = resolveLifecycleProject(args.project, args, 'comment');
       const ticket = store.getTicket(slug, args.ref);
       const sessionId = sessionOf(args);
       const claimSessionId = ticket?.claim?.runtime?.sessionId;
