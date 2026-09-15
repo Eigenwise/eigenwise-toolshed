@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_sidequest-install-fixture.js';
 'use strict';
 
 const test = require('node:test');
@@ -11,6 +12,8 @@ const { execFileSync, spawn } = require('node:child_process');
 const { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureSlotDirectory, recordCapture } = require('../lib/verify-capture.js');
 const { runProcessVerification } = require('../lib/ports/process.js');
 const store = require('../lib/store.js');
+const worktrees = require('../lib/worktrees.js');
+const worktreeLease = require('../lib/kernel/worktree.js');
 const SIDEQUEST_DIR = path.resolve(__dirname, '..');
 
 function deleteLog(capture: { logPath: string }) {
@@ -21,10 +24,12 @@ function nodeCommand(scriptPath: string, argument: string) {
   return `"${process.execPath}" "${scriptPath}" "${argument}"`;
 }
 
-function runCaptureProcess(command: string, project: string, ticket: string): Promise<Readonly<{ status: number | null; output: string }>> {
+function runCaptureProcess(command: string, project: string, ticket: string, options: { worktree?: string; cwd?: string } = {}): Promise<Readonly<{ status: number | null; output: string }>> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(SIDEQUEST_DIR, 'lib', 'verify-capture.js'), '--base64', Buffer.from(command).toString('base64'), '--project', project, '--ticket', ticket], {
-      cwd: project,
+    const args = [path.join(SIDEQUEST_DIR, 'lib', 'verify-capture.js'), '--base64', Buffer.from(command).toString('base64'), '--project', project, '--ticket', ticket];
+    if (options.worktree) args.push('--worktree', options.worktree);
+    const child = spawn(process.execPath, args, {
+      cwd: options.cwd || project,
       env: process.env,
       windowsHide: true,
     });
@@ -60,6 +65,71 @@ function slotBlockerScript(started: string, observedSiblingCaptures: string, wai
 function readRecordedCaptures(project: string, ticket: string) {
   const reader = `const store = require(${JSON.stringify(path.join(SIDEQUEST_DIR, 'lib', 'store.js'))}); const target = store.findProject(process.argv.at(-2)); console.log(JSON.stringify(store.getTicket(target.slug, process.argv.at(-1)).verificationCaptures));`;
   return JSON.parse(execFileSync(process.execPath, ['--eval', reader, project, ticket], { encoding: 'utf8', env: process.env, windowsHide: true }));
+}
+
+function recordedCaptureCount(project: string, ticket: string): number {
+  const reader = `const store = require(${JSON.stringify(path.join(SIDEQUEST_DIR, 'lib', 'store.js'))}); const target = store.findProject(process.argv.at(-2)); const list = store.getTicket(target.slug, process.argv.at(-1)).verificationCaptures; console.log(JSON.stringify(Array.isArray(list) ? list.length : 0));`;
+  return JSON.parse(execFileSync(process.execPath, ['--eval', reader, project, ticket], { encoding: 'utf8', env: process.env, windowsHide: true }));
+}
+
+// GitHub #110 fixtures: an isolated-worktree dispatch whose ticket.dispatch.worktree is a real,
+// bound, linked git worktree -- the same shape store/dispatch.ts and worktree-isolation.test.ts
+// use, so the wrapper reads the exact dispatch record structure production code writes.
+const isolatedDispatchCategory = store.getCategory('codebase-exploration');
+store.setCategory(Object.assign({}, isolatedDispatchCategory, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));
+
+function initGitRepo(prefix: string): string {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: project, windowsHide: true });
+  fs.writeFileSync(path.join(project, 'README.md'), 'fixture\n');
+  execFileSync('git', ['add', '--all'], { cwd: project, windowsHide: true });
+  execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'fixture'], { cwd: project, windowsHide: true });
+  return project;
+}
+
+function commitHead(cwd: string): string {
+  return execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+// The store refuses to record a capture unless its command matches the ticket's own
+// pinned verify command, so every fixture ticket declares this and every capture in
+// these tests runs exactly this command.
+const ISOLATED_DISPATCH_VERIFY_COMMAND = 'git rev-parse HEAD';
+
+function setupIsolatedDispatch(agentId: string) {
+  const project = initGitRepo(`sq-verify-capture-worktree-fixture-${agentId}-`);
+  const { slug } = store.ensureProject(project);
+  const ticket = store.createTicket(slug, {
+    title: `isolated worktree fixture ${agentId}`,
+    category: 'codebase-exploration',
+    files: ['README.md'],
+    executorVerifyKind: 'command',
+    executorVerify: ISOLATED_DISPATCH_VERIFY_COMMAND,
+  });
+  const sessionId = `session-${agentId}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: false, sessionId });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId, agentName: agentId,
+  }).ok, true);
+  const worktree = worktrees.resolvedAgentWorktree(project, agentId);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  execFileSync('git', ['worktree', 'add', '--detach', '--quiet', worktree], { cwd: project, windowsHide: true });
+  const gitDirectoryValue = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
+  const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
+  worktreeLease.createCheckoutInstanceMarker(gitDirectory);
+  assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId, worktree).ok, true);
+  return {
+    project,
+    slug,
+    ticket: store.getTicket(slug, ticket.ref),
+    worktree,
+    cleanup() {
+      execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: project, windowsHide: true });
+      fs.rmSync(project, { recursive: true, force: true });
+    },
+  };
 }
 
 test('full-suite capture serializes sibling captures and records the queue wait', async () => {
@@ -475,5 +545,138 @@ test('verify capture preserves quoted absolute paths in verify commands', async 
   } finally {
     fs.rmSync(scriptPath, { force: true });
     deleteLog(capture);
+  }
+});
+
+// GitHub #110: the wrapper's candidate came from process.cwd() at invocation, with nothing
+// refusing a run from the wrong checkout of the same repository. An isolated-worktree
+// executor that ran the briefing command from the shared registered checkout got a
+// plausible-looking green recorded against a revision it never touched.
+
+test('(a) --worktree binds the capture cwd and recorded revision to the named worktree, even when cwd is elsewhere', async () => {
+  const fixture = setupIsolatedDispatch('worktree-flag-bound');
+  try {
+    // Diverge the shared checkout's HEAD from the bound worktree's HEAD after the worktree
+    // was created, so a capture reading the wrong cwd is distinguishable from one reading W's.
+    fs.writeFileSync(path.join(fixture.project, 'diverged.txt'), 'diverged\n');
+    execFileSync('git', ['add', '--all'], { cwd: fixture.project, windowsHide: true });
+    execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'diverge project head'], { cwd: fixture.project, windowsHide: true });
+    const projectHead = commitHead(fixture.project);
+    const worktreeHead = commitHead(fixture.worktree);
+    assert.notEqual(projectHead, worktreeHead, 'fixture must diverge the two HEADs to be meaningful');
+
+    const { status, output } = await runCaptureProcess(ISOLATED_DISPATCH_VERIFY_COMMAND, fixture.project, fixture.ticket.ref, {
+      worktree: fixture.worktree,
+      cwd: fixture.project,
+    });
+    assert.equal(status, 0, output);
+
+    const captures = readRecordedCaptures(fixture.project, fixture.ticket.ref);
+    const recorded = captures.at(-1);
+    assert.equal(worktreeLease.canonicalPath(recorded.worktree), worktreeLease.canonicalPath(fixture.worktree));
+    assert.equal(recorded.candidate.value, worktreeHead.toLowerCase());
+    assert.notEqual(recorded.candidate.value, projectHead.toLowerCase());
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('(b) without --worktree, cwd outside the ticket\'s bound worktree refuses and records nothing', async () => {
+  const fixture = setupIsolatedDispatch('worktree-refusal');
+  try {
+    const { status, output } = await runCaptureProcess(ISOLATED_DISPATCH_VERIFY_COMMAND, fixture.project, fixture.ticket.ref, {
+      cwd: fixture.project,
+    });
+    assert.notEqual(status, 0, output);
+    const canonicalWorktree = worktreeLease.canonicalPath(fixture.worktree);
+    assert.ok(output.includes(canonicalWorktree), output);
+    assert.ok(/run (it|this command) from/i.test(output), output);
+    assert.equal(recordedCaptureCount(fixture.project, fixture.ticket.ref), 0);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('(c) without --worktree, cwd already inside the ticket\'s bound worktree records as today', async () => {
+  const fixture = setupIsolatedDispatch('worktree-inside');
+  try {
+    const { status, output } = await runCaptureProcess(ISOLATED_DISPATCH_VERIFY_COMMAND, fixture.project, fixture.ticket.ref, {
+      cwd: fixture.worktree,
+    });
+    assert.equal(status, 0, output);
+    const captures = readRecordedCaptures(fixture.project, fixture.ticket.ref);
+    const recorded = captures.at(-1);
+    assert.equal(worktreeLease.canonicalPath(recorded.worktree), worktreeLease.canonicalPath(fixture.worktree));
+    assert.equal(recorded.candidate.value, commitHead(fixture.worktree).toLowerCase());
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('(e) --worktree naming any tree other than the bound one refuses and records nothing, even with the same HEAD', async () => {
+  const fixture = setupIsolatedDispatch('worktree-flag-mismatch');
+  try {
+    assert.equal(commitHead(fixture.project), commitHead(fixture.worktree), 'fixture must share HEAD so only the tree identity distinguishes the runs');
+    const { status, output } = await runCaptureProcess(ISOLATED_DISPATCH_VERIFY_COMMAND, fixture.project, fixture.ticket.ref, {
+      worktree: fixture.project,
+      cwd: fixture.worktree,
+    });
+    assert.notEqual(status, 0, output);
+    assert.ok(output.includes(worktreeLease.canonicalPath(fixture.worktree)), output);
+    assert.ok(output.includes(worktreeLease.canonicalPath(fixture.project)), output);
+    assert.equal(recordedCaptureCount(fixture.project, fixture.ticket.ref), 0);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('(f) a bound-worktree child directory whose name starts with two dots still counts as inside', async () => {
+  const fixture = setupIsolatedDispatch('worktree-dotdot-child');
+  try {
+    const child = path.join(fixture.worktree, '..valid');
+    fs.mkdirSync(child);
+    const { status, output } = await runCaptureProcess(ISOLATED_DISPATCH_VERIFY_COMMAND, fixture.project, fixture.ticket.ref, {
+      cwd: child,
+    });
+    assert.equal(status, 0, output);
+    assert.equal(recordedCaptureCount(fixture.project, fixture.ticket.ref), 1);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('(d) a working-tree-delivery ticket keeps its shared-checkout override unchanged', async () => {
+  const project = initGitRepo('sq-verify-capture-wtd-fixture-');
+  const { slug } = store.ensureProject(project);
+  store.setCategory({ id: 'repository-write-wtd-fixture', name: 'Repository write (fixture)', route: { model: 'sonnet', effort: 'medium' }, artifactRoots: [] });
+  const ticket = store.createTicket(slug, {
+    title: 'working-tree-delivery fixture',
+    category: 'repository-write-wtd-fixture',
+    files: ['README.md'],
+    workingTreeDelivery: true,
+    executorVerifyKind: 'command',
+    executorVerify: ISOLATED_DISPATCH_VERIFY_COMMAND,
+    source: 'mcp',
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true });
+  const claimed = store.claimTicket(slug, ticket.ref, 'wtd-owner', {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, source: 'mcp',
+  });
+  assert.equal(claimed.ok, true, JSON.stringify(claimed));
+  try {
+    const outsideCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-capture-wtd-cwd-'));
+    try {
+      const { status, output } = await runCaptureProcess(ISOLATED_DISPATCH_VERIFY_COMMAND, project, ticket.ref, { cwd: outsideCwd });
+      assert.equal(status, 0, output);
+      const captures = readRecordedCaptures(project, ticket.ref);
+      const recorded = captures.at(-1);
+      // Unchanged behaviour: the working-tree-delivery override still wins and runs the
+      // shared checkout, regardless of where the wrapper was invoked from.
+      assert.equal(worktreeLease.canonicalPath(recorded.worktree), worktreeLease.canonicalPath(project));
+    } finally {
+      fs.rmSync(outsideCwd, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
   }
 });
