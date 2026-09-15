@@ -989,6 +989,39 @@ test('integrate public surfaces honor a bounded verification waiver and refuse a
     store.getTicket(mcpFixture.slug, mcpFixture.ticket.ref).submission.integration.verify.diagnostics,
     mcpPayload.verify.diagnostics,
   );
+
+  // GitHub #109: a host that doesn't honor the (previously untyped)
+  // verificationWaiver schema may stringify the object instead of sending it
+  // as a top-level object. The handler tolerates exactly that one shape.
+  const mcpStringFixture = deliveryTicket('verify-skip-mcp-stringified', {
+    verify: nodeVerify("process.exit(7)"),
+  });
+  const mcpStringResponse = await mcp.handleRequest({
+    jsonrpc: '2.0',
+    id: 2248,
+    method: 'tools/call',
+    params: {
+      name: 'integrate',
+      arguments: {
+        project: mcpStringFixture.fixture.repo,
+        ref: mcpStringFixture.ticket.ref,
+        by: 'orchestrator',
+        skipVerify: true,
+        verificationWaiver: JSON.stringify({
+          authority: 'release-manager',
+          reason: 'vendor verifier outage',
+          affectedGate: 'integration-suite',
+          scope: mcpStringFixture.ticket.ref,
+        }),
+      },
+    },
+  });
+  assert.ok(mcpStringResponse.result, JSON.stringify(mcpStringResponse));
+  assert.ok(!mcpStringResponse.result.isError, mcpStringResponse.result.content?.[0]?.text);
+  const mcpStringPayload = JSON.parse(mcpStringResponse.result.content[0].text);
+  assert.equal(mcpStringPayload.ok, true, JSON.stringify(mcpStringPayload));
+  assert.equal(mcpStringPayload.verify.status, 'skipped');
+  assert.equal(mcpStringPayload.verify.diagnostics[0].code, 'verification_waived');
 });
 
 function makeUnmergedTarget(repo: string, label: string) {
