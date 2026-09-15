@@ -216,12 +216,14 @@ function createDispatch(dependencies) {
       return null;
     }
   }
-  function isolatedTreeRuntimeRefusal(ticket, projectPath, runtimeCwd) {
+  function isolatedTreeRuntimeRefusal(ticket, projectPath, runtimeCwd, slug, sessionId) {
     if (!runtimeCwd || !projectPath) return null;
     const project = repositoryIdentity(projectPath);
     const runtime = repositoryIdentity(runtimeCwd);
     if (!project || !runtime || project === runtime) return null;
-    return `prepare dispatch: refused ${ticket.ref}; an isolated worktree is created by this session's WorktreeCreate hook, which resolves the board from the spawning checkout ${runtimeCwd} rather than from ${projectPath}. Its worktree lease would refuse creation with dispatch_binding_unavailable and the executor would never start. Dispatch it with sharedTree:true, or from a session rooted in ${projectPath}.`;
+    const competing = launchedIsolatedSessionProjects(String(sessionId || "").trim(), slug);
+    if (!competing.length) return null;
+    return `prepare dispatch: refused ${ticket.ref}; its project ${projectPath} is a different repository from this session's checkout ${runtimeCwd}, and this session already owns launched isolated dispatches on another board (${competing.map((entry) => entry.path).join(", ")}). WorktreeCreate follows the session id to one board, so with several live it cannot tell which ticket it is creating for and would cut this worktree from the wrong repository. Dispatch ${ticket.ref} once those are terminal, leaving ${projectPath} as this session's only isolated board. sharedTree:true stays available but runs the executor and its commit in ${runtimeCwd}; only its verification is redirected to ${projectPath}.`;
   }
   function dispatchPreparationAttribution(opts) {
     return {
@@ -1328,7 +1330,7 @@ function createDispatch(dependencies) {
         if (t.workingTreeDelivery === true && !sharedTree) {
           throw new Error(`prepare dispatch: ${t.ref} declares a working-tree deliverable and must run in the shared checkout. Re-dispatch with sharedTree:true.`);
         }
-        const runtimeRefusal = sharedTree ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd) : isolatedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd);
+        const runtimeRefusal = sharedTree ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd) : isolatedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd, slug, opts.sessionId);
         if (runtimeRefusal) throw new Error(runtimeRefusal);
         const workingTreeDelivery = sharedTree && t.workingTreeDelivery === true && effectiveFiles.length > 0;
         const verificationRequirement2 = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ""));
@@ -1775,17 +1777,27 @@ function createDispatch(dependencies) {
     if (!state.worktree || canonicalPath(state.worktree) !== worktree) return "canonical_worktree";
     return "dispatch_binding_unavailable";
   }
-  function launchedIsolatedDispatchOnAnotherProject(slug, sessionId) {
+  function launchedIsolatedSessionProjects(sessionId, skipSlug) {
+    const owned = [];
+    if (!sessionId) return owned;
     for (const project of listProjects({ all: true })) {
-      if (project.slug === slug) continue;
+      if (!project?.slug || !project.path || project.slug === skipSlug) continue;
       for (const candidate of listTickets(project.slug)) {
         const state = dispatchState(candidate);
         if (state?.sessionId === sessionId && state.sharedTree === false && state.outcome === "launched" && !state.terminalAt) {
-          return state;
+          owned.push({ slug: project.slug, path: String(project.path), state });
+          break;
         }
       }
     }
-    return null;
+    return owned;
+  }
+  function launchedIsolatedDispatchOnAnotherProject(slug, sessionId) {
+    return launchedIsolatedSessionProjects(sessionId, slug)[0]?.state || null;
+  }
+  function isolatedDispatchRepositoryForSession(sessionId) {
+    const boards = launchedIsolatedSessionProjects(String(sessionId || "").trim());
+    return boards.length === 1 ? boards[0].path : null;
   }
   function unavailableWorktreeBinding(slug, candidates = [], sessionId, worktree) {
     const nearest = candidates.find(({ state: state2 }) => state2.sessionId === sessionId) || candidates.find(({ state: state2 }) => state2.worktree && canonicalPath(state2.worktree) === worktree);
@@ -2531,6 +2543,7 @@ function createDispatch(dependencies) {
     dispatchState,
     executorClaimDispatchRefusal,
     sharedTreeRuntimeRefusal,
+    isolatedDispatchRepositoryForSession,
     sharedTreeArtifactRequested,
     categoryArtifactRoot,
     sharedTreeArtifactMode,

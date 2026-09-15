@@ -44,7 +44,7 @@ function worktreeBindingComparison(failure) {
   const count = `${candidates} dispatch record${candidates === 1 ? "" : "s"}`;
   const comparison = `hook session id ${abbreviatedSessionId(failure?.suppliedSessionId)} against recorded session id ${abbreviatedSessionId(failure?.recordedSessionId)}; hook canonical worktree ${recordedWorktree(failure?.suppliedWorktree)} against recorded canonical worktree ${recordedWorktree(failure?.recordedWorktree)}`;
   if (failure?.crossProject) {
-    return `Considered ${count} on this board. The nearest dispatch failed predicate \`different_project\`: ${comparison}. The matching launched isolated dispatch is recorded for a different project, so WorktreeCreate cannot bind it here: dispatch it with sharedTree:true, or from a session rooted in that project.`;
+    return `Considered ${count} on this board. The nearest dispatch failed predicate \`different_project\`: ${comparison}. WorktreeCreate follows the session id to the board that reserved the creation, but this session owns launched isolated dispatches on more than one board, so it could not tell which and fell back to the spawning checkout. Let the other boards' isolated dispatches reach a terminal state, then re-dispatch this one so the session owns isolated dispatches on a single board.`;
   }
   if (failure?.predicate) {
     return `Considered ${count}. The nearest dispatch failed predicate \`${failure.predicate}\`: ${comparison}. Run \`sidequest pulse <ref>\` and re-dispatch with recovery evidence.`;

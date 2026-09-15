@@ -1970,12 +1970,14 @@ test('creation bindings reserve one launched dispatch each within a shared sessi
   }
 });
 
-// SQ-2570. The WorktreeCreate hook resolves the board from the spawning
+// SQ-2570/SQ-2884. WorktreeCreate used to resolve the board from the spawning
 // session's own checkout, so a worktree dispatch prepared for another repository
 // handed back a spawn spec whose lease refused creation and an executor that
-// never started. Each runtime shape runs as its own prepared dispatch with its
-// own catch, so one refusal cannot hide the others.
-test('isolated dispatch refuses a spawning runtime outside the board repository', () => {
+// never started. The hook now follows the session id to the board that reserved
+// the creation, so a foreign spawning runtime is no longer a refusal while this
+// session owns isolated dispatches on one board. Each runtime shape runs as its
+// own prepared dispatch with its own catch, so one refusal cannot hide the others.
+test('isolated dispatch admits a spawning runtime outside the board repository', () => {
   const foreign = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-foreign-repo-'));
   execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: foreign });
   execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: foreign });
@@ -2007,15 +2009,11 @@ test('isolated dispatch refuses a spawning runtime outside the board repository'
 
   try {
     assert.deepEqual(outcomes.map((entry: any) => `${entry.name}: ${entry.outcome}`), [
-      'another repository: refused',
+      'another repository: isolated',
       'the project root: isolated',
       'a linked worktree of the project: isolated',
       'an unreported runtime: isolated',
     ]);
-    const refusal = String((outcomes[0] as any).message);
-    assert.match(refusal, /dispatch_binding_unavailable/);
-    assert.match(refusal, /sharedTree:true/);
-    assert.ok(refusal.includes(foreign), 'the refusal names the spawning checkout');
   } finally {
     for (const ref of dispatched) {
       assert.equal(store.releaseTicket(slug, ref, 'cross-project-runtime-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);

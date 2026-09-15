@@ -78,24 +78,24 @@ function isFullSuiteCommand(command: string): boolean {
   return /(?:^|[\s&;()])npm\s+run\s+test:full(?:\s|$)/.test(command);
 }
 
-function captureSlotProjectRoot(project: string): string {
+function repositoryRoot(directory: string): string {
   try {
     const commonGitDirectory = String(execFileSync('git', ['rev-parse', '--git-common-dir'], {
-      cwd: project,
+      cwd: directory,
       encoding: 'utf8',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'ignore'],
     })).trim();
-    const commonGitPath = path.resolve(project, commonGitDirectory);
-    return canonicalPath(path.basename(commonGitPath).toLowerCase() === '.git' ? path.dirname(commonGitPath) : project);
+    const commonGitPath = path.resolve(directory, commonGitDirectory);
+    return canonicalPath(path.basename(commonGitPath).toLowerCase() === '.git' ? path.dirname(commonGitPath) : directory);
   } catch {
-    return canonicalPath(project);
+    return canonicalPath(directory);
   }
 }
 
 function captureSlotDirectory(project: string): string {
   // Linked worktrees share one repository runtime, so their full-suite captures share a slot.
-  const projectHash = createHash('sha256').update(captureSlotProjectRoot(project)).digest('hex');
+  const projectHash = createHash('sha256').update(repositoryRoot(project)).digest('hex');
   return path.join(os.tmpdir(), 'sidequest-verify-capture-slots', projectHash);
 }
 
@@ -459,7 +459,13 @@ function captureWorkingDirectory(target: CaptureTarget, cwd: string): string {
   if (!project) return cwd;
   const store = require('./store.js') as VerificationCaptureStore;
   const ticket = store.getTicket(project.slug, target.ticket);
-  return store.workingTreeDeliveryCandidate(project.slug, ticket) ? project.path : cwd;
+  if (store.workingTreeDeliveryCandidate(project.slug, ticket)) return project.path;
+  // A cross-project dispatch runs its executor in the spawning checkout, where the
+  // ticket's files do not exist. A doc- or lint-style verify built from negated
+  // greps then matches nothing, every negation succeeds, and the capture records a
+  // pass that proves nothing (SQ-2884). Verification belongs to the ticket's own
+  // repository; linked worktrees of it share that repository and stay put.
+  return repositoryRoot(cwd) === repositoryRoot(project.path) ? cwd : project.path;
 }
 
 async function runCapturedVerification(command: string, target: CaptureTarget | null, cwd = process.cwd(), fileSystem: CaptureSlotFileSystem = fs) {
@@ -499,10 +505,27 @@ function verifiedWorktreeIsClean(cwd: string) {
   }
 }
 
+function foreignCaptureRepository(projectPath: string, cwd: string): string | null {
+  const ticketRepository = repositoryRoot(projectPath);
+  return repositoryRoot(cwd) === ticketRepository ? null : ticketRepository;
+}
+
 function recordCapture(target: CaptureTarget, capture: VerifyCapture, cwd: string) {
   const store = require('./store.js') as VerificationCaptureStore;
   const project = store.findProject(target.project);
   if (!project.ok || !project.slug) return { ok: false, reason: 'project_not_found' };
+  const projectPath = String(project.meta?.path || '').trim();
+  // The capture's own status says nothing about where it ran, so a run outside the
+  // ticket's repository is refused rather than certified: it never saw the files
+  // the ticket changed (SQ-2884).
+  const ticketRepository = projectPath ? foreignCaptureRepository(projectPath, cwd) : null;
+  if (ticketRepository) {
+    return {
+      ok: false,
+      reason: 'verification_capture_foreign_repository',
+      message: `Verification capture for ${target.ticket} ran in ${cwd}, which is not the ticket's repository ${ticketRepository}. A verify that never saw the ticket's files proves nothing about them, so nothing is recorded. Run the pinned verifier from the ticket's own checkout.`,
+    };
+  }
   const ticket = store.getTicket(project.slug, target.ticket);
   const workingTreeCandidate = store.workingTreeDeliveryCandidate(project.slug, ticket);
   const candidate = workingTreeCandidate?.candidate || verifiedRevision(cwd);

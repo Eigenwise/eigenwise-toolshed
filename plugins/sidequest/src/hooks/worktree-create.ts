@@ -37,6 +37,22 @@ function repositoryFor(cwd: string): string {
   return path.resolve(git(cwd, ['rev-parse', '--show-toplevel']));
 }
 
+// This hook only learns the spawning checkout's cwd, so a dispatch prepared for a
+// sibling project reserved a creation no WorktreeCreate could bind and its executor
+// died before it started (SQ-2884). The session's own reservation names the board it
+// belongs to. Consulted only after the spawning checkout fails to bind, so the
+// common case pays nothing for a scan across every board; an ambiguous session
+// resolves to nothing and prepareDispatch refuses it.
+function reservedDispatchRepository(sessionId: string): string | null {
+  try {
+    const store = require(runtimeModule('store')) as { isolatedDispatchRepositoryForSession: (session: string) => string | null };
+    const reserved = store.isolatedDispatchRepositoryForSession(sessionId);
+    return reserved ? path.resolve(reserved) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function samePath(left: string, right: string): boolean {
   return leaseKernel.canonicalPath(left) === leaseKernel.canonicalPath(right);
 }
@@ -229,7 +245,7 @@ async function createWorktreeMain(): Promise<void> {
   const cwd = stringField(input, 'cwd') || process.cwd();
   if (!name) throw new Error('WorktreeCreate requires a worktree name.');
   if (!sessionId) throw new Error('WorktreeCreate requires a dispatch session binding.');
-  const repository = repositoryFor(cwd);
+  let repository = repositoryFor(cwd);
   const worktrees = require(runtimeModule('worktrees')) as {
     namedWorktreePath: (repo: string, worktreeName: string) => string;
     provisionWorktree: (
@@ -239,8 +255,17 @@ async function createWorktreeMain(): Promise<void> {
       options: { setupTimeoutMs?: number; onDependencyLink?: (link: { relativePath: string; target: string }) => void },
     ) => Promise<{ command: string; reason: string; stderrTail: string } | null>;
   };
-  const target = worktrees.namedWorktreePath(repository, name);
-  const binding = bindCreation(repository, sessionId, target);
+  let binding = bindCreation(repository, sessionId, worktrees.namedWorktreePath(repository, name));
+  if (!binding.ok) {
+    const reserved = reservedDispatchRepository(sessionId);
+    if (reserved && !samePath(reserved, repository)) {
+      const reservedBinding = bindCreation(reserved, sessionId, worktrees.namedWorktreePath(reserved, name));
+      if (reservedBinding.ok) {
+        repository = reserved;
+        binding = reservedBinding;
+      }
+    }
+  }
   if (!binding.ok || !binding.ref || !binding.baseline || !binding.repository || !binding.worktree) {
     throw new Error(worktreeCreationRefusalMessage(String(binding.reason || ''), repository, binding.binding));
   }

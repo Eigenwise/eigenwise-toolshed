@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 
-const { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureSlotDirectory } = require('../lib/verify-capture.js');
+const { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureSlotDirectory, recordCapture } = require('../lib/verify-capture.js');
 const { runProcessVerification } = require('../lib/ports/process.js');
 const store = require('../lib/store.js');
 const SIDEQUEST_DIR = path.resolve(__dirname, '..');
@@ -347,6 +347,84 @@ test('verify capture returns a timeout with partial output', async () => {
     assert.match(fs.readFileSync(capture.logPath, 'utf8'), /partial-output/);
   } finally {
     deleteLog(capture);
+  }
+});
+
+// SQ-2884. A cross-project dispatch runs its executor in the spawning checkout,
+// where the ticket's files do not exist. That is the input which makes a false pass
+// look real: every grep in a negated doc check fails to match, every negation
+// succeeds, and the capture records passed with exit 0 over a repository nothing
+// read. Both halves of the fix are checked against the same fixture.
+function siblingRepositories(prefix: string) {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  const seed = (repository: string) => {
+    fs.mkdirSync(repository, { recursive: true });
+    execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: repository, windowsHide: true });
+    fs.writeFileSync(path.join(repository, 'seed'), 'seed\n');
+    execFileSync('git', ['add', '--all'], { cwd: repository, windowsHide: true });
+    execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'fixture'], { cwd: repository, windowsHide: true });
+  };
+  const parent = path.join(root, 'parent');
+  const child = path.join(root, 'child');
+  seed(parent);
+  seed(child);
+  return { root, parent, child };
+}
+
+function negatedGrepTicket(child: string, phrase: string) {
+  fs.mkdirSync(path.join(child, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(child, 'docs', 'NOTES.md'), `the ${phrase} is documented here\n`);
+  const boardProject = store.ensureProject(child);
+  const command = `cd . && ! grep -rn "${phrase}" docs/`;
+  const ticket = store.createTicket(boardProject.slug, {
+    title: 'cross-project negated grep verification',
+    executorVerifyKind: 'command',
+    executorVerify: command,
+  });
+  return { command, ticket };
+}
+
+test('a negated-grep verify runs in the ticket repository, not the spawning checkout', async () => {
+  const { root, parent, child } = siblingRepositories('sq-verify-capture-cross-project-');
+  const { command, ticket } = negatedGrepTicket(child, 'banned-phrase');
+  try {
+    const falsePass = await runVerifyCapture(command, parent);
+    try {
+      assert.deepEqual({ status: falsePass.status, exitCode: falsePass.exitCode }, { status: 'passed', exitCode: 0 }, 'the reproduction only matters while this command passes in the wrong repository');
+    } finally {
+      deleteLog(falsePass);
+    }
+
+    const { capture, recorded } = await runCapturedVerification(command, { project: child, ticket: ticket.ref }, parent);
+    try {
+      assert.equal(capture.status, 'failed_suite');
+      assert.ok(recorded?.ok, recorded?.reason);
+      const captured = readRecordedCaptures(child, ticket.ref).at(-1);
+      assert.equal(captured.status, 'failed_suite');
+      assert.equal(path.resolve(captured.worktree), path.resolve(child));
+    } finally {
+      deleteLog(capture);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a capture that ran outside the ticket repository is not recorded', () => {
+  const { root, parent, child } = siblingRepositories('sq-verify-capture-foreign-repo-');
+  const { command, ticket } = negatedGrepTicket(child, 'foreign-phrase');
+  const target = { project: child, ticket: ticket.ref };
+  const passing = { command, status: 'passed', exitCode: 0, logPath: null, shell: 'fixture' };
+  try {
+    assert.equal(recordCapture(target, passing, child).ok, true);
+
+    const refused = recordCapture(target, passing, parent);
+    assert.equal(refused.ok, false);
+    assert.equal(refused.reason, 'verification_capture_foreign_repository');
+    assert.match(refused.message, /proves nothing about them/);
+    assert.equal(readRecordedCaptures(child, ticket.ref).length, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
