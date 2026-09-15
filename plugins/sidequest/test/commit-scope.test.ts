@@ -962,6 +962,43 @@ test('scopeRequest and commit refuse a foreign release fragment with the same ru
   );
 });
 
+// SQ-2925: foreignReleaseFragmentRefusalMessage must throw rather than interpolate a missing ref.
+test('foreignReleaseFragmentRefusalMessage throws a clear internal error instead of interpolating a missing ref', () => {
+  assert.throws(
+    () => commitScope.foreignReleaseFragmentRefusalMessage('scopeRequest', undefined, ['.release/unreleased/SQ-1.md']),
+    (error: Error) => error.message.includes('foreignReleaseFragmentRefusalMessage: missing or invalid ticket ref'),
+  );
+});
+
+// SQ-2925: a scopeRequest auto-approval used to call the internal scope validator with no
+// ticket ref, which read the ticket's own already-declared release fragment as foreign and
+// refused with "declared file scope: refused undefined; only null is implicitly writable".
+test('scopeRequest auto-approval does not misread the ticket\'s own declared release fragment as foreign', () => {
+  const root = repo();
+  const slug = store.ensureProject(root, 'own fragment auto-approval').slug;
+  store.setBoardConfig(slug, { autoApproveScope: ['lib/*.js'] });
+  const ticket = ticketHandler('add')({
+    project: root,
+    title: 'own fragment auto-approval',
+    files: ['lib/original.js'],
+    complexity: 1,
+    why: 'scopeRequest auto-approval must not read a missing ticketRef as a foreign fragment.',
+  });
+  const ownFragment = `.release/unreleased/${ticket.ref}.md`;
+  ticketHandler('update')({ project: root, ref: ticket.ref, files: ['lib/original.js', ownFragment] });
+  assert.deepEqual(store.getTicket(slug, ticket.ref).files, ['lib/original.js', ownFragment]);
+
+  const by = 'own-fragment-worker';
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'The handler regression fixture claims the ticket directly.' }).ok, true);
+
+  const scopeRequested = lifecycleHandler('scopeRequest')({ project: root, ref: ticket.ref, by, files: ['lib/granted.js'] });
+
+  assert.equal(scopeRequested.ok, true);
+  assert.equal(scopeRequested.state, 'granted');
+  assert.deepEqual(scopeRequested.approved, ['lib/granted.js']);
+  assert.deepEqual(store.getTicket(slug, ticket.ref).files, ['lib/original.js', ownFragment, 'lib/granted.js']);
+});
+
 // GitHub #51 (SQ-2717): in remote mode the frozen remote-tracking ref is an ADDITIONAL
 // reachability authority. These fixtures never point the remote ref at the candidate
 // itself, so a reverted union cannot pass them through direct ancestry (SQ-2711).
