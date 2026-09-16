@@ -2076,10 +2076,6 @@
           "type": "integer",
           "minimum": 1
         },
-        "worktreeRecoveryRetentionMaxPerAgent": {
-          "type": "integer",
-          "minimum": 1
-        },
         "autoApproveTestScope": {
           "type": "boolean"
         },

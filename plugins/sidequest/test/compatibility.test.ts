@@ -156,6 +156,7 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.match(byName.get('integrate')?.inputSchema.properties?.deliveryInteractionCommit?.description ?? '', /Reviewed descendant/);
   assert.deepEqual(byName.get('groomClose')?.inputSchema.properties?.deliveryMethod?.enum, ['reset', 'working-tree', 'manual']);
   assert.deepEqual(byName.get('integrate')?.inputSchema.properties?.deliveryMethod?.enum, ['reset', 'working-tree', 'manual']);
+  assert.equal(byName.get('board_config')?.inputSchema.properties?.worktreeRecoveryRetentionMaxPerAgent, undefined);
 
   const payload = JSON.stringify(descriptors);
   const payloadBytes = Buffer.byteLength(payload, 'utf8');

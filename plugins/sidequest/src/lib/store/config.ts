@@ -2,7 +2,6 @@
 
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 const DEFAULT_WORKTREE_RECOVERY_RETENTION_AGE_HOURS = 14 * 24;
-const DEFAULT_WORKTREE_RECOVERY_RETENTION_MAX_PER_AGENT = 3;
 
 function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, integrationTargetRef, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }: any) {
 function defaultProjectName(absPath?: any) {
@@ -189,15 +188,6 @@ function normalizeWorktreeRecoveryRetentionAgeHours(value?: any) {
   return hours;
 }
 
-function normalizeWorktreeRecoveryRetentionMaxPerAgent(value?: any) {
-  if (value == null || value === '') return DEFAULT_WORKTREE_RECOVERY_RETENTION_MAX_PER_AGENT;
-  const count = Number(value);
-  if (!Number.isInteger(count) || count < 1) {
-    throw new Error('worktreeRecoveryRetentionMaxPerAgent must be a whole number of at least 1.');
-  }
-  return count;
-}
-
 function normalizeAutoApproveTestScope(value?: any) {
   if (value == null) return true;
   if (typeof value !== 'boolean') throw new Error('autoApproveTestScope must be a boolean.');
@@ -343,7 +333,6 @@ function boardConfig(slug?: any) {
     worktreeBase: normalizeWorktreeBase(meta.worktreeBase),
     notIntegratedSalvageAgeHours: normalizeNotIntegratedSalvageAgeHours(meta.notIntegratedSalvageAgeHours),
     worktreeRecoveryRetentionAgeHours: normalizeWorktreeRecoveryRetentionAgeHours(meta.worktreeRecoveryRetentionAgeHours),
-    worktreeRecoveryRetentionMaxPerAgent: normalizeWorktreeRecoveryRetentionMaxPerAgent(meta.worktreeRecoveryRetentionMaxPerAgent),
     autoApproveTestScope: normalizeAutoApproveTestScope(meta.autoApproveTestScope == null ? meta.autoApprovePluginTests : meta.autoApproveTestScope),
     autoApproveScope: normalizeAutoApproveScope(meta.autoApproveScope),
     worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
@@ -405,9 +394,6 @@ function setBoardConfig(slug?: any, patch?: any) {
     if (Object.prototype.hasOwnProperty.call(patch, 'worktreeRecoveryRetentionAgeHours')) {
       meta.worktreeRecoveryRetentionAgeHours = normalizeWorktreeRecoveryRetentionAgeHours(patch.worktreeRecoveryRetentionAgeHours);
     }
-    if (Object.prototype.hasOwnProperty.call(patch, 'worktreeRecoveryRetentionMaxPerAgent')) {
-      meta.worktreeRecoveryRetentionMaxPerAgent = normalizeWorktreeRecoveryRetentionMaxPerAgent(patch.worktreeRecoveryRetentionMaxPerAgent);
-    }
     if (Object.prototype.hasOwnProperty.call(patch, 'autoApproveTestScope')) {
       meta.autoApproveTestScope = normalizeAutoApproveTestScope(patch.autoApproveTestScope);
     }
@@ -437,7 +423,7 @@ function effectiveScope(slug?: any, filesOrTicket?: any) {
 }
 
 
-  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeWorktreeBase, normalizeNotIntegratedSalvageAgeHours, normalizeWorktreeRecoveryRetentionAgeHours, normalizeWorktreeRecoveryRetentionMaxPerAgent, normalizeAutoApproveTestScope, normalizeAutoApproveScope, normalizeWorktreeSetup, normalizeWorktreeDependencyPaths, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
+  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeWorktreeBase, normalizeNotIntegratedSalvageAgeHours, normalizeWorktreeRecoveryRetentionAgeHours, normalizeAutoApproveTestScope, normalizeAutoApproveScope, normalizeWorktreeSetup, normalizeWorktreeDependencyPaths, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
 }
 
 module.exports = { createConfig };
