@@ -115,6 +115,7 @@ async function cleanupDeliveredWorktree(slug, projectPath, ticket, claimWasLive 
       execute: true,
       currentPath: store.nearestRepoRoot(process.cwd()),
       integrationTarget: store.ticketIntegrationTarget(slug, ticket),
+      minAgeMs: 0,
       ticketRef: ticket.ref
     });
   } catch (_) {
@@ -549,6 +550,7 @@ const tools = [
             execute: true,
             currentPath: store.nearestRepoRoot(process.cwd()),
             integrationTarget,
+            minAgeMs: 0,
             ticketRef: res.ticket.ref
           });
         } catch (error) {

@@ -1,6 +1,7 @@
 const path = require('path');
 const os = require('os');
 const fs = require('node:fs/promises');
+const { existsSync } = require('node:fs');
 const http = require('http');
 const { spawn, execFileSync } = require('child_process');
 const store = require('../lib/store');
@@ -37,6 +38,7 @@ type WorktreeSweepOutputEntry = {
   ahead: number | null;
   patchEquivalent: boolean | null;
   ageMs: number | null;
+  quarantine?: string;
 };
 
 type WorktreeSweepProgress = {
@@ -63,7 +65,8 @@ function worktreeSweepEntryLine(entry: WorktreeSweepOutputEntry): string {
   const ahead = entry.ahead == null ? 'unavailable' : entry.ahead;
   const patchEquivalent = entry.patchEquivalent == null ? 'unavailable' : entry.patchEquivalent;
   const age = entry.ageMs == null ? 'unavailable' : `${Math.round(entry.ageMs / 60000)}m`;
-  return `  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}; ${cleanliness}; ahead ${ahead}; patch-equivalent ${patchEquivalent}; age ${age}]`;
+  const quarantine = entry.quarantine ? `; quarantined ${entry.quarantine}` : '';
+  return `  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}; ${cleanliness}; ahead ${ahead}; patch-equivalent ${patchEquivalent}; age ${age}${quarantine}]`;
 }
 
 function formatBytes(bytes: number | null | undefined): string {
@@ -80,8 +83,36 @@ function formatBytes(bytes: number | null | undefined): string {
 
 function printStorage(storage: any): void {
   console.log(`  worktrees: ${formatBytes(storage.worktrees.bytes)} (${storage.worktrees.path})`);
-  console.log(`  backups: ${formatBytes(storage.backups.bytes)} (${storage.backups.path})`);
+  for (const directory of storage.worktrees.directories || []) {
+    console.log(`    ${formatBytes(directory.bytes)} ${directory.path}`);
+  }
   console.log(`  quarantine: ${formatBytes(storage.quarantine.bytes)} (${storage.quarantine.path})`);
+  const total = [storage.worktrees.bytes, storage.quarantine.bytes]
+    .filter((bytes: number | null) => bytes != null)
+    .reduce((sum: number, bytes: number) => sum + bytes, 0);
+  console.log(`  total: ${formatBytes(total)}`);
+}
+
+function printSweepResult(result: any, name: string, minAgeHours: number, recoveryRetentionAgeHours: number): void {
+  console.log(`worktrees sweep: ${result.dryRun ? 'dry run' : 'executed'} for ${name} (minimum age ${minAgeHours}h; quarantine retention ${recoveryRetentionAgeHours}h by age alone)`);
+  if (result.upstreamFallback) console.log(`  the configured integration ref is unavailable; settled checks used the fallback ${result.upstream}.`);
+  if (result.storage.worktrees.bytes != null) printStorage(result.storage);
+  for (const entry of result.entries) console.log(worktreeSweepEntryLine(entry));
+  for (const entry of result.strayDirectories || []) {
+    console.log(`  ${entry.action.toUpperCase()} STRAY ${entry.path} [${entry.reason}; ${entry.entries} entr${entry.entries === 1 ? 'y' : 'ies'}${entry.repository ? `; repository ${entry.repository}` : ''}]`);
+  }
+  for (const entry of result.recovery.quarantine.entries.filter((entry: any) => entry.action === 'remove')) {
+    console.log(`  REMOVE ${entry.store.toUpperCase()} ${entry.path} [${entry.reason}; ${formatBytes(entry.sizeBytes)}]`);
+  }
+  if (result.dryRun) console.log('  pass --yes to remove the planned worktree and recovery entries.');
+  if (result.removed.length) console.log(`  removed ${result.counts.removedWorktrees} worktree(s) and deleted ${result.counts.deletedBranches} branch(es).`);
+  for (const entry of result.retainedBranches || []) console.log(`  KEPT BRANCH ${entry.branch} from ${entry.path}; its commits are not on ${result.upstream}.`);
+  if (result.counts.removedStrayDirectories) console.log(`  removed ${result.counts.removedStrayDirectories} empty stray worktree directory(s).`);
+  if (result.counts.removedRecoveryEntries) console.log(`  removed ${result.counts.removedRecoveryEntries} recovery entry(s), reclaimed ${formatBytes(result.counts.reclaimedBytes)}.`);
+  for (const entry of result.salvaged || []) console.log(`  SALVAGED ${entry.path} at ${entry.ref}; recover with ${entry.recovery}`);
+  if (result.prunedOrphanBranches.length) console.log(`  pruned ${result.counts.prunedOrphanBranches} orphan worktree branch(es).`);
+  if (result.remainingCandidates) console.log(`  ${result.remainingCandidates} candidate(s) remain past this run's limit; re-run to continue.`);
+  for (const failure of result.failures) console.log(`  ERROR ${failure.path || 'prune'}: ${failure.message}`);
 }
 
 async function cmdWorktrees(opts: any, positional: any) {
@@ -106,51 +137,62 @@ async function cmdWorktrees(opts: any, positional: any) {
   const recoveryRetentionAgeHours = opts['recovery-retention-age-hours'] == null
     ? Number(config.worktreeRecoveryRetentionAgeHours || 14 * 24)
     : Number(opts['recovery-retention-age-hours']);
-  const recoveryRetentionMaxPerAgent = opts['recovery-retention-max-per-agent'] == null
-    ? Number(config.worktreeRecoveryRetentionMaxPerAgent || 3)
-    : Number(opts['recovery-retention-max-per-agent']);
   if (!Number.isFinite(recoveryRetentionAgeHours) || recoveryRetentionAgeHours < 0) {
     fail('worktrees sweep: --recovery-retention-age-hours must be a non-negative number.');
   }
-  if (!Number.isInteger(recoveryRetentionMaxPerAgent) || recoveryRetentionMaxPerAgent < 1) {
-    fail('worktrees sweep: --recovery-retention-max-per-agent must be a whole number of at least 1.');
-  }
-  let result;
-  try {
-    result = await worktrees.sweep(meta.path, store.worktreeGcTickets(), {
-      execute: !!opts.yes && !opts['dry-run'],
-      currentPath: store.nearestRepoRoot(process.cwd()),
-      integrationTarget: store.integrationTarget(slug),
-      minAgeMs: minAgeHours * 60 * 60 * 1000,
-      recoveryRetentionAgeMs: recoveryRetentionAgeHours * 60 * 60 * 1000,
-      recoveryRetentionMaxPerAgent,
-      includeStoreUsage: true,
-      onProgress: (progress: WorktreeSweepProgress) => {
-        const output = `${worktreeSweepProgressLine(progress)}\n`;
-        (opts.json ? process.stderr : process.stdout).write(output);
-      },
-    });
-  } catch (error: any) {
-    fail(`worktrees: ${(error && error.message) || error}`);
+  // A missing integration ref used to abort the whole sweep for that project, which
+  // is why projects with a stale integrationBranch never reclaimed anything; the
+  // sweep falls back to origin's default or HEAD and says so (SQ-2924).
+  const integrationTargetOrFallback = (projectSlug: string) => {
+    try {
+      return store.integrationTarget(projectSlug);
+    } catch (_) {
+      return null;
+    }
+  };
+  const targets = opts['all-projects']
+    ? store.listProjects({ all: true })
+      .filter((project: any) => project && project.slug && project.path && existsSync(project.path))
+      .sort((left: any, right: any) => String(left.slug).localeCompare(String(right.slug)))
+      .map((project: any) => ({ slug: project.slug, name: project.name || project.slug, path: project.path }))
+    : [{ slug, name: meta.name, path: meta.path }];
+  const results: any[] = [];
+  for (const [index, target] of targets.entries()) {
+    let result;
+    try {
+      result = await worktrees.sweep(target.path, store.worktreeGcTickets(), {
+        execute: !!opts.yes && !opts['dry-run'],
+        currentPath: store.nearestRepoRoot(process.cwd()),
+        integrationTarget: integrationTargetOrFallback(target.slug),
+        minAgeMs: minAgeHours * 60 * 60 * 1000,
+        recoveryRetentionAgeMs: recoveryRetentionAgeHours * 60 * 60 * 1000,
+        // The store lives in one shared home, so measuring it once per run is
+        // enough; repeating the walk per project is just slower.
+        includeStoreUsage: index === 0,
+        onProgress: (progress: WorktreeSweepProgress) => {
+          const output = `${worktreeSweepProgressLine(progress)}\n`;
+          (opts.json ? process.stderr : process.stdout).write(output);
+        },
+      });
+    } catch (error: any) {
+      if (!opts['all-projects']) fail(`worktrees: ${(error && error.message) || error}`);
+      result = { project: target.slug, failures: [{ path: target.path, message: (error && error.message) || String(error) }] };
+    }
+    results.push(Object.assign({ project: target.slug }, result));
   }
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, result), null, 2) + '\n');
-    if (result.failures.length) process.exitCode = 1;
+    process.stdout.write(JSON.stringify(opts['all-projects'] ? { projects: results } : results[0], null, 2) + '\n');
+    if (results.some((entry: any) => entry.failures?.length)) process.exitCode = 1;
     return;
   }
-  console.log(`worktrees sweep: ${result.dryRun ? 'dry run' : 'executed'} for ${meta.name} (minimum age ${minAgeHours}h; recovery retention ${recoveryRetentionAgeHours}h, ${recoveryRetentionMaxPerAgent} per agent)`);
-  printStorage(result.storage);
-  for (const entry of result.entries) console.log(worktreeSweepEntryLine(entry));
-  for (const entry of [...result.recovery.backups.entries, ...result.recovery.quarantine.entries].filter((entry: any) => entry.action === 'remove')) {
-    console.log(`  REMOVE ${entry.store.toUpperCase()} ${entry.path} [${entry.reason}; ${formatBytes(entry.sizeBytes)}]`);
+  for (const [index, result] of results.entries()) {
+    if (!result.entries) {
+      for (const failure of result.failures) console.log(`worktrees sweep: skipped ${targets[index].name}: ${failure.message}`);
+      continue;
+    }
+    printSweepResult(result, targets[index].name, minAgeHours, recoveryRetentionAgeHours);
   }
-  if (result.dryRun) console.log('  pass --yes to remove the planned worktree and recovery entries.');
-  if (result.removed.length) console.log(`  removed ${result.counts.removedWorktrees} worktree(s) and deleted ${result.counts.deletedBranches} branch(es).`);
-  if (result.counts.removedRecoveryEntries) console.log(`  removed ${result.counts.removedRecoveryEntries} recovery entry(s), reclaimed ${formatBytes(result.counts.reclaimedBytes)}.`);
-  for (const entry of result.salvaged || []) console.log(`  SALVAGED ${entry.path} at ${entry.ref}; recover with ${entry.recovery}`);
-  if (result.prunedOrphanBranches.length) console.log(`  pruned ${result.counts.prunedOrphanBranches} orphan worktree branch(es).`);
-  for (const failure of result.failures) console.log(`  ERROR ${failure.path || 'prune'}: ${failure.message}`);
-  if (result.failures.length) process.exitCode = 1;
+  if (results.some((entry: any) => entry.failures?.length)) process.exitCode = 1;
 }
 
 async function cmdRecoverShared(opts: any) {

@@ -69,6 +69,42 @@ test('CLI command help stays focused on the requested command', () => {
   }
 });
 
+test('worktree sweep help and retention docs use the classification order and the real thresholds', () => {
+  const worktrees = require('../lib/worktrees');
+  const order = worktrees.WORKTREE_SWEEP_CLASSIFICATION_ORDER as string[];
+  const hours = (milliseconds: number) => milliseconds / (60 * 60 * 1000);
+  const thresholds = [
+    `${hours(worktrees.DEFAULT_MIN_AGE_MS)} hours`,
+    `${hours(worktrees.DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS) / 24} days`,
+    `${hours(worktrees.DEFAULT_RECOVERY_RETENTION_AGE_MS) / 24} days`,
+  ];
+  assert.deepEqual(thresholds, ['3 hours', '7 days', '14 days'], 'the shipped defaults are what every surface promises');
+  assert.equal(worktrees.DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT, undefined, 'retention is age alone, so no per-agent cap is exported');
+  const help = run(['worktrees', '--help'], isolatedEnv());
+  assert.equal(help.status, 0, help.stderr);
+  const texts = [
+    help.stdout,
+    fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'orchestration.md'), 'utf8'),
+    fs.readFileSync(path.resolve(ROOT, '..', '..', 'docs', 'src', 'content', 'docs', 'getting-started', 'sidequest.md'), 'utf8'),
+  ];
+  for (const text of texts) {
+    let previous = -1;
+    for (const reason of order) {
+      const index = text.indexOf(reason, previous + 1);
+      assert.ok(index > previous, `${reason} follows the preceding sweep reason`);
+      previous = index;
+    }
+    for (const threshold of thresholds) assert.ok(text.includes(threshold), `the sweep surface names its ${threshold} threshold`);
+    assert.doesNotMatch(text, /per agent|per-agent|three entries/i, 'the per-agent quarantine cap is gone');
+    // Command help used to omit the node_modules exception the top-level help and both docs stated,
+    // and an agent acts on whichever surface it read (SQ-2958).
+    assert.ok(text.includes('node_modules'), 'the sweep surface names the node_modules exception');
+    assert.match(text, /regenerat/, 'the sweep surface says worktree setup regenerates that cache');
+    assert.match(text, /renamed into quarantine/, 'the sweep surface states the rename-first rule');
+    assert.match(text, /deleted only if it is still the clean tree that was classified/, 'the sweep surface says the moved tree is re-read before deletion');
+  }
+});
+
 test('worktree sweep sends live classification progress to stderr for JSON output', () => {
   const env = isolatedEnv();
   const project = String(env.CLAUDE_PROJECT_DIR);
@@ -89,7 +125,9 @@ test('worktree sweep sends live classification progress to stderr for JSON outpu
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).entries.length, 1);
     assert.match(result.stderr, /worktrees sweep: classifying 0\/1: .*agent-json-progress; planned 0, removed 0/);
-    assert.match(result.stderr, /worktrees sweep: classifying 1\/1: .*agent-json-progress \(legacy_unreclaimed\); planned 0, removed 0/);
+    // A worktree cut moments ago is now kept for its age, not for its missing lease:
+    // legacy status stopped being a keep reason (SQ-2924).
+    assert.match(result.stderr, /worktrees sweep: classifying 1\/1: .*agent-json-progress \(too_young\); planned 0, removed 0/);
   } finally {
     if (fs.existsSync(worktree)) runGit(project, ['worktree', 'remove', '--force', worktree]);
   }
