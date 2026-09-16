@@ -223,6 +223,28 @@ function reportIntegrationBranch(outcome) {
   console.log(outcome.advanced ? `  ${outcome.message}` : `  ! ${outcome.message}`);
   if (outcome.command) console.log(`    run: ${outcome.command}`);
 }
+async function advanceAndSweepAfterIntegration(slug, projectPath, ticket) {
+  try {
+    const integrationTarget = store.ticketIntegrationTarget(slug, ticket);
+    const integrationBranch = await worktrees.advanceIntegrationBranch(projectPath, {
+      integrationTarget,
+      submissionCommit: ticket.submission ? ticket.submission.commit : null,
+      submissionWorktree: ticket.submission ? ticket.submission.worktree : null,
+      admittedScope: ticket.submission ? ticket.submission.admittedScope : null,
+      changedPaths: ticket.submission ? ticket.submission.changedPaths : null
+    });
+    const worktreeSweep = await worktrees.sweep(projectPath, store.worktreeGcTickets(), {
+      execute: true,
+      currentPath: store.nearestRepoRoot(process.cwd()),
+      integrationTarget,
+      minAgeMs: 0,
+      ticketRef: ticket.ref
+    });
+    return { integrationBranch, worktreeSweep };
+  } catch (error) {
+    return { worktreeSweep: { failures: [{ path: null, message: error && error.message || String(error) }] } };
+  }
+}
 async function cmdGroomClose(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('groom-close: pass a ticket id or ref, e.g. sidequest groom-close SQ-3 --reason "Already shipped in abc1234."');
@@ -242,26 +264,7 @@ async function cmdGroomClose(opts, positional) {
     deliveryMethod: opts["delivery-method"]
   });
   if (res.ok && !res.idempotent) closeDispatchExecutor(ticket);
-  if (res.ok && opts.integration) {
-    try {
-      const integrationTarget = store.ticketIntegrationTarget(slug, res.ticket);
-      res.integrationBranch = await worktrees.advanceIntegrationBranch(meta.path, {
-        integrationTarget,
-        submissionCommit: res.ticket.submission ? res.ticket.submission.commit : null,
-        submissionWorktree: res.ticket.submission ? res.ticket.submission.worktree : null,
-        admittedScope: res.ticket.submission ? res.ticket.submission.admittedScope : null,
-        changedPaths: res.ticket.submission ? res.ticket.submission.changedPaths : null
-      });
-      res.worktreeSweep = await worktrees.sweep(meta.path, store.worktreeGcTickets(), {
-        execute: true,
-        currentPath: store.nearestRepoRoot(process.cwd()),
-        integrationTarget,
-        ticketRef: res.ticket.ref
-      });
-    } catch (error) {
-      res.worktreeSweep = { failures: [{ path: null, message: error && error.message || String(error) }] };
-    }
-  }
+  if (res.ok && opts.integration) Object.assign(res, await advanceAndSweepAfterIntegration(slug, meta.path, res.ticket));
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
@@ -648,6 +651,7 @@ async function cmdIntegrate(opts, positional) {
       reason: opts.reason,
       purpose: "integration"
     });
+    if (closed.ok && !closed.idempotent) Object.assign(closed, await advanceAndSweepAfterIntegration(slug, meta.path, closed.ticket));
     if (opts.json) {
       process.stdout.write(JSON.stringify(Object.assign({ project: slug, delivery: recorded.integration, verify: recorded.integration.verify }, closed), null, 2) + "\n");
       if (!closed.ok) process.exitCode = 1;
@@ -710,6 +714,10 @@ async function cmdIntegrate(opts, positional) {
     purpose: "integration"
   }));
   const failedClosure = closures.find((closure) => !closure.ok);
+  for (const closure of closures) {
+    if (!closure.ok || closure.idempotent) continue;
+    Object.assign(closure, await advanceAndSweepAfterIntegration(slug, meta.path, closure.ticket));
+  }
   if (opts.json) {
     const payload = refs.length > 1 ? { project: slug, delivery: integration, verify: verification.verify, tickets: closures.map((closure) => closure.ticket || null), ok: !failedClosure } : Object.assign({ project: slug, delivery: integration, verify: verification.verify }, closures[0]);
     process.stdout.write(JSON.stringify(payload, null, 2) + "\n");

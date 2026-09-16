@@ -58,16 +58,16 @@ test('non-Windows worktree removal failure keeps the existing notice', () => {
 test('worktree sweep rows print known facts without placeholder values', () => {
   const row = worktreeSweepEntryLine({
     action: 'keep',
-    path: 'C:\\worktrees\\agent-legacy-dirty',
+    path: 'C:\\worktrees\\agent-dirty',
     ticket: null,
-    reason: 'legacy_unreclaimed',
+    reason: 'tracked_changes',
     clean: false,
     ahead: 2,
     patchEquivalent: false,
     ageMs: 4 * 60 * 60 * 1000,
   });
 
-  assert.match(row, /legacy_unreclaimed; dirty; ahead 2; patch-equivalent false; age 240m/);
+  assert.match(row, /tracked_changes; dirty; ahead 2; patch-equivalent false; age 240m/);
   assert.doesNotMatch(row, /\?/);
 });
 
@@ -78,14 +78,14 @@ test('deferred SessionStart sweep reports active classification and the finishin
     candidates: 8,
     observed: 3,
     current: 'C:/worktrees/agent-slow',
-    reason: 'legacy_unreclaimed',
+    reason: 'tracked_changes',
     planned: 4,
     removed: 2,
-    keptByReason: { legacy_unreclaimed: 1, active_ticket: 3 },
+    keptByReason: { tracked_changes: 1, active_ticket: 3 },
   });
 
-  assert.match(notice, /Classifying 3\/8: C:\/worktrees\/agent-slow \(legacy_unreclaimed\)/);
-  assert.match(notice, /Reached planned 4, removed 2, skipped 4 \(legacy_unreclaimed 1, active_ticket 3\)/);
+  assert.match(notice, /Classifying 3\/8: C:\/worktrees\/agent-slow \(tracked_changes\)/);
+  assert.match(notice, /Reached planned 4, removed 2, skipped 4 \(tracked_changes 1, active_ticket 3\)/);
   assert.match(notice, /worktrees sweep --yes --project/);
 });
 
@@ -95,11 +95,11 @@ test('manual worktree sweep progress names the classification candidate and reas
     candidates: 8,
     observed: 3,
     current: 'C:/worktrees/agent-slow',
-    reason: 'legacy_unreclaimed',
+    reason: 'tracked_changes',
     planned: 0,
     removed: 0,
     keptByReason: {},
   });
 
-  assert.equal(line, 'worktrees sweep: classifying 3/8: C:/worktrees/agent-slow (legacy_unreclaimed); planned 0, removed 0');
+  assert.equal(line, 'worktrees sweep: classifying 3/8: C:/worktrees/agent-slow (tracked_changes); planned 0, removed 0');
 });

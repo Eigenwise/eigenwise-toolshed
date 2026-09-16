@@ -8,6 +8,7 @@ const { execFileSync, spawn, spawnSync } = require("node:child_process");
 const commitScope = require("./commit-scope.js");
 const worktreeLease = require("./kernel/worktree.js");
 const UNMERGED_STATUS_CODES = /* @__PURE__ */ new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
+const UNVERSIONED_STATUS_CODES = /* @__PURE__ */ new Set(["??", "!!"]);
 const IN_PROGRESS_GIT_OPERATION_STATE = [
   ["CHERRY_PICK_HEAD", "cherry-pick"],
   ["MERGE_HEAD", "merge"],
@@ -16,8 +17,35 @@ const IN_PROGRESS_GIT_OPERATION_STATE = [
   ["rebase-apply", "rebase"],
   ["BISECT_LOG", "bisect"]
 ];
+const AT_RISK_STATUS_ARGUMENTS = ["status", "--porcelain", "--ignored", "--untracked-files=all", "-z"];
+const AT_RISK_STATUS_MAX_BUFFER = 64 * 1024 * 1024;
+function parseWorktreeStatus(stdout) {
+  const fields = stdout.split("\0");
+  const entries = [];
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index];
+    if (!field) continue;
+    const code = field.slice(0, 2);
+    entries.push({ code, path: field.slice(3).replace(/\/+$/, "") });
+    if (code.startsWith("R") || code.startsWith("C")) index += 1;
+  }
+  return entries;
+}
+function atRiskStatusEntries(stdout, worktree, ticketOrDispatch) {
+  const recorded = recordedDependencyLinkPaths(worktree, ticketOrDispatch);
+  return parseWorktreeStatus(stdout).filter((entry) => !recorded.some((link) => entry.path === link || entry.path.startsWith(`${link}/`)));
+}
+function atRiskStatusEntriesSync(worktree, ticketOrDispatch = null) {
+  const stdout = execFileSync("git", [...AT_RISK_STATUS_ARGUMENTS], {
+    cwd: worktree,
+    encoding: "utf8",
+    windowsHide: true,
+    maxBuffer: AT_RISK_STATUS_MAX_BUFFER
+  });
+  return atRiskStatusEntries(stdout, worktree, ticketOrDispatch);
+}
 function unmergedCheckoutPaths(worktree) {
-  return execFileSync("git", ["status", "--porcelain"], { cwd: worktree, encoding: "utf8", windowsHide: true }).split(/\r?\n/).filter((line) => UNMERGED_STATUS_CODES.has(line.slice(0, 2))).map((line) => line.slice(3).trim()).filter(Boolean);
+  return atRiskStatusEntriesSync(worktree).filter((entry) => UNMERGED_STATUS_CODES.has(entry.code)).map((entry) => entry.path).filter(Boolean);
 }
 function inProgressGitOperation(worktree) {
   const reported = execFileSync("git", ["rev-parse", "--git-dir"], { cwd: worktree, encoding: "utf8", windowsHide: true }).trim();
@@ -49,21 +77,37 @@ function retainedWorktreeResumeDecision(lease) {
 const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1e3;
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 const DEFAULT_RECOVERY_RETENTION_AGE_MS = 14 * 24 * 60 * 60 * 1e3;
-const DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT = 3;
+const WORKTREE_SWEEP_CLASSIFICATION_ORDER = Object.freeze([
+  "status_unknown",
+  "tracked_changes",
+  "too_young",
+  "upstream_ambiguous",
+  "upstream_unavailable",
+  "untracked_recent",
+  "untracked_quarantined",
+  "ticket_archived",
+  "ticket_done",
+  "branch_reachable",
+  "patch_equivalent",
+  "commits_on_branch",
+  "not_integrated_salvage",
+  "not_integrated"
+]);
 const QUARANTINE_RETRY_INTERVAL_MS = 24 * 60 * 60 * 1e3;
-function git(cwd, args) {
+function git(cwd, args, input, environment) {
   return new Promise((resolve) => {
     const child = spawn("git", ["-c", "core.editor=true", ...args], {
       cwd,
-      env: { ...process.env, GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" },
+      env: { ...process.env, GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true", ...environment },
       timeout: 12e4,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"]
+      stdio: [input == null ? "ignore" : "pipe", "pipe", "pipe"]
     });
     const stdout = [];
     const stderr = [];
     child.stdout.on("data", (chunk) => stdout.push(chunk));
     child.stderr.on("data", (chunk) => stderr.push(chunk));
+    if (input != null) child.stdin.end(input);
     child.once("error", (error) => {
       resolve({ ok: false, status: null, stdout: "", stderr: String(error.message || "").trim() });
     });
@@ -423,11 +467,37 @@ function recoveryCommand(entry) {
   const uncommittedRef = entry.salvage?.uncommittedRef ? ` && git -C "${worktree}" stash apply "${entry.salvage.uncommittedRef}"` : "";
   return `git worktree add --detach "${worktree}" "${ref}"${uncommittedRef}`;
 }
-function integrationUpstream(options) {
+async function verifiedQualifiedRef(repo, reference) {
+  const result = await git(repo, ["rev-parse", "--verify", "--symbolic-full-name", reference]);
+  return result.ok && result.stdout.startsWith("refs/") ? result.stdout : null;
+}
+async function qualifiedIntegrationUpstream(repo, upstream) {
+  const [local, remote, resolved] = await Promise.all([
+    verifiedQualifiedRef(repo, `refs/heads/${upstream}`),
+    verifiedQualifiedRef(repo, `refs/remotes/${upstream}`),
+    verifiedQualifiedRef(repo, upstream)
+  ]);
+  if (local && remote) return { comparison: null, ambiguous: true };
+  return { comparison: remote || local || resolved, ambiguous: false };
+}
+async function resolvedIntegrationUpstream(repo, options) {
   const target = options.integrationTarget || {};
-  const upstream = String(target.upstream || options.upstream || "").trim();
-  if (!upstream) throw new Error("worktree sweep requires the board integration target.");
-  return upstream;
+  const configured = String(target.upstream || options.upstream || "").trim();
+  if (configured) {
+    const resolved = await qualifiedIntegrationUpstream(repo, configured);
+    return { upstream: configured, fallback: false, ...resolved };
+  }
+  const originDefault = await git(repo, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+  if (originDefault.ok && originDefault.stdout) {
+    const resolved = await qualifiedIntegrationUpstream(repo, originDefault.stdout);
+    return { upstream: originDefault.stdout, fallback: true, ...resolved };
+  }
+  const head = await git(repo, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (head.ok && head.stdout && head.stdout !== "HEAD") {
+    const resolved = await qualifiedIntegrationUpstream(repo, head.stdout);
+    return { upstream: head.stdout, fallback: true, ...resolved };
+  }
+  throw new Error("worktree sweep requires the board integration target.");
 }
 function finalTicket(ticket) {
   return Boolean(ticket && (ticket.archived || ticket.status === "done"));
@@ -514,19 +584,19 @@ async function worktreeAge(pathname) {
     return null;
   }
 }
-async function inspectWorktree(entry, minAgeMs, upstream, notIntegratedSalvageAgeMs) {
+async function inspectWorktree(entry, ticket, minAgeMs, upstream, notIntegratedSalvageAgeMs) {
   const [cleanResult, ageMs, patch, reachable] = await Promise.all([
-    git(entry.worktree, ["status", "--porcelain"]),
+    git(entry.worktree, [...AT_RISK_STATUS_ARGUMENTS]),
     worktreeAge(entry.worktree),
-    patchEquivalence(entry.worktree, "HEAD", upstream),
-    reachableFrom(entry.worktree, "HEAD", upstream)
+    upstream ? patchEquivalence(entry.worktree, "HEAD", upstream) : Promise.resolve({ equivalent: false, ahead: null, equivalentCommits: 0, unmatchedCommits: null }),
+    upstream ? reachableFrom(entry.worktree, "HEAD", upstream) : Promise.resolve(false)
   ]);
-  const statusLines = cleanResult.stdout.split(/\r?\n/).filter(Boolean);
+  const statusEntries = cleanResult.ok ? atRiskStatusEntries(cleanResult.stdout, entry.worktree, ticket) : [];
   return {
-    clean: cleanResult.ok && statusLines.length === 0,
+    clean: cleanResult.ok && statusEntries.length === 0,
     statusKnown: cleanResult.ok,
-    trackedChanges: cleanResult.ok && statusLines.some((line) => !line.startsWith("?? ")),
-    untracked: cleanResult.ok && statusLines.some((line) => line.startsWith("?? ")),
+    trackedChanges: statusEntries.some((status) => !UNVERSIONED_STATUS_CODES.has(status.code)),
+    untrackedOrIgnored: statusEntries.some((status) => UNVERSIONED_STATUS_CODES.has(status.code)),
     ahead: patch.ahead,
     reachable,
     patchEquivalent: patch.equivalent,
@@ -540,7 +610,7 @@ async function inspectWorktree(entry, minAgeMs, upstream, notIntegratedSalvageAg
   };
 }
 function factsForEntry(facts) {
-  const { statusKnown: _statusKnown, trackedChanges: _trackedChanges, untracked: _untracked, ...entryFacts } = facts;
+  const { statusKnown: _statusKnown, trackedChanges: _trackedChanges, untrackedOrIgnored: _untrackedOrIgnored, ...entryFacts } = facts;
   return entryFacts;
 }
 async function patchEquivalence(repo, revision, upstream) {
@@ -599,67 +669,61 @@ function classifiedWorktreeEntry(entry, ticket, facts, action, reason, current) 
     current
   };
 }
-function canReclaimLegacyWorktree(ticket) {
-  return !ticket || finalTicket(ticket);
+function liveWorktreeKeepReason(entry, ticket, lease) {
+  if (entry.locked) return "locked";
+  if (lease.liveness.status === "live") return "live_session";
+  if (ticket && !finalTicket(ticket)) return "active_ticket";
+  if (lease.identity.status === "bound" && lease.phase !== "terminal") return "active_ticket";
+  return null;
 }
-async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, upstream, livePaths = [], notIntegratedSalvageAgeMs = DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, registeredWorktrees = []) {
+async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, upstream, upstreamSafetyReason, livePaths = [], notIntegratedSalvageAgeMs = DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, registeredWorktrees = []) {
   const ticket = ticketForWorktree(tickets, entry);
-  const facts = await inspectWorktree(entry, minAgeMs, upstream, notIntegratedSalvageAgeMs);
+  const facts = await inspectWorktree(entry, ticket, minAgeMs, upstream, notIntegratedSalvageAgeMs);
   const worktreePath2 = canonicalPath(entry.worktree);
   const current = worktreePath2 === canonicalPath(currentPath);
   if (current) return classifiedWorktreeEntry(entry, ticket, facts, "keep", "current_worktree", true);
   const lease = await worktreeCleanupLease(repo, ticket, entry, livePaths);
   const cleanup = worktreeLease.worktreeCleanupDecision(lease, registeredWorktrees);
-  if (!cleanup.allowed) {
-    if (lease.identity.status === "unknown" && canReclaimLegacyWorktree(ticket)) {
-      if (entry.locked) return {
-        ...classifiedWorktreeEntry(entry, ticket, facts, "keep", "locked", false),
-        lease,
-        leaseDecision: cleanup.reason
-      };
-      if (lease.liveness.status === "live") return {
-        ...classifiedWorktreeEntry(entry, ticket, facts, "keep", "live_session", false),
-        lease,
-        leaseDecision: cleanup.reason
-      };
-      const legacyCleanup = worktreeLease.legacyWorktreeCleanupDecision({
-        registered: registeredWorktrees.some((registered) => canonicalPath(registered) === worktreePath2),
-        clean: facts.clean,
-        oldEnough: facts.oldEnough,
-        settled: facts.reachable || facts.patchEquivalent
-      });
-      return {
-        ...classifiedWorktreeEntry(entry, ticket, facts, legacyCleanup.allowed ? "remove" : "keep", legacyCleanup.allowed ? "legacy_no_lease" : "legacy_unreclaimed", false),
-        lease,
-        leaseDecision: cleanup.reason
-      };
-    }
+  const live = liveWorktreeKeepReason(entry, ticket, lease);
+  if (live) return {
+    ...classifiedWorktreeEntry(entry, ticket, facts, "keep", live, false),
+    lease,
+    leaseDecision: cleanup.reason
+  };
+  if (!cleanup.allowed && !registeredWorktrees.some((registered) => canonicalPath(registered) === worktreePath2)) {
     return {
       ...classifiedWorktreeEntry(entry, ticket, facts, "keep", leaseCleanupSkipReason(cleanup), false),
       lease,
       leaseDecision: cleanup.reason
     };
   }
+  const branch = localBranchName(entry.branch);
   let action = "keep";
   let reason = "not_integrated";
   if (!facts.statusKnown) reason = "status_unknown";
-  else if (ticket?.archived && !facts.trackedChanges) {
+  else if (facts.trackedChanges) reason = "tracked_changes";
+  else if (!facts.oldEnough) reason = "too_young";
+  else if (upstreamSafetyReason) reason = upstreamSafetyReason;
+  else if (facts.untrackedOrIgnored) {
+    if (facts.oldEnoughToSalvage) {
+      action = "quarantine";
+      reason = "untracked_quarantined";
+    } else reason = "untracked_recent";
+  } else if (ticket?.archived) {
     action = "remove";
     reason = "ticket_archived";
-  } else if (ticket?.status === "done" && !facts.trackedChanges) {
+  } else if (ticket?.status === "done") {
     action = "remove";
     reason = "ticket_done";
-  } else if (facts.trackedChanges && (facts.reachable || facts.patchEquivalent)) {
-    reason = "tracked_changes";
-  } else if (!facts.oldEnough) reason = "too_young";
-  else if (facts.reachable) {
+  } else if (facts.reachable) {
     action = "remove";
     reason = "branch_reachable";
   } else if (facts.patchEquivalent) {
     action = "remove";
     reason = "patch_equivalent";
-  } else if (facts.oldEnoughToSalvage && facts.untracked) {
-    reason = "unrecoverable_untracked";
+  } else if (facts.clean && branch) {
+    action = "remove";
+    reason = "commits_on_branch";
   } else if (facts.oldEnoughToSalvage) {
     action = "salvage";
     reason = "not_integrated_salvage";
@@ -700,11 +764,12 @@ async function classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs) {
   const [ageMs, contents] = await Promise.all([worktreeAge(entry.worktree), fs.readdir(entry.worktree)]);
   const oldEnough = ageMs != null && ageMs >= minAgeMs;
   if (!oldEnough) return skippedEntry(entry, ticket, "too_young", false);
+  if (contents.length) return skippedEntry(entry, ticket, "orphan_directory_contents", false);
   return {
     path: entry.worktree,
     branch: null,
     ticket: ticket ? ticket.ref : null,
-    clean: contents.length === 0,
+    clean: true,
     ahead: null,
     reachable: null,
     patchEquivalent: null,
@@ -720,51 +785,55 @@ async function classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs) {
     orphanDirectory: true
   };
 }
-function backupRoot(options) {
-  return options.backupDir || path.join(sidequestHome(), "worktree-backups");
+const STRAY_WORKTREE_HOME_DIRECTORY = /^(agent-|sq.*-recovery-)/;
+async function strayWorktreeHomeDirectories(repo) {
+  const home = path.join(sidequestHome(), "worktrees");
+  const own = canonicalPath(worktreeRoot(repo));
+  let entries;
+  try {
+    entries = await fs.readdir(home, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+  const stray = entries.filter((entry) => entry.isDirectory() && STRAY_WORKTREE_HOME_DIRECTORY.test(entry.name) && canonicalPath(path.join(home, entry.name)) !== own);
+  return Promise.all(stray.map(async (entry) => {
+    const pathname = path.join(home, entry.name);
+    const contents = await fs.readdir(pathname);
+    if (!contents.length) return { path: pathname, entries: 0, repository: null, action: "remove", reason: "stray_empty" };
+    let gitMetadata = false;
+    try {
+      await fs.lstat(path.join(pathname, ".git"));
+      gitMetadata = true;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    if (!gitMetadata) return { path: pathname, entries: contents.length, repository: null, action: "keep", reason: "stray_directory" };
+    const commonGitDirectory = await git(pathname, ["rev-parse", "--git-common-dir"]);
+    if (!commonGitDirectory.ok) return { path: pathname, entries: contents.length, repository: null, action: "keep", reason: "stray_detached_repository" };
+    const resolved = path.isAbsolute(commonGitDirectory.stdout) ? commonGitDirectory.stdout : path.resolve(pathname, commonGitDirectory.stdout);
+    return { path: pathname, entries: contents.length, repository: path.dirname(resolved), action: "keep", reason: "stray_other_project" };
+  }));
 }
-async function backupDirtyWorktree(repo, entry, upstream, options) {
-  const agentId = path.basename(entry.path).replace(/^agent-/, "") || "unknown-agent";
-  const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-  const destination = path.join(backupRoot(options), `${agentId}-${timestamp}`);
-  await fs.mkdir(destination, { recursive: true });
-  const staged = await git(entry.path, ["add", "-A"]);
-  if (!staged.ok) throw new Error(staged.stderr || "git add -A failed");
-  const diff = await git(entry.path, ["diff", "--cached", "HEAD"]);
-  if (!diff.ok) throw new Error(diff.stderr || "git diff --cached HEAD failed");
-  const branch = localBranchName(entry.branch);
-  const commits = branch ? await git(repo, ["format-patch", "--stdout", `${upstream}..${branch}`]) : { ok: true, stdout: "", stderr: "" };
-  if (!commits.ok) throw new Error(commits.stderr || "git format-patch failed");
-  await Promise.all([
-    fs.writeFile(path.join(destination, "working-tree.patch"), diff.stdout ? `${diff.stdout}
-` : "", "utf8"),
-    fs.writeFile(path.join(destination, "commits.patch"), commits.stdout ? `${commits.stdout}
-` : "", "utf8"),
-    fs.writeFile(path.join(destination, "metadata.json"), JSON.stringify({
-      agentId,
-      ticket: entry.ticket || null,
-      worktree: entry.path,
-      branch,
-      upstream,
-      backedUpAt: (/* @__PURE__ */ new Date()).toISOString()
-    }, null, 2) + "\n", "utf8")
-  ]);
-  return destination;
-}
-async function backupDirtyOrphanDirectory(entry, options) {
-  const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-  const destination = path.join(backupRoot(options), `orphan-${path.basename(entry.path)}-${timestamp}`);
-  await fs.mkdir(destination, { recursive: true });
-  await fs.writeFile(path.join(destination, "metadata.json"), JSON.stringify({
-    agentId: null,
-    ticket: entry.ticket || null,
-    worktree: entry.path,
-    branch: null,
-    upstream: null,
-    backedUpAt: (/* @__PURE__ */ new Date()).toISOString(),
-    reason: "unregistered worktree directory without .git metadata; contents could not be represented as Git patches"
-  }, null, 2) + "\n", "utf8");
-  return destination;
+async function sweepStrayWorktreeHome(repo, execute, failures) {
+  let stray;
+  try {
+    stray = await strayWorktreeHomeDirectories(repo);
+  } catch (error) {
+    failures.push({ path: null, message: `stray worktree directory scan failed: ${error && error.message || error}` });
+    return [];
+  }
+  if (!execute) return stray;
+  for (const entry of stray.filter((candidate) => candidate.action === "remove")) {
+    try {
+      await fs.rm(entry.path, { recursive: true, force: true });
+    } catch (error) {
+      entry.action = "keep";
+      entry.reason = "stray_remove_failed";
+      failures.push({ path: entry.path, message: `stray directory removal failed: ${error && error.message || error}` });
+    }
+  }
+  return stray;
 }
 async function findOrphanBranches(repo, checkedOutBranches, upstream, maxCandidates) {
   const result = await git(repo, ["for-each-ref", "--format=%(refname:short)", "refs/heads/worktree-agent-*"]);
@@ -1018,34 +1087,6 @@ async function advanceLocalIntegrationBranch(repo, options) {
 function quarantineRoot(options) {
   return options.quarantineDir || path.join(sidequestHome(), "worktree-quarantine");
 }
-function removableQuarantineDirectory(worktree, relativePath) {
-  const normalized = relativePath.replace(/[\\/]+$/, "");
-  if (!normalized || path.isAbsolute(normalized)) return null;
-  const candidate = path.resolve(worktree, normalized);
-  return pathIsInside(worktree, candidate) ? candidate : null;
-}
-async function regenerableQuarantineDirectories(worktree) {
-  const ignored = await git(worktree, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]);
-  const listed = ignored.ok ? ignored.stdout.split("\0").filter((entry) => /[\\/]$/.test(entry)) : [];
-  const directories = new Set(listed);
-  directories.add("node_modules/");
-  directories.add(".venv/");
-  return [...directories].map((relativePath) => removableQuarantineDirectory(worktree, relativePath)).filter((pathname) => !!pathname).sort((left, right) => right.length - left.length);
-}
-async function stripRegenerableQuarantineDirectories(worktree) {
-  const removed = [];
-  for (const directory of await regenerableQuarantineDirectories(worktree)) {
-    try {
-      const status = await fs.lstat(directory);
-      if (!status.isDirectory()) continue;
-      await fs.rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-      removed.push(directory);
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
-  }
-  return removed;
-}
 async function quarantineCandidate(entry, message, options) {
   const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
   const destination = path.join(quarantineRoot(options), `${path.basename(entry.path)}-${timestamp}`);
@@ -1057,15 +1098,8 @@ async function quarantineCandidate(entry, message, options) {
     recordQuarantineFailure(entry.path, stderr);
     return { ok: false, stderr };
   }
-  try {
-    const stripped = await stripRegenerableQuarantineDirectories(destination);
-    recordQuarantine(entry.path, message, destination);
-    return { ok: true, destination, stderr: "", stripped };
-  } catch (error) {
-    const stripFailure = String(error && error.message || error);
-    recordQuarantine(entry.path, message, destination);
-    return { ok: true, destination, stderr: "", stripFailure };
-  }
+  recordQuarantine(entry.path, message, destination);
+  return { ok: true, destination, stderr: "" };
 }
 function normalizedWorktreeRelativePath(worktree, pathname) {
   const relativePath = path.relative(worktree, pathname).split(path.sep).join("/");
@@ -1109,6 +1143,20 @@ function ownedDependencyLinkMatches(linkPath, record) {
   } catch (_) {
     return false;
   }
+}
+function recordedDependencyLinkPaths(worktree, ticketOrDispatch) {
+  const dispatch = ticketOrDispatch?.dispatch || ticketOrDispatch;
+  const records = Array.isArray(dispatch?.ownedDependencyLinks) ? dispatch.ownedDependencyLinks : [];
+  const worktreeIdentity = canonicalPath(worktree);
+  const paths = [];
+  for (const record of records) {
+    const relativePath = String(record?.relativePath || "").replace(/\\/g, "/").replace(/\/+$/, "");
+    const target = String(record?.target || "").trim();
+    if (!relativePath || !target || canonicalPath(String(record?.worktree || "")) !== worktreeIdentity) continue;
+    if (!ownedDependencyLinkMatches(path.resolve(worktree, relativePath), { ...record, target: canonicalPath(target) })) continue;
+    paths.push(relativePath);
+  }
+  return paths;
 }
 function dependencyLinkSafety(worktree, ticketOrDispatch, lease) {
   const records = ownedDependencyLinks(ticketOrDispatch, worktree, lease);
@@ -1163,11 +1211,41 @@ function unlinkOwnedDependencyLinks(links) {
   }
   return true;
 }
-function releaseVerifiedOwnedDependencyLinks(worktree, ticketOrDispatch, lease) {
-  const initial = dependencyLinkSafety(worktree, ticketOrDispatch, lease);
-  if (!initial.safe) return { ok: false, reason: "dependency_link_untrusted" };
-  if (!unlinkOwnedDependencyLinks(initial.links)) return { ok: false, reason: "dependency_link_unlink_failed" };
-  return dependencyLinkSafety(worktree, ticketOrDispatch, lease).safe ? { ok: true } : { ok: false, reason: "dependency_link_changed" };
+function worktreeSymbolicLinks(worktree) {
+  const links = [];
+  const walk = (pathname) => {
+    let status;
+    try {
+      status = nativeFs.lstatSync(pathname);
+    } catch (_) {
+      return false;
+    }
+    if (status.isSymbolicLink()) {
+      links.push(pathname);
+      return true;
+    }
+    if (!status.isDirectory()) return true;
+    let entries;
+    try {
+      entries = nativeFs.readdirSync(pathname, { withFileTypes: true });
+    } catch (_) {
+      return false;
+    }
+    for (const entry of entries) {
+      if (!walk(path.join(pathname, entry.name))) return false;
+    }
+    return true;
+  };
+  return walk(worktree) ? links : null;
+}
+function releaseWorktreeDependencyLinks(worktree, ticketOrDispatch, lease) {
+  const verified = dependencyLinkSafety(worktree, ticketOrDispatch, lease);
+  const links = verified.safe ? verified.links : worktreeSymbolicLinks(worktree);
+  if (!links) return { ok: false, reason: "dependency_link_unreadable" };
+  if (!unlinkOwnedDependencyLinks(links)) return { ok: false, reason: "dependency_link_unlink_failed" };
+  const remaining = worktreeSymbolicLinks(worktree);
+  if (!remaining) return { ok: false, reason: "dependency_link_unreadable" };
+  return remaining.length ? { ok: false, reason: "dependency_link_changed" } : { ok: true };
 }
 async function removeCandidate(repo, entry) {
   const remove = async (pathname) => git(repo, entry.clean ? ["worktree", "remove", pathname] : ["worktree", "remove", "--force", pathname]);
@@ -1232,17 +1310,13 @@ function reclaimUnclaimedDispatchWorktree(repository, dispatch, facts = {}) {
   });
   const cleanup = worktreeLease.worktreeCleanupDecision(lease, [entry.worktree]);
   if (!cleanup.allowed) return { worktree, reclaimed: false, reason: "lease_refused", message: `immutable recovery fact: ${cleanup.reason}` };
-  const dirty = execFileSync("git", ["status", "--porcelain"], {
-    cwd: entry.worktree,
-    encoding: "utf8",
-    windowsHide: true
-  }).trim();
-  if (dirty) {
+  const atRisk = atRiskStatusEntriesSync(entry.worktree, dispatch);
+  if (atRisk.length) {
     return {
       worktree: entry.worktree,
       reclaimed: false,
       reason: "dirty_worktree",
-      message: `immutable recovery fact: ${entry.worktree} has uncommitted changes.`
+      message: `immutable recovery fact: ${entry.worktree} holds uncommitted, untracked or ignored content (${atRisk[0].code} ${atRisk[0].path}).`
     };
   }
   const checkpointCommit = String(facts.checkpointCommit || "").trim();
@@ -1286,7 +1360,7 @@ function reclaimUnclaimedDispatchWorktree(repository, dispatch, facts = {}) {
       message: baseAtOrBeforeHead ? `immutable recovery fact: candidate commit ${head} descends from dispatch base ${baseCommit}.` : `immutable recovery fact: worktree head ${head} and dispatch base ${baseCommit} diverge.`
     };
   }
-  const dependencyLinksReleased = releaseVerifiedOwnedDependencyLinks(entry.worktree, dispatch, lease);
+  const dependencyLinksReleased = releaseWorktreeDependencyLinks(entry.worktree, dispatch, lease);
   if (!dependencyLinksReleased.ok) {
     return {
       worktree: entry.worktree,
@@ -1309,25 +1383,16 @@ function recoveryRetentionAgeMs(options) {
   }
   return DEFAULT_RECOVERY_RETENTION_AGE_MS;
 }
-function recoveryRetentionMaxPerAgent(options) {
-  const values = [options.recoveryRetentionMaxPerAgent, process.env.SIDEQUEST_TEST_WORKTREE_RECOVERY_RETENTION_MAX_PER_AGENT];
-  for (const value of values) {
-    const parsed = Number(value);
-    if (Number.isInteger(parsed) && parsed >= 1) return parsed;
-  }
-  return DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT;
-}
 function recoveryTimestamp(name, fallback) {
   const match = /-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)$/.exec(name);
   if (!match) return fallback;
   const parsed = Date.parse(match[1].replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, "T$1:$2:$3.$4Z"));
   return Number.isFinite(parsed) ? parsed : fallback;
 }
-function recoveryAgentId(store, name) {
-  const timestamp = /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/.exec(name);
+function recoveryAgentId(name) {
+  const timestamp = /-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)$/.exec(name);
   const prefix = timestamp ? name.slice(0, timestamp.index) : name;
-  const agentId = store === "quarantine" ? prefix.replace(/^agent-/, "") : prefix;
-  return agentId || "unknown";
+  return prefix.replace(/^agent-/, "") || "unknown";
 }
 async function directoryBytes(root) {
   let total = 0;
@@ -1356,7 +1421,7 @@ async function directoryBytes(root) {
   }
   return total;
 }
-async function recoveryStoreEntries(store, root, protectedAgentIds, retentionAgeMs, retentionMaxPerAgent) {
+async function recoveryStoreEntries(store, root, protectedAgentIds, retentionAgeMs) {
   let directories;
   try {
     directories = await fs.readdir(root, { withFileTypes: true });
@@ -1373,34 +1438,21 @@ async function recoveryStoreEntries(store, root, protectedAgentIds, retentionAge
       store,
       path: pathname,
       name: directory.name,
-      agentId: recoveryAgentId(store, directory.name),
+      agentId: recoveryAgentId(directory.name),
       createdAtMs,
       ageMs: Math.max(0, now - createdAtMs),
       action: "keep",
       reason: "within_retention"
     };
   }))).sort((left, right) => left.createdAtMs - right.createdAtMs || left.name.localeCompare(right.name));
-  const indexByPath = new Map(entries.map((entry) => [entry.path, entry]));
-  const grouped = /* @__PURE__ */ new Map();
   for (const entry of entries) {
-    const group = grouped.get(entry.agentId) || [];
-    group.push(entry);
-    grouped.set(entry.agentId, group);
-  }
-  for (const group of grouped.values()) {
-    const newestFirst = [...group].sort((left, right) => right.createdAtMs - left.createdAtMs || right.name.localeCompare(left.name));
-    newestFirst.forEach((entry, index) => {
-      const current = indexByPath.get(entry.path);
-      if (protectedAgentIds.has(current.agentId)) {
-        current.reason = "live_claim";
-        return;
-      }
-      const oldEnough = current.ageMs >= retentionAgeMs;
-      const beyondCount = index >= retentionMaxPerAgent;
-      if (!oldEnough && !beyondCount) return;
-      current.action = "remove";
-      current.reason = oldEnough && beyondCount ? "retention_age_and_count" : oldEnough ? "retention_age" : "retention_count";
-    });
+    if (protectedAgentIds.has(entry.agentId)) {
+      entry.reason = "live_claim";
+      continue;
+    }
+    if (entry.ageMs < retentionAgeMs) continue;
+    entry.action = "remove";
+    entry.reason = "retention_age";
   }
   return entries;
 }
@@ -1415,8 +1467,8 @@ function clearQuarantineFailureForDestination(destination) {
   }
   if (changed) writeFailureState(state);
 }
-async function recoveryStoreReport(store, root, protectedAgentIds, retentionAgeMs, retentionMaxPerAgent, options) {
-  const entries = await recoveryStoreEntries(store, root, protectedAgentIds, retentionAgeMs, retentionMaxPerAgent);
+async function recoveryStoreReport(store, root, protectedAgentIds, retentionAgeMs, options) {
+  const entries = await recoveryStoreEntries(store, root, protectedAgentIds, retentionAgeMs);
   const planned = entries.filter((entry) => entry.action === "remove");
   let removed = 0;
   let reclaimedBytes = 0;
@@ -1436,53 +1488,64 @@ function protectedRecoveryAgentIds(tickets) {
 }
 async function sweepRecoveryStores(tickets, options) {
   const retentionAgeMs = recoveryRetentionAgeMs(options);
-  const retentionMaxPerAgent = recoveryRetentionMaxPerAgent(options);
   const protectedAgentIds = protectedRecoveryAgentIds(tickets);
   const failures = [];
-  const report = async (store, root) => {
-    try {
-      return await recoveryStoreReport(store, root, protectedAgentIds, retentionAgeMs, retentionMaxPerAgent, options);
-    } catch (error) {
-      failures.push({ path: root, message: `recovery retention failed: ${error && error.message || error}` });
-      return { path: root, entries: [], bytes: null, planned: 0, removed: 0, reclaimedBytes: 0 };
-    }
-  };
-  const [backups, quarantine] = await Promise.all([
-    report("backups", backupRoot(options)),
-    report("quarantine", quarantineRoot(options))
-  ]);
-  return { retentionAgeMs, retentionMaxPerAgent, backups, quarantine, failures };
+  try {
+    const quarantine = await recoveryStoreReport("quarantine", quarantineRoot(options), protectedAgentIds, retentionAgeMs, options);
+    return { retentionAgeMs, quarantine, failures };
+  } catch (error) {
+    failures.push({ path: quarantineRoot(options), message: `recovery retention failed: ${error && error.message || error}` });
+    return { retentionAgeMs, quarantine: { path: quarantineRoot(options), entries: [], bytes: null, planned: 0, removed: 0, reclaimedBytes: 0 }, failures };
+  }
+}
+async function directorySizes(root) {
+  let entries;
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+  const sizes = await Promise.all(entries.filter((entry) => entry.isDirectory()).map(async (entry) => ({
+    path: path.join(root, entry.name),
+    bytes: await directoryBytes(path.join(root, entry.name))
+  })));
+  return sizes.sort((left, right) => right.bytes - left.bytes || left.path.localeCompare(right.path));
 }
 async function storageStatus(options = {}) {
   const report = async (pathname) => ({ path: pathname, bytes: await directoryBytes(pathname) });
+  const worktreeHome = path.join(sidequestHome(), "worktrees");
+  const directories = await directorySizes(worktreeHome);
   return {
-    worktrees: await report(path.join(sidequestHome(), "worktrees")),
-    backups: await report(backupRoot(options)),
+    worktrees: {
+      path: worktreeHome,
+      bytes: directories.reduce((total, entry) => total + entry.bytes, 0),
+      directories
+    },
     quarantine: await report(quarantineRoot(options))
   };
 }
 function recoveryCounts(recovery) {
   return {
-    plannedBackupEntries: recovery.backups.planned,
     plannedQuarantineEntries: recovery.quarantine.planned,
-    removedBackupEntries: recovery.backups.removed,
     removedQuarantineEntries: recovery.quarantine.removed,
-    removedRecoveryEntries: recovery.backups.removed + recovery.quarantine.removed,
-    reclaimedBytes: recovery.backups.reclaimedBytes + recovery.quarantine.reclaimedBytes
+    removedRecoveryEntries: recovery.quarantine.removed,
+    reclaimedBytes: recovery.quarantine.reclaimedBytes
   };
 }
 async function recoveryStoreSizes(recovery, options) {
   const worktreePath2 = path.join(sidequestHome(), "worktrees");
   let worktreeBytes = null;
+  let worktreeDirectories = [];
   if (options.includeStoreUsage) {
     try {
-      worktreeBytes = await directoryBytes(worktreePath2);
+      worktreeDirectories = await directorySizes(worktreePath2);
+      worktreeBytes = worktreeDirectories.reduce((total, entry) => total + entry.bytes, 0);
     } catch (_) {
     }
   }
   return {
-    worktrees: { path: worktreePath2, bytes: worktreeBytes },
-    backups: { path: recovery.backups.path, bytes: recovery.backups.bytes },
+    worktrees: { path: worktreePath2, bytes: worktreeBytes, directories: worktreeDirectories },
     quarantine: { path: recovery.quarantine.path, bytes: recovery.quarantine.bytes }
   };
 }
@@ -1508,23 +1571,25 @@ async function sweep(repo, tickets, options = {}) {
   const notIntegratedSalvageAgeMs = Number.isFinite(Number(options.notIntegratedSalvageAgeMs)) && Number(options.notIntegratedSalvageAgeMs) >= 0 ? Number(options.notIntegratedSalvageAgeMs) : DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS;
   const recovery = options.ticketRef ? {
     retentionAgeMs: recoveryRetentionAgeMs(options),
-    retentionMaxPerAgent: recoveryRetentionMaxPerAgent(options),
-    backups: { path: backupRoot(options), entries: [], bytes: null, planned: 0, removed: 0, reclaimedBytes: 0 },
     quarantine: { path: quarantineRoot(options), entries: [], bytes: null, planned: 0, removed: 0, reclaimedBytes: 0 },
     failures: []
   } : await sweepRecoveryStores(tickets, options);
   const storage = await recoveryStoreSizes(recovery, options);
-  const upstream = integrationUpstream(options);
+  const { upstream, comparison, fallback: upstreamFallback, ambiguous } = await resolvedIntegrationUpstream(repo, options);
+  const upstreamSafetyReason = ambiguous ? "upstream_ambiguous" : comparison ? null : "upstream_unavailable";
   if (await repositoryBusy(repo)) {
     return {
       dryRun: !options.execute,
       minAgeMs,
       notIntegratedSalvageAgeMs,
       upstream,
+      upstreamFallback,
       entries: [],
+      strayDirectories: [],
+      retainedBranches: [],
+      remainingCandidates: 0,
       orphanBranches: [],
       removed: [],
-      backups: [],
       salvaged: [],
       deletedBranches: [],
       prunedOrphanBranches: [],
@@ -1535,9 +1600,10 @@ async function sweep(repo, tickets, options = {}) {
         removedWorktrees: 0,
         salvagedWorktrees: 0,
         quarantinedWorktrees: 0,
-        backedUpWorktrees: 0,
         deletedBranches: 0,
+        retainedBranches: 0,
         prunedOrphanBranches: 0,
+        removedStrayDirectories: 0,
         ...recoveryCounts(recovery)
       },
       failures: recovery.failures,
@@ -1549,10 +1615,13 @@ async function sweep(repo, tickets, options = {}) {
   const worktreeList = parseWorktreeList(listed.stdout);
   const registered = new Set(worktreeList.map((entry) => canonicalPath(entry.worktree)));
   const candidates = worktreeList.filter((entry) => isAgentWorktree(repo, entry.worktree)).filter((entry) => quarantineRetryDue(entry.worktree)).filter((entry) => !options.ticketRef || ticketForWorktree(tickets, entry)?.ref === options.ticketRef);
-  const orphanCandidates = [];
-  const allCandidates = candidates;
+  const orphanCandidates = options.ticketRef ? [] : await orphanDirectories(repo, registered);
+  const allCandidates = [...candidates, ...orphanCandidates];
   const maxCandidates = Number.isFinite(Number(options.maxCandidates)) && Number(options.maxCandidates) > 0 ? Math.floor(Number(options.maxCandidates)) : allCandidates.length;
-  const boundedCandidates = allCandidates.slice(0, maxCandidates);
+  const agedCandidates = await Promise.all(allCandidates.map(async (entry) => ({ entry, ageMs: await worktreeAge(entry.worktree) ?? 0 })));
+  agedCandidates.sort((left, right) => right.ageMs - left.ageMs || String(left.entry.worktree).localeCompare(String(right.entry.worktree)));
+  const boundedCandidates = agedCandidates.slice(0, maxCandidates).map((candidate) => candidate.entry);
+  const remainingCandidates = agedCandidates.length - boundedCandidates.length;
   const livePaths = Array.isArray(options.livePaths) ? options.livePaths.map((pathname) => String(pathname)) : [];
   const removed = [];
   const classified = [];
@@ -1565,7 +1634,9 @@ async function sweep(repo, tickets, options = {}) {
   });
   const entries = await Promise.all(boundedCandidates.map(async (entry) => {
     reportSweepProgress(options, classified, removed, classificationStatus(entry, null));
-    const classifiedEntry = entry.orphanDirectory ? await classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs) : await classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, upstream, livePaths, notIntegratedSalvageAgeMs, [...registered]);
+    const classifiedEntry = entry.orphanDirectory ? await classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs) : await classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, comparison, upstreamSafetyReason, livePaths, notIntegratedSalvageAgeMs, [...registered]);
+    classifiedEntry.upstream = upstream;
+    classifiedEntry.upstreamFallback = upstreamFallback;
     classified.push(classifiedEntry);
     reportSweepProgress(options, classified, removed, classificationStatus(entry, classifiedEntry.reason));
     return classifiedEntry;
@@ -1580,14 +1651,14 @@ async function sweep(repo, tickets, options = {}) {
   const completeStatus = { ...sweepingStatus, phase: "complete" };
   const execute = !!options.execute;
   reportSweepProgress(options, entries, removed, sweepingStatus);
-  const backups = [];
   const salvaged = [];
   const deletedBranches = [];
+  const retainedBranches = [];
   const prunedOrphanBranches = [];
   const quarantined = [];
   const failures = [...recovery.failures];
   if (execute) {
-    for (const entry of entries.filter((candidate) => candidate.action === "remove" || candidate.action === "salvage")) {
+    for (const entry of entries.filter((candidate) => candidate.action === "remove" || candidate.action === "salvage" || candidate.action === "quarantine")) {
       if (shouldSkipKnownFailure(entry.path)) {
         entry.action = "keep";
         entry.reason = "known_permanent_failure";
@@ -1595,11 +1666,24 @@ async function sweep(repo, tickets, options = {}) {
         continue;
       }
       const ticket = ticketForWorktree(tickets, { worktree: entry.path });
-      const initialLinkSafety = await dependencyLinkSafety(entry.path, ticket, entry.lease);
-      if (!initialLinkSafety.safe) {
-        entry.action = "keep";
-        entry.reason = "dependency_link_untrusted";
-        reportSweepProgress(options, entries, removed, sweepingStatus);
+      if (entry.orphanDirectory) {
+        try {
+          if ((await fs.readdir(entry.path)).length) {
+            entry.action = "keep";
+            entry.reason = "orphan_directory_contents";
+            reportSweepProgress(options, entries, removed, sweepingStatus);
+            continue;
+          }
+          await fs.rm(entry.path, { recursive: true, force: true });
+          clearFailure(entry.path);
+          removed.push(entry.path);
+          reportSweepProgress(options, entries, removed, sweepingStatus);
+        } catch (error) {
+          entry.action = "keep";
+          entry.reason = "orphan_remove_failed";
+          failures.push({ path: entry.path, message: `orphan directory removal failed: ${error && error.message || error}` });
+          reportSweepProgress(options, entries, removed, sweepingStatus);
+        }
         continue;
       }
       if (entry.action === "salvage") {
@@ -1614,50 +1698,64 @@ async function sweep(repo, tickets, options = {}) {
           continue;
         }
       }
-      if (!entry.clean && !entry.salvage) {
-        try {
-          entry.backup = entry.orphanDirectory ? await backupDirtyOrphanDirectory(entry, options) : await backupDirtyWorktree(repo, entry, upstream, options);
-          backups.push(entry.backup);
-        } catch (error) {
-          failures.push({ path: entry.path, message: `backup failed: ${error && error.message || error}` });
-          continue;
-        }
-      }
-      const dependencyLinksReleased = releaseVerifiedOwnedDependencyLinks(entry.path, ticket, entry.lease);
-      if (!dependencyLinksReleased.ok) {
-        entry.action = "keep";
-        entry.reason = dependencyLinksReleased.reason;
-        reportSweepProgress(options, entries, removed, sweepingStatus);
-        continue;
-      }
-      const result = await removeCandidate(repo, entry);
-      if (!result.ok) {
-        const message = result.stderr || "worktree remove failed";
-        recordFailure(entry.path, message);
-        const quarantine = await quarantineCandidate(entry, message, options);
+      if (entry.action === "quarantine") {
+        const recordedLinks = recordedDependencyLinkPaths(entry.path, ticket);
+        const quarantine = await quarantineCandidate(entry, "untracked work quarantined", options);
         if (!quarantine.ok || !quarantine.destination) {
           entry.action = "keep";
           entry.reason = "quarantine_failed";
-          failures.push({ path: entry.path, message: `${message}; quarantine failed: ${quarantine.stderr}` });
+          failures.push({ path: entry.path, message: `untracked quarantine failed: ${quarantine.stderr}` });
           reportSweepProgress(options, entries, removed, sweepingStatus);
           continue;
         }
-        entry.action = "quarantine";
-        entry.reason = "remove_failed_quarantined";
-        entry.quarantine = quarantine.destination;
-        quarantined.push({ path: entry.path, destination: quarantine.destination, message });
-        if (quarantine.stripFailure) {
-          failures.push({ path: quarantine.destination, message: `quarantine cleanup failed: ${quarantine.stripFailure}` });
+        const destination = quarantine.destination;
+        if (!unlinkOwnedDependencyLinks(recordedLinks.map((relativePath) => path.resolve(destination, relativePath)))) {
+          failures.push({ path: destination, message: "quarantined the worktree, but its recorded dependency links could not be released at the quarantine destination" });
         }
+        entry.quarantine = quarantine.destination;
+        quarantined.push({ path: entry.path, destination: quarantine.destination, message: "untracked work quarantined" });
+        const prune = await git(repo, ["worktree", "prune"]);
+        if (!prune.ok) failures.push({ path: null, message: prune.stderr || "git worktree prune failed" });
         reportSweepProgress(options, entries, removed, sweepingStatus);
-        continue;
+      } else {
+        const dependencyLinksReleased = releaseWorktreeDependencyLinks(entry.path, ticket, entry.lease);
+        if (!dependencyLinksReleased.ok) {
+          entry.action = "keep";
+          entry.reason = dependencyLinksReleased.reason;
+          reportSweepProgress(options, entries, removed, sweepingStatus);
+          continue;
+        }
+        const result = await removeCandidate(repo, entry);
+        if (!result.ok) {
+          const message = result.stderr || "worktree remove failed";
+          recordFailure(entry.path, message);
+          const quarantine = await quarantineCandidate(entry, message, options);
+          if (!quarantine.ok || !quarantine.destination) {
+            entry.action = "keep";
+            entry.reason = "quarantine_failed";
+            failures.push({ path: entry.path, message: `${message}; quarantine failed: ${quarantine.stderr}` });
+            reportSweepProgress(options, entries, removed, sweepingStatus);
+            continue;
+          }
+          entry.action = "quarantine";
+          entry.reason = "remove_failed_quarantined";
+          entry.quarantine = quarantine.destination;
+          quarantined.push({ path: entry.path, destination: quarantine.destination, message });
+          reportSweepProgress(options, entries, removed, sweepingStatus);
+          continue;
+        }
+        clearFailure(entry.path);
+        removed.push(entry.path);
+        reportSweepProgress(options, entries, removed, sweepingStatus);
       }
-      clearFailure(entry.path);
-      removed.push(entry.path);
-      reportSweepProgress(options, entries, removed, sweepingStatus);
       if (entry.orphanDirectory) continue;
       const branch = localBranchName(entry.branch);
       if (!branch) continue;
+      if (!entry.reachable && !entry.patchEquivalent) {
+        entry.retainedBranch = branch;
+        retainedBranches.push({ branch, path: entry.path });
+        continue;
+      }
       const deleted = await git(repo, ["branch", "-D", "--", branch]);
       if (deleted.ok) deletedBranches.push(branch);
       else failures.push({ path: branch, message: deleted.stderr || "git branch delete failed" });
@@ -1671,7 +1769,7 @@ async function sweep(repo, tickets, options = {}) {
   if (!remainingList.ok) throw new Error(remainingList.stderr || "could not list git worktrees");
   const remainingWorktrees = parseWorktreeList(remainingList.stdout);
   const checkedOutBranches = new Set(remainingWorktrees.map((entry) => localBranchName(entry.branch)).filter((branch) => !!branch));
-  const orphanBranches = options.ticketRef ? [] : await findOrphanBranches(repo, checkedOutBranches, upstream, maxCandidates);
+  const orphanBranches = options.ticketRef || upstreamSafetyReason ? [] : await findOrphanBranches(repo, checkedOutBranches, comparison, maxCandidates);
   if (execute) {
     for (const entry of orphanBranches.filter((candidate) => candidate.action === "prune")) {
       const deleted = await git(repo, ["branch", "-D", "--", entry.branch]);
@@ -1679,16 +1777,20 @@ async function sweep(repo, tickets, options = {}) {
       else failures.push({ path: entry.branch, message: deleted.stderr || "git branch delete failed" });
     }
   }
+  const strayDirectories = options.ticketRef ? [] : await sweepStrayWorktreeHome(repo, execute, failures);
   reportSweepProgress(options, entries, removed, completeStatus);
   return {
     dryRun: !execute,
     minAgeMs,
     notIntegratedSalvageAgeMs,
     upstream,
+    upstreamFallback,
     entries,
+    strayDirectories,
+    retainedBranches,
+    remainingCandidates,
     orphanBranches,
     removed,
-    backups,
     salvaged,
     deletedBranches,
     prunedOrphanBranches,
@@ -1699,12 +1801,13 @@ async function sweep(repo, tickets, options = {}) {
       removedWorktrees: removed.length,
       salvagedWorktrees: salvaged.length,
       quarantinedWorktrees: quarantined.length,
-      backedUpWorktrees: backups.length,
       deletedBranches: deletedBranches.length,
+      retainedBranches: retainedBranches.length,
       prunedOrphanBranches: prunedOrphanBranches.length,
+      removedStrayDirectories: strayDirectories.filter((entry) => entry.action === "remove").length,
       ...recoveryCounts(recovery)
     },
     failures
   };
 }
-module.exports = { retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };
+module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };

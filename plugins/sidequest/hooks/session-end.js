@@ -152,6 +152,7 @@ function writeSweepProgress(cwd, progress) {
 // src/hooks/shared/worktree-sweep.ts
 var MAX_PROJECTS_PER_START = 3;
 var MAX_CANDIDATES_PER_PROJECT = 8;
+var MAX_CANDIDATES_PER_START = 24;
 var DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 var MAX_ORPHAN_SUBJECT_LENGTH = 120;
 function windowsProcesses() {
@@ -279,6 +280,9 @@ function salvageNotices(salvaged) {
 function missingIntegrationTarget(error) {
   return /Configured integration ref .+ does not exist\./.test(String(error?.message || error));
 }
+function sweepRule(order) {
+  return `Cleanup classifies in this order: ${order.join(", ")}.`;
+}
 async function sweepWorktrees(data, includeKnownProjects) {
   const store = require(runtimeModule("store"));
   const { project: current, sessionPath } = currentProject(data, store);
@@ -286,6 +290,7 @@ async function sweepWorktrees(data, includeKnownProjects) {
   const projects = includeKnownProjects ? store.worktreeGcProjects(current.slug, MAX_PROJECTS_PER_START) : [current];
   const notices = [];
   const worktrees = require(runtimeModule("worktrees"));
+  const rule = sweepRule(worktrees.WORKTREE_SWEEP_CLASSIFICATION_ORDER);
   const activePaths = liveSessionPaths();
   const progressCwd = stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const projectProgress = /* @__PURE__ */ new Map();
@@ -317,6 +322,7 @@ async function sweepWorktrees(data, includeKnownProjects) {
     }
     writeSweepProgress(progressCwd, { phase, candidates, observed, current: current2, reason, planned, removed, keptByReason });
   };
+  let budget = MAX_CANDIDATES_PER_START;
   for (const project of projects) {
     const isCurrentProject = project.slug === current.slug;
     try {
@@ -324,20 +330,17 @@ async function sweepWorktrees(data, includeKnownProjects) {
     } catch (_) {
       continue;
     }
-    let target;
+    if (budget <= 0) break;
+    let target = null;
     try {
       target = store.integrationTarget(project.slug);
     } catch (error) {
-      if (isCurrentProject && missingIntegrationTarget(error)) {
-        notices.push(`sidequest: skipped worktree sweep for ${project.name || project.slug}: the configured integration branch is unavailable locally.`);
+      if (isCurrentProject && !missingIntegrationTarget(error)) {
+        notices.push(`sidequest: worktree sweep for ${project.name || project.slug} could not read its integration target: ${error && error.message || error}`);
       }
-      continue;
     }
-    if (!target) {
-      if (isCurrentProject) {
-        notices.push(`sidequest: skipped worktree sweep for ${project.name || project.slug}: no integration target. Configure one with ${projectCommand(project)}.`);
-      }
-      continue;
+    if (!target && isCurrentProject) {
+      notices.push(`sidequest: ${project.name || project.slug} has no usable integration ref, so the worktree sweep compared against the repository default instead. ${rule} Configure one with ${projectCommand(project)}.`);
     }
     try {
       const config = store.boardConfig(project.slug);
@@ -346,13 +349,19 @@ async function sweepWorktrees(data, includeKnownProjects) {
         currentPath: isCurrentProject ? sessionPath : "",
         livePaths: activePaths,
         integrationTarget: target,
-        maxCandidates: MAX_CANDIDATES_PER_PROJECT,
+        maxCandidates: isCurrentProject ? Math.min(MAX_CANDIDATES_PER_PROJECT, budget) : budget,
         notIntegratedSalvageAgeMs: (config?.notIntegratedSalvageAgeHours || DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS) * 60 * 60 * 1e3,
         recoveryRetentionAgeMs: (config?.worktreeRecoveryRetentionAgeHours || 14 * 24) * 60 * 60 * 1e3,
-        recoveryRetentionMaxPerAgent: config?.worktreeRecoveryRetentionMaxPerAgent || 3,
         onProgress: (progress) => updateProgress(project, progress)
       });
+      budget -= result.entries?.length || 0;
+      for (const retained of result.retainedBranches || []) {
+        notices.push(`sidequest: reclaimed ${retained.path} and kept branch ${retained.branch}, which carries commits that are not on ${result.upstream}. ${rule}`);
+      }
       if (!isCurrentProject) continue;
+      if (result.remainingCandidates) {
+        notices.push(`sidequest: ${result.remainingCandidates} worktree candidate(s) in ${project.name || project.slug} remain past this session's sweep budget; later sessions continue oldest first.`);
+      }
       if (result.skipped === "repository_busy") {
         notices.push(`sidequest: skipped worktree sweep for ${project.name || project.slug}: the repository has an in-progress git operation.`);
       }
