@@ -531,6 +531,9 @@ const {
   rederiveUnlaunchedPreparedRoute,
   stampDispatchEvent,
   pulseDispatchState,
+  unclaimedRetirement,
+  unclaimedEvidenceAttempt,
+  unclaimedRetirementRefusal,
   isolatedDispatchWorktreeMissing,
   isolatedDispatchWithMissingWorktree,
   terminalDispatchTarget,
@@ -559,6 +562,7 @@ const {
   recoverDispatchQuotaFailure,
   bindDispatchWorktreeCreation,
   completeDispatchWorktreeCreation,
+  recordDispatchWorktreeProvisioned,
   recordDispatchWorktreeProvisioningFailure,
   recordDispatchWorktreeDependencyLink,
   recoverDispatchWorktreeCreation,
@@ -607,6 +611,7 @@ const {
   localAheadOfUpstreamWarning,
   availableRoute: (...args: any[]) => availableRoute(...args),
   boardConfig,
+  claimGraceMs: () => claimGraceMs(),
   claimIdleMs: () => claimIdleMs(),
   claimReclaimable: (...args: any[]) => claimReclaimable(...args),
   claimVerification: (...args: any[]) => claimVerification(...args),
@@ -1020,11 +1025,13 @@ function completionTreeCheck(slug?: any, ticket?: any, opts?: any) {
 
 const {
   DEFAULT_CLAIM_ABANDON_MIN,
+  DEFAULT_CLAIM_GRACE_MIN,
   DEFAULT_CLAIM_IDLE_MIN,
   DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
   autoReleasedClaimMessage,
   claimAbandonMs,
   claimActivityMs,
+  claimGraceMs,
   claimIdleAge,
   claimIdleMs,
   claimMaySubmit,
@@ -1969,7 +1976,7 @@ function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
     // A reduced-schema attempt has no agentName, so SubagentStop can only reach
     // it by agent_id. Recording identity before refusing keeps a refused attempt
     // retirable by its own terminal hook instead of stranding it until the
-    // claim-idle backstop. Identity is not permission: claimTicket re-checks.
+    // claim grace elapses. Identity is not permission: claimTicket re-checks.
     const permissionRefused = state.reducedAgentSchema === true && !reducedPermissionModeSupported(observedPermissionMode);
     stampDispatchEvent(ticket, permissionRefused ? 'claim-permission-refused' : 'claim-runtime-identity', now);
     putTicket(slug, ticket);
@@ -3062,19 +3069,33 @@ function pendingSubmissionDeliveryRefusal(ticket?: any, result?: any) {
   });
 }
 
+// The same shape the dispatch evidence path accepts, deliberately: grooming used to refuse every bound
+// attempt outright, so closing one meant a retire-then-close dance through two tools while the two surfaces
+// slowly drifted apart. Whether it is retirable YET is the authority's call in clearUnclaimedDispatch.
 function unclaimedPreRuntimeDispatch(ticket?: any, state?: any) {
+  return unclaimedEvidenceAttempt(ticket, state);
+}
+
+// A bound attempt that never claimed used to leave closure with no legal move at all: grooming and hand
+// delivery both refused it as an open dispatch and named no exit, so the reporter of SQ-2922 delivered the
+// contract from a duplicate ticket and left the original unclosable. Retirement is that exit, so say so.
+function boundUnclaimedDispatch(ticket?: any, state?: any) {
   return Boolean(
     ticket?.dispatchNonce
     && state
     && ['prepared', 'launched'].includes(state.outcome)
     && !state.terminalAt
-    && !state.boundAt
+    && state.boundAt
     && !state.claimedAt
-    && !ticket.claim?.by,
+    && !ticket.claim?.by
+    && !ticket.checkpoint,
   );
 }
 
 function unclaimedPreRuntimeDeliveryGuidance(ticket?: any, state?: any) {
+  if (boundUnclaimedDispatch(ticket, state)) {
+    return ` This attempt bound a runtime that never claimed. Once the claim grace has passed with no further board signal from that runtime, close it with \`groomClose ${ticket.ref} --recoveryEvidence "<the host notification that the runtime terminated>"\`, which retires the attempt in the same call, or retire it on its own with \`sidequest dispatch ${ticket.ref} --recovery-evidence "<that same evidence>" --retire-only\` (MCP \`recoveryEvidence\` with \`retireOnly: true\`). Inside the grace both refuse with the same countdown, naming the exact instant it becomes retirable and the signal it measured from.`;
+  }
   if (!unclaimedPreRuntimeDispatch(ticket, state)) return '';
   return ` This attempt is unclaimed and unbound. Once the delivery commit is reachable from the recorded integration branch, close it with \`groomClose ${ticket.ref} --deliveryCommit <sha> --deliveryMethod manual --recoveryEvidence "<why the attempt is dead>"\` (include by and reason). If the commit is not reachable from that branch, grooming still refuses until delivery reaches it. To retire without preparing a replacement first, dispatch with recoveryEvidence and retireOnly:true.`;
 }
@@ -3108,7 +3129,19 @@ function clearUnclaimedDispatch(slug?: any, idOrRef?: any, opts?: any) {
         ok: false,
         reason: 'active_dispatch',
         ticket,
-        message: `${ticket.ref} cannot apply recovery evidence because its dispatch is live, bound, claimed, or already terminal. Recovery evidence clears only an unclaimed prepared or launched dispatch before runtime binding.`,
+        message: `${ticket.ref} cannot apply recovery evidence because its dispatch is claimed, checkpointed, or already terminal. Recovery evidence clears an unclaimed prepared or launched dispatch once it is past its retirement deadline.`,
+      };
+    }
+    // This door used to skip the retirement authority entirely and retire an attempt that was still inside
+    // its grace, which is what let groomClose kill a runtime that had barely started (SQ-2949 finding 1).
+    const nowMs = Date.now();
+    const retirement = unclaimedRetirement(ticket, state, nowMs);
+    if (nowMs < retirement.retirableAt) {
+      return {
+        ok: false,
+        reason: 'unclaimed_launch_not_supersedable',
+        ticket,
+        message: unclaimedRetirementRefusal(ticket, state, nowMs),
       };
     }
     if (agentId && String(state.agentId || '') !== agentId) return { ok: false, reason: 'dispatch_identity_mismatch', ticket };
@@ -3128,6 +3161,25 @@ function clearUnclaimedDispatch(slug?: any, idOrRef?: any, opts?: any) {
     queueEventNotification(slug, ticket, ticket.lastEventType, ticket.lastEventSource);
     return { ok: true, ticket };
   });
+}
+
+// THE groom-close retirement authority, so the CLI and the MCP tool cannot answer the same recovery evidence
+// differently. The CLI accepted `--recovery-evidence`, never read it, and went straight to
+// completeTicketAsControlPlane, which refuses a bound unclaimed attempt as `active_dispatch` both inside and
+// past the deadline - while MCP counted down and then retired and closed in one call. So the CLI's advertised
+// recovery door could never open (SQ-2959 finding 3). Both surfaces now call this and print what it returns.
+function groomCloseRecovery(slug?: any, idOrRef?: any, opts?: any) {
+  const evidence = String(opts?.evidence || '').trim();
+  const reason = String(opts?.reason || '');
+  if (!evidence) return { ok: true, reason };
+  const ticket = getTicket(slug, idOrRef);
+  const recovered = clearUnclaimedDispatch(slug, idOrRef, { by: opts?.by, evidence });
+  if (recovered.ok) return { ok: true, reason };
+  // A dispatch that is ALREADY terminal needs no retirement, so evidence arriving after the fact is recorded
+  // in the closure reason rather than refused.
+  const terminalDispatch = Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
+  if (!terminalDispatch) return { ok: false, recovered };
+  return { ok: true, reason: `${reason} Recovery evidence recorded after the terminal dispatch: ${evidence}` };
 }
 
 function unconsumedPreparedDispatch(ticket?: any, state?: any) {
@@ -3552,8 +3604,8 @@ const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createP
   boardConfig,
   checkpointProjection,
   claimPulse,
-  claimIdleMs,
   claimReleaseVerdict,
+  unclaimedRetirement,
   claimVerification,
   commitScope,
   dispatchState,
@@ -3728,6 +3780,7 @@ module.exports = {
   recoverDispatchQuotaFailure,
   bindDispatchWorktreeCreation,
   completeDispatchWorktreeCreation,
+  recordDispatchWorktreeProvisioned,
   recordDispatchWorktreeProvisioningFailure,
   recordDispatchWorktreeDependencyLink,
   recoverDispatchWorktreeCreation,
@@ -3755,6 +3808,7 @@ module.exports = {
   missingReleaseFragmentMessage,
   unrecordedSanctionedCommitWarning,
   clearUnclaimedDispatch,
+  groomCloseRecovery,
   closeTicketForGrooming,
   makeWorkedBy,
   checkpointTicket,
@@ -3837,9 +3891,11 @@ module.exports = {
   technicalBlockerRelease,
   touchClaim,
   claimIdleMs,
+  claimGraceMs,
   claimAbandonMs,
   preparedDispatchTtlMs,
   DEFAULT_CLAIM_IDLE_MIN,
+  DEFAULT_CLAIM_GRACE_MIN,
   DEFAULT_CLAIM_ABANDON_MIN,
   DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
   sweepStaleClaims,

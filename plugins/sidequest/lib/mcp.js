@@ -250,15 +250,13 @@ async function runTool(tool, rawArgs) {
 const ATTESTATION_VERIFY_CONTRACT = "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.";
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   context_page: {
-    limit: "UTF-8 bytes.",
-    expectedRevision: "Revision."
+    limit: "UTF-8 bytes."
   },
   add: { complexity: "Legacy score; why required.", verify: ATTESTATION_VERIFY_CONTRACT },
   claim: { force: "Operator-only." },
   update: { verify: ATTESTATION_VERIFY_CONTRACT },
   supersede_submission: { supersededBy: "Repair ticket ref, not a commit." },
   comments: {
-    full: "Whole bodies.",
     since: "Comment id or ISO timestamp."
   },
   list: {
@@ -270,17 +268,16 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
     outputTail: "Required blocker/contradiction output."
   },
   story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
-  category_edit: { fallbackModel: "null clears fallback." },
+  category_edit: { fallbackModel: "null clears." },
   dispatch: {
-    sharedTree: "Tree.",
     reducedAgentSchema: "Only when name/mode missing; hook needs agent_id+auto|bypass mode.",
-    recoveryEvidence: "unbound or expired bound",
-    worktree: "Checkout."
+    recoveryEvidence: "Unverified; latest signal grace; only the bound runtime name counts."
   },
   integrate: { deliveryInteractionCommit: "Reviewed descendant, submitted paths only." },
   groomClose: {
     deliveryCommit: "Prepared integration target.",
-    deliveryInteractionCommit: "Reviewed descendant, submitted paths only."
+    deliveryInteractionCommit: "Reviewed descendant, submitted paths only.",
+    recoveryEvidence: "Unverified; retires unclaimed attempts past deadline; CLI too."
   },
   verdict: {
     outcome: "Candidate, not reviewer prose."

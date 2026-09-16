@@ -1472,7 +1472,7 @@ function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, fac
   if (incompleteCreation && dispatch?.worktreeBindingSource !== 'worktree-create') {
     // A continuation attempt inherits a checkout an earlier attempt created, so an attempt that never bound a
     // runtime owns nothing here: there is no checkout of its own to match, and the inherited one stays either
-    // way. Reporting that as a retry blocker locked the ticket until the claim-idle backstop (SQ-2537).
+    // way. Reporting that as a retry blocker locked the ticket until the claim grace elapsed (SQ-2537).
     const retainedCheckout = !dispatch?.boundAt;
     return {
       worktree: entry.worktree,

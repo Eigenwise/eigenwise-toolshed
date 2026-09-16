@@ -260,9 +260,19 @@ async function cmdGroomClose(opts: any, positional: any) {
   const by = workerId(opts);
   const ticket = store.getTicket(slug, idOrRef);
   const purpose = opts.integration ? 'integration' : opts['delivery-commit'] ? 'delivery' : 'grooming';
+  const recovery = store.groomCloseRecovery(slug, idOrRef, { by, reason, evidence: opts['recovery-evidence'] });
+  if (!recovery.ok) {
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, recovery.recovered), null, 2) + '\n');
+      process.exitCode = 1;
+      return;
+    }
+    reportClaimFailure('groom-close', idOrRef, recovery.recovered, meta);
+    return;
+  }
   const res = store.completeTicketAsControlPlane(slug, idOrRef, {
     by,
-    reason,
+    reason: recovery.reason,
     purpose,
     abandonSubmission: opts['abandon-submission'] === true,
     deliveryCommit: opts['delivery-commit'],

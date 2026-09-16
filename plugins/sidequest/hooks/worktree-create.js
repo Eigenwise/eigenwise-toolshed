@@ -175,7 +175,7 @@ var CLAIM_REFUSAL_MESSAGES = Object.freeze({
   empty: () => "No tickets are available on this board. Run `sidequest ready` to inspect the queue.",
   submitted: (ref) => `${ref} is READY_FOR_INTEGRATION with a submitted commit. Run the orchestrator publish flow. While it is UNBOUND, a review rejection is \`sidequest rework ${ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the same ticket for a normal repair claim; the old candidate remains recorded until replacement submission. Once a \`review-audit\` ticket is bound to the candidate, rework, clear, reclaim, and amendment all refuse without writing: record the failed review's evidence on the review ticket, release that review with kind \`oracle\`, and repair through a fresh ticket, dispatch, commit, review, and candidate. \`submit --clear\` intentionally drops an unbound candidate and is only for an integration bounce. \`release\`/\`update\` alone refuse rather than silently leaving it wedged (SQ-1010).`,
   dispatch_required: (ref) => `${ref} is category-routed and has no prepared dispatch. File a spike for investigation when needed, then run \`sidequest dispatch ${ref}\` and spawn its returned executor. Inline is limited to the inline-safe allowlist: \`sidequest claim ${ref} --direct --reason "why this is inline-safe"\` (MCP \`direct:true\` with \`reason\`).`,
-  token: (ref) => `${ref} has a prepared dispatch whose token file was missing, unreadable, or invalid. Re-run the exact claim from this executor's briefing with its dispatched \`tokenFile\` path; do not transcribe the token, retry dispatch from this executor, or release a dispatch you did not claim. The orchestrator should run \`sidequest pulse ${ref}\`: if it reports prepared or launched with no bound runtime identity, claim, or checkpoint, or stalled because a bound runtime never claimed past the claim-idle backstop, retire it in one call with \`sidequest dispatch ${ref} --recovery-evidence "<observed failed-claim evidence>"\` (MCP \`recoveryEvidence\`), which records the evidence on the failed attempt and prepares a fresh one; otherwise wait for the active attempt to become terminal before dispatching again.`,
+  token: (ref) => `${ref} has a prepared dispatch whose token file was missing, unreadable, or invalid. Re-run the exact claim from this executor's briefing with its dispatched \`tokenFile\` path; do not transcribe the token, retry dispatch from this executor, or release a dispatch you did not claim. The orchestrator should run \`sidequest pulse ${ref}\`: if it reports stalled because an unclaimed runtime has no readable signal or is past its deadline, retire it in one call with \`sidequest dispatch ${ref} --recovery-evidence "<observed failed-claim evidence>"\` (MCP \`recoveryEvidence\`), which records the evidence on the failed attempt and prepares a fresh one; otherwise wait for the active attempt to become terminal before dispatching again.`,
   prepared_compatibility_stale: (ref) => `${ref}'s prepared Sidequest runtime/version snapshot no longer matches the installed MCP and hooks configuration, so the token-file refusal already retired that dispatch attempt. Stop without claiming. The orchestrator can dispatch ${ref} again for a fresh token file.`,
   unbound_dispatch: (ref) => `${ref} could not bind this executor runtime to its isolated dispatch. Claim it with the dispatched token file and exact executor from its briefing; the token file binds the claiming runtime. If that claim still fails, comment the refusal evidence and release ${ref} with kind \`technical_blocker\` so the orchestrator can redispatch it. Do not hand a command to the user.`,
   executor_mismatch: (ref, ticket, projectPath) => `${ref} has a prepared dispatch for a different executor. A token-file-valid claim from the currently-derived executor self-heals version skew, so re-run the claim from its briefing with that token file. ${dispatchedClaimGuidance(ref, ticket, projectPath)}`,
@@ -190,6 +190,8 @@ var CLAIM_REFUSAL_MESSAGES = Object.freeze({
 var WORKTREE_CREATION_REFUSALS = Object.freeze({
   project_unavailable: (repository) => `${repository} is not a registered Sidequest board, so this session cannot create a dispatch worktree in it. Register the project, or dispatch with sharedTree:true.`,
   dispatch_binding_unavailable: (_repository, failure) => worktreeBindingComparison(failure),
+  stale_attempt: () => "A retired dispatch attempt holds this checkout, or this call presented a generation the live attempt does not have. The start binding is scoped to the session and the checkout rather than to a generation, so this refusal is how a late hook finds out a replacement owns the checkout now; nothing was stamped and the live attempt was left untouched. Run `sidequest pulse <ref>` to see which attempt owns it.",
+  missing_attempt: () => 'This checkout is already bound to an attempt whose WorktreeCreate has not finished creating it, so its own hook already holds the attempt generation. A second start binding with no generation is a racing hook, not the owner, and would have acquired that live generation; nothing was stamped. Wait for the owning hook, or retire the attempt with `sidequest dispatch <ref> --recovery-evidence "<observed failure evidence>"` once it is past its deadline.',
   dispatch_launch_unrecorded: (repository) => `The board for ${repository} holds a prepared dispatch for this session but no recorded launch, so no launched attempt exists to reserve this checkout, and a prepared attempt never supplies creation authority. Run \`sidequest pulse <ref>\`, then \`sidequest dispatch <ref> --recovery-evidence "WorktreeCreate refused: the dispatch launch was never recorded"\`.`,
   baseline_unavailable: () => "The launched dispatch recorded no base commit, so its worktree has no revision to check out. Re-dispatch the ticket for a fresh baseline."
 });
@@ -272,6 +274,18 @@ function createWorktree(binding, name) {
   git(repository, ["worktree", "add", "-b", branch, target, baseline]);
   return true;
 }
+function retiredGenerationRefusal(reason) {
+  return reason === "stale_attempt" || reason === "missing_attempt";
+}
+function recordingRefusal(what, reason, fallback = "dispatch binding is incomplete") {
+  if (reason === "stale_attempt") {
+    return `worktree lease could not record ${what}: this WorktreeCreate belongs to a retired dispatch attempt, so the board refused the stamp and the live attempt was left untouched`;
+  }
+  if (reason === "missing_attempt") {
+    return `worktree lease could not record ${what}: this WorktreeCreate carried no dispatch attempt generation, so the board refused the stamp and the live attempt was left untouched`;
+  }
+  return `worktree lease could not record ${what}: ${reason || fallback}`;
+}
 function registeredProject(store, repository) {
   return store.findProject(store.nearestRepoRoot(repository));
 }
@@ -281,23 +295,29 @@ function bindCreation(repository, sessionId, worktree) {
   if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
   return store.bindDispatchWorktreeCreation(project.slug, sessionId, worktree);
 }
-function completeCreation(repository, sessionId, worktree) {
+function completeCreation(repository, sessionId, worktree, attempt) {
   const store = require(runtimeModule("store"));
   const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
-  return store.completeDispatchWorktreeCreation(project.slug, sessionId, worktree);
+  return store.completeDispatchWorktreeCreation(project.slug, sessionId, worktree, attempt);
 }
-function recordProvisioningFailure(repository, sessionId, worktree, failure) {
+function recordProvisioned(repository, sessionId, worktree, attempt) {
   const store = require(runtimeModule("store"));
   const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
-  return store.recordDispatchWorktreeProvisioningFailure(project.slug, sessionId, worktree, failure);
+  return store.recordDispatchWorktreeProvisioned(project.slug, sessionId, worktree, attempt);
 }
-function recordDependencyLink(repository, sessionId, worktree, link) {
+function recordProvisioningFailure(repository, sessionId, worktree, failure, attempt) {
   const store = require(runtimeModule("store"));
   const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
-  return store.recordDispatchWorktreeDependencyLink(project.slug, sessionId, worktree, link);
+  return store.recordDispatchWorktreeProvisioningFailure(project.slug, sessionId, worktree, failure, attempt);
+}
+function recordDependencyLink(repository, sessionId, worktree, link, attempt) {
+  const store = require(runtimeModule("store"));
+  const project = registeredProject(store, repository);
+  if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
+  return store.recordDispatchWorktreeDependencyLink(project.slug, sessionId, worktree, link, attempt);
 }
 function plannedRevision(repository, name, baseline) {
   const branch = `worktree-${name}`;
@@ -329,11 +349,14 @@ function provisioningConfig(repository) {
   const project = registeredProject(store, repository);
   return project.ok && project.slug ? store.boardConfig(project.slug) || {} : {};
 }
-function recoverCreatedWorktree(repository, sessionId, target, error) {
+function recoverCreatedWorktree(repository, sessionId, target, error, attempt) {
   const store = require(runtimeModule("store"));
   const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return "worktree recovery preserved the checkout because its project binding is unavailable";
-  const recovery = store.recoverDispatchWorktreeCreation(project.slug, sessionId, target, error);
+  const recovery = store.recoverDispatchWorktreeCreation(project.slug, sessionId, target, error, attempt);
+  if (retiredGenerationRefusal(recovery.reason)) {
+    return "worktree recovery touched no attempt and left the checkout to the replacement that now owns it";
+  }
   if (!recovery.ok) return `worktree recovery preserved the checkout because ${recovery.reason || "its dispatch binding is unavailable"}`;
   if (recovery.cleanup?.reclaimed) return null;
   return `worktree recovery preserved the checkout because ${recovery.cleanup?.message || recovery.cleanup?.reason || "cleanup authority is incomplete"}`;
@@ -365,6 +388,8 @@ async function createWorktreeMain() {
   if (!binding.ok || !binding.ref || !binding.baseline || !binding.repository || !binding.worktree) {
     throw new Error(worktreeCreationRefusalMessage(String(binding.reason || ""), repository, binding.binding));
   }
+  const attempt = String(binding.attempt || "");
+  if (!attempt) throw new Error("worktree lease refused creation: the dispatch binding carried no attempt generation");
   const boundCreation = {
     ...binding,
     ref: binding.ref,
@@ -380,8 +405,8 @@ async function createWorktreeMain() {
       const identity2 = linkedCheckoutIdentity(boundCreation.worktree);
       if (!identity2) throw new Error("new worktree identity is unavailable");
       leaseKernel.createCheckoutInstanceMarker(identity2.gitDirectory);
-      const completed = completeCreation(boundCreation.repository, sessionId, boundCreation.worktree);
-      if (!completed.ok) throw new Error(`worktree lease could not record completed creation: ${completed.reason || "completion binding is incomplete"}`);
+      const completed = completeCreation(boundCreation.repository, sessionId, boundCreation.worktree, attempt);
+      if (!completed.ok) throw new Error(recordingRefusal("completed creation", completed.reason, "completion binding is incomplete"));
       const provisioningFailure = await worktrees.provisionWorktree(
         boundCreation.repository,
         boundCreation.worktree,
@@ -389,17 +414,19 @@ async function createWorktreeMain() {
         {
           setupTimeoutMs: worktreeSetupDeadlineMs(),
           onDependencyLink: (link) => {
-            const recorded = recordDependencyLink(boundCreation.repository, sessionId, boundCreation.worktree, link);
-            if (!recorded.ok) throw new Error(`worktree lease could not record dependency link: ${recorded.reason || "dispatch binding is incomplete"}`);
+            const recorded = recordDependencyLink(boundCreation.repository, sessionId, boundCreation.worktree, link, attempt);
+            if (!recorded.ok) throw new Error(recordingRefusal("dependency link", recorded.reason));
           }
         }
       );
+      const provisioned = recordProvisioned(boundCreation.repository, sessionId, boundCreation.worktree, attempt);
+      if (!provisioned.ok) throw new Error(recordingRefusal("finished provisioning", provisioned.reason));
       if (provisioningFailure) {
-        const recorded = recordProvisioningFailure(boundCreation.repository, sessionId, boundCreation.worktree, provisioningFailure);
-        if (!recorded.ok) throw new Error(`worktree lease could not record setup failure: ${recorded.reason || "dispatch binding is incomplete"}`);
+        const recorded = recordProvisioningFailure(boundCreation.repository, sessionId, boundCreation.worktree, provisioningFailure, attempt);
+        if (!recorded.ok) throw new Error(recordingRefusal("setup failure", recorded.reason));
       }
     } catch (error) {
-      const preservation = recoverCreatedWorktree(boundCreation.repository, sessionId, boundCreation.worktree, error);
+      const preservation = recoverCreatedWorktree(boundCreation.repository, sessionId, boundCreation.worktree, error, attempt);
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(preservation ? `${message}; ${preservation}` : message);
     }

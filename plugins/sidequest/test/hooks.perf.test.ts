@@ -241,7 +241,7 @@ test('fresh-process hook latency reports benchmark measurements', (context: any)
 
   // The only hook whose budget the host hardcodes: runAgent's interrupted-query fallback gives
   // SubagentStop 5000ms instead of the usual 600000ms, and a launched attempt that misses it waits
-  // out the claim-idle backstop instead. A diagnostic line alone kept that invisible (SQ-2864).
+  // out the claim grace instead. A diagnostic line alone kept that invisible (SQ-2864).
   assert.ok(
     subagentStop.p95 < 1500,
     `SubagentStop fresh-process p95 ${subagentStop.p95.toFixed(1)}ms exceeds the 1500ms bound inside the host's 5000ms failure-path wait`,
