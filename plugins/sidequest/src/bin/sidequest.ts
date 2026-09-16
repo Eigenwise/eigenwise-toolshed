@@ -1,5 +1,11 @@
 'use strict';
 const path = require('path');
+const {
+  WORKTREE_SWEEP_CLASSIFICATION_ORDER,
+  DEFAULT_MIN_AGE_MS,
+  DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS,
+  DEFAULT_RECOVERY_RETENTION_AGE_MS,
+} = require('../lib/worktrees');
 const store = require('../lib/store');
 const { sidequestMutationFreshness } = require('../lib/plugin-freshness');
 const { createProjectBoardWatch } = require('../lib/store/project-watch');
@@ -14,7 +20,7 @@ const { cmdStory } = require('./sidequest-cmd-story');
 
 const ARRAY_FLAGS = new Set(['image', 'label', 'file', 'always-in-scope', 'read-only-denied-tool', 'auto-approve-scope', 'produces', 'changes', 'consumes', 'changed-surface', 'dependency']);
 const ARRAY_FLAG_ALIASES: Record<string, string> = { files: 'file', labels: 'label' };
-const BOOLEAN_FLAGS = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'skip-verify', 'contract-waiver', 'full', 'rotate', 'worktree-isolation', 'auto-approve-test-scope', 'high-stakes', 'working-tree-delivery', 'external-deliverable', 'unverified-transport', 'reduced-agent-schema', 'allow-repeat-failure', 'allow-unscoped', 'no-process', 'no-worktree', 'review', 'abandon-submission']);
+const BOOLEAN_FLAGS = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'skip-verify', 'contract-waiver', 'full', 'rotate', 'worktree-isolation', 'auto-approve-test-scope', 'high-stakes', 'working-tree-delivery', 'external-deliverable', 'unverified-transport', 'reduced-agent-schema', 'allow-repeat-failure', 'allow-unscoped', 'all-projects', 'no-process', 'no-worktree', 'review', 'abandon-submission']);
 const COMMON_FLAGS = new Set(['help', 'json', 'project', 'source']);
 const COMMAND_FLAGS: Record<string, string[]> = {
   add: ['title', 'desc', 'description', 'body', 'body-file', 'priority', 'status', 'category', 'unclassified', 'complexity', 'why', 'high-stakes', 'label', 'image', 'file', 'produces', 'changes', 'consumes', 'contract-waiver', 'readonly', 'working-tree-delivery', 'external-deliverable', 'anchors', 'verify-kind', 'attestation-artifact', 'verify', 'story', 'route-model', 'route-effort', 'route', 'model', 'effort', 'review-ref', 'review-commit', 'review-source', 'review-revision', 'dry-run', 'name'],
@@ -30,7 +36,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   claim: ['by', 'token-file', 'effort', 'executor', 'force', 'direct', 'reason', 'session'],
   checkpoint: ['by', 'commit', 'worktree', 'verify', 'ttl-minutes'],
   claims: ['sweep'],
-  worktrees: ['dry-run', 'yes', 'min-age-hours', 'recovery-retention-age-hours', 'recovery-retention-max-per-agent'],
+  worktrees: ['dry-run', 'yes', 'all-projects', 'min-age-hours', 'recovery-retention-age-hours'],
   'recover-shared': ['project', 'stash', 'yes'],
   next: ['by', 'priority', 'model', 'category', 'direct', 'reason'],
   reconcile: ['session', 'reason', 'ref'],
@@ -200,6 +206,20 @@ function parseArgs(argv: any) {
 }
 
 
+function sweepThresholdLabel(milliseconds: number): string {
+  const hours = milliseconds / (60 * 60 * 1000);
+  return hours >= 24 ? `${hours / 24} days` : `${hours} hours`;
+}
+
+// The reason order alone told an agent nothing about when each reason fires, so the numbers come
+// from the same constants the sweep runs on (SQ-2952).
+const WORKTREE_SWEEP_THRESHOLDS = `too_young keeps anything younger than ${sweepThresholdLabel(DEFAULT_MIN_AGE_MS)}; untracked or ignored content is quarantined whole, and unintegrated work salvaged, once the tree is older than ${sweepThresholdLabel(DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS)}; a quarantine entry is deleted on age alone after ${sweepThresholdLabel(DEFAULT_RECOVERY_RETENTION_AGE_MS)}`;
+
+// Command help and the top-level help drifted apart on the node_modules exception, and an agent acts
+// on whichever one it read (SQ-2958). Both render this sentence, and so do orchestration.md and the
+// getting-started page.
+const WORKTREE_SWEEP_RECLAIM_RULE = 'nothing is deleted where it stands: a reclaimed tree is renamed into quarantine, and content that was there when the sweep classified it, or that arrives before the move, parks the whole tree. A tree counts as clean only when its status carries nothing untracked or ignored; installed files under an ignored node_modules, which worktree setup regenerates, are the one exception. The moved copy is re-read once before its files are deleted, so a file written into it in the instant after that read is deleted with it; a commit is never lost, because the sweep deletes a branch only with update-ref -d against the tip it read, and keeps the branch as tip_moved otherwise. On Windows a process still holding the tree open makes the rename fail and the tree stays in place until a later pass, and quarantine lives under the Sidequest home, so a worktree on a different volume is never reclaimed and parks as quarantine_failed every pass until the quarantine directory is on the same volume';
+
 const HELP_COMMANDS: any = {
   add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [--file <path>]... [--route-model <model> --route-effort <effort>] [-d desc|--body-file path] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly true|false] [--working-tree-delivery] [--external-deliverable] [-i image]... [-s todo|doing|done] [--dry-run] [--json]   (--file declares write scope; a write ticket without it is refused at dispatch)',
   list: 'sidequest list [--status todo|doing|awaiting-oracle|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]  (defaults to active tickets; --status done or --all includes done)',
@@ -214,7 +234,7 @@ const HELP_COMMANDS: any = {
   claim: 'sidequest claim <id|SQ-n> [--by who] [--token-file path] [--effort level] [--force] [--direct --reason "why"]',
   checkpoint: 'sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "command: result" [--ttl-minutes N] [--json]',
   claims: 'sidequest claims sweep [--project <path-or-slug>]',
-  worktrees: 'sidequest worktrees <status|sweep> [--dry-run] [--yes] [--min-age-hours N] [--recovery-retention-age-hours N] [--recovery-retention-max-per-agent N] [--project <path-or-slug>]  report worktree, backup, and quarantine storage; sweep plans stale worktree and recovery-entry cleanup',
+  worktrees: `sidequest worktrees <status|sweep> [--dry-run] [--yes] [--all-projects] [--min-age-hours N] [--recovery-retention-age-hours N] [--project <path-or-slug>]  report per-directory worktree and quarantine storage with a total; sweep plans stale worktree and recovery-entry cleanup in this order: ${WORKTREE_SWEEP_CLASSIFICATION_ORDER.join(', ')}; ${WORKTREE_SWEEP_THRESHOLDS}; ${WORKTREE_SWEEP_RECLAIM_RULE}; --all-projects sweeps every registered project whose path still exists, in slug order`,
   next: 'sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why"]',
   reconcile: 'sidequest reconcile [--session <id>] [--reason "..."]',
   work: 'sidequest work|drain',
@@ -372,7 +392,7 @@ Native Agent dispatch (routed work stays in this conversation):
     window passes, so keep long work writing to the board. Closeout (commit/submit/done) never consults these
     windows, and a bound unclaimed attempt is never swept on age at all: it needs its terminal hook or
     explicit recovery evidence.
-  sidequest worktrees <status|sweep> [--dry-run] [--yes] [--min-age-hours N] [--recovery-retention-age-hours N] [--recovery-retention-max-per-agent N] [--project <path-or-slug>]  report worktree storage; --yes removes planned stale worktrees and expired recovery entries
+  sidequest worktrees <status|sweep> [--dry-run] [--yes] [--all-projects] [--min-age-hours N] [--recovery-retention-age-hours N] [--project <path-or-slug>]  report per-directory worktree and quarantine storage with a total; sweep classifies in this order: ${WORKTREE_SWEEP_CLASSIFICATION_ORDER.join(', ')}. ${WORKTREE_SWEEP_THRESHOLDS}. ${WORKTREE_SWEEP_RECLAIM_RULE}. --yes removes planned stale worktrees and expired quarantine entries; --all-projects walks every registered project, oldest worktrees first
   sidequest recover-shared --project <path-or-slug> --stash <stash@{n}> --yes  reset a dirty shared checkout only after verifying its named stash
 
 Assigning (persistent owner, e.g. handing a ticket to the human — separate from a claim):
