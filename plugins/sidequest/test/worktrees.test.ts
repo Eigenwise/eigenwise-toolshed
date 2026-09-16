@@ -778,6 +778,88 @@ test('sweep quarantines a clean tree whose gitignored nested repository holds co
   }
 });
 
+test('sweep removes a clean tree whose only ignored content is an installed node_modules', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-clean-node-modules-quarantine-'));
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'clean-node-modules');
+  const ticket = integratedTicket('SQ-CLEAN-NODE-MODULES', 'clean-node-modules', worktree, baseCommit);
+  fs.mkdirSync(path.join(worktree, 'node_modules', 'installed'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'node_modules', 'installed', 'index.js'), 'module.exports = 1;\n');
+  const oldTimestamp = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(worktree, oldTimestamp, oldTimestamp);
+  try {
+    assert.match(git(worktree, ['status', '--porcelain', '--ignored']), /^!! node_modules\//m, 'the installed cache is ignored content');
+
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget, quarantineDir });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.action, 'remove');
+    assert.equal(entry.clean, true);
+    assert.equal(fs.existsSync(worktree), false);
+    assert.deepEqual(result.quarantined, []);
+    assert.deepEqual(fs.readdirSync(quarantineDir), []);
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
+  }
+});
+
+test('sweep quarantines a clean tree whose node_modules hides a nested repository', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-node-modules-nested-quarantine-'));
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'node-modules-nested');
+  const ticket = integratedTicket('SQ-NODE-MODULES-NESTED', 'node-modules-nested', worktree, baseCommit);
+  const nested = path.join(worktree, 'node_modules', 'linked-package');
+  fs.mkdirSync(nested, { recursive: true });
+  git(nested, ['init', '-b', 'main']);
+  git(nested, ['config', 'user.name', 'Sidequest Test']);
+  git(nested, ['config', 'user.email', 'sidequest-test@example.invalid']);
+  fs.writeFileSync(path.join(nested, 'unfinished.txt'), 'work only this nested repository has\n');
+  git(nested, ['add', '.']);
+  git(nested, ['commit', '-m', 'nested work']);
+  const oldTimestamp = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(worktree, oldTimestamp, oldTimestamp);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget, quarantineDir });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.action, 'quarantine');
+    assert.equal(entry.reason, 'untracked_quarantined');
+    assert.equal(fs.readFileSync(path.join(entry.quarantine, 'node_modules', 'linked-package', 'unfinished.txt'), 'utf8'), 'work only this nested repository has\n');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
+  }
+});
+
+test('sweep quarantines a clean tree holding an installed node_modules next to other ignored content', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-node-modules-plus-quarantine-'));
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'node-modules-plus');
+  const ticket = integratedTicket('SQ-NODE-MODULES-PLUS', 'node-modules-plus', worktree, baseCommit);
+  fs.mkdirSync(path.join(worktree, 'node_modules', 'installed'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'node_modules', 'installed', 'index.js'), 'module.exports = 1;\n');
+  fs.mkdirSync(path.join(worktree, 'nested-clean'));
+  fs.writeFileSync(path.join(worktree, 'nested-clean', 'notes.txt'), 'ignored, and only here\n');
+  const oldTimestamp = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(worktree, oldTimestamp, oldTimestamp);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget, quarantineDir });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.action, 'quarantine');
+    assert.equal(entry.reason, 'untracked_quarantined');
+    assert.equal(fs.readFileSync(path.join(entry.quarantine, 'nested-clean', 'notes.txt'), 'utf8'), 'ignored, and only here\n');
+    assert.equal(fs.existsSync(path.join(entry.quarantine, 'node_modules', 'installed', 'index.js')), true, 'the cache travels with the tree');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
+  }
+});
+
 // A quarantine move that fails must leave the source record-for-record, not just byte-for-byte: the
 // links used to be released first, so a cross-volume rename failure kept the tree without them
 // (SQ-2952 MEDIUM 2). The injection here is a quarantine root that is a file, so the move cannot

@@ -33,7 +33,21 @@ function parseWorktreeStatus(stdout) {
 }
 function atRiskStatusEntries(stdout, worktree, ticketOrDispatch) {
   const recorded = recordedDependencyLinkPaths(worktree, ticketOrDispatch);
-  return parseWorktreeStatus(stdout).filter((entry) => !recorded.some((link) => entry.path === link || entry.path.startsWith(`${link}/`)));
+  return parseWorktreeStatus(stdout).filter((entry) => !recorded.some((link) => entry.path === link || entry.path.startsWith(`${link}/`))).filter((entry) => !installedDependencyCacheFile(worktree, entry));
+}
+function installedDependencyCacheFile(worktree, entry) {
+  if (entry.code !== "!!" || !dependencyCachePath(entry.path) || entry.path.endsWith("/")) return false;
+  const segments = entry.path.split(/[\\/]+/).filter(Boolean);
+  try {
+    for (let depth = 1; depth <= segments.length; depth += 1) {
+      const stats = nativeFs.lstatSync(path.join(worktree, ...segments.slice(0, depth)));
+      if (stats.isSymbolicLink()) return false;
+      if (depth === segments.length) return stats.isFile();
+    }
+  } catch (_) {
+    return false;
+  }
+  return false;
 }
 function atRiskStatusEntriesSync(worktree, ticketOrDispatch = null) {
   const stdout = execFileSync("git", [...AT_RISK_STATUS_ARGUMENTS], {

@@ -53,7 +53,29 @@ function parseWorktreeStatus(stdout: string): WorktreeStatusEntry[] {
 function atRiskStatusEntries(stdout: string, worktree: string, ticketOrDispatch: any): WorktreeStatusEntry[] {
   const recorded = recordedDependencyLinkPaths(worktree, ticketOrDispatch);
   return parseWorktreeStatus(stdout)
-    .filter((entry) => !recorded.some((link) => entry.path === link || entry.path.startsWith(`${link}/`)));
+    .filter((entry) => !recorded.some((link) => entry.path === link || entry.path.startsWith(`${link}/`)))
+    .filter((entry) => !installedDependencyCacheFile(worktree, entry));
+}
+
+// Worktree setup runs `npm ci`, so every real worktree carries an ignored node_modules that setup
+// regenerates; counting it as data would park every finished worktree for the retention period.
+// Only plain files reached through plain directories are dropped: a link or a nested repository
+// under node_modules is content the sweep did not put there (SQ-2952 CRITICAL 1), so it still
+// travels into quarantine. git status follows a junction and lists the files behind it, which is
+// why every ancestor is checked and not just the leaf.
+function installedDependencyCacheFile(worktree: string, entry: WorktreeStatusEntry): boolean {
+  if (entry.code !== '!!' || !dependencyCachePath(entry.path) || entry.path.endsWith('/')) return false;
+  const segments = entry.path.split(/[\\/]+/).filter(Boolean);
+  try {
+    for (let depth = 1; depth <= segments.length; depth += 1) {
+      const stats = nativeFs.lstatSync(path.join(worktree, ...segments.slice(0, depth)));
+      if (stats.isSymbolicLink()) return false;
+      if (depth === segments.length) return stats.isFile();
+    }
+  } catch (_) {
+    return false;
+  }
+  return false;
 }
 
 function atRiskStatusEntriesSync(worktree: string, ticketOrDispatch: any = null): WorktreeStatusEntry[] {
