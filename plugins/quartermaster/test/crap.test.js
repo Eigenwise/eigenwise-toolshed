@@ -7,7 +7,7 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { test } = require('node:test');
 
-const { crapReport, crapScore, formatReport } = require('../lib/crap.js');
+const { COVERAGE_DIR_ENV, crapReport, crapScore, formatReport, realDir, sameDir } = require('../lib/crap.js');
 
 const CLI = path.resolve(__dirname, '../bin/quartermaster.js');
 
@@ -40,6 +40,52 @@ function environmentWithoutPath() {
 function functionNamed(report, name) {
   return report.functions.find((entry) => entry.function === name);
 }
+
+/**
+ * crapReport passes runLizard a workDir resolved through git, which realpath-normalizes 8.3 short names
+ * and symlinks; comparing raw path.resolve() output against the fixture's own un-normalized temp path
+ * would spuriously disagree on Windows even though both name the same directory.
+ */
+function sameRealDir(left, right) {
+  return sameDir(realDir(left), realDir(right));
+}
+
+/**
+ * The three ratchet tests below feed a fake `runLizard` that must tell a "current" cwd (the project
+ * itself) from a "baseline" cwd (the temp checkout `baselineFunctions()` makes via
+ * `quartermaster-crap-base-*`). A `sameRealDir` regression that stops recognizing the project would
+ * previously fall through silently to the baseline branch and produce a confusing TypeError or a
+ * quietly-wrong 0-failure report; this makes that mismatch a loud AssertionError naming both spellings.
+ */
+function classifyRatchetCwd(cwd, projectDir) {
+  if (sameRealDir(cwd, projectDir)) return 'current';
+  if (path.basename(cwd).startsWith('quartermaster-crap-base-')) return 'baseline';
+  assert.fail(`fake runLizard got an unrecognized cwd ${cwd}; expected the project ${projectDir} or a quartermaster-crap-base- baseline checkout`);
+}
+
+test('sameRealDir resolves a symlinked alias the way native realpath does, unlike plain realpathSync', () => {
+  // Reproduces the Windows 8.3-short-name gap on Linux: a symlink alias stands in for the short form,
+  // and the non-native realpathSync is stubbed to leave its input unresolved, the way the non-native
+  // realpath leaves 8.3 short names unexpanded on Windows.
+  const realDirPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-real-'));
+  const aliasParent = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-alias-'));
+  const aliasDirPath = path.join(aliasParent, 'alias');
+  fs.symlinkSync(realDirPath, aliasDirPath, 'dir');
+
+  const originalRealpathSync = fs.realpathSync;
+  const stubbedRealpathSync = (target) => target;
+  stubbedRealpathSync.native = originalRealpathSync.native;
+  fs.realpathSync = stubbedRealpathSync;
+  try {
+    assert.equal(fs.realpathSync(aliasDirPath), aliasDirPath, 'the stub leaves the alias unresolved, mimicking an unexpanded 8.3 short name');
+    assert.ok(
+      sameRealDir(aliasDirPath, realDirPath),
+      'sameRealDir must resolve through realpathSync.native, which still dereferences the symlink despite the stub',
+    );
+  } finally {
+    fs.realpathSync = originalRealpathSync;
+  }
+});
 
 test('CRAP comes from the lcov lines inside each function, whatever slashes the lcov used', () => {
   const projectDir = fixtureProject({
@@ -159,7 +205,7 @@ test('the ratchet fails a function that got worse and holds new functions to the
   const lizardCalls = [];
   const runLizard = ({ cwd, sources }) => {
     lizardCalls.push({ cwd, sources });
-    return path.resolve(cwd) === path.resolve(projectDir) ? currentCsv : baseCsv;
+    return classifyRatchetCwd(cwd, projectDir) === 'current' ? currentCsv : baseCsv;
   };
 
   const report = crapReport({ projectDir, ratchet: 'main', runLizard });
@@ -177,6 +223,133 @@ test('the ratchet fails a function that got worse and holds new functions to the
   assert.equal(report.atOrAboveMax, 1);
   assert.equal(report.preExistingAtOrAboveMax, 2);
   assert.match(formatReport(report), /CRAP gate failed: 1 of 3 functions at or above 6; 2 pre-existing functions at or above 6 \(ratchet against main\)/);
+});
+
+test('an anonymous function is not a false new offender when its complexity falls and neighbors shift its position', () => {
+  const projectDir = fixtureProject({
+    'src/widget.js': [
+      'const Widget = (props) => {',
+      '  if (props.a) return 1;',
+      '  if (props.b) return 2;',
+      '  if (props.c) return 3;',
+      '  if (props.d) return 4;',
+      '  return 0;',
+      '};',
+      '',
+    ].join('\n'),
+    'coverage/lcov.info': '',
+  });
+  const git = (args) => execFileSync('git', args, { cwd: projectDir, encoding: 'utf8', windowsHide: true });
+  git(['init', '-b', 'main']);
+  git(['config', 'user.name', 'CRAP test']);
+  git(['config', 'user.email', 'crap-test@example.invalid']);
+  git(['add', '.']);
+  git(['commit', '-m', 'base']);
+
+  // lizard reports every one of these as "(anonymous)"; extracting two helpers ahead of the component
+  // shifts its position among same-named siblings even though its own complexity dropped 20 -> 15.
+  fs.writeFileSync(
+    path.join(projectDir, 'src', 'widget.js'),
+    [
+      'const helperA = (x) => {',
+      '  return x + 1;',
+      '};',
+      '',
+      'const helperB = (x) => {',
+      '  return x - 1;',
+      '};',
+      '',
+      'const Widget = (props) => {',
+      '  if (props.a) return helperA(1);',
+      '  return helperB(0);',
+      '};',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  const baseCsv = '20,20,100,1,7,"(anonymous)@1-7@src/widget.js","src/widget.js","(anonymous)","(anonymous)",1,7\n';
+  const currentCsv = [
+    '1,1,10,1,3,"(anonymous)@1-3@src/widget.js","src/widget.js","(anonymous)","(anonymous)",1,3',
+    '1,1,10,1,3,"(anonymous)@5-7@src/widget.js","src/widget.js","(anonymous)","(anonymous)",5,7',
+    '15,15,80,1,4,"(anonymous)@9-12@src/widget.js","src/widget.js","(anonymous)","(anonymous)",9,12',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (classifyRatchetCwd(cwd, projectDir) === 'current' ? currentCsv : baseCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.deepEqual(report.failures, []);
+  assert.equal(report.ambiguousMatches.length, 1);
+  assert.deepEqual(
+    { file: report.ambiguousMatches[0].file, degraded: report.ambiguousMatches[0].degraded },
+    { file: 'src/widget.js', degraded: false },
+  );
+  assert.match(formatReport(report), /src\/widget\.js: ambiguous match/);
+  assert.match(formatReport(report), /CRAP gate passed/);
+});
+
+test('an anonymous function that truly gets worse still reports one new offender, with no stable baseline match', () => {
+  const projectDir = fixtureProject({
+    'src/widget.js': [
+      'const Widget = (props) => {',
+      '  if (props.a) return 1;',
+      '  if (props.b) return 2;',
+      '  if (props.c) return 3;',
+      '  if (props.d) return 4;',
+      '  return 0;',
+      '};',
+      '',
+    ].join('\n'),
+    'coverage/lcov.info': '',
+  });
+  const git = (args) => execFileSync('git', args, { cwd: projectDir, encoding: 'utf8', windowsHide: true });
+  git(['init', '-b', 'main']);
+  git(['config', 'user.name', 'CRAP test']);
+  git(['config', 'user.email', 'crap-test@example.invalid']);
+  git(['add', '.']);
+  git(['commit', '-m', 'base']);
+
+  fs.writeFileSync(
+    path.join(projectDir, 'src', 'widget.js'),
+    [
+      'const helperA = (x) => {',
+      '  return x + 1;',
+      '};',
+      '',
+      'const helperB = (x) => {',
+      '  return x - 1;',
+      '};',
+      '',
+      'const Widget = (props) => {',
+      '  if (props.a) return helperA(1);',
+      '  if (props.b) return helperB(0);',
+      '  if (props.c) return helperA(2) + helperB(3);',
+      '  return 0;',
+      '};',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  const baseCsv = '20,20,100,1,7,"(anonymous)@1-7@src/widget.js","src/widget.js","(anonymous)","(anonymous)",1,7\n';
+  const currentCsv = [
+    '1,1,10,1,3,"(anonymous)@1-3@src/widget.js","src/widget.js","(anonymous)","(anonymous)",1,3',
+    '1,1,10,1,3,"(anonymous)@5-7@src/widget.js","src/widget.js","(anonymous)","(anonymous)",5,7',
+    '25,25,120,1,6,"(anonymous)@9-14@src/widget.js","src/widget.js","(anonymous)","(anonymous)",9,14',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (classifyRatchetCwd(cwd, projectDir) === 'current' ? currentCsv : baseCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.equal(report.failures.length, 1);
+  assert.deepEqual(
+    { line: report.failures[0].line, reason: report.failures[0].reason },
+    { line: 9, reason: 'ambiguous' },
+  );
+  assert.equal(report.ambiguousMatches[0].degraded, true);
+  assert.match(formatReport(report), /CRAP gate failed: 1 of 3 functions/);
 });
 
 test('the config file supplies the gate settings and flags override it', () => {
@@ -214,6 +387,122 @@ test('a failing coverage command exits 2 instead of reading a stale lcov', () =>
   const result = runCli(['--complexity', 'complexity.csv', '--coverage-command', 'node -e "process.exit(3)"'], projectDir);
   assert.equal(result.status, 2, result.stderr);
   assert.match(result.stderr, /coverage command exited 3/);
+});
+
+function gitAt(cwd) {
+  return (args) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+}
+
+function initRepo(dir) {
+  const git = gitAt(dir);
+  git(['init', '-b', 'main']);
+  git(['config', 'user.name', 'CRAP test']);
+  git(['config', 'user.email', 'crap-test@example.invalid']);
+  return git;
+}
+
+test('running the gate from a linked worktree with --project <main checkout> measures the worktree', () => {
+  const mainDir = fixtureProject({ 'README.md': 'main\n' });
+  const git = initRepo(mainDir);
+  git(['add', '.']);
+  git(['commit', '-m', 'base']);
+
+  const worktreeParent = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-worktree-'));
+  const worktreeDir = path.join(worktreeParent, 'wt');
+  git(['worktree', 'add', '-b', 'wt-branch', worktreeDir, 'main']);
+
+  const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-stub-'));
+  const markerPath = path.join(stubDir, 'marker.json');
+  const scriptPath = path.join(stubDir, 'coverage-stub.js');
+  fs.writeFileSync(
+    scriptPath,
+    [
+      "const fs = require('fs');",
+      "const path = require('path');",
+      "fs.mkdirSync('coverage', { recursive: true });",
+      "fs.writeFileSync(path.join('coverage', 'lcov.info'), 'SF:a.js\\nDA:1,1\\nend_of_record\\n', 'utf8');",
+      `fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({ cwd: process.cwd() }));`,
+    ].join('\n'),
+    'utf8',
+  );
+
+  const lizardCalls = [];
+  const runLizard = ({ cwd, sources, exclude }) => {
+    lizardCalls.push({ cwd, sources, exclude });
+    return '';
+  };
+
+  const report = crapReport({
+    projectDir: mainDir,
+    cwd: worktreeDir,
+    projectPathGiven: true,
+    coverageCommand: `node "${scriptPath}"`,
+    runLizard,
+  });
+
+  assert.ok(sameRealDir(report.root, worktreeDir), `expected ${report.root} to be the worktree ${worktreeDir}`);
+  assert.equal(lizardCalls.length, 1);
+  assert.ok(sameRealDir(lizardCalls[0].cwd, worktreeDir), `expected lizard cwd ${lizardCalls[0].cwd} to be the worktree ${worktreeDir}`);
+  const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+  assert.ok(sameRealDir(marker.cwd, worktreeDir), 'coverage command ran with cwd inside the worktree');
+  assert.equal(fs.existsSync(path.join(mainDir, 'coverage')), false, 'the main checkout never got a coverage directory written to it');
+});
+
+test('two runs sharing a workDir isolate their coverage reports from each other', () => {
+  const workDir = fixtureProject({
+    'complexity.csv': '4,2,19,2,4,"add@1-4@src/sample.js","src/sample.js","add","add ( a , b )",1,4\n',
+  });
+  const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-stub-'));
+  const logPath = path.join(stubDir, 'dirs.log');
+  const scriptPath = path.join(stubDir, 'coverage-stub.js');
+  fs.writeFileSync(
+    scriptPath,
+    [
+      "const fs = require('fs');",
+      "const path = require('path');",
+      `const dir = process.env[${JSON.stringify(COVERAGE_DIR_ENV)}];`,
+      "fs.appendFileSync(process.env.CRAP_TEST_LOG, dir + '\\n');",
+      "fs.mkdirSync(dir, { recursive: true });",
+      "fs.writeFileSync(path.join(dir, 'lcov.info'), process.env.CRAP_TEST_LCOV, 'utf8');",
+    ].join('\n'),
+    'utf8',
+  );
+
+  const runWith = (lcovBody) => {
+    process.env.CRAP_TEST_LOG = logPath;
+    process.env.CRAP_TEST_LCOV = lcovBody;
+    try {
+      return crapReport({ projectDir: workDir, complexity: 'complexity.csv', coverageCommand: `node "${scriptPath}"` });
+    } finally {
+      delete process.env.CRAP_TEST_LOG;
+      delete process.env.CRAP_TEST_LCOV;
+    }
+  };
+
+  const first = runWith('SF:src/sample.js\nDA:2,1\nDA:3,0\nend_of_record\n');
+  const second = runWith('SF:src/sample.js\nDA:2,0\nDA:3,0\nend_of_record\n');
+
+  const dirs = fs.readFileSync(logPath, 'utf8').trim().split('\n');
+  assert.equal(dirs.length, 2, 'both runs recorded a coverage directory');
+  assert.notEqual(dirs[0], dirs[1], 'concurrent runs must not share a coverage report directory');
+
+  const firstAdd = first.functions.find((entry) => entry.function === 'add');
+  const secondAdd = second.functions.find((entry) => entry.function === 'add');
+  assert.equal(firstAdd.coverage, 0.5, "first run reads its own run's lcov, unaffected by the second");
+  assert.equal(secondAdd.coverage, 0, "second run reads its own run's lcov, unaffected by the first");
+});
+
+test('the generated crap-gate live rule has no hard-coded main-checkout path', () => {
+  const crapGateDoc = fs.readFileSync(
+    path.join(__dirname, '..', 'skills', 'setup', 'references', 'crap-gate.md'),
+    'utf8',
+  );
+  const liveRuleMatch = crapGateDoc.match(/```markdown\n([\s\S]*?)```/);
+  assert.ok(liveRuleMatch, 'the reference doc has a fenced live-rule template');
+  const liveRuleBlock = liveRuleMatch[1];
+  assert.match(liveRuleBlock, /quartermaster\.js" crap`/);
+  assert.doesNotMatch(liveRuleBlock, /--project/);
+  assert.doesNotMatch(liveRuleBlock, /"\/[^"]+"/, 'no absolute path baked into the rule text');
 });
 
 test('the real lizard backend measures a JavaScript and a Python file end to end', (t) => {

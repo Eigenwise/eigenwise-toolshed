@@ -18,6 +18,16 @@ For a new project, set `max` to 6 and apply it to every function. For an existin
 number of functions at or above the ceiling, including how many predate the branch, so the user can
 choose a different ceiling with real numbers in front of them.
 
+lizard names every arrow function or closure it cannot attribute to a declaration `(anonymous)`. A
+file built entirely from these (a large React component, for example) can have dozens of them, so the
+gate matches each one to its baseline copy by its exact source text first, then by its position
+relative to the nearest named function, instead of by name and position alone, which broke the moment
+an unrelated edit shifted where a function sat in the file. When no anonymous function in a changed
+file finds a stable match, the gate prints `<file>: ambiguous match` and judges the whole file instead
+of the single function: it only fails when the file's own worst complexity or count of ceiling
+breaches got worse than the baseline. A function at or under its matched baseline's complexity never
+counts as a new offender.
+
 ## Prerequisite
 
 Quartermaster needs [lizard](https://github.com/terryyin/lizard) to measure complexity. It never
@@ -67,11 +77,21 @@ Create `.claude/quartermaster/crap.json`. Every key is optional and command-line
 
 The defaults are `coverage/lcov.info`, sources `.` , no exclusions, `max` 6, no ratchet, and no
 coverage command. Use `--max`, `--ratchet`, `--lcov`, `--complexity`, or `--coverage-command` for a
-one-off override. Run it with:
+one-off override. `--project` only names the project for config and ratchet lookup, not the tree the
+gate measures: with no `--project`, or with cwd inside a linked worktree of the named project, it
+measures cwd's own git toplevel, so a per-ticket worktree checkout is measured in place instead of the
+main checkout. Never write `--project` with a hard-coded absolute path into a live rule or any other
+file that outlives this setup session - a worktree that runs it later would have it point at the wrong
+tree. Run it from the project root with:
 
 ```text
-node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"
+node "<quartermaster plugin root>/bin/quartermaster.js" crap
 ```
+
+If a coverage command needs to isolate its report output for concurrent runs sharing one working tree,
+have it read the `QUARTERMASTER_COVERAGE_DIR` environment variable for its reports-directory flag (for
+example `c8 --reporter=lcov --reports-dir "$QUARTERMASTER_COVERAGE_DIR" <test command>`); quartermaster
+sets it to a fresh per-run directory automatically.
 
 Use this live rule after the command has passed:
 
@@ -80,7 +100,7 @@ Use this live rule after the command has passed:
 description: Keep changed code within the CRAP ceiling
 priority: 85
 ---
-Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"`.
+Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap`.
 Keep every changed or new function under the ceiling. Cover it or split it.
 Exit 2 means a prerequisite is missing. Follow the printed install hint, then rerun the gate. Do not skip it.
 ```
