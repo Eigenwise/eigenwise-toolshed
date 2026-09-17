@@ -752,6 +752,28 @@ ${String(ticket?.description || "")}`;
     if (!absent.size) return null;
     return `recorded verify references paths absent from this repo: ${[...absent].join(", ")}. This is allowed for greenfield work; confirm the executor creates them before verifying.`;
   }
+  function verifyUnquotedGlobIssue(ticket) {
+    const verify = String(ticket?.executorVerify || "").trim();
+    if (!verify || manualVerify(verify)) return null;
+    const offenders = /* @__PURE__ */ new Set();
+    for (const segment of splitVerifyCommands(verify).segments) {
+      for (const match of segment.matchAll(/(?:["']([^"']*)["']|([^\s;&|()]+))/g)) {
+        if (match[1] !== void 0) continue;
+        const token = match[2];
+        if (!token || token.startsWith("-") || token === "." || token === "..") continue;
+        if (token.includes("=") || token.includes("..")) continue;
+        if (!/[\\/]|\.[A-Za-z0-9_-]+$/.test(token)) continue;
+        if (/[[\]*?]/.test(token)) offenders.add(token);
+      }
+    }
+    if (!offenders.size) return null;
+    const [firstOffender] = offenders;
+    return `recorded verify references an unquoted path with shell glob characters: ${[...offenders].join(", ")}. Quote it, e.g. "${firstOffender}", so every shell (including zsh) passes it through literally instead of treating it as a glob pattern.`;
+  }
+  function verifyUnquotedGlobWarning(ticket) {
+    const issue = verifyUnquotedGlobIssue(ticket);
+    return issue ? `Planning-depth warning: ${issue}` : null;
+  }
   function derivedVerifyCommand(ticket, projectPath) {
     if (!projectPath) return null;
     const plugins = /* @__PURE__ */ new Set();
@@ -852,6 +874,8 @@ ${String(ticket?.description || "")}`;
     const projectPath = slug ? readMeta(slug)?.path : null;
     const verifyPath = verifyPathWarning(ticket, projectPath);
     if (verifyPath) warnings.push(verifyPath);
+    const unquotedGlob = verifyUnquotedGlobIssue(ticket);
+    if (unquotedGlob) warnings.push(unquotedGlob);
     const dispatch = dispatchState(ticket);
     if (dispatch) {
       const setupIncomplete = worktreeSetupIncompleteWarning(dispatch);
@@ -1100,6 +1124,8 @@ ${String(ticket?.description || "")}`;
     if (browserReview) warnings.push(browserReview);
     const verify = verifyCommandWarning(ticket, projectPath);
     if (verify) warnings.push(verify);
+    const unquotedGlob = verifyUnquotedGlobWarning(ticket);
+    if (unquotedGlob) warnings.push(unquotedGlob);
     warnings.push(...executorAnchorWarnings(ticket, projectPath));
     if (!projectPath || !Array.isArray(ticket.files)) return warnings;
     warnings.push(...sourceBuildOutputWarnings(ticket, projectPath));

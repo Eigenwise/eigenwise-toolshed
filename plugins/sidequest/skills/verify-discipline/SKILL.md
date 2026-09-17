@@ -28,3 +28,10 @@ only the relevant log range on failure. Preserve the command's exit code when fi
 
 If no focused form exists, use the smallest documented check that covers the change. Do not make a
 full suite an edit loop.
+
+## Quote dynamic-route paths
+
+Quote a path that contains brackets, such as a Next.js dynamic-route segment like `[id]`, when you
+pin a verify command: the capture wrapper no longer aborts on an unquoted one under zsh, but every
+shell besides sh/bash still risks treating `[...]` as a glob, so quoting keeps the pinned string
+portable.
