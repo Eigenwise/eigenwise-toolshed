@@ -297,9 +297,17 @@ async function cmdUpdate(opts, positional) {
   if (opts["high-stakes"] !== void 0) patch.highStakes = highStakesFromOpts(opts);
   if (opts.label != null) patch.labels = opts.label;
   if (opts.image != null) patch.images = opts.image;
-  if (opts.file != null || opts.files != null) {
+  const hasFilesFlag = opts.file != null || opts.files != null;
+  const hasAddRemoveFlags = opts["add-file"] != null || opts["remove-file"] != null;
+  if (hasFilesFlag && hasAddRemoveFlags) {
+    fail("update: --file/--files replaces the whole declared list and cannot be combined with --add-file/--remove-file — use one or the other.");
+  }
+  if (hasFilesFlag) {
     const files = opts.file != null ? opts.file : opts.files;
     patch.files = Array.isArray(files) && files.length === 1 && String(files[0]).toLowerCase() === "none" || String(files).toLowerCase() === "none" ? [] : files;
+  } else if (hasAddRemoveFlags) {
+    if (opts["add-file"] != null) patch.addFiles = opts["add-file"];
+    if (opts["remove-file"] != null) patch.removeFiles = opts["remove-file"];
   }
   if (opts.produces !== void 0 || opts.changes !== void 0 || opts.consumes !== void 0) patch.contracts = contractsFromOpts(opts, current && current.contracts);
   if (opts["contract-waiver"] !== void 0) patch.contractWaiver = contractWaiverFromOpts(opts);

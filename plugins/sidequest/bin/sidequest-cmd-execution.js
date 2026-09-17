@@ -292,10 +292,25 @@ function scopeRemedy(ticket, paths) {
 async function cmdScopeRequest(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("scope-request: pass a ticket ref, e.g. sidequest scope-request SQ-3 --file path/to/new-file.");
-  const files = opts.file != null ? opts.file : opts.files;
-  if (files == null) fail("scope-request: pass one or more requested paths with --file or --files.");
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
+  if (opts.grant) {
+    if (opts.file != null || opts.files != null) fail("scope-request --grant cannot be combined with --file/--files — it grants the ticket's pending refused request as recorded.");
+    const res2 = store.grantScope(slug, idOrRef, by, { source: opts.source || "cli" });
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res2), null, 2) + "\n");
+      if (!res2.ok) process.exitCode = 1;
+      return;
+    }
+    if (res2.ok) {
+      console.log(`✓ ${res2.ticket.ref} scope granted: ${res2.granted.join(", ")} — ${meta.name}`);
+    } else {
+      reportClaimFailure("scope-request", idOrRef, res2, meta);
+    }
+    return;
+  }
+  const files = opts.file != null ? opts.file : opts.files;
+  if (files == null) fail("scope-request: pass one or more requested paths with --file or --files, or --grant to grant the pending refused request.");
   const res = store.requestScope(slug, idOrRef, by, files, { source: opts.source || "cli", force: !!opts.force });
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");

@@ -26,6 +26,8 @@ const {
   provenNoOpCloseout,
   PROJECT_PROP,
   FILES_PROP,
+  ADD_FILES_PROP,
+  REMOVE_FILES_PROP,
   LABELS_PROP,
   CONTRACT_PROP,
   MODEL_FILTER_PROP,
@@ -239,6 +241,8 @@ const tools: ToolDefinition[] = [
         highStakes: { type: 'boolean' },
         labels: LABELS_PROP,
         files: FILES_PROP,
+        addFiles: ADD_FILES_PROP,
+        removeFiles: REMOVE_FILES_PROP,
         by: { type: 'string', description: 'Human-readable update label. It cannot authorize closeout fields on a live claim.' },
         produces: CONTRACT_PROP('produces'),
         changes: CONTRACT_PROP('changes'),
@@ -302,7 +306,7 @@ const tools: ToolDefinition[] = [
         : null;
       if (verificationAmendmentRefusal) return Object.assign({ project: slug }, verificationAmendmentRefusal);
       const patch: any = { source: 'mcp', by: String(args.by || '').trim() || null };
-      for (const k of ['title', 'description', 'priority', 'status', 'highStakes', 'labels', 'files', 'complexity']) {
+      for (const k of ['title', 'description', 'priority', 'status', 'highStakes', 'labels', 'files', 'addFiles', 'removeFiles', 'complexity']) {
         if (args[k] !== undefined) patch[k] = args[k];
       }
       if (args.produces !== undefined || args.changes !== undefined || args.consumes !== undefined) {

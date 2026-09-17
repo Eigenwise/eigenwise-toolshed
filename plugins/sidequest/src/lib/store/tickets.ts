@@ -349,7 +349,7 @@ function verificationEvidenceGuidance(evidenceDirectory: any, evidencePaths: any
 function declaredScopeGuidance(ticket: any, refusedPaths: any[]) {
   if (!refusedPaths.length || !normalizeFiles(ticket.files).length) return '';
   const subject = refusedPaths.length === 1 ? 'The refused path is' : 'The refused paths are';
-  return ` ${subject} outside this ticket's declared files: ${refusedPaths.join(', ')}. The orchestrator has to declare them (\`sidequest update ${ticket.ref} --file <path>\`) and redispatch.`;
+  return ` ${subject} outside this ticket's declared files: ${refusedPaths.join(', ')}. The orchestrator has to widen scope with \`sidequest update ${ticket.ref} --add-file <path>\` (MCP \`update\` addFiles keeps the rest of the declared list), or grant this exact request with \`sidequest scope-grant ${ticket.ref}\`, then redispatch.`;
 }
 
 const DECLARED_FILES_MAX = 100;
@@ -392,6 +392,13 @@ function boundedLabels(labels?: any) {
 
 function scopeExpansionFiles(ticket?: any, additions?: any) {
   return normalizeFiles([...(Array.isArray(ticket?.files) ? ticket.files : []), ...normalizeFiles(additions)]);
+}
+
+// addFiles/removeFiles adjust the declared list in place instead of the
+// caller reconstructing it: append, then drop the named paths.
+function scopeReductionFiles(files?: any, removals?: any) {
+  const removalSet = new Set(normalizeFiles(removals).map((file: string) => file.toLowerCase()));
+  return normalizeFiles(files).filter((file: string) => !removalSet.has(file.toLowerCase()));
 }
 
 function scopeResolution(slug?: any, ticket?: any, request?: any, state?: any, now?: any, granted?: any, refused?: any) {
@@ -780,6 +787,56 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
   });
 }
 
+// The orchestrator's counterpart to a refused scopeRequest: instead of the
+// executor's own identity re-requesting, the orchestrator grants the ticket's
+// most recently refused request outright and widens declaredFiles so the same
+// live dispatch reads it on its next scopeRequest — no redispatch needed.
+// requestScope resolves immediately rather than parking a separate pending
+// object, so the last refused scopeResolution IS the pending request; nothing
+// to grant means there is no unresolved refusal to act on.
+function grantScope(slug?: any, idOrRef?: any, by?: any, opts?: any) {
+  opts = opts || {};
+  by = String(by || 'orchestrator');
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return { ok: false, reason: 'not_found' };
+    const pending = t.scopeResolution;
+    const refused = normalizeFiles(pending?.refused);
+    if (!pending || pending.state !== 'refused' || !refused.length) {
+      return { ok: false, reason: 'no_pending_scope_request', ticket: t };
+    }
+    const now = new Date().toISOString();
+    t.files = boundedFiles(scopeExpansionFiles(t, refused), {
+      category: t.category,
+      readonlyOverride: t.readonlyOverride,
+      slug,
+      ticketRef: t.ref,
+      operation: 'scopeGrant',
+    });
+    syncLiveDispatchScope(slug, t);
+    const grantedAll = normalizeFiles([...(Array.isArray(pending.granted) ? pending.granted : []), ...refused]);
+    const request = { by: pending.by, files: refused, requested: pending.requested, covered: [], at: pending.requestAt };
+    scopeResolution(slug, t, request, 'granted', now, grantedAll, []);
+    t.scopeResolution.grantedBy = by;
+    if (!Array.isArray(t.comments)) t.comments = [];
+    const comment = createComment({
+      by,
+      body: `Granted pending scope request: ${refused.join(', ')}. Declared files widened without redispatch.`,
+      kind: 'comment',
+      source: opts.source || 'cli',
+    }, now);
+    t.comments.push(comment);
+    t.lastEventType = 'scope_granted';
+    t.lastEventSource = comment.source;
+    t.updatedAt = now;
+    putTicket(slug, t);
+    queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
+    return { ok: true, ticket: t, granted: refused, resolution: t.scopeResolution, comment };
+  });
+}
+
 function migrateLegacyScopeRequest(slug?: any, idOrRef?: any) {
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
@@ -1031,10 +1088,18 @@ type UpdateTicketOptions = {
   allowLiveClaimCloseoutUpdate?: boolean;
 };
 
+function patchChangesFiles(ticket?: any, patch?: any) {
+  if (patch.files !== undefined) return !sameFiles(ticket.files, patch.files);
+  if (patch.addFiles !== undefined || patch.removeFiles !== undefined) {
+    return !sameFiles(ticket.files, scopeReductionFiles(scopeExpansionFiles(ticket, patch.addFiles), patch.removeFiles));
+  }
+  return false;
+}
+
 function activeClaimCloseoutUpdateRefusal(ticket?: any, patch?: any, options: UpdateTicketOptions = {}) {
   if (!ticket.claim?.by || claimReclaimable(ticket)) return null;
   const changedFields = [
-    ...(patch.files !== undefined && !sameFiles(ticket.files, patch.files) ? ['files'] : []),
+    ...(patchChangesFiles(ticket, patch) ? ['files'] : []),
     ...(patch.status !== undefined && String(patch.status).trim().toLowerCase() !== ticket.status ? ['status'] : []),
     ...((patch.readonly !== undefined || patch.readonlyOverride !== undefined) && requestedReadonlyOverride(patch) !== ticket.readonlyOverride ? ['readonly'] : []),
     ...(patch.workingTreeDelivery !== undefined && (patch.workingTreeDelivery === true) !== (ticket.workingTreeDelivery === true) ? ['workingTreeDelivery'] : []),
@@ -1128,12 +1193,20 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
     // rides along whenever one is provided (the CLI demands one on change).
     if (patch.complexity !== undefined) { const c = coerceComplexity(patch.complexity); if (c) t.complexity = c; }
     if (patch.complexityWhy !== undefined && String(patch.complexityWhy).trim()) t.complexityWhy = String(patch.complexityWhy).trim().slice(0, 1000);
-    if (patch.files !== undefined) {
+    if (patch.files !== undefined && (patch.addFiles !== undefined || patch.removeFiles !== undefined)) {
+      throw new Error(`${t.ref}: update cannot mix files with addFiles/removeFiles in one call. Use files to replace the declared list, or addFiles/removeFiles to adjust it without dropping the rest.`);
+    }
+    const filesPatch = patch.files !== undefined
+      ? patch.files
+      : (patch.addFiles !== undefined || patch.removeFiles !== undefined)
+        ? scopeReductionFiles(scopeExpansionFiles(t, patch.addFiles), patch.removeFiles)
+        : undefined;
+    if (filesPatch !== undefined) {
       const scopeRefusal = options.allowLiveClaimCloseoutUpdate === true
         ? null
-        : activeClaimScopeRefusal(slug, t, patch.files, patch);
+        : activeClaimScopeRefusal(slug, t, filesPatch, patch);
       if (scopeRefusal) throw new Error(scopeRefusal);
-      t.files = boundedFiles(patch.files, {
+      t.files = boundedFiles(filesPatch, {
         category: patch.category === undefined ? t.category : patch.category,
         readonlyOverride: patch.readonly === undefined && patch.readonlyOverride === undefined
           ? t.readonlyOverride
@@ -1368,7 +1441,7 @@ function listActive(slug?: any) {
   return queryTickets(String(slug || ''), { archived: false });
 }
 
-  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, submissionReviewRelation, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
+  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, submissionReviewRelation, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, grantScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
 }
 
 module.exports = { createTickets };

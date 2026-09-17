@@ -131,6 +131,24 @@ test('CLI records readonly false on add and update', () => {
   assert.equal(JSON.parse(updated.stdout).ticket.readonlyOverride, false);
 });
 
+test('CLI --add-file appends to declared files, and mixing it with --file refuses', () => {
+  const env = isolatedEnv();
+  const added = run(['add', '--title', 'scope append ticket', '--unclassified', '--file', 'src/a.js', '--json'], env);
+  assert.equal(added.status, 0, added.stderr);
+
+  const updated = run(['update', 'SQ-1', '--add-file', 'src/b.js', '--json'], env);
+  assert.equal(updated.status, 0, updated.stderr);
+  assert.deepEqual(JSON.parse(updated.stdout).ticket.files, ['src/a.js', 'src/b.js']);
+
+  const removed = run(['update', 'SQ-1', '--remove-file', 'src/a.js', '--json'], env);
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.deepEqual(JSON.parse(removed.stdout).ticket.files, ['src/b.js']);
+
+  const mixed = run(['update', 'SQ-1', '--file', 'src/c.js', '--add-file', 'src/d.js'], env);
+  assert.equal(mixed.status, 1);
+  assert.match(mixed.stderr, /cannot be combined/);
+});
+
 test('CLI never grants live-claim closeout updates from by, source, or session identity', () => {
   const env = isolatedEnv();
   const added = run(['add', '--title', 'live ticket', '--unclassified', '--file', 'src/engine.js', '--json'], env);
