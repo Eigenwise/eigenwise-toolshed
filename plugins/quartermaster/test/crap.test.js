@@ -41,6 +41,15 @@ function functionNamed(report, name) {
   return report.functions.find((entry) => entry.function === name);
 }
 
+/**
+ * crapReport passes runLizard a workDir resolved through git, which realpath-normalizes 8.3 short names
+ * and symlinks; comparing raw path.resolve() output against the fixture's own un-normalized temp path
+ * would spuriously disagree on Windows even though both name the same directory.
+ */
+function sameRealDir(left, right) {
+  return fs.realpathSync(left) === fs.realpathSync(right);
+}
+
 test('CRAP comes from the lcov lines inside each function, whatever slashes the lcov used', () => {
   const projectDir = fixtureProject({
     // lizard reports src/sample.js with forward slashes and src\sample.py with backslashes; the lcov
@@ -159,7 +168,7 @@ test('the ratchet fails a function that got worse and holds new functions to the
   const lizardCalls = [];
   const runLizard = ({ cwd, sources }) => {
     lizardCalls.push({ cwd, sources });
-    return path.resolve(cwd) === path.resolve(projectDir) ? currentCsv : baseCsv;
+    return sameRealDir(cwd, projectDir) ? currentCsv : baseCsv;
   };
 
   const report = crapReport({ projectDir, ratchet: 'main', runLizard });
@@ -229,7 +238,7 @@ test('an anonymous function is not a false new offender when its complexity fall
     '15,15,80,1,4,"(anonymous)@9-12@src/widget.js","src/widget.js","(anonymous)","(anonymous)",9,12',
     '',
   ].join('\n');
-  const runLizard = ({ cwd }) => (path.resolve(cwd) === path.resolve(projectDir) ? currentCsv : baseCsv);
+  const runLizard = ({ cwd }) => (sameRealDir(cwd, projectDir) ? currentCsv : baseCsv);
 
   const report = crapReport({ projectDir, ratchet: 'main', runLizard });
 
@@ -293,7 +302,7 @@ test('an anonymous function that truly gets worse still reports one new offender
     '25,25,120,1,6,"(anonymous)@9-14@src/widget.js","src/widget.js","(anonymous)","(anonymous)",9,14',
     '',
   ].join('\n');
-  const runLizard = ({ cwd }) => (path.resolve(cwd) === path.resolve(projectDir) ? currentCsv : baseCsv);
+  const runLizard = ({ cwd }) => (sameRealDir(cwd, projectDir) ? currentCsv : baseCsv);
 
   const report = crapReport({ projectDir, ratchet: 'main', runLizard });
 
@@ -394,7 +403,7 @@ test('running the gate from a linked worktree with --project <main checkout> mea
     runLizard,
   });
 
-  assert.equal(report.root, worktreeDir);
+  assert.ok(sameRealDir(report.root, worktreeDir), `expected ${report.root} to be the worktree ${worktreeDir}`);
   assert.equal(lizardCalls.length, 1);
   assert.equal(lizardCalls[0].cwd, worktreeDir);
   const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));

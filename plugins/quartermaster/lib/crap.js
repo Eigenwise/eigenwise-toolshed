@@ -246,14 +246,36 @@ function tryGit(dir, args) {
   return result.stdout.trim();
 }
 
+/** Resolves Windows 8.3 short names and symlinks so two spellings of the same directory compare equal. */
+function realDir(dir) {
+  try {
+    return fs.realpathSync.native(dir);
+  } catch {
+    return path.resolve(dir);
+  }
+}
+
+/** Inputs are already realDir-resolved; this only accounts for Windows' case-insensitive, either-slash paths. */
+function sameDir(a, b) {
+  if (!a || !b) return false;
+  const normalize = (value) => {
+    const slashed = value.replaceAll('\\', '/');
+    return process.platform === 'win32' ? slashed.toLowerCase() : slashed;
+  };
+  return normalize(a) === normalize(b);
+}
+
 function commonGitDir(dir) {
   const output = tryGit(dir, ['rev-parse', '--git-common-dir']);
-  return output ? path.resolve(dir, output) : null;
+  // git prints --git-common-dir relative to the cwd it was asked from, and absolute for a linked
+  // worktree's main checkout; resolve either against `dir` before realpath-normalizing so both forms
+  // land on the same canonical directory.
+  return output ? realDir(path.resolve(dir, output)) : null;
 }
 
 function gitToplevel(dir) {
   const output = tryGit(dir, ['rev-parse', '--show-toplevel']);
-  return output ? path.resolve(output) : null;
+  return output ? realDir(path.resolve(output)) : null;
 }
 
 /**
@@ -268,7 +290,7 @@ function resolveWorkDir({ projectDir, cwd, projectPathGiven }) {
   if (projectPathGiven) {
     const cwdCommon = commonGitDir(startDir);
     const projectCommon = commonGitDir(projectDir);
-    if (!cwdCommon || !projectCommon || cwdCommon !== projectCommon) return projectDir;
+    if (!cwdCommon || !projectCommon || !sameDir(cwdCommon, projectCommon)) return projectDir;
   }
   return gitToplevel(startDir) ?? startDir;
 }
