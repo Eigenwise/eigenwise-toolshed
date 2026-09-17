@@ -40,15 +40,20 @@ function windowsPosixShell() {
   if (discovered.status !== 0) return null;
   return String(discovered.stdout || "").split(/\r?\n/).map((candidate) => candidate.trim()).find((candidate) => fs.existsSync(candidate)) || null;
 }
+function isZshExecutable(executable) {
+  return /(?:^|[\\/])zsh(?:\.exe)?$/i.test(executable);
+}
 function shellDefinition(platform = process.platform) {
   if (platform === "win32") {
     const posixShell2 = windowsPosixShell();
-    if (posixShell2) return Object.freeze({ executable: posixShell2, label: `POSIX shell (${posixShell2})`, scriptExtension: ".sh" });
+    if (posixShell2) return Object.freeze({ executable: posixShell2, label: `POSIX shell (${posixShell2})`, scriptExtension: ".sh", isZsh: false });
     const commandPrompt = process.env.ComSpec || "cmd.exe";
-    return Object.freeze({ executable: commandPrompt, label: `Command Prompt (${commandPrompt})`, scriptExtension: ".cmd" });
+    return Object.freeze({ executable: commandPrompt, label: `Command Prompt (${commandPrompt})`, scriptExtension: ".cmd", isZsh: false });
   }
   const posixShell = process.env.SHELL || "/bin/sh";
-  return Object.freeze({ executable: posixShell, label: `POSIX shell (${posixShell})`, scriptExtension: ".sh" });
+  const isZsh = isZshExecutable(posixShell);
+  const label = isZsh ? `POSIX shell (${posixShell}, nonomatch)` : `POSIX shell (${posixShell})`;
+  return Object.freeze({ executable: posixShell, label, scriptExtension: ".sh", isZsh });
 }
 function commandForShell(scriptPath, shell) {
   const arguments_ = shell.scriptExtension === ".cmd" ? Object.freeze(["/d", "/s", "/c", scriptPath]) : Object.freeze([scriptPath]);
@@ -68,7 +73,8 @@ function shellScript(command, shell) {
       ""
     ].join("\r\n");
   }
-  return `(
+  const zshNonomatchPreamble = shell.isZsh ? "setopt nonomatch\n" : "";
+  return `${zshNonomatchPreamble}(
 ${command}
 )
 sidequest_exit_code=$?

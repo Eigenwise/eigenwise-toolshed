@@ -837,6 +837,33 @@ test('accepts repository-root and subdirectory verify commands', () => {
   assert.deepStrictEqual(subdirectory.warnings, []);
 });
 
+// SQ-10: an unquoted `[fulfillmentId]`-shaped dynamic-route path in a recorded verify string
+// aborts under zsh with "no matches found" before the pinned command runs. add/update now warn
+// (not refuse) so existing tickets keep working while the wrapper fix removes the false red.
+test('warns about an unquoted [param]-shaped path in a recorded verify command, not a quoted one', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const unquoted = cliJson(['add', '-t', 'unquoted glob verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node -e "0" src/app/fulfillments/[fulfillmentId]/pick/pick-row.test.ts']);
+  assert.ok(
+    unquoted.warnings.some((warning: string) => warning.includes('unquoted path with shell glob characters') && warning.includes('[fulfillmentId]')),
+    JSON.stringify(unquoted.warnings),
+  );
+
+  const quoted = cliJson(['add', '-t', 'quoted glob verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node -e "0" "src/app/fulfillments/[fulfillmentId]/pick/pick-row.test.ts"']);
+  assert.ok(
+    !quoted.warnings.some((warning: string) => warning.includes('unquoted path with shell glob characters')),
+    JSON.stringify(quoted.warnings),
+  );
+
+  const updated = cliJson(['update', quoted.ticket.ref, '--verify', 'node -e "0" src/app/fulfillments/[fulfillmentId]/pick/pick-row.test.ts']);
+  assert.ok(
+    updated.warnings.some((warning: string) => warning.includes('unquoted path with shell glob characters')),
+    JSON.stringify(updated.warnings),
+  );
+});
+
 test('rejects unrunnable npm verifies when tickets are added or updated', () => {
   const packageDir = path.join(PROJ, 'plugins', 'package-suite');
   const bareDir = path.join(PROJ, 'plugins', 'bare-suite');

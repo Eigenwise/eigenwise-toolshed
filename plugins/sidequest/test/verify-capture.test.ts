@@ -7,7 +7,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync, spawn } = require('node:child_process');
+const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
 const { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureSlotDirectory, recordCapture } = require('../lib/verify-capture.js');
 const { runProcessVerification } = require('../lib/ports/process.js');
@@ -15,6 +15,20 @@ const store = require('../lib/store.js');
 const worktrees = require('../lib/worktrees.js');
 const worktreeLease = require('../lib/kernel/worktree.js');
 const SIDEQUEST_DIR = path.resolve(__dirname, '..');
+
+// SQ-10: zsh (unlike sh/bash) glob-expands an unquoted path, and with `nomatch` set (its
+// default) aborts the whole verify command with "no matches found" when nothing matches a
+// pattern like `[fulfillmentId]`. Force SHELL=zsh when it's actually on the box so this test
+// exercises the real regression; on a host without zsh (Windows CI) there is no `SHELL`-based
+// POSIX shell selection to force at all, so the case is skipped rather than faked.
+function locateZsh(): string | null {
+  if (process.platform === 'win32') return null;
+  const found = spawnSync('which', ['zsh'], { encoding: 'utf8' });
+  const candidate = String(found.stdout || '').trim().split(/\r?\n/)[0];
+  return found.status === 0 && candidate && fs.existsSync(candidate) ? candidate : null;
+}
+const ZSH_EXECUTABLE = locateZsh();
+const UNQUOTED_GLOB_SHELL = ZSH_EXECUTABLE || (process.platform === 'win32' ? null : '/bin/sh');
 
 function deleteLog(capture: { logPath: string }) {
   fs.rmSync(capture.logPath, { force: true });
@@ -567,6 +581,28 @@ test('verify capture preserves quoted absolute paths in verify commands', async 
   } finally {
     fs.rmSync(scriptPath, { force: true });
     deleteLog(capture);
+  }
+});
+
+test('verify capture passes an unquoted [param] dynamic-route path through literally', { skip: !UNQUOTED_GLOB_SHELL }, async () => {
+  const scriptPath = path.join(os.tmpdir(), `sidequest-unquoted-glob-${Date.now()}.js`);
+  fs.writeFileSync(scriptPath, 'process.stdout.write(process.argv[2] + \'\\n\');\n', 'utf8');
+  const dynamicRoutePath = 'src/app/fulfillments/[fulfillmentId]/pick/pick-row.test.ts';
+  const originalShell = process.env.SHELL;
+  process.env.SHELL = UNQUOTED_GLOB_SHELL as string;
+  try {
+    const capture = await runVerifyCapture(`"${process.execPath}" "${scriptPath}" ${dynamicRoutePath}`);
+    try {
+      assert.deepStrictEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 });
+      if (ZSH_EXECUTABLE) assert.match(capture.shell || '', /zsh/i);
+      assert.match(fs.readFileSync(capture.logPath, 'utf8'), /fulfillments\/\[fulfillmentId\]\/pick\/pick-row\.test\.ts/);
+    } finally {
+      fs.rmSync(scriptPath, { force: true });
+      deleteLog(capture);
+    }
+  } finally {
+    if (originalShell === undefined) delete process.env.SHELL;
+    else process.env.SHELL = originalShell;
   }
 });
 

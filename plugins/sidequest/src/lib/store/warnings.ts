@@ -782,6 +782,35 @@ function verifyPathWarning(ticket?: any, projectPath?: any) {
   return `recorded verify references paths absent from this repo: ${[...absent].join(', ')}. This is allowed for greenfield work; confirm the executor creates them before verifying.`;
 }
 
+// zsh treats an unquoted path segment like `[id]` as a glob and (with `nomatch` set, the
+// default) aborts the whole verify command with "no matches found" before the pinned command
+// ever runs (SQ-10). The wrapper now disarms that abort for every recorded command, but an
+// author can still hit surprises with other tools that glob-expand bracketed paths, so this
+// stays a warning naming the exact token rather than a silent no-op.
+function verifyUnquotedGlobIssue(ticket?: any) {
+  const verify = String(ticket?.executorVerify || '').trim();
+  if (!verify || manualVerify(verify)) return null;
+  const offenders = new Set<string>();
+  for (const segment of splitVerifyCommands(verify).segments) {
+    for (const match of segment.matchAll(/(?:["']([^"']*)["']|([^\s;&|()]+))/g)) {
+      if (match[1] !== undefined) continue; // quoted already; every shell passes it through literally
+      const token = match[2];
+      if (!token || token.startsWith('-') || token === '.' || token === '..') continue;
+      if (token.includes('=') || token.includes('..')) continue;
+      if (!/[\\/]|\.[A-Za-z0-9_-]+$/.test(token)) continue;
+      if (/[[\]*?]/.test(token)) offenders.add(token);
+    }
+  }
+  if (!offenders.size) return null;
+  const [firstOffender] = offenders;
+  return `recorded verify references an unquoted path with shell glob characters: ${[...offenders].join(', ')}. Quote it, e.g. "${firstOffender}", so every shell (including zsh) passes it through literally instead of treating it as a glob pattern.`;
+}
+
+function verifyUnquotedGlobWarning(ticket?: any) {
+  const issue = verifyUnquotedGlobIssue(ticket);
+  return issue ? `Planning-depth warning: ${issue}` : null;
+}
+
 function derivedVerifyCommand(ticket?: any, projectPath?: any) {
   if (!projectPath) return null;
   const plugins = new Set<string>();
@@ -887,6 +916,8 @@ function dispatchUncertaintyWarnings(ticket?: any, slug?: any) {
   const projectPath = slug ? readMeta(slug)?.path : null;
   const verifyPath = verifyPathWarning(ticket, projectPath);
   if (verifyPath) warnings.push(verifyPath);
+  const unquotedGlob = verifyUnquotedGlobIssue(ticket);
+  if (unquotedGlob) warnings.push(unquotedGlob);
   const dispatch = dispatchState(ticket);
   if (dispatch) {
     const setupIncomplete = worktreeSetupIncompleteWarning(dispatch);
@@ -1164,6 +1195,8 @@ function ticketPlanningWarnings(ticket?: any, projectPath?: any, slug?: any) {
   if (browserReview) warnings.push(browserReview);
   const verify = verifyCommandWarning(ticket, projectPath);
   if (verify) warnings.push(verify);
+  const unquotedGlob = verifyUnquotedGlobWarning(ticket);
+  if (unquotedGlob) warnings.push(unquotedGlob);
   warnings.push(...executorAnchorWarnings(ticket, projectPath));
   if (!projectPath || !Array.isArray(ticket.files)) return warnings;
   warnings.push(...sourceBuildOutputWarnings(ticket, projectPath));
