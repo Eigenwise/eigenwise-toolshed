@@ -728,7 +728,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'scopeRequest',
-    description: 'Request scope and receive an immediate ruling. Granted paths take effect immediately for hook write enforcement and commit admission. A foreign .release/unreleased/*.md fragment always refuses because only this ticket’s fragment is writable.',
+    description: 'Request scope and receive an immediate ruling. Granted paths take effect immediately for hook write enforcement and commit admission. A foreign .release/unreleased/*.md fragment always refuses because only this ticket’s fragment is writable. grant:true is the orchestrator path: it grants the ticket’s most recently refused request outright, widening declaredFiles without a redispatch; pass no files with it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -736,12 +736,23 @@ const tools: ToolDefinition[] = [
         project: PROJECT_PROP,
         by: { type: 'string' },
         files: { type: 'array', items: { type: 'string' }, minItems: 1 },
+        grant: { type: 'boolean', description: 'Orchestrator only: grant the ticket’s pending refused scope request instead of requesting new files.' },
       },
-      required: ['ref', 'by', 'files'],
+      required: ['ref', 'by'],
     },
     handler(args) {
       const { slug } = resolveLifecycleProject(args.project, args, 'scopeRequest');
       const by = requireBy(args, 'scopeRequest');
+      if (args.grant) {
+        if (args.files !== undefined) throw new Error('scopeRequest: grant cannot be combined with files — it grants the ticket’s pending refused request as recorded.');
+        const res = store.grantScope(slug, args.ref, by, { source: 'mcp' });
+        const changed = res.ok ? {
+          granted: res.granted || [],
+          resolution: res.resolution || null,
+        } : null;
+        return mutationAck(slug, res, changed);
+      }
+      if (args.files === undefined) throw new Error('scopeRequest: pass files, or grant:true to grant the pending refused request.');
       const res = store.requestScope(slug, args.ref, by, args.files, { source: 'mcp' });
       const changed = res.ok ? {
         covered: res.covered || [],

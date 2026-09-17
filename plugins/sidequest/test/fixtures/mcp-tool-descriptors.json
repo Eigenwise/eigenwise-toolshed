@@ -452,6 +452,20 @@
             "type": "string"
           }
         },
+        "addFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Appends, keeps rest. Refused with files."
+        },
+        "removeFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Drops only these, keeps rest. Refused with files."
+        },
         "by": {
           "type": "string"
         },
@@ -1052,12 +1066,15 @@
             "type": "string"
           },
           "minItems": 1
+        },
+        "grant": {
+          "type": "boolean",
+          "description": "Orchestrator: grants the pending refused request; pass no files."
         }
       },
       "required": [
         "ref",
-        "by",
-        "files"
+        "by"
       ]
     }
   },

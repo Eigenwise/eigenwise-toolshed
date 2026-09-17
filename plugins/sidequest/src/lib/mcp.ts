@@ -110,7 +110,10 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 24000 for VERIFICATION_WAIVER_PROP's type: 'object' (SQ-2 / GitHub #109): an MCP host that
 // enforces the declared schema type refused a top-level verificationWaiver because the property listed
 // `properties` without `type: 'object'`. +91 bytes compacted, while preserving the 2.5KB reserve.
-const MCP_TOOLS_LIST_MAX_BYTES = 24100;
+// Raised from 24100 for update.addFiles/removeFiles and scopeRequest.grant (SQ-13): the base sat at
+// exactly the 2.5KB reserve floor, so even a description-free addition of the required typed array/boolean
+// properties (+130 bytes minimum, +334 bytes with one-line descriptions) could not fit without this bump.
+const MCP_TOOLS_LIST_MAX_BYTES = 24500;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -309,7 +312,11 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   },
   add: { complexity: 'Legacy score; why required.', verify: ATTESTATION_VERIFY_CONTRACT },
   claim: { force: 'Operator-only.' },
-  update: { verify: ATTESTATION_VERIFY_CONTRACT },
+  update: {
+    verify: ATTESTATION_VERIFY_CONTRACT,
+    addFiles: 'Appends, keeps rest. Refused with files.',
+    removeFiles: 'Drops only these, keeps rest. Refused with files.',
+  },
   supersede_submission: { supersededBy: 'Repair ticket ref, not a commit.' },
   comments: {
     full: 'Whole bodies.',
@@ -338,6 +345,9 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   },
   verdict: {
     outcome: 'Candidate, not reviewer prose.',
+  },
+  scopeRequest: {
+    grant: 'Orchestrator: grants the pending refused request; pass no files.',
   },
 };
 

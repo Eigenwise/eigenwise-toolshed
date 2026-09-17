@@ -643,20 +643,31 @@ const tools = [
   },
   {
     name: "scopeRequest",
-    description: "Request scope and receive an immediate ruling. Granted paths take effect immediately for hook write enforcement and commit admission. A foreign .release/unreleased/*.md fragment always refuses because only this ticket’s fragment is writable.",
+    description: "Request scope and receive an immediate ruling. Granted paths take effect immediately for hook write enforcement and commit admission. A foreign .release/unreleased/*.md fragment always refuses because only this ticket’s fragment is writable. grant:true is the orchestrator path: it grants the ticket’s most recently refused request outright, widening declaredFiles without a redispatch; pass no files with it.",
     inputSchema: {
       type: "object",
       properties: {
         ref: { type: "string" },
         project: PROJECT_PROP,
         by: { type: "string" },
-        files: { type: "array", items: { type: "string" }, minItems: 1 }
+        files: { type: "array", items: { type: "string" }, minItems: 1 },
+        grant: { type: "boolean", description: "Orchestrator only: grant the ticket’s pending refused scope request instead of requesting new files." }
       },
-      required: ["ref", "by", "files"]
+      required: ["ref", "by"]
     },
     handler(args) {
       const { slug } = resolveLifecycleProject(args.project, args, "scopeRequest");
       const by = requireBy(args, "scopeRequest");
+      if (args.grant) {
+        if (args.files !== void 0) throw new Error("scopeRequest: grant cannot be combined with files — it grants the ticket’s pending refused request as recorded.");
+        const res2 = store.grantScope(slug, args.ref, by, { source: "mcp" });
+        const changed2 = res2.ok ? {
+          granted: res2.granted || [],
+          resolution: res2.resolution || null
+        } : null;
+        return mutationAck(slug, res2, changed2);
+      }
+      if (args.files === void 0) throw new Error("scopeRequest: pass files, or grant:true to grant the pending refused request.");
       const res = store.requestScope(slug, args.ref, by, args.files, { source: "mcp" });
       const changed = res.ok ? {
         covered: res.covered || [],
