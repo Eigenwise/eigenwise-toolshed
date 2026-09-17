@@ -21,6 +21,22 @@ const ARBITRARY_EXECUTION = /^(?:node|nodejs|deno|bun|python|python2|python3|py|
 const NEEDS_SUBCOMMAND = /^(?:git|docker|podman|kubectl|helm|terraform|aws|gcloud|az|npm|pnpm|yarn|cargo|go|dotnet|gh|systemctl|sc|net)$/i;
 const DESTRUCTIVE_FAMILY = /^(?:git\s+(?:push|reset|clean|branch|rm|checkout|restore)|docker\s+\S+|podman\s+\S+|kubectl\s+\S+|npm\s+(?:publish|unpublish|version))$/i;
 
+// A rule anchored on a shell control keyword or a subshell opener grants
+// whatever the loop or branch body runs, not the keyword itself.
+const SHELL_CONTROL_KEYWORD = /^(?:for|while|until|if|case|select|function|time|coproc)$/i;
+// The fingerprint is only ever the first one or two words of the observed
+// command, so a separator or operator inside it means the rest of a compound
+// command was cut off the fingerprint but not off the permission it grants.
+const COMPOUND_OPERATOR = /[;&|]/;
+// `"$w"`, `'$w'`, `$w`, `${w}` and quoted/braced variants: a target or
+// argument that resolves only at runtime, from whatever the caller's
+// environment happens to hold.
+const VARIABLE_ONLY_ARG = /^["']?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?["']?$/;
+// A plugin cache path is dead the moment the pinned version updates; a
+// scratchpad path is dead the moment the session ends.
+const PLUGIN_CACHE_PATH = /\.claude[\\/]plugins[\\/]cache[\\/][^\\/]+[\\/][^\\/]+[\\/][^\\/]+[\\/]/;
+const SESSION_SCRATCHPAD_PATH = /claude-[^\\/]+[\\/][\s\S]*[\\/]scratchpad(?:[\\/]|$)/i;
+
 function settingsFile(projectDir) {
   return path.join(projectDir, '.claude', 'settings.local.json');
 }
@@ -42,8 +58,13 @@ function permissionAutomationEnabled(projectDir) {
 function normalizedCommandPrefix(command) {
   const words = String(command ?? '').trim().replace(/\s+/g, ' ').replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)+/, '').split(' ');
   if (!words[0]) return null;
-  const executable = words[0].replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase();
-  const subcommand = words[1] && !words[1].startsWith('-') ? words[1].toLowerCase() : null;
+  // Case is kept: the rule this fingerprint becomes is matched literally by a
+  // case-sensitive host, so a lowercased fingerprint can silently fail to
+  // match the very command it was written for. Anything that needs a
+  // case-insensitive comparison (the veto regexes below) matches on this
+  // original-case string with an `i` flag instead of lowercasing it here.
+  const executable = words[0].replace(/^.*[\\/]/, '').replace(/\.exe$/i, '');
+  const subcommand = words[1] && !words[1].startsWith('-') ? words[1] : null;
   return subcommand ? `${executable} ${subcommand}` : executable;
 }
 
@@ -82,7 +103,32 @@ function ruleTooBroadReason(fingerprint) {
   const match = /^permission:Bash:(.+)$/.exec(fingerprint);
   if (!match) return null;
   const prefix = match[1];
-  const [executable] = prefix.split(' ');
+  const [executable, ...rest] = prefix.split(' ');
+  const firstArg = rest.length ? rest.join(' ') : null;
+  // A loop or branch keyword, or a `{`/`(` subshell opener, grants its whole
+  // body, not the keyword: the body is arbitrary execution the fingerprint
+  // never captures.
+  if (SHELL_CONTROL_KEYWORD.test(executable) || executable.startsWith('{') || executable.startsWith('(')) {
+    return 'shell control keyword';
+  }
+  // The fingerprint is a two-word slice of a longer, still-attached compound
+  // command; the separator proves the harmless half was cut off mid-command.
+  if (COMPOUND_OPERATOR.test(prefix) || prefix.endsWith('\\')) {
+    return 'compound command fragment';
+  }
+  // `cd` with no target, or a target that only resolves at runtime, goes
+  // wherever that variable happened to point when it was approved.
+  if (executable.toLowerCase() === 'cd' && (!firstArg || VARIABLE_ONLY_ARG.test(firstArg))) {
+    return 'variable or empty cd target';
+  }
+  // Any other first argument that is nothing but a bare variable reference is
+  // just as runtime-dependent, regardless of which command it follows.
+  if (firstArg && VARIABLE_ONLY_ARG.test(firstArg)) return 'bare shell variable argument';
+  // A version-pinned plugin cache path or per-session scratchpad path is dead
+  // the instant the version bumps or the session ends.
+  if (PLUGIN_CACHE_PATH.test(prefix) || SESSION_SCRATCHPAD_PATH.test(prefix)) {
+    return 'version-pinned or session-scoped path';
+  }
   if (ARBITRARY_EXECUTION.test(executable)) return 'arbitrary execution';
   if (!prefix.includes(' ') && NEEDS_SUBCOMMAND.test(executable)) return 'bare tool';
   if (DESTRUCTIVE_FAMILY.test(prefix)) return 'wildcard would cover destructive siblings';
@@ -290,5 +336,6 @@ module.exports = {
   normalizedCommandPrefix,
   permissionAutomationEnabled,
   ruleFor,
+  ruleTooBroadReason,
   settingsFile,
 };

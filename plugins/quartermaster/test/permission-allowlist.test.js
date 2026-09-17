@@ -7,7 +7,15 @@ const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
 
-const { applyPermissionAllowlist, enablePermissionAutomation, permissionAutomationEnabled } = require('../lib/permission-allowlist.js');
+const {
+  applyPermissionAllowlist,
+  enablePermissionAutomation,
+  fingerprintFor,
+  normalizedCommandPrefix,
+  permissionAutomationEnabled,
+  ruleFor,
+  ruleTooBroadReason,
+} = require('../lib/permission-allowlist.js');
 const { readDecisions } = require('../lib/state.js');
 const { slugForProject } = require('../lib/paths.js');
 
@@ -185,4 +193,74 @@ test('enabling automation writes only the project-local opt-in marker', () => {
   assert.equal(enablePermissionAutomation(projectDir), true);
   assert.equal(permissionAutomationEnabled(projectDir), true);
   assert.equal(fs.existsSync(path.join(projectDir, '.claude', 'settings.local.json')), true);
+});
+
+// Representative subset of the 33 offending fingerprints from the
+// cardinventorymanagement report (2026-09-16), one per veto class, plus the
+// existing allowed set to prove the new vetoes do not regress it.
+const BLOCKED_FINGERPRINTS = [
+  // Class 1: shell control keywords as the executable.
+  ['permission:Bash:for j', 'shell control keyword'],
+  ['permission:Bash:for r', 'shell control keyword'],
+  ['permission:Bash:while [', 'shell control keyword'],
+  ['permission:Bash:if [', 'shell control keyword'],
+  ['permission:Bash:{ echo', 'shell control keyword'],
+  ['permission:Bash:(cd', 'shell control keyword'],
+  // Class 2: a fingerprint that ends in, or contains, a separator/operator.
+  ['permission:Bash:cd "$w";', 'compound command fragment'],
+  ['permission:Bash:sleep 240;', 'compound command fragment'],
+  ['permission:Bash:pwd &&', 'compound command fragment'],
+  ['permission:Bash:echo foo|', 'compound command fragment'],
+  ['permission:Bash:tar \\', 'compound command fragment'],
+  // Class 3: variable-only or empty cd target, and bare variable arguments.
+  ['permission:Bash:cd $s', 'variable or empty cd target'],
+  ['permission:Bash:cd "$w"', 'variable or empty cd target'],
+  ['permission:Bash:cd', 'variable or empty cd target'],
+  ['permission:Bash:export $PATH', 'bare shell variable argument'],
+  // Class 4: version-pinned plugin cache path, per-session scratchpad path.
+  ['permission:Bash:cat ~/.claude/plugins/cache/eigenwise-toolshed/quartermaster/0.11.1/lib/foo.js', 'version-pinned or session-scoped path'],
+  ['permission:Bash:cat /tmp/claude-1000/-home-john-project/session-abc/scratchpad/notes.txt', 'version-pinned or session-scoped path'],
+];
+
+const ALLOWED_FINGERPRINTS = [
+  'permission:Bash:npm test',
+  'permission:Bash:npm run',
+  'permission:Bash:git status',
+  'permission:Bash:cat README.md',
+  'permission:Bash:cd src',
+  'permission:Bash:ls',
+];
+
+test('the veto blocks every class of loop keyword, shell fragment, variable target, and pinned path', () => {
+  for (const [fingerprint, reason] of BLOCKED_FINGERPRINTS) {
+    assert.equal(ruleTooBroadReason(fingerprint), reason, `expected ${fingerprint} to be vetoed as "${reason}"`);
+  }
+});
+
+test('the veto leaves the existing allowed set alone', () => {
+  for (const fingerprint of ALLOWED_FINGERPRINTS) {
+    assert.equal(ruleTooBroadReason(fingerprint), null, `expected ${fingerprint} to remain allowed`);
+  }
+});
+
+test('a mixed-case command keeps its case so the written rule matches it on a case-sensitive host', async () => {
+  assert.equal(normalizedCommandPrefix('NPM Test'), 'NPM Test');
+  assert.equal(fingerprintFor('Bash', { command: 'NPM Test' }), 'permission:Bash:NPM Test');
+  assert.equal(ruleFor('permission:Bash:NPM Test'), 'Bash(NPM Test:*)');
+  assert.equal(ruleTooBroadReason('permission:Bash:NPM Test'), null);
+
+  const projectDir = temporaryProject();
+  enablePermissionAutomation(projectDir);
+  const environment = writeWindow(projectDir, [
+    permissionTranscript('NPM Test -- --unit'),
+    permissionTranscript('NPM Test -- --integration'),
+    permissionTranscript('NPM Test -- --watch'),
+  ]);
+
+  const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
+  const after = fs.readFileSync(path.join(projectDir, '.claude', 'settings.local.json'), 'utf8');
+
+  assert.equal(result.additions[0].fingerprint, 'permission:Bash:NPM Test');
+  assert.match(after, /"Bash\(NPM Test:\*\)"/);
+  assert.doesNotMatch(after, /"Bash\(npm test:\*\)"/);
 });
