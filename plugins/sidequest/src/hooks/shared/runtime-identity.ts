@@ -33,6 +33,18 @@ export function canonicalPath(value: string): string {
   return kernel.canonicalPath(value);
 }
 
+// The board owns its verification evidence directories, so a write there is never a statement about a
+// repository and must not be answered by a repository write lease (SQ-9). The store owns the rule
+// because the store is what creates those directories.
+export function boardVerificationEvidencePath(target: string): boolean {
+  try {
+    const store = require(runtimeModule('store')) as { boardVerificationEvidencePath: (target: string) => boolean };
+    return store.boardVerificationEvidencePath(target);
+  } catch (_) {
+    return false;
+  }
+}
+
 export function executorAgent(type: string): boolean {
   if (!type) return false;
   try {
