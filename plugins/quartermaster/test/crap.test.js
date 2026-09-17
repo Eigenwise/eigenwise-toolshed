@@ -7,7 +7,7 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { test } = require('node:test');
 
-const { COVERAGE_DIR_ENV, crapReport, crapScore, formatReport } = require('../lib/crap.js');
+const { COVERAGE_DIR_ENV, crapReport, crapScore, formatReport, realDir, sameDir } = require('../lib/crap.js');
 
 const CLI = path.resolve(__dirname, '../bin/quartermaster.js');
 
@@ -47,8 +47,45 @@ function functionNamed(report, name) {
  * would spuriously disagree on Windows even though both name the same directory.
  */
 function sameRealDir(left, right) {
-  return fs.realpathSync(left) === fs.realpathSync(right);
+  return sameDir(realDir(left), realDir(right));
 }
+
+/**
+ * The three ratchet tests below feed a fake `runLizard` that must tell a "current" cwd (the project
+ * itself) from a "baseline" cwd (the temp checkout `baselineFunctions()` makes via
+ * `quartermaster-crap-base-*`). A `sameRealDir` regression that stops recognizing the project would
+ * previously fall through silently to the baseline branch and produce a confusing TypeError or a
+ * quietly-wrong 0-failure report; this makes that mismatch a loud AssertionError naming both spellings.
+ */
+function classifyRatchetCwd(cwd, projectDir) {
+  if (sameRealDir(cwd, projectDir)) return 'current';
+  if (path.basename(cwd).startsWith('quartermaster-crap-base-')) return 'baseline';
+  assert.fail(`fake runLizard got an unrecognized cwd ${cwd}; expected the project ${projectDir} or a quartermaster-crap-base- baseline checkout`);
+}
+
+test('sameRealDir resolves a symlinked alias the way native realpath does, unlike plain realpathSync', () => {
+  // Reproduces the Windows 8.3-short-name gap on Linux: a symlink alias stands in for the short form,
+  // and the non-native realpathSync is stubbed to leave its input unresolved, the way the non-native
+  // realpath leaves 8.3 short names unexpanded on Windows.
+  const realDirPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-real-'));
+  const aliasParent = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-alias-'));
+  const aliasDirPath = path.join(aliasParent, 'alias');
+  fs.symlinkSync(realDirPath, aliasDirPath, 'dir');
+
+  const originalRealpathSync = fs.realpathSync;
+  const stubbedRealpathSync = (target) => target;
+  stubbedRealpathSync.native = originalRealpathSync.native;
+  fs.realpathSync = stubbedRealpathSync;
+  try {
+    assert.equal(fs.realpathSync(aliasDirPath), aliasDirPath, 'the stub leaves the alias unresolved, mimicking an unexpanded 8.3 short name');
+    assert.ok(
+      sameRealDir(aliasDirPath, realDirPath),
+      'sameRealDir must resolve through realpathSync.native, which still dereferences the symlink despite the stub',
+    );
+  } finally {
+    fs.realpathSync = originalRealpathSync;
+  }
+});
 
 test('CRAP comes from the lcov lines inside each function, whatever slashes the lcov used', () => {
   const projectDir = fixtureProject({
@@ -168,7 +205,7 @@ test('the ratchet fails a function that got worse and holds new functions to the
   const lizardCalls = [];
   const runLizard = ({ cwd, sources }) => {
     lizardCalls.push({ cwd, sources });
-    return sameRealDir(cwd, projectDir) ? currentCsv : baseCsv;
+    return classifyRatchetCwd(cwd, projectDir) === 'current' ? currentCsv : baseCsv;
   };
 
   const report = crapReport({ projectDir, ratchet: 'main', runLizard });
@@ -238,7 +275,7 @@ test('an anonymous function is not a false new offender when its complexity fall
     '15,15,80,1,4,"(anonymous)@9-12@src/widget.js","src/widget.js","(anonymous)","(anonymous)",9,12',
     '',
   ].join('\n');
-  const runLizard = ({ cwd }) => (sameRealDir(cwd, projectDir) ? currentCsv : baseCsv);
+  const runLizard = ({ cwd }) => (classifyRatchetCwd(cwd, projectDir) === 'current' ? currentCsv : baseCsv);
 
   const report = crapReport({ projectDir, ratchet: 'main', runLizard });
 
@@ -302,7 +339,7 @@ test('an anonymous function that truly gets worse still reports one new offender
     '25,25,120,1,6,"(anonymous)@9-14@src/widget.js","src/widget.js","(anonymous)","(anonymous)",9,14',
     '',
   ].join('\n');
-  const runLizard = ({ cwd }) => (sameRealDir(cwd, projectDir) ? currentCsv : baseCsv);
+  const runLizard = ({ cwd }) => (classifyRatchetCwd(cwd, projectDir) === 'current' ? currentCsv : baseCsv);
 
   const report = crapReport({ projectDir, ratchet: 'main', runLizard });
 

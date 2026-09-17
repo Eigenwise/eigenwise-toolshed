@@ -543,5 +543,7 @@ module.exports = {
   crapScore,
   formatReport,
   parseLizardCsv,
+  realDir,
   resolveWorkDir,
+  sameDir,
 };
