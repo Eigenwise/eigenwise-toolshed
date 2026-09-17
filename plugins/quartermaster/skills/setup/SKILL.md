@@ -185,8 +185,8 @@ After the reload or restart: `claude plugin list --json` confirms every selected
 enabled at its requested scope. Then verify each piece is actually usable, not just present:
 build the codebase map via `map-codebase` (skip for not-a-codebase), confirm live-rules content
 is visibly injected in your context, bring up the sidequest board if selected, and check each
-LSP responds. For an approved CRAP gate, run `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" crap
---project "${CLAUDE_PROJECT_DIR}"` once and report the real result: pass, fail with its offender
+LSP responds. For an approved CRAP gate, run `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" crap`
+from `${CLAUDE_PROJECT_DIR}` once and report the real result: pass, fail with its offender
 count, or exit 2 with the missing prerequisite. Do not say the gate is live before that command ran.
 If model-gateway is installed but unwired, point at its skill rather than wiring it yourself. Fix what
 fails and re-verify; report what you confirmed, concretely.

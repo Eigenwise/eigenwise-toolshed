@@ -7,7 +7,7 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { test } = require('node:test');
 
-const { crapReport, crapScore, formatReport } = require('../lib/crap.js');
+const { COVERAGE_DIR_ENV, crapReport, crapScore, formatReport } = require('../lib/crap.js');
 
 const CLI = path.resolve(__dirname, '../bin/quartermaster.js');
 
@@ -341,6 +341,122 @@ test('a failing coverage command exits 2 instead of reading a stale lcov', () =>
   const result = runCli(['--complexity', 'complexity.csv', '--coverage-command', 'node -e "process.exit(3)"'], projectDir);
   assert.equal(result.status, 2, result.stderr);
   assert.match(result.stderr, /coverage command exited 3/);
+});
+
+function gitAt(cwd) {
+  return (args) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+}
+
+function initRepo(dir) {
+  const git = gitAt(dir);
+  git(['init', '-b', 'main']);
+  git(['config', 'user.name', 'CRAP test']);
+  git(['config', 'user.email', 'crap-test@example.invalid']);
+  return git;
+}
+
+test('running the gate from a linked worktree with --project <main checkout> measures the worktree', () => {
+  const mainDir = fixtureProject({ 'README.md': 'main\n' });
+  const git = initRepo(mainDir);
+  git(['add', '.']);
+  git(['commit', '-m', 'base']);
+
+  const worktreeParent = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-worktree-'));
+  const worktreeDir = path.join(worktreeParent, 'wt');
+  git(['worktree', 'add', '-b', 'wt-branch', worktreeDir, 'main']);
+
+  const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-stub-'));
+  const markerPath = path.join(stubDir, 'marker.json');
+  const scriptPath = path.join(stubDir, 'coverage-stub.js');
+  fs.writeFileSync(
+    scriptPath,
+    [
+      "const fs = require('fs');",
+      "const path = require('path');",
+      "fs.mkdirSync('coverage', { recursive: true });",
+      "fs.writeFileSync(path.join('coverage', 'lcov.info'), 'SF:a.js\\nDA:1,1\\nend_of_record\\n', 'utf8');",
+      `fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({ cwd: process.cwd() }));`,
+    ].join('\n'),
+    'utf8',
+  );
+
+  const lizardCalls = [];
+  const runLizard = ({ cwd, sources, exclude }) => {
+    lizardCalls.push({ cwd, sources, exclude });
+    return '';
+  };
+
+  const report = crapReport({
+    projectDir: mainDir,
+    cwd: worktreeDir,
+    projectPathGiven: true,
+    coverageCommand: `node "${scriptPath}"`,
+    runLizard,
+  });
+
+  assert.equal(report.root, worktreeDir);
+  assert.equal(lizardCalls.length, 1);
+  assert.equal(lizardCalls[0].cwd, worktreeDir);
+  const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+  assert.equal(fs.realpathSync(marker.cwd), fs.realpathSync(worktreeDir), 'coverage command ran with cwd inside the worktree');
+  assert.equal(fs.existsSync(path.join(mainDir, 'coverage')), false, 'the main checkout never got a coverage directory written to it');
+});
+
+test('two runs sharing a workDir isolate their coverage reports from each other', () => {
+  const workDir = fixtureProject({
+    'complexity.csv': '4,2,19,2,4,"add@1-4@src/sample.js","src/sample.js","add","add ( a , b )",1,4\n',
+  });
+  const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-stub-'));
+  const logPath = path.join(stubDir, 'dirs.log');
+  const scriptPath = path.join(stubDir, 'coverage-stub.js');
+  fs.writeFileSync(
+    scriptPath,
+    [
+      "const fs = require('fs');",
+      "const path = require('path');",
+      `const dir = process.env[${JSON.stringify(COVERAGE_DIR_ENV)}];`,
+      "fs.appendFileSync(process.env.CRAP_TEST_LOG, dir + '\\n');",
+      "fs.mkdirSync(dir, { recursive: true });",
+      "fs.writeFileSync(path.join(dir, 'lcov.info'), process.env.CRAP_TEST_LCOV, 'utf8');",
+    ].join('\n'),
+    'utf8',
+  );
+
+  const runWith = (lcovBody) => {
+    process.env.CRAP_TEST_LOG = logPath;
+    process.env.CRAP_TEST_LCOV = lcovBody;
+    try {
+      return crapReport({ projectDir: workDir, complexity: 'complexity.csv', coverageCommand: `node "${scriptPath}"` });
+    } finally {
+      delete process.env.CRAP_TEST_LOG;
+      delete process.env.CRAP_TEST_LCOV;
+    }
+  };
+
+  const first = runWith('SF:src/sample.js\nDA:2,1\nDA:3,0\nend_of_record\n');
+  const second = runWith('SF:src/sample.js\nDA:2,0\nDA:3,0\nend_of_record\n');
+
+  const dirs = fs.readFileSync(logPath, 'utf8').trim().split('\n');
+  assert.equal(dirs.length, 2, 'both runs recorded a coverage directory');
+  assert.notEqual(dirs[0], dirs[1], 'concurrent runs must not share a coverage report directory');
+
+  const firstAdd = first.functions.find((entry) => entry.function === 'add');
+  const secondAdd = second.functions.find((entry) => entry.function === 'add');
+  assert.equal(firstAdd.coverage, 0.5, "first run reads its own run's lcov, unaffected by the second");
+  assert.equal(secondAdd.coverage, 0, "second run reads its own run's lcov, unaffected by the first");
+});
+
+test('the generated crap-gate live rule has no hard-coded main-checkout path', () => {
+  const crapGateDoc = fs.readFileSync(
+    path.join(__dirname, '..', 'skills', 'setup', 'references', 'crap-gate.md'),
+    'utf8',
+  );
+  const liveRuleMatch = crapGateDoc.match(/```markdown\n([\s\S]*?)```/);
+  assert.ok(liveRuleMatch, 'the reference doc has a fenced live-rule template');
+  const liveRuleBlock = liveRuleMatch[1];
+  assert.match(liveRuleBlock, /quartermaster\.js" crap`/);
+  assert.doesNotMatch(liveRuleBlock, /--project/);
+  assert.doesNotMatch(liveRuleBlock, /"\/[^"]+"/, 'no absolute path baked into the rule text');
 });
 
 test('the real lizard backend measures a JavaScript and a Python file end to end', (t) => {
