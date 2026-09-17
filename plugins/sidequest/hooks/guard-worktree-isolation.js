@@ -156,6 +156,14 @@ function canonicalPath(value) {
   const kernel = require(runtimeModule("kernel/worktree"));
   return kernel.canonicalPath(value);
 }
+function boardVerificationEvidencePath(target) {
+  try {
+    const store = require(runtimeModule("store"));
+    return store.boardVerificationEvidencePath(target);
+  } catch (_) {
+    return false;
+  }
+}
 function executorAgent(type) {
   if (!type) return false;
   try {
@@ -372,6 +380,7 @@ function main() {
   if (!agentId || !executorAgent(executor)) return;
   const target = targetPath(input);
   if (!target) return;
+  if (boardVerificationEvidencePath(target)) return;
   const repo = enclosingCheckout(import_node_path3.default.dirname(canonicalPath(target)));
   if (!repo) return;
   let found = isolationExpectation(input, agentId, executor, true, repo.root);

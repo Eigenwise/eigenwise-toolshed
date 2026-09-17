@@ -126,6 +126,25 @@ function ticketEvidenceDirectory(slug?: any, ref?: any, projectPath?: any) {
     : directory;
 }
 
+// Board-owned verification evidence is not repository content: dispatch creates the directory above,
+// the briefing sends executors there, and on a machine that keeps ~/.claude in a dotfiles repository
+// the whole subtree sits inside a Git checkout no dispatch holds a lease for. A write lease answers
+// for a repository, so letting the isolation guard resolve that enclosing checkout refused the board's
+// own directory while the same write through Bash, which no hook gates, went through (SQ-9). Only the
+// `verification` subtree of a project is exempt, so the database and the dispatch tokens stay guarded.
+// The relocated form ticketEvidenceDirectory falls back to when the home sits inside the project repo
+// lands beside that repository rather than under the home, and is deliberately not matched here: a
+// directory name inside an arbitrary checkout is not proof the board owns it.
+function boardVerificationEvidencePath(target?: any) {
+  const requested = String(target || '').trim();
+  if (!requested) return false;
+  const projectsRoot = canonicalPath(path.resolve(homeRoot(), 'projects'));
+  const relative = path.relative(projectsRoot, canonicalPath(path.resolve(requested))).replace(/\\/g, '/');
+  if (!relative || relative.startsWith('../') || path.isAbsolute(relative)) return false;
+  const segments = relative.split('/');
+  return segments.length > 2 && segments[1] === 'verification';
+}
+
 function writeDispatchTokenFile(ticket?: any) {
   const file = dispatchTokenFile(ticket);
   if (!file) throw new Error('dispatch token file is unavailable');
@@ -3119,6 +3138,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     dispatchIdentityDiagnosis,
     dispatchIsolationExpectation,
     dispatchUnboundClaim,
+    boardVerificationEvidencePath,
     recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,

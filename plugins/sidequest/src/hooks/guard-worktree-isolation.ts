@@ -6,6 +6,7 @@ import { writeDeny } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 import {
   bindObservedRuntimeIdentity,
+  boardVerificationEvidencePath,
   canonicalPath,
   enclosingCheckout,
   executorAgent,
@@ -220,6 +221,10 @@ function main(): void {
 
   const target = targetPath(input);
   if (!target) return;
+  // Asked before any checkout lookup: the board's evidence directory can itself sit inside a Git
+  // checkout that belongs to nobody's dispatch, and resolving that checkout is what turned the write
+  // the briefing asked for into a lease refusal (SQ-9).
+  if (boardVerificationEvidencePath(target)) return;
   const repo = enclosingCheckout(path.dirname(canonicalPath(target)));
   if (!repo) return;
   let found = isolationExpectation(input, agentId, executor, true, repo.root);

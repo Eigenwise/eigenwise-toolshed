@@ -102,6 +102,15 @@ function createDispatch(dependencies) {
     const insideRepository = relative === "" || !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
     return insideRepository ? path.join(path.dirname(path.resolve(repository)), ".sidequest-verification", safeSlug, safeRef) : directory;
   }
+  function boardVerificationEvidencePath(target) {
+    const requested = String(target || "").trim();
+    if (!requested) return false;
+    const projectsRoot = canonicalPath(path.resolve(homeRoot(), "projects"));
+    const relative = path.relative(projectsRoot, canonicalPath(path.resolve(requested))).replace(/\\/g, "/");
+    if (!relative || relative.startsWith("../") || path.isAbsolute(relative)) return false;
+    const segments = relative.split("/");
+    return segments.length > 2 && segments[1] === "verification";
+  }
   function writeDispatchTokenFile(ticket) {
     const file = dispatchTokenFile(ticket);
     if (!file) throw new Error("dispatch token file is unavailable");
@@ -2642,6 +2651,7 @@ function createDispatch(dependencies) {
     dispatchIdentityDiagnosis,
     dispatchIsolationExpectation,
     dispatchUnboundClaim,
+    boardVerificationEvidencePath,
     recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,
