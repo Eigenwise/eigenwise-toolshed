@@ -442,9 +442,9 @@ test('running the gate from a linked worktree with --project <main checkout> mea
 
   assert.ok(sameRealDir(report.root, worktreeDir), `expected ${report.root} to be the worktree ${worktreeDir}`);
   assert.equal(lizardCalls.length, 1);
-  assert.equal(lizardCalls[0].cwd, worktreeDir);
+  assert.ok(sameRealDir(lizardCalls[0].cwd, worktreeDir), `expected lizard cwd ${lizardCalls[0].cwd} to be the worktree ${worktreeDir}`);
   const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
-  assert.equal(fs.realpathSync(marker.cwd), fs.realpathSync(worktreeDir), 'coverage command ran with cwd inside the worktree');
+  assert.ok(sameRealDir(marker.cwd, worktreeDir), 'coverage command ran with cwd inside the worktree');
   assert.equal(fs.existsSync(path.join(mainDir, 'coverage')), false, 'the main checkout never got a coverage directory written to it');
 });
 
