@@ -804,6 +804,102 @@ test('negative-control marker refusals quote malformed marker lines', () => {
   git(['commit', '-m', 'negative control malformed marker fixture']);
 });
 
+test('SQ-17: a target= value keeps its semicolons, and an unparsed marker names the field it stopped at', () => {
+  const by = 'negative-control-semicolon-target';
+  const ticket = addNegativeControlTicket('negative control target keeps its semicolons', by);
+  const testName = 'a semicolon-joined target is read as one value';
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), `test('${testName}', () => {});\n`);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: `[sidequest:negative-control] target=lib/fixture.js:1;lib/other.js:2; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion\n[sidequest:negative-control-test] failed ${testName}`,
+    source: 'mcp',
+  }).ok, true);
+  const accepted = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(accepted.ok, true, accepted.message);
+
+  const unparsed = '[sidequest:negative-control] target=lib/fixture.js:1;lib/other.js:2 npm run test:files test/fixture.test.js failed=1 failure-kind=assertion';
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: unparsed, source: 'mcp' }).ok, true);
+  const unparsedRefusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(unparsedRefusal.reason, 'negative_control_evidence_required');
+  assert.match(unparsedRefusal.message, new RegExp(unparsed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(unparsedRefusal.message, /no "; assertion=" follows its target= value/);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control semicolon target fixture']);
+});
+
+test('SQ-17: a changed it.each table is attributed to its own test, not the preceding plain test', () => {
+  const by = 'negative-control-each-table';
+  const eachName = 'adds %s to the row';
+  const unrelatedName = 'an unrelated baseline test';
+  const baseline = `test('${unrelatedName}', () => {});\n\ntest.each([\n  ['a'],\n])('${eachName}', () => {});\n`;
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline);
+  git(['add', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control each-table baseline']);
+
+  const ticket = addNegativeControlTicket('negative control reads an each table', by);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline.replace("  ['a'],\n", "  ['a'],\n  ['b'],\n"));
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const refusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(refusal.reason, 'negative_control_test_required');
+  assert.match(refusal.message, new RegExp(eachName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.doesNotMatch(refusal.message, new RegExp(unrelatedName));
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control each-table fixture']);
+});
+
+test('SQ-17: a hunk inserted between tests does not demand the test that follows it', () => {
+  const by = 'negative-control-inserted-hunk';
+  const alphaName = 'alpha baseline assertion';
+  const omegaName = 'omega baseline assertion';
+  const insertedName = 'inserted middle assertion';
+  const definition = 'test';
+  const baseline = `${definition}('${alphaName}', () => {});\n\n${definition}('${omegaName}', () => {});\n`;
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), baseline);
+  git(['add', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control inserted-hunk baseline']);
+
+  const ticket = addNegativeControlTicket('negative control reads an inserted hunk', by);
+  fs.writeFileSync(
+    path.join(PROJECT_DIR, 'test', 'fixture.test.js'),
+    baseline.replace(`${definition}('${omegaName}`, `${definition}('${insertedName}', () => {});\n\n${definition}('${omegaName}`),
+  );
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: `[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 failure-kind=assertion\n[sidequest:negative-control-test] failed ${insertedName}\n[sidequest:negative-control-test] failed ${alphaName}`,
+    source: 'mcp',
+  }).ok, true);
+  const accepted = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(accepted.ok, true, accepted.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control inserted-hunk fixture']);
+});
+
 test('negative controls account for every added named test', () => {
   const by = 'negative-control-per-test-executor';
   const ticket = addNegativeControlTicket('negative control names every changed test', by);
