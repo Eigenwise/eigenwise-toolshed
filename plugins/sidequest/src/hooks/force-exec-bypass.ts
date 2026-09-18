@@ -664,7 +664,18 @@ function terminalExecutorTicket(input: HookInput): TerminalExecutorTicket | null
     const matches: TerminalExecutorTicket[] = [];
     for (const project of store.listProjects({ all: true })) {
       for (const ticket of store.listTickets(project.slug)) {
-        if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId || !ticket.dispatch?.terminalAt || ticket.claim?.by || !dispatchIdentityMatches(ticket, agentId, executor)) continue;
+        if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId || !dispatchIdentityMatches(ticket, agentId, executor)) continue;
+        // SQ-20. One runtime identity reaches more than one sibling dispatch of the same
+        // session: a bind records an agent id on any sibling whose own id is still unset,
+        // and the name fallbacks above match by prefix. So a terminal sibling alone never
+        // proves this agent is finished, while a claim it still holds proves it is not.
+        // Refusing there cost a live read-only executor its only write path and told it to
+        // abandon an open ticket, which is worse than leaving a finished agent unrefused.
+        if (!ticket.dispatch?.terminalAt) {
+          if (ticket.claim?.by) return null;
+          continue;
+        }
+        if (ticket.claim?.by) continue;
         if (ticket.submission?.supersededBy?.ref || ticket.completion?.supersededBy?.ref) {
           const by = String(ticket.completion?.by || 'the control plane').trim();
           matches.push({ ref: ticket.ref, closedBy: `superseded by ${ticket.submission?.supersededBy?.ref || ticket.completion?.supersededBy?.ref} through ${by}`, outcome: 'superseded' });
