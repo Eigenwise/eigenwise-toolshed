@@ -107,9 +107,10 @@ function bodyHash(sourceLines, start, end) {
 /**
  * lizard --csv columns: NLOC, CCN, token, PARAM, length, location, file, function name, long_name, start, end.
  *
- * `rootDir`, when given, lets anonymous functions (lizard name `(anonymous)`) get a body hash: reading the
- * exact source lines lizard attributed to them means a function whose text is untouched still matches its
- * baseline counterpart even when unrelated edits elsewhere in the file shifted its ordinal.
+ * `rootDir`, when given, lets every function get a body hash: reading the exact source lines lizard
+ * attributed to it means a function whose text is untouched still matches its baseline counterpart even
+ * when unrelated edits elsewhere in the file shifted its ordinal. Names collide too (two classes with a
+ * `run` method, two components with a `render`), so this is not only an anonymous-function problem.
  */
 function parseLizardCsv(csvText, rootDir) {
   const rows = [];
@@ -159,7 +160,6 @@ function parseLizardCsv(csvText, rootDir) {
 
       let anchor = null;
       let anchorOrdinal = null;
-      let hash = null;
       if (isAnonymous) {
         let enclosing = null;
         let preceding = null;
@@ -173,10 +173,10 @@ function parseLizardCsv(csvText, rootDir) {
         const anchorKey = anchor ?? '\u0000no-anchor';
         anchorOrdinal = anchorOrdinals.get(anchorKey) ?? 0;
         anchorOrdinals.set(anchorKey, anchorOrdinal + 1);
-        hash = bodyHash(readSourceLines(file), entry.start, entry.end);
       } else {
         namedSoFar.push(entry);
       }
+      const hash = bodyHash(readSourceLines(file), entry.start, entry.end);
 
       functions.push({
         file: entry.file,
@@ -213,7 +213,10 @@ function measure(lizardFunctions, coverage, projectDir) {
       executable += 1;
       if (hits > 0) covered += 1;
     }
-    const ratio = executable ? covered / executable : 0;
+    // The ratchet recomputes the baseline's CRAP from this reported coverage, so CRAP has to come from
+    // the same rounded number. Scoring the raw ratio instead moves CRAP by 0.01 against the baseline's
+    // and fails a function whose complexity never changed.
+    const ratio = executable ? rounded(covered / executable, 4) : 0;
     return {
       file: displayPath(projectDir, entry.file),
       line: entry.start,
@@ -223,7 +226,7 @@ function measure(lizardFunctions, coverage, projectDir) {
       anchorOrdinal: entry.anchorOrdinal ?? null,
       bodyHash: entry.bodyHash ?? null,
       cc: entry.complexity,
-      coverage: rounded(ratio, 4),
+      coverage: ratio,
       crap: rounded(crapScore(entry.complexity, ratio), 2),
       unmeasured: executable === 0,
     };
@@ -272,7 +275,7 @@ function baselineFunctions({ projectDir, ratchet, files, exclude, runLizard }) {
       .filter(Boolean),
   );
   const changedHere = [...files].filter((file) => changed.has(file));
-  const empty = { byIdentity: new Map(), byBodyHash: new Map(), byAnchor: new Map(), functionsByFile: new Map() };
+  const empty = { byIdentity: new Map(), byBodyHash: new Map(), byAnchor: new Map(), functionsByFile: new Map(), namesByFile: new Map() };
   if (!changedHere.length) return { base, changed, ...empty };
 
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-base-'));
@@ -290,6 +293,7 @@ function baselineFunctions({ projectDir, ratchet, files, exclude, runLizard }) {
     const byBodyHash = new Map();
     const byAnchor = new Map();
     const functionsByFile = new Map();
+    const namesByFile = new Map();
     if (extracted) {
       for (const entry of parseLizardCsv(runLizard({ cwd: temporaryDir, sources: ['.'], exclude }), temporaryDir)) {
         const file = displayPath(temporaryDir, entry.file);
@@ -298,12 +302,31 @@ function baselineFunctions({ projectDir, ratchet, files, exclude, runLizard }) {
         if (entry.name === ANONYMOUS_NAME) byAnchor.set(`${file}\u0000${entry.anchor ?? ''}\u0000${entry.anchorOrdinal}`, entry);
         if (!functionsByFile.has(file)) functionsByFile.set(file, []);
         functionsByFile.get(file).push(entry);
+        if (!namesByFile.has(file)) namesByFile.set(file, new Set());
+        namesByFile.get(file).add(entry.name);
       }
     }
-    return { base, changed, byIdentity, byBodyHash, byAnchor, functionsByFile };
+    return { base, changed, byIdentity, byBodyHash, byAnchor, functionsByFile, namesByFile };
   } finally {
     fs.rmSync(temporaryDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Pairing has to survive an insertion anywhere in the file: one added function shifts every later
+ * position, and names repeat (two classes with a `run`, two components with a `render`), so neither
+ * position nor name on its own identifies a function. Byte-identical source text is the strongest
+ * identity, and it carries the same complexity whichever copy it pairs with, so it is tried first.
+ */
+function baselineMatch(baseline, entry) {
+  if (entry.bodyHash) {
+    const sameText = baseline.byBodyHash.get(`${entry.file}\u0000${entry.bodyHash}`);
+    if (sameText) return sameText;
+  }
+  if (entry.function !== ANONYMOUS_NAME) {
+    return baseline.byIdentity.get(`${entry.file}\u0000${entry.function}\u0000${entry.ordinal}`) ?? null;
+  }
+  return baseline.byAnchor.get(`${entry.file}\u0000${entry.anchor ?? ''}\u0000${entry.anchorOrdinal}`) ?? null;
 }
 
 function crapReport(options) {
@@ -353,15 +376,7 @@ function crapReport(options) {
   let preExistingAtOrAboveMax = 0;
   const ambiguousByFile = new Map();
   for (const entry of functions) {
-    let previous = null;
-    if (baseline) {
-      if (entry.function === ANONYMOUS_NAME) {
-        if (entry.bodyHash) previous = baseline.byBodyHash.get(`${entry.file}\u0000${entry.bodyHash}`) ?? null;
-        if (!previous) previous = baseline.byAnchor.get(`${entry.file}\u0000${entry.anchor ?? ''}\u0000${entry.anchorOrdinal}`) ?? null;
-      } else {
-        previous = baseline.byIdentity.get(`${entry.file}\u0000${entry.function}\u0000${entry.ordinal}`) ?? null;
-      }
-    }
+    const previous = baseline ? baselineMatch(baseline, entry) : null;
     if (previous) {
       if (entry.crap >= max) preExistingAtOrAboveMax += 1;
       const baselineCrap = rounded(crapScore(previous.complexity, entry.coverage), 2);
@@ -372,10 +387,11 @@ function crapReport(options) {
       if (entry.crap >= max) preExistingAtOrAboveMax += 1;
       continue;
     }
-    // An anonymous function with no baseline counterpart is ambiguous, not new: same-named siblings shift
-    // position whenever the file gains or loses one of them, so a missing identity match proves nothing
-    // about this specific function. Judge the file as a whole once every entry has been scanned.
-    if (baseline && entry.function === ANONYMOUS_NAME) {
+    // A function whose name the baseline copy of this file already carried is ambiguous, not new:
+    // same-named siblings shift position whenever the file gains or loses one of them, so a missing
+    // match proves nothing about this particular function. Judge the file as a whole once every entry
+    // has been scanned. A name the baseline never had is genuinely new and answers to the ceiling.
+    if (baseline && baseline.namesByFile.get(entry.file)?.has(entry.function)) {
       if (!ambiguousByFile.has(entry.file)) ambiguousByFile.set(entry.file, []);
       ambiguousByFile.get(entry.file).push(entry);
       continue;
@@ -432,7 +448,7 @@ function formatReport(report) {
   );
   for (const ambiguous of report.ambiguousMatches ?? []) {
     const verb = ambiguous.degraded ? 'aggregate got worse' : 'aggregate holds';
-    lines.push(`${ambiguous.file}: ambiguous match (unnamed functions moved; ${verb})`);
+    lines.push(`${ambiguous.file}: ambiguous match (same-named functions moved; ${verb})`);
   }
   const verdict = report.failures.length ? 'failed' : 'passed';
   let summary = `CRAP gate ${verdict}: ${report.atOrAboveMax} of ${report.functions.length} functions at or above ${report.max}`;

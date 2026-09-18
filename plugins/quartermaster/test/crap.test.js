@@ -41,6 +41,10 @@ function functionNamed(report, name) {
   return report.functions.find((entry) => entry.function === name);
 }
 
+function rounded2(value) {
+  return Number(value.toFixed(2));
+}
+
 test('CRAP comes from the lcov lines inside each function, whatever slashes the lcov used', () => {
   const projectDir = fixtureProject({
     // lizard reports src/sample.js with forward slashes and src\sample.py with backslashes; the lcov
@@ -304,6 +308,102 @@ test('an anonymous function that truly gets worse still reports one new offender
   );
   assert.equal(report.ambiguousMatches[0].degraded, true);
   assert.match(formatReport(report), /CRAP gate failed: 1 of 3 functions/);
+});
+
+/** The baseline checkout is the only cwd `baselineFunctions()` ever makes, and it names itself. */
+function isBaselineCwd(cwd) {
+  return path.basename(cwd).startsWith('quartermaster-crap-base-');
+}
+
+function initFixtureRepository(projectDir) {
+  const git = (args) => execFileSync('git', args, { cwd: projectDir, encoding: 'utf8', windowsHide: true });
+  git(['init', '-b', 'main']);
+  git(['config', 'user.name', 'CRAP test']);
+  git(['config', 'user.email', 'crap-test@example.invalid']);
+  git(['add', '.']);
+  git(['commit', '-m', 'base']);
+}
+
+/**
+ * Inserting one function shifts the position of every later function that shares its name, and lizard
+ * repeats names freely: two Python classes with a `run`, two components with a `render`. Pairing on
+ * position alone read the untouched namesakes against the wrong baseline row, so one came back as a
+ * regression (its own 13 branches against its neighbour's baseline 4) and the one pushed past the end of
+ * the baseline's ordinals came back as a new function over the ceiling.
+ */
+test('inserting a same-named function leaves its untouched namesakes matched to their own baseline', () => {
+  const alphaRun = ['    def run(self, n):', '        if n > 0:', '            return 1', '        return 0'];
+  const betaRun = ['    def run(self, n):', '        if n < 0:', '            return -1', '        return 0'];
+  const projectDir = fixtureProject({
+    'src/jobs.py': ['class Alpha:', ...alphaRun, '', 'class Beta:', ...betaRun, ''].join('\n'),
+    'coverage/lcov.info': '',
+  });
+  initFixtureRepository(projectDir);
+
+  // Only the new class is added; both existing `run` bodies stay byte-identical, six lines lower.
+  fs.writeFileSync(
+    path.join(projectDir, 'src', 'jobs.py'),
+    ['class Gamma:', '    def run(self, n):', '        return n', '', 'class Alpha:', ...alphaRun, '', 'class Beta:', ...betaRun, ''].join('\n'),
+    'utf8',
+  );
+
+  const baseCsv = [
+    '4,13,40,2,4,"run@2-5@./src/jobs.py","./src/jobs.py","run","run( self , n )",2,5',
+    '4,4,40,2,4,"run@8-11@./src/jobs.py","./src/jobs.py","run","run( self , n )",8,11',
+    '',
+  ].join('\n');
+  const currentCsv = [
+    '2,1,12,2,2,"run@2-3@src/jobs.py","src/jobs.py","run","run( self , n )",2,3',
+    '4,13,40,2,4,"run@6-9@src/jobs.py","src/jobs.py","run","run( self , n )",6,9',
+    '4,4,40,2,4,"run@12-15@src/jobs.py","src/jobs.py","run","run( self , n )",12,15',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (isBaselineCwd(cwd) ? baseCsv : currentCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.deepEqual(report.failures.map((entry) => `${entry.line}:${entry.reason}`), []);
+  assert.equal(report.atOrAboveMax, 0);
+  assert.equal(report.preExistingAtOrAboveMax, 2, 'both untouched methods stay over the ceiling, reported and not gated');
+  assert.deepEqual(report.ambiguousMatches, [], 'exact source text matched every namesake, so nothing was ambiguous');
+  assert.match(formatReport(report), /CRAP gate passed: 0 of 3 functions at or above 6; 2 pre-existing functions at or above 6/);
+});
+
+/**
+ * The ratchet recomputes the baseline's CRAP from the coverage this run reports, which is rounded to four
+ * places, so scoring the current side from the raw ratio instead put the two numbers 0.01 apart: 26
+ * branches at 2/3 coverage scored 51.04 against a baseline 51.03 and failed a function nobody had touched.
+ */
+test('coverage rounding alone never fails a function whose complexity held', () => {
+  const render = ['function render(rows) {', '  if (!rows) return 0;', '  if (rows.length) return 1;', '  return 2;', '}'];
+  const projectDir = fixtureProject({
+    'src/report.js': [...render, ''].join('\n'),
+    'coverage/lcov.info': 'SF:src/report.js\nDA:2,1\nDA:3,1\nDA:4,0\nend_of_record\n',
+  });
+  initFixtureRepository(projectDir);
+
+  fs.writeFileSync(
+    path.join(projectDir, 'src', 'report.js'),
+    [...render, '', 'function tally(rows) {', '  return rows.length;', '}', ''].join('\n'),
+    'utf8',
+  );
+
+  const baseCsv = '5,26,40,1,5,"render@1-5@./src/report.js","./src/report.js","render","render ( rows )",1,5\n';
+  const currentCsv = [
+    '5,26,40,1,5,"render@1-5@src/report.js","src/report.js","render","render ( rows )",1,5',
+    '3,1,10,1,3,"tally@7-9@src/report.js","src/report.js","tally","tally ( rows )",7,9',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (isBaselineCwd(cwd) ? baseCsv : currentCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  const rendered = functionNamed(report, 'render');
+  assert.deepEqual({ cc: rendered.cc, coverage: rendered.coverage, crap: rendered.crap }, { cc: 26, coverage: 0.6667, crap: 51.03 });
+  assert.equal(rounded2(crapScore(26, 2 / 3)), 51.04, 'the raw ratio scores 0.01 higher, which is what used to fail the gate');
+  assert.equal(rounded2(crapScore(26, rendered.coverage)), rendered.crap, 'reported CRAP comes from the reported coverage');
+  assert.deepEqual(report.failures, [], 'the same complexity at the same coverage is not a regression');
+  assert.equal(report.preExistingAtOrAboveMax, 1);
 });
 
 test('the config file supplies the gate settings and flags override it', () => {
