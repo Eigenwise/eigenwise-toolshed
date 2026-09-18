@@ -23,6 +23,10 @@ export type CandidateInvalidation = Readonly<{
   ref: string;
   state: 'invalidated';
   reason: 'baseline_moved' | 'surface_overlap' | 'verification_required' | 'participant_missing';
+  // The finding without the recovery prose, so a caller summarising several
+  // invalidations can name each one without repeating the recovery paragraph.
+  detail: string;
+  outside?: readonly string[];
   message: string;
 }>;
 
@@ -83,7 +87,7 @@ function participantFor(wave: Wave, ref: string): WaveParticipant | null {
   return wave.participants.find((participant) => participant.ref === ref) || null;
 }
 
-function invalidation(ref: string, reason: CandidateInvalidation['reason'], message: string): CandidateInvalidation {
+function invalidation(ref: string, reason: CandidateInvalidation['reason'], detail: string, outside?: readonly string[]): CandidateInvalidation {
   // A moved baseline is the one reason redispatch cannot recover from: the
   // candidate is already verified against a revision the target rewound past, so
   // the only way forward is a hand merge onto the current target (SQ-2528).
@@ -94,7 +98,9 @@ function invalidation(ref: string, reason: CandidateInvalidation['reason'], mess
     ref,
     state: 'invalidated',
     reason,
-    message: `${message}${recovery}`,
+    detail,
+    ...(outside && outside.length ? { outside: Object.freeze([...outside]) } : {}),
+    message: `${detail}${recovery}`,
   });
 }
 
@@ -144,8 +150,17 @@ export function assembleWave(wave: Wave, candidates: readonly WaveCandidate[]): 
       invalidated.push(invalidation(candidate.ref, 'verification_required', `${candidate.ref} has no accepted verifier evidence for the opened wave.`));
       continue;
     }
-    if (candidate.surfaces.some((surface) => !isInScope(surface, participant.declaredSurfaces))) {
-      invalidated.push(invalidation(candidate.ref, 'surface_overlap', `${candidate.ref} changed surfaces outside its wave-declared surfaces.`));
+    // Name the paths. "changed surfaces outside its wave-declared surfaces" sent four
+    // integration attempts hunting a baseline mismatch that did not exist, because the
+    // refusal never said which path was outside (cardinventorymanagement SQ-141/SQ-144).
+    const outside = candidate.surfaces.filter((surface) => !isInScope(surface, participant.declaredSurfaces));
+    if (outside.length) {
+      invalidated.push(invalidation(
+        candidate.ref,
+        'surface_overlap',
+        `${candidate.ref} changed surfaces outside its wave-declared surfaces: ${outside.join(', ')}.`,
+        outside,
+      ));
     }
   }
   const admitted = candidates.filter((candidate) => wave.participants.some((participant) => participant.ref === candidate.ref));
