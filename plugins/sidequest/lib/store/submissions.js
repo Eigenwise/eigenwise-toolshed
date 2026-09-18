@@ -802,6 +802,13 @@ ${verify.outputTail}` : null
     }
     return { ok: true, ticket, scopeValidation };
   }
+  function waveDeclaredSurfaces(slug, ticket) {
+    const admitted = Array.isArray(ticket?.submission?.admittedScope) ? ticket.submission.admittedScope : [];
+    return Array.from(/* @__PURE__ */ new Set([
+      ...commitScope.ticketCommitScope(executionScope(slug, ticket), ticket?.files, ticket?.ref),
+      ...commitScope.ticketCommitScope(admitted, admitted, ticket?.ref)
+    ]));
+  }
   function reconciledDeliveryWave(slug, ticket, revision, verification) {
     const baseline = ticket.submission?.baseline || sourceRevisionBaseline(ticket);
     return {
@@ -809,7 +816,7 @@ ${verify.outputTail}` : null
       baseline,
       participants: [ticket.ref],
       dependencies: {},
-      declaredSurfaces: executionScope(slug, ticket),
+      declaredSurfaces: waveDeclaredSurfaces(slug, ticket),
       state: "gate_passed",
       gate: { verification, state: "gate_passed" },
       delivery: { state: "delivered", revision, verification }
@@ -2846,17 +2853,19 @@ ${verify.outputTail}` : null
       participants: tickets.map((ticket) => ({
         ref: ticket.ref,
         dependencies: Array.isArray(dependencies2[ticket.ref]) ? dependencies2[ticket.ref] : [],
-        declaredSurfaces: executionScope(slug, ticket)
+        declaredSurfaces: waveDeclaredSurfaces(slug, ticket)
       }))
     });
     if ("code" in opened) return { ok: false, reason: opened.code, message: opened.message };
     const decision = assembleWave(opened, waveCandidatesForBaseline(slug, waveCandidates, opened.baseline));
     if (!decision.ok) {
       const deliveryTarget = target?.branch ? `ticket delivery target ${target.branch}` : "the current integration target";
+      const findings = decision.invalidated.map((entry) => `${entry.ref} ${entry.reason}: ${entry.detail}`).join(" ");
+      const baselines = decision.invalidated.some((entry) => entry.reason === "baseline_moved") ? ` Assembled baseline ${opened.baseline.revision.source}:${opened.baseline.revision.value}; candidate baselines ${waveCandidates.map((candidate) => `${candidate.ref}=${candidate.baseline.revision.source}:${candidate.baseline.revision.value}`).join(", ")}.` : "";
       return {
         ok: false,
         reason: "wave_invalidated",
-        message: `Wave ${waveId} could not assemble at ${deliveryTarget}: assembled baseline ${opened.baseline.revision.source}:${opened.baseline.revision.value}; candidate baselines ${waveCandidates.map((candidate) => `${candidate.ref}=${candidate.baseline.revision.source}:${candidate.baseline.revision.value}`).join(", ")}. Submitted candidates remain parked with their existing verification evidence.`,
+        message: `Wave ${waveId} could not assemble at ${deliveryTarget}: ${findings}${baselines} Submitted candidates remain parked with their existing verification evidence.`,
         invalidated: decision.invalidated,
         wave: { id: waveId, baseline: opened.baseline }
       };
@@ -2931,7 +2940,7 @@ ${verify.outputTail}` : null
       participants: tickets.map((ticket) => ({
         ref: ticket.ref,
         dependencies: Array.isArray(waveState.dependencies?.[ticket.ref]) ? waveState.dependencies[ticket.ref] : [],
-        declaredSurfaces: executionScope(slug, ticket)
+        declaredSurfaces: waveDeclaredSurfaces(slug, ticket)
       }))
     });
     if ("code" in opened) return { ok: false, reason: opened.code, message: opened.message };

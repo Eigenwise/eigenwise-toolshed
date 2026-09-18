@@ -44,13 +44,15 @@ function sameBaseline(left, right) {
 function participantFor(wave, ref) {
   return wave.participants.find((participant) => participant.ref === ref) || null;
 }
-function invalidation(ref, reason, message) {
+function invalidation(ref, reason, detail, outside) {
   const recovery = reason === "baseline_moved" ? " The recorded baseline is no longer reachable from the wave target. Recovery: manually merge the verified candidate onto the current target, re-gate it, then record delivery with groomClose using deliveryCommit." : " Candidate submissions remain available. Call integrate with one candidate ref, redispatch a candidate against the current base, or have the integrator use groomClose after a verified reconciled delivery.";
   return Object.freeze({
     ref,
     state: "invalidated",
     reason,
-    message: `${message}${recovery}`
+    detail,
+    ...outside && outside.length ? { outside: Object.freeze([...outside]) } : {},
+    message: `${detail}${recovery}`
   });
 }
 function openWave(input) {
@@ -95,8 +97,14 @@ function assembleWave(wave, candidates) {
       invalidated.push(invalidation(candidate.ref, "verification_required", `${candidate.ref} has no accepted verifier evidence for the opened wave.`));
       continue;
     }
-    if (candidate.surfaces.some((surface) => !(0, import_scope_match.isInScope)(surface, participant.declaredSurfaces))) {
-      invalidated.push(invalidation(candidate.ref, "surface_overlap", `${candidate.ref} changed surfaces outside its wave-declared surfaces.`));
+    const outside = candidate.surfaces.filter((surface) => !(0, import_scope_match.isInScope)(surface, participant.declaredSurfaces));
+    if (outside.length) {
+      invalidated.push(invalidation(
+        candidate.ref,
+        "surface_overlap",
+        `${candidate.ref} changed surfaces outside its wave-declared surfaces: ${outside.join(", ")}.`,
+        outside
+      ));
     }
   }
   const admitted = candidates.filter((candidate) => wave.participants.some((participant) => participant.ref === candidate.ref));

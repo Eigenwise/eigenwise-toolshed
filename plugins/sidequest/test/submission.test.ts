@@ -4925,6 +4925,97 @@ test('SQ-2463: a wave invalidation preserves submitted candidate status', () => 
   }
 });
 
+// GitHub #180 (SQ-16): the commit gate admits the ticket's own release fragment
+// implicitly, and so does the stored-range validator, but wave assembly re-derived its
+// surfaces from ticket.files alone — so a candidate that wrote its own fragment without
+// declaring it was refused as surface_overlap after passing both
+// (cardinventorymanagement SQ-141/SQ-144).
+test('SQ-16: a candidate that changed its implicitly admitted release fragment assembles', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  try {
+    const ticket = addTicket('release-fragment wave candidate', { files: ['docs'] });
+    const fragment = `.release/unreleased/${ticket.ref}.md`;
+    const baselineCommit = git(['rev-parse', 'HEAD']);
+    const observedAt = new Date().toISOString();
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'fragment-wave-worker', { direct: true, reason: 'The release-fragment wave fixture requires a local direct claim.' }).ok, true);
+    const docsPath = path.join(PROJECT_DIR, 'docs', 'wave-fragment.md');
+    fs.mkdirSync(path.dirname(docsPath), { recursive: true });
+    fs.writeFileSync(docsPath, 'fragment fixture\n');
+    fs.mkdirSync(path.join(PROJECT_DIR, '.release', 'unreleased'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, fragment), '- release note fixture\n');
+    git(['add', 'docs/wave-fragment.md', fragment]);
+    git(['commit', '-m', 'candidate that writes its own release fragment']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    const submitted = store.submitTicket(slug, ticket.ref, 'fragment-wave-worker', { commit: candidate, verify: 'node -e "process.exit(0)"' });
+    assert.strictEqual(submitted.ok, true, submitted.message);
+    const stored = store.getTicket(slug, ticket.ref);
+    assert.ok(!store.effectiveScope(slug, stored).includes(fragment), 'the fragment is admitted implicitly, never declared');
+    assert.ok(!(stored.submission.admittedScope || []).includes(fragment), 'the recorded snapshot carries the declared scope, not the implicit fragment');
+    // A dispatched submit records the range; a direct fixture claim supplies it here.
+    Object.assign(stored.submission, {
+      baseline: { revision: { source: 'git', value: baselineCommit, observedAt }, purpose: 'dispatch' },
+      changedPaths: [fragment, 'docs/wave-fragment.md'],
+    });
+    stored.executorVerify = 'node -e "process.exit(0)"';
+    persist(stored);
+    git(['reset', '--hard', baselineCommit]);
+
+    const assembled = store.assembleSubmissionWave(slug, [ticket.ref], { waveId: 'release-fragment-wave' });
+    assert.strictEqual(assembled.ok, true, assembled.message);
+    assert.ok(store.getTicket(slug, ticket.ref).submission.wave.declaredSurfaces.includes(fragment));
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+// The refusal has to name the path and the reason where the caller reads it: four
+// integration attempts on cardinventorymanagement SQ-141 chased a baseline mismatch the
+// message printed while every baseline matched (GitHub #180).
+test('SQ-16: a surface_overlap refusal names the offending path instead of matching baselines', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  try {
+    const ticket = addTicket('surface overlap message candidate', { files: ['docs'] });
+    const baselineCommit = git(['rev-parse', 'HEAD']);
+    const observedAt = new Date().toISOString();
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'overlap-message-worker', { direct: true, reason: 'The overlap message fixture requires a local direct claim.' }).ok, true);
+    const docsPath = path.join(PROJECT_DIR, 'docs', 'wave-overlap.md');
+    fs.mkdirSync(path.dirname(docsPath), { recursive: true });
+    fs.writeFileSync(docsPath, 'overlap fixture\n');
+    git(['add', 'docs/wave-overlap.md']);
+    git(['commit', '-m', 'overlap message candidate']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'overlap-message-worker', { commit: candidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const stored = store.getTicket(slug, ticket.ref);
+    Object.assign(stored.submission, {
+      baseline: { revision: { source: 'git', value: baselineCommit, observedAt }, purpose: 'dispatch' },
+      changedPaths: ['docs/wave-overlap.md', 'lib/never-admitted.js'],
+      admittedScope: ['docs'],
+    });
+    persist(stored);
+    git(['reset', '--hard', baselineCommit]);
+
+    const refused = store.assembleSubmissionWave(slug, [ticket.ref], { waveId: 'overlap-message-wave' });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'wave_invalidated');
+    assert.strictEqual(refused.invalidated[0].reason, 'surface_overlap');
+    assert.deepStrictEqual(refused.invalidated[0].outside, ['lib/never-admitted.js']);
+    assert.match(refused.message, /surface_overlap: .*lib\/never-admitted\.js/);
+    assert.doesNotMatch(refused.message, /candidate baselines/);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
 // GitHub #51 (SQ-2717): landed proof, not delivery location. Each fixture gets its own
 // repo plus bare origin so origin/main can be advanced past a stale local main without
 // touching the shared PROJECT_DIR fixtures.
