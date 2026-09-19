@@ -26,6 +26,10 @@ function createClaims(dependencies: any) {
   } = dependencies;
 
   const DEFAULT_CLAIM_IDLE_MIN = 60;
+  // Measured from the last board-side signal the runtime produced, not from its launch: a gateway first
+  // turn, a briefing fetch, and a pre-claim skill load each move that signal forward, and the SQ-2932
+  // review found five minutes from bind alone retiring executors that were about to claim.
+  const DEFAULT_CLAIM_GRACE_MIN = 15;
   const DEFAULT_CLAIM_ABANDON_MIN = 24 * 60;
   const DEFAULT_PREPARED_DISPATCH_TTL_HOURS = 6;
   const VERIFY_START_COMMENT = '[sidequest:verify-start] ';
@@ -117,6 +121,10 @@ function createClaims(dependencies: any) {
 
   function claimIdleMs() {
     return envMinutesMs(DEFAULT_CLAIM_IDLE_MIN, 'SIDEQUEST_CLAIM_IDLE_MIN', 'SIDEQUEST_CLAIM_TTL_MIN');
+  }
+
+  function claimGraceMs() {
+    return Math.min(envMinutesMs(DEFAULT_CLAIM_GRACE_MIN, 'SIDEQUEST_CLAIM_GRACE_MIN'), claimIdleMs());
   }
 
   function claimAbandonMs() {
@@ -347,11 +355,13 @@ function createClaims(dependencies: any) {
 
   return {
     DEFAULT_CLAIM_ABANDON_MIN,
+    DEFAULT_CLAIM_GRACE_MIN,
     DEFAULT_CLAIM_IDLE_MIN,
     DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
     autoReleasedClaimMessage,
     claimAbandonMs,
     claimActivityMs,
+    claimGraceMs,
     claimIdleAge,
     claimIdleMs,
     claimMaySubmit,

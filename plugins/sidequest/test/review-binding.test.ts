@@ -4,6 +4,7 @@ import './_sidequest-install-fixture.js';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { creationGeneration } = require('./_creation-generation.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -1299,7 +1300,7 @@ function claimedReviewInWorktree(slug: string, repository: string, reviewRef: st
   assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
   git(repository, ['worktree', 'add', '--detach', worktree, String(prepared.ticket.dispatch.baseCommit)]);
   worktreeLease.createCheckoutInstanceMarker(path.resolve(worktree, git(worktree, ['rev-parse', '--git-dir'])));
-  assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+  assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId).ok, true);
   assert.equal(store.claimTicket(slug, reviewRef, agentId, {
     token: prepared.token,

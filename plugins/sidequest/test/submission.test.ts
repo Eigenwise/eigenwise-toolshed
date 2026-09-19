@@ -16,6 +16,7 @@ import './_hook-runtime.js';
 const test = require('node:test');
 const { afterEach } = test;
 const assert = require('node:assert');
+const { creationGeneration } = require('./_creation-generation.js');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
@@ -3337,7 +3338,7 @@ function dispatchedIsolatedReview(title: string, sourceRef: string, commit: stri
   execFileSync('git', ['worktree', 'add', '--detach', worktree], { cwd: PROJECT_DIR, windowsHide: true });
   const gitDirectoryValue = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
   worktreeLease.createCheckoutInstanceMarker(path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue));
-  assert.strictEqual(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+  assert.strictEqual(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
   return { review, sessionId, executor, agentId, worktree };
 }
 

@@ -6,6 +6,7 @@ import './_hook-runtime.js';
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
+const { creationGeneration } = require('./_creation-generation.js');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
@@ -363,7 +364,7 @@ function completeCheckoutCreation(project: string, sessionId: string, worktree: 
   const gitDirectoryValue = gitFixture(['rev-parse', '--git-dir'], worktree);
   const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
   worktreeLease.createCheckoutInstanceMarker(gitDirectory);
-  assert.equal(store.completeDispatchWorktreeCreation(project, sessionId, worktree).ok, true);
+  assert.equal(store.completeDispatchWorktreeCreation(project, sessionId, worktree, creationGeneration(project, sessionId, worktree)).ok, true);
 }
 
 function preparedPrompt(prepared: any): string {
@@ -3903,6 +3904,83 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   }
 });
 
+test('SQ-2955: a WorktreeCreate whose generation was retired mid-setup stamps nothing and leaves the replacement attempt alone', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktree-generation-race-'));
+  gitFixture(['init', '--quiet', '-b', 'main'], repo);
+  gitFixture(['config', 'user.email', 'test@example.invalid'], repo);
+  gitFixture(['config', 'user.name', 'Worktree Race Test'], repo);
+  fs.writeFileSync(path.join(repo, 'tracked.txt'), 'seed\n');
+  gitFixture(['add', 'tracked.txt'], repo);
+  gitFixture(['commit', '--quiet', '-m', 'seed'], repo);
+  const project = store.ensureProject(repo, 'worktree hook generation race').slug;
+  const category = `worktree-race-${++sqSeq}`;
+  store.setCategory({ id: category, name: category, route: { model: 'sonnet', effort: 'medium' }, fallback: null, enabled: true });
+  const ticket = store.createTicket(project, { title: 'generation race', category, files: ['tracked.txt'] });
+  const sessionId = 'hook-generation-race';
+  const receipt = path.join(os.tmpdir(), `sq-worktree-race-receipt-${sqSeq}.json`);
+  // Setup runs inside the half-provisioned checkout, the only window where the orchestrator can retire
+  // this attempt and redispatch the same ticket onto the same session before the hook stamps anything.
+  const racer = path.join(os.tmpdir(), `sq-worktree-race-${sqSeq}.js`);
+  fs.writeFileSync(racer, [
+    "'use strict';",
+    "const fs = require('fs');",
+    'const [storeLib, slug, ref, sessionId, worktree, receipt] = process.argv.slice(2);',
+    'const store = require(storeLib);',
+    'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);',
+    'try {',
+    "  const retired = store.prepareDispatch(slug, ref, { retireOnly: true, recoveryEvidence: 'race probe: the bound runtime never arrived' });",
+    '  const prepared = store.prepareDispatch(slug, ref, { sessionId });',
+    '  const launched = store.recordDispatchLaunch(slug, ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId });',
+    '  const bound = store.bindDispatchWorktreeCreation(slug, sessionId, worktree);',
+    '  fs.writeFileSync(receipt, JSON.stringify({ retired: retired.retired === true, launched: launched.ok === true, bound: bound.ok === true }));',
+    '} catch (error) {',
+    '  fs.writeFileSync(receipt, JSON.stringify({ raceFailed: String((error && error.message) || error) }));',
+    '}',
+  ].join('\n'));
+  const name = 'agent-hook-generation-race';
+  const target = worktrees.namedWorktreePath(repo, name);
+  // `cd ..` first: setup runs with the checkout as its working directory, and on Windows that handle
+  // blocks the retirement from reclaiming it, which is the fixture's problem and not the hook's.
+  store.setBoardConfig(project, {
+    worktreeDependencyPaths: [],
+    worktreeSetup: `cd .. && node "${racer}" "${require.resolve('../lib/store.js')}" "${project}" "${ticket.ref}" "${sessionId}" "${target}" "${receipt}"`,
+  });
+  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId });
+  assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+  }).ok, true);
+  const retiredGeneration = store.getTicket(project, ticket.ref).dispatch.preparedAt;
+  try {
+    const raced = spawnSync(process.execPath, [WORKTREE_CREATE], {
+      input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: sessionId, cwd: repo, name }),
+      encoding: 'utf8',
+      env: { ...process.env, SIDEQUEST_CLAIM_IDLE_MIN: '0.002' },
+    });
+    assert.deepEqual(JSON.parse(fs.readFileSync(receipt, 'utf8')), { retired: true, launched: true, bound: true }, 'the race must have retired the generation and bound a replacement');
+    assert.notEqual(raced.status, 0, 'a hook holding a retired generation must fail instead of stamping the replacement');
+    assert.match(raced.stderr, /could not record finished provisioning: this WorktreeCreate belongs to a retired dispatch attempt/);
+    assert.match(raced.stderr, /worktree recovery touched no attempt and left the checkout to the replacement that now owns it/);
+
+    const replacement = store.getTicket(project, ticket.ref);
+    assert.notEqual(replacement.dispatch.preparedAt, retiredGeneration, 'the live attempt must be the replacement generation');
+    assert.equal(replacement.dispatch.outcome, 'launched', 'the stale hook must not terminalize the replacement');
+    assert.equal(replacement.dispatch.terminalAt ?? null, null);
+    assert.ok(replacement.dispatchNonce, 'the replacement keeps the briefing nonce its runtime will present');
+    assert.equal(replacement.dispatch.worktreeCreationCompletedAt ?? null, null, 'no callback from the retired generation may land on the replacement');
+    assert.equal(replacement.dispatch.worktreeProvisionedAt ?? null, null);
+    assert.equal(replacement.dispatch.worktreeProvisioningFailure ?? null, null);
+  } finally {
+    // Retiring the stranded attempt already reclaimed this checkout, so cleanup only has to cover the
+    // runs where it did not.
+    if (fs.existsSync(target)) {
+      try { gitFixture(['worktree', 'remove', '--force', target], repo); } catch (_) { fs.rmSync(target, { recursive: true, force: true }); }
+      try { gitFixture(['branch', '-D', `worktree-${name}`], repo); } catch (_) {}
+    }
+  }
+});
+
 test('subagent-start warns only for embedded worktrees outside the receiving agent checkout', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-diagnostic-worktrees-'));
   gitFixture(['init', '-b', 'main'], repo);
@@ -4335,6 +4413,18 @@ test('subagent-stop: a superseded unclaimed attempt names its exact native teamm
     executor: prepared.ticket.dispatchExecutor,
     agentName,
   }).ok, true);
+  // Recovery evidence only retires an unclaimed attempt once its latest runtime signal is past the claim
+  // grace, so the launch has to be old before the replacement can supersede it.
+  const launched = store.getTicket(slug, ticket.ref);
+  const silentSince = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  for (const field of ['preparedAt', 'launchedAt']) {
+    launched.dispatch[field] = silentSince;
+    if (launched.dispatch.attempts?.at(-1)?.[field]) launched.dispatch.attempts.at(-1)[field] = silentSince;
+  }
+  db.putRow(database, 'tickets', {
+    id: launched.id, project: slug, ref: launched.ref, status: launched.status,
+    archived: launched.archived ? 1 : 0, ord: launched.order, claim_by: launched.claim?.by ?? null, data: launched,
+  });
   assert.doesNotThrow(() => store.prepareDispatch(slug, ticket.ref, {
     allowUnscoped: true,
     sessionId: `superseded-replacement-${ticket.id}`,

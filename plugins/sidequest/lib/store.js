@@ -620,6 +620,9 @@ const {
   rederiveUnlaunchedPreparedRoute,
   stampDispatchEvent,
   pulseDispatchState,
+  unclaimedRetirement,
+  unclaimedEvidenceAttempt,
+  unclaimedRetirementRefusal,
   isolatedDispatchWorktreeMissing,
   isolatedDispatchWithMissingWorktree,
   terminalDispatchTarget,
@@ -648,6 +651,7 @@ const {
   recoverDispatchQuotaFailure,
   bindDispatchWorktreeCreation,
   completeDispatchWorktreeCreation,
+  recordDispatchWorktreeProvisioned,
   recordDispatchWorktreeProvisioningFailure,
   recordDispatchWorktreeDependencyLink,
   recoverDispatchWorktreeCreation,
@@ -696,6 +700,7 @@ const {
   localAheadOfUpstreamWarning,
   availableRoute: (...args) => availableRoute(...args),
   boardConfig,
+  claimGraceMs: () => claimGraceMs(),
   claimIdleMs: () => claimIdleMs(),
   claimReclaimable: (...args) => claimReclaimable(...args),
   claimVerification: (...args) => claimVerification(...args),
@@ -1050,11 +1055,13 @@ function completionTreeCheck(slug, ticket, opts) {
 }
 const {
   DEFAULT_CLAIM_ABANDON_MIN,
+  DEFAULT_CLAIM_GRACE_MIN,
   DEFAULT_CLAIM_IDLE_MIN,
   DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
   autoReleasedClaimMessage,
   claimAbandonMs,
   claimActivityMs,
+  claimGraceMs,
   claimIdleAge,
   claimIdleMs,
   claimMaySubmit,
@@ -2810,11 +2817,17 @@ function pendingSubmissionDeliveryRefusal(ticket, result) {
   });
 }
 function unclaimedPreRuntimeDispatch(ticket, state) {
+  return unclaimedEvidenceAttempt(ticket, state);
+}
+function boundUnclaimedDispatch(ticket, state) {
   return Boolean(
-    ticket?.dispatchNonce && state && ["prepared", "launched"].includes(state.outcome) && !state.terminalAt && !state.boundAt && !state.claimedAt && !ticket.claim?.by
+    ticket?.dispatchNonce && state && ["prepared", "launched"].includes(state.outcome) && !state.terminalAt && state.boundAt && !state.claimedAt && !ticket.claim?.by && !ticket.checkpoint
   );
 }
 function unclaimedPreRuntimeDeliveryGuidance(ticket, state) {
+  if (boundUnclaimedDispatch(ticket, state)) {
+    return ` This attempt bound a runtime that never claimed. Once the claim grace has passed with no further board signal from that runtime, close it with \`groomClose ${ticket.ref} --recoveryEvidence "<the host notification that the runtime terminated>"\`, which retires the attempt in the same call, or retire it on its own with \`sidequest dispatch ${ticket.ref} --recovery-evidence "<that same evidence>" --retire-only\` (MCP \`recoveryEvidence\` with \`retireOnly: true\`). Inside the grace both refuse with the same countdown, naming the exact instant it becomes retirable and the signal it measured from.`;
+  }
   if (!unclaimedPreRuntimeDispatch(ticket, state)) return "";
   return ` This attempt is unclaimed and unbound. Once the delivery commit is reachable from the recorded integration branch, close it with \`groomClose ${ticket.ref} --deliveryCommit <sha> --deliveryMethod manual --recoveryEvidence "<why the attempt is dead>"\` (include by and reason). If the commit is not reachable from that branch, grooming still refuses until delivery reaches it. To retire without preparing a replacement first, dispatch with recoveryEvidence and retireOnly:true.`;
 }
@@ -2845,7 +2858,17 @@ function clearUnclaimedDispatch(slug, idOrRef, opts) {
         ok: false,
         reason: "active_dispatch",
         ticket,
-        message: `${ticket.ref} cannot apply recovery evidence because its dispatch is live, bound, claimed, or already terminal. Recovery evidence clears only an unclaimed prepared or launched dispatch before runtime binding.`
+        message: `${ticket.ref} cannot apply recovery evidence because its dispatch is claimed, checkpointed, or already terminal. Recovery evidence clears an unclaimed prepared or launched dispatch once it is past its retirement deadline.`
+      };
+    }
+    const nowMs = Date.now();
+    const retirement = unclaimedRetirement(ticket, state, nowMs);
+    if (nowMs < retirement.retirableAt) {
+      return {
+        ok: false,
+        reason: "unclaimed_launch_not_supersedable",
+        ticket,
+        message: unclaimedRetirementRefusal(ticket, state, nowMs)
       };
     }
     if (agentId && String(state.agentId || "") !== agentId) return { ok: false, reason: "dispatch_identity_mismatch", ticket };
@@ -2865,6 +2888,17 @@ function clearUnclaimedDispatch(slug, idOrRef, opts) {
     queueEventNotification(slug, ticket, ticket.lastEventType, ticket.lastEventSource);
     return { ok: true, ticket };
   });
+}
+function groomCloseRecovery(slug, idOrRef, opts) {
+  const evidence = String(opts?.evidence || "").trim();
+  const reason = String(opts?.reason || "");
+  if (!evidence) return { ok: true, reason };
+  const ticket = getTicket(slug, idOrRef);
+  const recovered = clearUnclaimedDispatch(slug, idOrRef, { by: opts?.by, evidence });
+  if (recovered.ok) return { ok: true, reason };
+  const terminalDispatch = Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
+  if (!terminalDispatch) return { ok: false, recovered };
+  return { ok: true, reason: `${reason} Recovery evidence recorded after the terminal dispatch: ${evidence}` };
 }
 function unconsumedPreparedDispatch(ticket, state) {
   return Boolean(
@@ -3207,8 +3241,8 @@ const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createP
   boardConfig,
   checkpointProjection,
   claimPulse,
-  claimIdleMs,
   claimReleaseVerdict,
+  unclaimedRetirement,
   claimVerification,
   commitScope,
   dispatchState,
@@ -3382,6 +3416,7 @@ module.exports = {
   recoverDispatchQuotaFailure,
   bindDispatchWorktreeCreation,
   completeDispatchWorktreeCreation,
+  recordDispatchWorktreeProvisioned,
   recordDispatchWorktreeProvisioningFailure,
   recordDispatchWorktreeDependencyLink,
   recoverDispatchWorktreeCreation,
@@ -3409,6 +3444,7 @@ module.exports = {
   missingReleaseFragmentMessage,
   unrecordedSanctionedCommitWarning,
   clearUnclaimedDispatch,
+  groomCloseRecovery,
   closeTicketForGrooming,
   makeWorkedBy,
   checkpointTicket,
@@ -3491,9 +3527,11 @@ module.exports = {
   technicalBlockerRelease,
   touchClaim,
   claimIdleMs,
+  claimGraceMs,
   claimAbandonMs,
   preparedDispatchTtlMs,
   DEFAULT_CLAIM_IDLE_MIN,
+  DEFAULT_CLAIM_GRACE_MIN,
   DEFAULT_CLAIM_ABANDON_MIN,
   DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
   sweepStaleClaims,
