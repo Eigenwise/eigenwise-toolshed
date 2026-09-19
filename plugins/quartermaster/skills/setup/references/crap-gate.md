@@ -18,6 +18,18 @@ For a new project, set `max` to 6 and apply it to every function. For an existin
 number of functions at or above the ceiling, including how many predate the branch, so the user can
 choose a different ceiling with real numbers in front of them.
 
+Adding one function shifts the position of every function below it, and names repeat inside a file:
+lizard names every arrow function or closure it cannot attribute to a declaration `(anonymous)`, and
+two classes can each carry a `run`. So the gate matches every function to its baseline copy by its
+exact source text first, then by name and position among its namesakes, and an anonymous function by
+its position relative to the nearest named function. A function whose text is untouched keeps its own
+baseline no matter what moved above it. When a function in a changed file finds no stable match but the
+baseline copy of that file already carried its name, the gate prints `<file>: ambiguous match` and
+judges the whole file instead of the single function: it only fails when the file's own worst
+complexity or count of ceiling breaches got worse than the baseline. A function at or under its
+matched baseline's complexity never counts as a new offender, and both sides are scored from the
+coverage the gate reports, so rounding alone never pushes a function past its baseline.
+
 ## Prerequisite
 
 Quartermaster needs [lizard](https://github.com/terryyin/lizard) to measure complexity. It never
