@@ -1273,6 +1273,7 @@ const {
   submissionReadiness,
   submissionProjection,
   pendingSubmission,
+  applyDeliveryAwaitingContentCommit,
   submissionUsesGit,
   workingTreeVerification,
   verifyIntegration,
@@ -2962,7 +2963,8 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
     }
   }
   let reconciledDelivery = null;
-  if (purpose === "delivery" && pendingSubmission(ticket)) {
+  const completingApplyDelivery = purpose === "delivery" && applyDeliveryAwaitingContentCommit(ticket);
+  if (purpose === "delivery" && (pendingSubmission(ticket) || completingApplyDelivery)) {
     let target;
     try {
       target = ticketIntegrationTarget(slug, ticket);
@@ -2975,10 +2977,16 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
       deliveryInteractionCommit: opts.deliveryInteractionCommit,
       deliveryMethod: opts.deliveryMethod,
       verificationSupersession: opts.verificationSupersession,
+      completingApplyDelivery,
       by,
       reason
     });
-    if (!recordedSubmission.ok) return pendingSubmissionDeliveryRefusal(ticket, recordedSubmission);
+    if (!recordedSubmission.ok) {
+      return completingApplyDelivery ? Object.assign({ ticket }, recordedSubmission) : pendingSubmissionDeliveryRefusal(ticket, recordedSubmission);
+    }
+    if (completingApplyDelivery) {
+      return { ok: true, idempotent: true, deliveryRecordCompleted: true, ticket: recordedSubmission.ticket, integration: recordedSubmission.integration };
+    }
     const integration = recordedSubmission.integration;
     reconciledDelivery = {
       ok: true,

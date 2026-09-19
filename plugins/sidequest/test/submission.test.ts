@@ -5110,4 +5110,424 @@ test('SQ-2720: grooming recognizes a remotely landed candidate when the optional
   assert.strictEqual(store.pendingSubmission(store.getTicket(fixture.project, ticket.ref)), false);
 });
 
+// SQ-2972 (replacing the rejected SQ-2757 candidate). A repair whose worktree
+// descends from an oracle-rejected candidate keeps the FULL range on purpose:
+// review, replay/apply/merge delivery, and per-path supersession lineage all read
+// submission.commits and submission.changedPaths, so moving the base past the
+// inherited commits returns ok:true while dropping the bytes those authorities
+// exist to see. Only the duplicate classification is narrowed, and only on the two
+// halves an oracle rejection writes: the review ticket's own outcome and the
+// source-side mirror recorded with it.
+const SQ2972_COMMON = 'lib/sq2972-common.js';
+const SQ2972_DOOMED = 'lib/sq2972-doomed.js';
+const SQ2972_INHERITED = 'lib/sq2972-inherited.js';
+const SQ2972_REPAIR = 'lib/sq2972-repair.js';
+const SQ2972_SOURCE_PATHS = [SQ2972_COMMON, SQ2972_DOOMED, SQ2972_INHERITED];
+const SQ2972_REPAIR_PATHS = [SQ2972_COMMON, SQ2972_DOOMED, SQ2972_INHERITED, SQ2972_REPAIR];
+
+function sq2972Write(relative: string, contents: string) {
+  const absolute = path.join(PROJECT_DIR, relative);
+  fs.mkdirSync(path.dirname(absolute), { recursive: true });
+  fs.writeFileSync(absolute, contents);
+}
+
+function sq2972Read(relative: string) {
+  return fs.readFileSync(path.join(PROJECT_DIR, relative), 'utf8');
+}
+
+// The rejected candidate deletes a base file, adds a file the repair never touches,
+// and edits a common file; the repair edits only the common file and adds its own.
+// Every delivery and lineage assertion below needs all four paths. Both claims are
+// taken while the fixture's integration branch is checked out, because a claim
+// snapshots its lifecycle baseline from the checkout and wave assembly requires that
+// baseline to be an ancestor of the delivery target.
+function inheritedRejectedFixture(label: string, branch: string) {
+  git(['checkout', '-f', '-B', branch, 'origin/main']);
+  git(['clean', '-fd']);
+  sq2972Write(SQ2972_COMMON, 'base common\n');
+  sq2972Write(SQ2972_DOOMED, 'base doomed\n');
+  git(['add', SQ2972_COMMON, SQ2972_DOOMED]);
+  git(['commit', '-m', `${label} integration base`]);
+  const integrationHead = git(['rev-parse', 'HEAD']);
+  const source = addTicket(`${label} rejected source`, { files: SQ2972_SOURCE_PATHS });
+  const repair = addTicket(`${label} repair`, { files: SQ2972_REPAIR_PATHS });
+  for (const owned of [{ ticket: source, by: `${label}-source` }, { ticket: repair, by: `${label}-repair` }]) {
+    assert.strictEqual(store.claimTicket(slug, owned.ticket.ref, owned.by, {
+      direct: true,
+      reason: 'The submission fixture requires a local direct claim.',
+    }).ok, true);
+  }
+  git(['checkout', '-B', `${branch}-work`, integrationHead]);
+  fs.rmSync(path.join(PROJECT_DIR, SQ2972_DOOMED));
+  sq2972Write(SQ2972_COMMON, 'original common\n');
+  sq2972Write(SQ2972_INHERITED, 'inherited addition\n');
+  git(['add', '-A', 'lib']);
+  git(['commit', '-m', `${label} rejected candidate`]);
+  const sourceCommit = git(['rev-parse', 'HEAD']);
+  sq2972Write(SQ2972_COMMON, 'repaired common\n');
+  sq2972Write(SQ2972_REPAIR, 'repair addition\n');
+  git(['add', '-A', 'lib']);
+  git(['commit', '-m', `${label} repair`]);
+  const repairCommit = git(['rev-parse', 'HEAD']);
+  pin(source, sourceCommit);
+  pin(repair, repairCommit);
+  return { label, branch, integrationHead, sourceCommit, repairCommit, source, repair };
+}
+
+async function withInheritedRejectedFixture(label: string, run: (fixture: any) => Promise<void>) {
+  const original = store.boardConfig(slug);
+  const branch = `sq2972-${label}-${++branchSeq}`;
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: branch });
+  try {
+    await run(inheritedRejectedFixture(label, branch));
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: original.integrationMode, integrationBranch: original.integrationBranch });
+  }
+}
+
+function sq2972Submit(ref: string, by: string, commit: string) {
+  return callMcp('submit', {
+    project: PROJECT_DIR,
+    ref,
+    by,
+    commit,
+    worktree: PROJECT_DIR,
+    body: 'Inherited-rejected-ancestry fixture submission. Scoped submission suite passed. Nothing skipped.',
+  });
+}
+
+async function submitInheritedSource(fixture: any) {
+  const submitted = await sq2972Submit(fixture.source.ref, `${fixture.label}-source`, fixture.sourceCommit);
+  assert.strictEqual(submitted.ok, true, submitted.message);
+  // Review binding needs a terminal submitted attempt, which only a real dispatch
+  // records; the rest of the submission is the one MCP just wrote.
+  const stored = store.getTicket(slug, fixture.source.ref);
+  stored.dispatch = Object.assign({}, stored.dispatch, {
+    attempts: [{
+      outcome: 'submitted',
+      commit: fixture.sourceCommit,
+      agentId: `${fixture.label}-source-agent`,
+      terminalAt: new Date(Date.now() - 60_000).toISOString(),
+    }],
+  });
+  persist(stored);
+  return store.getTicket(slug, fixture.source.ref);
+}
+
+function bindCandidateReview(sourceRef: string, commit: string, label: string) {
+  const review = store.createTicket(slug, {
+    title: `${label} candidate review`,
+    category: 'review-audit',
+    files: [`lib/${label}-review.js`],
+  }, { ref: sourceRef, commit });
+  const claimed = store.getTicket(slug, review.ref);
+  claimed.status = 'doing';
+  claimed.claim = { by: `${label}-reviewer`, at: new Date().toISOString() };
+  claimed.dispatch = { launchSeq: 1 };
+  persist(claimed);
+  return review;
+}
+
+function rejectThroughOracle(reviewRef: string, commit: string, label: string) {
+  assert.strictEqual(store.releaseTicket(slug, reviewRef, `${label}-reviewer`, {
+    releaseKind: 'oracle',
+    oracle: 'Does the recorded defect reject this candidate?',
+    candidate: commit,
+  }).ok, true);
+  const verdict = store.applyExperimentVerdict(slug, reviewRef, {
+    text: 'The candidate is rejected because the recorded defect is confirmed.',
+    outcome: 'rejected',
+    why: 'The review reproduced the defect in the pinned candidate.',
+    constraint: 'Replace the candidate before integration.',
+  });
+  assert.strictEqual(verdict.ok, true, verdict.message);
+}
+
+test('SQ-2972: only an oracle-rejected related source admits inherited commits, and the admitted range stays whole', async () => {
+  await withInheritedRejectedFixture('classification', async (fixture: any) => {
+    const source = await submitInheritedSource(fixture);
+    const repair = fixture.repair;
+
+    const unrelated = await sq2972Submit(repair.ref, 'classification-repair', fixture.repairCommit);
+    assert.strictEqual(unrelated.ok, false);
+    assert.strictEqual(unrelated.reason, 'duplicate_submission');
+    assert.match(unrelated.message, /not linked `related` to this one/);
+
+    assert.strictEqual(store.linkTickets(slug, repair.ref, 'related', source.ref).ok, true);
+    const review = bindCandidateReview(source.ref, fixture.sourceCommit, 'classification');
+    const unrejected = await sq2972Submit(repair.ref, 'classification-repair', fixture.repairCommit);
+    assert.strictEqual(unrejected.ok, false);
+    assert.strictEqual(unrejected.reason, 'duplicate_submission');
+    assert.match(unrejected.message, /has not recorded an oracle rejection/);
+
+    rejectThroughOracle(review.ref, fixture.sourceCommit, 'classification');
+
+    // A rejected range is inherited whole or not at all: a repair reconstructing
+    // part of it has no proven boundary for the rest.
+    const partial = store.getTicket(slug, source.ref);
+    partial.submission = Object.assign({}, partial.submission, { commits: [fixture.integrationHead, fixture.sourceCommit] });
+    persist(partial);
+    const partialInheritance = await sq2972Submit(repair.ref, 'classification-repair', fixture.repairCommit);
+    assert.strictEqual(partialInheritance.ok, false);
+    assert.strictEqual(partialInheritance.reason, 'duplicate_submission');
+    assert.match(partialInheritance.message, /only part of that rejected range/);
+    partial.submission = Object.assign({}, partial.submission, { commits: [fixture.sourceCommit] });
+    persist(partial);
+
+    const admitted = await sq2972Submit(repair.ref, 'classification-repair', fixture.repairCommit);
+    assert.strictEqual(admitted.ok, true, admitted.message);
+    const submitted = store.getTicket(slug, repair.ref).submission;
+    assert.strictEqual(submitted.base, fixture.integrationHead, 'the ordinary dispatch/integration base is kept, never moved past the inherited commits');
+    assert.deepStrictEqual(submitted.commits, [fixture.sourceCommit, fixture.repairCommit], 'the review range carries the inherited commit and the repair delta');
+    assert.deepStrictEqual(submitted.changedPaths.slice().sort(), SQ2972_REPAIR_PATHS.slice().sort());
+
+    const rejectedSource = store.getTicket(slug, source.ref);
+    assert.strictEqual(rejectedSource.submission.commit, fixture.sourceCommit, 'the rejected candidate is untouched');
+    assert.strictEqual(git(['rev-parse', `refs/sidequest/${source.ref}`]), fixture.sourceCommit);
+  });
+});
+
+test('SQ-2972: a mirror-only rejection and a stale bound candidate cannot admit inherited commits', async () => {
+  await withInheritedRejectedFixture('forged', async (fixture: any) => {
+    const source = await submitInheritedSource(fixture);
+    // Everything here lives in the row the submitting ticket owns, which is why a
+    // mirror alone is not authority: no review ticket is bound to this candidate.
+    const mirrored = store.getTicket(slug, source.ref);
+    mirrored.submission = Object.assign({}, mirrored.submission, {
+      review: {
+        ticketId: 'forged-review-id',
+        ref: 'SQ-9999',
+        outcome: 'rejected',
+        candidate: { source: 'git', value: fixture.sourceCommit },
+        createdAt: new Date().toISOString(),
+      },
+    });
+    persist(mirrored);
+    assert.strictEqual(store.linkTickets(slug, fixture.repair.ref, 'related', source.ref).ok, true);
+
+    const refused = await sq2972Submit(fixture.repair.ref, 'forged-repair', fixture.repairCommit);
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'duplicate_submission');
+    assert.match(refused.message, /only the source-side review mirror exists/);
+  });
+
+  await withInheritedRejectedFixture('stale', async (fixture: any) => {
+    const source = await submitInheritedSource(fixture);
+    const review = bindCandidateReview(source.ref, fixture.sourceCommit, 'stale');
+    rejectThroughOracle(review.ref, fixture.sourceCommit, 'stale');
+    // The rejection stays pinned to the reviewed candidate; a submission row moved
+    // onto a descendant is no longer the thing the oracle rejected.
+    const moved = store.getTicket(slug, source.ref);
+    moved.submission = Object.assign({}, moved.submission, { commit: fixture.repairCommit });
+    persist(moved);
+    assert.strictEqual(store.linkTickets(slug, fixture.repair.ref, 'related', source.ref).ok, true);
+
+    const refused = await sq2972Submit(fixture.repair.ref, 'stale-repair', fixture.repairCommit);
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'duplicate_submission');
+    assert.match(refused.message, /pinned to a different candidate/);
+  });
+});
+
+async function deliverInheritedRepair(fixture: any, mode: 'merge' | 'replay' | 'apply') {
+  const source = await submitInheritedSource(fixture);
+  const review = bindCandidateReview(source.ref, fixture.sourceCommit, fixture.label);
+  rejectThroughOracle(review.ref, fixture.sourceCommit, fixture.label);
+  assert.strictEqual(store.linkTickets(slug, fixture.repair.ref, 'related', source.ref).ok, true);
+  const submitted = await sq2972Submit(fixture.repair.ref, `${fixture.label}-repair`, fixture.repairCommit);
+  assert.strictEqual(submitted.ok, true, submitted.message);
+  git(['checkout', '-f', fixture.branch]);
+  const delivered = store.integrateSubmission(slug, fixture.repair.ref, { target: store.integrationTarget(slug), mode, by: 'orchestrator' });
+  return { source, review, delivered };
+}
+
+function assertInheritedTreeDelivered() {
+  assert.strictEqual(fs.existsSync(path.join(PROJECT_DIR, SQ2972_DOOMED)), false, 'the inherited deletion survived delivery');
+  assert.strictEqual(sq2972Read(SQ2972_INHERITED), 'inherited addition\n', 'the inherited addition the repair never touched survived delivery');
+  assert.strictEqual(sq2972Read(SQ2972_COMMON), 'repaired common\n');
+  assert.strictEqual(sq2972Read(SQ2972_REPAIR), 'repair addition\n');
+}
+
+for (const mode of ['replay', 'merge'] as const) {
+  test(`SQ-2972: ${mode} delivery of an inherited-rejected repair keeps every inherited path and its supersession lineage`, async () => {
+    await withInheritedRejectedFixture(`deliver-${mode}`, async (fixture: any) => {
+      const { source, review, delivered } = await deliverInheritedRepair(fixture, mode);
+      assert.strictEqual(delivered.ok, true, delivered.message);
+      assertInheritedTreeDelivered();
+      assert.strictEqual(git(['diff', '--name-status', fixture.repairCommit, 'HEAD']), '', 'the delivered tree is the candidate tree');
+      assert.deepStrictEqual(delivered.integration.deliveredFiles.slice().sort(), SQ2972_REPAIR_PATHS.slice().sort());
+
+      const closed = runCli(['groom-close', fixture.repair.ref, '--by', 'orchestrator', '--integration', '--reason', `Delivered ${fixture.repairCommit} by ${mode}.`]);
+      assert.strictEqual(closed.status, 0, closed.stderr + closed.stdout);
+      const superseded = await callMcp('supersede_submission', {
+        project: PROJECT_DIR,
+        ref: source.ref,
+        by: 'orchestrator',
+        supersededBy: fixture.repair.ref,
+        reason: 'The reviewed repair delivery replaces the oracle-rejected candidate it inherited.',
+        reviewedReplacements: [{ path: SQ2972_COMMON, reviewedBy: review.ref, reason: 'The repair replaces the rejected change to this path.' }],
+      });
+
+      assert.strictEqual(superseded.ok, true, superseded.message);
+      const closedSource = store.getTicket(slug, source.ref);
+      assert.strictEqual(closedSource.submission.integration.outcome, 'superseded');
+      assert.deepStrictEqual(closedSource.submission.supersededBy.changedPaths.slice().sort(), SQ2972_SOURCE_PATHS.slice().sort(), 'every submitted path keeps its lineage, including the ones the repair never touched');
+      assert.deepStrictEqual(closedSource.submission.supersededBy.reviewedReplacements.map((entry: any) => entry.path), [SQ2972_COMMON], 'only the path whose delivered content actually differs needs retirement evidence');
+    });
+  });
+}
+
+// apply deliberately materializes the range without a commit, so it has no content
+// commit to prove per-path lineage against. It still has to deliver every inherited
+// byte, and supersession has to fail closed on the paths it cannot prove rather than
+// close the rejected submission against an uncommitted head.
+test('SQ-2972: apply delivery materializes the whole inherited range and supersession fails closed on its uncommitted head', async () => {
+  await withInheritedRejectedFixture('deliver-apply', async (fixture: any) => {
+    const { source, delivered } = await deliverInheritedRepair(fixture, 'apply');
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assertInheritedTreeDelivered();
+    assert.strictEqual(git(['diff', fixture.repairCommit, '--name-status']), '', 'the applied working tree is the candidate tree');
+    assert.deepStrictEqual(delivered.integration.deliveredFiles.slice().sort(), SQ2972_REPAIR_PATHS.slice().sort());
+
+    const closed = runCli(['groom-close', fixture.repair.ref, '--by', 'orchestrator', '--integration', '--reason', `Applied ${fixture.repairCommit} for review.`]);
+    assert.strictEqual(closed.status, 0, closed.stderr + closed.stdout);
+    const superseded = await callMcp('supersede_submission', {
+      project: PROJECT_DIR,
+      ref: source.ref,
+      by: 'orchestrator',
+      supersededBy: fixture.repair.ref,
+      reason: 'An uncommitted apply cannot prove the inherited lineage.',
+    });
+
+    assert.strictEqual(superseded.ok, false);
+    assert.strictEqual(superseded.reason, 'lineage_content_diverged');
+    assert.match(superseded.message, /lib\/sq2972-doomed\.js/, 'the inherited deletion is named rather than silently closed');
+    assert.strictEqual(store.getTicket(slug, source.ref).status, 'doing', 'the rejected submission stays parked');
+    git(['checkout', '-f', fixture.branch]);
+    git(['clean', '-fd']);
+  });
+});
+
+// SQ-2978. An apply delivery is only half recorded: the delivered bytes sit in the
+// integration working tree, so the head it stored holds none of them and per-path
+// lineage has nothing to read. Committing that exact tree and binding it through the
+// same verified delivery record is what lets the inherited rejected source close
+// truthfully — replacement evidence only for the path the repair really changed, and
+// nothing at all for the inherited addition and deletion it left alone.
+test('SQ-2978: binding the committed apply tree completes its delivery record and closes the inherited rejected submission', async () => {
+  await withInheritedRejectedFixture('apply-bind', async (fixture: any) => {
+    const { source, review, delivered } = await deliverInheritedRepair(fixture, 'apply');
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    const appliedHead = git(['rev-parse', 'HEAD']);
+    const closed = runCli(['groom-close', fixture.repair.ref, '--by', 'orchestrator', '--integration', '--reason', `Applied ${fixture.repairCommit} for review.`]);
+    assert.strictEqual(closed.status, 0, closed.stderr + closed.stdout);
+    assert.strictEqual(store.getTicket(slug, fixture.repair.ref).submission.integration.resultingHead, appliedHead, 'apply recorded the pre-commit head, which holds none of the delivered bytes');
+
+    // Nothing is committed yet, so integrate still refuses — but it now names the
+    // commit-and-bind flow instead of a bare "no submission to integrate".
+    const premature = await callMcp('integrate', {
+      project: PROJECT_DIR,
+      ref: fixture.repair.ref,
+      by: 'orchestrator',
+      deliveryCommit: fixture.repairCommit,
+      reason: 'The applied tree has not been committed yet.',
+    });
+    assert.strictEqual(premature.ok, false);
+    assert.strictEqual(premature.reason, 'submission_required');
+    assert.match(premature.message, /leaves the materialized tree uncommitted/);
+    assert.match(premature.message, /groomClose/);
+
+    // An unreachable candidate and a stale reachable head are both refused before the
+    // verifier runs: neither is the tree apply materialized.
+    const unreachable = await callMcp('groomClose', {
+      project: PROJECT_DIR,
+      ref: fixture.repair.ref,
+      by: 'orchestrator',
+      deliveryCommit: fixture.repairCommit,
+      reason: 'The candidate itself never reached the integration branch.',
+    });
+    assert.strictEqual(unreachable.ok, false);
+    assert.strictEqual(unreachable.reason, 'delivery_not_reachable');
+
+    const stale = await callMcp('groomClose', {
+      project: PROJECT_DIR,
+      ref: fixture.repair.ref,
+      by: 'orchestrator',
+      deliveryCommit: fixture.integrationHead,
+      reason: 'The pre-delivery base is reachable but is not the applied tree.',
+    });
+    assert.strictEqual(stale.ok, false);
+    assert.strictEqual(stale.reason, 'delivery_content_missing');
+    for (const file of SQ2972_REPAIR_PATHS) {
+      assert.ok(stale.message.includes(file), `a reachable head that is not the applied tree names ${file}`);
+    }
+
+    git(['add', '-A', 'lib']);
+    git(['commit', '-m', `${fixture.label} materialized apply`]);
+    const materialized = git(['rev-parse', 'HEAD']);
+    assert.strictEqual(git(['diff', '--name-status', fixture.repairCommit, materialized]), '', 'the committed tree is the candidate tree');
+
+    // A later commit that touches a submitted path is not the applied tree either.
+    sq2972Write(SQ2972_COMMON, 'drifted common\n');
+    git(['add', '-A', 'lib']);
+    git(['commit', '-m', `${fixture.label} unrelated drift`]);
+    const drifted = git(['rev-parse', 'HEAD']);
+    const wrongContent = await callMcp('groomClose', {
+      project: PROJECT_DIR,
+      ref: fixture.repair.ref,
+      by: 'orchestrator',
+      deliveryCommit: drifted,
+      reason: 'A later head is not proof that the applied tree was committed.',
+    });
+    assert.strictEqual(wrongContent.ok, false);
+    assert.strictEqual(wrongContent.reason, 'delivery_content_missing');
+    assert.ok(wrongContent.message.includes(SQ2972_COMMON));
+    assert.doesNotMatch(wrongContent.message, /sq2972-doomed|sq2972-inherited|sq2972-repair/, 'only the drifted path is named');
+    git(['reset', '--hard', materialized]);
+
+    const bound = runCli(['groom-close', fixture.repair.ref, '--by', 'orchestrator', '--delivery-commit', materialized, '--reason', `Committed the tree apply materialized for ${fixture.repairCommit}.`]);
+    assert.strictEqual(bound.status, 0, bound.stderr + bound.stdout);
+    assert.match(bound.stdout, /bound delivered commit/);
+    const repairAfterBinding = store.getTicket(slug, fixture.repair.ref);
+    assert.strictEqual(repairAfterBinding.submission.integration.mode, 'recorded-apply-content-commit');
+    assert.strictEqual(repairAfterBinding.submission.integration.outcome, 'verified');
+    assert.strictEqual(repairAfterBinding.submission.integration.contentCommit, materialized);
+    assert.deepStrictEqual(repairAfterBinding.submission.integration.dirtyFiles, [], 'the delivered bytes are committed, so no dirty-file record remains');
+    assert.strictEqual(repairAfterBinding.submission.commit, fixture.repairCommit, 'binding the delivery never rewrites the immutable candidate');
+    assert.strictEqual(repairAfterBinding.status, 'done');
+
+    // The inherited deletion and the inherited addition the repair never touched are
+    // now provably delivered, so only the genuinely repaired path needs evidence.
+    const withoutEvidence = await callMcp('supersede_submission', {
+      project: PROJECT_DIR,
+      ref: source.ref,
+      by: 'orchestrator',
+      supersededBy: fixture.repair.ref,
+      reason: 'The committed apply tree replaces the oracle-rejected candidate it inherited.',
+    });
+    assert.strictEqual(withoutEvidence.ok, false);
+    assert.strictEqual(withoutEvidence.reason, 'lineage_content_diverged');
+    assert.ok(withoutEvidence.message.includes(SQ2972_COMMON));
+    assert.doesNotMatch(withoutEvidence.message, /sq2972-doomed|sq2972-inherited/, 'unchanged inherited paths are no longer demanded as replacements');
+    assert.doesNotMatch(withoutEvidence.message, /leaves the materialized tree uncommitted/, 'the delivery record is complete, so the commit-and-bind guidance is gone');
+
+    const superseded = await callMcp('supersede_submission', {
+      project: PROJECT_DIR,
+      ref: source.ref,
+      by: 'orchestrator',
+      supersededBy: fixture.repair.ref,
+      reason: 'The committed apply tree replaces the oracle-rejected candidate it inherited.',
+      reviewedReplacements: [{ path: SQ2972_COMMON, reviewedBy: review.ref, reason: 'The repair replaces the rejected change to this path.' }],
+    });
+    assert.strictEqual(superseded.ok, true, superseded.message);
+    const closedSource = store.getTicket(slug, source.ref);
+    assert.strictEqual(closedSource.status, 'done');
+    assert.strictEqual(closedSource.submission.integration.outcome, 'superseded');
+    assert.strictEqual(closedSource.submission.supersededBy.resultingHead, materialized);
+    assert.deepStrictEqual(closedSource.submission.supersededBy.changedPaths.slice().sort(), SQ2972_SOURCE_PATHS.slice().sort());
+    assert.deepStrictEqual(closedSource.submission.supersededBy.reviewedReplacements.map((entry: any) => entry.path), [SQ2972_COMMON]);
+    assert.strictEqual(git(['rev-parse', `refs/sidequest/${source.ref}`]), fixture.sourceCommit, 'the rejected candidate stays immutable');
+  });
+});
+
 export {};

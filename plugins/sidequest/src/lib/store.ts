@@ -1254,6 +1254,7 @@ const {
   submissionReadiness,
   submissionProjection,
   pendingSubmission,
+  applyDeliveryAwaitingContentCommit,
   submissionUsesGit,
   workingTreeVerification,
   verifyIntegration,
@@ -3244,7 +3245,13 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
     }
   }
   let reconciledDelivery: any = null;
-  if (purpose === 'delivery' && pendingSubmission(ticket)) {
+  // An apply delivery consumed its submission and closed the ticket while leaving the
+  // delivered bytes in the working tree. Binding the commit of that exact tree is the
+  // remainder of that same delivery, so it goes through the verified delivery record
+  // rather than the reachability-only hand-delivery note, and it does not re-close a
+  // ticket that is already done.
+  const completingApplyDelivery = purpose === 'delivery' && applyDeliveryAwaitingContentCommit(ticket);
+  if (purpose === 'delivery' && (pendingSubmission(ticket) || completingApplyDelivery)) {
     let target: any;
     try {
       target = ticketIntegrationTarget(slug, ticket);
@@ -3257,10 +3264,18 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
       deliveryInteractionCommit: opts.deliveryInteractionCommit,
       deliveryMethod: opts.deliveryMethod,
       verificationSupersession: opts.verificationSupersession,
+      completingApplyDelivery,
       by,
       reason,
     });
-    if (!recordedSubmission.ok) return pendingSubmissionDeliveryRefusal(ticket, recordedSubmission);
+    if (!recordedSubmission.ok) {
+      return completingApplyDelivery
+        ? Object.assign({ ticket }, recordedSubmission)
+        : pendingSubmissionDeliveryRefusal(ticket, recordedSubmission);
+    }
+    if (completingApplyDelivery) {
+      return { ok: true, idempotent: true, deliveryRecordCompleted: true, ticket: recordedSubmission.ticket, integration: recordedSubmission.integration };
+    }
     const integration = recordedSubmission.integration;
     reconciledDelivery = {
       ok: true,

@@ -298,7 +298,9 @@ async function cmdGroomClose(opts: any, positional: any) {
     return;
   }
   if (res.ok) {
-    console.log(`✓ ${res.ticket.ref} closed after ${purpose}  — ${meta.name}`);
+    console.log(res.deliveryRecordCompleted
+      ? `✓ ${res.ticket.ref} bound delivered commit ${res.integration.deliveryCommit} to its recorded apply delivery — ${meta.name}`
+      : `✓ ${res.ticket.ref} closed after ${purpose}  — ${meta.name}`);
     if (res.advisory) console.log(`  advisory: ${res.advisory}`);
     reportIntegrationBranch(res.integrationBranch);
   }
