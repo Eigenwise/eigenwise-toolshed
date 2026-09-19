@@ -5110,4 +5110,235 @@ test('SQ-2720: grooming recognizes a remotely landed candidate when the optional
   assert.strictEqual(store.pendingSubmission(store.getTicket(fixture.project, ticket.ref)), false);
 });
 
+// SQ-2757. The prescribed flow after an oracle rejects a candidate is a fresh
+// repair ticket, linked `related` to the rejected source and built on its
+// candidate. Three chains hit `duplicate_submission` for the inherited commits
+// and `unrecognized_base` for every other boundary, leaving that flow with no
+// legal submit base at all. The lineage here is built through the real
+// authorities — an MCP submit, a bound review, an oracle verdict — because the
+// boundary is only allowed for a rejection those authorities recorded.
+function claimIsolatedDispatch(ticket: any, worker: string) {
+  const sessionId = `${ticket.ref}-isolated-session`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: false });
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, worker, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+  }).ok, true);
+  return prepared;
+}
+
+function submitOverMcp(ticket: any, worker: string, commit: string, base?: string) {
+  pin(ticket, commit);
+  return callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: ticket.ref,
+    by: worker,
+    commit,
+    ...(base ? { base } : {}),
+    worktree: PROJECT_DIR,
+    body: 'Rejected-lineage fixture submission report.',
+  });
+}
+
+function commitScopedPath(file: string, content: string, message: string) {
+  fs.mkdirSync(path.dirname(path.join(PROJECT_DIR, file)), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, file), content);
+  git(['add', file]);
+  git(['commit', '-m', message]);
+  return git(['rev-parse', 'HEAD']);
+}
+
+function useLocalMainIntegration(t: any) {
+  const original = store.boardConfig(slug);
+  assert.strictEqual(store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: 'main' }).ok, true);
+  const mainBefore = git(['rev-parse', 'main']);
+  t.after(() => {
+    cleanBranch();
+    git(['branch', '-f', 'main', mainBefore]);
+    store.setBoardConfig(slug, { integrationMode: original.integrationMode, integrationBranch: original.integrationBranch });
+  });
+}
+
+async function submittedCandidate(label: string, file: string, worker: string) {
+  const ticket = addTicket(`${label} candidate`, { files: [file], category: 'submission.fixture' });
+  claimIsolatedDispatch(ticket, worker);
+  const commit = commitScopedPath(file, 'original delivery\n', `${label} candidate`);
+  const submitted = await submitOverMcp(ticket, worker, commit);
+  assert.strictEqual(submitted.ok, true, submitted.message);
+  return { ticket, commit };
+}
+
+async function rejectByOracle(label: string, source: any, commit: string, file: string) {
+  const review = store.createTicket(slug, {
+    title: `${label} oracle-confirmed review`,
+    category: 'review-audit',
+    files: [file],
+  }, { ref: source.ref, commit });
+  const claimed = store.getTicket(slug, review.ref);
+  claimed.status = 'doing';
+  claimed.claim = { by: `${label}-reviewer`, at: new Date().toISOString() };
+  claimed.dispatch = { launchSeq: 1 };
+  persist(claimed);
+  const released = await callMcp('release', {
+    project: PROJECT_DIR,
+    ref: review.ref,
+    by: `${label}-reviewer`,
+    kind: 'oracle',
+    oracle: 'Does the recorded defect reject this candidate?',
+  });
+  assert.strictEqual(released.ok, true, released.message);
+  const verdict = await callMcp('verdict', {
+    project: PROJECT_DIR,
+    ref: review.ref,
+    outcome: 'rejected',
+    text: 'The candidate is rejected because the recorded defect is confirmed.',
+    why: 'The review reproduced the defect in the pinned candidate.',
+    constraint: 'Replace the candidate before integration.',
+  });
+  assert.strictEqual(verdict.ok, true, verdict.message);
+  assert.strictEqual(store.getTicket(slug, source.ref).submission.review.outcome, 'rejected');
+  return review;
+}
+
+async function rejectedLineage(label: string) {
+  cleanBranch();
+  const sourceFile = `lib/${label}-source.js`;
+  const repairFile = `lib/${label}-repair.js`;
+  const dispatchBase = git(['rev-parse', 'HEAD']);
+  const source = await submittedCandidate(`${label} source`, sourceFile, `${label}-source-worker`);
+  await rejectByOracle(label, source.ticket, source.commit, sourceFile);
+
+  const repair = addTicket(`${label} repair on the rejected candidate`, {
+    files: [sourceFile, repairFile],
+    category: 'submission.fixture',
+  });
+  assert.strictEqual(store.linkTickets(slug, repair.ref, 'related', source.ticket.ref).ok, true);
+  const worker = `${label}-repair-worker`;
+  claimIsolatedDispatch(repair, worker);
+  const inheritedFix = commitScopedPath(sourceFile, 'repaired delivery\n', `${label} repair the rejected content`);
+  const repairCommit = commitScopedPath(repairFile, 'repair delivery\n', `${label} repair candidate`);
+  return { dispatchBase, source, sourceFile, repair, repairFile, inheritedFix, repairCommit, worker };
+}
+
+test('SQ-2757: a repair inheriting an oracle-rejected candidate submits against that boundary, and the refusals name it', async (t?: any) => {
+  useLocalMainIntegration(t);
+  const lineage = await rejectedLineage('inherited');
+
+  // Forcing the dispatch base still refuses — the inherited commits really are
+  // already submitted — but the refusal now says which base clears it.
+  const forced = await submitOverMcp(lineage.repair, lineage.worker, lineage.repairCommit, lineage.dispatchBase);
+  assert.strictEqual(forced.ok, false);
+  assert.strictEqual(forced.reason, 'duplicate_submission');
+  assert.match(forced.message, new RegExp(`already submitted by ${lineage.source.ticket.ref}`));
+  assert.match(forced.message, new RegExp(`rejected candidate ${lineage.source.commit}`));
+  assert.match(forced.message, new RegExp(`--base ${lineage.source.commit}`));
+
+  // An in-range commit of its own is still not a boundary, and that remedy names
+  // the rejected candidate instead of dead-ending on the dispatch base.
+  const arbitrary = await submitOverMcp(lineage.repair, lineage.worker, lineage.repairCommit, lineage.inheritedFix);
+  assert.strictEqual(arbitrary.ok, false);
+  assert.strictEqual(arbitrary.reason, 'unrecognized_base');
+  assert.match(arbitrary.message, new RegExp(`${lineage.source.ticket.ref}'s rejected candidate boundary ${lineage.source.commit}`));
+
+  const submitted = await submitOverMcp(lineage.repair, lineage.worker, lineage.repairCommit);
+  assert.strictEqual(submitted.ok, true, submitted.message);
+  const stored = store.getTicket(slug, lineage.repair.ref).submission;
+  assert.strictEqual(stored.base, lineage.source.commit, 'the rejected candidate is the selected boundary');
+  assert.deepStrictEqual(stored.commits, [lineage.inheritedFix, lineage.repairCommit]);
+  assert.ok(!stored.commits.includes(lineage.source.commit), 'the inherited candidate stays out of the submitted range');
+  assert.deepStrictEqual(stored.changedPaths.slice().sort(), [lineage.repairFile, lineage.sourceFile].sort());
+  assert.strictEqual(git(['rev-parse', `refs/sidequest/${lineage.source.ticket.ref}`]), lineage.source.commit, 'the rejected candidate ref is untouched');
+});
+
+test('SQ-2757: the inherited boundary is refused without a recorded rejection, without the link, and without ancestry', async (t?: any) => {
+  useLocalMainIntegration(t);
+  cleanBranch();
+  const dispatchBase = git(['rev-parse', 'HEAD']);
+
+  // (b) A genuinely duplicate submission of an ACTIVE candidate still refuses,
+  // and its refusal says nothing about a rejected boundary.
+  const active = await submittedCandidate('active sibling', 'lib/active-sibling.js', 'active-sibling-worker');
+  const follower = addTicket('follower on an active candidate', {
+    files: ['lib/active-sibling.js', 'lib/active-follower.js'],
+    category: 'submission.fixture',
+  });
+  assert.strictEqual(store.linkTickets(slug, follower.ref, 'related', active.ticket.ref).ok, true);
+  claimIsolatedDispatch(follower, 'active-follower-worker');
+  const followerCommit = commitScopedPath('lib/active-follower.js', 'follower delivery\n', 'follower candidate');
+  const refusedActive = await submitOverMcp(follower, 'active-follower-worker', followerCommit);
+  assert.strictEqual(refusedActive.ok, false);
+  assert.strictEqual(refusedActive.reason, 'duplicate_submission');
+  assert.doesNotMatch(refusedActive.message, /rejected candidate/);
+  const refusedActiveBase = await submitOverMcp(follower, 'active-follower-worker', followerCommit, active.commit);
+  assert.strictEqual(refusedActiveBase.ok, false);
+  assert.strictEqual(refusedActiveBase.reason, 'unrecognized_base');
+
+  // A rejected candidate is only a boundary for a repair that actually descends
+  // from it: a same-named lineage on another branch gets no boundary at all.
+  const lineage = await rejectedLineage('unrelated');
+  const stranger = addTicket('stranger claiming the rejected lineage', {
+    files: ['lib/unrelated-source.js', 'lib/stranger.js'],
+    category: 'submission.fixture',
+  });
+  assert.strictEqual(store.linkTickets(slug, stranger.ref, 'related', lineage.source.ticket.ref).ok, true);
+  claimIsolatedDispatch(stranger, 'stranger-worker');
+  cleanBranch();
+  const strangerCommit = commitScopedPath('lib/stranger.js', 'stranger delivery\n', 'stranger candidate');
+  const refusedStranger = await submitOverMcp(stranger, 'stranger-worker', strangerCommit, lineage.source.commit);
+  assert.strictEqual(refusedStranger.ok, false);
+  assert.strictEqual(refusedStranger.reason, 'base_not_reachable');
+  const strangerSubmitted = await submitOverMcp(stranger, 'stranger-worker', strangerCommit);
+  assert.strictEqual(strangerSubmitted.ok, true, strangerSubmitted.message);
+  assert.strictEqual(store.getTicket(slug, stranger.ref).submission.base, dispatchBase, 'a candidate outside the lineage keeps its own merge base');
+});
+
+test('SQ-2757: the inherited-boundary candidate takes a bound review, a delivery, and supersedes the rejected submission', async (t?: any) => {
+  useLocalMainIntegration(t);
+  const lineage = await rejectedLineage('delivered');
+  const submitted = await submitOverMcp(lineage.repair, lineage.worker, lineage.repairCommit);
+  assert.strictEqual(submitted.ok, true, submitted.message);
+
+  // The delivery gate reads both runtime identities out of terminal attempts.
+  const submittedTicket = store.getTicket(slug, lineage.repair.ref);
+  const attempts = submittedTicket.dispatch.attempts || [];
+  assert.strictEqual(attempts.at(-1).outcome, 'submitted', 'the real submit left a terminal submitted attempt');
+  attempts[attempts.length - 1] = Object.assign({}, attempts.at(-1), { agentId: 'inherited-boundary-source' });
+  persist(submittedTicket);
+  const review = dispatchedIsolatedReview('inherited boundary review', lineage.repair.ref, lineage.repairCommit, 'inherited-boundary-reviewer');
+  assert.strictEqual(store.getTicket(slug, lineage.repair.ref).submission.review.candidate.value, lineage.repairCommit);
+  const reviewAttempt = completeIsolatedReview(review, true);
+  assert.strictEqual(reviewAttempt.outcome, 'done');
+
+  git(['checkout', '-f', '-B', 'main', lineage.dispatchBase]);
+  const delivery = store.integrateSubmission(slug, lineage.repair.ref, { target: store.integrationTarget(slug) });
+  assert.strictEqual(delivery.ok, true, delivery.message);
+  const closed = store.completeTicketAsControlPlane(slug, lineage.repair.ref, {
+    by: 'orchestrator',
+    reason: 'Delivered the reviewed repair candidate.',
+    purpose: 'integration',
+  });
+  assert.strictEqual(closed.ok, true, closed.message);
+
+  const superseded = await callMcp('supersede_submission', {
+    project: PROJECT_DIR,
+    ref: lineage.source.ticket.ref,
+    by: 'orchestrator',
+    supersededBy: lineage.repair.ref,
+    reason: 'The reviewed repair delivers the rejected candidate content plus the fix.',
+    reviewedReplacements: [{
+      path: lineage.sourceFile,
+      reviewedBy: 'inherited-boundary-reviewer',
+      reason: 'replaced by the repaired implementation',
+    }],
+  });
+  assert.strictEqual(superseded.ok, true, superseded.message);
+  const closedSource = store.getTicket(slug, lineage.source.ticket.ref);
+  assert.strictEqual(closedSource.submission.supersededBy.ref, lineage.repair.ref);
+  assert.deepStrictEqual(closedSource.submission.supersededBy.changedPaths, [lineage.sourceFile]);
+  assert.strictEqual(git(['rev-parse', `refs/sidequest/${lineage.source.ticket.ref}`]), lineage.source.commit, 'supersession leaves the rejected candidate reachable');
+
+  if (fs.existsSync(review.worktree)) execFileSync('git', ['worktree', 'remove', '--force', review.worktree], { cwd: PROJECT_DIR, windowsHide: true });
+});
+
 export {};

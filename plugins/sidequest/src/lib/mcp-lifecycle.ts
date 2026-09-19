@@ -175,15 +175,34 @@ function missingReleaseFragmentMessage(ref: string, fragmentPath: string, plugin
   return store.missingReleaseFragmentMessage(ref, fragmentPath, plugins);
 }
 
-function rejectedRelatedReleaseFragments(slug: string, ticket: any): string[] {
+type SubmissionBoundary = { ref: string; commit: string; rejected?: boolean };
+
+function rejectedRelatedSources(slug: string, ticket: any): any[] {
   const relatedRefs = Array.isArray(ticket.links)
     ? ticket.links.filter((link: any) => link?.type === 'related').map((link: any) => link.ref)
     : [];
   return relatedRefs.flatMap((relatedRef: unknown) => {
     const source = store.getTicket(slug, relatedRef);
-    if (source?.submission?.review?.outcome !== 'rejected') return [];
+    return source?.submission?.review?.outcome === 'rejected' ? [source] : [];
+  });
+}
+
+function rejectedRelatedReleaseFragments(slug: string, ticket: any): string[] {
+  return rejectedRelatedSources(slug, ticket).flatMap((source: any) => {
     const fragment = commitScope.ticketReleaseFragment(source.ref);
     return fragment ? [fragment] : [];
+  });
+}
+
+// The prescribed repair flow files a fresh ticket on the candidate an oracle
+// rejected, so that candidate's commits are inherited rather than duplicated.
+// Its pinned commit is an approved boundary for the repair that links itself
+// `related` to it, which keeps the submitted range down to the repair's own
+// work instead of leaving it with no legal base at all (SQ-2757).
+function rejectedCandidateBoundaries(slug: string, ticket: any): SubmissionBoundary[] {
+  return rejectedRelatedSources(slug, ticket).flatMap((source: any) => {
+    const commit = String(source.submission.commit || '').trim();
+    return commit ? [{ ref: source.ref, commit, rejected: true }] : [];
   });
 }
 
@@ -213,9 +232,9 @@ function dispatchBaseMessage(ticket: any): string {
     : 'the pinned dispatch base commit recorded in the dispatch';
 }
 
-function sharedTreeSubmissionBoundaries(slug: string, ticket: any): Array<{ ref: string; commit: string }> {
+function sharedTreeSubmissionBoundaries(slug: string, ticket: any): SubmissionBoundary[] {
   if (ticket.dispatch?.sharedTree !== true) return [];
-  return store.listTickets(slug).flatMap((candidate: any): Array<{ ref: string; commit: string }> => {
+  return store.listTickets(slug).flatMap((candidate: any): SubmissionBoundary[] => {
     if (candidate.ref === ticket.ref) return [];
     const submission = candidate.submission;
     const commit = String(submission?.commit || '').trim();
@@ -232,8 +251,8 @@ function submissionRangeRemedy(ticket: any, range: any, gitRef: string): string 
     ? range.approvedBoundaries.find((boundary: any) => Array.isArray(range.approvedBases) && range.approvedBases.includes(boundary.commit))
     : null;
   const unrecognizedBaseRemedy = approvedBoundary
-    ? `omit base to select ${approvedBoundary.ref}'s approved boundary ${approvedBoundary.commit} automatically, or pass \`--base ${approvedBoundary.commit}\` to use it explicitly.`
-    : `use the recorded ${pinnedBase}; no approved submitted-ticket boundary reaches this candidate.`;
+    ? `omit base to select ${approvedBoundary.ref}'s ${approvedBoundary.rejected ? 'rejected candidate' : 'approved'} boundary ${approvedBoundary.commit} automatically, or pass \`--base ${approvedBoundary.commit}\` to use it explicitly.`
+    : `use ${pinnedBase}; no approved submitted-ticket boundary reaches this candidate. A repair inheriting a rejected candidate needs that source linked \`related\` to this ticket for its commit to count as a boundary; without that link, squash this ticket's work onto the dispatch base with the inherited paths in scope.`;
   const remedies: Record<string, string> = {
     missing_git_ref: `${gitRef} is missing or does not point to the submitted commit. Run \`git update-ref ${gitRef} <commit>\`, then resubmit.`,
     missing_upstream: `fetch or recreate the recorded integration ref, then resubmit the preserved commit without changing its base.`,
@@ -300,8 +319,9 @@ function collectGitSubmissionFacts(options: any) {
     targetFailure = { code: 'integration_target_unavailable', message: `submit: refused ${ticket.ref}; ${boundedSubmissionText((error && error.message) || String(error))}. Remedy: Fetch or recreate ${targetName}, then resubmit the preserved candidate.`, retryable: true };
   }
   const dispatchBase = String(ticket.dispatch?.baseCommit || '').trim() || null;
-  const approvedBoundaries = sharedTreeSubmissionBoundaries(slug, ticket);
-  const boundaryCommits = approvedBoundaries.map((boundary: { ref: string; commit: string }) => boundary.commit);
+  const rejectedBoundaries = rejectedCandidateBoundaries(slug, ticket);
+  const approvedBoundaries = [...sharedTreeSubmissionBoundaries(slug, ticket), ...rejectedBoundaries];
+  const boundaryCommits = [...new Set(approvedBoundaries.map((boundary: SubmissionBoundary) => boundary.commit))];
   const calculatedRange = target
     ? commitScope.submissionRange(root, {
       commit,
@@ -317,8 +337,8 @@ function collectGitSubmissionFacts(options: any) {
           baseCandidates: boundaryCommits,
         }
         : ticket.dispatch?.sharedTree !== false && dispatchBase
-          ? { dispatchBase, allowedBases: [dispatchBase] }
-          : { allowedBases: [] }),
+          ? { dispatchBase, allowedBases: [dispatchBase, ...boundaryCommits], baseCandidates: boundaryCommits }
+          : { allowedBases: boundaryCommits, baseCandidates: boundaryCommits }),
     })
     : null;
   const range = calculatedRange && !calculatedRange.ok
@@ -353,10 +373,15 @@ function collectGitSubmissionFacts(options: any) {
   }
   const duplicate = range?.ok
     ? ticket.dispatch?.sharedTree === true
-      ? approvedBoundaries.find((boundary: { ref: string; commit: string }) => range.commits.includes(boundary.commit)) || null
+      ? approvedBoundaries.find((boundary: SubmissionBoundary) => range.commits.includes(boundary.commit)) || null
       : store.submissionsPayload(slug).tickets
         .filter((entry: any) => entry.ref !== ticket.ref)
         .find((entry: any) => (Array.isArray(entry.submission.commits) && entry.submission.commits.length ? entry.submission.commits : [entry.submission.commit]).some((entryCommit: any) => range.commits.includes(entryCommit)))
+    : null;
+  // A duplicate the repair inherits is a base selection the executor can fix,
+  // not a collision with someone else's work, so it gets told which base clears it.
+  const inheritedDuplicate = duplicate
+    ? rejectedBoundaries.find((boundary: SubmissionBoundary) => boundary.ref === duplicate.ref) || null
     : null;
   return {
     target,
@@ -374,9 +399,11 @@ function collectGitSubmissionFacts(options: any) {
           identity: duplicate.ref,
           diagnostic: {
             code: 'duplicate_submission',
-            message: ticket.dispatch?.sharedTree === true
-              ? `submit: refused ${ticket.ref}; its range includes submitted sibling ${duplicate.ref}'s candidate ${duplicate.commit}. Use the approved boundary with \`--base ${duplicate.commit}\`, or omit base to select the newest approved boundary automatically.`
-              : `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.`,
+            message: inheritedDuplicate
+              ? `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}, whose rejected candidate ${inheritedDuplicate.commit} this repair inherits. Omit base to select that rejected boundary automatically, or pass \`--base ${inheritedDuplicate.commit}\`, so the range carries only this ticket's own commits.`
+              : ticket.dispatch?.sharedTree === true
+                ? `submit: refused ${ticket.ref}; its range includes submitted sibling ${duplicate.ref}'s candidate ${duplicate.commit}. Use the approved boundary with \`--base ${duplicate.commit}\`, or omit base to select the newest approved boundary automatically.`
+                : `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.`,
             retryable: false,
           },
         }
