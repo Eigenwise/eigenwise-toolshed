@@ -489,7 +489,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'done',
-    description: 'Finish. A readonly last dispatch closes without a submission; a clean writable scope needs externalDeliverable:true plus a current-attempt pinned verify-capture. Commandless working-tree delivery requires typed verify evidence.',
+    description: 'Finish. A readonly last dispatch closes without a submission; a clean writable scope needs externalDeliverable:true plus a current-attempt pinned verify-capture, or typed verify evidence when the ticket has no pinned command. Commandless working-tree delivery requires typed verify evidence.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -499,7 +499,7 @@ const tools: ToolDefinition[] = [
         model: { type: 'string', description: 'Concrete runtime model that actually worked this ticket (provenance).' },
         effort: { type: 'string', enum: store.VALID_EFFORTS },
         body: { type: 'string', description: 'Final report stored as the completion comment.' },
-        verify: { type: 'string', maxLength: 4000, description: 'Typed evidence required only for active commandless working-tree delivery. Command or suite delivery still requires its matching verify-capture.' },
+        verify: { type: 'string', maxLength: 4000, description: 'Typed evidence for active commandless working-tree delivery, and for a clean externalDeliverable:true closeout on a ticket without a pinned command. Command or suite delivery still requires its matching verify-capture.' },
         session: { type: 'string' },
       },
       required: ['ref', 'by', 'body'],
@@ -513,7 +513,7 @@ const tools: ToolDefinition[] = [
       const opts = { source: 'mcp', model, effort: args.effort, body, verify: args.verify, sessionId: sessionOf(args) };
       let res = store.completeTicket(slug, args.ref, by, opts);
       if (!res.ok && ['submission_required', 'empty_declared_scope'].includes(res.reason)) {
-        const noOp = provenNoOpCloseout(slug, res.ticket);
+        const noOp = provenNoOpCloseout(slug, res.ticket, args.verify);
         if (noOp.ok) {
           res = store.completeTicket(slug, args.ref, by, Object.assign({}, opts, {
             cleanDeclaredScope: true,

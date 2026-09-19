@@ -200,7 +200,7 @@ async function cmdDone(opts: any, positional: any) {
     };
     res = store.completeTicket(slug, idOrRef, by, completionOptions);
     if (!res.ok && ['submission_required', 'empty_declared_scope'].includes(res.reason)) {
-      const externalDeliverable = store.externalDeliverableCloseout(slug, res.ticket);
+      const externalDeliverable = store.externalDeliverableCloseout(slug, res.ticket, opts.verify);
       if (externalDeliverable.ok) {
         res = store.completeTicket(slug, idOrRef, by, Object.assign({}, completionOptions, {
           cleanDeclaredScope: true,
