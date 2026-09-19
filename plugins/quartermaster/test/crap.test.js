@@ -179,6 +179,133 @@ test('the ratchet fails a function that got worse and holds new functions to the
   assert.match(formatReport(report), /CRAP gate failed: 1 of 3 functions at or above 6; 2 pre-existing functions at or above 6 \(ratchet against main\)/);
 });
 
+test('an anonymous function is not a false new offender when its complexity falls and neighbors shift its position', () => {
+  const projectDir = fixtureProject({
+    'src/widget.js': [
+      'const Widget = (props) => {',
+      '  if (props.a) return 1;',
+      '  if (props.b) return 2;',
+      '  if (props.c) return 3;',
+      '  if (props.d) return 4;',
+      '  return 0;',
+      '};',
+      '',
+    ].join('\n'),
+    'coverage/lcov.info': '',
+  });
+  const git = (args) => execFileSync('git', args, { cwd: projectDir, encoding: 'utf8', windowsHide: true });
+  git(['init', '-b', 'main']);
+  git(['config', 'user.name', 'CRAP test']);
+  git(['config', 'user.email', 'crap-test@example.invalid']);
+  git(['add', '.']);
+  git(['commit', '-m', 'base']);
+
+  // lizard reports every one of these as "(anonymous)"; extracting two helpers ahead of the component
+  // shifts its position among same-named siblings even though its own complexity dropped 20 -> 15.
+  fs.writeFileSync(
+    path.join(projectDir, 'src', 'widget.js'),
+    [
+      'const helperA = (x) => {',
+      '  return x + 1;',
+      '};',
+      '',
+      'const helperB = (x) => {',
+      '  return x - 1;',
+      '};',
+      '',
+      'const Widget = (props) => {',
+      '  if (props.a) return helperA(1);',
+      '  return helperB(0);',
+      '};',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  const baseCsv = '20,20,100,1,7,"(anonymous)@1-7@src/widget.js","src/widget.js","(anonymous)","(anonymous)",1,7\n';
+  const currentCsv = [
+    '1,1,10,1,3,"(anonymous)@1-3@src/widget.js","src/widget.js","(anonymous)","(anonymous)",1,3',
+    '1,1,10,1,3,"(anonymous)@5-7@src/widget.js","src/widget.js","(anonymous)","(anonymous)",5,7',
+    '15,15,80,1,4,"(anonymous)@9-12@src/widget.js","src/widget.js","(anonymous)","(anonymous)",9,12',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (path.resolve(cwd) === path.resolve(projectDir) ? currentCsv : baseCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.deepEqual(report.failures, []);
+  assert.equal(report.ambiguousMatches.length, 1);
+  assert.deepEqual(
+    { file: report.ambiguousMatches[0].file, degraded: report.ambiguousMatches[0].degraded },
+    { file: 'src/widget.js', degraded: false },
+  );
+  assert.match(formatReport(report), /src\/widget\.js: ambiguous match/);
+  assert.match(formatReport(report), /CRAP gate passed/);
+});
+
+test('an anonymous function that truly gets worse still reports one new offender, with no stable baseline match', () => {
+  const projectDir = fixtureProject({
+    'src/widget.js': [
+      'const Widget = (props) => {',
+      '  if (props.a) return 1;',
+      '  if (props.b) return 2;',
+      '  if (props.c) return 3;',
+      '  if (props.d) return 4;',
+      '  return 0;',
+      '};',
+      '',
+    ].join('\n'),
+    'coverage/lcov.info': '',
+  });
+  const git = (args) => execFileSync('git', args, { cwd: projectDir, encoding: 'utf8', windowsHide: true });
+  git(['init', '-b', 'main']);
+  git(['config', 'user.name', 'CRAP test']);
+  git(['config', 'user.email', 'crap-test@example.invalid']);
+  git(['add', '.']);
+  git(['commit', '-m', 'base']);
+
+  fs.writeFileSync(
+    path.join(projectDir, 'src', 'widget.js'),
+    [
+      'const helperA = (x) => {',
+      '  return x + 1;',
+      '};',
+      '',
+      'const helperB = (x) => {',
+      '  return x - 1;',
+      '};',
+      '',
+      'const Widget = (props) => {',
+      '  if (props.a) return helperA(1);',
+      '  if (props.b) return helperB(0);',
+      '  if (props.c) return helperA(2) + helperB(3);',
+      '  return 0;',
+      '};',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  const baseCsv = '20,20,100,1,7,"(anonymous)@1-7@src/widget.js","src/widget.js","(anonymous)","(anonymous)",1,7\n';
+  const currentCsv = [
+    '1,1,10,1,3,"(anonymous)@1-3@src/widget.js","src/widget.js","(anonymous)","(anonymous)",1,3',
+    '1,1,10,1,3,"(anonymous)@5-7@src/widget.js","src/widget.js","(anonymous)","(anonymous)",5,7',
+    '25,25,120,1,6,"(anonymous)@9-14@src/widget.js","src/widget.js","(anonymous)","(anonymous)",9,14',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (path.resolve(cwd) === path.resolve(projectDir) ? currentCsv : baseCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.equal(report.failures.length, 1);
+  assert.deepEqual(
+    { line: report.failures[0].line, reason: report.failures[0].reason },
+    { line: 9, reason: 'ambiguous' },
+  );
+  assert.equal(report.ambiguousMatches[0].degraded, true);
+  assert.match(formatReport(report), /CRAP gate failed: 1 of 3 functions/);
+});
+
 test('the config file supplies the gate settings and flags override it', () => {
   const projectDir = fixtureProject({
     '.claude/quartermaster/crap.json': JSON.stringify({ lcov: 'reports/lcov.info', max: 100 }),

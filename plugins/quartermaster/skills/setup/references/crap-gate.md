@@ -18,6 +18,16 @@ For a new project, set `max` to 6 and apply it to every function. For an existin
 number of functions at or above the ceiling, including how many predate the branch, so the user can
 choose a different ceiling with real numbers in front of them.
 
+lizard names every arrow function or closure it cannot attribute to a declaration `(anonymous)`. A
+file built entirely from these (a large React component, for example) can have dozens of them, so the
+gate matches each one to its baseline copy by its exact source text first, then by its position
+relative to the nearest named function, instead of by name and position alone, which broke the moment
+an unrelated edit shifted where a function sat in the file. When no anonymous function in a changed
+file finds a stable match, the gate prints `<file>: ambiguous match` and judges the whole file instead
+of the single function: it only fails when the file's own worst complexity or count of ceiling
+breaches got worse than the baseline. A function at or under its matched baseline's complexity never
+counts as a new offender.
+
 ## Prerequisite
 
 Quartermaster needs [lizard](https://github.com/terryyin/lizard) to measure complexity. It never
