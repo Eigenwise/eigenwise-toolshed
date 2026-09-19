@@ -634,7 +634,7 @@ test('terminal recovery names the immutable fact that prevents a retry', () => {
     assert.equal(store.markDispatchStopped(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).stopped, true);
     assert.throws(
       () => store.prepareDispatch(slug, ticket.ref, { sessionId: 'dirty-terminal-retry', sharedTree: false }),
-      /cannot retry because immutable recovery fact: .* has uncommitted changes/,
+      /cannot retry because immutable recovery fact: .* holds uncommitted, untracked or ignored content/,
     );
   } finally {
     store.releaseTicket(slug, ticket.ref, 'dirty-terminal-cleanup', { status: 'todo', source: 'test', force: true });

@@ -3549,7 +3549,11 @@ test('sweep worker: records its notices for the next session instead of dropping
   assert.ok(Array.isArray(JSON.parse(fs.readFileSync(report, 'utf8')).notices));
 });
 
-test('session-start skips an unavailable integration target without failing the sweep', () => {
+// Was 'session-start skips an unavailable integration target without failing the
+// sweep'. Skipping is what left those projects reclaiming nothing forever, so the
+// sweep now runs against the repository default and says which ref it compared with
+// (SQ-2924).
+test('session-start sweeps against the repository default when the integration target is unavailable', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-sweep-target-'));
   gitFixture(['init', '-b', 'main'], repo);
   gitFixture(['config', 'user.name', 'Sidequest Test'], repo);
@@ -3565,8 +3569,8 @@ test('session-start skips an unavailable integration target without failing the 
   // turning the expected skip notice into a deferral notice; pin the deadline
   // so the sweep always finishes inside this test.
   const context = runHook(SESSION, { session_id: 'session-target', source: 'startup', cwd: repo }, { SIDEQUEST_SWEEP_DEADLINE_MS: '60000', CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
-  assert.match(context, /skipped worktree sweep/);
-  assert.match(context, /configured integration branch is unavailable locally/);
+  assert.match(context, /has no usable integration ref, so the worktree sweep compared against the repository default instead/);
+  assert.doesNotMatch(context, /skipped worktree sweep/);
   assert.doesNotMatch(context, /worktree sweep failed/);
 });
 

@@ -1399,20 +1399,15 @@ test('board_config sets worktree recovery retention', async () => {
   const configured = await callTool('board_config', {
     project,
     worktreeRecoveryRetentionAgeHours: 336,
-    worktreeRecoveryRetentionMaxPerAgent: 5,
   });
   assert.equal(configured.worktreeRecoveryRetentionAgeHours, 336);
-  assert.equal(configured.worktreeRecoveryRetentionMaxPerAgent, 5);
   const cli = runCli([
     'board-config', '--project', root,
     '--worktree-recovery-retention-age-hours', '504',
-    '--worktree-recovery-retention-max-per-agent', '6',
     '--json',
   ]);
   assert.equal(cli.worktreeRecoveryRetentionAgeHours, 504);
-  assert.equal(cli.worktreeRecoveryRetentionMaxPerAgent, 6);
   await assert.rejects(() => callTool('board_config', { project, worktreeRecoveryRetentionAgeHours: 0 }), /at least 1 hour/);
-  await assert.rejects(() => callTool('board_config', { project, worktreeRecoveryRetentionMaxPerAgent: 0 }), /at least 1/);
 });
 
 test('board_config sets the unintegrated worktree salvage age', async () => {
@@ -2313,6 +2308,35 @@ test('MCP delivery reclaims a terminal isolated worktree immediately', async (co
   assert.equal(integrated.ok, true, integrated.message || integrated.reason);
   assert.equal(store.getTicket(project, ticket.ref).status, 'done');
   assert.equal(fs.existsSync(worktree), false);
+});
+
+// The reviewer's cli-delivery probe: ordinary `sidequest integrate` delivered and closed the ticket
+// without any sweep, so a 1.37-second-old isolated worktree stayed on disk and registered until the
+// next SessionStart (SQ-2952 HIGH). Both CLI delivery commands run the same advance-then-sweep block.
+test('CLI integrate reclaims a terminal isolated worktree in the same command', async (context: any) => {
+  const primary = createGitWorktree();
+  const project = store.ensureProject(primary).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main', worktreeBase: 'local-main' });
+  const ticket = store.createTicket(project, {
+    title: 'reclaim delivered worktree through the CLI', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'exercise delivery-time cleanup through the ordinary CLI integrate command',
+  });
+  const by = 'cli-delivery-worker';
+  const worktree = prepareIsolatedWorktreeDispatch(project, primary, ticket, by);
+  context.after(() => removeTestWorktree(primary, worktree));
+  await submitIsolatedDeliveryCandidate(project, ticket, by, worktree);
+  assert.equal(fs.existsSync(worktree), true, 'the candidate worktree is seconds old when integration starts');
+
+  const integrated = spawnSync(process.execPath, [
+    path.join(__dirname, '..', 'bin', 'sidequest.js'), 'integrate', ticket.ref,
+    '--project', primary, '--by', 'cli-delivery-integrator', '--json',
+  ], { encoding: 'utf8', windowsHide: true });
+
+  assert.equal(integrated.status, 0, integrated.stderr);
+  assert.equal(JSON.parse(integrated.stdout).ok, true, integrated.stdout);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'done');
+  assert.equal(fs.existsSync(worktree), false, 'CLI integration reclaimed the worktree in the same command');
+  assert.equal(gitAt(primary, ['worktree', 'list']).includes(worktree), false, 'and left it unregistered');
 });
 
 test('MCP delivery preserves a retained continuation worktree', async (context: any) => {

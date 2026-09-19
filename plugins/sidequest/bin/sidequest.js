@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 "use strict";
 const path = require("path");
+const {
+  WORKTREE_SWEEP_CLASSIFICATION_ORDER,
+  DEFAULT_MIN_AGE_MS,
+  DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS,
+  DEFAULT_RECOVERY_RETENTION_AGE_MS
+} = require("../lib/worktrees");
 const store = require("../lib/store");
 const { sidequestMutationFreshness } = require("../lib/plugin-freshness");
 const { createProjectBoardWatch } = require("../lib/store/project-watch");
@@ -14,7 +20,7 @@ const { cmdDispatch, cmdBriefing, cmdTempCleanup, cmdNativeAgent, cmdModels, cmd
 const { cmdStory } = require("./sidequest-cmd-story");
 const ARRAY_FLAGS = /* @__PURE__ */ new Set(["image", "label", "file", "always-in-scope", "read-only-denied-tool", "auto-approve-scope", "produces", "changes", "consumes", "changed-surface", "dependency"]);
 const ARRAY_FLAG_ALIASES = { files: "file", labels: "label" };
-const BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "skip-verify", "contract-waiver", "full", "rotate", "worktree-isolation", "auto-approve-test-scope", "high-stakes", "working-tree-delivery", "external-deliverable", "unverified-transport", "reduced-agent-schema", "allow-repeat-failure", "allow-unscoped", "no-process", "no-worktree", "review", "abandon-submission"]);
+const BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "skip-verify", "contract-waiver", "full", "rotate", "worktree-isolation", "auto-approve-test-scope", "high-stakes", "working-tree-delivery", "external-deliverable", "unverified-transport", "reduced-agent-schema", "allow-repeat-failure", "allow-unscoped", "all-projects", "no-process", "no-worktree", "review", "abandon-submission"]);
 const COMMON_FLAGS = /* @__PURE__ */ new Set(["help", "json", "project", "source"]);
 const COMMAND_FLAGS = {
   add: ["title", "desc", "description", "body", "body-file", "priority", "status", "category", "unclassified", "complexity", "why", "high-stakes", "label", "image", "file", "produces", "changes", "consumes", "contract-waiver", "readonly", "working-tree-delivery", "external-deliverable", "anchors", "verify-kind", "attestation-artifact", "verify", "story", "route-model", "route-effort", "route", "model", "effort", "review-ref", "review-commit", "review-source", "review-revision", "dry-run", "name"],
@@ -30,7 +36,7 @@ const COMMAND_FLAGS = {
   claim: ["by", "token-file", "effort", "executor", "force", "direct", "reason", "session"],
   checkpoint: ["by", "commit", "worktree", "verify", "ttl-minutes"],
   claims: ["sweep"],
-  worktrees: ["dry-run", "yes", "min-age-hours", "recovery-retention-age-hours", "recovery-retention-max-per-agent"],
+  worktrees: ["dry-run", "yes", "all-projects", "min-age-hours", "recovery-retention-age-hours"],
   "recover-shared": ["project", "stash", "yes"],
   next: ["by", "priority", "model", "category", "direct", "reason"],
   reconcile: ["session", "reason", "ref"],
@@ -65,7 +71,7 @@ const COMMAND_FLAGS = {
   "native-agent": ["prompt", "shared-tree", "unverified-transport", "session", "dir", "name"],
   models: ["full"],
   route: ["ticket"],
-  "board-config": ["name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-branch", "delivery", "integration-verify-timeout-ms", "worktree-isolation", "worktree-base", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "worktree-recovery-retention-max-per-agent", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"],
+  "board-config": ["name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-branch", "delivery", "integration-verify-timeout-ms", "worktree-isolation", "worktree-base", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"],
   projects: ["archived"],
   routing: ["enabled", "disabled"],
   "archive-board": [],
@@ -141,7 +147,7 @@ function commandMutates(command, opts, positional) {
   }
   if (command === "story") return ["add", "update", "edit", "log", "rotate"].includes(String(positional[0] || "").toLowerCase());
   if (command === "board-config" || command === "board_config") {
-    return ["name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-branch", "worktree-isolation", "worktree-base", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "worktree-recovery-retention-max-per-agent", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"].some((key) => Object.hasOwn(opts, key));
+    return ["name", "always-in-scope", "read-only-denied-tool", "generated-pairs", "integration-mode", "integration-branch", "worktree-isolation", "worktree-base", "not-integrated-salvage-age-hours", "worktree-recovery-retention-age-hours", "auto-approve-test-scope", "auto-approve-scope", "worktree-setup", "worktree-dependency-paths"].some((key) => Object.hasOwn(opts, key));
   }
   return false;
 }
@@ -237,6 +243,12 @@ function parseArgs(argv) {
   }
   return { opts, positional };
 }
+function sweepThresholdLabel(milliseconds) {
+  const hours = milliseconds / (60 * 60 * 1e3);
+  return hours >= 24 ? `${hours / 24} days` : `${hours} hours`;
+}
+const WORKTREE_SWEEP_THRESHOLDS = `too_young keeps anything younger than ${sweepThresholdLabel(DEFAULT_MIN_AGE_MS)}; untracked or ignored content is quarantined whole, and unintegrated work salvaged, once the tree is older than ${sweepThresholdLabel(DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS)}; a quarantine entry is deleted on age alone after ${sweepThresholdLabel(DEFAULT_RECOVERY_RETENTION_AGE_MS)}`;
+const WORKTREE_SWEEP_RECLAIM_RULE = "nothing is deleted where it stands: a reclaimed tree is renamed into quarantine, and content that was there when the sweep classified it, or that arrives before the move, parks the whole tree. A tree counts as clean only when its status carries nothing untracked or ignored; installed files under an ignored node_modules, which worktree setup regenerates, are the one exception. The moved copy is re-read once before its files are deleted, so a file written into it in the instant after that read is deleted with it. A commit on the worktree's own branch is not lost: the branch is deleted only with update-ref -d refs/heads/<branch> <tip> against the tip re-read at that destination, so a commit landed on it after that read leaves the branch retained as tip_moved. That compare is by value, so a ref moved away and then back to the same tip is not detected. A detached checkout is never reclaimed on ticket status alone: before its tree is touched, and again at the quarantine destination, the sweep asks the main checkout whether another ref already contains that HEAD, counting neither the checkout's own private metadata, nor a per-worktree ref (refs/worktree/, refs/bisect/, refs/rewritten/) of the checkout doing the asking, nor any branch this sweep could still delete, which includes every worktree-agent branch the orphan pass may take once the reclaims are done; a probe that cannot answer keeps the tree, and so does a branch listing it cannot read. A HEAD no other ref holds keeps its checkout where it stands as detached_head_unpinned, and one whose ref disappears mid-reclaim parks the moved tree: the park runs git worktree repair against the quarantine destination, so the parked tree keeps a working HEAD and its commit stays in rev-list --all after the prune. A repair that cannot be confirmed withholds every repository prune until a later sweep repairs every retained park, and is reported as a failure, leaving both the files and the registration they came from intact. Expiry removes quarantine files with link-safe filesystem deletion; only after retained parks reconcile does Git's metadata-only prune remove their registrations, otherwise that metadata cleanup is reported as deferred. A review's detached checkout still reclaims normally, because its candidate is pinned by refs/sidequest/<ref>. The limit is a commit made on a detached HEAD after those reads. On Windows a process still holding the tree open makes the rename fail and the tree stays in place until a later pass, and quarantine lives under the Sidequest home, so a worktree on a different volume is never reclaimed and parks as quarantine_failed every pass until the quarantine directory is on the same volume";
 const HELP_COMMANDS = {
   add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [--file <path>]... [--route-model <model> --route-effort <effort>] [-d desc|--body-file path] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly true|false] [--working-tree-delivery] [--external-deliverable] [-i image]... [-s todo|doing|done] [--dry-run] [--json]   (--file declares write scope; a write ticket without it is refused at dispatch)',
   list: "sidequest list [--status todo|doing|awaiting-oracle|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]  (defaults to active tickets; --status done or --all includes done)",
@@ -251,7 +263,7 @@ const HELP_COMMANDS = {
   claim: 'sidequest claim <id|SQ-n> [--by who] [--token-file path] [--effort level] [--force] [--direct --reason "why"]',
   checkpoint: 'sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "command: result" [--ttl-minutes N] [--json]',
   claims: "sidequest claims sweep [--project <path-or-slug>]",
-  worktrees: "sidequest worktrees <status|sweep> [--dry-run] [--yes] [--min-age-hours N] [--recovery-retention-age-hours N] [--recovery-retention-max-per-agent N] [--project <path-or-slug>]  report worktree, backup, and quarantine storage; sweep plans stale worktree and recovery-entry cleanup",
+  worktrees: `sidequest worktrees <status|sweep> [--dry-run] [--yes] [--all-projects] [--min-age-hours N] [--recovery-retention-age-hours N] [--project <path-or-slug>]  report per-directory worktree and quarantine storage with a total; sweep plans stale worktree and recovery-entry cleanup in this order: ${WORKTREE_SWEEP_CLASSIFICATION_ORDER.join(", ")}; ${WORKTREE_SWEEP_THRESHOLDS}; ${WORKTREE_SWEEP_RECLAIM_RULE}; --all-projects sweeps every registered project whose path still exists, in slug order`,
   next: 'sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why"]',
   reconcile: 'sidequest reconcile [--session <id>] [--reason "..."]',
   work: "sidequest work|drain",
@@ -284,7 +296,7 @@ const HELP_COMMANDS = {
   "cleanup-temp": "sidequest cleanup-temp [--root <path>] [--json]",
   models: "sidequest models [--project <path-or-slug>] [--full] [--json]",
   route: "sidequest route <category> [--ticket SQ-n] [--project <path-or-slug>] --json",
-  "board-config": 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base origin-main|local-main] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--worktree-recovery-retention-max-per-agent <count>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--worktree-dependency-paths <json>] [--json]',
+  "board-config": 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base origin-main|local-main] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--worktree-dependency-paths <json>] [--json]',
   projects: "sidequest projects [--archived] [--json]",
   routing: "sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]",
   "archive-board": "sidequest archive-board <board-ref> [--json]",
@@ -430,7 +442,7 @@ Native Agent dispatch (routed work stays in this conversation):
     window passes, so keep long work writing to the board. Closeout (commit/submit/done) never consults these
     windows, and a bound unclaimed attempt is never swept on age at all: it needs its terminal hook or
     explicit recovery evidence.
-  sidequest worktrees <status|sweep> [--dry-run] [--yes] [--min-age-hours N] [--recovery-retention-age-hours N] [--recovery-retention-max-per-agent N] [--project <path-or-slug>]  report worktree storage; --yes removes planned stale worktrees and expired recovery entries
+  sidequest worktrees <status|sweep> [--dry-run] [--yes] [--all-projects] [--min-age-hours N] [--recovery-retention-age-hours N] [--project <path-or-slug>]  report per-directory worktree and quarantine storage with a total; sweep classifies in this order: ${WORKTREE_SWEEP_CLASSIFICATION_ORDER.join(", ")}. ${WORKTREE_SWEEP_THRESHOLDS}. ${WORKTREE_SWEEP_RECLAIM_RULE}. --yes removes planned stale worktrees and expired quarantine entries; --all-projects walks every registered project, oldest worktrees first
   sidequest recover-shared --project <path-or-slug> --stash <stash@{n}> --yes  reset a dirty shared checkout only after verifying its named stash
 
 Assigning (persistent owner, e.g. handing a ticket to the human — separate from a claim):
@@ -480,7 +492,7 @@ Project selection:
     A slug or display name must already be registered. An absolute path to a real
     directory is created on first use, so you can file into another repo's board
     (even one that doesn't exist yet) from anywhere by passing its full path.
-  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--auto-approve-scope <glob>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base <origin-main|local-main>] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--worktree-recovery-retention-max-per-agent <count>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>] [--worktree-dependency-paths <json>]
+  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--auto-approve-scope <glob>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base <origin-main|local-main>] [--not-integrated-salvage-age-hours <hours>] [--worktree-recovery-retention-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>] [--worktree-dependency-paths <json>]
     View or update board settings. --name changes only the display name; the slug, path, tickets, claims, and refs stay put.
     --worktree-base picks which side of --integration-branch isolated dispatches fork: origin-main uses its
     remote ref and refuses the dispatch when that ref does not exist, local-main uses the local branch.
