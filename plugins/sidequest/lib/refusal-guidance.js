@@ -23,6 +23,7 @@ __export(refusal_guidance_exports, {
   claimRefusalMessage: () => claimRefusalMessage,
   filesystemSnapshotChildFailureGuidance: () => filesystemSnapshotChildFailureGuidance,
   filesystemSnapshotLimitGuidance: () => filesystemSnapshotLimitGuidance,
+  inheritedRejectedDuplicateGuidance: () => inheritedRejectedDuplicateGuidance,
   manualCandidateDeliveryGuidance: () => manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance: () => negativeControlRecoveryGuidance,
   routingDisabledMessage: () => routingDisabledMessage,
@@ -118,6 +119,25 @@ function manualCandidateDeliveryGuidance() {
 function candidateReviewRequiredGuidance() {
   return "A bound review must terminally complete on this exact candidate, from a runtime identity that is not the one that submitted it. The two sides are held to different proof. The submitting side may identify itself by the attempt's hook-bound agent id, or by the token prefix and agent name recorded against a proven claim-token binding; an attempt older than bind-source recording proves that binding through its recorded bind time instead. The reviewing side needs the hook-bound agent id and nothing else stands in: a dispatch token and agent name authenticate a dispatch, not the runtime that ran it, and one runtime can hold several of those. Run `sidequest pulse <ref>` and read `dispatch.attempts` on both tickets to see which half is missing. If the review never ran to a terminal done attempt, dispatch it and let it close normally. If it reviewed a different candidate, that candidate needs its own bound review. If the review attempt carries no hook-bound agent id, its executor never bound a runtime: re-dispatch the review on a host whose PreToolUse hook reports agent_id, and let that attempt close normally. If the submitting attempt recorded no identity and no bind time at all, it bound nothing and nothing recovers it: re-dispatch that ticket so the replacement attempt binds, then review the resubmitted candidate. Do not assert an identity, hand-edit the attempt, or route around this with a manual delivery: the manual and groomClose routes enforce the same check.";
 }
+const INHERITED_REJECTED_REFUSALS = Object.freeze({
+  not_related: "that ticket is not linked `related` to this one, so nothing declares this range a repair of it. An unrelated submitted range is never inherited: `sidequest link <this-ref> related <source-ref>` only when this work really repairs that candidate.",
+  source_unavailable: "that ticket or its submission could not be read, so no inherited boundary can be proven.",
+  source_active: "that ticket still holds a live claim, so its candidate is active work rather than a rejected one.",
+  submission_integrated: "its submission is already integrated or superseded, so there is nothing parked to inherit.",
+  candidate_unavailable: "its submission records no immutable candidate identity.",
+  review_unbound: "its candidate is not bound to a review-audit ticket. Only a bound review can reject a candidate.",
+  review_conflict: "more than one review ticket addresses that candidate, so the binding is ambiguous and fails closed.",
+  mirror_only: "only the source-side review mirror exists, with no review ticket bound to that candidate. A mirror lives in the submitting ticket's own row and proves nothing on its own.",
+  not_rejected: "its bound review has not recorded an oracle rejection for that candidate. Record the review evidence, release the review with `kind=oracle`, and let the oracle verdict reject it.",
+  stale_candidate: "its bound review is pinned to a different candidate than the one that submission now records, so the rejection does not cover the inherited commits.",
+  mirror_mismatch: "its review mirror and bound review disagree about the rejected candidate.",
+  partial_inheritance: "this range carries only part of that rejected range. Inherit the whole rejected candidate or none of it; do not reconstruct a subset."
+});
+function inheritedRejectedDuplicateGuidance(reason) {
+  const detail = INHERITED_REJECTED_REFUSALS[String(reason || "")];
+  const preamble = "An inherited range is admitted only when the overlapping ticket is linked `related` to this one and its exact candidate carries an oracle-confirmed review rejection; here ";
+  return detail ? `${preamble}${detail} Keep the full range and the recorded dispatch base: never pass an explicit base or squash to hide the inherited commits, because delivery and supersession read them.` : "Preserve this candidate and resolve the overlap on the board. A range may inherit another ticket's commits only when that ticket is linked `related` to this one and its exact candidate carries an oracle-confirmed review rejection. Keep the full range and the recorded dispatch base: never pass an explicit base or squash to hide the inherited commits, because delivery and supersession read them.";
+}
 function negativeControlRecoveryGuidance() {
   return "Revert the non-test changes, run the changed tests, and keep them importable. Say which one happened: failure-kind=assertion when the changed tests failed their assertions, failure-kind=import or failure-kind=collection when the revert stopped them loading, because only an assertion failure proves they catch wrong behavior. Post [sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=<assertion|import|collection> with n greater than zero. The target and assertion must be the changed behavior this ticket is about. Then restore the change and run the declared verify. You may add context after failed=<n>. For every added or modified named test, add [sidequest:negative-control-test] failed <test name>. If a named test does not cover the reverted change, add [sidequest:negative-control-test] unaffected <test name> because <reason> instead. If the control cannot run, post a line beginning [sidequest:negative-control] waived <reason of at least 20 characters>.";
 }
@@ -144,6 +164,7 @@ function filesystemSnapshotChildFailureGuidance(failure) {
   claimRefusalMessage,
   filesystemSnapshotChildFailureGuidance,
   filesystemSnapshotLimitGuidance,
+  inheritedRejectedDuplicateGuidance,
   manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance,
   routingDisabledMessage,

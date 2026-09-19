@@ -197,6 +197,20 @@ function worktreeCreationRefusalMessage(reason, repository, failure) {
   const guidance = WORKTREE_CREATION_REFUSALS[reason];
   return `worktree lease refused creation: ${reason || "dispatch binding is incomplete"}${guidance ? `. ${guidance(repository, failure)}` : ""}`;
 }
+var INHERITED_REJECTED_REFUSALS = Object.freeze({
+  not_related: "that ticket is not linked `related` to this one, so nothing declares this range a repair of it. An unrelated submitted range is never inherited: `sidequest link <this-ref> related <source-ref>` only when this work really repairs that candidate.",
+  source_unavailable: "that ticket or its submission could not be read, so no inherited boundary can be proven.",
+  source_active: "that ticket still holds a live claim, so its candidate is active work rather than a rejected one.",
+  submission_integrated: "its submission is already integrated or superseded, so there is nothing parked to inherit.",
+  candidate_unavailable: "its submission records no immutable candidate identity.",
+  review_unbound: "its candidate is not bound to a review-audit ticket. Only a bound review can reject a candidate.",
+  review_conflict: "more than one review ticket addresses that candidate, so the binding is ambiguous and fails closed.",
+  mirror_only: "only the source-side review mirror exists, with no review ticket bound to that candidate. A mirror lives in the submitting ticket's own row and proves nothing on its own.",
+  not_rejected: "its bound review has not recorded an oracle rejection for that candidate. Record the review evidence, release the review with `kind=oracle`, and let the oracle verdict reject it.",
+  stale_candidate: "its bound review is pinned to a different candidate than the one that submission now records, so the rejection does not cover the inherited commits.",
+  mirror_mismatch: "its review mirror and bound review disagree about the rejected candidate.",
+  partial_inheritance: "this range carries only part of that rejected range. Inherit the whole rejected candidate or none of it; do not reconstruct a subset."
+});
 
 // src/hooks/worktree-create.ts
 var leaseKernel = require(runtimeModule("kernel/worktree"));
