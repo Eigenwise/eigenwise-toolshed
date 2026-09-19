@@ -2342,7 +2342,7 @@ test('a checkout the attempt reserved itself still blocks the retry, and repeati
     const evidence = 'observed terminal agent with no claim';
     withoutRetirementGrace(() => assert.throws(
       () => store.prepareDispatch(slug, ticket.ref, { sessionId: `${sequence}-retry`, recoveryEvidence: evidence }),
-      /cannot retry because immutable recovery fact: .* has uncommitted changes/,
+      /cannot retry because immutable recovery fact: .* holds uncommitted, untracked or ignored content/,
     ));
     const retired = store.getTicket(slug, ticket.ref).dispatch;
     assert.equal(retired.failureShape, 'stranded_bound_launch_superseded');

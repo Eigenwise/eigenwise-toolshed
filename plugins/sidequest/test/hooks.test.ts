@@ -181,14 +181,72 @@ function runHookProcessForBudget(script?: any, payload?: any, envOverrides?: any
   });
 }
 
-async function waitForPath(file: string): Promise<void> {
-  const deadline = Date.now() + 2000;
+// A fixed wall-clock bound can't tell a loaded CI runner from a stuck worker: the
+// detached sweep this waits on spawns its own node process, so its cost rides the
+// same machine load as a bare spawn does. Scale the bound against a spawn measured
+// in this run instead (SQ-2864 used the same shape for SubagentStop's budget), and
+// keep a floor above the ~3.6s durations already observed on a loaded Windows
+// runner (SQ-2895). The calibration spawn itself carries an explicit timeout so a
+// stalled child (or an inherited preload that never returns) fails loudly instead
+// of hanging test collection indefinitely (SQ-2999/SQ-3000).
+const PROCESS_SPAWN_CALIBRATION_TIMEOUT_MS = 5_000;
+const PROCESS_SPAWN_CALIBRATION_OPTIONS = {
+  windowsHide: true,
+  timeout: PROCESS_SPAWN_CALIBRATION_TIMEOUT_MS,
+} as const;
+const PROCESS_SPAWN_BASELINE_MS = (() => {
+  const started = Date.now();
+  execFileSync(process.execPath, ['-e', ''], PROCESS_SPAWN_CALIBRATION_OPTIONS);
+  return Math.max(1, Date.now() - started);
+})();
+const WAIT_FOR_PATH_DEFAULT_MS = Math.max(5000, PROCESS_SPAWN_BASELINE_MS * 40);
+
+async function waitForPath(file: string, budgetMs: number = WAIT_FOR_PATH_DEFAULT_MS): Promise<void> {
+  const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {
     if (fs.existsSync(file)) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  throw new Error(`Timed out waiting for ${file}`);
+  throw new Error(`Timed out waiting for ${file} after ${budgetMs}ms`);
 }
+
+test('waitForPath: resolves once a file appears after a deterministic delay, not only if it is already there', async () => {
+  const file = path.join(SIDEQUEST_HOME, `wait-for-path-delayed-${crypto.randomUUID()}.json`);
+  setTimeout(() => fs.writeFileSync(file, '{}'), 20);
+  assert.equal(fs.existsSync(file), false, 'the control must start without the file, or the wait proves nothing');
+  await waitForPath(file);
+  assert.equal(fs.existsSync(file), true);
+});
+
+test('waitForPath: still times out when the file never appears', async () => {
+  const file = path.join(SIDEQUEST_HOME, `wait-for-path-missing-${crypto.randomUUID()}.json`);
+  await assert.rejects(() => waitForPath(file, 50), /Timed out waiting for/);
+});
+
+test('the process-spawn calibration bounds its child with a finite timeout', () => {
+  assert.equal(PROCESS_SPAWN_CALIBRATION_OPTIONS.windowsHide, true);
+  assert.ok(
+    Number.isFinite(PROCESS_SPAWN_CALIBRATION_OPTIONS.timeout) && PROCESS_SPAWN_CALIBRATION_OPTIONS.timeout > 0,
+    'the calibration spawn must carry a finite, positive timeout or a stalled child can hang test collection forever',
+  );
+});
+
+test('a stalled process-spawn calibration terminates within its declared timeout bound, not indefinitely', () => {
+  const boundedTimeoutMs = 200;
+  const started = Date.now();
+  assert.throws(
+    () => execFileSync(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      windowsHide: true,
+      timeout: boundedTimeoutMs,
+    }),
+    (error: any) => error.code === 'ETIMEDOUT',
+  );
+  const elapsedMs = Date.now() - started;
+  assert.ok(
+    elapsedMs < boundedTimeoutMs + 5000,
+    `expected the stalled child to be killed near its ${boundedTimeoutMs}ms bound, took ${elapsedMs}ms`,
+  );
+});
 
 function publishStateLock(lockDirectory: string, ownerPid: number): string {
   const generation = `fixture-${crypto.randomUUID()}`;
@@ -3549,7 +3607,11 @@ test('sweep worker: records its notices for the next session instead of dropping
   assert.ok(Array.isArray(JSON.parse(fs.readFileSync(report, 'utf8')).notices));
 });
 
-test('session-start skips an unavailable integration target without failing the sweep', () => {
+// Was 'session-start skips an unavailable integration target without failing the
+// sweep'. Skipping is what left those projects reclaiming nothing forever, so the
+// sweep now runs against the repository default and says which ref it compared with
+// (SQ-2924).
+test('session-start sweeps against the repository default when the integration target is unavailable', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-sweep-target-'));
   gitFixture(['init', '-b', 'main'], repo);
   gitFixture(['config', 'user.name', 'Sidequest Test'], repo);
@@ -3565,8 +3627,8 @@ test('session-start skips an unavailable integration target without failing the 
   // turning the expected skip notice into a deferral notice; pin the deadline
   // so the sweep always finishes inside this test.
   const context = runHook(SESSION, { session_id: 'session-target', source: 'startup', cwd: repo }, { SIDEQUEST_SWEEP_DEADLINE_MS: '60000', CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
-  assert.match(context, /skipped worktree sweep/);
-  assert.match(context, /configured integration branch is unavailable locally/);
+  assert.match(context, /has no usable integration ref, so the worktree sweep compared against the repository default instead/);
+  assert.doesNotMatch(context, /skipped worktree sweep/);
   assert.doesNotMatch(context, /worktree sweep failed/);
 });
 
