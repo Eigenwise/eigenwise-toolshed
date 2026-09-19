@@ -1,25 +1,29 @@
 {
-  "skill_name": "quartermaster-host-capability-discovery",
+  "skill_name": "resupply",
   "evals": [
     {
-      "id": "pi-missing-subagents",
+      "id": 1,
       "prompt": "We use the Pi coding agent. This repo needs independent subagents for parallel investigation, but I cannot find a delegation tool. What should Quartermaster recommend?",
-      "expected_behavior": "Identify Pi from the user's statement, distinguish the missing live delegation capability from installed state, and recommend checking Pi's checked upstream Subagent Example as adaptable source material. Do not claim it is a ready-to-install package or invent an install command."
+      "expected_output": "For Pi without visible coding-agent subagents, identify the missing live delegation capability, distinguish it from installed state, and recommend checking Pi's checked upstream Subagent Example as adaptable source material. Do not claim it is a ready-to-install package or invent an install command.",
+      "files": []
     },
     {
-      "id": "native-delegation-already-works",
+      "id": 2,
       "prompt": "Our coding-agent host already exposes a working native delegation tool in this session, and the team uses it for review tasks. Should we add a subagent extension?",
-      "expected_behavior": "Treat the observed live native capability as sufficient and recommend no redundant extension. State that the existing capability holds up for this need."
+      "expected_output": "For an existing native delegation capability, treat the observed live capability as sufficient and recommend no redundant extension. State that the existing capability holds up for this need.",
+      "files": []
     },
     {
-      "id": "unknown-host",
+      "id": 3,
       "prompt": "This coding assistant has no visible delegation command. Can you find us a subagent plugin?",
-      "expected_behavior": "State that the host and extension state are unknown, ask for or inspect host-specific evidence when available, and avoid assuming Claude Code commands, catalogs, or another host's package ecosystem."
+      "expected_output": "For an unknown host, state that the host and extension state are unknown, ask for or inspect host-specific evidence when available, and avoid assuming Claude Code commands, catalogs, or another host's package ecosystem.",
+      "files": []
     },
     {
-      "id": "approval-not-granted",
+      "id": 4,
       "prompt": "Pi subagents would help with a migration. Please look for options, but do not change my setup yet.",
-      "expected_behavior": "Research and present only checked, host-specific options. Keep any installation or configuration change behind explicit per-item approval, preserve the reload boundary, and require a live-usability check after approval."
+      "expected_output": "For Pi with no install approval, research and present only checked, host-specific options. Keep any installation or configuration change behind explicit per-item approval, preserve the reload boundary, and require a live-usability check after approval.",
+      "files": []
     }
   ]
 }

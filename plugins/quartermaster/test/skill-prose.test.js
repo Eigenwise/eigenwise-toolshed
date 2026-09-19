@@ -99,12 +99,15 @@ test('guides host-capability recommendations without assuming a universal catalo
   assert.match(hostCapabilities, /Live usability/);
   assert.match(hostCapabilities, /Do not infer Claude Code/);
   assert.match(hostCapabilities, /Subagent Example/);
+  assert.equal(evaluations.skill_name, 'resupply');
   assert.deepEqual(
     evaluations.evals.map((evaluation) => evaluation.id),
-    ['pi-missing-subagents', 'native-delegation-already-works', 'unknown-host', 'approval-not-granted'],
+    [1, 2, 3, 4],
   );
   for (const evaluation of evaluations.evals) {
     assert.equal(typeof evaluation.prompt, 'string');
-    assert.equal(typeof evaluation.expected_behavior, 'string');
+    assert.equal(typeof evaluation.expected_output, 'string');
+    assert.ok(Array.isArray(evaluation.files));
+    assert.equal(Object.hasOwn(evaluation, 'expected_behavior'), false);
   }
 });
