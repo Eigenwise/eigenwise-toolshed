@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.573.0 (2026-09-20)
+
+### sidequest 5.2.0 → 5.2.1
+
+#### Fixes
+
+- Resume safe parked-recovery metadata pruning (SQ-2997)
+  Every safe sweep now runs Git's metadata-only worktree prune after retained parks reconcile, even when that invocation removed no worktrees or quarantine entries. Unresolved parked registrations still veto pruning, so their detached commits remain protected until a later repair succeeds.
+- Sweep-report tests scale their wait bound and bound the startup calibration itself (SQ-3000)
+  The hooks test suite's shared `waitForPath` helper waited a hardcoded 2000ms for a detached sweep worker's report file, which a loaded Windows CI runner could exceed even when nothing was broken. It now scales its bound against a `node -e ''` baseline measured in the same run, with a 5000ms floor, and gained deterministic delayed-report and never-report controls. The baseline measurement itself now carries an explicit 5000ms timeout, so a stalled child process (or an inherited preload that never returns) fails the run loudly instead of hanging test collection indefinitely.
+
 ## v3.572.0 (2026-09-19)
 
 ### quartermaster 0.11.1 → 0.11.2
