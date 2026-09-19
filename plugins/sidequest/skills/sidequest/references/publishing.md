@@ -77,6 +77,31 @@ This route still fails closed. Do not skip a verifier or review, substitute curr
 Set the board default with `sidequest board-config --delivery merge|replay|apply`. Consumer boards
 usually want `apply` or `replay`; use `merge` where the repository's release flow owns integration.
 
+### A repair whose range inherits a rejected candidate
+
+When a repair is built on top of an oracle-rejected candidate, its submitted range legitimately contains
+that candidate's commits. Sidequest admits that overlap instead of refusing it as a duplicate, and it does
+NOT shorten the range to do so: the repair submits with no explicit base, against the base its dispatch
+recorded, so review, delivery, and supersession all read the inherited bytes plus the repair delta.
+
+File the repair so all of this holds before dispatching it:
+
+- Link it `related` to the rejected source (`sidequest link <repair> related <source>`). Without that link
+  the overlap is refused; an unrelated submitted range is never inherited.
+- The source's candidate needs an oracle-confirmed rejection: a bound `review-audit` ticket whose verdict
+  rejected that exact candidate. A source-side `submission.review` mirror alone is not authority, and a
+  rejection pinned to a different commit than the submission now records does not count.
+- Declare the union of the inherited paths and the repair's own, including paths the rejected candidate
+  deleted or added and the repair never touches. Scope admission covers every path in the range.
+- The rejected range is inherited whole. A range carrying only part of it is refused.
+
+An active, unrelated, unreviewed, or not-yet-rejected overlapping submission still refuses
+`duplicate_submission`, and the refusal names which half is missing. Do not answer that refusal with
+`--base`, a squash, or a rebuilt exact-tree candidate: those hide the inherited commits from the
+authorities that read them. `merge` and `replay` deliver the whole inherited tree. `apply` materializes it
+without a commit, so it has no content commit to prove per-path lineage, and `supersede_submission` then
+refuses the inherited paths rather than closing the rejected submission against an uncommitted head.
+
 If a repair ticket deliberately delivers an earlier parked submission, do not replay the obsolete range. Use MCP `supersede_submission` with the earlier ref, the later integrated repair ref, concise closure evidence, and `reviewedReplacements` for every original path whose delivered content intentionally differs. The control plane requires the repair's recorded delivery to include every original changed path, preserves the earlier submission and its lineage under `supersededBy`, marks it done, and removes its pending-submission warning. A missing path, an unintegrated repair, or unreviewed divergent content leaves the original submission parked.
 
 ## Integration mode: where delivery happens versus what proves a candidate landed
