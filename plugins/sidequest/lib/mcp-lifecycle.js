@@ -58,6 +58,8 @@ const {
   state
 } = require("./mcp-shared");
 const { sourceRevisionBaseline } = require("./source-revision-capability");
+const { reviewCandidateFromSubmission, sameReviewCandidate } = require("./kernel/review-binding.js");
+const { inheritedRejectedDuplicateGuidance } = require("./refusal-guidance.js");
 const VERIFICATION_WAIVER_PROP = {
   type: "object",
   description: "Required with skipVerify. Names the human authority, reason, affected gate, and a bounded scope or future expiry. Runtime validation rejects incomplete, expired, or non-object values.",
@@ -141,9 +143,41 @@ function missingReleaseFragment(repoPath, ref, changedPaths) {
 function missingReleaseFragmentMessage(ref, fragmentPath, plugins) {
   return store.missingReleaseFragmentMessage(ref, fragmentPath, plugins);
 }
+function relatedTicketRefs(ticket) {
+  return Array.isArray(ticket.links) ? ticket.links.filter((link) => link?.type === "related").map((link) => String(link.ref || "").trim()).filter(Boolean) : [];
+}
+function submittedRangeCommits(submission) {
+  return Array.isArray(submission?.commits) && submission.commits.length ? submission.commits.map((entry) => String(entry || "").toLowerCase()).filter(Boolean) : [String(submission?.commit || "").toLowerCase()].filter(Boolean);
+}
+function inheritedRejectedAdmission(slug, ticket, entryRef, rangeCommits) {
+  const related = relatedTicketRefs(ticket).some((ref) => ref.toUpperCase() === String(entryRef).toUpperCase());
+  if (!related) return { ok: false, reason: "not_related" };
+  const source = store.getTicket(slug, entryRef);
+  if (!source || !source.submission || source.id === ticket.id) return { ok: false, reason: "source_unavailable" };
+  if (source.claim?.by) return { ok: false, reason: "source_active" };
+  if (source.submission.integratedAt || source.submission.supersededBy) return { ok: false, reason: "submission_integrated" };
+  const candidate = reviewCandidateFromSubmission(source.submission);
+  if (!candidate) return { ok: false, reason: "candidate_unavailable" };
+  const relation = store.submissionReviewRelation(slug, source);
+  if (!relation) return { ok: false, reason: "review_unbound" };
+  if (relation.conflict) return { ok: false, reason: "review_conflict" };
+  if (relation.side !== "both" || !relation.reviewTicket?.id || !relation.reviewTarget) return { ok: false, reason: "mirror_only" };
+  if (String(relation.reviewTarget.outcome) !== "rejected" || String(relation.reviewTicket.oracle?.verdict?.outcome || "") !== "rejected") {
+    return { ok: false, reason: "not_rejected" };
+  }
+  if (!sameReviewCandidate(candidate, relation.reviewTarget.candidate)) return { ok: false, reason: "stale_candidate" };
+  if (String(relation.mirror?.ticketId || "") !== String(relation.reviewTicket.id) || String(relation.mirror?.outcome) !== "rejected" || !sameReviewCandidate(candidate, relation.mirror?.candidate)) {
+    return { ok: false, reason: "mirror_mismatch" };
+  }
+  const inherited = submittedRangeCommits(source.submission);
+  const contained = new Set(rangeCommits.map((commit) => String(commit).toLowerCase()));
+  if (!contained.has(String(candidate.value).toLowerCase()) || !inherited.every((commit) => contained.has(commit))) {
+    return { ok: false, reason: "partial_inheritance" };
+  }
+  return { ok: true, ref: source.ref, commit: String(source.submission.commit), review: relation.reviewTicket.ref };
+}
 function rejectedRelatedReleaseFragments(slug, ticket) {
-  const relatedRefs = Array.isArray(ticket.links) ? ticket.links.filter((link) => link?.type === "related").map((link) => link.ref) : [];
-  return relatedRefs.flatMap((relatedRef) => {
+  return relatedTicketRefs(ticket).flatMap((relatedRef) => {
     const source = store.getTicket(slug, relatedRef);
     if (source?.submission?.review?.outcome !== "rejected") return [];
     const fragment = commitScope.ticketReleaseFragment(source.ref);
@@ -286,7 +320,9 @@ function collectGitSubmissionFacts(options) {
     const missingFragment = missingReleaseFragment(root, ticket.ref, scopedRange.paths || range.changedPaths);
     if (missingFragment) requirements.push({ code: "missing_release_fragment", message: missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins), retryable: true });
   }
-  const duplicate = range?.ok ? ticket.dispatch?.sharedTree === true ? approvedBoundaries.find((boundary) => range.commits.includes(boundary.commit)) || null : store.submissionsPayload(slug).tickets.filter((entry) => entry.ref !== ticket.ref).find((entry) => (Array.isArray(entry.submission.commits) && entry.submission.commits.length ? entry.submission.commits : [entry.submission.commit]).some((entryCommit) => range.commits.includes(entryCommit))) : null;
+  const overlappingSubmissions = range?.ok && ticket.dispatch?.sharedTree !== true ? store.submissionsPayload(slug).tickets.filter((entry) => entry.ref !== ticket.ref).filter((entry) => (Array.isArray(entry.submission.commits) && entry.submission.commits.length ? entry.submission.commits : [entry.submission.commit]).some((entryCommit) => range.commits.includes(entryCommit))) : [];
+  const refusedOverlap = overlappingSubmissions.map((entry) => ({ entry, admission: inheritedRejectedAdmission(slug, ticket, entry.ref, range.commits) })).find((overlap) => !overlap.admission.ok) || null;
+  const duplicate = range?.ok ? ticket.dispatch?.sharedTree === true ? approvedBoundaries.find((boundary) => range.commits.includes(boundary.commit)) || null : refusedOverlap?.entry || null : null;
   return {
     target,
     range,
@@ -300,7 +336,7 @@ function collectGitSubmissionFacts(options) {
         identity: duplicate.ref,
         diagnostic: {
           code: "duplicate_submission",
-          message: ticket.dispatch?.sharedTree === true ? `submit: refused ${ticket.ref}; its range includes submitted sibling ${duplicate.ref}'s candidate ${duplicate.commit}. Use the approved boundary with \`--base ${duplicate.commit}\`, or omit base to select the newest approved boundary automatically.` : `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.`,
+          message: ticket.dispatch?.sharedTree === true ? `submit: refused ${ticket.ref}; its range includes submitted sibling ${duplicate.ref}'s candidate ${duplicate.commit}. Use the approved boundary with \`--base ${duplicate.commit}\`, or omit base to select the newest approved boundary automatically.` : `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}. ${inheritedRejectedDuplicateGuidance(refusedOverlap?.admission?.reason)}`,
           retryable: false
         }
       } : { identity: null },
@@ -458,7 +494,7 @@ const tools = [
   },
   {
     name: "groomClose",
-    description: `Close with evidence. Delivery uses the ticket's prepared integration target when recorded, even if the board target or checkout changed later. For manually composed candidates with different pinned verifiers, run every pinned verifier and the full composed gate, then use deliveryCommit with deliveryMethod:"manual" and omit integration:true; integration:true is only for a matching delivered wave. verificationSupersession is the explicit exception for a terminal recorded submission whose sealed verifier no longer runs: it runs the replacement command, and records the old requirement, replacement requirement, reason, and result as a distinct delivered outcome. An unclaimed prepared or launched dispatch before runtime binding can be recovered only with deliveryMethod:"manual" and recoveryEvidence once deliveryCommit is reachable from the recorded integration branch. A pending candidate requires verified delivery, which reconciles the delivered commit against the candidate without checking sibling declared scope; abandonSubmission: true records discard, and a candidate already contained in the recorded target (in remote mode that includes the frozen origin/<branch> ref) records already-landed delivery instead of abandoning shipped work. A recorded revision names the ref that actually contained it, so a local delivery reads git:<branch> until origin has it. A pending candidate landed only on the frozen remote ref refuses integration_target_behind_landed_candidate until that local branch is synchronized, and a frozen integration ref that no longer resolves refuses integration_target_unavailable rather than answering from the local branch. An unlaunched prepared dispatch is recorded abandoned.`,
+    description: `Close with evidence. Delivery uses the ticket's prepared integration target when recorded, even if the board target or checkout changed later. For manually composed candidates with different pinned verifiers, run every pinned verifier and the full composed gate, then use deliveryCommit with deliveryMethod:"manual" and omit integration:true; integration:true is only for a matching delivered wave. verificationSupersession is the explicit exception for a terminal recorded submission whose sealed verifier no longer runs: it runs the replacement command, and records the old requirement, replacement requirement, reason, and result as a distinct delivered outcome. An unclaimed prepared or launched dispatch before runtime binding can be recovered only with deliveryMethod:"manual" and recoveryEvidence once deliveryCommit is reachable from the recorded integration branch. A pending candidate requires verified delivery, which reconciles the delivered commit against the candidate without checking sibling declared scope; abandonSubmission: true records discard, and a candidate already contained in the recorded target (in remote mode that includes the frozen origin/<branch> ref) records already-landed delivery instead of abandoning shipped work. A recorded revision names the ref that actually contained it, so a local delivery reads git:<branch> until origin has it. A pending candidate landed only on the frozen remote ref refuses integration_target_behind_landed_candidate until that local branch is synchronized, and a frozen integration ref that no longer resolves refuses integration_target_unavailable rather than answering from the local branch. An unlaunched prepared dispatch is recorded abandoned. A closed apply delivery still owes the commit of the tree it materialized, since its recorded head holds none of it: commit that tree unchanged on the recorded target and pass it as deliveryCommit to bind it as the delivered content supersession lineage reads. That completes the delivery record instead of closing the ticket again, re-runs the merged-tree verifier, and refuses a commit whose tree differs from the reviewed candidate on a submitted path.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -551,7 +587,11 @@ const tools = [
           res.worktreeSweep = { failures: [{ path: null, message: error && error.message || String(error) }] };
         }
       }
-      return mutationAck(slug, res, res.ok ? Object.assign({ completion: res.ticket.completion }, integrationBranchAck(res.integrationBranch)) : null);
+      return mutationAck(slug, res, res.ok ? Object.assign(
+        { completion: res.ticket.completion },
+        res.deliveryRecordCompleted ? { delivery: res.integration } : {},
+        integrationBranchAck(res.integrationBranch)
+      ) : null);
     }
   },
   {
