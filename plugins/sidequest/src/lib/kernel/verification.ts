@@ -53,6 +53,7 @@ export type CompletedVerificationCapture = Readonly<{
   status: VerificationStatus;
   candidate: Readonly<{ source: string; value: string }>;
   completedAt: string;
+  cleanWorktree?: boolean;
   worktree?: string;
   logPath?: string | null;
   exitCode?: number | null;
@@ -179,18 +180,23 @@ export function commandVerificationResult(requirement: VerificationRequirement, 
       diagnostic: Object.freeze({ code: 'executor_verify_mismatch', message, retryable: true }),
     });
   }
-  const completedCapture = captures.find((capture) => capture.ticket === ticket
+  const matchingCapture = (capture: CompletedVerificationCapture) => capture.ticket === ticket
     && capture.command === command
     && capture.status === 'passed'
     && capture.candidate.source === candidate.source
     && capture.candidate.value === candidate.value
-    && capture.dispatchNonce === dispatchNonce);
+    && capture.dispatchNonce === dispatchNonce;
+  const provesCandidate = (capture: CompletedVerificationCapture) => capture.candidate.source === 'working-tree' || capture.cleanWorktree === true;
+  const completedCapture = captures.find((capture) => matchingCapture(capture) && provesCandidate(capture));
   if (!completedCapture) {
-    const message = `No completed passed verification capture exists for ${ticket}, dispatch attempt ${dispatchNonce || '<none>'}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)}. Run ${JSON.stringify(command)} through the dispatched verify-capture wrapper again after finalizing that candidate, then resubmit.`;
+    const dirtyCapture = captures.find((capture) => matchingCapture(capture) && capture.cleanWorktree === false);
+    const message = dirtyCapture
+      ? `Verification capture ${dirtyCapture.id} for ${ticket}, dispatch attempt ${dispatchNonce || '<none>'}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)} ran over a dirty worktree. Commit or discard the changes, then run the pinned verifier again before resubmitting.`
+      : `No completed passed verification capture exists for ${ticket}, dispatch attempt ${dispatchNonce || '<none>'}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)}. Run ${JSON.stringify(command)} through the dispatched verify-capture wrapper again after finalizing that candidate, then resubmit.`;
     return Object.freeze({
-      result: Object.freeze({ kind: requirement.kind, status: 'failed_check' as const, evidence: message, command, failureIdentities: Object.freeze(['verification:capture-required']) }),
+      result: Object.freeze({ kind: requirement.kind, status: 'failed_check' as const, evidence: message, command, failureIdentities: Object.freeze([dirtyCapture ? 'verification:dirty-worktree-capture' : 'verification:capture-required']) }),
       expectedEvidence: null,
-      diagnostic: Object.freeze({ code: 'verification_capture_required', message, retryable: true }),
+      diagnostic: Object.freeze({ code: dirtyCapture ? 'verification_capture_dirty_worktree' : 'verification_capture_required', message, retryable: true }),
     });
   }
   return Object.freeze({

@@ -126,6 +126,10 @@ Sidequest keeps ticket activity visible in the board. Ask Claude to check active
 
 CI watch alerts exclude completed runs marked `skipped` or `neutral`. Neither conclusion proves that the required checks passed; release verification still needs successful checks on the exact commit.
 
+### Boards in sibling repositories
+
+If you run one session from a parent directory holding several independent repos, each registered as its own board, an executor working a sibling repo's ticket no longer has to name the board on the calls that carry its `worktree` (commit, submit, checkpoint, dispatch). Sidequest resolves the board from the executor's own binding: the ticket ref plus the worktree its dispatch reserved for it, or, for a shared-tree dispatch, the ref plus the claim owner. Calls without a `worktree` argument (comment, release, done, claim, plan, scope requests) still need `project` to reach the sibling board. Nothing else selects a board, so a caller without a claim stays on the session's own board and gets that board's usual refusal. Passing `project` explicitly still wins, and two boards that both fit the same binding are refused by name rather than picked for you.
+
 ## Read-only reports
 
 Use Sidequest for independent candidate reviews, repository audits, and shortcut debt scans. They use the existing read-only review route and only report findings.
@@ -177,6 +181,8 @@ These read-only reports work independently. If Sidequest is not installed in the
 **A wave left out submitted work.** Ask Claude to inspect the assembled wave and its declared participant set. Active or accepted pending candidates with overlapping scope belong in the wave. Review-rejected candidates stay visible for later supersession and do not block an accepted repair wave.
 
 **Overlapping candidates use different pinned checks.** Claude keeps the checks and candidate identities frozen, composes the exact accepted candidates in the registered target, runs every pinned check and the full composed gate, then records each verified delivery manually. This is a control-plane `groomClose` with the immutable candidate as `deliveryCommit` and `deliveryMethod: "manual"`, without `integration: true`, which is only for a matching delivered wave. Missing candidate content, a skipped review or check, and substituting current `HEAD` all refuse.
+
+**A repair was delivered with `apply`, and closing the rejected submission it replaces keeps refusing.** `apply` puts the delivered changes in your working tree instead of a commit, so the board has no committed tree to prove the replaced paths against. Commit that tree unchanged on the recorded target branch, then ask Claude to bind it: a `groomClose` on the already-closed repair with that commit as `deliveryCommit`. Sidequest re-runs the merged-tree check and refuses a commit that is unreachable from the target or whose tree differs from the reviewed candidate on any submitted path. A refusal, including a failing check, leaves the recorded delivery alone, so the same commit can be bound again once the cause is fixed. After that, superseding the rejected submission needs replacement evidence only for the paths the repair really changed. Do not claim untouched paths as replacements to get past the refusal.
 
 **A verdict on a bound review approved the candidate, but you meant to agree the reviewer was right to reject it.** A verdict's outcome always describes the candidate, not the reviewer's prose: `accepted` approves the candidate, `rejected` confirms it must not ship. A finalized `accepted` cannot be reversed by another verdict, and there is no recovery path for a mistaken accept. To reject a candidate a reviewer flagged, record the verdict as `rejected`.
 

@@ -77,15 +77,17 @@ test('catalog cache re-reads a rewritten catalog', () => {
   }]);
 });
 
-test('stale, invalid, and future catalog timestamps suppress both models and readiness', () => {
+test('fixture catalogs remain usable regardless of their recorded timestamp', () => {
   for (const updatedAt of [undefined, 'not-a-date', new Date(Date.now() - 5 * 60 * 1000 - 1).toISOString(), new Date(Date.now() + 60 * 1000).toISOString()]) {
     writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test' }], {
       schemaVersion: 3,
       updatedAt,
       codexReadiness: { ready: true, state: 'ready', message: 'Codex is ready.' },
     });
-    assert.deepEqual(discovery.discoverExternalModels(), []);
-    assert.equal(discovery.providerReadiness('codex'), null);
+    assert.deepEqual(discovery.discoverExternalModels(), [{
+      slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', provider: 'codex', source: 'model-gateway',
+    }]);
+    assert.equal(discovery.providerReadiness('codex')?.ready, true);
   }
 });
 
@@ -128,15 +130,18 @@ function seedGatewayHome(t: { after(fn: () => void): void }, stored: unknown, re
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-refresh-'));
   const previousHome = process.env.HOME;
   const previousUserProfile = process.env.USERPROFILE;
+  const previousClaudeHome = process.env.SIDEQUEST_CLAUDE_HOME;
   const previousDiscoveryDirs = process.env.SIDEQUEST_DISCOVERY_DIRS;
   t.after(() => {
     process.env.HOME = previousHome;
     process.env.USERPROFILE = previousUserProfile;
+    process.env.SIDEQUEST_CLAUDE_HOME = previousClaudeHome;
     process.env.SIDEQUEST_DISCOVERY_DIRS = previousDiscoveryDirs;
     fs.rmSync(home, { recursive: true, force: true });
   });
   process.env.HOME = home;
   process.env.USERPROFILE = home;
+  process.env.SIDEQUEST_CLAUDE_HOME = path.join(home, '.claude');
   delete process.env.SIDEQUEST_DISCOVERY_DIRS;
 
   const catalogPath = path.join(home, '.claude', 'model-gateway', 'catalog.json');
@@ -174,6 +179,25 @@ test('SQ-2208: models survive a catalog that aged out of the freshness window', 
     slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', provider: 'codex', source: 'model-gateway',
   }]);
   assert.equal(discovery.configuredExternalModelProvider('codex-gpt-test'), 'codex');
+});
+
+test('SQ-2937: discovery override adds fixture roots without hiding the gateway catalog', (t) => {
+  const agedOut = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+  seedGatewayHome(t, readyCatalog(agedOut), { '0.48.7': readyCatalog() });
+  process.env.SIDEQUEST_DISCOVERY_DIRS = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-custom-root-'));
+
+  assert.deepEqual(discovery.discoverExternalModels(), [{
+    slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', provider: 'codex', source: 'model-gateway',
+  }]);
+  assert.equal(discovery.providerReadiness('codex')?.ready, true);
+});
+
+test('SQ-2937: a stale installed gateway catalog with no refresh command is still suppressed', (t) => {
+  const agedOut = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+  seedGatewayHome(t, readyCatalog(agedOut), {});
+
+  assert.deepEqual(discovery.discoverExternalModels(), []);
+  assert.equal(discovery.providerReadiness('codex'), null);
 });
 
 test('discovery validates concrete catalog identity and drops routing hints', () => {

@@ -73,6 +73,56 @@ function resolveProject(projectArg?: any) {
   return store.ensureProject(store.sessionProjectRoot());
 }
 
+// A lifecycle call comes from the executor holding the claim, but the MCP server
+// carries the ORCHESTRATION session's checkout, so an executor on a sibling repo's
+// board silently wrote to the spawning board and certified the wrong repository
+// (GH-84). The caller's own binding is the only thing it can prove: the (ref,
+// worktree) pair its dispatch record reserved for it. Runtime session id is shared
+// by every fan-out sibling, so it can never select a board on its own (SQ-2935).
+function callerWorktreePath(args?: any): string | null {
+  const supplied = String(args?.worktree || '').trim();
+  try {
+    return worktrees.canonicalPath(commitScope.repoRoot(supplied || process.cwd()));
+  } catch (_) {
+    return null;
+  }
+}
+
+function boardBindsCaller(ticket: any, args: any, callerWorktree: () => string | null) {
+  const dispatch = ticket?.dispatch;
+  if (!dispatch) return false;
+  if (dispatch.sharedTree === false) {
+    const recorded = String(dispatch.worktree || '').trim();
+    if (!recorded) return false;
+    const caller = callerWorktree();
+    return Boolean(caller) && worktrees.canonicalPath(recorded) === caller;
+  }
+  // A shared-tree dispatch records no worktree of its own, so the claim owner named
+  // by "by" is what binds it to its board.
+  const by = String(args?.by || '').trim();
+  return Boolean(by) && ticket.claim?.by === by;
+}
+
+function resolveLifecycleProject(projectArg?: any, args?: any, action?: any) {
+  const explicit = projectArg == null ? '' : String(projectArg).trim();
+  if (explicit) return resolveProject(explicit);
+  const sessionProject = resolveProject();
+  const ref = String(args?.ref || '').trim();
+  if (!ref) return sessionProject;
+  const boards = store.listProjects({ all: true });
+  if (boards.length < 2) return sessionProject;
+
+  let derived: string | null | undefined;
+  const callerWorktree = () => (derived === undefined ? (derived = callerWorktreePath(args)) : derived);
+  const bound = boards.filter((board: any) => boardBindsCaller(store.getTicket(board.slug, ref), args, callerWorktree));
+  if (bound.length === 1) return resolveProject(bound[0].path || bound[0].slug);
+  if (bound.length > 1) {
+    throw new Error(`${action}: "${ref}" binds this caller to ${bound.length} registered boards (${bound.map((board: any) => board.path || board.slug).join(', ')}). Pass "project" explicitly.`);
+  }
+  // Nothing bound: stay on the spawning board so its own refusals are unchanged.
+  return sessionProject;
+}
+
 // The MCP server inherits its Claude Code session identity. Tool callers only
 // know labels, which cannot be used by the Agent lifecycle hooks.
 function runtimeSessionId() {
@@ -172,8 +222,8 @@ function pathList(paths?: any) {
   return all.length > NO_OP_PATHS_SHOWN ? `${shown} (+${all.length - NO_OP_PATHS_SHOWN} more)` : shown;
 }
 
-function provenNoOpCloseout(slug: any, ticket: any) {
-  const closeout = store.externalDeliverableCloseout(slug, ticket);
+function provenNoOpCloseout(slug: any, ticket: any, verify?: any) {
+  const closeout = store.externalDeliverableCloseout(slug, ticket, verify);
   if (closeout.ok) return closeout;
   return { ok: false as const, detail: closeout.message };
 }
@@ -222,7 +272,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   remove: '',
   claim: 'Claim before work; proceed only on ok:true.',
   dispatch: 'Tree. token and spawn spec; retireOnly.',
-  done: 'Finish; declared external needs current capture; commandless working-tree needs verify.',
+  done: 'Finish; external/working-tree: pinned command needs capture; commandless needs verify.',
   release: 'reason required; oracle handoff.',
   groomClose: 'Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; verifier replacement; reviewed interaction.',
   native_agent: 'Agent spawn.',
@@ -1037,6 +1087,7 @@ module.exports = {
   assertSidequestInstall,
   assertDispatchTransport,
   resolveProject,
+  resolveLifecycleProject,
   runtimeSessionId,
   sessionOf,
   controlPlaneIdentity,

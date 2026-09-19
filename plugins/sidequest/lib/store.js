@@ -19,8 +19,8 @@ const {
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } = require("./category-defaults.js");
 const commitScope = require("./commit-scope.js");
 const { commitPaths } = commitScope;
-const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree } = require("./worktrees.js");
-const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = require("./kernel/worktree.js");
+const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, retainedWorktreeResumeDecision } = require("./worktrees.js");
+const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, isCanonicalRegisteredWorktree } = require("./kernel/worktree.js");
 const { reviewLockMessage } = require("./kernel/review-binding.js");
 const { migrateIfNeeded } = require("./migrate.js");
 const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, providerReadiness } = require("./discovery.js");
@@ -620,6 +620,9 @@ const {
   rederiveUnlaunchedPreparedRoute,
   stampDispatchEvent,
   pulseDispatchState,
+  unclaimedRetirement,
+  unclaimedEvidenceAttempt,
+  unclaimedRetirementRefusal,
   isolatedDispatchWorktreeMissing,
   isolatedDispatchWithMissingWorktree,
   terminalDispatchTarget,
@@ -648,6 +651,7 @@ const {
   recoverDispatchQuotaFailure,
   bindDispatchWorktreeCreation,
   completeDispatchWorktreeCreation,
+  recordDispatchWorktreeProvisioned,
   recordDispatchWorktreeProvisioningFailure,
   recordDispatchWorktreeDependencyLink,
   recoverDispatchWorktreeCreation,
@@ -680,7 +684,7 @@ const {
   canonicalPath,
   checkoutInstanceIdentity,
   createWorktreeLease,
-  worktreeResumeDecision,
+  worktreeResumeDecision: retainedWorktreeResumeDecision,
   isCanonicalRegisteredWorktree,
   classifyDispatchFailure: (...args) => classifyDispatchFailure(...args),
   terminalAgentFailure: (...args) => terminalAgentFailure(...args),
@@ -696,6 +700,7 @@ const {
   localAheadOfUpstreamWarning,
   availableRoute: (...args) => availableRoute(...args),
   boardConfig,
+  claimGraceMs: () => claimGraceMs(),
   claimIdleMs: () => claimIdleMs(),
   claimReclaimable: (...args) => claimReclaimable(...args),
   claimVerification: (...args) => claimVerification(...args),
@@ -1050,11 +1055,13 @@ function completionTreeCheck(slug, ticket, opts) {
 }
 const {
   DEFAULT_CLAIM_ABANDON_MIN,
+  DEFAULT_CLAIM_GRACE_MIN,
   DEFAULT_CLAIM_IDLE_MIN,
   DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
   autoReleasedClaimMessage,
   claimAbandonMs,
   claimActivityMs,
+  claimGraceMs,
   claimIdleAge,
   claimIdleMs,
   claimMaySubmit,
@@ -1273,6 +1280,7 @@ const {
   submissionReadiness,
   submissionProjection,
   pendingSubmission,
+  applyDeliveryAwaitingContentCommit,
   submissionUsesGit,
   workingTreeVerification,
   verifyIntegration,
@@ -2228,7 +2236,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
       return {
         ok: false,
         reason: "submission_required",
-        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path unless the recorded last executor is read-only. If the ticket contract forbids commits, set workingTreeDelivery:true before dispatch and run it in the shared checkout; done then records its declared working-tree paths and matching pinned verify-capture. A clean declared scope may close as an external-deliverable completion only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set that flag through update during this claim; then run the pinned command through the dispatched verify-capture wrapper for the current dispatch attempt and revision, and repeat done. Dirty or committed declared paths still require commit and submit.`,
+        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path unless the recorded last executor is read-only. If the ticket contract forbids commits, set workingTreeDelivery:true before dispatch and run it in the shared checkout; done then records its declared working-tree paths and matching pinned verify-capture. A clean declared scope may close as an external-deliverable completion only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set that flag through update during this claim; then, if the pinned requirement has a command, run it through the dispatched verify-capture wrapper for the current dispatch attempt and revision; otherwise supply explicit done --verify evidence for the pinned requirement. Repeat done with that evidence. Dirty or committed declared paths still require commit and submit.`,
         ticket: t
       };
     }
@@ -2608,12 +2616,12 @@ function workingTreeDeliveryCloseout(slug, ticket, completionDelta) {
   if (!candidate.changedPaths.length) return { ok: false, reason: "working_tree_delivery_empty", message: `${ticket.ref} has no changed declared paths to record as a working-tree deliverable.` };
   return { ok: true, ...candidate };
 }
-function externalDeliverableCloseout(slug, ticket) {
+function externalDeliverableCloseout(slug, ticket, verify) {
   if (ticket?.externalDeliverable !== true) {
     return {
       ok: false,
       reason: "external_deliverable_not_declared",
-      message: `${ticket.ref} has routed repository write scope. A clean scope can close with done only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set externalDeliverable:true through update during this claim, then this executor can rerun the pinned verify-capture wrapper and done.`
+      message: `${ticket.ref} has routed repository write scope. A clean scope can close with done only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set externalDeliverable:true through update during this claim, then this executor can repeat done: a pinned command requires a current verify-capture; a commandless requirement needs explicit done --verify evidence.`
     };
   }
   const workspace = dispatchWorkspace(slug, ticket);
@@ -2641,9 +2649,9 @@ function externalDeliverableCloseout(slug, ticket) {
   }
   if (!revision) return { ok: false, reason: "external_deliverable_revision_unavailable", message: `${ticket.ref} cannot read the current revision for its external-deliverable verification capture.` };
   const candidate = { source: "git", value: revision };
-  const verification = workingTreeVerification(ticket, candidate);
+  const verification = workingTreeVerification(ticket, candidate, verify);
   if (!verification.ok) return verification;
-  const capture = Array.isArray(ticket.verificationCaptures) ? ticket.verificationCaptures.find((entry) => entry?.status === "passed" && entry?.candidate?.source === candidate.source && entry?.candidate?.value === candidate.value && entry?.command === verification.verification.command && entry?.dispatchNonce === ticket.dispatchNonce) : null;
+  const capture = Array.isArray(ticket.verificationCaptures) ? ticket.verificationCaptures.find((entry) => entry?.status === "passed" && entry?.cleanWorktree === true && entry?.candidate?.source === candidate.source && entry?.candidate?.value === candidate.value && entry?.command === verification.verification.command && entry?.dispatchNonce === ticket.dispatchNonce) : null;
   return { ok: true, worktree: workspace.root, candidate, verification: verification.verification, capture: capture || null };
 }
 function completeTicket(slug, idOrRef, by, opts) {
@@ -2810,11 +2818,17 @@ function pendingSubmissionDeliveryRefusal(ticket, result) {
   });
 }
 function unclaimedPreRuntimeDispatch(ticket, state) {
+  return unclaimedEvidenceAttempt(ticket, state);
+}
+function boundUnclaimedDispatch(ticket, state) {
   return Boolean(
-    ticket?.dispatchNonce && state && ["prepared", "launched"].includes(state.outcome) && !state.terminalAt && !state.boundAt && !state.claimedAt && !ticket.claim?.by
+    ticket?.dispatchNonce && state && ["prepared", "launched"].includes(state.outcome) && !state.terminalAt && state.boundAt && !state.claimedAt && !ticket.claim?.by && !ticket.checkpoint
   );
 }
 function unclaimedPreRuntimeDeliveryGuidance(ticket, state) {
+  if (boundUnclaimedDispatch(ticket, state)) {
+    return ` This attempt bound a runtime that never claimed. Once the claim grace has passed with no further board signal from that runtime, close it with \`groomClose ${ticket.ref} --recoveryEvidence "<the host notification that the runtime terminated>"\`, which retires the attempt in the same call, or retire it on its own with \`sidequest dispatch ${ticket.ref} --recovery-evidence "<that same evidence>" --retire-only\` (MCP \`recoveryEvidence\` with \`retireOnly: true\`). Inside the grace both refuse with the same countdown, naming the exact instant it becomes retirable and the signal it measured from.`;
+  }
   if (!unclaimedPreRuntimeDispatch(ticket, state)) return "";
   return ` This attempt is unclaimed and unbound. Once the delivery commit is reachable from the recorded integration branch, close it with \`groomClose ${ticket.ref} --deliveryCommit <sha> --deliveryMethod manual --recoveryEvidence "<why the attempt is dead>"\` (include by and reason). If the commit is not reachable from that branch, grooming still refuses until delivery reaches it. To retire without preparing a replacement first, dispatch with recoveryEvidence and retireOnly:true.`;
 }
@@ -2845,7 +2859,17 @@ function clearUnclaimedDispatch(slug, idOrRef, opts) {
         ok: false,
         reason: "active_dispatch",
         ticket,
-        message: `${ticket.ref} cannot apply recovery evidence because its dispatch is live, bound, claimed, or already terminal. Recovery evidence clears only an unclaimed prepared or launched dispatch before runtime binding.`
+        message: `${ticket.ref} cannot apply recovery evidence because its dispatch is claimed, checkpointed, or already terminal. Recovery evidence clears an unclaimed prepared or launched dispatch once it is past its retirement deadline.`
+      };
+    }
+    const nowMs = Date.now();
+    const retirement = unclaimedRetirement(ticket, state, nowMs);
+    if (nowMs < retirement.retirableAt) {
+      return {
+        ok: false,
+        reason: "unclaimed_launch_not_supersedable",
+        ticket,
+        message: unclaimedRetirementRefusal(ticket, state, nowMs)
       };
     }
     if (agentId && String(state.agentId || "") !== agentId) return { ok: false, reason: "dispatch_identity_mismatch", ticket };
@@ -2865,6 +2889,17 @@ function clearUnclaimedDispatch(slug, idOrRef, opts) {
     queueEventNotification(slug, ticket, ticket.lastEventType, ticket.lastEventSource);
     return { ok: true, ticket };
   });
+}
+function groomCloseRecovery(slug, idOrRef, opts) {
+  const evidence = String(opts?.evidence || "").trim();
+  const reason = String(opts?.reason || "");
+  if (!evidence) return { ok: true, reason };
+  const ticket = getTicket(slug, idOrRef);
+  const recovered = clearUnclaimedDispatch(slug, idOrRef, { by: opts?.by, evidence });
+  if (recovered.ok) return { ok: true, reason };
+  const terminalDispatch = Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
+  if (!terminalDispatch) return { ok: false, recovered };
+  return { ok: true, reason: `${reason} Recovery evidence recorded after the terminal dispatch: ${evidence}` };
 }
 function unconsumedPreparedDispatch(ticket, state) {
   return Boolean(
@@ -2962,7 +2997,8 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
     }
   }
   let reconciledDelivery = null;
-  if (purpose === "delivery" && pendingSubmission(ticket)) {
+  const completingApplyDelivery = purpose === "delivery" && applyDeliveryAwaitingContentCommit(ticket);
+  if (purpose === "delivery" && (pendingSubmission(ticket) || completingApplyDelivery)) {
     let target;
     try {
       target = ticketIntegrationTarget(slug, ticket);
@@ -2975,10 +3011,16 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
       deliveryInteractionCommit: opts.deliveryInteractionCommit,
       deliveryMethod: opts.deliveryMethod,
       verificationSupersession: opts.verificationSupersession,
+      completingApplyDelivery,
       by,
       reason
     });
-    if (!recordedSubmission.ok) return pendingSubmissionDeliveryRefusal(ticket, recordedSubmission);
+    if (!recordedSubmission.ok) {
+      return completingApplyDelivery ? Object.assign({ ticket }, recordedSubmission) : pendingSubmissionDeliveryRefusal(ticket, recordedSubmission);
+    }
+    if (completingApplyDelivery) {
+      return { ok: true, idempotent: true, deliveryRecordCompleted: true, ticket: recordedSubmission.ticket, integration: recordedSubmission.integration };
+    }
     const integration = recordedSubmission.integration;
     reconciledDelivery = {
       ok: true,
@@ -3207,8 +3249,8 @@ const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createP
   boardConfig,
   checkpointProjection,
   claimPulse,
-  claimIdleMs,
   claimReleaseVerdict,
+  unclaimedRetirement,
   claimVerification,
   commitScope,
   dispatchState,
@@ -3382,6 +3424,7 @@ module.exports = {
   recoverDispatchQuotaFailure,
   bindDispatchWorktreeCreation,
   completeDispatchWorktreeCreation,
+  recordDispatchWorktreeProvisioned,
   recordDispatchWorktreeProvisioningFailure,
   recordDispatchWorktreeDependencyLink,
   recoverDispatchWorktreeCreation,
@@ -3409,6 +3452,7 @@ module.exports = {
   missingReleaseFragmentMessage,
   unrecordedSanctionedCommitWarning,
   clearUnclaimedDispatch,
+  groomCloseRecovery,
   closeTicketForGrooming,
   makeWorkedBy,
   checkpointTicket,
@@ -3491,9 +3535,11 @@ module.exports = {
   technicalBlockerRelease,
   touchClaim,
   claimIdleMs,
+  claimGraceMs,
   claimAbandonMs,
   preparedDispatchTtlMs,
   DEFAULT_CLAIM_IDLE_MIN,
+  DEFAULT_CLAIM_GRACE_MIN,
   DEFAULT_CLAIM_ABANDON_MIN,
   DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
   sweepStaleClaims,

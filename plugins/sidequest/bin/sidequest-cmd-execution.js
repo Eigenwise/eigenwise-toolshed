@@ -179,7 +179,7 @@ async function cmdDone(opts, positional) {
     };
     res = store.completeTicket(slug, idOrRef, by, completionOptions);
     if (!res.ok && ["submission_required", "empty_declared_scope"].includes(res.reason)) {
-      const externalDeliverable = store.externalDeliverableCloseout(slug, res.ticket);
+      const externalDeliverable = store.externalDeliverableCloseout(slug, res.ticket, opts.verify);
       if (externalDeliverable.ok) {
         res = store.completeTicket(slug, idOrRef, by, Object.assign({}, completionOptions, {
           cleanDeclaredScope: true,
@@ -232,9 +232,19 @@ async function cmdGroomClose(opts, positional) {
   const by = workerId(opts);
   const ticket = store.getTicket(slug, idOrRef);
   const purpose = opts.integration ? "integration" : opts["delivery-commit"] ? "delivery" : "grooming";
+  const recovery = store.groomCloseRecovery(slug, idOrRef, { by, reason, evidence: opts["recovery-evidence"] });
+  if (!recovery.ok) {
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, recovery.recovered), null, 2) + "\n");
+      process.exitCode = 1;
+      return;
+    }
+    reportClaimFailure("groom-close", idOrRef, recovery.recovered, meta);
+    return;
+  }
   const res = store.completeTicketAsControlPlane(slug, idOrRef, {
     by,
-    reason,
+    reason: recovery.reason,
     purpose,
     abandonSubmission: opts["abandon-submission"] === true,
     deliveryCommit: opts["delivery-commit"],
@@ -268,7 +278,7 @@ async function cmdGroomClose(opts, positional) {
     return;
   }
   if (res.ok) {
-    console.log(`✓ ${res.ticket.ref} closed after ${purpose}  — ${meta.name}`);
+    console.log(res.deliveryRecordCompleted ? `✓ ${res.ticket.ref} bound delivered commit ${res.integration.deliveryCommit} to its recorded apply delivery — ${meta.name}` : `✓ ${res.ticket.ref} closed after ${purpose}  — ${meta.name}`);
     if (res.advisory) console.log(`  advisory: ${res.advisory}`);
     reportIntegrationBranch(res.integrationBranch);
   } else reportClaimFailure("groom-close", idOrRef, res, meta);

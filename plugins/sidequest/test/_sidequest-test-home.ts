@@ -18,6 +18,7 @@ Object.assign(process.env, {
   GIT_CONFIG_SYSTEM: process.platform === 'win32' ? 'NUL' : '/dev/null',
 });
 process.env.SIDEQUEST_HOME = sidequestTestHome;
+process.env.SIDEQUEST_CLAUDE_HOME = path.join(sidequestTestHome, 'claude');
 
 process.once('exit', () => {
   try {

@@ -548,10 +548,20 @@ async function runCapturedVerification(command: string, target: CaptureTarget | 
   const resolution = resolveCaptureCwd(target, cwd, explicitWorktree);
   if (resolution.refusal) return Object.freeze({ capture: null, recorded: null, refusal: resolution.refusal });
   const captureCwd = resolution.cwd;
+  // Cleanliness is observed before the run: a verifier may leave logs or coverage output behind,
+  // and what matters is the content it read.
+  const cleanWorktree = target ? verifiedWorktreeIsClean(captureCwd) : true;
+  if (target && !cleanWorktree && !isWorkingTreeDeliveryTarget(target)) {
+    return Object.freeze({
+      capture: null,
+      recorded: null,
+      refusal: `verify-capture: capture=unrecorded reason=verification_capture_dirty_worktree\nVerification capture for ${target!.ticket} ran with uncommitted changes in ${captureCwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`,
+    });
+  }
   const capture = target && isFullSuiteCommand(command)
     ? await runFullSuiteCapture(command, target.project, captureCwd, fileSystem)
     : await runVerifyCapture(command, captureCwd);
-  const recorded = target ? recordCapture(target, capture, captureCwd) : null;
+  const recorded = target ? recordCapture(target, capture, captureCwd, cleanWorktree) : null;
   return Object.freeze({ capture, recorded, refusal: null });
 }
 
@@ -569,8 +579,8 @@ function verifiedRevision(cwd: string) {
 }
 
 // SQ-2789: the recorded revision is the cwd's HEAD, which says nothing about what the run
-// actually read. A capture taken over uncommitted edits is indistinguishable from one taken at
-// the committed content, so a later reuse could certify content nothing ran.
+// actually read. Captures over uncommitted edits are refused before they can certify content
+// that no verifier ran.
 function verifiedWorktreeIsClean(cwd: string) {
   try {
     return String(execFileSync('git', ['status', '--porcelain'], {
@@ -588,7 +598,7 @@ function foreignCaptureRepository(projectPath: string, cwd: string): string | nu
   return repositoryRoot(cwd) === ticketRepository ? null : ticketRepository;
 }
 
-function recordCapture(target: CaptureTarget, capture: VerifyCapture, cwd: string) {
+function recordCapture(target: CaptureTarget, capture: VerifyCapture, cwd: string, cleanWorktree = verifiedWorktreeIsClean(cwd)) {
   const store = require('./store.js') as VerificationCaptureStore;
   const project = store.findProject(target.project);
   if (!project.ok || !project.slug) return { ok: false, reason: 'project_not_found' };
@@ -606,13 +616,22 @@ function recordCapture(target: CaptureTarget, capture: VerifyCapture, cwd: strin
   }
   const ticket = store.getTicket(project.slug, target.ticket);
   const workingTreeCandidate = store.workingTreeDeliveryCandidate(project.slug, ticket);
+  // A working-tree delivery is identified by the content hash of its uncommitted paths, so the
+  // tree being dirty is the candidate, not a hole in the proof.
+  if (!cleanWorktree && !workingTreeCandidate) {
+    return {
+      ok: false,
+      reason: 'verification_capture_dirty_worktree',
+      message: `Verification capture for ${target.ticket} ran with uncommitted changes in ${cwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`,
+    };
+  }
   const candidate = workingTreeCandidate?.candidate || verifiedRevision(cwd);
   if (!candidate) return { ok: false, reason: 'verified_revision_unavailable' };
   return store.recordVerificationCapture(project.slug, target.ticket, {
     command: capture.command || '',
     status: capture.status,
     candidate,
-    cleanWorktree: verifiedWorktreeIsClean(cwd),
+    cleanWorktree,
     completedAt: new Date().toISOString(),
     worktree: cwd,
     logPath: capture.logPath,
