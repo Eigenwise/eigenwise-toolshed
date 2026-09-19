@@ -272,7 +272,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   remove: '',
   claim: 'Claim before work; proceed only on ok:true.',
   dispatch: 'Tree. token and spawn spec; retireOnly.',
-  done: 'Finish; declared external needs current capture; commandless working-tree needs verify.',
+  done: 'Finish; external/working-tree: pinned command needs capture; commandless needs verify.',
   release: 'reason required; oracle handoff.',
   groomClose: 'Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; verifier replacement; reviewed interaction.',
   native_agent: 'Agent spawn.',

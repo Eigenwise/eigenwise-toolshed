@@ -429,7 +429,7 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.ok(resp.result.tools.find((tool: any) => tool.name === 'done').inputSchema.required.includes('body'), 'done requires the final report');
   const doneDescriptor = resp.result.tools.find((tool: any) => tool.name === 'done');
   assert.equal(doneDescriptor.inputSchema.properties.verify.maxLength, 4000, 'done accepts bounded typed verification evidence');
-  assert.match(doneDescriptor.description, /commandless working-tree needs verify/);
+  assert.match(doneDescriptor.description, /commandless needs verify/);
   const groomClose = resp.result.tools.find((tool: any) => tool.name === 'groomClose');
   assert.ok(groomClose.inputSchema.properties.deliveryCommit, 'groomClose records hand-delivered commits');
   assert.match(groomClose.description, /reset\/working-tree\/manual: pinned candidate/i);
@@ -1267,7 +1267,7 @@ test('tools/list preserves MCP contracts within the payload budget', async (cont
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /token and spawn spec/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /retireOnly/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').inputSchema.properties.recoveryEvidence.description, /expired bound/);
-  assert.match(tools.find((tool: any) => tool.name === 'done').description, /declared external needs current capture/);
+  assert.match(tools.find((tool: any) => tool.name === 'done').description, /pinned command needs capture; commandless needs verify/);
   assert.match(tools.find((tool: any) => tool.name === 'list').description, /changes\/pulse/);
   const list = tools.find((tool: any) => tool.name === 'list');
   assert.match(list.inputSchema.properties.detail.description, /Full comments/);
@@ -6092,6 +6092,9 @@ test('SQ-2391: done refuses an ordinary writable clean scope even after its pinn
   assert.equal(refused.reason, 'submission_required');
   assert.match(refused.message, /externalDeliverable:true/, 'the refusal names the ticket declaration');
   assert.match(refused.message, /orchestrator can set.*through update/i, 'the refusal names the mid-claim recovery');
+  assert.match(refused.message, /otherwise supply explicit done --verify evidence/);
+  const externalRefusal = store.externalDeliverableCloseout(fixture.project, store.getTicket(fixture.project, fixture.ref));
+  assert.match(externalRefusal.message, /commandless requirement needs explicit done --verify evidence/);
   assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
 
   const updated = await callToolAsSession('sq2391-different-main-session', 'update', {
