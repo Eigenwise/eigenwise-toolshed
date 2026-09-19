@@ -605,14 +605,15 @@ const PRE_CLAIM_RUNTIME_SIGNALS: ReadonlyArray<readonly [string, string]> = [
 // After a claim the claim liveness rules take over and this stops being consulted at all.
 function lastAttributedBoardWriteAt(ticket?: any, state?: any) {
   const sessionId = String(state?.sessionId || '').trim();
-  const agentName = String(state?.agentName || '').trim();
+  // Exact means byte-for-byte: a `by` that differs only by whitespace is somebody else (SQ-2964).
+  const agentName = typeof state?.agentName === 'string' ? state.agentName : '';
   const launchedAt = Date.parse(state?.launchedAt);
-  if (!sessionId || !agentName || !Number.isFinite(launchedAt)) return null;
+  if (!sessionId || !agentName.trim() || !Number.isFinite(launchedAt)) return null;
   if (state.claimedAt || ticket?.claim?.by) return null;
   let latest: number | null = null;
   for (const comment of Array.isArray(ticket?.comments) ? ticket.comments : []) {
     if (String(comment?.sourceSession || '').trim() !== sessionId) continue;
-    if (String(comment?.by || '').trim() !== agentName) continue;
+    if (comment?.by !== agentName) continue;
     const at = Date.parse(comment?.at);
     if (!Number.isFinite(at) || at < launchedAt) continue;
     if (latest === null || at > latest) latest = at;

@@ -495,14 +495,14 @@ function createDispatch(dependencies) {
   ];
   function lastAttributedBoardWriteAt(ticket, state) {
     const sessionId = String(state?.sessionId || "").trim();
-    const agentName = String(state?.agentName || "").trim();
+    const agentName = typeof state?.agentName === "string" ? state.agentName : "";
     const launchedAt = Date.parse(state?.launchedAt);
-    if (!sessionId || !agentName || !Number.isFinite(launchedAt)) return null;
+    if (!sessionId || !agentName.trim() || !Number.isFinite(launchedAt)) return null;
     if (state.claimedAt || ticket?.claim?.by) return null;
     let latest = null;
     for (const comment of Array.isArray(ticket?.comments) ? ticket.comments : []) {
       if (String(comment?.sourceSession || "").trim() !== sessionId) continue;
-      if (String(comment?.by || "").trim() !== agentName) continue;
+      if (comment?.by !== agentName) continue;
       const at = Date.parse(comment?.at);
       if (!Number.isFinite(at) || at < launchedAt) continue;
       if (latest === null || at > latest) latest = at;

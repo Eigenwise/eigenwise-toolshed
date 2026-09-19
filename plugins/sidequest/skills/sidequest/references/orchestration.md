@@ -254,7 +254,8 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   claimed closes through that same one call: past the deadline, `groomClose --deliveryCommit <sha> --recoveryEvidence
   "<evidence>"` retires the attempt and closes the ticket together, and inside the deadline it refuses with the countdown.
   A claimed executor that is provably
-  dead goes through claim release or `groomClose --recoveryEvidence`. The exception is a live claimed executor
+  dead goes through claim release first; `groomClose --recoveryEvidence` refuses a live claim as
+  `active_dispatch` on both the CLI and MCP surfaces and only retires an attempt that never claimed. The exception is a live claimed executor
   that resumed into its original linked checkout but lost only the board binding: it uses `dispatch` with
   `recoveryEvidence`, `claimHolder`, and `worktree`; the board verifies the stored executor and restores that
   same identity without releasing.

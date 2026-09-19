@@ -1731,6 +1731,7 @@ test('SQ-2961: only a board write under the bound runtime name on the launcher s
   const FOREIGN_SIBLING: Writer = (agentName, sessionId) => ({ by: `${agentName}-sibling`, sourceSession: sessionId });
   const ORCHESTRATOR: Writer = (_agentName, sessionId) => ({ by: 'orchestrator', sourceSession: sessionId });
   const OTHER_SESSION: Writer = (agentName, sessionId) => ({ by: agentName, sourceSession: `${sessionId}-someone-else` });
+  const TRAILING_SPACE: Writer = (agentName, sessionId) => ({ by: `${agentName} `, sourceSession: sessionId });
 
   // One `wroteAt` across all three fixtures, so every door's printed deadline is the same instant.
   function writingFixture(label: string, wroteAt: string, identity: Writer) {
@@ -1805,6 +1806,7 @@ test('SQ-2961: only a board write under the bound runtime name on the launcher s
     ['board-write-foreign-sibling', FOREIGN_SIBLING],
     ['board-write-orchestrator', ORCHESTRATOR],
     ['board-write-other-session', OTHER_SESSION],
+    ['board-write-trailing-space', TRAILING_SPACE],
   ];
   for (const [label, identity] of notTheRuntime) {
     const foreign = doorVerdicts(label, 60000, identity);
