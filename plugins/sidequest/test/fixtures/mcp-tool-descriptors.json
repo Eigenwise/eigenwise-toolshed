@@ -809,7 +809,7 @@
   },
   {
     "name": "done",
-    "description": "Finish; declared external needs current capture; commandless working-tree needs verify.",
+    "description": "Finish; external/working-tree: pinned command needs capture; commandless needs verify.",
     "inputSchema": {
       "type": "object",
       "properties": {

@@ -436,7 +436,7 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.ok(resp.result.tools.find((tool: any) => tool.name === 'done').inputSchema.required.includes('body'), 'done requires the final report');
   const doneDescriptor = resp.result.tools.find((tool: any) => tool.name === 'done');
   assert.equal(doneDescriptor.inputSchema.properties.verify.maxLength, 4000, 'done accepts bounded typed verification evidence');
-  assert.match(doneDescriptor.description, /commandless working-tree needs verify/);
+  assert.match(doneDescriptor.description, /commandless needs verify/);
   const groomClose = resp.result.tools.find((tool: any) => tool.name === 'groomClose');
   assert.ok(groomClose.inputSchema.properties.deliveryCommit, 'groomClose records hand-delivered commits');
   assert.match(groomClose.description, /reset\/working-tree\/manual: pinned candidate/i);
@@ -1274,7 +1274,7 @@ test('tools/list preserves MCP contracts within the payload budget', async (cont
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /token and spawn spec/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /retireOnly/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').inputSchema.properties.recoveryEvidence.description, /latest signal grace/);
-  assert.match(tools.find((tool: any) => tool.name === 'done').description, /declared external needs current capture/);
+  assert.match(tools.find((tool: any) => tool.name === 'done').description, /pinned command needs capture; commandless needs verify/);
   assert.match(tools.find((tool: any) => tool.name === 'list').description, /changes\/pulse/);
   const list = tools.find((tool: any) => tool.name === 'list');
   assert.match(list.inputSchema.properties.detail.description, /Full comments/);
@@ -6308,6 +6308,9 @@ test('SQ-2391: done refuses an ordinary writable clean scope even after its pinn
   assert.equal(refused.reason, 'submission_required');
   assert.match(refused.message, /externalDeliverable:true/, 'the refusal names the ticket declaration');
   assert.match(refused.message, /orchestrator can set.*through update/i, 'the refusal names the mid-claim recovery');
+  assert.match(refused.message, /otherwise supply explicit done --verify evidence/);
+  const externalRefusal = store.externalDeliverableCloseout(fixture.project, store.getTicket(fixture.project, fixture.ref));
+  assert.match(externalRefusal.message, /commandless requirement needs explicit done --verify evidence/);
   assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
 
   const updated = await callToolAsSession('sq2391-different-main-session', 'update', {
@@ -6337,6 +6340,136 @@ test('SQ-2391: done refuses an ordinary writable clean scope even after its pinn
   assert.equal(done.completion.externalDeliverable.candidate.value, capture.candidate.value);
   assert.equal(done.completion.externalDeliverable.capture.id, capture.id);
   assert.equal(done.completion.externalDeliverable.verification.command, verifyCommand);
+});
+
+// SQ-2968. A no-source-command ticket (e.g. research with a manual verifier)
+// never had a command to capture, so externalDeliverableCloseout must accept
+// the executor's typed --verify evidence instead — it just dropped it on the
+// floor and always refused "required manual verification evidence is missing".
+test('SQ-2968: done passes manual verify evidence through external-deliverable closeout for a no-source ticket', async () => {
+  const fixture = isolatedDispatch('sq-2968-manual-', 'a2968manual', ['research-notes.md'], undefined, {
+    executorVerifyKind: 'manual',
+    executorVerify: 'manual: record where the research findings were written up and who confirmed them',
+    externalDeliverable: true,
+  });
+
+  const missingEvidence = await callTool('done', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    model: 'opus',
+    effort: 'high',
+    body: 'The research is complete and the repository scope is clean; no source to submit.',
+  });
+  assert.equal(missingEvidence.ok, false);
+  assert.match(missingEvidence.message, /required manual verification evidence is missing/);
+  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
+
+  const closed = await callTool('done', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    model: 'opus',
+    effort: 'high',
+    body: 'The research is complete and the repository scope is clean; no source to submit.',
+    verify: 'manual: findings recorded in the shared research doc, confirmed by a teammate',
+  });
+  assert.equal(closed.ok, true, 'done was refused: ' + closed.message);
+  const done = store.getTicket(fixture.project, fixture.ref);
+  assert.equal(done.status, 'done');
+  assert.equal(done.completion.purpose, 'external-deliverable');
+  assert.equal(done.completion.externalDeliverable.declared, true);
+  assert.equal(done.completion.externalDeliverable.verification.kind, 'manual');
+  assert.equal(done.completion.externalDeliverable.verification.evidence, 'manual: findings recorded in the shared research doc, confirmed by a teammate');
+});
+
+test('SQ-2968: manual-verifier external-deliverable closeout still refuses a dirty declared scope, verify evidence or not', async () => {
+  const fixture = isolatedDispatch('sq-2968-dirty-', 'a2968dirty', ['research-notes.md'], undefined, {
+    executorVerifyKind: 'manual',
+    executorVerify: 'manual: record where the research findings were written up',
+    externalDeliverable: true,
+  });
+  fs.writeFileSync(path.join(fixture.worktree, 'research-notes.md'), 'uncommitted notes\n');
+
+  const refused = await callTool('done', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    model: 'opus',
+    effort: 'high',
+    body: 'The research is complete.',
+    verify: 'manual: findings recorded in the shared research doc',
+  });
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /external_deliverable_scope_dirty|has declared repository changes/);
+  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
+});
+
+test('SQ-2968: a pinned command verifier still refuses a missing capture; verify text cannot replace it', async () => {
+  const verifyCommand = 'node -p "process.cwd()"';
+  const fixture = isolatedDispatch('sq-2968-command-', 'a2968command', ['src/engine.js'], verifyCommand, { externalDeliverable: true });
+
+  const refused = await callTool('done', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    model: 'opus',
+    effort: 'high',
+    body: 'The declared external deliverable is complete and the repository scope is clean.',
+    verify: 'manual: I ran it locally and it passed',
+  });
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /No completed passed verification capture exists/);
+  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
+});
+
+test('SQ-2968: a review-pinned ticket stays unsupported for external-deliverable closeout even with verify evidence', async () => {
+  const fixture = isolatedDispatch('sq-2968-review-', 'a2968review', ['research-notes.md'], undefined, {
+    executorVerifyKind: 'review',
+    executorVerify: 'independent review is required before this research closes',
+    externalDeliverable: true,
+  });
+
+  const refused = await callTool('done', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    model: 'opus',
+    effort: 'high',
+    body: 'The research is complete.',
+    verify: 'manual: I reviewed my own work',
+  });
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /cannot accept review verification/);
+  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
+});
+
+test('SQ-2968: the CLI done path accepts the same manual verify evidence as MCP', () => {
+  const fixture = isolatedDispatch('sq-2968-cli-', 'a2968cli', ['research-notes.md'], undefined, {
+    executorVerifyKind: 'manual',
+    executorVerify: 'manual: record where the research findings were written up',
+    externalDeliverable: true,
+  });
+  const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
+  const env = { ...process.env, SIDEQUEST_HOME };
+
+  const missingEvidence = spawnSync(process.execPath, [
+    cli, 'done', fixture.ref, '--project', fixture.project, '--by', fixture.by,
+    '--body', 'The research is complete; no source to submit.', '--json',
+  ], { encoding: 'utf8', windowsHide: true, env });
+  assert.equal(missingEvidence.status, 1);
+  assert.match(JSON.parse(missingEvidence.stdout).message, /required manual verification evidence is missing/);
+  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
+
+  const closed = spawnSync(process.execPath, [
+    cli, 'done', fixture.ref, '--project', fixture.project, '--by', fixture.by,
+    '--body', 'The research is complete; no source to submit.',
+    '--verify', 'manual: findings recorded in the shared research doc, confirmed by a teammate', '--json',
+  ], { encoding: 'utf8', windowsHide: true, env });
+  assert.equal(closed.status, 0, closed.stderr);
+  const closedTicket = JSON.parse(closed.stdout).ticket;
+  assert.equal(closedTicket.status, 'done');
+  assert.equal(closedTicket.completion.externalDeliverable.verification.kind, 'manual');
 });
 
 test('SQ-2397: MCP handler grant is explicit while CLI source, by, and session stay non-authoritative', async () => {
