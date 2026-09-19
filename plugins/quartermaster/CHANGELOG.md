@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.2 (2026-09-19)
+
+Released in v3.572.0, up from 0.11.1.
+
+### Fixes
+
+- Fix resupply eval schema (SQ-2995)
+  Make Quartermaster's resupply host-capability evals compatible with skill-creator.
+
 ## 0.11.1 (2026-09-15)
 
 Released in v3.570.0, up from 0.11.0.
