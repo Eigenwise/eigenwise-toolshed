@@ -79,3 +79,35 @@ test('proposes and documents the CRAP gate', () => {
   assert.match(resupply, /`rule:crap-gate`/);
   assert.match(routing, /routes to the CRAP gate reference/);
 });
+
+test('guides host-capability recommendations without assuming a universal catalog', () => {
+  const setup = readSkill('setup');
+  const resupply = readSkill('resupply');
+  const routing = fs.readFileSync(path.join(__dirname, '..', 'skills', 'resupply', 'references', 'routing.md'), 'utf8');
+  const selfImprovement = fs.readFileSync(path.join(__dirname, '..', 'skills', 'setup', 'references', 'self-improvement.md'), 'utf8');
+
+  assert.match(setup, /host-capabilities\.md/);
+  assert.match(resupply, /actual host from\s+direct evidence/);
+  assert.match(routing, /Host extension or package/);
+  assert.match(selfImprovement, /actual host from direct evidence/);
+
+  const hostCapabilities = fs.readFileSync(path.join(__dirname, '..', 'skills', 'setup', 'references', 'host-capabilities.md'), 'utf8');
+  const evaluations = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'skills', 'resupply', 'evals', 'evals.json'), 'utf8'));
+
+  assert.match(hostCapabilities, /Native capability/);
+  assert.match(hostCapabilities, /Installed extension/);
+  assert.match(hostCapabilities, /Live usability/);
+  assert.match(hostCapabilities, /Do not infer Claude Code/);
+  assert.match(hostCapabilities, /Subagent Example/);
+  assert.equal(evaluations.skill_name, 'resupply');
+  assert.deepEqual(
+    evaluations.evals.map((evaluation) => evaluation.id),
+    [1, 2, 3, 4],
+  );
+  for (const evaluation of evaluations.evals) {
+    assert.equal(typeof evaluation.prompt, 'string');
+    assert.equal(typeof evaluation.expected_output, 'string');
+    assert.ok(Array.isArray(evaluation.files));
+    assert.equal(Object.hasOwn(evaluation, 'expected_behavior'), false);
+  }
+});
