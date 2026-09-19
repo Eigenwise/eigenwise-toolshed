@@ -138,6 +138,51 @@ export function candidateReviewRequiredGuidance(): string {
     + ' Do not assert an identity, hand-edit the attempt, or route around this with a manual delivery: the manual and groomClose routes enforce the same check.';
 }
 
+// apply delivery materializes the candidate into the integration working tree on
+// purpose, so the head it records holds none of the delivered bytes. Everything that
+// reads delivered content from that record — per-path supersession lineage above all
+// — would be answering from the pre-delivery tree, so the record stays incomplete
+// until the exact materialized tree is committed on the recorded target and bound
+// through the same verified delivery authority (SQ-2978).
+export function applyDeliveryContentCommitGuidance(ref: string): string {
+  return `${ref} was delivered with mode apply, which leaves the materialized tree uncommitted, so its recorded head contains none of the delivered content.`
+    + ` Commit that exact tree on its recorded integration branch without changing it, then bind it with \`groomClose ${ref}\` passing deliveryCommit (CLI \`--delivery-commit\`) and the same delivery evidence.`
+    + ' That re-runs the merged-tree verifier, checks the committed tree still matches the reviewed candidate on every submitted path, and records it as the delivered content that supersession lineage reads.'
+    + ' A refused binding, a failing verifier included, leaves the recorded delivery exactly as delivered, so bind the same commit again once the cause is fixed.'
+    + ' Do not claim unchanged paths as reviewedReplacements, hand-edit the recorded delivery, or offer an unrelated later head as proof: a commit whose tree differs from the candidate on any submitted path is refused.';
+}
+
+// Why one overlapping submission was not admitted as inherited rejected ancestry.
+// A repair whose history descends from an oracle-rejected candidate keeps the FULL
+// range: review, replay/apply/merge delivery, and per-path supersession lineage all
+// read the submitted commits and changed paths, so moving the base past the
+// inherited commits would silently drop the bytes those authorities exist to see.
+// Only the duplicate classification is narrowed, and only on proof the board wrote
+// itself, so each refusal names the missing half instead of hinting at a base
+// override that would shorten the range (SQ-2972).
+const INHERITED_REJECTED_REFUSALS: Readonly<Record<string, string>> = Object.freeze({
+  not_related: 'that ticket is not linked `related` to this one, so nothing declares this range a repair of it. An unrelated submitted range is never inherited: `sidequest link <this-ref> related <source-ref>` only when this work really repairs that candidate.',
+  source_unavailable: 'that ticket or its submission could not be read, so no inherited boundary can be proven.',
+  source_active: 'that ticket still holds a live claim, so its candidate is active work rather than a rejected one.',
+  submission_integrated: 'its submission is already integrated or superseded, so there is nothing parked to inherit.',
+  candidate_unavailable: 'its submission records no immutable candidate identity.',
+  review_unbound: 'its candidate is not bound to a review-audit ticket. Only a bound review can reject a candidate.',
+  review_conflict: 'more than one review ticket addresses that candidate, so the binding is ambiguous and fails closed.',
+  mirror_only: 'only the source-side review mirror exists, with no review ticket bound to that candidate. A mirror lives in the submitting ticket\'s own row and proves nothing on its own.',
+  not_rejected: 'its bound review has not recorded an oracle rejection for that candidate. Record the review evidence, release the review with `kind=oracle`, and let the oracle verdict reject it.',
+  stale_candidate: 'its bound review is pinned to a different candidate than the one that submission now records, so the rejection does not cover the inherited commits.',
+  mirror_mismatch: 'its review mirror and bound review disagree about the rejected candidate.',
+  partial_inheritance: 'this range carries only part of that rejected range. Inherit the whole rejected candidate or none of it; do not reconstruct a subset.',
+});
+
+export function inheritedRejectedDuplicateGuidance(reason?: string): string {
+  const detail = INHERITED_REJECTED_REFUSALS[String(reason || '')];
+  const preamble = 'An inherited range is admitted only when the overlapping ticket is linked `related` to this one and its exact candidate carries an oracle-confirmed review rejection; here ';
+  return detail
+    ? `${preamble}${detail} Keep the full range and the recorded dispatch base: never pass an explicit base or squash to hide the inherited commits, because delivery and supersession read them.`
+    : 'Preserve this candidate and resolve the overlap on the board. A range may inherit another ticket\'s commits only when that ticket is linked `related` to this one and its exact candidate carries an oracle-confirmed review rejection. Keep the full range and the recorded dispatch base: never pass an explicit base or squash to hide the inherited commits, because delivery and supersession read them.';
+}
+
 export function negativeControlRecoveryGuidance(): string {
   return 'Revert the non-test changes, run the changed tests, and keep them importable. Say which one happened: failure-kind=assertion when the changed tests failed their assertions, failure-kind=import or failure-kind=collection when the revert stopped them loading, because only an assertion failure proves they catch wrong behavior. Post [sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=<assertion|import|collection> with n greater than zero. The target and assertion must be the changed behavior this ticket is about. Then restore the change and run the declared verify. You may add context after failed=<n>. For every added or modified named test, add [sidequest:negative-control-test] failed <test name>. If a named test does not cover the reverted change, add [sidequest:negative-control-test] unaffected <test name> because <reason> instead. If the control cannot run, post a line beginning [sidequest:negative-control] waived <reason of at least 20 characters>.';
 }
