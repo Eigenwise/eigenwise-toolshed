@@ -235,6 +235,24 @@ is recorded against the already-done ticket; it must not be described as remotel
   be dropped before the ticket can restart. Record the delivery refusal. A review-bound candidate
   rejects both routes; retain its oracle, then repair through a fresh ticket and supersede it only
   after the reviewed repair integrates.
+- **File the fresh repair ticket linked `related` to the rejected source before dispatching it.**
+  The repair's commits build on the rejected candidate, so its submitted range naturally contains
+  those inherited commits. `submit` only treats the rejected candidate's pinned commit as an
+  approved boundary — and excludes it from the range automatically — when all three hold: the
+  repair ticket carries a `related` link to the source, the source's submission records
+  `review.outcome: 'rejected'`, and the repair's candidate is a real git descendant of that rejected
+  commit. When they hold, a plain `submit` with no `--base` selects the rejected boundary on its
+  own, and forcing a different base instead gets a `duplicate_submission` or `unrecognized_base`
+  refusal that names the rejected candidate and its commit as the fix. Missing the link, the
+  recorded rejection, or real ancestry leaves no legal base at all: the inherited commits still trip
+  `duplicate_submission` against the dispatch base and every other base still trips
+  `unrecognized_base`, but with no boundary to name. File the `related` link before dispatching the
+  repair, not after it deadlocks. This boundary never extends to an active (not-yet-rejected) or
+  unrelated candidate — those keep tripping `duplicate_submission` / `unrecognized_base` exactly as
+  before, with no boundary offered. Once submit succeeds, the repair takes a normal candidate-bound
+  review and reviewed delivery, and `supersede_submission` records the rejected source as
+  superseded with its per-path `reviewedReplacements` intact — the rejected candidate and its ref
+  stay untouched throughout.
 
 ## Dead executor salvage
 
