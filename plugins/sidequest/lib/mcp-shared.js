@@ -167,8 +167,8 @@ function pathList(paths) {
   const shown = all.slice(0, NO_OP_PATHS_SHOWN).join(", ");
   return all.length > NO_OP_PATHS_SHOWN ? `${shown} (+${all.length - NO_OP_PATHS_SHOWN} more)` : shown;
 }
-function provenNoOpCloseout(slug, ticket) {
-  const closeout = store.externalDeliverableCloseout(slug, ticket);
+function provenNoOpCloseout(slug, ticket, verify) {
+  const closeout = store.externalDeliverableCloseout(slug, ticket, verify);
   if (closeout.ok) return closeout;
   return { ok: false, detail: closeout.message };
 }

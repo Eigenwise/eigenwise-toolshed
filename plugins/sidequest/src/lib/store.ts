@@ -2830,7 +2830,7 @@ function workingTreeDeliveryCloseout(slug?: any, ticket?: any, completionDelta?:
   return { ok: true, ...candidate };
 }
 
-function externalDeliverableCloseout(slug?: any, ticket?: any) {
+function externalDeliverableCloseout(slug?: any, ticket?: any, verify?: any) {
   if (ticket?.externalDeliverable !== true) {
     return {
       ok: false,
@@ -2863,7 +2863,7 @@ function externalDeliverableCloseout(slug?: any, ticket?: any) {
   }
   if (!revision) return { ok: false, reason: 'external_deliverable_revision_unavailable', message: `${ticket.ref} cannot read the current revision for its external-deliverable verification capture.` };
   const candidate = { source: 'git', value: revision };
-  const verification = workingTreeVerification(ticket, candidate);
+  const verification = workingTreeVerification(ticket, candidate, verify);
   if (!verification.ok) return verification;
   const capture = Array.isArray(ticket.verificationCaptures)
     ? ticket.verificationCaptures.find((entry: any) => entry?.status === 'passed'

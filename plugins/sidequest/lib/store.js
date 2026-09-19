@@ -2608,7 +2608,7 @@ function workingTreeDeliveryCloseout(slug, ticket, completionDelta) {
   if (!candidate.changedPaths.length) return { ok: false, reason: "working_tree_delivery_empty", message: `${ticket.ref} has no changed declared paths to record as a working-tree deliverable.` };
   return { ok: true, ...candidate };
 }
-function externalDeliverableCloseout(slug, ticket) {
+function externalDeliverableCloseout(slug, ticket, verify) {
   if (ticket?.externalDeliverable !== true) {
     return {
       ok: false,
@@ -2641,7 +2641,7 @@ function externalDeliverableCloseout(slug, ticket) {
   }
   if (!revision) return { ok: false, reason: "external_deliverable_revision_unavailable", message: `${ticket.ref} cannot read the current revision for its external-deliverable verification capture.` };
   const candidate = { source: "git", value: revision };
-  const verification = workingTreeVerification(ticket, candidate);
+  const verification = workingTreeVerification(ticket, candidate, verify);
   if (!verification.ok) return verification;
   const capture = Array.isArray(ticket.verificationCaptures) ? ticket.verificationCaptures.find((entry) => entry?.status === "passed" && entry?.cleanWorktree === true && entry?.candidate?.source === candidate.source && entry?.candidate?.value === candidate.value && entry?.command === verification.verification.command && entry?.dispatchNonce === ticket.dispatchNonce) : null;
   return { ok: true, worktree: workspace.root, candidate, verification: verification.verification, capture: capture || null };
