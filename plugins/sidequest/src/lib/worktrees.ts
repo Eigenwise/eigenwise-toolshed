@@ -58,18 +58,31 @@ function atRiskStatusEntries(stdout: string, worktree: string, recordedLinks: re
 
 // Worktree setup runs `npm ci`, so every real worktree carries an ignored node_modules that setup
 // regenerates; counting it as data would park every finished worktree for the retention period.
-// Only plain files reached through plain directories are dropped: a link or a nested repository
-// under node_modules is content the sweep did not put there (SQ-2952 CRITICAL 1), so it still
-// travels into quarantine. git status follows a junction and lists the files behind it, which is
-// why every ancestor is checked and not just the leaf.
+// Only plain files are dropped, reached through path components that stay inside the worktree: a
+// link out of the tree or a nested repository under node_modules is content the sweep did not put
+// there (SQ-2952 CRITICAL 1), so it still travels into quarantine. A link resolving inside the tree
+// is a plain component instead, because it can reach nothing the tree does not already own, and
+// `npm ci` writes one per `node_modules/.bin` entry (SQ-22). git status follows a junction and lists
+// the files behind it, which is why every ancestor is resolved and not just the leaf.
 function installedDependencyCacheFile(worktree: string, entry: WorktreeStatusEntry): boolean {
   if (entry.code !== '!!' || !dependencyCachePath(entry.path) || entry.path.endsWith('/')) return false;
   const segments = entry.path.split(/[\\/]+/).filter(Boolean);
+  const canonicalWorktree = canonicalPath(worktree);
+  let current = worktree;
   try {
-    for (let depth = 1; depth <= segments.length; depth += 1) {
-      const stats = nativeFs.lstatSync(path.join(worktree, ...segments.slice(0, depth)));
-      if (stats.isSymbolicLink()) return false;
-      if (depth === segments.length) return stats.isFile();
+    for (let depth = 0; depth < segments.length; depth += 1) {
+      current = path.join(current, segments[depth]!);
+      let stats = nativeFs.lstatSync(current);
+      if (stats.isSymbolicLink()) {
+        const resolved = linkTargetPath(current, nativeFs.readlinkSync(current));
+        if (!pathIsInside(canonicalWorktree, resolved)) return false;
+        current = resolved;
+        stats = nativeFs.lstatSync(current);
+        // linkTargetPath resolves the whole chain, so a link left here is one the platform could
+        // not resolve at all, such as a cycle.
+        if (stats.isSymbolicLink()) return false;
+      }
+      if (depth === segments.length - 1) return stats.isFile();
     }
   } catch (_) {
     return false;

@@ -121,6 +121,25 @@ function createInTreeDependencyLink(worktree: string, relativePath: string, targ
   return link;
 }
 
+// `npm ci` writes every node_modules/.bin entry as a relative link to the installed file, and git
+// lists each one as ignored content. Windows has no file link a fixture can always create, and git
+// there lists the files behind a junction, so the same in-tree shape is spelled as a junction over
+// the .bin directory whose leaves are those installed files (SQ-22).
+function createInstalledBinaryLinks(worktree: string, names: readonly string[]): void {
+  const installed = path.join(worktree, 'node_modules', 'tsx', 'dist');
+  fs.mkdirSync(installed, { recursive: true });
+  for (const name of names) fs.writeFileSync(path.join(installed, name), '#!/usr/bin/env node\n');
+  const binDirectory = path.join(worktree, 'node_modules', '.bin');
+  if (process.platform === 'win32') {
+    fs.symlinkSync(installed, binDirectory, 'junction');
+    return;
+  }
+  fs.mkdirSync(binDirectory, { recursive: true });
+  for (const name of names) {
+    fs.symlinkSync(path.join('..', 'tsx', 'dist', name), path.join(binDirectory, name), 'file');
+  }
+}
+
 function matchingWorktreeLease(worktree: string, ticket: any) {
   const dispatch = ticket.dispatch;
   return {
@@ -889,6 +908,56 @@ test('sweep quarantines a clean tree holding an installed node_modules next to o
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
     fs.rmSync(repository, { recursive: true, force: true });
     fs.rmSync(quarantineDir, { recursive: true, force: true });
+  }
+});
+
+// SQ-22: the exemption refused any ignored path whose leaf or ancestor was a link, so the three
+// `node_modules/.bin` links `npm ci` leaves behind read as data and every finished worktree parked
+// for the 14-day retention instead of being reclaimed.
+test('sweep removes a finished tree whose only ignored links resolve inside it', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'in-tree-bin-links');
+  const ticket = integratedTicket('SQ-IN-TREE-BIN-LINKS', 'in-tree-bin-links', worktree, baseCommit);
+  createInstalledBinaryLinks(worktree, ['tsx', 'tsc', 'vitest']);
+  try {
+    assert.match(
+      git(worktree, ['status', '--porcelain', '--ignored', '--untracked-files=all']),
+      /^!! node_modules\/\.bin\/tsx$/m,
+      'git reports the install link as ignored content',
+    );
+
+    const result = await worktrees.sweep(repository, [ticket], { execute: false, minAgeMs: 0, notIntegratedSalvageAgeMs: 0, integrationTarget });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.clean, true);
+    assert.equal(entry.reason, 'ticket_done');
+    assert.equal(entry.action, 'remove');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+// The hazard the exemption guards: a link under node_modules pointing at a shared store the tree
+// never owned is data, and removal following it would delete what nothing else holds (SQ-2952).
+test('sweep quarantines a finished tree whose ignored link under node_modules leaves it', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'escaping-bin-link');
+  const ticket = integratedTicket('SQ-ESCAPING-BIN-LINK', 'escaping-bin-link', worktree, baseCommit);
+  createInstalledBinaryLinks(worktree, ['tsx']);
+  const target = dependencyTarget(repository, 'escaping-store');
+  createDependencyLink(worktree, 'node_modules/.pnpm-store', target);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: false, minAgeMs: 0, notIntegratedSalvageAgeMs: 0, integrationTarget });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.clean, false);
+    assert.equal(entry.reason, 'untracked_quarantined');
+    assert.equal(entry.action, 'quarantine');
+    assert.equal(fs.readFileSync(path.join(target, 'sentinel.txt'), 'utf8'), 'escaping-store');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
   }
 });
 

@@ -37,11 +37,20 @@ function atRiskStatusEntries(stdout, worktree, recordedLinks) {
 function installedDependencyCacheFile(worktree, entry) {
   if (entry.code !== "!!" || !dependencyCachePath(entry.path) || entry.path.endsWith("/")) return false;
   const segments = entry.path.split(/[\\/]+/).filter(Boolean);
+  const canonicalWorktree = canonicalPath(worktree);
+  let current = worktree;
   try {
-    for (let depth = 1; depth <= segments.length; depth += 1) {
-      const stats = nativeFs.lstatSync(path.join(worktree, ...segments.slice(0, depth)));
-      if (stats.isSymbolicLink()) return false;
-      if (depth === segments.length) return stats.isFile();
+    for (let depth = 0; depth < segments.length; depth += 1) {
+      current = path.join(current, segments[depth]);
+      let stats = nativeFs.lstatSync(current);
+      if (stats.isSymbolicLink()) {
+        const resolved = linkTargetPath(current, nativeFs.readlinkSync(current));
+        if (!pathIsInside(canonicalWorktree, resolved)) return false;
+        current = resolved;
+        stats = nativeFs.lstatSync(current);
+        if (stats.isSymbolicLink()) return false;
+      }
+      if (depth === segments.length - 1) return stats.isFile();
     }
   } catch (_) {
     return false;
