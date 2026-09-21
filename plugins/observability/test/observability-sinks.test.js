@@ -634,7 +634,7 @@ test('validates explicit generic OTLP egress and credentials', () => {
   }), /project API key/);
 });
 
-test('persists sink config in a private dedicated file', (t) => {
+test('persists sink config with a POSIX-only mode assertion', (t) => {
   const directory = temporaryDirectory();
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const configPath = path.join(directory, 'observability.json');
