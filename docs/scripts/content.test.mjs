@@ -92,3 +92,30 @@ test('legacy Model Gateway redirects preserve the docs base path', () => {
   assert.match(configuration, /'\/getting-started\/codex-gateway': '\/eigenwise-toolshed\/getting-started\/model-gateway'/);
   assert.match(configuration, /'\/reference\/codex-gateway': '\/eigenwise-toolshed\/reference\/model-gateway'/);
 });
+
+test('screenshot source, manifest, and committed assets have the same files', function screenshotInventoryMatchesSourceManifestAndAssets() {
+  const captureSource = fs.readFileSync(path.join(docsRoot, 'screenshots/capture.mjs'), 'utf8');
+  const manifest = JSON.parse(fs.readFileSync(path.join(docsRoot, 'screenshots/manifest.json'), 'utf8'));
+  const sidequestFiles = [...captureSource.matchAll(/(?:capture|captureRegion)\('([^']+\.png)'/g)].map((match) => match[1]);
+  const observabilityFiles = [...captureSource.matchAll(/\['(observability-[^']+\.png)'/g)].map((match) => match[1]);
+  const capturedFiles = [...new Set([...sidequestFiles, ...observabilityFiles])].sort();
+  const manifestFiles = Object.keys(manifest.files).sort();
+  const assetFiles = fs.readdirSync(path.join(docsRoot, 'src/assets/screenshots')).filter((file) => file.endsWith('.png')).sort();
+  assert.deepEqual(manifestFiles, capturedFiles);
+  assert.deepEqual(assetFiles, capturedFiles);
+});
+
+test('examples use portable current plugin guidance', function examplesUsePortableCurrentGuidance() {
+  const haikuReadme = fs.readFileSync(path.join(repositoryRoot, 'examples/haiku-jar/README.md'), 'utf8');
+  const codeAndOdeReadme = fs.readFileSync(path.join(repositoryRoot, 'examples/code-and-ode/README.md'), 'utf8');
+  const exampleSettings = [
+    fs.readFileSync(path.join(repositoryRoot, 'examples/haiku-jar/.claude/settings.json'), 'utf8'),
+    fs.readFileSync(path.join(repositoryRoot, 'examples/code-and-ode/.claude/settings.json'), 'utf8'),
+  ].join('\n');
+  assert.doesNotMatch(exampleSettings, /(?:[A-Za-z]:[\\/]|\/(?:home|Users)\/)/);
+  assert.match(haikuReadme, /SessionStart[\s\S]*SubagentStart/);
+  assert.match(haikuReadme, /UserPromptSubmit[\s\S]*reminder/);
+  assert.match(haikuReadme, /an? unchanged rule\s+does not repeat on every prompt/);
+  assert.doesNotMatch(haikuReadme, /(?:re-)?injects? `?INDEX\.md`? on every prompt/i);
+  assert.match(codeAndOdeReadme, /atomic rule/i);
+});
