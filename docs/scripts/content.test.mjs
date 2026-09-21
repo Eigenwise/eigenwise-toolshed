@@ -80,19 +80,19 @@ test('current observability privacy claims match storage, consent, and signal-pa
     {
       surface: 'Marketplace description',
       content: marketplaceDescription,
-      required: [/Telemetry payloads exclude[\s\S]*credentials[\s\S]*environment values\./, /observability\.json/, /Logs reach configured sinks[\s\S]*observer's consent-filtered outbox/, /traces and metrics use separate Collector sink pipelines/, /including PostHog/],
+      required: [/Telemetry payloads exclude[\s\S]*credentials[\s\S]*environment values\./, /observability\.json/, /%LOCALAPPDATA%\\Eigenwise\\Workbench\\observability\.json/, /~\/\.local\/share\/Eigenwise\/Workbench\/observability\.json/, /Logs reach configured sinks[\s\S]*observer's consent-filtered outbox/, /traces and metrics use separate Collector sink pipelines/, /including PostHog/],
       forbidden: [/\bprotected\b/i, /Collector can forward redacted signals to Grafana, generic OTLP, or PostHog/],
     },
     {
       surface: 'Observability manifest description',
       content: observabilityManifest.description,
-      required: [/Telemetry payloads exclude[\s\S]*credentials[\s\S]*environment values\./, /observability\.json/, /Logs reach configured sinks[\s\S]*observer's consent-filtered outbox/, /traces and metrics use separate Collector sink pipelines/, /including PostHog/],
+      required: [/Telemetry payloads exclude[\s\S]*credentials[\s\S]*environment values\./, /observability\.json/, /%LOCALAPPDATA%\\Eigenwise\\Workbench\\observability\.json/, /~\/\.local\/share\/Eigenwise\/Workbench\/observability\.json/, /Logs reach configured sinks[\s\S]*observer's consent-filtered outbox/, /traces and metrics use separate Collector sink pipelines/, /including PostHog/],
       forbidden: [/\bprotected\b/i, /Collector can forward redacted signals to Grafana, generic OTLP, or PostHog/],
     },
     {
       surface: 'Quartermaster setup skill',
       content: fs.readFileSync(path.join(repositoryRoot, 'plugins/quartermaster/skills/setup/SKILL.md'), 'utf8'),
-      required: [/Telemetry\s+payloads exclude[\s\S]*credentials[\s\S]*environment\s+values\./, /observability\.json/, /Logs reach configured sinks[\s\S]*observer's consent-filtered outbox/, /traces and metrics use separate Collector sink pipelines/, /including PostHog/],
+      required: [/Telemetry\s+payloads exclude[\s\S]*credentials[\s\S]*environment\s+values\./, /observability\.json/, /%LOCALAPPDATA%\\Eigenwise\\Workbench\\observability\.json/, /~\/\.local\/share\/Eigenwise\/Workbench\/observability\.json/, /Logs reach configured sinks[\s\S]*observer's consent-filtered outbox/, /traces and metrics use separate Collector sink pipelines/, /including PostHog/],
       forbidden: [/credentials are never stored/i, /Collector can forward redacted signals to Grafana or another sink/],
     },
     {
@@ -123,7 +123,7 @@ test('current observability privacy claims match storage, consent, and signal-pa
       surface: 'Observability setup reference',
       content: fs.readFileSync(path.join(repositoryRoot, 'plugins/observability/skills/enable-project-telemetry/setup-reference.md'), 'utf8'),
       required: [/Install this plugin at any scope[\s\S]*repository opt-in are separate choices/, /observability\.json/, /Repository consent gates hook-spool admission, observer ingest, and log export through the observer outbox/, /Collector's trace and metric sink paths remain outside that repository gate/],
-      forbidden: [/credentials are never stored/i],
+      forbidden: [/credentials are never stored/i, /\bprivate config\b|current-user-only permissions/i],
     },
     {
       surface: 'Generic OTLP sink README',
