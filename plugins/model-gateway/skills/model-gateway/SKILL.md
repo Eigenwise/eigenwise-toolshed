@@ -260,6 +260,12 @@ agree).
   evidence, not that Codex is live. An `upstream-blocked` OpenAI/auth rejection stays separate
   and does not expire; `setup` deliberately clears either record. Sidequest consumes a cached
   catalog and can lag this state by up to five minutes.
+- **Gateway models vanish from a Sidequest board a few minutes after the shim starts**: Sidequest
+  discards a catalog older than five minutes and refreshes it by running `catalog --refresh --json`.
+  Run that command by hand and read stderr plus the exit code. It exits non-zero and names the reason
+  when it declines to write (shim not answering `/healthz`, `/v1/models` erroring, or a model list
+  with no gateway ids in it), leaving the stored catalog and its timestamp untouched. Exit 0 with no
+  diagnostic means it did write, so compare the printed `updatedAt` with the stored file.
 - **Startup, recovery, restart, or drain refuses to touch a listener**: each ownership probe shares one
   `CODEX_GATEWAY_PROBE_TIMEOUT_MS` budget (2 seconds by default, 8 seconds on Windows, where the Win32_Process
   lookup itself typically takes 1.8-2.4 seconds). When that budget expires, the refusal says so, names the elapsed

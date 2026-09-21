@@ -135,7 +135,9 @@ const USAGE = `usage: model-gateway.js <command>
   ensure [--quiet] start whatever isn't running; used by the SessionStart hook
   status           show what's running
   models           show the model list the shim advertises to Claude Code
-  catalog [--json] [--refresh] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')})
+  catalog [--json] [--refresh] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')});
+                   --refresh exits non-zero and says why on stderr when it could not write a
+                   fresh one, and prints the retained catalog unchanged
   pin [--opus|--sonnet|--fable <model|default>]
                    show or persist Claude alias pins (${PIN_OVERRIDE_PATH})
   env [--write-project | --write-user | --remove] [--reconcile]
@@ -1693,7 +1695,10 @@ async function writeCatalog() {
   const shimModels = await fetchShimModels();
   writeGatewayDiscoveryCache(shimModels);
   const ids = shimModels.map((model) => model.id).filter((id) => modelCatalogDetails(id) != null);
-  if (!ids.length) return null;
+  // A zero-model catalog would merge straight back to the stored models with a fresh timestamp, so
+  // publishing it would make a shim that advertises nothing routable look like a successful refresh.
+  // Refusing is right; returning null was not, because every caller read that as "nothing to do".
+  if (!ids.length) throw new Error(`shim advertised ${shimModels.length} model(s), none of them a gateway id`);
   const readiness = await getCodexReadiness();
   const catalog = buildCatalog(ids, readiness);
   mkdirs();
@@ -1709,10 +1714,22 @@ async function catalogCommand() {
   const refresh = flag('--refresh');
   let catalog = readCatalog();
   const stale = !catalog || (Date.now() - Date.parse(catalog.updatedAt || 0) > CATALOG_STALE_MS);
-  if ((refresh || stale) && (await shimHealthy())) {
-    catalog = (await writeCatalog().catch(() => null)) || catalog;
+  let refusal = null;
+  if (refresh || stale) {
+    try {
+      if (!(await shimHealthy())) throw new Error(`shim is not answering /healthz on 127.0.0.1:${SHIM_PORT}`);
+      catalog = await writeCatalog();
+    } catch (error) {
+      refusal = error.message;
+    }
   }
-  if (!catalog) die('no catalog available yet (run setup or start first)');
+  if (!catalog) die(`no catalog available yet (${refusal || 'run setup or start first'})`);
+  // A refresh that fell back to the stored catalog used to be indistinguishable from one that
+  // wrote: exit 0, no diagnostic, an unchanged file the caller then discards as stale (issue #227).
+  // stdout stays a machine contract, so the reason goes to stderr, and an explicitly requested
+  // refresh also fails the exit code, which is what sidequest's refresh checks.
+  if (refusal) console.error(`model-gateway: catalog refresh did not write (${refusal}); kept the stored catalog from ${catalog.updatedAt || 'an unknown time'}`);
+  if (refusal && refresh) process.exitCode = 1;
   if (jsonOut) process.stdout.write(JSON.stringify(catalog) + '\n');
   else log(JSON.stringify(catalog, null, 2));
 }
