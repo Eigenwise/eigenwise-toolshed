@@ -797,11 +797,29 @@ test('negative-control marker refusals quote malformed marker lines', () => {
     body: '[sidequest:verify-complete]',
     source: 'mcp',
   });
-  assert.equal(refusal.reason, 'negative_control_required');
+  assert.equal(refusal.reason, 'negative_control_evidence_required');
   assert.match(refusal.message, new RegExp(markerLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(refusal.message, /number was not where it was expected/);
+  assert.match(refusal.message, /it does not begin with target=/);
   git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
   git(['commit', '-m', 'negative control malformed marker fixture']);
+});
+
+test('negative-control marker refusals bound an unbounded quoted marker line', () => {
+  const by = 'negative-control-long-marker';
+  const ticket = addNegativeControlTicket('negative control bounds a long marker line', by);
+  const longMarker = `[sidequest:negative-control] ${'x'.repeat(400)} failed=1`;
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: longMarker, source: 'mcp' }).ok, true);
+  const refusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(refusal.reason, 'negative_control_evidence_required');
+  assert.match(refusal.message, new RegExp(longMarker.slice(0, 200).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(refusal.message, /more characters/);
+  assert.ok(!refusal.message.includes(longMarker), 'a long marker line must not appear in full');
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control long marker fixture']);
 });
 
 test('SQ-17: a target= value keeps its semicolons, and an unparsed marker names the field it stopped at', () => {
@@ -862,6 +880,19 @@ test('SQ-17: a changed it.each table is attributed to its own test, not the prec
   assert.equal(refusal.reason, 'negative_control_test_required');
   assert.match(refusal.message, new RegExp(eachName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.doesNotMatch(refusal.message, new RegExp(unrelatedName));
+
+  // The runner substitutes %s with the row's actual value, so an agent reporting the
+  // resolved name ("adds a to the row") must still match the table's placeholder name.
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control-test] failed adds a to the row',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  }).ok, true);
 
   git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
   git(['commit', '-m', 'negative control each-table fixture']);

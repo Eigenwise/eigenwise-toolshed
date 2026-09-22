@@ -797,7 +797,10 @@ function capturedTestName(match?: RegExpMatchArray | null) {
 // test the diff never touched.
 function eachTableTestName(lines: string[], startIndex: number) {
   for (let index = startIndex; index < lines.length; index += 1) {
-    const line = lines[index] ?? '';
+    // The loop bound above already guarantees index < lines.length, so this index
+    // always yields a string; a `?? ''` fallback here was a branch for a case the loop
+    // can never reach. The `!` only tells the type checker what the bound already proves.
+    const line = lines[index]!;
     const name = capturedTestName(line.match(/[)`]\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/));
     if (name) return name;
     if (index > startIndex && /\b(?:test|it|specify)\s*\(/.test(line)) return null;
@@ -805,12 +808,19 @@ function eachTableTestName(lines: string[], startIndex: number) {
   return null;
 }
 
+// What test (if any) does this source line define — a plain `test`/`it`/`specify`/`def
+// test_*`, or, when the line opens an `.each` table, the name printed after the table.
+function testDefinitionName(lines: string[], index: number) {
+  const line = lines[index]!;
+  const match = line.match(/\b(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
+  return capturedTestName(match) ?? (/\b(?:test|it|specify)\.each\b/.test(line) ? eachTableTestName(lines, index) : null);
+}
+
 function testDefinitions(source: string) {
   const lines = source.split(/\r?\n/);
   const definitions: Array<{ line: number; name: string }> = [];
-  for (const [index, line] of lines.entries()) {
-    const match = line.match(/\b(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
-    const name = capturedTestName(match) ?? (/\b(?:test|it|specify)\.each\b/.test(line) ? eachTableTestName(lines, index) : null);
+  for (let index = 0; index < lines.length; index += 1) {
+    const name = testDefinitionName(lines, index);
     if (name) definitions.push({ line: index + 1, name });
   }
   return definitions;
@@ -895,6 +905,19 @@ function normalizedNegativeControlTestName(name: unknown) {
   return String(name || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+// An each-table name carries its placeholders verbatim (`adds %s to the row`), but the
+// runner substitutes them (`adds a to the row`), so a literal substring comparison never
+// matches a parameterised name back to what an agent actually reports; treat %s, %d, and
+// $name as wildcards instead.
+function negativeControlTestNamePattern(normalizedExpectedName: string): RegExp | null {
+  if (!/%s|%d|\$\w+/.test(normalizedExpectedName)) return null;
+  const pattern = normalizedExpectedName
+    .split(/%s|%d|\$\w+/)
+    .map((segment) => segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('.+');
+  return new RegExp(`^${pattern}$`);
+}
+
 function negativeControlTestReport(comments: Array<{ body?: unknown }>, expectedTestNames: string[] = []) {
   const markerLines = comments.flatMap((comment) => String(comment?.body || '').split(/\r?\n/)
     .map((line) => line.trim())
@@ -905,7 +928,11 @@ function negativeControlTestReport(comments: Array<{ body?: unknown }>, expected
     .filter(Boolean);
   const unreported = expectedTestNames.filter((expectedName) => {
     const normalizedExpectedName = normalizedNegativeControlTestName(expectedName);
-    return !reportedNames.some((reportedName) => reportedName.includes(normalizedExpectedName) || normalizedExpectedName.includes(reportedName));
+    const wildcardPattern = negativeControlTestNamePattern(normalizedExpectedName);
+    return !reportedNames.some((reportedName) => {
+      if (wildcardPattern) return wildcardPattern.test(reportedName);
+      return reportedName.includes(normalizedExpectedName) || normalizedExpectedName.includes(reportedName);
+    });
   });
   return { markerLines, unreported };
 }
@@ -927,16 +954,17 @@ function parseNegativeControlMarker(markerLine: string): NegativeControlMarker {
   const assertionAt = targetText.search(/;\s*assertion=/);
   if (assertionAt < 0) return { ok: false, detail: 'no "; assertion=" follows its target= value' };
   const assertionText = targetText.slice(assertionAt).replace(/^;\s*assertion=/, '');
-  const assertionEnd = assertionText.indexOf(';');
-  if (assertionEnd < 0) return { ok: false, detail: 'no ";" ends its assertion= value' };
-  const tail = assertionText.slice(assertionEnd + 1).match(/^\s*(.+?)\s+failed=(\d+)/);
+  // Matched in one step against the whole remainder so the greedy `(.*)` backs off from
+  // the end and lands on the LAST ';' that still leaves a "<command> failed=<n>" tail,
+  // the same way target= already tolerates semicolons: a ';' inside assertion= is data.
+  const tail = assertionText.match(/^(.*);\s*(.+?)\s+failed=(\d+)/);
   if (!tail) return { ok: false, detail: 'no "<command> failed=<n>" follows its assertion= value' };
   return {
     ok: true,
     target: targetText.slice(0, assertionAt).trim(),
-    assertion: assertionText.slice(0, assertionEnd).trim(),
-    command: String(tail[1]),
-    failed: Number(tail[2]),
+    assertion: tail[1]!.trim(),
+    command: String(tail[2]!),
+    failed: Number(tail[3]!),
   };
 }
 
@@ -945,7 +973,6 @@ function negativeControlResult(ticket?: any, expectedTestNames: string[] = []) {
   if (!claimHolder) return { kind: 'missing' };
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
   let otherControlAuthor = '';
-  let malformedMarkerLine = '';
   for (const comment of comments.slice().reverse()) {
     const body = String(comment.body || '').trim();
     const markerLine = body.split(/\r?\n/).map((line: string) => line.trim()).find((line: string) => line.startsWith('[sidequest:negative-control]'));
@@ -970,13 +997,19 @@ function negativeControlResult(ticket?: any, expectedTestNames: string[] = []) {
       const testReport = negativeControlTestReport(comments.filter((comment: { by?: unknown, body?: unknown }) => comment.by === claimHolder), expectedTestNames);
       return testReport.unreported.length ? { kind: 'unreported_tests', tests: testReport.unreported, markerLines: testReport.markerLines } : { kind: 'failed' };
     }
-    if (/^\[sidequest:negative-control\]\s+.+?\s+failed=\d+/.test(markerLine)) {
-      return { kind: 'missing_target_or_assertion', markerLine, detail: parsed.detail };
-    }
-    if (!malformedMarkerLine) malformedMarkerLine = markerLine;
+    // The parse names the field it stopped at in every failure case, so that detail is
+    // always worth surfacing rather than only when the line happens to look conformant.
+    return { kind: 'missing_target_or_assertion', markerLine, detail: parsed.detail };
   }
-  if (malformedMarkerLine) return { kind: 'malformed_marker', markerLine: malformedMarkerLine };
   return otherControlAuthor ? { kind: 'wrong_author', by: otherControlAuthor } : { kind: 'missing' };
+}
+
+// Comment bodies are capped at 16000 characters, so echoing a posted marker line back
+// unbounded lets one long line crowd out the recovery recipe that actually tells the
+// agent what to do; quote only a head slice and say how much more there was.
+function boundedMarkerLineQuote(markerLine: string, maxChars = 200): string {
+  if (markerLine.length <= maxChars) return markerLine;
+  return `${markerLine.slice(0, maxChars)} [… ${markerLine.length - maxChars} more characters]`;
 }
 
 function negativeControlRefusal(ticket?: any, result?: any) {
@@ -997,7 +1030,7 @@ function negativeControlRefusal(ticket?: any, result?: any) {
     };
   }
   if (result.kind === 'missing_target_or_assertion') {
-    const found = result.markerLine ? ` Found negative-control marker line "${result.markerLine}", but ${result.detail}.` : '';
+    const found = result.markerLine ? ` Found negative-control marker line "${boundedMarkerLineQuote(result.markerLine)}", but ${result.detail}.` : '';
     return {
       ok: false,
       reason: 'negative_control_evidence_required',
@@ -1023,13 +1056,6 @@ function negativeControlRefusal(ticket?: any, result?: any) {
       ok: false,
       reason: 'negative_control_waiver_too_short',
       message: `${ticket.ref} completion refused: a negative-control waiver needs a reason of at least 20 characters. ${recipe}`,
-    };
-  }
-  if (result.kind === 'malformed_marker') {
-    return {
-      ok: false,
-      reason: 'negative_control_required',
-      message: `${ticket.ref} completion refused: found negative-control marker line "${result.markerLine}", but the number was not where it was expected. ${recipe}`,
     };
   }
   if (result.kind === 'wrong_author') {

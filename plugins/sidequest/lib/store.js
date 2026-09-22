@@ -839,19 +839,23 @@ function capturedTestName(match) {
 }
 function eachTableTestName(lines, startIndex) {
   for (let index = startIndex; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
+    const line = lines[index];
     const name = capturedTestName(line.match(/[)`]\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/));
     if (name) return name;
     if (index > startIndex && /\b(?:test|it|specify)\s*\(/.test(line)) return null;
   }
   return null;
 }
+function testDefinitionName(lines, index) {
+  const line = lines[index];
+  const match = line.match(/\b(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
+  return capturedTestName(match) ?? (/\b(?:test|it|specify)\.each\b/.test(line) ? eachTableTestName(lines, index) : null);
+}
 function testDefinitions(source) {
   const lines = source.split(/\r?\n/);
   const definitions = [];
-  for (const [index, line] of lines.entries()) {
-    const match = line.match(/\b(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
-    const name = capturedTestName(match) ?? (/\b(?:test|it|specify)\.each\b/.test(line) ? eachTableTestName(lines, index) : null);
+  for (let index = 0; index < lines.length; index += 1) {
+    const name = testDefinitionName(lines, index);
     if (name) definitions.push({ line: index + 1, name });
   }
   return definitions;
@@ -929,12 +933,21 @@ function changedTestNames(delta, changedPaths) {
 function normalizedNegativeControlTestName(name) {
   return String(name || "").replace(/\s+/g, " ").trim().toLowerCase();
 }
+function negativeControlTestNamePattern(normalizedExpectedName) {
+  if (!/%s|%d|\$\w+/.test(normalizedExpectedName)) return null;
+  const pattern = normalizedExpectedName.split(/%s|%d|\$\w+/).map((segment) => segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".+");
+  return new RegExp(`^${pattern}$`);
+}
 function negativeControlTestReport(comments, expectedTestNames = []) {
   const markerLines = comments.flatMap((comment) => String(comment?.body || "").split(/\r?\n/).map((line) => line.trim()).filter((line) => /^\[sidequest:negative-control-test\]\s+/i.test(line)));
   const reportedNames = markerLines.map((line) => line.match(/^\[sidequest:negative-control-test\]\s+(?:failed|unaffected)\s+(.+)$/i)?.[1] || "").map(normalizedNegativeControlTestName).filter(Boolean);
   const unreported = expectedTestNames.filter((expectedName) => {
     const normalizedExpectedName = normalizedNegativeControlTestName(expectedName);
-    return !reportedNames.some((reportedName) => reportedName.includes(normalizedExpectedName) || normalizedExpectedName.includes(reportedName));
+    const wildcardPattern = negativeControlTestNamePattern(normalizedExpectedName);
+    return !reportedNames.some((reportedName) => {
+      if (wildcardPattern) return wildcardPattern.test(reportedName);
+      return reportedName.includes(normalizedExpectedName) || normalizedExpectedName.includes(reportedName);
+    });
   });
   return { markerLines, unreported };
 }
@@ -946,16 +959,14 @@ function parseNegativeControlMarker(markerLine) {
   const assertionAt = targetText.search(/;\s*assertion=/);
   if (assertionAt < 0) return { ok: false, detail: 'no "; assertion=" follows its target= value' };
   const assertionText = targetText.slice(assertionAt).replace(/^;\s*assertion=/, "");
-  const assertionEnd = assertionText.indexOf(";");
-  if (assertionEnd < 0) return { ok: false, detail: 'no ";" ends its assertion= value' };
-  const tail = assertionText.slice(assertionEnd + 1).match(/^\s*(.+?)\s+failed=(\d+)/);
+  const tail = assertionText.match(/^(.*);\s*(.+?)\s+failed=(\d+)/);
   if (!tail) return { ok: false, detail: 'no "<command> failed=<n>" follows its assertion= value' };
   return {
     ok: true,
     target: targetText.slice(0, assertionAt).trim(),
-    assertion: assertionText.slice(0, assertionEnd).trim(),
-    command: String(tail[1]),
-    failed: Number(tail[2])
+    assertion: tail[1].trim(),
+    command: String(tail[2]),
+    failed: Number(tail[3])
   };
 }
 function negativeControlResult(ticket, expectedTestNames = []) {
@@ -963,7 +974,6 @@ function negativeControlResult(ticket, expectedTestNames = []) {
   if (!claimHolder) return { kind: "missing" };
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
   let otherControlAuthor = "";
-  let malformedMarkerLine = "";
   for (const comment of comments.slice().reverse()) {
     const body = String(comment.body || "").trim();
     const markerLine = body.split(/\r?\n/).map((line) => line.trim()).find((line) => line.startsWith("[sidequest:negative-control]"));
@@ -988,13 +998,13 @@ function negativeControlResult(ticket, expectedTestNames = []) {
       const testReport = negativeControlTestReport(comments.filter((comment2) => comment2.by === claimHolder), expectedTestNames);
       return testReport.unreported.length ? { kind: "unreported_tests", tests: testReport.unreported, markerLines: testReport.markerLines } : { kind: "failed" };
     }
-    if (/^\[sidequest:negative-control\]\s+.+?\s+failed=\d+/.test(markerLine)) {
-      return { kind: "missing_target_or_assertion", markerLine, detail: parsed.detail };
-    }
-    if (!malformedMarkerLine) malformedMarkerLine = markerLine;
+    return { kind: "missing_target_or_assertion", markerLine, detail: parsed.detail };
   }
-  if (malformedMarkerLine) return { kind: "malformed_marker", markerLine: malformedMarkerLine };
   return otherControlAuthor ? { kind: "wrong_author", by: otherControlAuthor } : { kind: "missing" };
+}
+function boundedMarkerLineQuote(markerLine, maxChars = 200) {
+  if (markerLine.length <= maxChars) return markerLine;
+  return `${markerLine.slice(0, maxChars)} [… ${markerLine.length - maxChars} more characters]`;
 }
 function negativeControlRefusal(ticket, result) {
   const recipe = negativeControlRecoveryGuidance();
@@ -1014,7 +1024,7 @@ function negativeControlRefusal(ticket, result) {
     };
   }
   if (result.kind === "missing_target_or_assertion") {
-    const found = result.markerLine ? ` Found negative-control marker line "${result.markerLine}", but ${result.detail}.` : "";
+    const found = result.markerLine ? ` Found negative-control marker line "${boundedMarkerLineQuote(result.markerLine)}", but ${result.detail}.` : "";
     return {
       ok: false,
       reason: "negative_control_evidence_required",
@@ -1040,13 +1050,6 @@ function negativeControlRefusal(ticket, result) {
       ok: false,
       reason: "negative_control_waiver_too_short",
       message: `${ticket.ref} completion refused: a negative-control waiver needs a reason of at least 20 characters. ${recipe}`
-    };
-  }
-  if (result.kind === "malformed_marker") {
-    return {
-      ok: false,
-      reason: "negative_control_required",
-      message: `${ticket.ref} completion refused: found negative-control marker line "${result.markerLine}", but the number was not where it was expected. ${recipe}`
     };
   }
   if (result.kind === "wrong_author") {
