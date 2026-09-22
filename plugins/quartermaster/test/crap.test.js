@@ -87,6 +87,10 @@ test('sameRealDir resolves a symlinked alias the way native realpath does, unlik
   }
 });
 
+function rounded2(value) {
+  return Number(value.toFixed(2));
+}
+
 test('CRAP comes from the lcov lines inside each function, whatever slashes the lcov used', () => {
   const projectDir = fixtureProject({
     // lizard reports src/sample.js with forward slashes and src\sample.py with backslashes; the lcov
@@ -225,7 +229,11 @@ test('the ratchet fails a function that got worse and holds new functions to the
   assert.match(formatReport(report), /CRAP gate failed: 1 of 3 functions at or above 6; 2 pre-existing functions at or above 6 \(ratchet against main\)/);
 });
 
-test('an anonymous function is not a false new offender when its complexity falls and neighbors shift its position', () => {
+/**
+ * The file aggregate is reported but no longer decides: here it holds (worst complexity 20 -> 15) and
+ * the rewritten component is still gated, because one-to-one pairing left it without a baseline row.
+ */
+test('a rewritten anonymous function that also moved answers to the ceiling, whatever the file aggregate did', () => {
   const projectDir = fixtureProject({
     'src/widget.js': [
       'const Widget = (props) => {',
@@ -239,15 +247,10 @@ test('an anonymous function is not a false new offender when its complexity fall
     ].join('\n'),
     'coverage/lcov.info': '',
   });
-  const git = (args) => execFileSync('git', args, { cwd: projectDir, encoding: 'utf8', windowsHide: true });
-  git(['init', '-b', 'main']);
-  git(['config', 'user.name', 'CRAP test']);
-  git(['config', 'user.email', 'crap-test@example.invalid']);
-  git(['add', '.']);
-  git(['commit', '-m', 'base']);
+  initFixtureRepository(projectDir);
 
   // lizard reports every one of these as "(anonymous)"; extracting two helpers ahead of the component
-  // shifts its position among same-named siblings even though its own complexity dropped 20 -> 15.
+  // shifts its position among same-named siblings, and its own body was rewritten to call them.
   fs.writeFileSync(
     path.join(projectDir, 'src', 'widget.js'),
     [
@@ -275,18 +278,62 @@ test('an anonymous function is not a false new offender when its complexity fall
     '15,15,80,1,4,"(anonymous)@9-12@src/widget.js","src/widget.js","(anonymous)","(anonymous)",9,12',
     '',
   ].join('\n');
-  const runLizard = ({ cwd }) => (classifyRatchetCwd(cwd, projectDir) === 'current' ? currentCsv : baseCsv);
+  const runLizard = ({ cwd }) => (isBaselineCwd(cwd) ? baseCsv : currentCsv);
 
   const report = crapReport({ projectDir, ratchet: 'main', runLizard });
 
-  assert.deepEqual(report.failures, []);
+  assert.deepEqual(report.failures.map((entry) => `${entry.line}:${entry.reason}:crap=${entry.crap}`), ['9:ceiling:crap=240']);
   assert.equal(report.ambiguousMatches.length, 1);
   assert.deepEqual(
     { file: report.ambiguousMatches[0].file, degraded: report.ambiguousMatches[0].degraded },
     { file: 'src/widget.js', degraded: false },
+    'the aggregate held and is still reported; it is not what decided the unmatched function',
   );
   assert.match(formatReport(report), /src\/widget\.js: ambiguous match/);
-  assert.match(formatReport(report), /CRAP gate passed/);
+  assert.doesNotMatch(formatReport(report), /CRAP gate passed/);
+});
+
+/**
+ * The same shape with the component's text untouched: exact source text claims its own baseline row
+ * before the two inserted helpers can take it by position, so nothing is reported as new.
+ */
+test('an anonymous function whose text is untouched keeps its own baseline when neighbours shift its position', () => {
+  const widget = [
+    'const Widget = (props) => {',
+    '  if (props.a) return 1;',
+    '  if (props.b) return 2;',
+    '  if (props.c) return 3;',
+    '  if (props.d) return 4;',
+    '  return 0;',
+    '};',
+  ];
+  const projectDir = fixtureProject({
+    'src/widget.js': [...widget, ''].join('\n'),
+    'coverage/lcov.info': '',
+  });
+  initFixtureRepository(projectDir);
+
+  fs.writeFileSync(
+    path.join(projectDir, 'src', 'widget.js'),
+    ['const helperA = (x) => {', '  return x + 1;', '};', '', 'const helperB = (x) => {', '  return x - 1;', '};', '', ...widget, ''].join('\n'),
+    'utf8',
+  );
+
+  const baseCsv = '20,20,100,1,7,"(anonymous)@1-7@src/widget.js","src/widget.js","(anonymous)","(anonymous)",1,7\n';
+  const currentCsv = [
+    '1,1,10,1,3,"(anonymous)@1-3@src/widget.js","src/widget.js","(anonymous)","(anonymous)",1,3',
+    '1,1,10,1,3,"(anonymous)@5-7@src/widget.js","src/widget.js","(anonymous)","(anonymous)",5,7',
+    '20,20,100,1,7,"(anonymous)@9-15@src/widget.js","src/widget.js","(anonymous)","(anonymous)",9,15',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (isBaselineCwd(cwd) ? baseCsv : currentCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.deepEqual(report.failures, [], 'the untouched component matched its own baseline row by exact text');
+  assert.deepEqual(report.ambiguousMatches, []);
+  assert.equal(report.preExistingAtOrAboveMax, 1);
+  assert.match(formatReport(report), /CRAP gate passed: 0 of 3 functions at or above 6/);
 });
 
 test('an anonymous function that truly gets worse still reports one new offender, with no stable baseline match', () => {
@@ -346,10 +393,225 @@ test('an anonymous function that truly gets worse still reports one new offender
   assert.equal(report.failures.length, 1);
   assert.deepEqual(
     { line: report.failures[0].line, reason: report.failures[0].reason },
-    { line: 9, reason: 'ambiguous' },
+    { line: 9, reason: 'ceiling' },
   );
-  assert.equal(report.ambiguousMatches[0].degraded, true);
+  assert.equal(report.ambiguousMatches[0].degraded, true, 'the aggregate agrees here, but the ceiling is what gated the function');
   assert.match(formatReport(report), /CRAP gate failed: 1 of 3 functions/);
+});
+
+/** The baseline checkout is the only cwd `baselineFunctions()` ever makes, and it names itself. */
+function isBaselineCwd(cwd) {
+  return path.basename(cwd).startsWith('quartermaster-crap-base-');
+}
+
+function initFixtureRepository(projectDir) {
+  const git = (args) => execFileSync('git', args, { cwd: projectDir, encoding: 'utf8', windowsHide: true });
+  git(['init', '-b', 'main']);
+  git(['config', 'user.name', 'CRAP test']);
+  git(['config', 'user.email', 'crap-test@example.invalid']);
+  git(['add', '.']);
+  git(['commit', '-m', 'base']);
+}
+
+/**
+ * Inserting one function shifts the position of every later function that shares its name, and lizard
+ * repeats names freely: two Python classes with a `run`, two components with a `render`. Pairing on
+ * position alone read the untouched namesakes against the wrong baseline row, so one came back as a
+ * regression (its own 13 branches against its neighbour's baseline 4) and the one pushed past the end of
+ * the baseline's ordinals came back as a new function over the ceiling.
+ */
+test('inserting a same-named function leaves its untouched namesakes matched to their own baseline', () => {
+  const alphaRun = ['    def run(self, n):', '        if n > 0:', '            return 1', '        return 0'];
+  const betaRun = ['    def run(self, n):', '        if n < 0:', '            return -1', '        return 0'];
+  const projectDir = fixtureProject({
+    'src/jobs.py': ['class Alpha:', ...alphaRun, '', 'class Beta:', ...betaRun, ''].join('\n'),
+    'coverage/lcov.info': '',
+  });
+  initFixtureRepository(projectDir);
+
+  // Only the new class is added; both existing `run` bodies stay byte-identical, six lines lower.
+  fs.writeFileSync(
+    path.join(projectDir, 'src', 'jobs.py'),
+    ['class Gamma:', '    def run(self, n):', '        return n', '', 'class Alpha:', ...alphaRun, '', 'class Beta:', ...betaRun, ''].join('\n'),
+    'utf8',
+  );
+
+  const baseCsv = [
+    '4,13,40,2,4,"run@2-5@./src/jobs.py","./src/jobs.py","run","run( self , n )",2,5',
+    '4,4,40,2,4,"run@8-11@./src/jobs.py","./src/jobs.py","run","run( self , n )",8,11',
+    '',
+  ].join('\n');
+  const currentCsv = [
+    '2,1,12,2,2,"run@2-3@src/jobs.py","src/jobs.py","run","run( self , n )",2,3',
+    '4,13,40,2,4,"run@6-9@src/jobs.py","src/jobs.py","run","run( self , n )",6,9',
+    '4,4,40,2,4,"run@12-15@src/jobs.py","src/jobs.py","run","run( self , n )",12,15',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (isBaselineCwd(cwd) ? baseCsv : currentCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.deepEqual(report.failures.map((entry) => `${entry.line}:${entry.reason}`), []);
+  assert.equal(report.atOrAboveMax, 0);
+  assert.equal(report.preExistingAtOrAboveMax, 2, 'both untouched methods stay over the ceiling, reported and not gated');
+  assert.deepEqual(report.ambiguousMatches, [], 'exact source text claimed both baseline rows, and the inserted method is under the ceiling');
+  assert.match(formatReport(report), /CRAP gate passed: 0 of 3 functions at or above 6; 2 pre-existing functions at or above 6/);
+});
+
+/**
+ * Pairing is one-to-one, so the third `run` cannot borrow a baseline row its namesakes already claimed.
+ * The file aggregate ties here, because refactoring one sibling below the ceiling cancels the new
+ * offender out, which is exactly why the aggregate no longer gets to clear an unmatched function.
+ */
+test('a third same-named function over the ceiling is new code, even when the file aggregate ties', () => {
+  const firstRun = ['function run(n) {', '  if (n > 0) return 1;', '  return 0;', '}'];
+  const secondRun = ['function run(n) {', '  if (n < 0) return -1;', '  return 0;', '}'];
+  const projectDir = fixtureProject({
+    'src/app.js': [...firstRun, '', ...secondRun, ''].join('\n'),
+    'coverage/lcov.info': '',
+  });
+  initFixtureRepository(projectDir);
+
+  fs.writeFileSync(
+    path.join(projectDir, 'src', 'app.js'),
+    [
+      ...firstRun,
+      '',
+      'function run(n) {',
+      '  return 0;',
+      '}',
+      '',
+      'function run(n) {',
+      '  if (n === 1) return 1;',
+      '  if (n === 2) return 2;',
+      '  return 0;',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  const baseCsv = [
+    '4,10,40,1,4,"run@1-4@./src/app.js","./src/app.js","run","run ( n )",1,4',
+    '4,10,40,1,4,"run@6-9@./src/app.js","./src/app.js","run","run ( n )",6,9',
+    '',
+  ].join('\n');
+  const currentCsv = [
+    '4,10,40,1,4,"run@1-4@src/app.js","src/app.js","run","run ( n )",1,4',
+    '3,1,20,1,3,"run@6-8@src/app.js","src/app.js","run","run ( n )",6,8',
+    '5,5,40,1,5,"run@10-14@src/app.js","src/app.js","run","run ( n )",10,14',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (isBaselineCwd(cwd) ? baseCsv : currentCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.deepEqual(
+    report.failures.map((entry) => `${entry.function}@${entry.line}:${entry.reason}:crap=${entry.crap}`),
+    ['run@10:ceiling:crap=30'],
+  );
+  assert.deepEqual(
+    report.ambiguousMatches,
+    [{ file: 'src/app.js', current: { overCeiling: 1, maxComplexity: 10 }, baseline: { overCeiling: 2, maxComplexity: 10 }, degraded: false }],
+    'the aggregate is reported on the same metric on both sides, and it is not what decided the new run',
+  );
+  assert.equal(report.atOrAboveMax, 1);
+  assert.doesNotMatch(formatReport(report), /CRAP gate passed/);
+});
+
+/** N baseline copies of one text match N current copies, never N + 1: a copy-paste is new code. */
+test('a byte-identical copy of an over-ceiling function answers to the ceiling', () => {
+  const helper = ['function helper(n) {', '  if (n > 0) return 1;', '  return 0;', '}'];
+  const projectDir = fixtureProject({
+    'src/util.js': [...helper, ''].join('\n'),
+    'coverage/lcov.info': '',
+  });
+  initFixtureRepository(projectDir);
+
+  fs.writeFileSync(path.join(projectDir, 'src', 'util.js'), [...helper, '', ...helper, ''].join('\n'), 'utf8');
+
+  const baseCsv = '4,10,40,1,4,"helper@1-4@./src/util.js","./src/util.js","helper","helper ( n )",1,4\n';
+  const currentCsv = [
+    '4,10,40,1,4,"helper@1-4@src/util.js","src/util.js","helper","helper ( n )",1,4',
+    '4,10,40,1,4,"helper@6-9@src/util.js","src/util.js","helper","helper ( n )",6,9',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (isBaselineCwd(cwd) ? baseCsv : currentCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.deepEqual(
+    report.failures.map((entry) => `${entry.function}@${entry.line}:${entry.reason}:crap=${entry.crap}`),
+    ['helper@6:ceiling:crap=110'],
+  );
+  assert.equal(report.preExistingAtOrAboveMax, 1, 'the original copy still pairs with its own baseline row');
+});
+
+test('one baseline copy and one current copy of identical text still pair with each other', () => {
+  const helper = ['function helper(n) {', '  if (n > 0) return 1;', '  return 0;', '}'];
+  const projectDir = fixtureProject({
+    'src/util.js': [...helper, ''].join('\n'),
+    'coverage/lcov.info': '',
+  });
+  initFixtureRepository(projectDir);
+
+  fs.writeFileSync(
+    path.join(projectDir, 'src', 'util.js'),
+    [...helper, '', 'function tally(n) {', '  return n;', '}', ''].join('\n'),
+    'utf8',
+  );
+
+  const baseCsv = '4,10,40,1,4,"helper@1-4@./src/util.js","./src/util.js","helper","helper ( n )",1,4\n';
+  const currentCsv = [
+    '4,10,40,1,4,"helper@1-4@src/util.js","src/util.js","helper","helper ( n )",1,4',
+    '3,1,10,1,3,"tally@6-8@src/util.js","src/util.js","tally","tally ( n )",6,8',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (isBaselineCwd(cwd) ? baseCsv : currentCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.deepEqual(report.failures, []);
+  assert.deepEqual(report.ambiguousMatches, []);
+  assert.equal(report.preExistingAtOrAboveMax, 1);
+  assert.match(formatReport(report), /CRAP gate passed: 0 of 2 functions at or above 6/);
+});
+
+/**
+ * The ratchet recomputes the baseline's CRAP from the coverage this run reports, which is rounded to four
+ * places, so scoring the current side from the raw ratio instead put the two numbers 0.01 apart: 26
+ * branches at 2/3 coverage scored 51.04 against a baseline 51.03 and failed a function nobody had touched.
+ */
+test('coverage rounding alone never fails a function whose complexity held', () => {
+  const render = ['function render(rows) {', '  if (!rows) return 0;', '  if (rows.length) return 1;', '  return 2;', '}'];
+  const projectDir = fixtureProject({
+    'src/report.js': [...render, ''].join('\n'),
+    'coverage/lcov.info': 'SF:src/report.js\nDA:2,1\nDA:3,1\nDA:4,0\nend_of_record\n',
+  });
+  initFixtureRepository(projectDir);
+
+  fs.writeFileSync(
+    path.join(projectDir, 'src', 'report.js'),
+    [...render, '', 'function tally(rows) {', '  return rows.length;', '}', ''].join('\n'),
+    'utf8',
+  );
+
+  const baseCsv = '5,26,40,1,5,"render@1-5@./src/report.js","./src/report.js","render","render ( rows )",1,5\n';
+  const currentCsv = [
+    '5,26,40,1,5,"render@1-5@src/report.js","src/report.js","render","render ( rows )",1,5',
+    '3,1,10,1,3,"tally@7-9@src/report.js","src/report.js","tally","tally ( rows )",7,9',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (isBaselineCwd(cwd) ? baseCsv : currentCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  const rendered = functionNamed(report, 'render');
+  assert.deepEqual({ cc: rendered.cc, coverage: rendered.coverage, crap: rendered.crap }, { cc: 26, coverage: 0.6667, crap: 51.03 });
+  assert.equal(rounded2(crapScore(26, 2 / 3)), 51.04, 'the raw ratio scores 0.01 higher, which is what used to fail the gate');
+  assert.equal(rounded2(crapScore(26, rendered.coverage)), rendered.crap, 'reported CRAP comes from the reported coverage');
+  assert.deepEqual(report.failures, [], 'the same complexity at the same coverage is not a regression');
+  assert.equal(report.preExistingAtOrAboveMax, 1);
 });
 
 test('the config file supplies the gate settings and flags override it', () => {
@@ -360,6 +622,38 @@ test('the config file supplies the gate settings and flags override it', () => {
   });
   assert.equal(crapReport({ projectDir, complexity: 'complexity.csv' }).failures.length, 0);
   assert.equal(crapReport({ projectDir, complexity: 'complexity.csv', max: 6 }).failures.length, 1);
+});
+
+/**
+ * With --project omitted, projectDir is raw cwd; the measured root walks up to the git toplevel, and
+ * the config lookup has to follow it there too, or a subdirectory run reads no config at all and falls
+ * back to every default (no ratchet, no coverage command, max 6).
+ */
+test('config resolves from the measured root when --project is not given, from the root and from a subdirectory', () => {
+  const projectDir = fixtureProject({
+    '.claude/quartermaster/crap.json': JSON.stringify({ max: 500 }),
+    'src/hairy.js': [
+      'function hairy(n) {',
+      '  if (n > 1) return 1;',
+      '  if (n > 2) return 2;',
+      '  if (n > 3) return 3;',
+      '  return 0;',
+      '}',
+      '',
+    ].join('\n'),
+    'complexity.csv': '6,4,20,1,6,"hairy@1-6@src/hairy.js","src/hairy.js","hairy","hairy ( n )",1,6\n',
+    'coverage/lcov.info': '',
+  });
+  initFixtureRepository(projectDir);
+
+  const fromRoot = crapReport({ projectDir, cwd: projectDir, complexity: 'complexity.csv' });
+  assert.equal(fromRoot.max, 500, 'the root run reads the config directly');
+  assert.equal(fromRoot.failures.length, 0);
+
+  const subDir = path.join(projectDir, 'src');
+  const fromSubdir = crapReport({ projectDir: subDir, cwd: subDir, complexity: path.join(projectDir, 'complexity.csv') });
+  assert.equal(fromSubdir.max, 500, 'the subdirectory run still reads the config from the measured git toplevel, not from cwd');
+  assert.equal(fromSubdir.failures.length, 0);
 });
 
 test('a missing lcov file exits 2 with the fix, not a passing gate', () => {
@@ -387,6 +681,24 @@ test('a failing coverage command exits 2 instead of reading a stale lcov', () =>
   const result = runCli(['--complexity', 'complexity.csv', '--coverage-command', 'node -e "process.exit(3)"'], projectDir);
   assert.equal(result.status, 2, result.stderr);
   assert.match(result.stderr, /coverage command exited 3/);
+});
+
+/**
+ * A coverage command that exits 0 but writes nothing leaves the default lcov exactly as stale as
+ * before this run; without a freshness check the gate would silently score against yesterday's
+ * coverage instead of refusing with "could not measure".
+ */
+test('a coverage command that writes nothing leaves a stale lcov, and the gate refuses instead of trusting it', () => {
+  const projectDir = fixtureProject({
+    'complexity.csv': '4,4,20,1,4,"branchy@1-4@src/branchy.js","src/branchy.js","branchy","branchy ( n )",1,4\n',
+    'coverage/lcov.info': 'SF:src/branchy.js\nDA:2,1\nDA:3,1\nDA:4,1\nend_of_record\n',
+  });
+  const staleSeconds = (Date.now() - 24 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(path.join(projectDir, 'coverage', 'lcov.info'), staleSeconds, staleSeconds);
+
+  const result = runCli(['--complexity', 'complexity.csv', '--coverage-command', 'node -e "process.exit(0)"'], projectDir);
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /predates/);
 });
 
 function gitAt(cwd) {
@@ -492,7 +804,18 @@ test('two runs sharing a workDir isolate their coverage reports from each other'
   assert.equal(secondAdd.coverage, 0, "second run reads its own run's lcov, unaffected by the first");
 });
 
-test('the generated crap-gate live rule has no hard-coded main-checkout path', () => {
+/** Plain recursive walk, not fs.readdirSync's `recursive` option, so this runs the same on every supported Node. */
+function collectFiles(dir) {
+  const results = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) results.push(...collectFiles(fullPath));
+    else results.push(fullPath);
+  }
+  return results;
+}
+
+test('the generated crap-gate live rule has no hard-coded main-checkout path, and no file under skills/ tells an agent to pass --project to the crap gate', () => {
   const crapGateDoc = fs.readFileSync(
     path.join(__dirname, '..', 'skills', 'setup', 'references', 'crap-gate.md'),
     'utf8',
@@ -503,6 +826,12 @@ test('the generated crap-gate live rule has no hard-coded main-checkout path', (
   assert.match(liveRuleBlock, /quartermaster\.js" crap`/);
   assert.doesNotMatch(liveRuleBlock, /--project/);
   assert.doesNotMatch(liveRuleBlock, /"\/[^"]+"/, 'no absolute path baked into the rule text');
+
+  const skillsDir = path.join(__dirname, '..', 'skills');
+  const offenders = collectFiles(skillsDir)
+    .filter((filePath) => fs.readFileSync(filePath, 'utf8').includes('crap --project'))
+    .map((filePath) => path.relative(skillsDir, filePath));
+  assert.deepEqual(offenders, [], 'no file under skills/ should tell an agent to pass --project to the crap gate');
 });
 
 test('the real lizard backend measures a JavaScript and a Python file end to end', (t) => {

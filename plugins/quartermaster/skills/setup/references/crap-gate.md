@@ -18,15 +18,30 @@ For a new project, set `max` to 6 and apply it to every function. For an existin
 number of functions at or above the ceiling, including how many predate the branch, so the user can
 choose a different ceiling with real numbers in front of them.
 
-lizard names every arrow function or closure it cannot attribute to a declaration `(anonymous)`. A
-file built entirely from these (a large React component, for example) can have dozens of them, so the
-gate matches each one to its baseline copy by its exact source text first, then by its position
-relative to the nearest named function, instead of by name and position alone, which broke the moment
-an unrelated edit shifted where a function sat in the file. When no anonymous function in a changed
-file finds a stable match, the gate prints `<file>: ambiguous match` and judges the whole file instead
-of the single function: it only fails when the file's own worst complexity or count of ceiling
-breaches got worse than the baseline. A function at or under its matched baseline's complexity never
-counts as a new offender.
+Adding one function shifts the position of every function below it, and names repeat inside a file:
+lizard names every arrow function or closure it cannot attribute to a declaration `(anonymous)`, and
+two classes can each carry a `run`. So the gate pairs each function with its baseline copy by exact
+source text first, then by name and position among its namesakes, and an anonymous function by its
+position relative to the nearest named function.
+
+Pairing is one-to-one. A baseline function is claimed by at most one of today's functions, exact text
+claims before name or position does, and **a function that claims nothing answers to the ceiling**.
+So a byte-identical copy of an over-ceiling function is new code over the ceiling even though its twin
+is untouched, and a third `run` in a file that already had two is gated on its own number. Exact
+source text comes from the line span lizard reports, which for a nested closure in a JavaScript file
+can be wider than the closure itself; when that span picks up an unrelated edit, pairing falls back to
+name and position.
+
+The source-text key is file-scoped: a function moved untouched from one file to another finds no
+baseline copy and answers to the ceiling like anything else new. Cover it, shrink it, or land the move
+first and rerun the gate against the branch that already has it.
+
+When a function that answered to the ceiling shares a name the baseline copy of its file already
+carried, the gate also prints `<file>: ambiguous match` with the file's worst complexity and its count
+of ceiling breaches on both sides, scored by complexity on both. That line is context, not a verdict.
+A function at or under its matched baseline's complexity never counts as a new offender, and both
+sides are scored from the coverage the gate reports, so rounding alone never pushes a function past
+its baseline.
 
 ## Prerequisite
 
@@ -77,10 +92,11 @@ Create `.claude/quartermaster/crap.json`. Every key is optional and command-line
 
 The defaults are `coverage/lcov.info`, sources `.` , no exclusions, `max` 6, no ratchet, and no
 coverage command. Use `--max`, `--ratchet`, `--lcov`, `--complexity`, or `--coverage-command` for a
-one-off override. `--project` only names the project for config and ratchet lookup, not the tree the
-gate measures: with no `--project`, or with cwd inside a linked worktree of the named project, it
-measures cwd's own git toplevel, so a per-ticket worktree checkout is measured in place instead of the
-main checkout. Never write `--project` with a hard-coded absolute path into a live rule or any other
+one-off override. `--project` only names the project for config lookup, not the tree the gate measures
+or the ratchet baseline: with no `--project`, or with cwd inside a linked worktree of the named
+project, it measures cwd's own git toplevel, so a per-ticket worktree checkout is measured in place
+instead of the main checkout, and the ratchet resolves against that same measured root. Never write
+`--project` with a hard-coded absolute path into a live rule or any other
 file that outlives this setup session - a worktree that runs it later would have it point at the wrong
 tree. Run it from the project root with:
 

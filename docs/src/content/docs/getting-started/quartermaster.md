@@ -37,7 +37,7 @@ each function small or cover it well.
 When you approve it, setup writes `.claude/quartermaster/crap.json` and a live rule that runs:
 
 ```text
-node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"
+node "<quartermaster plugin root>/bin/quartermaster.js" crap
 ```
 
 It also shows the coverage command for your stack and asks you to pick the threshold. The gate needs

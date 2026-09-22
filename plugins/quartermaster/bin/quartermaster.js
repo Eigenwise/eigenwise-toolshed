@@ -41,11 +41,12 @@ Blocked allowlist candidates are summarized by default; --blocked includes up to
 crap reads .claude/quartermaster/crap.json (coverageCommand, lcov, sources, exclude, max, ratchet), needs
 lizard (lizard on PATH, else uvx lizard, else pipx run lizard), and exits 0 pass, 1 gate failed,
 2 prerequisite missing (lizard unresolvable, no lcov, coverage command failed). Default --max ${DEFAULT_MAX}.
-crap's --project only names the project for config and ratchet lookup, not the tree it measures: when
-cwd is a linked worktree of that same project, or --project is omitted, the coverage command, lcov
-read, and lizard scan all run against cwd's own git toplevel instead, and it prints which root it
-measured. Set QUARTERMASTER_COVERAGE_DIR in coverageCommand's reports-directory flag to give each run
-its own coverage output so concurrent runs sharing a root do not collide.
+crap's --project only names the project for config lookup, not the tree it measures or the ratchet
+baseline: when cwd is a linked worktree of that same project, or --project is omitted, the coverage
+command, lcov read, and lizard scan all run against cwd's own git toplevel instead, the ratchet
+resolves against that same measured root, and it prints which root it measured. Set
+QUARTERMASTER_COVERAGE_DIR in coverageCommand's reports-directory flag to give each run its own
+coverage output so concurrent runs sharing a root do not collide.
 `;
 
 const BLOCKED_SUMMARY_LIMIT = 5;
