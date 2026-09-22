@@ -102,14 +102,27 @@ function createDispatch(dependencies) {
     const insideRepository = relative === "" || !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
     return insideRepository ? path.join(path.dirname(path.resolve(repository)), ".sidequest-verification", safeSlug, safeRef) : directory;
   }
-  function boardVerificationEvidencePath(target) {
-    const requested = String(target || "").trim();
-    if (!requested) return false;
-    const projectsRoot = canonicalPath(path.resolve(homeRoot(), "projects"));
-    const relative = path.relative(projectsRoot, canonicalPath(path.resolve(requested))).replace(/\\/g, "/");
-    if (!relative || relative.startsWith("../") || path.isAbsolute(relative)) return false;
-    const segments = relative.split("/");
-    return segments.length > 2 && segments[1] === "verification";
+  function dispatchEvidenceDirectory(project, ref) {
+    const state = dispatchState(getTicket(project, ref));
+    return state && state.evidenceDirectory ? String(state.evidenceDirectory) : null;
+  }
+  function segmentsUnder(root, target) {
+    const relative = path.relative(canonicalPath(root), canonicalPath(path.resolve(target))).replace(/\\/g, "/");
+    const outside = !relative || relative === ".." || relative.startsWith("../") || path.isAbsolute(relative);
+    return outside ? [] : relative.split("/");
+  }
+  function trimmedString(value) {
+    return String(value || "").trim();
+  }
+  function boardVerificationEvidencePath(target, evidenceDirectory) {
+    const requested = trimmedString(target);
+    const root = trimmedString(evidenceDirectory);
+    if (!requested || !root) return false;
+    try {
+      if (fs.lstatSync(requested).isSymbolicLink()) return false;
+    } catch (_) {
+    }
+    return segmentsUnder(root, requested).length > 0;
   }
   function writeDispatchTokenFile(ticket) {
     const file = dispatchTokenFile(ticket);
@@ -2652,6 +2665,7 @@ function createDispatch(dependencies) {
     dispatchIsolationExpectation,
     dispatchUnboundClaim,
     boardVerificationEvidencePath,
+    dispatchEvidenceDirectory,
     recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,

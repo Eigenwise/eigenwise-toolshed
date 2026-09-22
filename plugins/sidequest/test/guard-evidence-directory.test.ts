@@ -3,7 +3,7 @@ import './_sidequest-install-fixture.js';
 import './_hook-runtime.js';
 'use strict';
 
-// SQ-9. `~/.claude` is a Git checkout on machines that keep dotfiles in one, so the Sidequest home
+// GH-163. `~/.claude` is a Git checkout on machines that keep dotfiles in one, so the Sidequest home
 // and every board-owned `projects/<slug>/verification/<ref>` directory sit inside a repository that
 // belongs to nobody's dispatch. The isolation guard resolved that enclosing checkout and asked the
 // write lease about it, so an executor writing the evidence the briefing told it to write was
@@ -137,4 +137,54 @@ test('an isolated dispatch writing into the shared project checkout is still ref
   const out = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, PROJECT));
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /writing to:/);
+});
+
+// Direct unit tests of boardVerificationEvidencePath, far cheaper than spawning the hook: these need
+// only a root directory, never a registered project, a dispatched ticket, or the isolation guard.
+test('boardVerificationEvidencePath accepts a file directly inside the recorded evidence directory', () => {
+  const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-evidence-direct-'));
+  const target = path.join(evidenceDirectory, 'probe.log');
+  assert.equal(store.boardVerificationEvidencePath(target, evidenceDirectory), true);
+});
+
+test('boardVerificationEvidencePath accepts a nested path under the recorded evidence directory', () => {
+  const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-evidence-direct-'));
+  const target = path.join(evidenceDirectory, 'screenshots', 'board.png');
+  assert.equal(store.boardVerificationEvidencePath(target, evidenceDirectory), true);
+});
+
+// Boundary case from review item 6: the `projects/<slug>/verification` directory itself, one level
+// above the ticket's own evidence directory, must stay refused rather than being treated as nested
+// inside it.
+test('boardVerificationEvidencePath refuses the verification directory itself, one level above the recorded evidence directory', () => {
+  const verificationDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-evidence-verification-'));
+  const evidenceDirectory = path.join(verificationDirectory, 'SQ-999');
+  fs.mkdirSync(evidenceDirectory, { recursive: true });
+  assert.equal(store.boardVerificationEvidencePath(verificationDirectory, evidenceDirectory), false);
+});
+
+// Boundary case from review item 6: traversal back out of the evidence directory towards a sibling
+// (standing in for the database file) must stay refused.
+test('boardVerificationEvidencePath refuses traversal back out of the recorded evidence directory', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-evidence-traversal-'));
+  const evidenceDirectory = path.join(root, 'projects', 'slug', 'verification', 'SQ-1');
+  fs.mkdirSync(evidenceDirectory, { recursive: true });
+  fs.writeFileSync(path.join(root, 'board.sqlite3'), '');
+  const target = path.join(evidenceDirectory, '..', '..', '..', '..', 'board.sqlite3');
+  assert.equal(store.boardVerificationEvidencePath(target, evidenceDirectory), false);
+});
+
+// Review item 5: a symlink at the final path component that does not resolve to anything yet must not
+// escape the containment check the way a live symlink already does.
+test('boardVerificationEvidencePath refuses a dangling symlink as the requested path', () => {
+  const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-evidence-symlink-'));
+  const target = path.join(evidenceDirectory, 'dangling.log');
+  fs.symlinkSync(path.join(evidenceDirectory, 'does-not-exist-yet.log'), target);
+  assert.equal(store.boardVerificationEvidencePath(target, evidenceDirectory), false);
+});
+
+test('boardVerificationEvidencePath refuses without a recorded evidence directory or a requested path', () => {
+  const evidenceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-evidence-empty-'));
+  assert.equal(store.boardVerificationEvidencePath(path.join(evidenceDirectory, 'x.log'), ''), false);
+  assert.equal(store.boardVerificationEvidencePath('', evidenceDirectory), false);
 });

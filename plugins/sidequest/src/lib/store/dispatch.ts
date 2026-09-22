@@ -130,19 +130,52 @@ function ticketEvidenceDirectory(slug?: any, ref?: any, projectPath?: any) {
 // the briefing sends executors there, and on a machine that keeps ~/.claude in a dotfiles repository
 // the whole subtree sits inside a Git checkout no dispatch holds a lease for. A write lease answers
 // for a repository, so letting the isolation guard resolve that enclosing checkout refused the board's
-// own directory while the same write through Bash, which no hook gates, went through (SQ-9). Only the
-// `verification` subtree of a project is exempt, so the database and the dispatch tokens stay guarded.
-// The relocated form ticketEvidenceDirectory falls back to when the home sits inside the project repo
-// lands beside that repository rather than under the home, and is deliberately not matched here: a
-// directory name inside an arbitrary checkout is not proof the board owns it.
-function boardVerificationEvidencePath(target?: any) {
-  const requested = String(target || '').trim();
-  if (!requested) return false;
-  const projectsRoot = canonicalPath(path.resolve(homeRoot(), 'projects'));
-  const relative = path.relative(projectsRoot, canonicalPath(path.resolve(requested))).replace(/\\/g, '/');
-  if (!relative || relative.startsWith('../') || path.isAbsolute(relative)) return false;
-  const segments = relative.split('/');
-  return segments.length > 2 && segments[1] === 'verification';
+// own directory while the same write through Bash, which no hook gates, went through (GH-163).
+//
+// The exemption is keyed to the caller's own resolved dispatch rather than to a path shape. A shape
+// match on `projects/<anything>/verification/**` cannot tell a registered ticket's directory from an
+// invented slug, and it cannot recognize ticketEvidenceDirectory's relocated form at all, since that
+// form lands beside the project repository rather than under the home. Comparing against the
+// evidenceDirectory the store actually recorded for the matched dispatch answers both at once: only
+// that one directory, wherever prepareDispatch resolved it to, is exempt.
+//
+// A dedicated lookup rather than a field folded into dispatchIsolationExpectation: that function
+// already scans every project and ticket to answer a much bigger question (worktree and lease facts
+// for every candidate dispatch), and this only ever needs one ticket's recorded directory once the
+// guard already knows which dispatch it is asking about.
+function dispatchEvidenceDirectory(project?: any, ref?: any) {
+  const state = dispatchState(getTicket(project, ref));
+  return state && state.evidenceDirectory ? String(state.evidenceDirectory) : null;
+}
+
+function segmentsUnder(root: string, target: string): string[] {
+  const relative = path.relative(canonicalPath(root), canonicalPath(path.resolve(target))).replace(/\\/g, '/');
+  // path.relative returns exactly '..' (no trailing slash) for root's immediate parent, so matching
+  // only the '../' prefix let that one directory - here, the verification directory itself, one level
+  // above any ticket's evidence directory - through as if it were nested inside root.
+  const outside = !relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative);
+  return outside ? [] : relative.split('/');
+}
+
+function trimmedString(value?: any): string {
+  return String(value || '').trim();
+}
+
+// `canonicalPath` realpaths only the longest existing prefix, so a symlink at the final path
+// component that does not resolve to anything yet stays unresolved and containment above would follow
+// it out of the evidence directory once the write actually creates something there. Refusing whenever
+// the requested path is itself a symlink, dangling or not, closes that; a live symlink pointing outside
+// the directory was already refused by the containment check.
+function boardVerificationEvidencePath(target?: any, evidenceDirectory?: any) {
+  const requested = trimmedString(target);
+  const root = trimmedString(evidenceDirectory);
+  if (!requested || !root) return false;
+  try {
+    if (fs.lstatSync(requested).isSymbolicLink()) return false;
+  } catch (_) {
+    // Not there yet: the common case is exactly the write that will create it.
+  }
+  return segmentsUnder(root, requested).length > 0;
 }
 
 function writeDispatchTokenFile(ticket?: any) {
@@ -3139,6 +3172,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     dispatchIsolationExpectation,
     dispatchUnboundClaim,
     boardVerificationEvidencePath,
+    dispatchEvidenceDirectory,
     recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,
