@@ -10,6 +10,7 @@ const path = require('node:path');
 process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-routing-test-'));
 const emptyDiscovery = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-routing-empty-'));
 process.env.SIDEQUEST_DISCOVERY_DIRS = emptyDiscovery;
+delete process.env.ANTHROPIC_DEFAULT_OPUS_MODEL;
 const store = require('../lib/store.js');
 
 function seedCatalog(models?: any, catalog: any = { schemaVersion: 3, source: 'model-gateway' }) {
@@ -33,11 +34,11 @@ test('model vocabulary contains Claude runtimes and discovered concrete models',
   assert.equal(store.classifyModelFilter('missing'), 'unknown');
 });
 
-test('resolveExec is keyed directly by concrete model and effort', () => {
+test('resolveExec falls back to a version-free Claude tier', () => {
   seedCatalog([{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test' }]);
   assert.deepEqual(store.resolveExec('opus', 'high'), {
     agent: 'sidequest-exec-high', model: 'opus', spawnId: 'opus', backend: 'claude', slug: 'opus',
-    runsModel: 'opus', apiModel: 'opus', runsLabel: 'Claude Opus 5', dispatch: 'native-agent',
+    runsModel: 'opus', apiModel: 'opus', runsLabel: 'Claude Opus', dispatch: 'native-agent',
   });
   const codex = store.resolveExec('codex-gpt-test', 'xhigh');
   assert.equal(codex.agent, 'sidequest-exec-dispatch');
@@ -46,6 +47,14 @@ test('resolveExec is keyed directly by concrete model and effort', () => {
   assert.equal(codex.dispatchModel, 'test');
   assert.equal(codex.runsModel, 'codex-gpt-test');
   assert.equal(codex.apiModel, 'claude-test');
+});
+
+test('resolveExec reports the wired Claude runtime id and label', () => {
+  process.env.ANTHROPIC_DEFAULT_OPUS_MODEL = 'claude-opus-5-5[1m]';
+  const exec = store.resolveExec('opus', 'high');
+  assert.equal(exec.runsModel, 'claude-opus-5-5[1m]');
+  assert.equal(exec.apiModel, 'claude-opus-5-5[1m]');
+  assert.equal(exec.runsLabel, 'Claude Opus 5.5');
 });
 
 test('v2 catalog migration still discovers concrete routes', () => {
@@ -60,6 +69,10 @@ test('models payload contains resolved category policy without grade vocabulary'
   seedCatalog([{ slug: 'codex-gpt-5-6-luna', id: 'claude-luna', label: 'Luna' }]);
   const payload = store.modelsPayload();
   assert.ok(payload.categories.length);
+  assert.deepEqual(payload.discovered.filter((model: { slug?: string }) => model.slug === 'opus'), [{
+    backend: 'claude', source: null, slug: 'opus', id: 'claude-opus-5-5[1m]', label: 'Claude Opus 5.5',
+  }]);
+  assert.ok(payload.discovered.some((model: { slug?: string }) => model.slug === 'codex-gpt-5-6-luna'));
   assert.deepEqual(payload.globalFallback, { label: 'availability fallback', model: 'sonnet', effort: 'high' });
   assert.doesNotMatch(JSON.stringify(payload), /grade-[1-4]|tierBackend|routingLadder|routingBias|profiles/);
   assert.ok(payload.categories.every((category?: any) => category.id && category.route));
