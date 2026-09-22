@@ -9,6 +9,7 @@ const { createHash, randomUUID } = require('node:crypto') as typeof import('node
 const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
 const { runProcessVerification, shellCommand } = require('./ports/process.js') as typeof import('./ports/process.js');
 const { canonicalPath } = require('./kernel/worktree.js') as { canonicalPath(value: string): string };
+const { crossedWorktreeRefusalMessage } = require('./refusal-guidance.js') as typeof import('./refusal-guidance.js');
 
 type CaptureSlotFileSystem = Pick<typeof fs, 'existsSync' | 'mkdirSync' | 'readdirSync' | 'renameSync' | 'rmSync' | 'writeFileSync'>;
 
@@ -35,6 +36,7 @@ type VerificationCaptureStore = Readonly<{
   getTicket(slug: string, ticket: string): unknown;
   workingTreeDeliveryCandidate(slug: string, ticket: unknown): Readonly<{ candidate: Readonly<{ source: string; value: string }> }> | null;
   recordVerificationCapture(slug: string, ticket: string, capture: Readonly<Record<string, unknown>>): CaptureRecordResult;
+  crossedWorktreeBinding(slug: string, ticket: unknown, actualWorktree: string): import('./refusal-guidance.js').CrossedWorktreeBinding | null;
 }>;
 type CaptureProject = Readonly<{ slug: string; path: string }>;
 type CaptureSlotLease = Readonly<{
@@ -502,6 +504,25 @@ function dispatchBoundWorktree(target: CaptureTarget): string | null {
   return worktree || null;
 }
 
+// A capture refusal has to separate "you ran this from the wrong place" from "your dispatch is bound to a
+// checkout another live executor owns". The second is unactionable as written - the bound tree cannot be entered,
+// and its contents are the other ticket's - so the shared crossed-binding message replaces it (GH-235).
+function crossedCaptureRefusal(target: CaptureTarget, actualWorktree: string): string | null {
+  const project = captureProject(target);
+  if (!project) return null;
+  const store = require('./store.js') as VerificationCaptureStore;
+  const ticket = store.getTicket(project.slug, target.ticket);
+  const crossing = store.crossedWorktreeBinding(project.slug, ticket, actualWorktree);
+  return crossing ? crossedWorktreeRefusalMessage('verify-capture', crossing) : null;
+}
+
+// Both refusals a bound worktree can produce, in the order they have to be tried: a crossing first, because
+// "run it from the bound worktree" is impossible advice once another live executor owns that tree.
+function boundWorktreeRefusal(target: CaptureTarget, actualWorktree: string, mismatch: string): string {
+  return crossedCaptureRefusal(target, actualWorktree)
+    || `verify-capture: ${target.ticket}'s dispatch is bound to worktree ${canonicalPath(dispatchBoundWorktree(target)!)}, but ${mismatch}`;
+}
+
 function isWithinWorktree(root: string, candidate: string): boolean {
   const relative = path.relative(root, canonicalPath(candidate));
   if (relative === '') return true;
@@ -527,7 +548,7 @@ function resolveCaptureCwd(target: CaptureTarget | null, cwd: string, explicitWo
     if (canonicalBound && canonicalWorktree !== canonicalBound) {
       return Object.freeze({
         cwd,
-        refusal: `verify-capture: ${target!.ticket}'s dispatch is bound to worktree ${canonicalBound}, but --worktree names ${canonicalWorktree}. Only the bound worktree can verify this ticket; run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`,
+        refusal: boundWorktreeRefusal(target!, canonicalWorktree, `--worktree names ${canonicalWorktree}. Only the bound worktree can verify this ticket; run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`),
       });
     }
     if (!isWithinWorktree(canonicalWorktree, cwd)) {
@@ -538,7 +559,7 @@ function resolveCaptureCwd(target: CaptureTarget | null, cwd: string, explicitWo
   if (canonicalBound && !isWithinWorktree(canonicalBound, cwd)) {
     return Object.freeze({
       cwd,
-      refusal: `verify-capture: ${target!.ticket}'s dispatch is bound to worktree ${canonicalBound}, but this command ran from ${cwd}. Run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`,
+      refusal: boundWorktreeRefusal(target!, cwd, `this command ran from ${cwd}. Run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`),
     });
   }
   return Object.freeze({ cwd: target ? captureWorkingDirectory(target, cwd) : cwd, refusal: null });

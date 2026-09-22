@@ -60,7 +60,7 @@ const {
 } = require('./mcp-shared');
 const { sourceRevisionBaseline } = require('./source-revision-capability');
 const { reviewCandidateFromSubmission, sameReviewCandidate } = require('./kernel/review-binding.js');
-const { inheritedRejectedDuplicateGuidance } = require('./refusal-guidance.js');
+const { inheritedRejectedDuplicateGuidance, crossedWorktreeRefusalMessage } = require('./refusal-guidance.js');
 
 type ToolDefinition = {
   name: string;
@@ -335,6 +335,37 @@ function submissionRoot(meta: any, worktree: any, commit: string, gitRef: string
     }
     return repository;
   }
+}
+
+// Everything commit can check about where this executor is standing, before it looks at a single path: the
+// dispatch's isolation contract, and whether the checkout it ran from is crossed with another live claim.
+function unlinkedIsolatedCommit(ticket: any, root: string) {
+  if (ticket.dispatch?.sharedTree !== false) return false;
+  const location = commitScope.linkedWorktree(root);
+  return !location.ok || !location.linked;
+}
+
+function commitWorktreeRefusal(slug: string, ticket: any, root: string) {
+  if (unlinkedIsolatedCommit(ticket, root)) {
+    return {
+      reason: 'worktree_isolation',
+      message: `commit: refused ${ticket.ref}; this dispatch requires a linked worktree. Do not commit in the shared tree. Report that the executor lost its worktree to the orchestrator and re-dispatch.`,
+    };
+  }
+  const crossing = store.crossedWorktreeBinding(slug, ticket, root);
+  return crossing ? { reason: 'crossed_worktree_binding', message: crossedWorktreeRefusalMessage('commit', crossing) } : null;
+}
+
+// The same standing check for submit, with one deliberate asymmetry: the crossing half runs only when the
+// caller supplied a worktree, because `submissionRoot` otherwise falls back to process.cwd(), which is the
+// board server's directory rather than the executor's tree, and every worktree-less submit would read as a
+// crossing.
+function submitWorktreeRefusal(slug: string, ticket: any, root: string, args: any) {
+  if (verifyEmbedsWorktreeRoot(args.verify, root)) {
+    throw new Error(`submit: refused ${ticket.ref}; verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
+  }
+  const crossing = args.worktree == null ? null : store.crossedWorktreeBinding(slug, ticket, root);
+  return crossing ? { reason: 'crossed_worktree_binding', message: crossedWorktreeRefusalMessage('submit', crossing) } : null;
 }
 
 function collectGitSubmissionFacts(options: any) {
@@ -844,17 +875,8 @@ const tools: ToolDefinition[] = [
         return mutationAck(slug, { ok: false, ticket, reason: 'not_owner', message: `commit: ${ticket.ref} must be claimed by "${by}" before committing.${released}` });
       }
       const root = worktreeRoot(args.worktree, 'commit');
-      if (ticket.dispatch && ticket.dispatch.sharedTree === false) {
-        const location = commitScope.linkedWorktree(root);
-        if (!location.ok || !location.linked) {
-          return mutationAck(slug, {
-            ok: false,
-            ticket,
-            reason: 'worktree_isolation',
-            message: `commit: refused ${ticket.ref}; this dispatch requires a linked worktree. Do not commit in the shared tree. Report that the executor lost its worktree to the orchestrator and re-dispatch.`,
-          });
-        }
-      }
+      const standing = commitWorktreeRefusal(slug, ticket, root);
+      if (standing) return mutationAck(slug, { ok: false, ticket, ...standing });
       const scope = ticketCommitScope(slug, ticket);
       const outsideWorktree = commitScope.validateRelativeScopes(scope).outside;
       if (outsideWorktree.length) {
@@ -1025,9 +1047,8 @@ const tools: ToolDefinition[] = [
       }
       const gitRef = args.gitRef || `refs/sidequest/${ticket.ref}`;
       const root = submissionRoot(meta, args.worktree, commit, gitRef);
-      if (verifyEmbedsWorktreeRoot(args.verify, root)) {
-        throw new Error(`submit: refused ${ticket.ref}; verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
-      }
+      const standing = submitWorktreeRefusal(slug, ticket, root, args);
+      if (standing) return mutationAck(slug, { ok: false, ticket, ...standing });
       const verify = String(args.verify || '').trim();
       const collected = collectGitSubmissionFacts({ slug, ticket, root, commit, gitRef, base: args.base });
       const { target, range, scope } = collected;
