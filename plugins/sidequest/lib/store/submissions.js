@@ -8,7 +8,7 @@ const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require("../sou
 const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require("../kernel/review-binding");
 const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require("../kernel/wave");
 const { isInScope, scopedPaths } = require("../scope-match");
-const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance } = require("../refusal-guidance.js");
+const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyDeliveryContentCommitGuidance } = require("../refusal-guidance.js");
 function createSubmissions(dependencies) {
   const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
@@ -454,6 +454,11 @@ Expires: ${checkpoint.expiresAt}`;
   function pendingSubmission(t) {
     return !!(t && t.submission && (t.submission.commit || t.submission.sourceRevision) && !t.submission.integratedAt);
   }
+  function applyDeliveryAwaitingContentCommit(ticket) {
+    const integration = ticket?.submission?.integration;
+    if (!integration || integration.outcome !== "delivered" || integration.contentCommit) return false;
+    return Array.isArray(integration.dirtyFiles) && integration.dirtyFiles.length > 0;
+  }
   function submissionGitRef(ticket) {
     return `refs/sidequest/${ticket.ref}`;
   }
@@ -698,7 +703,15 @@ ${verify.outputTail}` : null
     const ticket = getTicket(slug, idOrRef);
     if (!ticket) return { ok: false, reason: "not_found" };
     if (!pendingSubmission(ticket)) {
-      return { ok: false, reason: "submission_required", ticket, message: `${ticket.ref} has no submission to integrate.` };
+      const awaitingContentCommit = applyDeliveryAwaitingContentCommit(ticket);
+      if (!awaitingContentCommit || opts?.completingApplyDelivery !== true) {
+        return {
+          ok: false,
+          reason: "submission_required",
+          ticket,
+          message: awaitingContentCommit ? `${ticket.ref} has no submission to integrate. ${applyDeliveryContentCommitGuidance(ticket.ref)}` : `${ticket.ref} has no submission to integrate.`
+        };
+      }
     }
     const candidateReview = candidateReviewRelation(slug, ticket);
     if (candidateReview) {
@@ -1009,6 +1022,10 @@ ${verify.outputTail}` : null
     const missing = candidateCommits.filter((commit) => !deliveredPatchIds.has(patchIdForCommit(repo, String(commit))));
     return missing.length ? { ok: false, missing } : { ok: true, evidence: "equivalent_patches" };
   }
+  function applyDeliveryTreeMatchesCandidate(repo, submission, deliveryCommit) {
+    const divergent = pathsWithDifferentContent(repo, String(submission.commit || ""), deliveryCommit, changedIntegrationPaths(repo, submission));
+    return divergent.length ? { ok: false, missing: divergent } : { ok: true, evidence: "candidate_tree_committed" };
+  }
   function reviewedMergedTreeInteraction(repo, ticket, sourceCommit, resultingHead, requestedInteraction) {
     const interaction = String(requestedInteraction || "").trim();
     if (!interaction) return { ok: true, interaction: null };
@@ -1240,7 +1257,10 @@ ${verify.outputTail}` : null
   }
   function recordDeliveredSubmission(slug, idOrRef, opts) {
     opts = opts || {};
-    const preflight = validateIntegrationSubmission(slug, idOrRef, { deliveryInteractionCommit: opts.deliveryInteractionCommit });
+    const preflight = validateIntegrationSubmission(slug, idOrRef, {
+      deliveryInteractionCommit: opts.deliveryInteractionCommit,
+      completingApplyDelivery: opts.completingApplyDelivery === true
+    });
     if (!preflight.ok) return preflight;
     const preflightTicket = preflight.ticket;
     if (opts.skipVerify === true) return { ok: false, reason: "delivery_verify_required", ticket: preflightTicket, message: `${preflightTicket.ref} reconciliation requires a passing merged-tree verification; skipVerify is not allowed.` };
@@ -1327,6 +1347,7 @@ ${verify.outputTail}` : null
           message: `${ticket.ref} reconciliation refused: non-reachable delivery must name its immutable ${submissionGitRef(ticket)} candidate, not ${deliveryCommit}.`
         };
       }
+      const completingApplyDelivery = opts.completingApplyDelivery === true && !workingTreeDelivery;
       const revisionProof = workingTreeDelivery && requestedDeliveryRevision ? deliveryRevisionProof(repo, ticket, deliveryCommit, {
         requested: requestedDeliveryRevision,
         resolvedPaths,
@@ -1336,14 +1357,14 @@ ${verify.outputTail}` : null
         reason
       }) : null;
       if (revisionProof && !revisionProof.ok) return Object.assign({ ticket }, revisionProof);
-      const content = revisionProof ? revisionProof.content : workingTreeDelivery && !reachable ? workingTreeContainsSubmittedContent(repo, ticket.submission, deliveryCommit) : deliveryContainsSubmittedContent(repo, ticket.submission, deliveryCommit);
+      const content = completingApplyDelivery ? applyDeliveryTreeMatchesCandidate(repo, ticket.submission, deliveryCommit) : revisionProof ? revisionProof.content : workingTreeDelivery && !reachable ? workingTreeContainsSubmittedContent(repo, ticket.submission, deliveryCommit) : deliveryContainsSubmittedContent(repo, ticket.submission, deliveryCommit);
       if (!content.ok) {
         return {
           ok: false,
           reason: "delivery_content_missing",
           ticket,
-          missingCommits: content.missing,
-          message: `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${content.missing.join(", ")}. When the candidate was rebased, squash-merged, or conflict-resolved before it landed, name that landed revision with deliveryRevision so the proof reads its tree instead of the working tree, plus resolvedPaths for every path you resolved by hand.`
+          ...completingApplyDelivery ? { divergentPaths: content.missing } : { missingCommits: content.missing },
+          message: completingApplyDelivery ? `${ticket.ref} reconciliation refused: ${deliveryCommit} is not the tree its apply delivery materialized; it differs from candidate ${ticket.submission.commit} for ${content.missing.join(", ")}. Commit the applied tree unchanged and record that commit.` : `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${content.missing.join(", ")}. When the candidate was rebased, squash-merged, or conflict-resolved before it landed, name that landed revision with deliveryRevision so the proof reads its tree instead of the working tree, plus resolvedPaths for every path you resolved by hand.`
         };
       }
       const interaction = workingTreeDelivery ? { ok: true, interaction: null } : reviewedMergedTreeInteraction(repo, ticket, deliveryCommit, resultingHead, opts.deliveryInteractionCommit);
@@ -1360,11 +1381,18 @@ ${verify.outputTail}` : null
       }
       const verify = verifyDeliveredSubmission(slug, ticket, replacementRequirement ? { requirement: replacementRequirement } : void 0);
       if (!verificationAccepted(verify)) {
-        return integrationFailure(slug, ticket, {
-          reason: `${verificationOutcome(verify)}_recorded_delivery`,
-          verify,
-          message: `${ticket.ref} merged-tree verification returned ${verify.status} for recorded delivery ${deliveryCommit}: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || "not created"}.`
-        });
+        const failureReason = `${verificationOutcome(verify)}_recorded_delivery`;
+        const failureMessage = `${ticket.ref} merged-tree verification returned ${verify.status} for recorded delivery ${deliveryCommit}: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || "not created"}.`;
+        if (completingApplyDelivery) {
+          return {
+            ok: false,
+            reason: failureReason,
+            ticket,
+            verify,
+            message: `${failureMessage} Its recorded apply delivery is unchanged and still awaits its content commit, so fix what the verifier reported and bind the same commit again with deliveryCommit.`
+          };
+        }
+        return integrationFailure(slug, ticket, { reason: failureReason, verify, message: failureMessage });
       }
       const deliveredFiles = revisionProof ? revisionProof.deliveredFiles : workingTreeDelivery ? workingTreeDeliveryPaths(repo) : interaction.interaction ? Array.from(/* @__PURE__ */ new Set([...deliveredCommitPaths(repo, deliveryCommit), ...interaction.interaction.paths])) : deliveredCommitPaths(repo, deliveryCommit);
       const deliveryIdentity = {
@@ -1377,18 +1405,24 @@ ${verify.outputTail}` : null
         ...revisionProof ? { revision: revisionProof.revision } : {}
       };
       const recorded = updateSubmissionIntegration(slug, ticket.id, {
-        mode: interaction.interaction ? "recorded-reviewed-interaction" : workingTreeDelivery ? "recorded-working-tree" : replacementRequirement ? "recorded-verify-superseded" : "recorded",
+        mode: interaction.interaction ? "recorded-reviewed-interaction" : workingTreeDelivery ? "recorded-working-tree" : completingApplyDelivery ? "recorded-apply-content-commit" : replacementRequirement ? "recorded-verify-superseded" : "recorded",
         pinnedRef: submissionGitRef(ticket),
         pinnedCommit: ticket.submission.commit,
         deliveryCommit,
         resultingHead,
-        contentCommit: workingTreeDelivery ? deliveryCommit : resultingHead,
+        // An apply binding claims one exact commit holds the materialized tree, and that
+        // is the commit its content was checked against, so lineage reads it rather than
+        // whatever the branch head has moved on to.
+        contentCommit: workingTreeDelivery || completingApplyDelivery ? deliveryCommit : resultingHead,
         deliveryRevision,
         deliveryIdentity,
         targetBranch: target.branch,
         targetUpstream: target.upstream,
         changedPaths: changedIntegrationPaths(repo, ticket.submission),
         deliveredFiles,
+        // The applied bytes now live in a commit, so the dirty-file record that marked
+        // this delivery content-incomplete no longer describes it.
+        ...completingApplyDelivery ? { dirtyFiles: [] } : {},
         verify,
         ...replacementRequirement ? {
           verificationSupersession: {
@@ -2333,6 +2367,7 @@ ${verify.outputTail}` : null
       }
       const repaired = integratedRepairTicket(slug, source, repairRef);
       if (!repaired.ok) return Object.assign({ ticket: source }, repaired);
+      const contentCommitOwed = applyDeliveryAwaitingContentCommit(repaired.repair) ? ` ${applyDeliveryContentCommitGuidance(repaired.repair.ref)}` : "";
       const repo = readMeta(slug)?.path;
       if (!repo) return { ok: false, reason: "project_unavailable", ticket: source };
       let changedPaths;
@@ -2359,7 +2394,7 @@ ${verify.outputTail}` : null
           reason: "lineage_paths_missing",
           ticket: source,
           missingPaths: unreviewedMissingPaths,
-          message: `${source.ref} supersession refused: ${repaired.repair.ref}'s recorded delivery omits submitted paths without reviewed retirement evidence: ${unreviewedMissingPaths.join(", ")}. Supply reviewedReplacements entries with path, reviewedBy, and reason for every intentionally retired path, or integrate a repair that delivers the full path lineage.`
+          message: `${source.ref} supersession refused: ${repaired.repair.ref}'s recorded delivery omits submitted paths without reviewed retirement evidence: ${unreviewedMissingPaths.join(", ")}. Supply reviewedReplacements entries with path, reviewedBy, and reason for every intentionally retired path, or integrate a repair that delivers the full path lineage.${contentCommitOwed}`
         };
       }
       let divergentPaths;
@@ -2380,7 +2415,7 @@ ${verify.outputTail}` : null
           reason: "lineage_content_diverged",
           ticket: source,
           divergentPaths: unreviewed,
-          message: `${source.ref} supersession refused: delivered content differs for ${unreviewed.join(", ")}. Supply reviewedReplacements entries with path, reviewedBy, and reason for every intentional replacement.`
+          message: `${source.ref} supersession refused: delivered content differs for ${unreviewed.join(", ")}. Supply reviewedReplacements entries with path, reviewedBy, and reason for every intentional replacement.${contentCommitOwed}`
         };
       }
       const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -3110,6 +3145,6 @@ ${verify.outputTail}` : null
     }));
     return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || "merge" };
   }
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
 }
 module.exports = { createSubmissions };

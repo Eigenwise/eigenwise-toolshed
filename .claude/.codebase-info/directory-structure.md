@@ -1,6 +1,6 @@
 # Directory structure
 
-Last Updated: 2026-09-14
+Last Updated: 2026-09-19
 
 - `.claude/`: project settings, live rules, and generated codebase map.
 - `.claude-plugin/`: marketplace manifest and published plugin entries.
@@ -9,12 +9,12 @@ Last Updated: 2026-09-14
 - `plugins/model-gateway/`: local model gateway CLI, registry hook, skills, and tests; `lib/` holds the shim/worker runtime, the per-model policy table, process supervision, the Windows detached launcher, lifecycle diagnostics, cache-sibling identity checks, bounded owner resolution, and full-width POSIX process probes.
 - `plugins/live-rules/`: rule-management skills and prompt/edit/session hooks.
 - `plugins/codebase-mapper/`: map-generation/update skills and context injection hooks.
-- `plugins/quartermaster/`: workspace setup and resupply skills (`setup`, `resupply`), the `update-toolshed` and `toolshed-doctor` skills, updater and workspace-plugin installers under `bin/`, transcript miner CLI under `bin/quartermaster.js`, streaming signal collector under `lib/`, a SessionEnd tally hook, and SessionStart hooks that inject the capability-capture charter every session (skipped where setup seeded the self-improvement live rule) plus a threshold-gated offer of a user-approved optimization round, a Stop hook that re-raises an overdue offer once per session at turn end, and a separate Stop freshness/update check plus compaction-window diagnostics and billing-path checks. Setup seeds an adapted reuse-first implementation baseline and self-improvement rule into each approved workspace.
+- `plugins/quartermaster/`: workspace setup and resupply skills (`setup`, `resupply`), the `update-toolshed` and `toolshed-doctor` skills, updater and workspace-plugin installers under `bin/`, transcript miner CLI under `bin/quartermaster.js`, streaming signal collector under `lib/`, a language-agnostic CRAP (Change Risk Anti-Patterns) gate under `lib/crap.js` exposed as `bin/quartermaster.js crap` (`skills/setup/references/crap-gate.md`), a SessionEnd tally hook, and SessionStart hooks that inject the capability-capture charter every session (skipped where setup seeded the self-improvement live rule) plus a threshold-gated offer of a user-approved optimization round, a Stop hook that re-raises an overdue offer once per session at turn end, and a separate Stop freshness/update check plus compaction-window diagnostics and billing-path checks. Setup seeds an adapted reuse-first implementation baseline and self-improvement rule into each approved workspace.
 - `plugins/test-support/`: JavaScript test scanner shared by Quartermaster, Observability, and Model Gateway tests.
 - `docs/`: Astro/Starlight prose, generated reference source, scripts, and synthetic screenshots.
 - `sandbox/windows/`: maintainer-only, gitignored Windows Sandbox launcher, guest bootstrap, and PowerShell contract test — never committed, no public docs page.
 - `scripts/release/`: release note, plan, cut, finalize, guard, manifest, promotion/publication helpers, and release tests. Protected publication prepares an unprotected release branch, promotes it to `main` through a reviewed PR, then tags the exact merged commit and prints a `main`-to-`develop` sync PR.
-- `scripts/quality/`: the CRAP delta gate. `crap.mjs` runs the Sidequest suite under V8 coverage, scores only `src/` TypeScript, merges direct `tsx` coverage with the compiled child-process counterpart, and fails a changed function whose complexity rose against the merge base with `develop`. Run it as `npm run quality:crap` from `plugins/sidequest`; it is a local gate, not wired into CI. `crap.test.mjs` covers the scorer and the gate through an injectable baseline reader.
+- `scripts/quality/`: the CRAP delta gate. `crap.mjs` runs the Sidequest suite under V8 coverage, scores only `src/` TypeScript, merges direct `tsx` coverage with the compiled child-process counterpart, and fails a changed function whose complexity rose against the merge base with `develop`. Run it as `npm run quality:crap` from `plugins/sidequest`; it is a local gate, not wired into CI. `crap.test.mjs` covers the scorer and the gate through an injectable baseline reader. This is separate from Quartermaster's `lib/crap.js`, a language-agnostic version of the same CRAP formula that any approved workspace can adopt via lcov and `lizard` instead of Sidequest's own V8/TypeScript pipeline.
 - `.github/workflows/`: test, release guard, release cut, and docs deployment automation.
 - `examples/`: small example projects, not production plugin runtime.
 

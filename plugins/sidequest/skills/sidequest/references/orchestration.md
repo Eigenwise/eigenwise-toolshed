@@ -190,9 +190,8 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   replacing it. If an isolated worker's recorded worktree is gone, do not `SendMessage` it: redispatch after
   reading the ticket instead, because a resumed agent must never fall back to the shared checkout. Preserve a
   verified commit, or recover the declared-scope diff, then read the ticket and its thread again before deciding
-  whether a replacement is needed. Never overwrite stranded work by blindly redispatching. Use `sidequest worktrees status` to check the disk use of active worktrees, recovery backups, and quarantine. Use `sidequest worktrees sweep --dry-run` to review old executor worktrees and recovery entries; it only removes worktrees that are clean, at least three hours old, and whose commits are patch-equivalent to
-  `origin/main`. Sweep, reclaim, and failed-creation recovery never follow a dependency link. Before removal, each unlinks only a Sidequest-created link whose recorded normalized path, expected target, and checkout identity still match; missing, foreign, unreadable, or changed links remain protected as `dependency_link_untrusted`. The dry run also names expired backups and quarantine entries, which default to 14 days and three per agent. Pass `--yes` only after reviewing the list. When a natural wakeup shows that an executor has no claim and no commit past the
-  2–3 minute grace period, stop it, then diagnose before retrying: `pulse <ref>` and read the denial or
+  whether a replacement is needed. Never overwrite stranded work by blindly redispatching. Use `sidequest worktrees status` to check active worktrees and quarantine storage per directory with a total. Use `sidequest worktrees sweep --dry-run` to review old executor worktrees and recovery entries, and `--all-projects` to walk every registered project rather than just this one. Cleanup classifies in this order: `status_unknown` keeps; `tracked_changes` keeps; `too_young` keeps for 3 hours; `upstream_ambiguous` or `upstream_unavailable` keeps; `untracked_recent` keeps, while `untracked_quarantined` moves a tree holding untracked or ignored content older than 7 days whole into quarantine; `ticket_archived`, `ticket_done`, `branch_reachable`, and `patch_equivalent` remove; `commits_on_branch` removes the tree and retains its branch; `not_integrated_salvage` salvages work older than 7 days; then `not_integrated` keeps. Quarantined work is parked for 14 days and removed on age alone; nothing younger is ever deleted, and entries under a live claim are kept. Nothing is deleted where it stands: a reclaimed tree is renamed into quarantine, and content that was there when the sweep classified it, or that arrives before the move, parks the whole tree. A tree counts as clean only when its status carries nothing untracked or ignored (ignored content counts, including a gitignored nested repository; the one exception is installed files under an ignored `node_modules`, which worktree setup regenerates); anything else stays in quarantine. The moved copy is re-read once before its files are deleted, so a file written into it in the instant after that read is deleted with it. A commit on the worktree's own branch is not lost: the branch is deleted only with `update-ref -d refs/heads/<branch> <tip>` against the tip re-read at that destination, so a commit landed on it after that read leaves the branch retained as `tip_moved`. That compare is by value, so a ref moved away and then back to the same tip is not detected. A detached checkout is never reclaimed on ticket status alone: before its tree is touched, and again at the quarantine destination, the sweep asks the main checkout whether another ref already contains that HEAD, counting neither the checkout's own private metadata, nor a per-worktree ref (`refs/worktree/`, `refs/bisect/`, `refs/rewritten/`) of the checkout doing the asking, nor any branch this sweep could still delete, which includes every `worktree-agent` branch the orphan pass may take once the reclaims are done; a probe that cannot answer keeps the tree, and so does a branch listing it cannot read. A HEAD no other ref holds keeps its checkout where it stands as `detached_head_unpinned`, and one whose ref disappears mid-reclaim parks the moved tree: the park runs `git worktree repair` against the quarantine destination, so the parked tree keeps a working HEAD and its commit stays in `rev-list --all` after the prune. A repair that cannot be confirmed withholds every repository prune until a later sweep repairs every retained park, and is reported as a failure, leaving both the files and the registration they came from intact. Expiry removes quarantine files with link-safe filesystem deletion; only after retained parks reconcile does Git's metadata-only prune remove their registrations, otherwise that metadata cleanup is reported as deferred. A review's detached checkout still reclaims normally, because its candidate is pinned by `refs/sidequest/<ref>`. The limit is a commit made on a detached HEAD after those reads. On Windows a process still holding the tree open makes the rename fail and the tree stays in place until a later pass, and quarantine lives under the Sidequest home, so a worktree on a different volume is never reclaimed and parks as `quarantine_failed` every pass until the quarantine directory is on the same volume. Sweep, reclaim, and failed-creation recovery never follow a dependency link: a rename never follows one, and the links are released at the quarantine destination after the move, which never touches their targets. Before removal, each unlinks only a Sidequest-created link whose recorded normalized path, expected target, and checkout identity still match; missing, foreign, unreadable, or changed links remain protected as `dependency_link_untrusted`. Every delivery path reclaims the candidate worktree in the same command, at zero age: `sidequest integrate`, `groom-close --integration`, and the MCP integrate and groomClose tools. A missing integration ref no longer skips the project; the settled check falls back to the repository default and the report says so. The dry run names expired quarantine entries. Pass `--yes` only after reviewing the list. When a natural wakeup shows that an executor has no claim and no commit past the
+  recorded retirement deadline, stop it, then diagnose before retrying: `pulse <ref>` and read the denial or
   terminal reason verbatim. Make ONE retry only when that diagnosis changes the dispatch; never blindly
   respawn the identical spec. When native Agent reports the exact supported Claude quota-limit signature before claim, the failure hook records that primary attempt
   and prepares the ticket's configured fallback with a fresh token. Run `dispatch` for the ref again, then
@@ -203,23 +202,59 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   then release before replacing it. A dispatch failure needs verbatim ticket evidence and user-visible
   escalation; never pull substantial work inline by default. Other `SendMessage` calls
   carry new information such as a scope change or unblock, never a "wake up" poke.
-- **Retire an attempt no runtime will finish.** Two shapes qualify. When `pulse` reports the dispatch
-  `prepared` or `launched` with no bound runtime identity, no claim, and no checkpoint, there is nothing to
-  wait for: the spawn never started or never bound. And when it reports `stalled` with "bound a runtime that
-  never claimed, past the claim-idle backstop", that runtime is gone: a claim is a bound executor's FIRST
-  action, and its stop hook never fired, so nothing else will ever retire the attempt. Retire either in one
+- **Retire an attempt no runtime will finish.** Use `recoveryEvidence` only when `pulse` reports an
+  unclaimed attempt as `stalled`: it has no readable runtime signal, or its deadline has passed. Retire it in one
   call with `sidequest dispatch <ref> --recovery-evidence "<observed failure evidence>"` (MCP
   `recoveryEvidence`). Add `--retire-only` (MCP `retireOnly:true`) when the attempt should be retired without
-  preparing a replacement; it accepts those same two recovery-evidence shapes. A tokened claim refused as
+  preparing a replacement. `pulse` reports `starting` while the same attempt remains inside that deadline. A tokened claim refused as
   `prepared_compatibility_stale` is already terminal: that refusal retires its own stale attempt, so the executor
   stops without claiming and the orchestrator dispatches a fresh token. That records the evidence on the failed
   attempt, keeps it in `dispatch.attempts` as history, and prepares exactly one fresh identity when replacement
-  is requested. It refuses while a bound attempt is still inside the backstop, and once the attempt is
-  checkpointed or terminal; the refusal names which of those it found and, for a bound one, how long is left.
+  is requested. It refuses while the attempt is still inside the grace, and once it is claimed,
+  checkpointed, or terminal; the refusal names which of those it found and, for an unclaimed one, the exact instant
+  it becomes retirable, the minutes left until then, and the runtime signal it measured from. An attempt that
+  DID claim is untouched by the grace and still waits for the hour-long idle backstop.
+  **What the grace actually is.** `recoveryEvidence` is your attestation and the board does not verify it:
+  any text is accepted. So the grace is the ONLY mechanical protection against retiring a runtime that is
+  still starting, and an elapsed grace does not prove the runtime is gone. It is 15 minutes
+  (`SIDEQUEST_CLAIM_GRACE_MIN`, clamped to the idle backstop) measured from the newest runtime signal:
+  launch, WorktreeCreate start and completion, finished worktree provisioning, SubagentStart bind,
+  briefing fetch, claim, or a board write from that runtime itself. The launcher session is the trust boundary
+  for that eighth signal, and it is a wide one: you and every fan-out sibling write on it, so a board write
+  counts only when it lands on the attempt's own ticket, on the launcher session the dispatch recorded, after
+  launch, before any claim, and under the EXACT runtime name SubagentStart bound. A same-session caller that
+  deliberately writes under that bound name is trusted as that runtime — including you, so do not post
+  progress under an executor's agent name unless you mean to hold its attempt open. Any other `by`, your own
+  orchestrator identity included, a different session, or a comment written before launch counts for nothing,
+  and an attempt whose bind recorded only an agent id has no name to match, so no board write can speak for it.
+  Each signal pushes the deadline out because a gateway first turn, a briefing fetch,
+  and a pre-claim skill load are all legitimately slow. Preparing the dispatch is not one of those signals, so an
+  attempt that recorded none of them, a spawn that never started, is retirable at once. An attempt whose WorktreeCreate has not recorded
+  finished provisioning (a cold `npm ci` is minutes of silence) waits for the idle backstop. One authority answers this
+  for every route, so `groomClose` with `recoveryEvidence` refuses with the same countdown the dispatch call prints, and
+  `sidequest groom-close --recovery-evidence` is that same authority rather than a second implementation: both surfaces
+  print the same refusal inside the deadline and retire-and-close together past it. Retiring an attempt whose runtime is still
+  starting strands it: its claim is then refused and a second runtime can start on the same ticket. When the
+  refusal names a deadline, wait for it rather than looking for another route.
+  **Which WorktreeCreate callbacks are generation-scoped.** Five are: creation completed, finished provisioning,
+  provisioning failure, dependency link, and recovery. Each must present the attempt generation its binding handed
+  out, and a missing or retired one is refused as `missing_attempt` or `stale_attempt` having stamped nothing. The
+  start binding itself is NOT: the hook learns its generation from that call, and a WorktreeCreate payload carries
+  nothing that tells two generations of one session and checkout apart, so the start binding is scoped to the
+  session and the checkout. It refuses `stale_attempt` when a retired attempt still holds the checkout rather than
+  handing a late hook some other live attempt, and refuses `missing_attempt` rather than letting a generation-less
+  second caller acquire the live generation of a checkout that is still being created.
   TaskStop output and host task notifications do not include the dispatch token, attempt generation, and immutable
-  ticket binding, so they cannot record a terminal dispatch. The backstop remains the only recovery route when
-  a bound unclaimed runtime dies without SubagentStop or PostToolUseFailure. A claimed executor that is provably
-  dead goes through claim release or `groomClose --recoveryEvidence`. The exception is a live claimed executor
+  ticket binding, so they cannot record a terminal dispatch, but they are the evidence `--recovery-evidence`
+  wants: you spawned the runtime, so you are the authority that can attest the host reported it gone. Attest what
+  you observed, not what you assume. The host is
+  not documented to fire SubagentStop for an agent that ends with `status: failed`, and SubagentStop carries no
+  terminal status field, so do not wait for a stop hook that may never arrive. A ticket whose bound attempt never
+  claimed closes through that same one call: past the deadline, `groomClose --deliveryCommit <sha> --recoveryEvidence
+  "<evidence>"` retires the attempt and closes the ticket together, and inside the deadline it refuses with the countdown.
+  A claimed executor that is provably
+  dead goes through claim release first; `groomClose --recoveryEvidence` refuses a live claim as
+  `active_dispatch` on both the CLI and MCP surfaces and only retires an attempt that never claimed. The exception is a live claimed executor
   that resumed into its original linked checkout but lost only the board binding: it uses `dispatch` with
   `recoveryEvidence`, `claimHolder`, and `worktree`; the board verifies the stored executor and restores that
   same identity without releasing.

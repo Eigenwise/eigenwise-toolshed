@@ -485,7 +485,11 @@ function ticketCloseout(ticket?: any) {
   if (ticket?.dispatch?.readonly === true) {
     return `Closeout: this prepared dispatch is read-only. Close with done --model ${resolved.runsModel} --effort ${effort} and include the full final report in its completion comment. Do not commit or submit. Then stop without a routine SendMessage.`;
   }
-  return `Closeout: this prepared dispatch is write-capable. Commit scoped repo changes, then put the full final report in submit.body with the commit hash and verification execution evidence: changed behavior, named assertion, and empty-state proof for acquisition, install, download, or cache work. A clean declared scope whose ticket explicitly sets externalDeliverable:true closes through done only after the pinned verify-capture wrapper records the current dispatch attempt and revision; include the full final report in its completion comment. Do not post a separate pre-submit final-report comment. Submit writes the short terminal submission marker; do not repeat the report in another comment. Then stop without a routine SendMessage.`;
+  const externalDeliverableRequirement = ticket.dispatch?.verificationRequirement || {};
+  const externalDeliverableVerify = externalDeliverableRequirement.command
+    ? 'the pinned verify-capture wrapper records the current dispatch attempt and revision'
+    : `explicit done --verify evidence for the pinned ${externalDeliverableRequirement.kind || 'custom'} requirement is supplied`;
+  return `Closeout: this prepared dispatch is write-capable. Commit scoped repo changes, then put the full final report in submit.body with the commit hash and verification execution evidence: changed behavior, named assertion, and empty-state proof for acquisition, install, download, or cache work. A clean declared scope whose ticket explicitly sets externalDeliverable:true closes through done only after ${externalDeliverableVerify}; include the full final report in its completion comment. Do not post a separate pre-submit final-report comment. Submit writes the short terminal submission marker; do not repeat the report in another comment. Then stop without a routine SendMessage.`;
 }
 
 function continuationResumeDecision(continuation?: any) {

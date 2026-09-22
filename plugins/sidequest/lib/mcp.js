@@ -118,7 +118,7 @@ function toolMutates(name, args) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === "new_board_profile") return args.profile !== void 0;
   if (name === "global_fallback") return args.model !== void 0 || args.effort !== void 0;
-  if (name === "board_config") return args.name !== void 0 || args.alwaysInScope != null || args.generatedPairs !== void 0 || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== void 0 || args.worktreeBase !== void 0 || args.notIntegratedSalvageAgeHours !== void 0 || args.worktreeRecoveryRetentionAgeHours !== void 0 || args.worktreeRecoveryRetentionMaxPerAgent !== void 0 || args.autoApproveTestScope !== void 0 || args.autoApproveScope !== void 0 || args.worktreeSetup !== void 0 || args.worktreeDependencyPaths !== void 0;
+  if (name === "board_config") return args.name !== void 0 || args.alwaysInScope != null || args.generatedPairs !== void 0 || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== void 0 || args.worktreeBase !== void 0 || args.notIntegratedSalvageAgeHours !== void 0 || args.worktreeRecoveryRetentionAgeHours !== void 0 || args.autoApproveTestScope !== void 0 || args.autoApproveScope !== void 0 || args.worktreeSetup !== void 0 || args.worktreeDependencyPaths !== void 0;
   return false;
 }
 function mutationQueueKey(name, args) {
@@ -252,15 +252,13 @@ const DELIVERY_REVISION_CONTRACT = "Landed revision reachable from the target; p
 const RESOLVED_PATHS_CONTRACT = "Diverging submitted paths resolved by hand; needs deliveryRevision. reason is the evidence.";
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   context_page: {
-    limit: "UTF-8 bytes.",
-    expectedRevision: "Revision."
+    limit: "UTF-8 bytes."
   },
   add: { complexity: "Legacy score; why required.", verify: ATTESTATION_VERIFY_CONTRACT },
   claim: { force: "Operator-only." },
   update: { verify: ATTESTATION_VERIFY_CONTRACT },
   supersede_submission: { supersededBy: "Repair ticket ref, not a commit." },
   comments: {
-    full: "Whole bodies.",
     since: "Comment id or ISO timestamp."
   },
   list: {
@@ -272,12 +270,10 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
     outputTail: "Required blocker/contradiction output."
   },
   story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
-  category_edit: { fallbackModel: "null clears fallback." },
+  category_edit: { fallbackModel: "null clears." },
   dispatch: {
-    sharedTree: "Tree.",
     reducedAgentSchema: "Only when name/mode missing; hook needs agent_id+auto|bypass mode.",
-    recoveryEvidence: "unbound or expired bound",
-    worktree: "Checkout."
+    recoveryEvidence: "Unverified; latest signal grace; only the bound runtime name counts."
   },
   integrate: {
     deliveryInteractionCommit: "Reviewed descendant, submitted paths only.",
@@ -288,7 +284,8 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
     deliveryCommit: "Prepared integration target.",
     deliveryInteractionCommit: "Reviewed descendant, submitted paths only.",
     deliveryRevision: DELIVERY_REVISION_CONTRACT,
-    resolvedPaths: RESOLVED_PATHS_CONTRACT
+    resolvedPaths: RESOLVED_PATHS_CONTRACT,
+    recoveryEvidence: "Unverified; retires unclaimed attempts past deadline; CLI too."
   },
   verdict: {
     outcome: "Candidate, not reviewer prose."

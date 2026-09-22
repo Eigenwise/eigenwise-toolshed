@@ -59,6 +59,8 @@ const {
   state,
 } = require('./mcp-shared');
 const { sourceRevisionBaseline } = require('./source-revision-capability');
+const { reviewCandidateFromSubmission, sameReviewCandidate } = require('./kernel/review-binding.js');
+const { inheritedRejectedDuplicateGuidance } = require('./refusal-guidance.js');
 
 type ToolDefinition = {
   name: string;
@@ -143,6 +145,7 @@ async function cleanupDeliveredWorktree(slug: string, projectPath: string, ticke
       execute: true,
       currentPath: store.nearestRepoRoot(process.cwd()),
       integrationTarget: store.ticketIntegrationTarget(slug, ticket),
+      minAgeMs: 0,
       ticketRef: ticket.ref,
     });
   } catch (_) {
@@ -175,11 +178,59 @@ function missingReleaseFragmentMessage(ref: string, fragmentPath: string, plugin
   return store.missingReleaseFragmentMessage(ref, fragmentPath, plugins);
 }
 
-function rejectedRelatedReleaseFragments(slug: string, ticket: any): string[] {
-  const relatedRefs = Array.isArray(ticket.links)
-    ? ticket.links.filter((link: any) => link?.type === 'related').map((link: any) => link.ref)
+function relatedTicketRefs(ticket: any): string[] {
+  return Array.isArray(ticket.links)
+    ? ticket.links.filter((link: any) => link?.type === 'related').map((link: any) => String(link.ref || '').trim()).filter(Boolean)
     : [];
-  return relatedRefs.flatMap((relatedRef: unknown) => {
+}
+
+function submittedRangeCommits(submission: any): string[] {
+  return Array.isArray(submission?.commits) && submission.commits.length
+    ? submission.commits.map((entry: unknown) => String(entry || '').toLowerCase()).filter(Boolean)
+    : [String(submission?.commit || '').toLowerCase()].filter(Boolean);
+}
+
+// Whether this repair may carry one overlapping submission's commits inside its own
+// full range. Deliberately narrow: only the DUPLICATE classification relaxes, and
+// only on the two halves the board writes itself during an oracle rejection — the
+// review ticket's own reviewTarget outcome and the source-side mirror that
+// recordBoundReviewOutcome writes with it. The mirror alone is not authority: it
+// lives in the row the submitting ticket owns. Everything else, including an active
+// claim, an unrelated source, a review pinned to a different candidate, and a range
+// that inherits only part of the rejected one, stays refused.
+function inheritedRejectedAdmission(slug: string, ticket: any, entryRef: string, rangeCommits: readonly string[]) {
+  const related = relatedTicketRefs(ticket).some((ref: string) => ref.toUpperCase() === String(entryRef).toUpperCase());
+  if (!related) return { ok: false as const, reason: 'not_related' };
+  const source = store.getTicket(slug, entryRef);
+  if (!source || !source.submission || source.id === ticket.id) return { ok: false as const, reason: 'source_unavailable' };
+  if (source.claim?.by) return { ok: false as const, reason: 'source_active' };
+  if (source.submission.integratedAt || source.submission.supersededBy) return { ok: false as const, reason: 'submission_integrated' };
+  const candidate = reviewCandidateFromSubmission(source.submission);
+  if (!candidate) return { ok: false as const, reason: 'candidate_unavailable' };
+  const relation = store.submissionReviewRelation(slug, source);
+  if (!relation) return { ok: false as const, reason: 'review_unbound' };
+  if (relation.conflict) return { ok: false as const, reason: 'review_conflict' };
+  if (relation.side !== 'both' || !relation.reviewTicket?.id || !relation.reviewTarget) return { ok: false as const, reason: 'mirror_only' };
+  if (String(relation.reviewTarget.outcome) !== 'rejected'
+    || String(relation.reviewTicket.oracle?.verdict?.outcome || '') !== 'rejected') {
+    return { ok: false as const, reason: 'not_rejected' };
+  }
+  if (!sameReviewCandidate(candidate, relation.reviewTarget.candidate)) return { ok: false as const, reason: 'stale_candidate' };
+  if (String(relation.mirror?.ticketId || '') !== String(relation.reviewTicket.id)
+    || String(relation.mirror?.outcome) !== 'rejected'
+    || !sameReviewCandidate(candidate, relation.mirror?.candidate)) {
+    return { ok: false as const, reason: 'mirror_mismatch' };
+  }
+  const inherited = submittedRangeCommits(source.submission);
+  const contained = new Set(rangeCommits.map((commit: string) => String(commit).toLowerCase()));
+  if (!contained.has(String(candidate.value).toLowerCase()) || !inherited.every((commit: string) => contained.has(commit))) {
+    return { ok: false as const, reason: 'partial_inheritance' };
+  }
+  return { ok: true as const, ref: source.ref, commit: String(source.submission.commit), review: relation.reviewTicket.ref };
+}
+
+function rejectedRelatedReleaseFragments(slug: string, ticket: any): string[] {
+  return relatedTicketRefs(ticket).flatMap((relatedRef: unknown) => {
     const source = store.getTicket(slug, relatedRef);
     if (source?.submission?.review?.outcome !== 'rejected') return [];
     const fragment = commitScope.ticketReleaseFragment(source.ref);
@@ -351,12 +402,18 @@ function collectGitSubmissionFacts(options: any) {
     const missingFragment = missingReleaseFragment(root, ticket.ref, scopedRange.paths || range.changedPaths);
     if (missingFragment) requirements.push({ code: 'missing_release_fragment', message: missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins), retryable: true });
   }
+  const overlappingSubmissions = range?.ok && ticket.dispatch?.sharedTree !== true
+    ? store.submissionsPayload(slug).tickets
+      .filter((entry: any) => entry.ref !== ticket.ref)
+      .filter((entry: any) => (Array.isArray(entry.submission.commits) && entry.submission.commits.length ? entry.submission.commits : [entry.submission.commit]).some((entryCommit: any) => range.commits.includes(entryCommit)))
+    : [];
+  const refusedOverlap = overlappingSubmissions
+    .map((entry: any) => ({ entry, admission: inheritedRejectedAdmission(slug, ticket, entry.ref, range.commits) }))
+    .find((overlap: any) => !overlap.admission.ok) || null;
   const duplicate = range?.ok
     ? ticket.dispatch?.sharedTree === true
       ? approvedBoundaries.find((boundary: { ref: string; commit: string }) => range.commits.includes(boundary.commit)) || null
-      : store.submissionsPayload(slug).tickets
-        .filter((entry: any) => entry.ref !== ticket.ref)
-        .find((entry: any) => (Array.isArray(entry.submission.commits) && entry.submission.commits.length ? entry.submission.commits : [entry.submission.commit]).some((entryCommit: any) => range.commits.includes(entryCommit)))
+      : refusedOverlap?.entry || null
     : null;
   return {
     target,
@@ -376,7 +433,7 @@ function collectGitSubmissionFacts(options: any) {
             code: 'duplicate_submission',
             message: ticket.dispatch?.sharedTree === true
               ? `submit: refused ${ticket.ref}; its range includes submitted sibling ${duplicate.ref}'s candidate ${duplicate.commit}. Use the approved boundary with \`--base ${duplicate.commit}\`, or omit base to select the newest approved boundary automatically.`
-              : `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.`,
+              : `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}. ${inheritedRejectedDuplicateGuidance(refusedOverlap?.admission?.reason)}`,
             retryable: false,
           },
         }
@@ -489,7 +546,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'done',
-    description: 'Finish. A readonly last dispatch closes without a submission; a clean writable scope needs externalDeliverable:true plus a current-attempt pinned verify-capture. Commandless working-tree delivery requires typed verify evidence.',
+    description: 'Finish. A readonly last dispatch closes without a submission; a clean writable scope needs externalDeliverable:true plus a current-attempt pinned verify-capture, or typed verify evidence when the ticket has no pinned command. Commandless working-tree delivery requires typed verify evidence.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -499,7 +556,7 @@ const tools: ToolDefinition[] = [
         model: { type: 'string', description: 'Concrete runtime model that actually worked this ticket (provenance).' },
         effort: { type: 'string', enum: store.VALID_EFFORTS },
         body: { type: 'string', description: 'Final report stored as the completion comment.' },
-        verify: { type: 'string', maxLength: 4000, description: 'Typed evidence required only for active commandless working-tree delivery. Command or suite delivery still requires its matching verify-capture.' },
+        verify: { type: 'string', maxLength: 4000, description: 'Typed evidence for active commandless working-tree delivery, and for a clean externalDeliverable:true closeout on a ticket without a pinned command. Command or suite delivery still requires its matching verify-capture.' },
         session: { type: 'string' },
       },
       required: ['ref', 'by', 'body'],
@@ -513,7 +570,7 @@ const tools: ToolDefinition[] = [
       const opts = { source: 'mcp', model, effort: args.effort, body, verify: args.verify, sessionId: sessionOf(args) };
       let res = store.completeTicket(slug, args.ref, by, opts);
       if (!res.ok && ['submission_required', 'empty_declared_scope'].includes(res.reason)) {
-        const noOp = provenNoOpCloseout(slug, res.ticket);
+        const noOp = provenNoOpCloseout(slug, res.ticket, args.verify);
         if (noOp.ok) {
           res = store.completeTicket(slug, args.ref, by, Object.assign({}, opts, {
             cleanDeclaredScope: true,
@@ -538,7 +595,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'groomClose',
-    description: 'Close with evidence. Delivery uses the ticket\'s prepared integration target when recorded, even if the board target or checkout changed later. For manually composed candidates with different pinned verifiers, run every pinned verifier and the full composed gate, then use deliveryCommit with deliveryMethod:"manual" and omit integration:true; integration:true is only for a matching delivered wave. verificationSupersession is the explicit exception for a terminal recorded submission whose sealed verifier no longer runs: it runs the replacement command, and records the old requirement, replacement requirement, reason, and result as a distinct delivered outcome. A non-reachable pinned candidate proves its content in the integration working tree, or — when it was rebased, squash-merged, or conflict-resolved before landing — at a deliveryRevision reachable from the target, per submitted path: identical blob, candidate deletion absent there, or the candidate patch reverse-applying onto that tree. Anything left over refuses delivery_content_diverged until resolvedPaths attests exactly those paths, and the record keeps the per-path contentProof. An unclaimed prepared or launched dispatch before runtime binding can be recovered only with deliveryMethod:"manual" and recoveryEvidence once deliveryCommit is reachable from the recorded integration branch. A pending candidate requires verified delivery, which reconciles the delivered commit against the candidate without checking sibling declared scope; abandonSubmission: true records discard, and a candidate already contained in the recorded target (in remote mode that includes the frozen origin/<branch> ref) records already-landed delivery instead of abandoning shipped work. A recorded revision names the ref that actually contained it, so a local delivery reads git:<branch> until origin has it. A pending candidate landed only on the frozen remote ref refuses integration_target_behind_landed_candidate until that local branch is synchronized, and a frozen integration ref that no longer resolves refuses integration_target_unavailable rather than answering from the local branch. An unlaunched prepared dispatch is recorded abandoned.',
+    description: 'Close with evidence. Delivery uses the ticket\'s prepared integration target when recorded, even if the board target or checkout changed later. For manually composed candidates with different pinned verifiers, run every pinned verifier and the full composed gate, then use deliveryCommit with deliveryMethod:"manual" and omit integration:true; integration:true is only for a matching delivered wave. verificationSupersession is the explicit exception for a terminal recorded submission whose sealed verifier no longer runs: it runs the replacement command, and records the old requirement, replacement requirement, reason, and result as a distinct delivered outcome. A non-reachable pinned candidate proves its content in the integration working tree, or — when it was rebased, squash-merged, or conflict-resolved before landing — at a deliveryRevision reachable from the target, per submitted path: identical blob, candidate deletion absent there, or the candidate patch reverse-applying onto that tree. Anything left over refuses delivery_content_diverged until resolvedPaths attests exactly those paths, and the record keeps the per-path contentProof. An unclaimed prepared or launched dispatch before runtime binding can be recovered only with deliveryMethod:"manual" and recoveryEvidence once deliveryCommit is reachable from the recorded integration branch. A pending candidate requires verified delivery, which reconciles the delivered commit against the candidate without checking sibling declared scope; abandonSubmission: true records discard, and a candidate already contained in the recorded target (in remote mode that includes the frozen origin/<branch> ref) records already-landed delivery instead of abandoning shipped work. A recorded revision names the ref that actually contained it, so a local delivery reads git:<branch> until origin has it. A pending candidate landed only on the frozen remote ref refuses integration_target_behind_landed_candidate until that local branch is synchronized, and a frozen integration ref that no longer resolves refuses integration_target_unavailable rather than answering from the local branch. An unlaunched prepared dispatch is recorded abandoned. A closed apply delivery still owes the commit of the tree it materialized, since its recorded head holds none of it: commit that tree unchanged on the recorded target and pass it as deliveryCommit to bind it as the delivered content supersession lineage reads. That completes the delivery record instead of closing the ticket again, re-runs the merged-tree verifier, and refuses a commit whose tree differs from the reviewed candidate on a submitted path. A refusal there leaves the delivered record untouched, so the same commit can be bound again once the cause is fixed.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -562,7 +619,7 @@ const tools: ToolDefinition[] = [
           required: ['verifyKind', 'verify'],
         },
         abandonSubmission: { type: 'boolean', description: 'Retire a candidate that never landed; refused while it is reachable from this ticket\'s prepared integration target.' },
-        recoveryEvidence: { type: 'string', description: 'Terminal-agent evidence that clears only an unclaimed prepared or launched dispatch before runtime binding; with deliveryMethod:"manual", deliveryCommit must already be reachable from the recorded integration branch.' },
+        recoveryEvidence: { type: 'string', description: 'Terminal-agent evidence that retires an unclaimed prepared or launched dispatch, whether or not a runtime ever bound to it, and closes the ticket in the same call - but only once it is past the retirement deadline one authority sets for every route. Inside that deadline this refuses with the same countdown `dispatch` prints, naming the instant it becomes retirable and the runtime signal it measured from. `sidequest groom-close --recovery-evidence` runs this exact authority, so both surfaces print the same refusal and retire-and-close together. With deliveryMethod:"manual", deliveryCommit must already be reachable from the recorded integration branch.' },
       },
       required: ['ref', 'by', 'reason'],
     },
@@ -601,13 +658,9 @@ const tools: ToolDefinition[] = [
           message: `${args.ref} has no terminal recorded submission whose verifier can be superseded.`,
         });
       }
-      let completionReason = reason;
-      if (args.recoveryEvidence) {
-        const recovered = store.clearUnclaimedDispatch(slug, args.ref, { by, evidence: args.recoveryEvidence });
-        const terminalDispatch = Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
-        if (!recovered.ok && !terminalDispatch) return mutationAck(slug, recovered);
-        if (!recovered.ok) completionReason = `${reason} Recovery evidence recorded after the terminal dispatch: ${args.recoveryEvidence}`;
-      }
+      const recovery = store.groomCloseRecovery(slug, args.ref, { by, reason, evidence: args.recoveryEvidence });
+      if (!recovery.ok) return mutationAck(slug, recovery.recovered);
+      const completionReason = recovery.reason;
       const purpose = args.integration ? 'integration' : args.abandonSubmission ? 'grooming' : args.deliveryCommit ? 'delivery' : 'grooming';
       const res = store.completeTicketAsControlPlane(slug, args.ref, {
         by,
@@ -636,6 +689,7 @@ const tools: ToolDefinition[] = [
             execute: true,
             currentPath: store.nearestRepoRoot(process.cwd()),
             integrationTarget,
+            minAgeMs: 0,
             ticketRef: res.ticket.ref,
           });
         } catch (error: any) {
@@ -643,7 +697,11 @@ const tools: ToolDefinition[] = [
         }
       }
       return mutationAck(slug, res, res.ok
-        ? Object.assign({ completion: res.ticket.completion }, integrationBranchAck(res.integrationBranch))
+        ? Object.assign(
+          { completion: res.ticket.completion },
+          res.deliveryRecordCompleted ? { delivery: res.integration } : {},
+          integrationBranchAck(res.integrationBranch),
+        )
         : null);
     },
   },

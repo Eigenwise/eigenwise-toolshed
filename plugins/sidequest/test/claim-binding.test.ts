@@ -5,6 +5,7 @@ import './_sidequest-install-fixture.js';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { creationGeneration } = require('./_creation-generation.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -259,7 +260,7 @@ test('a claim heartbeat overrides a host terminal record before recovery', () =>
 
 // SubagentStop carries agent_id and never agent_name, so an attempt whose cancellable SubagentStart
 // never recorded an agentId used to be unreachable by its own terminal hook and waited out the
-// claim-idle backstop instead. The host's agent-<id>.meta.json sidecar carries the launch name, and
+// claim grace instead. The host's agent-<id>.meta.json sidecar carries the launch name, and
 // it must name exactly one attempt: a sibling's sidecar may not retire this one (SQ-2864).
 test('a launched attempt with no recorded agentId is retired by its own transcript sidecar name only', () => {
   const pluginRoot = path.resolve(__dirname, '..');
@@ -499,7 +500,10 @@ test('SubagentStop before claim clears admission and allows a fresh retry', () =
   assert.equal(retry.ticket.dispatch.attempts.at(-1).failureShape, 'stopped_before_claim');
 });
 
-test('recovery evidence immediately retires an incomplete WorktreeCreate checkout', () => {
+// SQ-2934: the board cannot tell a cancelled WorktreeCreate from one whose cold `npm ci` is still running,
+// because creation completion is recorded before provisioning. So an incomplete creation is protected until
+// the idle backstop, and only then does recovery evidence retire it and reclaim the checkout.
+test('recovery evidence retires an incomplete WorktreeCreate checkout once its backstop passes', () => {
   const ticket = createFixture('incomplete worktree creation recovery');
   const sessionId = `incomplete-worktree-recovery-${Date.now()}`;
   const worktree = worktrees.agentWorktreePath(PROJECT, `incomplete-${ticket.id}`);
@@ -515,14 +519,26 @@ test('recovery evidence immediately retires an incomplete WorktreeCreate checkou
     assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
     git(PROJECT, ['worktree', 'add', '--quiet', '-b', branch, worktree, prepared.ticket.dispatch.baseCommit]);
 
+    const evidence = 'WorktreeCreate was cancelled after git worktree add and before completion.';
+    assert.throws(
+      () => store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-early`, sharedTree: false, recoveryEvidence: evidence }),
+      /has not recorded finished provisioning, so only the idle backstop applies/,
+      'an unfinished creation could still be a running install, so it is protected until the backstop',
+    );
+
+    const silent = store.getTicket(slug, ticket.ref);
+    const silentSince = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    for (const field of ['preparedAt', 'launchedAt', 'worktreeBoundAt']) silent.dispatch[field] = silentSince;
+    persist(silent);
+
     const replacement = store.prepareDispatch(slug, ticket.ref, {
       sessionId: `${sessionId}-retry`,
       sharedTree: false,
-      recoveryEvidence: 'WorktreeCreate was cancelled after git worktree add and before completion.',
+      recoveryEvidence: evidence,
     });
     assert.notEqual(replacement.token, prepared.token);
     assert.equal(replacement.ticket.dispatch.attempts.at(-1).failureShape, 'stranded_bound_launch_superseded');
-    assert.equal(fs.existsSync(worktree), false, 'recovery must retire a clean incomplete checkout immediately');
+    assert.equal(fs.existsSync(worktree), false, 'retirement past the backstop still reclaims a clean incomplete checkout');
   } finally {
     store.releaseTicket(slug, ticket.ref, 'incomplete-worktree-recovery-cleanup', { status: 'todo', source: 'test', force: true });
     if (fs.existsSync(worktree)) git(PROJECT, ['worktree', 'remove', '--force', worktree]);
@@ -579,7 +595,7 @@ test('terminal retry cleans the exact completed-bound checkout', () => {
     const gitDirectoryValue = git(worktree, ['rev-parse', '--git-dir']);
     const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
     worktreeKernel.createCheckoutInstanceMarker(gitDirectory);
-    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
     assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName, worktree).ok, true);
     assert.equal(store.markDispatchStopped(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).stopped, true);
     const retry = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-retry`, sharedTree: false });
@@ -612,13 +628,13 @@ test('terminal recovery names the immutable fact that prevents a retry', () => {
     const gitDirectoryValue = git(worktree, ['rev-parse', '--git-dir']);
     const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
     worktreeKernel.createCheckoutInstanceMarker(gitDirectory);
-    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
     assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName, worktree).ok, true);
     fs.appendFileSync(path.join(worktree, 'tracked.txt'), 'dirty\n');
     assert.equal(store.markDispatchStopped(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).stopped, true);
     assert.throws(
       () => store.prepareDispatch(slug, ticket.ref, { sessionId: 'dirty-terminal-retry', sharedTree: false }),
-      /cannot retry because immutable recovery fact: .* has uncommitted changes/,
+      /cannot retry because immutable recovery fact: .* holds uncommitted, untracked or ignored content/,
     );
   } finally {
     store.releaseTicket(slug, ticket.ref, 'dirty-terminal-cleanup', { status: 'todo', source: 'test', force: true });

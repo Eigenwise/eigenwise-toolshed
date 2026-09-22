@@ -222,8 +222,8 @@ function pathList(paths?: any) {
   return all.length > NO_OP_PATHS_SHOWN ? `${shown} (+${all.length - NO_OP_PATHS_SHOWN} more)` : shown;
 }
 
-function provenNoOpCloseout(slug: any, ticket: any) {
-  const closeout = store.externalDeliverableCloseout(slug, ticket);
+function provenNoOpCloseout(slug: any, ticket: any, verify?: any) {
+  const closeout = store.externalDeliverableCloseout(slug, ticket, verify);
   if (closeout.ok) return closeout;
   return { ok: false as const, detail: closeout.message };
 }
@@ -272,7 +272,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   remove: '',
   claim: 'Claim before work; proceed only on ok:true.',
   dispatch: 'Tree. token and spawn spec; retireOnly.',
-  done: 'Finish; declared external needs current capture; commandless working-tree needs verify.',
+  done: 'Finish; external/working-tree: pinned command needs capture; commandless needs verify.',
   release: 'reason required; oracle handoff.',
   groomClose: 'Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate proven in the working tree or at deliveryRevision; verifier replacement; reviewed interaction.',
   native_agent: 'Agent spawn.',

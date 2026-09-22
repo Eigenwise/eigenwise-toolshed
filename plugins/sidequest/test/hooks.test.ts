@@ -6,6 +6,7 @@ import './_hook-runtime.js';
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
+const { creationGeneration } = require('./_creation-generation.js');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
@@ -180,14 +181,72 @@ function runHookProcessForBudget(script?: any, payload?: any, envOverrides?: any
   });
 }
 
-async function waitForPath(file: string): Promise<void> {
-  const deadline = Date.now() + 2000;
+// A fixed wall-clock bound can't tell a loaded CI runner from a stuck worker: the
+// detached sweep this waits on spawns its own node process, so its cost rides the
+// same machine load as a bare spawn does. Scale the bound against a spawn measured
+// in this run instead (SQ-2864 used the same shape for SubagentStop's budget), and
+// keep a floor above the ~3.6s durations already observed on a loaded Windows
+// runner (SQ-2895). The calibration spawn itself carries an explicit timeout so a
+// stalled child (or an inherited preload that never returns) fails loudly instead
+// of hanging test collection indefinitely (SQ-2999/SQ-3000).
+const PROCESS_SPAWN_CALIBRATION_TIMEOUT_MS = 5_000;
+const PROCESS_SPAWN_CALIBRATION_OPTIONS = {
+  windowsHide: true,
+  timeout: PROCESS_SPAWN_CALIBRATION_TIMEOUT_MS,
+} as const;
+const PROCESS_SPAWN_BASELINE_MS = (() => {
+  const started = Date.now();
+  execFileSync(process.execPath, ['-e', ''], PROCESS_SPAWN_CALIBRATION_OPTIONS);
+  return Math.max(1, Date.now() - started);
+})();
+const WAIT_FOR_PATH_DEFAULT_MS = Math.max(5000, PROCESS_SPAWN_BASELINE_MS * 40);
+
+async function waitForPath(file: string, budgetMs: number = WAIT_FOR_PATH_DEFAULT_MS): Promise<void> {
+  const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {
     if (fs.existsSync(file)) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  throw new Error(`Timed out waiting for ${file}`);
+  throw new Error(`Timed out waiting for ${file} after ${budgetMs}ms`);
 }
+
+test('waitForPath: resolves once a file appears after a deterministic delay, not only if it is already there', async () => {
+  const file = path.join(SIDEQUEST_HOME, `wait-for-path-delayed-${crypto.randomUUID()}.json`);
+  setTimeout(() => fs.writeFileSync(file, '{}'), 20);
+  assert.equal(fs.existsSync(file), false, 'the control must start without the file, or the wait proves nothing');
+  await waitForPath(file);
+  assert.equal(fs.existsSync(file), true);
+});
+
+test('waitForPath: still times out when the file never appears', async () => {
+  const file = path.join(SIDEQUEST_HOME, `wait-for-path-missing-${crypto.randomUUID()}.json`);
+  await assert.rejects(() => waitForPath(file, 50), /Timed out waiting for/);
+});
+
+test('the process-spawn calibration bounds its child with a finite timeout', () => {
+  assert.equal(PROCESS_SPAWN_CALIBRATION_OPTIONS.windowsHide, true);
+  assert.ok(
+    Number.isFinite(PROCESS_SPAWN_CALIBRATION_OPTIONS.timeout) && PROCESS_SPAWN_CALIBRATION_OPTIONS.timeout > 0,
+    'the calibration spawn must carry a finite, positive timeout or a stalled child can hang test collection forever',
+  );
+});
+
+test('a stalled process-spawn calibration terminates within its declared timeout bound, not indefinitely', () => {
+  const boundedTimeoutMs = 200;
+  const started = Date.now();
+  assert.throws(
+    () => execFileSync(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      windowsHide: true,
+      timeout: boundedTimeoutMs,
+    }),
+    (error: any) => error.code === 'ETIMEDOUT',
+  );
+  const elapsedMs = Date.now() - started;
+  assert.ok(
+    elapsedMs < boundedTimeoutMs + 5000,
+    `expected the stalled child to be killed near its ${boundedTimeoutMs}ms bound, took ${elapsedMs}ms`,
+  );
+});
 
 function publishStateLock(lockDirectory: string, ownerPid: number): string {
   const generation = `fixture-${crypto.randomUUID()}`;
@@ -363,7 +422,7 @@ function completeCheckoutCreation(project: string, sessionId: string, worktree: 
   const gitDirectoryValue = gitFixture(['rev-parse', '--git-dir'], worktree);
   const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
   worktreeLease.createCheckoutInstanceMarker(gitDirectory);
-  assert.equal(store.completeDispatchWorktreeCreation(project, sessionId, worktree).ok, true);
+  assert.equal(store.completeDispatchWorktreeCreation(project, sessionId, worktree, creationGeneration(project, sessionId, worktree)).ok, true);
 }
 
 function preparedPrompt(prepared: any): string {
@@ -3548,7 +3607,11 @@ test('sweep worker: records its notices for the next session instead of dropping
   assert.ok(Array.isArray(JSON.parse(fs.readFileSync(report, 'utf8')).notices));
 });
 
-test('session-start skips an unavailable integration target without failing the sweep', () => {
+// Was 'session-start skips an unavailable integration target without failing the
+// sweep'. Skipping is what left those projects reclaiming nothing forever, so the
+// sweep now runs against the repository default and says which ref it compared with
+// (SQ-2924).
+test('session-start sweeps against the repository default when the integration target is unavailable', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-sweep-target-'));
   gitFixture(['init', '-b', 'main'], repo);
   gitFixture(['config', 'user.name', 'Sidequest Test'], repo);
@@ -3564,8 +3627,8 @@ test('session-start skips an unavailable integration target without failing the 
   // turning the expected skip notice into a deferral notice; pin the deadline
   // so the sweep always finishes inside this test.
   const context = runHook(SESSION, { session_id: 'session-target', source: 'startup', cwd: repo }, { SIDEQUEST_SWEEP_DEADLINE_MS: '60000', CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
-  assert.match(context, /skipped worktree sweep/);
-  assert.match(context, /configured integration branch is unavailable locally/);
+  assert.match(context, /has no usable integration ref, so the worktree sweep compared against the repository default instead/);
+  assert.doesNotMatch(context, /skipped worktree sweep/);
   assert.doesNotMatch(context, /worktree sweep failed/);
 });
 
@@ -3900,6 +3963,83 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   } finally {
     if (fs.existsSync(failedTarget)) gitFixture(['worktree', 'remove', '--force', failedTarget], repo);
     try { gitFixture(['branch', '-D', `worktree-${failedName}`], repo); } catch (_) {}
+  }
+});
+
+test('SQ-2955: a WorktreeCreate whose generation was retired mid-setup stamps nothing and leaves the replacement attempt alone', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktree-generation-race-'));
+  gitFixture(['init', '--quiet', '-b', 'main'], repo);
+  gitFixture(['config', 'user.email', 'test@example.invalid'], repo);
+  gitFixture(['config', 'user.name', 'Worktree Race Test'], repo);
+  fs.writeFileSync(path.join(repo, 'tracked.txt'), 'seed\n');
+  gitFixture(['add', 'tracked.txt'], repo);
+  gitFixture(['commit', '--quiet', '-m', 'seed'], repo);
+  const project = store.ensureProject(repo, 'worktree hook generation race').slug;
+  const category = `worktree-race-${++sqSeq}`;
+  store.setCategory({ id: category, name: category, route: { model: 'sonnet', effort: 'medium' }, fallback: null, enabled: true });
+  const ticket = store.createTicket(project, { title: 'generation race', category, files: ['tracked.txt'] });
+  const sessionId = 'hook-generation-race';
+  const receipt = path.join(os.tmpdir(), `sq-worktree-race-receipt-${sqSeq}.json`);
+  // Setup runs inside the half-provisioned checkout, the only window where the orchestrator can retire
+  // this attempt and redispatch the same ticket onto the same session before the hook stamps anything.
+  const racer = path.join(os.tmpdir(), `sq-worktree-race-${sqSeq}.js`);
+  fs.writeFileSync(racer, [
+    "'use strict';",
+    "const fs = require('fs');",
+    'const [storeLib, slug, ref, sessionId, worktree, receipt] = process.argv.slice(2);',
+    'const store = require(storeLib);',
+    'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);',
+    'try {',
+    "  const retired = store.prepareDispatch(slug, ref, { retireOnly: true, recoveryEvidence: 'race probe: the bound runtime never arrived' });",
+    '  const prepared = store.prepareDispatch(slug, ref, { sessionId });',
+    '  const launched = store.recordDispatchLaunch(slug, ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId });',
+    '  const bound = store.bindDispatchWorktreeCreation(slug, sessionId, worktree);',
+    '  fs.writeFileSync(receipt, JSON.stringify({ retired: retired.retired === true, launched: launched.ok === true, bound: bound.ok === true }));',
+    '} catch (error) {',
+    '  fs.writeFileSync(receipt, JSON.stringify({ raceFailed: String((error && error.message) || error) }));',
+    '}',
+  ].join('\n'));
+  const name = 'agent-hook-generation-race';
+  const target = worktrees.namedWorktreePath(repo, name);
+  // `cd ..` first: setup runs with the checkout as its working directory, and on Windows that handle
+  // blocks the retirement from reclaiming it, which is the fixture's problem and not the hook's.
+  store.setBoardConfig(project, {
+    worktreeDependencyPaths: [],
+    worktreeSetup: `cd .. && node "${racer}" "${require.resolve('../lib/store.js')}" "${project}" "${ticket.ref}" "${sessionId}" "${target}" "${receipt}"`,
+  });
+  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId });
+  assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+  }).ok, true);
+  const retiredGeneration = store.getTicket(project, ticket.ref).dispatch.preparedAt;
+  try {
+    const raced = spawnSync(process.execPath, [WORKTREE_CREATE], {
+      input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: sessionId, cwd: repo, name }),
+      encoding: 'utf8',
+      env: { ...process.env, SIDEQUEST_CLAIM_IDLE_MIN: '0.002' },
+    });
+    assert.deepEqual(JSON.parse(fs.readFileSync(receipt, 'utf8')), { retired: true, launched: true, bound: true }, 'the race must have retired the generation and bound a replacement');
+    assert.notEqual(raced.status, 0, 'a hook holding a retired generation must fail instead of stamping the replacement');
+    assert.match(raced.stderr, /could not record finished provisioning: this WorktreeCreate belongs to a retired dispatch attempt/);
+    assert.match(raced.stderr, /worktree recovery touched no attempt and left the checkout to the replacement that now owns it/);
+
+    const replacement = store.getTicket(project, ticket.ref);
+    assert.notEqual(replacement.dispatch.preparedAt, retiredGeneration, 'the live attempt must be the replacement generation');
+    assert.equal(replacement.dispatch.outcome, 'launched', 'the stale hook must not terminalize the replacement');
+    assert.equal(replacement.dispatch.terminalAt ?? null, null);
+    assert.ok(replacement.dispatchNonce, 'the replacement keeps the briefing nonce its runtime will present');
+    assert.equal(replacement.dispatch.worktreeCreationCompletedAt ?? null, null, 'no callback from the retired generation may land on the replacement');
+    assert.equal(replacement.dispatch.worktreeProvisionedAt ?? null, null);
+    assert.equal(replacement.dispatch.worktreeProvisioningFailure ?? null, null);
+  } finally {
+    // Retiring the stranded attempt already reclaimed this checkout, so cleanup only has to cover the
+    // runs where it did not.
+    if (fs.existsSync(target)) {
+      try { gitFixture(['worktree', 'remove', '--force', target], repo); } catch (_) { fs.rmSync(target, { recursive: true, force: true }); }
+      try { gitFixture(['branch', '-D', `worktree-${name}`], repo); } catch (_) {}
+    }
   }
 });
 
@@ -4335,6 +4475,18 @@ test('subagent-stop: a superseded unclaimed attempt names its exact native teamm
     executor: prepared.ticket.dispatchExecutor,
     agentName,
   }).ok, true);
+  // Recovery evidence only retires an unclaimed attempt once its latest runtime signal is past the claim
+  // grace, so the launch has to be old before the replacement can supersede it.
+  const launched = store.getTicket(slug, ticket.ref);
+  const silentSince = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  for (const field of ['preparedAt', 'launchedAt']) {
+    launched.dispatch[field] = silentSince;
+    if (launched.dispatch.attempts?.at(-1)?.[field]) launched.dispatch.attempts.at(-1)[field] = silentSince;
+  }
+  db.putRow(database, 'tickets', {
+    id: launched.id, project: slug, ref: launched.ref, status: launched.status,
+    archived: launched.archived ? 1 : 0, ord: launched.order, claim_by: launched.claim?.by ?? null, data: launched,
+  });
   assert.doesNotThrow(() => store.prepareDispatch(slug, ticket.ref, {
     allowUnscoped: true,
     sessionId: `superseded-replacement-${ticket.id}`,
