@@ -1037,6 +1037,25 @@ test('story_log reads, appends from a claimed member, and rotates after promotio
   const denied = await callToolRaw('story_log', { project, story: story.ref, rotate: true, by: 'log-worker' });
   assert.equal(denied.isError, true);
   assert.match(denied.content[0].text, /rotate:true requires by:"orchestrator"/);
+
+  await callTool('story_log', {
+    project, story: story.ref, entry: `DECISION: ${'x'.repeat(16_000)}`,
+  });
+  await callTool('story_log', {
+    project, story: story.ref, entry: `DECISION: ${'y'.repeat(400)}`,
+  });
+  const full = await callToolRaw('story_log', {
+    project, story: story.ref, entry: 'DECISION: rotate before adding another entry.',
+  });
+  assert.equal(full.isError, true);
+  assert.match(full.content[0].text, /decision log is full/);
+  assert.match(full.content[0].text, /story_log\(\{ project: .*story: .*rotate: true, by: "orchestrator" \}\)/);
+
+  const rotatedAndAppended = await callTool('story_log', {
+    project, story: story.ref, rotate: true, by: 'orchestrator', entry: 'DECISION: Rotation retains the new entry.',
+  });
+  assert.deepEqual(rotatedAndAppended.story.entries.map((entry: any) => entry.text), ['Rotation retains the new entry.']);
+  assert.equal(rotatedAndAppended.story.archivedEntries, 3);
 });
 
 // The orchestrator, every teammate and every resumed executor reach this server on the one
@@ -2403,7 +2422,7 @@ test('MCP groomClose abandons an unconsumed prepared dispatch without waiting fo
   store.prepareDispatch(project, preparedTicket.ref, { sharedTree: true });
 
   const closed = await callTool('groomClose', {
-    project, ref: preparedTicket.ref, by: 'groomer', reason: 'The prepared ticket is obsolete.',
+    project, ref: preparedTicket.ref, reason: 'The prepared ticket is obsolete.',
   });
   assert.equal(closed.ok, true, closed.message || closed.reason);
   const completed = store.getTicket(project, preparedTicket.ref);
@@ -5265,12 +5284,16 @@ test('MCP done requires a final report and release records its reason', async ()
 
   const released = await callTool('add', { title: 'required release reason', complexity: 2, why: 'exercise durable release-reason validation', labels: ['direct-ok'] });
   await callTool('claim', { ref: released.ref, by: 'mcp-release-worker', direct: true, reason: 'The release-reason fixture needs a direct claim.' });
-  const missingReason = await callToolRaw('release', { ref: released.ref, by: 'mcp-release-worker' });
-  assert.ok(missingReason.isError, 'release refuses a missing reason');
-  assert.match(missingReason.content[0].text, /"reason" is required.*why.*released/i);
-  const unclassified = await callTool('release', { ref: released.ref, by: 'mcp-release-worker', reason: 'Scope path was refused.', status: 'todo' });
-  assert.equal(unclassified.ok, false, 'release refuses an unclassified reasoned handback');
-  assert.equal(unclassified.reason, 'release_kind_required');
+  const missingFields = await callTool('release', { ref: released.ref, by: 'mcp-release-worker' });
+  assert.equal(missingFields.ok, false, 'release refuses missing reason and kind together');
+  assert.equal(missingFields.reason, 'release_arguments_required');
+  assert.match(missingFields.message, /reason: non-empty text/);
+  assert.match(missingFields.message, /kind: technical_blocker \| contradiction \| oracle \| handback/);
+  assert.ok(store.getTicket(released.project, released.ref).claim, 'argument validation keeps the claim');
+  const missingKind = await callTool('release', { ref: released.ref, by: 'mcp-release-worker', reason: 'Scope path was refused.', status: 'todo' });
+  assert.equal(missingKind.ok, false, 'release requires a classification with a reason');
+  assert.equal(missingKind.reason, 'release_arguments_required');
+  assert.match(missingKind.message, /kind: technical_blocker \| contradiction \| oracle \| handback/);
   await callTool('release', { ref: released.ref, by: 'mcp-release-worker', reason: 'Scope path was refused.', kind: 'handback', status: 'todo' });
   const afterRelease = store.getTicket(released.project, released.ref);
   assert.equal(afterRelease.claim, null);
