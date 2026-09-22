@@ -18,6 +18,28 @@ checks only functions the change added or modified. Untouched legacy functions, 
 a changed file, never fail or appear in the failure list. A changed function below 6 passes even when
 its prior score was lower.
 
+Deciding which functions the change touched means pairing each of today's functions with its copy in
+the baseline revision. Position alone cannot do that: adding one function shifts every function below
+it, and names repeat inside a file, because lizard names every arrow function or closure it cannot
+attribute to a declaration `(anonymous)` and two classes can each carry a `run`. So the gate pairs by
+source text first, then by name and position among its namesakes, and leaves the rest unpaired.
+
+Pairing is one-to-one. A baseline function is claimed by at most one of today's functions, source text
+claims across the whole file before name and position is consulted at all, and **a function that claims
+nothing is new code judged on its own number**. So an untouched over-ceiling `run` keeps passing when a
+new `run` lands above it, while a byte-identical copy of an over-ceiling function is new code over the
+ceiling even though its twin is untouched, and a third `run` in a file that already had two is gated on
+its own number.
+
+The source text is the line span lizard reports, with runs of whitespace collapsed, so reindenting a
+function alone does not make it changed. For a nested closure in a JavaScript file that span can be
+wider than the closure itself; when it picks up an unrelated edit, pairing falls back to name and
+position, and the function is judged as changed.
+
+The source-text key is file-scoped: a function moved untouched from one file to another finds no
+baseline copy and answers to the ceiling like anything else new. Cover it, shrink it, or land the move
+first and rerun the gate against the branch that already has it.
+
 ## Prerequisite
 
 Quartermaster needs [lizard](https://github.com/terryyin/lizard) to measure complexity. It never
