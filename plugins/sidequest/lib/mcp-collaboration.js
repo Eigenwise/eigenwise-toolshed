@@ -15,7 +15,6 @@ const {
   resolveLifecycleProject,
   runtimeSessionId,
   sessionOf,
-  controlPlaneIdentity,
   requireDispatchSession,
   workflowRecipe,
   requireBy,
@@ -62,6 +61,14 @@ const {
   state
 } = require("./mcp-shared");
 const { sidequestMutationFreshness } = require("./plugin-freshness");
+function unattributedIdentity(sessionId) {
+  const id = String(sessionId || "").trim();
+  return id ? `session-${id.slice(0, 12)}` : "unattributed";
+}
+function commentAuthor(args, ticket, sessionId) {
+  const claimedOnThisSession = sessionId && ticket?.claim?.runtime?.sessionId === sessionId;
+  return args?.by || (claimedOnThisSession ? ticket.claim.by : unattributedIdentity(sessionId));
+}
 const tools = [
   {
     name: "supersede_submission",
@@ -115,8 +122,7 @@ const tools = [
       const { slug } = resolveLifecycleProject(args.project, args, "comment");
       const ticket = store.getTicket(slug, args.ref);
       const sessionId = sessionOf(args);
-      const claimSessionId = ticket?.claim?.runtime?.sessionId;
-      const by = args.by || (sessionId && claimSessionId === sessionId ? ticket.claim.by : controlPlaneIdentity(null, sessionId));
+      const by = commentAuthor(args, ticket, sessionId);
       const res = store.addComment(slug, args.ref, {
         body: args.body,
         by,

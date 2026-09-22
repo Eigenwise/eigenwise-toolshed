@@ -8,7 +8,7 @@ const {
   CLAUDE_BIN, CLAUDE_BIN_IS_BATCH, CODEX_FAMILY_RE, COMPAT_BASE_URL, DEFAULT_BASE_URL,
   DISPATCH_MODEL_ID, GROK_PREFIX, KNOWN_GOOD_PINS, LEGACY_CODEX_PREFIX, PIN_ALIASES,
   PIN_CACHE_PATH, PIN_CACHE_TTL_MS, PIN_OVERRIDE_PATH, PIN_PROBE_TIMEOUT_MS, PREFIX,
-  STATE, STATIC_ENV_BLOCK, WIN,
+  RETIRED_SHIPPED_PINS, STATE, STATIC_ENV_BLOCK, WIN,
 } = require('./runtime.js');
 
 function codexBaseFromId(id) {
@@ -19,6 +19,31 @@ function codexBaseFromId(id) {
     : bare.startsWith(PREFIX) ? bare.slice(PREFIX.length)
       : null;
   return base && CODEX_FAMILY_RE.test(base) ? base : null;
+}
+
+function pinVersion(value) {
+  const bare = value.endsWith('[1m]') ? value.slice(0, -4) : value;
+  const segments = bare.split('-');
+  const [prefix, family, majorText, minorText = '0'] = segments;
+  if (prefix !== 'claude') return null;
+  if (![3, 4].includes(segments.length)) return null;
+  const major = Number.parseInt(majorText, 10);
+  const minor = Number.parseInt(minorText, 10);
+  if (`${major}:${minor}` !== `${majorText}:${minorText}`) return null;
+  return [family.toLowerCase(), major, minor];
+}
+
+function comparePinVersions(first, second) {
+  const firstVersion = pinVersion(first);
+  const secondVersion = pinVersion(second);
+  if (!firstVersion || !secondVersion || firstVersion[0] !== secondVersion[0]) return null;
+  return Math.sign(firstVersion[1] - secondVersion[1]) || Math.sign(firstVersion[2] - secondVersion[2]);
+}
+
+function pinLagNotice(alias, pin) {
+  if (comparePinVersions(pin.default, pin.shipped) !== -1) return null;
+  const override = pin.override ? ` Your override ${pin.override} overrides detected ${pin.default}.` : '';
+  return `Claude CLI ${alias} alias lags: ${pin.default} is older than ${pin.shipped}. Run pin --${alias} ${pin.shipped} to update it.${override}`;
 }
 
 function isGatewayModelId(id) {
@@ -294,10 +319,10 @@ function gatewayEnvBlock() {
 // ANTHROPIC_DEFAULT_*_MODEL are ordinary Claude Code settings a user may set
 // without this plugin, so unwiring must not claim them by key. A pin is ours
 // only if it still holds a value we could have written: the current effective
-// pin, the detected-pin cache, a saved override, or the built-in default. A
-// value outside that set was typed by the user and survives `env --remove`.
-// Detected pins a later probe replaced stay in the set, so a settings file
-// written before the last model release is still recognised as ours.
+// pin, the detected-pin cache, a saved override, the built-in default, or a default
+// an earlier release shipped. A value outside that set was typed by the user and
+// survives `env --remove`. Detected pins a later probe replaced stay in the set,
+// so a settings file written before the last model release is still ours.
 function ownedPinValues() {
   const overrides = readPinOverrides();
   const cache = readDetectedPinCache();
@@ -305,7 +330,7 @@ function ownedPinValues() {
   return Object.fromEntries(Object.keys(PIN_ALIASES).map((alias) => [
     PIN_ALIASES[alias],
     new Set([
-      KNOWN_GOOD_PINS[alias], cached[alias], overrides[alias], detectedPinDefaults()[alias],
+      KNOWN_GOOD_PINS[alias], ...RETIRED_SHIPPED_PINS[alias], cached[alias], overrides[alias], detectedPinDefaults()[alias],
       ...(cache?.retired?.[alias] || []),
     ].filter(Boolean)),
   ]));
@@ -327,7 +352,7 @@ function envBlockFor(mode) {
 function ourBaseUrls() { return [DEFAULT_BASE_URL, COMPAT_BASE_URL]; }
 
 module.exports = {
-  codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, pinProvenance, probeClaudeAlias, readPinOverrides,
+  codexBaseFromId, comparePinVersions, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
+  isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, pinLagNotice, pinProvenance, probeClaudeAlias, readPinOverrides,
   refreshDetectedPins, stalePinUpdates, writePinOverrides,
 };

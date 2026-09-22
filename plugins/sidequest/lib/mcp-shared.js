@@ -101,12 +101,6 @@ function runtimeSessionId() {
 function sessionOf(args) {
   return runtimeSessionId() || args && String(args.session || "").trim() || null;
 }
-function controlPlaneIdentity(by, session) {
-  const explicitBy = String(by || "").trim();
-  if (explicitBy) return explicitBy;
-  const sessionId = String(session || runtimeSessionId() || "").trim();
-  return sessionId ? `orchestrator-${sessionId.slice(0, 12)}` : "control-plane";
-}
 function requireDispatchSession() {
   const sessionId = runtimeSessionId();
   if (!sessionId) {
@@ -971,7 +965,6 @@ module.exports = {
   resolveLifecycleProject,
   runtimeSessionId,
   sessionOf,
-  controlPlaneIdentity,
   requireDispatchSession,
   workflowRecipe,
   requireBy,
