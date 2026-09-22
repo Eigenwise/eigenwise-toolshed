@@ -2034,7 +2034,7 @@ test('shared-tree agents bind by name before SubagentStop supplies their id', ()
   assert.equal(dispatch.terminalSource, terminalSource);
 });
 
-test('a resumed live claim re-mints its token and re-binds the linked worktree', () => {
+test('a resumed live claim re-mints its token, re-binds the linked worktree, and carries no isolation', () => {
   const ticket = createFixture('resumed live claim fixture');
   const originalSession = `resumed-live-claim-${Date.now()}`;
   const resumedSession = `${originalSession}-resumed`;
@@ -2075,9 +2075,31 @@ test('a resumed live claim re-mints its token and re-binds the linked worktree',
     });
     assert.equal(recovered.ok, true);
     assert.notEqual(recovered.token, prepared.token);
+    assert.equal(recovered.ticket.dispatch.continuation?.mode, 'live_claim_resume');
+    assert.equal(recovered.ticket.dispatch.continuation.sourceWorktree, worktrees.canonicalPath(worktree));
+    const recoveredSpawn = agentsync.agentSpawn(
+      recovered.ticket.dispatch.launchName,
+      agentsync.ticketIsolation(recovered.ticket, recovered.ticket.dispatch.sharedTree),
+      null,
+      executor,
+      agentsync.renderDispatchStub(recovered.ticket, PROJECT),
+      recovered.ticket.dispatch.description,
+    );
+    assert.equal(Object.hasOwn(recoveredSpawn, 'isolation'), false);
+    const recoveredLaunch = runForceBypass({
+      session_id: resumedSession,
+      cwd: PROJECT,
+      tool_name: 'Agent',
+      tool_input: recoveredSpawn,
+    });
+    assert.notEqual(recoveredLaunch.hookSpecificOutput.permissionDecision, 'deny', JSON.stringify(recoveredLaunch));
+    const briefing = agentsync.renderTicketBriefing(recovered.ticket, recovered.token, slug, PROJECT);
+    assert.match(briefing, new RegExp(`Live-claim recovery:[\\s\\S]*${worktrees.canonicalPath(worktree).replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}`));
+    assert.match(briefing, /prepared spawn intentionally carries no isolation field/);
+    assert.match(briefing, /Preserve any retained uncommitted work/);
     assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, prepared.ticket.dispatch.tokenFile).token, recovered.token);
     assert.equal(store.pulsePayload(slug, ticket.ref).dispatch.worktreeBound, true);
-    assert.equal(store.bindDispatchAgent(resumedSession, executor, resumedAgentId, agentName, worktree).ok, true);
+    assert.equal(store.bindDispatchAgent(resumedSession, executor, resumedAgentId, recoveredSpawn.name, worktree).ok, true);
     assert.equal(store.claimTicket(slug, ticket.ref, claimHolder, {
       sessionId: resumedSession,
       token: recovered.token,
