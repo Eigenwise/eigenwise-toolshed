@@ -282,6 +282,24 @@ async function cmdChanges(opts) {
   const changes = store.changesPayload(slug, opts.since);
   process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, changes), null, 2) + "\n");
 }
+function clearsDeclaredFiles(files) {
+  return Array.isArray(files) && files.length === 1 && String(files[0]).toLowerCase() === "none" || String(files).toLowerCase() === "none";
+}
+function adjustedFileScopePatch(opts) {
+  return {
+    ...opts["add-file"] != null ? { addFiles: opts["add-file"] } : {},
+    ...opts["remove-file"] != null ? { removeFiles: opts["remove-file"] } : {}
+  };
+}
+function fileScopeFlagsPatch(opts) {
+  const files = opts.file != null ? opts.file : opts.files;
+  const adjusted = adjustedFileScopePatch(opts);
+  if (files == null) return adjusted;
+  if (Object.keys(adjusted).length) {
+    fail("update: --file/--files replaces the whole declared list and cannot be combined with --add-file/--remove-file — use one or the other.");
+  }
+  return { files: clearsDeclaredFiles(files) ? [] : files };
+}
 async function cmdUpdate(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("update: pass a ticket id or ref, e.g. sidequest update SQ-4 --status done");
@@ -297,18 +315,7 @@ async function cmdUpdate(opts, positional) {
   if (opts["high-stakes"] !== void 0) patch.highStakes = highStakesFromOpts(opts);
   if (opts.label != null) patch.labels = opts.label;
   if (opts.image != null) patch.images = opts.image;
-  const hasFilesFlag = opts.file != null || opts.files != null;
-  const hasAddRemoveFlags = opts["add-file"] != null || opts["remove-file"] != null;
-  if (hasFilesFlag && hasAddRemoveFlags) {
-    fail("update: --file/--files replaces the whole declared list and cannot be combined with --add-file/--remove-file — use one or the other.");
-  }
-  if (hasFilesFlag) {
-    const files = opts.file != null ? opts.file : opts.files;
-    patch.files = Array.isArray(files) && files.length === 1 && String(files[0]).toLowerCase() === "none" || String(files).toLowerCase() === "none" ? [] : files;
-  } else if (hasAddRemoveFlags) {
-    if (opts["add-file"] != null) patch.addFiles = opts["add-file"];
-    if (opts["remove-file"] != null) patch.removeFiles = opts["remove-file"];
-  }
+  Object.assign(patch, fileScopeFlagsPatch(opts));
   if (opts.produces !== void 0 || opts.changes !== void 0 || opts.consumes !== void 0) patch.contracts = contractsFromOpts(opts, current && current.contracts);
   if (opts["contract-waiver"] !== void 0) patch.contractWaiver = contractWaiverFromOpts(opts);
   if (opts.readonly !== void 0) patch.readonly = readonlyFromOpts(opts);

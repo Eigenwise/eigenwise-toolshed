@@ -317,6 +317,29 @@ async function cmdChanges(opts: any) {
   process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, changes), null, 2) + '\n');
 }
 
+function clearsDeclaredFiles(files: any) {
+  return (Array.isArray(files) && files.length === 1 && String(files[0]).toLowerCase() === 'none') || String(files).toLowerCase() === 'none';
+}
+
+function adjustedFileScopePatch(opts: any) {
+  return {
+    ...(opts['add-file'] != null ? { addFiles: opts['add-file'] } : {}),
+    ...(opts['remove-file'] != null ? { removeFiles: opts['remove-file'] } : {}),
+  };
+}
+
+// --file/--files replaces the whole declared list; --add-file/--remove-file adjust it in
+// place. One call cannot mean both, so naming them together refuses instead of guessing.
+function fileScopeFlagsPatch(opts: any) {
+  const files = opts.file != null ? opts.file : opts.files;
+  const adjusted = adjustedFileScopePatch(opts);
+  if (files == null) return adjusted;
+  if (Object.keys(adjusted).length) {
+    fail('update: --file/--files replaces the whole declared list and cannot be combined with --add-file/--remove-file — use one or the other.');
+  }
+  return { files: clearsDeclaredFiles(files) ? [] : files };
+}
+
 async function cmdUpdate(opts: any, positional: any) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('update: pass a ticket id or ref, e.g. sidequest update SQ-4 --status done');
@@ -332,18 +355,7 @@ async function cmdUpdate(opts: any, positional: any) {
   if (opts['high-stakes'] !== undefined) patch.highStakes = highStakesFromOpts(opts);
   if (opts.label != null) patch.labels = opts.label;
   if (opts.image != null) patch.images = opts.image;
-  const hasFilesFlag = opts.file != null || opts.files != null;
-  const hasAddRemoveFlags = opts['add-file'] != null || opts['remove-file'] != null;
-  if (hasFilesFlag && hasAddRemoveFlags) {
-    fail('update: --file/--files replaces the whole declared list and cannot be combined with --add-file/--remove-file — use one or the other.');
-  }
-  if (hasFilesFlag) {
-    const files = opts.file != null ? opts.file : opts.files;
-    patch.files = (Array.isArray(files) && files.length === 1 && String(files[0]).toLowerCase() === 'none') || String(files).toLowerCase() === 'none' ? [] : files;
-  } else if (hasAddRemoveFlags) {
-    if (opts['add-file'] != null) patch.addFiles = opts['add-file'];
-    if (opts['remove-file'] != null) patch.removeFiles = opts['remove-file'];
-  }
+  Object.assign(patch, fileScopeFlagsPatch(opts));
   if (opts.produces !== undefined || opts.changes !== undefined || opts.consumes !== undefined) patch.contracts = contractsFromOpts(opts, current && current.contracts);
   if (opts['contract-waiver'] !== undefined) patch.contractWaiver = contractWaiverFromOpts(opts);
   if (opts.readonly !== undefined) patch.readonly = readonlyFromOpts(opts);

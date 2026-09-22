@@ -345,6 +345,35 @@ function collectGitSubmissionFacts(options) {
     }
   };
 }
+function scopeList(value) {
+  return Array.isArray(value) ? value : [];
+}
+function scopeRulingGuidance(res) {
+  if (res.state !== "refused") return {};
+  if (res.noBounce) {
+    return { instruction: 'Do not bounce: the orchestrator widens this live claim with update addFiles, or grants it with scopeRequest grant:true, both from an identity other than the claim holder. Commit in-scope work and release with kind "handback" only if no one can.' };
+  }
+  return { instruction: 'Commit in-scope work, then release with kind "handback" and name the refused paths.' };
+}
+function scopeRequestChanged(res) {
+  if (!res.ok) return null;
+  const resolution = res.resolution || null;
+  return {
+    covered: scopeList(res.covered),
+    approved: scopeList(res.approved),
+    refused: scopeList(res.refused),
+    autoApproved: !!res.autoApproved,
+    state: res.state,
+    effectiveScope: resolution?.effectiveScope,
+    resolution,
+    ...res.message ? { message: res.message } : {},
+    ...scopeRulingGuidance(res)
+  };
+}
+function scopeGrantChanged(res) {
+  if (!res.ok) return null;
+  return { granted: scopeList(res.granted), resolution: res.resolution || null };
+}
 const tools = [
   {
     name: "claim",
@@ -681,7 +710,7 @@ const tools = [
   },
   {
     name: "scopeRequest",
-    description: "Request scope and receive an immediate ruling. Granted paths take effect immediately for hook write enforcement and commit admission. A foreign .release/unreleased/*.md fragment always refuses because only this ticket’s fragment is writable. grant:true is the orchestrator path: it grants the ticket’s most recently refused request outright, widening declaredFiles without a redispatch; pass no files with it.",
+    description: "Request scope and receive an immediate ruling. Granted paths take effect immediately for hook write enforcement and commit admission. A foreign .release/unreleased/*.md fragment always refuses because only this ticket’s fragment is writable. grant:true grants the paths this claim still has refused, widening declaredFiles for the live dispatch without a redispatch; pass no files with it, and pass a by other than the claim holder.",
     inputSchema: {
       type: "object",
       properties: {
@@ -689,7 +718,7 @@ const tools = [
         project: PROJECT_PROP,
         by: { type: "string" },
         files: { type: "array", items: { type: "string" }, minItems: 1 },
-        grant: { type: "boolean", description: "Orchestrator only: grant the ticket’s pending refused scope request instead of requesting new files." }
+        grant: { type: "boolean" }
       },
       required: ["ref", "by"]
     },
@@ -697,30 +726,13 @@ const tools = [
       const { slug } = resolveLifecycleProject(args.project, args, "scopeRequest");
       const by = requireBy(args, "scopeRequest");
       if (args.grant) {
-        if (args.files !== void 0) throw new Error("scopeRequest: grant cannot be combined with files — it grants the ticket’s pending refused request as recorded.");
-        const res2 = store.grantScope(slug, args.ref, by, { source: "mcp" });
-        const changed2 = res2.ok ? {
-          granted: res2.granted || [],
-          resolution: res2.resolution || null
-        } : null;
-        return mutationAck(slug, res2, changed2);
+        if (args.files !== void 0) throw new Error("scopeRequest: grant cannot be combined with files — it grants the refusal the ticket already recorded.");
+        const granted = store.grantScope(slug, args.ref, by, { source: "mcp" });
+        return mutationAck(slug, granted, scopeGrantChanged(granted));
       }
-      if (args.files === void 0) throw new Error("scopeRequest: pass files, or grant:true to grant the pending refused request.");
+      if (args.files === void 0) throw new Error("scopeRequest: pass files, or grant:true to grant the outstanding refused request.");
       const res = store.requestScope(slug, args.ref, by, args.files, { source: "mcp" });
-      const changed = res.ok ? {
-        covered: res.covered || [],
-        approved: res.approved || [],
-        refused: res.refused || [],
-        autoApproved: !!res.autoApproved,
-        state: res.state,
-        effectiveScope: res.resolution?.effectiveScope,
-        resolution: res.resolution || null,
-        ...res.message ? { message: res.message } : {},
-        ...res.state === "refused" ? {
-          instruction: 'Commit in-scope work, then release with kind "handback" and name the refused paths.'
-        } : {}
-      } : null;
-      return mutationAck(slug, res, changed);
+      return mutationAck(slug, res, scopeRequestChanged(res));
     }
   },
   {

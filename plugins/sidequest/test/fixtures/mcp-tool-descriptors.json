@@ -456,14 +456,14 @@
           "items": {
             "type": "string"
           },
-          "description": "Appends, keeps rest. Refused with files."
+          "description": "Appends, keeps rest. Refused with files. Applied before removeFiles."
         },
         "removeFiles": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Drops only these, keeps rest. Refused with files."
+          "description": "Drops only these, keeps rest. Refused with files. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch."
         },
         "by": {
           "type": "string"
@@ -1069,7 +1069,7 @@
         },
         "grant": {
           "type": "boolean",
-          "description": "Orchestrator: grants the pending refused request; pass no files."
+          "description": "Grants every path this claim still has refused; pass no files. Refuses the claim holder’s own by."
         }
       },
       "required": [

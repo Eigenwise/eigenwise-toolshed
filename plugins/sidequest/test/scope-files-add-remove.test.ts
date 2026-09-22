@@ -9,7 +9,7 @@ import { stubSidequestInstall } from './_sidequest-install-fixture.js';
 
 stubSidequestInstall();
 
-// SQ-13: update --files replaced the whole declared list, so widening scope
+// GitHub #173: update --files replaced the whole declared list, so widening scope
 // for a scope refusal silently dropped the original files. addFiles/removeFiles
 // adjust the list in place instead.
 function freshProject() {
@@ -103,4 +103,37 @@ test('a live dispatch reads the widened list on its next scopeRequest', () => {
   const result = fixture.store.requestScope(fixture.project, fixture.ticket.ref, fixture.ticket.claim.by, [newPath]);
   assert.equal(result.ok, true);
   assert.deepEqual(result.covered, [newPath]);
+});
+
+test('removeFiles against a live isolated dispatch strips the path from declaredFiles too', () => {
+  const fixture = createClaimedDispatch();
+  const declared = 'plugins/sidequest/src/lib/store/tickets.ts';
+  assert.ok(fixture.ticket.dispatch.declaredFiles.includes(declared));
+  const updated = fixture.store.updateTicket(fixture.project, fixture.ticket.ref, {
+    removeFiles: [declared],
+    by: 'scope-add-remove-orchestrator',
+  }, undefined, { allowLiveClaimCloseoutUpdate: true });
+  assert.deepEqual(updated.files, []);
+  // The isolated dispatch sheds it immediately, so a running executor loses a path
+  // it may already have written. The CLI help and orchestration.md say so.
+  assert.equal(updated.dispatch.declaredFiles.includes(declared), false);
+});
+
+test('addFiles and removeFiles naming the same path in one call resolve as a removal', () => {
+  const { project, store } = freshProject();
+  const ticket = store.createTicket(project, { title: 'additions apply first', category: 'debugging', files: ['a.ts'] });
+  const updated = store.updateTicket(project, ticket.ref, { addFiles: ['b.ts'], removeFiles: ['b.ts'] });
+  assert.deepEqual(updated.files, ['a.ts']);
+});
+
+test('a mixed files patch is refused before any other field lands', () => {
+  const { project, store } = freshProject();
+  const ticket = store.createTicket(project, { title: 'original title', category: 'debugging', files: ['a.ts'] });
+  assert.throws(
+    () => store.updateTicket(project, ticket.ref, { title: 'renamed by a refused patch', files: ['z.ts'], addFiles: ['b.ts'] }),
+    /cannot mix files with addFiles\/removeFiles/,
+  );
+  const after = store.getTicket(project, ticket.ref);
+  assert.equal(after.title, 'original title');
+  assert.deepEqual(after.files, ['a.ts']);
 });

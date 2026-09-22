@@ -302,38 +302,39 @@ function outOfScopeComment(paths) {
 function scopeRemedy(ticket, paths) {
   return store.scopeExpansionCommand(ticket, paths);
 }
+function reportScopeJson(slug, res) {
+  process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+  if (!res.ok) process.exitCode = 1;
+}
+function scopeRefusalNextStep(res) {
+  if (res.noBounce) return "the orchestrator can widen this live claim in place — MCP update addFiles, or sidequest scope-grant from its own identity. Commit in-scope work and hand back only if no one can.";
+  return "commit in-scope work, then release with --release-kind handback and name the refused paths.";
+}
+async function cmdScopeGrant(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail("scope-grant: pass a ticket ref, e.g. sidequest scope-grant SQ-3.");
+  const { slug, meta } = await resolveProject(opts);
+  const res = store.grantScope(slug, idOrRef, workerId(opts), { source: opts.source });
+  if (opts.json) return reportScopeJson(slug, res);
+  if (res.ok) console.log(`✓ ${res.ticket.ref} scope granted: ${res.granted.join(", ")} — ${meta.name}`);
+  else reportClaimFailure("scope-grant", idOrRef, res, meta);
+}
 async function cmdScopeRequest(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("scope-request: pass a ticket ref, e.g. sidequest scope-request SQ-3 --file path/to/new-file.");
-  const { slug, meta } = await resolveProject(opts);
-  const by = workerId(opts);
-  if (opts.grant) {
-    if (opts.file != null || opts.files != null) fail("scope-request --grant cannot be combined with --file/--files — it grants the ticket's pending refused request as recorded.");
-    const res2 = store.grantScope(slug, idOrRef, by, { source: opts.source || "cli" });
-    if (opts.json) {
-      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res2), null, 2) + "\n");
-      if (!res2.ok) process.exitCode = 1;
-      return;
-    }
-    if (res2.ok) {
-      console.log(`✓ ${res2.ticket.ref} scope granted: ${res2.granted.join(", ")} — ${meta.name}`);
-    } else {
-      reportClaimFailure("scope-request", idOrRef, res2, meta);
-    }
-    return;
-  }
   const files = opts.file != null ? opts.file : opts.files;
-  if (files == null) fail("scope-request: pass one or more requested paths with --file or --files, or --grant to grant the pending refused request.");
-  const res = store.requestScope(slug, idOrRef, by, files, { source: opts.source || "cli", force: !!opts.force });
-  if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
-    if (!res.ok) process.exitCode = 1;
-    return;
+  if (opts.grant) {
+    if (files != null) fail("scope-request --grant cannot be combined with --file/--files — it grants the refusal the ticket already recorded.");
+    return cmdScopeGrant(opts, positional);
   }
+  if (files == null) fail("scope-request: pass one or more requested paths with --file or --files, or --grant to grant the outstanding refused request.");
+  const { slug, meta } = await resolveProject(opts);
+  const res = store.requestScope(slug, idOrRef, workerId(opts), files, { source: opts.source, force: !!opts.force });
+  if (opts.json) return reportScopeJson(slug, res);
   if (res.ok) {
     if (res.state === "refused") {
       console.log(`✓ ${res.ticket.ref} scope expansion refused: ${res.refused.join(", ")} — ${meta.name}`);
-      console.log("  commit in-scope work, then release with --release-kind handback and name the refused paths.");
+      console.log(`  ${scopeRefusalNextStep(res)}`);
     } else if (res.approved?.length) {
       console.log(`✓ ${res.ticket.ref} scope auto-approved: ${res.approved.join(", ")} — ${meta.name}`);
     } else {
@@ -858,4 +859,4 @@ async function cmdPublish(opts, positional) {
   }
   fail("publish: expected `sidequest publish lock|unlock|status|queue`");
 }
-module.exports = { validateModelFilter, cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish };
+module.exports = { validateModelFilter, cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdScopeGrant, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish };

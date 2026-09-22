@@ -13,7 +13,7 @@ const { fail, resolveProject, resolveWatchProject } = require('./sidequest-cmd-s
 const { PLUGIN_VERSION, cmdDashboard, cmdServe, cmdStop } = require('./sidequest-cmd-server');
 const { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm } = require('./sidequest-cmd-tickets');
 const { cmdProfile, cmdCategory, cmdGlobalFallback } = require('./sidequest-cmd-configuration');
-const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish } = require('./sidequest-cmd-execution');
+const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdScopeGrant, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish } = require('./sidequest-cmd-execution');
 const { cmdSweepClaims, cmdWorktrees, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive } = require('./sidequest-cmd-collaboration');
 const { cmdDispatch, cmdBriefing, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge } = require('./sidequest-cmd-dispatch');
 const { cmdStory } = require('./sidequest-cmd-story');
@@ -227,7 +227,7 @@ const HELP_COMMANDS: any = {
   pulse: 'sidequest pulse <SQ-n> [--project <path-or-slug>]',
   changes: 'sidequest changes [--since <iso>] [--project <path-or-slug>]',
   watch: 'sidequest watch [--project <path-or-slug>] [--interval <seconds>] [--all]  print session-owned, unowned, and terminal ticket alerts plus all GitHub CI alerts; --all includes every ticket',
-  update: 'sidequest update <id|SQ-n> [-t title] [-d desc|--body-file path] [-p priority] [-s status] [--file <path>|--file none]... [--add-file <path>]... [--remove-file <path>]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [--working-tree-delivery] [--external-deliverable] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "motivation"] [--by who]  (--file replaces the whole declared list; --add-file/--remove-file adjust it without dropping the rest, and refuse combined with --file. Live-claim closeout fields require releasing the claim first or using MCP update from the orchestrator main thread; executors use scopeRequest for files)',
+  update: 'sidequest update <id|SQ-n> [-t title] [-d desc|--body-file path] [-p priority] [-s status] [--file <path>|--file none]... [--add-file <path>]... [--remove-file <path>]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [--working-tree-delivery] [--external-deliverable] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "motivation"] [--by who]  (--file replaces the whole declared list; --add-file/--remove-file adjust it without dropping the rest, refuse combined with --file, and apply additions before removals. Live-claim closeout fields require releasing the claim first or using MCP update from the orchestrator main thread; executors use scopeRequest for files)',
   rm: 'sidequest rm <id|SQ-n> [--force]',
   profile: 'sidequest profile <hygiene|list|show|get|create|edit|retire|use|repoint|promote|new-board> ... [--retired] [--project <path-or-slug>] [--dry-run] [--json]',
   category: 'sidequest category <list|add|edit|rm|disable|enable|pin|reset> <id> [--profile <profile>|--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>|--no-fallback] [--readonly true|false] [--json]',
@@ -249,8 +249,8 @@ const HELP_COMMANDS: any = {
   publish: 'sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]',
   release: 'sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind handback | --release-kind oracle --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>]',
   verdict: 'sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"]  outcome is candidate-addressed: accepted approves the candidate (not the reviewer\'s prose), rejected confirms it must not ship, and a finalized accepted cannot be reversed by another verdict (an accepted readonly review released with kind oracle also closes as done)',
-  'scope-request': 'sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] | sidequest scope-request <id|SQ-n> --grant [--by who]  (orchestrator: grants the ticket\'s most recently refused request; same as sidequest scope-grant <id|SQ-n>)',
-  'scope-grant': 'sidequest scope-grant <id|SQ-n> [--by who]  orchestrator-only: grants the ticket\'s most recently refused scope request, widening declared files without a redispatch',
+  'scope-request': 'sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] | sidequest scope-request <id|SQ-n> --grant [--by who]  (grants every path the claim still has refused; same as sidequest scope-grant <id|SQ-n>)',
+  'scope-grant': 'sidequest scope-grant <id|SQ-n> [--by who]  grants every path this claim still has refused, widening declared files without a redispatch. Refused for the claim holder\'s own --by, for an unclaimed ticket, and for a refusal recorded by an earlier claim',
   assign: 'sidequest assign <id|SQ-n> [--to who=you]',
   unassign: 'sidequest unassign <id|SQ-n>',
   remind: 'sidequest remind <id|SQ-n> (--in 1h|3h|tomorrow | --at "date/time")',
@@ -310,7 +310,7 @@ Usage:
   sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
   sidequest watch [--project <path-or-slug>] [--interval <seconds>] [--all]   stream session-owned, unowned, and terminal ticket events plus all GitHub CI events; --all includes every ticket (30s default)
   sidequest update <id|SQ-n> [-t title] [-d desc|--body-file path] [-p priority] [-s status] [--file <path>|--file none]... [--add-file <path>]... [--remove-file <path>]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "<motivation>"]
-      --file replaces the whole declared list; --add-file/--remove-file adjust it in place without dropping the rest (refused together with --file).
+      --file replaces the whole declared list; --add-file/--remove-file adjust it in place without dropping the rest (refused together with --file, and additions apply before removals).
       A live claim blocks closeout-field changes through the CLI. Release it first, or use MCP update from the orchestrator main thread. Executors use scopeRequest for files.
   sidequest profile hygiene|list|show|get|create|edit|retire|use|repoint|promote|new-board ... [--json]
   sidequest category list|add|edit|rm|disable|enable|pin|reset <id> (--profile <profile> | --project <path-or-slug>) [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--readonly true|false] [--json]
@@ -338,7 +338,7 @@ Working the board safely (multi-agent):
   sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind handback | --release-kind oracle --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>] parks the ticket awaiting the human verdict, then exits
   sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"] records an oracle verdict addressed to the CANDIDATE, not the reviewer's prose: for a bound review, rejected confirms the candidate must not ship, accepted approves the candidate, and a finalized accepted cannot be reversed by another verdict; accepting a readonly review released with kind oracle also closes it as done
   sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] request scope and receive an immediate ruling
-  sidequest scope-request <id|SQ-n> --grant [--by who]  (or sidequest scope-grant <id|SQ-n>)   orchestrator-only: grants the ticket's most recently refused request outright, widening declared files without a redispatch
+  sidequest scope-request <id|SQ-n> --grant [--by who]  (or sidequest scope-grant <id|SQ-n>)   grants every path this claim still has refused, widening declared files without a redispatch; refused for the claim holder's own --by, an unclaimed ticket, or a refusal an earlier claim recorded
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
   sidequest rework <id|SQ-n> --by reviewer --review <review-ticket-or-evidence> --reason "what needs repair"  reject an UNBOUND ready submission for repair, retain its candidate and review evidence, then dispatch the same ticket for a normal replacement claim
     a candidate bound to a review-audit ticket is locked: this refuses without writing, and --review-ref is accepted only for compatibility. Record the failed review's evidence on the review ticket, release that review with --kind oracle, and repair through a fresh ticket, dispatch, commit, review, and candidate
@@ -360,9 +360,12 @@ Working the board safely (multi-agent):
     several; "none" clears (update only). 'ready' groups tickets into parallel-safe waves by declared file
     scope: tickets in the same wave never touch overlapping files/directories; untagged tickets never conflict.
   sidequest update ... --add-file path [--add-file path...] / --remove-file path [--remove-file path...]   widen or
-    trim the declared list without replacing it; refused together with --file. This is how the orchestrator answers
-    a scope refusal without dropping the ticket's existing files — or grant the pending request outright with
-    scope-grant/scope-request --grant instead.
+    trim the declared list without replacing it; refused together with --file. Additions apply before removals, so a
+    path named by both is removed. Both are closeout fields, so on a live claim they need MCP update from the
+    orchestrator's main thread; from the CLI they work once the claim is released. A removal reaches an isolated live
+    dispatch at once — it loses a path it may already have written — while a shared-tree dispatch keeps it until
+    redispatch. This is how the orchestrator answers a scope refusal without dropping the ticket's existing files —
+    or grant the outstanding request outright with scope-grant/scope-request --grant instead.
   sidequest add/update ... --produces name --changes name --consumes name   declare free-form contract edges;
     'ready --brief' reports a produce/consume or change/change collision in waveDependencies. --contract-waiver
     is a reviewed override and can be cleared with --contract-waiver=false.
@@ -569,7 +572,7 @@ async function main() {
       await cmdScopeRequest(opts, positional);
       break;
     case 'scope-grant':
-      await cmdScopeRequest(Object.assign({}, opts, { grant: true }), positional);
+      await cmdScopeGrant(opts, positional);
       break;
     case 'commit':
       await cmdCommit(opts, positional);

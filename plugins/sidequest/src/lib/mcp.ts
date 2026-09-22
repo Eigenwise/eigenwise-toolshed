@@ -110,10 +110,15 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 24000 for VERIFICATION_WAIVER_PROP's type: 'object' (SQ-2 / GitHub #109): an MCP host that
 // enforces the declared schema type refused a top-level verificationWaiver because the property listed
 // `properties` without `type: 'object'`. +91 bytes compacted, while preserving the 2.5KB reserve.
-// Raised from 24100 for update.addFiles/removeFiles and scopeRequest.grant (SQ-13): the base sat at
-// exactly the 2.5KB reserve floor, so even a description-free addition of the required typed array/boolean
-// properties (+130 bytes minimum, +334 bytes with one-line descriptions) could not fit without this bump.
-const MCP_TOOLS_LIST_MAX_BYTES = 24500;
+// Raised from 24100 for update.addFiles/removeFiles and scopeRequest.grant (GitHub #173). The base
+// carried 75 bytes of slack over the 2.5KB reserve (21525 payload) and had been held there by deleting
+// other property descriptions rather than by raising the cap; these properties and the live-claim rules
+// their descriptions have to state cost 490 bytes, so the payload is 22015 and the ceiling has to be at
+// least 24515. 24600 would be the smallest round value that passes this change alone. 25400 is
+// deliberately higher because GitHub #144 raises the same constant for its own properties: a shared
+// ceiling lets the two land in either order without the second one re-measuring. Any further addition
+// measures its own payload instead of inheriting this.
+const MCP_TOOLS_LIST_MAX_BYTES = 25400;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -313,8 +318,8 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   claim: { force: 'Operator-only.' },
   update: {
     verify: ATTESTATION_VERIFY_CONTRACT,
-    addFiles: 'Appends, keeps rest. Refused with files.',
-    removeFiles: 'Drops only these, keeps rest. Refused with files.',
+    addFiles: 'Appends, keeps rest. Refused with files. Applied before removeFiles.',
+    removeFiles: 'Drops only these, keeps rest. Refused with files. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch.',
   },
   supersede_submission: { supersededBy: 'Repair ticket ref, not a commit.' },
   comments: {
@@ -344,7 +349,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
     outcome: 'Candidate, not reviewer prose.',
   },
   scopeRequest: {
-    grant: 'Orchestrator: grants the pending refused request; pass no files.',
+    grant: 'Grants every path this claim still has refused; pass no files. Refuses the claim holder’s own by.',
   },
 };
 
