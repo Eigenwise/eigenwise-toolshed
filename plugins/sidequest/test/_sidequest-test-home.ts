@@ -20,6 +20,12 @@ Object.assign(process.env, {
 process.env.SIDEQUEST_HOME = sidequestTestHome;
 process.env.SIDEQUEST_CLAUDE_HOME = path.join(sidequestTestHome, 'claude');
 
+// Routing reads the wired Claude tier pins from the environment. A developer machine wired to the
+// gateway carries them; CI does not. Tests that need a pin set it themselves.
+for (const key of Object.keys(process.env)) {
+  if (/^ANTHROPIC_DEFAULT_[A-Z]+_MODEL$/.test(key)) delete process.env[key];
+}
+
 process.once('exit', () => {
   try {
     fs.rmSync(sidequestTestHome, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });

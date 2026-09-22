@@ -34,7 +34,7 @@ test('published guidance excludes retired instructions', () => {
   assert.match(executorTemplate, /useful edits, a scoped commit, or meaningful verification expose an interpretive or correctness concern, keep the claim and worktree alive/);
   assert.match(executorTemplate, /newly supplied token-gated briefing and live board state as authoritative over an inherited transcript that says the ticket is terminal/);
   assert.match(executorTemplate, /wait for corrected evidence or a decision through `SendMessage` so the same executor can continue/);
-  assert.match(skill, /For useful work\s+needing a decision, `SendMessage` the same agent and keep its claim and worktree/);
+  assert.match(skill, /For work needing a decision, `SendMessage` the same agent; a resume keeps claim, token-file path, and worktree binding/);
   assert.match(orchestration, /Correct the live worker before replacing it/);
   assert.match(skill, /Don't accept a green suite as proof of coverage; review execution evidence/);
   assert.match(executorTemplate, /Trace the actual call flow before implementing/);
@@ -52,11 +52,16 @@ test('published guidance excludes retired instructions', () => {
   assert.match(ticketAuthoring, /do not invent a test count/);
   assert.match(orchestration, /read each submit report, then run one combined full gate for the wave/);
   assert.match(orchestration, /Retire terminal teammates/);
-  assert.match(orchestration, /TaskStop\(\{ task_id: "<agent name>" \}\)`\s+once/);
-  assert.match(orchestration, /Claude Code host action, not a Sidequest tool/);
-  assert.match(orchestration, /Never stop a live claim, retained continuation,\s+or candidate awaiting\s+integration/);
-  assert.match(orchestration, /Do not wake a completed executor, poll FleetView, or create a cleanup loop/);
+  assert.match(orchestration, /TaskStop mandate is authoritative in\s+`SKILL\.md`/);
+  assert.match(skill, /TaskStop\(\{ task_id: "<agent name>" \}\)`\s+once/);
+  assert.match(skill, /host action, not Sidequest/);
+  assert.match(skill, /Never stop a live claim, retained continuation, or candidate awaiting integration/);
+  assert.match(skill, /never wake a completed executor or build a cleanup loop/);
   assert.match(skill, /TaskStop\(\{ task_id: "<agent name>" \}\)/);
+  assert.match(skill, /a process list is never dispatch evidence/);
+  assert.match(orchestration, /A process list \(`tasklist`\/`ps`\) is never evidence about a dispatch/);
+  assert.match(orchestration, /never a "waiting" paragraph/);
+  assert.match(orchestration, /A host\s+check-in or idle-nudge prompt is not an evidence request/);
   assert.match(executorTemplate, /After terminal closeout, the board terminal state is authoritative/);
 
   for (const source of [skill, orchestration]) {
