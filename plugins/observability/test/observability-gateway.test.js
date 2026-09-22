@@ -8,9 +8,13 @@ const test = require('node:test');
 
 const { createObserver } = require('../bin/observer.js');
 const { buildTokenUsageReport } = require('../lib/observability/report.js');
+const { VIEW_SQL } = require('../lib/observability/resolve.js');
 const { otlpToObservations } = require('../lib/observability/otlp.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
-const { gatewayProjectCostTargets } = require('../observability/sinks/grafana/model-prices.js');
+const {
+  ANTHROPIC_MODEL_PRICES_PER_MILLION,
+  gatewayProjectCostTargets,
+} = require('../observability/sinks/grafana/model-prices.js');
 const { startFakeOtlpReceiver, testSink } = require('./observability-test-support.js');
 const {
   buildOtlpLogPayload,
@@ -19,6 +23,12 @@ const {
 } = require('../../model-gateway/lib/usage-observability.js');
 
 const PROJECT_ID = 'a'.repeat(64);
+
+test('generates cache economics prices from the Anthropic table', () => {
+  for (const [model, prices] of Object.entries(ANTHROPIC_MODEL_PRICES_PER_MILLION)) {
+    assert.ok(VIEW_SQL.includes(`WHEN '${model}' THEN ${prices.input}`), `cache_economics does not price ${model}`);
+  }
+});
 
 function gatewayPayload({ sessionId = 'session-gateway', projectId = null, resolveProjectId = () => projectId } = {}) {
   const request = {
