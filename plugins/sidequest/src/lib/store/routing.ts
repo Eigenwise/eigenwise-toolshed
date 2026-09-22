@@ -182,7 +182,7 @@ function execFromBackend(backend?: any, effort?: any) {
   }
   const runtime = backend.slug;
   const agent = effort ? stableClaudeName(effort) : null;
-  return { agent, model: runtime, spawnId: runtime, backend: 'claude', slug: runtime, runsModel: backend.id, apiModel: backend.id, runsLabel: backend.label, dispatch: 'native-agent' };
+  return { agent, model: runtime, spawnId: runtime, backend: 'claude', slug: runtime, runsModel: runtime, apiModel: backend.id, runsLabel: backend.label, dispatch: 'native-agent' };
 }
 
 function resolveExec(model?: any, effort?: any) {

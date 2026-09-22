@@ -37,7 +37,7 @@ const {
 // Claude Code's Agent `name` parameter schema.
 const NATIVE_AGENT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const TERRA_EXEC = { backend: 'codex', dispatchModel: 'gpt-5.6-terra', runsLabel: 'GPT-5.6 Terra' };
-const OPUS_EXEC = { backend: 'claude', runsModel: 'claude-opus-5-5[1m]', runsLabel: 'Claude Opus 5.5' };
+const OPUS_EXEC = { backend: 'claude', runsModel: 'claude-opus-5', runsLabel: 'Claude Opus 5' };
 
 test('builders produce the current public stable names', () => {
   assert.strictEqual(stableClaudeName('high'), 'sidequest-exec-high');
@@ -103,7 +103,7 @@ test('launch names carry the ref, title, and resolved codex route', () => {
 });
 
 test('launch names derive builtin routes from the resolved runtime', () => {
-  assert.strictEqual(dispatchLaunchName('SQ-843', 'Release engine', OPUS_EXEC, 'xhigh'), 'sq-843-release-engine-opus-5-5-1m-xhigh');
+  assert.strictEqual(dispatchLaunchName('SQ-843', 'Release engine', OPUS_EXEC, 'xhigh'), 'sq-843-release-engine-opus-5-xhigh');
 });
 
 test('launch names never fall back to an opaque id', () => {

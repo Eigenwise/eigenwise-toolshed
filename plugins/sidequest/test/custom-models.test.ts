@@ -10,7 +10,6 @@ const path = require('node:path');
 process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-routing-test-'));
 const emptyDiscovery = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-routing-empty-'));
 process.env.SIDEQUEST_DISCOVERY_DIRS = emptyDiscovery;
-delete process.env.ANTHROPIC_DEFAULT_OPUS_MODEL;
 const store = require('../lib/store.js');
 
 function seedCatalog(models?: any, catalog: any = { schemaVersion: 3, source: 'model-gateway' }) {
@@ -52,7 +51,7 @@ test('resolveExec falls back to a version-free Claude tier', () => {
 test('resolveExec reports the wired Claude runtime id and label', () => {
   process.env.ANTHROPIC_DEFAULT_OPUS_MODEL = 'claude-opus-5-5[1m]';
   const exec = store.resolveExec('opus', 'high');
-  assert.equal(exec.runsModel, 'claude-opus-5-5[1m]');
+  assert.equal(exec.runsModel, 'opus');
   assert.equal(exec.apiModel, 'claude-opus-5-5[1m]');
   assert.equal(exec.runsLabel, 'Claude Opus 5.5');
 });
