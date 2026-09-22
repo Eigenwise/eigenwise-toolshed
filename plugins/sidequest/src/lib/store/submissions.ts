@@ -11,6 +11,7 @@ const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = 
 const { isInScope, scopedPaths } = require('../scope-match');
 const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyDeliveryContentCommitGuidance } = require('../refusal-guidance.js');
 import type { VerificationResult } from '../kernel/verification.js';
+import type { CandidateInvalidation } from '../kernel/wave.js';
 
 function createSubmissions(dependencies: any) {
   const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
@@ -984,6 +985,28 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
   return { ok: true, ticket, scopeValidation };
 }
 
+// The surfaces a wave holds a candidate to. Submit's own gate is
+// ticketCommitScope(admitted, ticket.files, ticket.ref) (below, submissionAdmissionDecision)
+// and the stored-range validator is ticketCommitScope(admittedScope, admittedScope, ticketRef)
+// (commit-scope.ts), and the latter refuses any submission whose snapshot is empty — so
+// every candidate that can reach a wave already carries a non-empty recorded snapshot.
+// Derive from that snapshot rather than re-reading live scope: bare executionScope
+// reproduced neither authority, and it stops honouring the dispatch binding the moment
+// submit marks the dispatch terminal — so a candidate that wrote its own release
+// fragment without declaring it in ticket.files read as surface_overlap at integrate
+// time, after the same paths had passed the commit gate and the range validator
+// (GitHub #180, #147). The live scope is kept only as a fallback for a ticket with no
+// recorded snapshot yet (a reconciled delivery computed before any submit ran), and
+// deriving from the snapshot instead of unioning it with the live scope keeps a
+// post-submit `update --files` or scope grant from retroactively widening the surface
+// a wave holds an already-submitted candidate to.
+function waveDeclaredSurfaces(slug: any, ticket: any) {
+  const admitted = Array.isArray(ticket?.submission?.admittedScope) ? ticket.submission.admittedScope : [];
+  return admitted.length
+    ? commitScope.ticketCommitScope(admitted, admitted, ticket?.ref)
+    : commitScope.ticketCommitScope(executionScope(slug, ticket), ticket?.files, ticket?.ref);
+}
+
 function reconciledDeliveryWave(slug: any, ticket: any, revision: any, verification: any) {
   const baseline = ticket.submission?.baseline || sourceRevisionBaseline(ticket);
   return {
@@ -991,7 +1014,7 @@ function reconciledDeliveryWave(slug: any, ticket: any, revision: any, verificat
     baseline,
     participants: [ticket.ref],
     dependencies: {},
-    declaredSurfaces: executionScope(slug, ticket),
+    declaredSurfaces: waveDeclaredSurfaces(slug, ticket),
     state: 'gate_passed',
     gate: { verification, state: 'gate_passed' },
     delivery: { state: 'delivered', revision, verification },
@@ -3206,6 +3229,13 @@ function waveCandidatesForBaseline(slug: any, candidates: any[], waveBaseline: a
   }));
 }
 
+// Split out of assembleSubmissionWave's refusal message so the conditional lives in a
+// function of its own instead of adding another branch to an already-large caller.
+function waveBaselineMismatchDetail(invalidated: readonly CandidateInvalidation[], opened: any, waveCandidates: any[]): string {
+  if (!invalidated.some((entry) => entry.reason === 'baseline_moved')) return '';
+  return ` Assembled baseline ${opened.baseline.revision.source}:${opened.baseline.revision.value}; candidate baselines ${waveCandidates.map((candidate) => `${candidate.ref}=${candidate.baseline.revision.source}:${candidate.baseline.revision.value}`).join(', ')}.`;
+}
+
 function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
   const participantRefs = Array.from(new Set((Array.isArray(refs) ? refs : [refs]).map((ref) => String(ref || '').trim()).filter(Boolean)));
   if (!participantRefs.length) return { ok: false, reason: 'wave_participants_required', message: 'Wave assembly requires one or more submitted participant refs.' };
@@ -3266,17 +3296,24 @@ function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
     participants: tickets.map((ticket) => ({
       ref: ticket.ref,
       dependencies: Array.isArray(dependencies[ticket.ref]) ? dependencies[ticket.ref] : [],
-      declaredSurfaces: executionScope(slug, ticket),
+      declaredSurfaces: waveDeclaredSurfaces(slug, ticket),
     })),
   });
   if ('code' in opened) return { ok: false, reason: opened.code, message: opened.message };
   const decision = assembleWave(opened, waveCandidatesForBaseline(slug, waveCandidates, opened.baseline));
   if (!decision.ok) {
     const deliveryTarget = target?.branch ? `ticket delivery target ${target.branch}` : 'the current integration target';
+    // Lead with what each candidate was actually refused for. Printing the baselines
+    // unconditionally read as a baseline mismatch even when every baseline matched, and
+    // the real reason sat in invalidated[] that only --json showed (GitHub #180).
+    // detail already opens with the candidate's own ref, so leading with entry.ref here
+    // doubled it: "<ref> surface_overlap: <ref> changed surfaces outside ...".
+    const findings = decision.invalidated.map((entry: CandidateInvalidation) => `${entry.reason}: ${entry.detail}`).join(' ');
+    const baselines = waveBaselineMismatchDetail(decision.invalidated, opened, waveCandidates);
     return {
       ok: false,
       reason: 'wave_invalidated',
-      message: `Wave ${waveId} could not assemble at ${deliveryTarget}: assembled baseline ${opened.baseline.revision.source}:${opened.baseline.revision.value}; candidate baselines ${waveCandidates.map((candidate) => `${candidate.ref}=${candidate.baseline.revision.source}:${candidate.baseline.revision.value}`).join(', ')}. Submitted candidates remain parked with their existing verification evidence.`,
+      message: `Wave ${waveId} could not assemble at ${deliveryTarget}: ${findings}${baselines} Submitted candidates remain parked with their existing verification evidence.`,
       invalidated: decision.invalidated,
       wave: { id: waveId, baseline: opened.baseline },
     };
@@ -3354,7 +3391,7 @@ function recordSubmissionWaveDelivery(slug?: any, refs?: any, revision?: any, ve
     participants: tickets.map((ticket) => ({
       ref: ticket.ref,
       dependencies: Array.isArray(waveState.dependencies?.[ticket.ref]) ? waveState.dependencies[ticket.ref] : [],
-      declaredSurfaces: executionScope(slug, ticket),
+      declaredSurfaces: waveDeclaredSurfaces(slug, ticket),
     })),
   });
   if ('code' in opened) return { ok: false, reason: opened.code, message: opened.message };

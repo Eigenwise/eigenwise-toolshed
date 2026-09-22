@@ -815,6 +815,10 @@ ${verify.outputTail}` : null
     }
     return { ok: true, ticket, scopeValidation };
   }
+  function waveDeclaredSurfaces(slug, ticket) {
+    const admitted = Array.isArray(ticket?.submission?.admittedScope) ? ticket.submission.admittedScope : [];
+    return admitted.length ? commitScope.ticketCommitScope(admitted, admitted, ticket?.ref) : commitScope.ticketCommitScope(executionScope(slug, ticket), ticket?.files, ticket?.ref);
+  }
   function reconciledDeliveryWave(slug, ticket, revision, verification) {
     const baseline = ticket.submission?.baseline || sourceRevisionBaseline(ticket);
     return {
@@ -822,7 +826,7 @@ ${verify.outputTail}` : null
       baseline,
       participants: [ticket.ref],
       dependencies: {},
-      declaredSurfaces: executionScope(slug, ticket),
+      declaredSurfaces: waveDeclaredSurfaces(slug, ticket),
       state: "gate_passed",
       gate: { verification, state: "gate_passed" },
       delivery: { state: "delivered", revision, verification }
@@ -2825,6 +2829,10 @@ ${verify.outputTail}` : null
       baselineCompatible: candidateBaselineIsCurrentOrAncestor(slug, candidate, waveBaseline)
     }));
   }
+  function waveBaselineMismatchDetail(invalidated, opened, waveCandidates) {
+    if (!invalidated.some((entry) => entry.reason === "baseline_moved")) return "";
+    return ` Assembled baseline ${opened.baseline.revision.source}:${opened.baseline.revision.value}; candidate baselines ${waveCandidates.map((candidate) => `${candidate.ref}=${candidate.baseline.revision.source}:${candidate.baseline.revision.value}`).join(", ")}.`;
+  }
   function assembleSubmissionWave(slug, refs, opts) {
     const participantRefs = Array.from(new Set((Array.isArray(refs) ? refs : [refs]).map((ref) => String(ref || "").trim()).filter(Boolean)));
     if (!participantRefs.length) return { ok: false, reason: "wave_participants_required", message: "Wave assembly requires one or more submitted participant refs." };
@@ -2881,17 +2889,19 @@ ${verify.outputTail}` : null
       participants: tickets.map((ticket) => ({
         ref: ticket.ref,
         dependencies: Array.isArray(dependencies2[ticket.ref]) ? dependencies2[ticket.ref] : [],
-        declaredSurfaces: executionScope(slug, ticket)
+        declaredSurfaces: waveDeclaredSurfaces(slug, ticket)
       }))
     });
     if ("code" in opened) return { ok: false, reason: opened.code, message: opened.message };
     const decision = assembleWave(opened, waveCandidatesForBaseline(slug, waveCandidates, opened.baseline));
     if (!decision.ok) {
       const deliveryTarget = target?.branch ? `ticket delivery target ${target.branch}` : "the current integration target";
+      const findings = decision.invalidated.map((entry) => `${entry.reason}: ${entry.detail}`).join(" ");
+      const baselines = waveBaselineMismatchDetail(decision.invalidated, opened, waveCandidates);
       return {
         ok: false,
         reason: "wave_invalidated",
-        message: `Wave ${waveId} could not assemble at ${deliveryTarget}: assembled baseline ${opened.baseline.revision.source}:${opened.baseline.revision.value}; candidate baselines ${waveCandidates.map((candidate) => `${candidate.ref}=${candidate.baseline.revision.source}:${candidate.baseline.revision.value}`).join(", ")}. Submitted candidates remain parked with their existing verification evidence.`,
+        message: `Wave ${waveId} could not assemble at ${deliveryTarget}: ${findings}${baselines} Submitted candidates remain parked with their existing verification evidence.`,
         invalidated: decision.invalidated,
         wave: { id: waveId, baseline: opened.baseline }
       };
@@ -2966,7 +2976,7 @@ ${verify.outputTail}` : null
       participants: tickets.map((ticket) => ({
         ref: ticket.ref,
         dependencies: Array.isArray(waveState.dependencies?.[ticket.ref]) ? waveState.dependencies[ticket.ref] : [],
-        declaredSurfaces: executionScope(slug, ticket)
+        declaredSurfaces: waveDeclaredSurfaces(slug, ticket)
       }))
     });
     if ("code" in opened) return { ok: false, reason: opened.code, message: opened.message };

@@ -4926,6 +4926,191 @@ test('SQ-2463: a wave invalidation preserves submitted candidate status', () => 
   }
 });
 
+// GitHub #180 (SQ-16): the commit gate admits the ticket's own release fragment
+// implicitly, and so does the stored-range validator, but wave assembly re-derived its
+// surfaces from ticket.files alone — so a candidate that wrote its own fragment without
+// declaring it was refused as surface_overlap after passing both.
+test('SQ-16: a candidate that changed its implicitly admitted release fragment assembles', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  try {
+    const ticket = addTicket('release-fragment wave candidate', { files: ['docs'] });
+    const fragment = `.release/unreleased/${ticket.ref}.md`;
+    const baselineCommit = git(['rev-parse', 'HEAD']);
+    const observedAt = new Date().toISOString();
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'fragment-wave-worker', { direct: true, reason: 'The release-fragment wave fixture requires a local direct claim.' }).ok, true);
+    const docsPath = path.join(PROJECT_DIR, 'docs', 'wave-fragment.md');
+    fs.mkdirSync(path.dirname(docsPath), { recursive: true });
+    fs.writeFileSync(docsPath, 'fragment fixture\n');
+    fs.mkdirSync(path.join(PROJECT_DIR, '.release', 'unreleased'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, fragment), '- release note fixture\n');
+    git(['add', 'docs/wave-fragment.md', fragment]);
+    git(['commit', '-m', 'candidate that writes its own release fragment']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    const submitted = store.submitTicket(slug, ticket.ref, 'fragment-wave-worker', { commit: candidate, verify: 'node -e "process.exit(0)"' });
+    assert.strictEqual(submitted.ok, true, submitted.message);
+    const stored = store.getTicket(slug, ticket.ref);
+    assert.ok(!store.effectiveScope(slug, stored).includes(fragment), 'the fragment is admitted implicitly, never declared');
+    assert.ok(!(stored.submission.admittedScope || []).includes(fragment), 'the recorded snapshot carries the declared scope, not the implicit fragment');
+    // A dispatched submit records the range; a direct fixture claim supplies it here.
+    Object.assign(stored.submission, {
+      baseline: { revision: { source: 'git', value: baselineCommit, observedAt }, purpose: 'dispatch' },
+      changedPaths: [fragment, 'docs/wave-fragment.md'],
+    });
+    stored.executorVerify = 'node -e "process.exit(0)"';
+    persist(stored);
+    git(['reset', '--hard', baselineCommit]);
+
+    const assembled = store.assembleSubmissionWave(slug, [ticket.ref], { waveId: 'release-fragment-wave' });
+    assert.strictEqual(assembled.ok, true, assembled.message);
+    assert.ok(store.getTicket(slug, ticket.ref).submission.wave.declaredSurfaces.includes(fragment));
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+// The refusal has to name the path and the reason where the caller reads it: four
+// integration attempts chased a baseline mismatch the message printed while every
+// baseline matched (GitHub #180).
+test('SQ-16: a surface_overlap refusal names the offending path instead of matching baselines', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  try {
+    const ticket = addTicket('surface overlap message candidate', { files: ['docs'] });
+    const baselineCommit = git(['rev-parse', 'HEAD']);
+    const observedAt = new Date().toISOString();
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'overlap-message-worker', { direct: true, reason: 'The overlap message fixture requires a local direct claim.' }).ok, true);
+    const docsPath = path.join(PROJECT_DIR, 'docs', 'wave-overlap.md');
+    fs.mkdirSync(path.dirname(docsPath), { recursive: true });
+    fs.writeFileSync(docsPath, 'overlap fixture\n');
+    git(['add', 'docs/wave-overlap.md']);
+    git(['commit', '-m', 'overlap message candidate']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'overlap-message-worker', { commit: candidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const stored = store.getTicket(slug, ticket.ref);
+    Object.assign(stored.submission, {
+      baseline: { revision: { source: 'git', value: baselineCommit, observedAt }, purpose: 'dispatch' },
+      changedPaths: ['docs/wave-overlap.md', 'lib/never-admitted.js'],
+      admittedScope: ['docs'],
+    });
+    persist(stored);
+    git(['reset', '--hard', baselineCommit]);
+
+    const refused = store.assembleSubmissionWave(slug, [ticket.ref], { waveId: 'overlap-message-wave' });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'wave_invalidated');
+    assert.strictEqual(refused.invalidated[0].reason, 'surface_overlap');
+    assert.deepStrictEqual(refused.invalidated[0].outside, ['lib/never-admitted.js']);
+    assert.match(refused.message, /surface_overlap: .*lib\/never-admitted\.js/);
+    assert.doesNotMatch(refused.message, /candidate baselines/);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+// Should (owner review on GitHub #180): the prior fixtures were shaped so the recorded
+// snapshot never added anything the live scope did not already cover, so the half of
+// the derivation that actually matters — the snapshot outliving a narrower ticket.files
+// — never ran. Narrow ticket.files after submit, the way `update --files` would, so
+// only the recorded admittedScope still covers the committed path, and confirm the
+// wave still assembles from that snapshot.
+test('SQ-16: a wave still assembles when ticket.files is narrowed after submit and only the recorded snapshot covers the committed range', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  try {
+    const ticket = addTicket('narrowed after submit candidate', { files: ['docs', 'lib'] });
+    const baselineCommit = git(['rev-parse', 'HEAD']);
+    const observedAt = new Date().toISOString();
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'narrowed-worker', { direct: true, reason: 'The narrowed-scope fixture requires a local direct claim.' }).ok, true);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'narrowed.js'), 'narrowed fixture\n');
+    git(['add', 'lib/narrowed.js']);
+    git(['commit', '-m', 'candidate committed under the original wider scope']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'narrowed-worker', { commit: candidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const stored = store.getTicket(slug, ticket.ref);
+    assert.ok((stored.submission.admittedScope || []).includes('lib'), 'the recorded snapshot covers the committed path while it is still declared');
+    Object.assign(stored.submission, {
+      baseline: { revision: { source: 'git', value: baselineCommit, observedAt }, purpose: 'dispatch' },
+      changedPaths: ['lib/narrowed.js'],
+    });
+    // Narrow the live declaration after submit; the recorded snapshot does not move.
+    stored.files = ['docs'];
+    persist(stored);
+    git(['reset', '--hard', baselineCommit]);
+
+    assert.ok(!store.effectiveScope(slug, store.getTicket(slug, ticket.ref)).includes('lib'), 'the live scope no longer covers the committed path');
+    const assembled = store.assembleSubmissionWave(slug, [ticket.ref], { waveId: 'narrowed-after-submit-wave' });
+    assert.strictEqual(assembled.ok, true, assembled.message);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+// GitHub #180's reported shape: a real dispatch (not a direct claim) that picked up a
+// post-dispatch scope grant, then integrated. `Fixes #180` closing on a reinterpretation
+// of the root cause rather than on a test risked the issue being reopened; this pins the
+// actual reported sequence end to end.
+test('SQ-16: a dispatched candidate with a post-dispatch scope grant integrates', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, {
+    integrationMode: 'local',
+    integrationBranch,
+    autoApproveScope: ['lib/reported-180-grant.js'],
+  });
+  try {
+    const ticket = addTicket('reported #180 shape candidate', { files: ['docs'], category: 'submission.fixture' });
+    const sessionId = 'reported-180-dispatch';
+    const worker = 'reported-180-worker';
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, worker, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+    }).ok, true);
+
+    const granted = store.requestScope(slug, ticket.ref, worker, ['lib/reported-180-grant.js']);
+    assert.strictEqual(granted.state, 'granted', granted.message);
+
+    const fragment = `.release/unreleased/${ticket.ref}.md`;
+    fs.mkdirSync(path.join(PROJECT_DIR, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'docs', 'reported-180.md'), 'declared scope fixture\n');
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'reported-180-grant.js'), 'granted fixture\n');
+    fs.mkdirSync(path.join(PROJECT_DIR, '.release', 'unreleased'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, fragment), '- release note fixture\n');
+    git(['add', 'docs/reported-180.md', 'lib/reported-180-grant.js', fragment]);
+    git(['commit', '-m', 'candidate covering declared scope, a post-dispatch grant, and its own release fragment']);
+    const commit = git(['rev-parse', 'HEAD']);
+    pin(ticket, commit);
+    assert.strictEqual(runCli(['submit', ticket.ref, '--by', worker, '--commit', commit]).status, 0);
+
+    const delivered = integrateOnCurrentTestBranch(ticket.ref);
+    assert.strictEqual(delivered.ok, true, delivered.message);
+  } finally {
+    store.setBoardConfig(slug, {
+      integrationMode: originalConfig.integrationMode,
+      integrationBranch: originalConfig.integrationBranch,
+      autoApproveScope: originalConfig.autoApproveScope,
+    });
+    cleanBranch();
+  }
+});
+
 // GitHub #51 (SQ-2717): landed proof, not delivery location. Each fixture gets its own
 // repo plus bare origin so origin/main can be advanced past a stale local main without
 // touching the shared PROJECT_DIR fixtures.
