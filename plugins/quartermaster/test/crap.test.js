@@ -183,7 +183,11 @@ test('the ratchet fails a function that got worse and holds new functions to the
   assert.match(formatReport(report), /CRAP gate failed: 1 of 3 functions at or above 6; 2 pre-existing functions at or above 6 \(ratchet against main\)/);
 });
 
-test('an anonymous function is not a false new offender when its complexity falls and neighbors shift its position', () => {
+/**
+ * The file aggregate is reported but no longer decides: here it holds (worst complexity 20 -> 15) and
+ * the rewritten component is still gated, because one-to-one pairing left it without a baseline row.
+ */
+test('a rewritten anonymous function that also moved answers to the ceiling, whatever the file aggregate did', () => {
   const projectDir = fixtureProject({
     'src/widget.js': [
       'const Widget = (props) => {',
@@ -197,15 +201,10 @@ test('an anonymous function is not a false new offender when its complexity fall
     ].join('\n'),
     'coverage/lcov.info': '',
   });
-  const git = (args) => execFileSync('git', args, { cwd: projectDir, encoding: 'utf8', windowsHide: true });
-  git(['init', '-b', 'main']);
-  git(['config', 'user.name', 'CRAP test']);
-  git(['config', 'user.email', 'crap-test@example.invalid']);
-  git(['add', '.']);
-  git(['commit', '-m', 'base']);
+  initFixtureRepository(projectDir);
 
   // lizard reports every one of these as "(anonymous)"; extracting two helpers ahead of the component
-  // shifts its position among same-named siblings even though its own complexity dropped 20 -> 15.
+  // shifts its position among same-named siblings, and its own body was rewritten to call them.
   fs.writeFileSync(
     path.join(projectDir, 'src', 'widget.js'),
     [
@@ -233,18 +232,62 @@ test('an anonymous function is not a false new offender when its complexity fall
     '15,15,80,1,4,"(anonymous)@9-12@src/widget.js","src/widget.js","(anonymous)","(anonymous)",9,12',
     '',
   ].join('\n');
-  const runLizard = ({ cwd }) => (path.resolve(cwd) === path.resolve(projectDir) ? currentCsv : baseCsv);
+  const runLizard = ({ cwd }) => (isBaselineCwd(cwd) ? baseCsv : currentCsv);
 
   const report = crapReport({ projectDir, ratchet: 'main', runLizard });
 
-  assert.deepEqual(report.failures, []);
+  assert.deepEqual(report.failures.map((entry) => `${entry.line}:${entry.reason}:crap=${entry.crap}`), ['9:ceiling:crap=240']);
   assert.equal(report.ambiguousMatches.length, 1);
   assert.deepEqual(
     { file: report.ambiguousMatches[0].file, degraded: report.ambiguousMatches[0].degraded },
     { file: 'src/widget.js', degraded: false },
+    'the aggregate held and is still reported; it is not what decided the unmatched function',
   );
   assert.match(formatReport(report), /src\/widget\.js: ambiguous match/);
-  assert.match(formatReport(report), /CRAP gate passed/);
+  assert.doesNotMatch(formatReport(report), /CRAP gate passed/);
+});
+
+/**
+ * The same shape with the component's text untouched: exact source text claims its own baseline row
+ * before the two inserted helpers can take it by position, so nothing is reported as new.
+ */
+test('an anonymous function whose text is untouched keeps its own baseline when neighbours shift its position', () => {
+  const widget = [
+    'const Widget = (props) => {',
+    '  if (props.a) return 1;',
+    '  if (props.b) return 2;',
+    '  if (props.c) return 3;',
+    '  if (props.d) return 4;',
+    '  return 0;',
+    '};',
+  ];
+  const projectDir = fixtureProject({
+    'src/widget.js': [...widget, ''].join('\n'),
+    'coverage/lcov.info': '',
+  });
+  initFixtureRepository(projectDir);
+
+  fs.writeFileSync(
+    path.join(projectDir, 'src', 'widget.js'),
+    ['const helperA = (x) => {', '  return x + 1;', '};', '', 'const helperB = (x) => {', '  return x - 1;', '};', '', ...widget, ''].join('\n'),
+    'utf8',
+  );
+
+  const baseCsv = '20,20,100,1,7,"(anonymous)@1-7@src/widget.js","src/widget.js","(anonymous)","(anonymous)",1,7\n';
+  const currentCsv = [
+    '1,1,10,1,3,"(anonymous)@1-3@src/widget.js","src/widget.js","(anonymous)","(anonymous)",1,3',
+    '1,1,10,1,3,"(anonymous)@5-7@src/widget.js","src/widget.js","(anonymous)","(anonymous)",5,7',
+    '20,20,100,1,7,"(anonymous)@9-15@src/widget.js","src/widget.js","(anonymous)","(anonymous)",9,15',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (isBaselineCwd(cwd) ? baseCsv : currentCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.deepEqual(report.failures, [], 'the untouched component matched its own baseline row by exact text');
+  assert.deepEqual(report.ambiguousMatches, []);
+  assert.equal(report.preExistingAtOrAboveMax, 1);
+  assert.match(formatReport(report), /CRAP gate passed: 0 of 3 functions at or above 6/);
 });
 
 test('an anonymous function that truly gets worse still reports one new offender, with no stable baseline match', () => {
@@ -304,9 +347,9 @@ test('an anonymous function that truly gets worse still reports one new offender
   assert.equal(report.failures.length, 1);
   assert.deepEqual(
     { line: report.failures[0].line, reason: report.failures[0].reason },
-    { line: 9, reason: 'ambiguous' },
+    { line: 9, reason: 'ceiling' },
   );
-  assert.equal(report.ambiguousMatches[0].degraded, true);
+  assert.equal(report.ambiguousMatches[0].degraded, true, 'the aggregate agrees here, but the ceiling is what gated the function');
   assert.match(formatReport(report), /CRAP gate failed: 1 of 3 functions/);
 });
 
@@ -365,8 +408,127 @@ test('inserting a same-named function leaves its untouched namesakes matched to 
   assert.deepEqual(report.failures.map((entry) => `${entry.line}:${entry.reason}`), []);
   assert.equal(report.atOrAboveMax, 0);
   assert.equal(report.preExistingAtOrAboveMax, 2, 'both untouched methods stay over the ceiling, reported and not gated');
-  assert.deepEqual(report.ambiguousMatches, [], 'exact source text matched every namesake, so nothing was ambiguous');
+  assert.deepEqual(report.ambiguousMatches, [], 'exact source text claimed both baseline rows, and the inserted method is under the ceiling');
   assert.match(formatReport(report), /CRAP gate passed: 0 of 3 functions at or above 6; 2 pre-existing functions at or above 6/);
+});
+
+/**
+ * Pairing is one-to-one, so the third `run` cannot borrow a baseline row its namesakes already claimed.
+ * The file aggregate ties here, because refactoring one sibling below the ceiling cancels the new
+ * offender out, which is exactly why the aggregate no longer gets to clear an unmatched function.
+ */
+test('a third same-named function over the ceiling is new code, even when the file aggregate ties', () => {
+  const firstRun = ['function run(n) {', '  if (n > 0) return 1;', '  return 0;', '}'];
+  const secondRun = ['function run(n) {', '  if (n < 0) return -1;', '  return 0;', '}'];
+  const projectDir = fixtureProject({
+    'src/app.js': [...firstRun, '', ...secondRun, ''].join('\n'),
+    'coverage/lcov.info': '',
+  });
+  initFixtureRepository(projectDir);
+
+  fs.writeFileSync(
+    path.join(projectDir, 'src', 'app.js'),
+    [
+      ...firstRun,
+      '',
+      'function run(n) {',
+      '  return 0;',
+      '}',
+      '',
+      'function run(n) {',
+      '  if (n === 1) return 1;',
+      '  if (n === 2) return 2;',
+      '  return 0;',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  const baseCsv = [
+    '4,10,40,1,4,"run@1-4@./src/app.js","./src/app.js","run","run ( n )",1,4',
+    '4,10,40,1,4,"run@6-9@./src/app.js","./src/app.js","run","run ( n )",6,9',
+    '',
+  ].join('\n');
+  const currentCsv = [
+    '4,10,40,1,4,"run@1-4@src/app.js","src/app.js","run","run ( n )",1,4',
+    '3,1,20,1,3,"run@6-8@src/app.js","src/app.js","run","run ( n )",6,8',
+    '5,5,40,1,5,"run@10-14@src/app.js","src/app.js","run","run ( n )",10,14',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (isBaselineCwd(cwd) ? baseCsv : currentCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.deepEqual(
+    report.failures.map((entry) => `${entry.function}@${entry.line}:${entry.reason}:crap=${entry.crap}`),
+    ['run@10:ceiling:crap=30'],
+  );
+  assert.deepEqual(
+    report.ambiguousMatches,
+    [{ file: 'src/app.js', current: { overCeiling: 1, maxComplexity: 10 }, baseline: { overCeiling: 2, maxComplexity: 10 }, degraded: false }],
+    'the aggregate is reported on the same metric on both sides, and it is not what decided the new run',
+  );
+  assert.equal(report.atOrAboveMax, 1);
+  assert.doesNotMatch(formatReport(report), /CRAP gate passed/);
+});
+
+/** N baseline copies of one text match N current copies, never N + 1: a copy-paste is new code. */
+test('a byte-identical copy of an over-ceiling function answers to the ceiling', () => {
+  const helper = ['function helper(n) {', '  if (n > 0) return 1;', '  return 0;', '}'];
+  const projectDir = fixtureProject({
+    'src/util.js': [...helper, ''].join('\n'),
+    'coverage/lcov.info': '',
+  });
+  initFixtureRepository(projectDir);
+
+  fs.writeFileSync(path.join(projectDir, 'src', 'util.js'), [...helper, '', ...helper, ''].join('\n'), 'utf8');
+
+  const baseCsv = '4,10,40,1,4,"helper@1-4@./src/util.js","./src/util.js","helper","helper ( n )",1,4\n';
+  const currentCsv = [
+    '4,10,40,1,4,"helper@1-4@src/util.js","src/util.js","helper","helper ( n )",1,4',
+    '4,10,40,1,4,"helper@6-9@src/util.js","src/util.js","helper","helper ( n )",6,9',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (isBaselineCwd(cwd) ? baseCsv : currentCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.deepEqual(
+    report.failures.map((entry) => `${entry.function}@${entry.line}:${entry.reason}:crap=${entry.crap}`),
+    ['helper@6:ceiling:crap=110'],
+  );
+  assert.equal(report.preExistingAtOrAboveMax, 1, 'the original copy still pairs with its own baseline row');
+});
+
+test('one baseline copy and one current copy of identical text still pair with each other', () => {
+  const helper = ['function helper(n) {', '  if (n > 0) return 1;', '  return 0;', '}'];
+  const projectDir = fixtureProject({
+    'src/util.js': [...helper, ''].join('\n'),
+    'coverage/lcov.info': '',
+  });
+  initFixtureRepository(projectDir);
+
+  fs.writeFileSync(
+    path.join(projectDir, 'src', 'util.js'),
+    [...helper, '', 'function tally(n) {', '  return n;', '}', ''].join('\n'),
+    'utf8',
+  );
+
+  const baseCsv = '4,10,40,1,4,"helper@1-4@./src/util.js","./src/util.js","helper","helper ( n )",1,4\n';
+  const currentCsv = [
+    '4,10,40,1,4,"helper@1-4@src/util.js","src/util.js","helper","helper ( n )",1,4',
+    '3,1,10,1,3,"tally@6-8@src/util.js","src/util.js","tally","tally ( n )",6,8',
+    '',
+  ].join('\n');
+  const runLizard = ({ cwd }) => (isBaselineCwd(cwd) ? baseCsv : currentCsv);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.deepEqual(report.failures, []);
+  assert.deepEqual(report.ambiguousMatches, []);
+  assert.equal(report.preExistingAtOrAboveMax, 1);
+  assert.match(formatReport(report), /CRAP gate passed: 0 of 2 functions at or above 6/);
 });
 
 /**

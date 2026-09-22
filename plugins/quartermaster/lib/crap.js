@@ -9,6 +9,8 @@ const { spawnSync } = require('node:child_process');
 const DEFAULT_MAX = 6;
 /** lizard prints this literal name for every arrow/closure it cannot attribute to a declaration. */
 const ANONYMOUS_NAME = '(anonymous)';
+/** A byte no file path, function name or hash can contain, so composed lookup keys stay unambiguous. */
+const KEY_SEPARATOR = '\u0000';
 const DEFAULT_LCOV = 'coverage/lcov.info';
 const CONFIG_RELATIVE_PATH = path.join('.claude', 'quartermaster', 'crap.json');
 const INSTALL_HINT = 'install lizard with `uv tool install lizard`, `pipx install lizard`, or `pip install lizard`';
@@ -265,50 +267,126 @@ function runCoverageCommand(command, projectDir) {
   }
 }
 
-function baselineFunctions({ projectDir, ratchet, files, exclude, runLizard }) {
+function textKey(file, hash) {
+  return [file, hash].join(KEY_SEPARATOR);
+}
+
+function identityKey(file, name, ordinal) {
+  return [file, name, ordinal].join(KEY_SEPARATOR);
+}
+
+function anchorKey(file, anchor, ordinal) {
+  return [file, anchor || '', ordinal].join(KEY_SEPARATOR);
+}
+
+/** Every bucket is a queue: pairing claims a baseline row and never hands the same row out twice. */
+function pushBucket(index, key, entry) {
+  const bucket = index.get(key);
+  if (bucket) bucket.push(entry);
+  else index.set(key, [entry]);
+}
+
+function emptyBaselineIndex() {
+  return {
+    byIdentity: new Map(),
+    byBodyHash: new Map(),
+    byAnchor: new Map(),
+    functionsByFile: new Map(),
+    namesByFile: new Map(),
+  };
+}
+
+function rememberName(index, file, name) {
+  const names = index.namesByFile.get(file);
+  if (names) names.add(name);
+  else index.namesByFile.set(file, new Set([name]));
+}
+
+function indexBaselineEntry(index, file, entry) {
+  pushBucket(index.byIdentity, identityKey(file, entry.name, entry.ordinal), entry);
+  if (entry.bodyHash) pushBucket(index.byBodyHash, textKey(file, entry.bodyHash), entry);
+  if (entry.name === ANONYMOUS_NAME) pushBucket(index.byAnchor, anchorKey(file, entry.anchor, entry.anchorOrdinal), entry);
+  pushBucket(index.functionsByFile, file, entry);
+  rememberName(index, file, entry.name);
+}
+
+function changedFiles(projectDir, base, hint) {
+  return git(projectDir, ['diff', '--name-only', '--relative', base], hint)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function extractBaselineFiles(projectDir, base, files, targetDir) {
+  let extracted = 0;
+  for (const file of files) {
+    const show = spawnSync('git', ['show', `${base}:${file}`], { cwd: projectDir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
+    if (show.status !== 0) continue;
+    const target = path.join(targetDir, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, show.stdout, 'utf8');
+    extracted += 1;
+  }
+  return extracted;
+}
+
+function indexBaselineCheckout(temporaryDir, exclude, runLizard) {
+  const index = emptyBaselineIndex();
+  for (const entry of parseLizardCsv(runLizard({ cwd: temporaryDir, sources: ['.'], exclude }), temporaryDir)) {
+    indexBaselineEntry(index, displayPath(temporaryDir, entry.file), entry);
+  }
+  return index;
+}
+
+function baselineFunctions(options) {
+  const { projectDir, ratchet, files, exclude, runLizard } = options;
   const hint = `check that ${JSON.stringify(ratchet)} is a git ref this repository knows`;
   const base = git(projectDir, ['merge-base', 'HEAD', ratchet], hint).trim();
-  const changed = new Set(
-    git(projectDir, ['diff', '--name-only', '--relative', base], hint)
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean),
-  );
+  const changed = new Set(changedFiles(projectDir, base, hint));
   const changedHere = [...files].filter((file) => changed.has(file));
-  const empty = { byIdentity: new Map(), byBodyHash: new Map(), byAnchor: new Map(), functionsByFile: new Map(), namesByFile: new Map() };
-  if (!changedHere.length) return { base, changed, ...empty };
+  if (!changedHere.length) return { base, changed, ...emptyBaselineIndex() };
 
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-base-'));
   try {
-    let extracted = 0;
-    for (const file of changedHere) {
-      const show = spawnSync('git', ['show', `${base}:${file}`], { cwd: projectDir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
-      if (show.status !== 0) continue;
-      const target = path.join(temporaryDir, file);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, show.stdout, 'utf8');
-      extracted += 1;
-    }
-    const byIdentity = new Map();
-    const byBodyHash = new Map();
-    const byAnchor = new Map();
-    const functionsByFile = new Map();
-    const namesByFile = new Map();
-    if (extracted) {
-      for (const entry of parseLizardCsv(runLizard({ cwd: temporaryDir, sources: ['.'], exclude }), temporaryDir)) {
-        const file = displayPath(temporaryDir, entry.file);
-        byIdentity.set(`${file}\u0000${entry.name}\u0000${entry.ordinal}`, entry);
-        if (entry.bodyHash) byBodyHash.set(`${file}\u0000${entry.bodyHash}`, entry);
-        if (entry.name === ANONYMOUS_NAME) byAnchor.set(`${file}\u0000${entry.anchor ?? ''}\u0000${entry.anchorOrdinal}`, entry);
-        if (!functionsByFile.has(file)) functionsByFile.set(file, []);
-        functionsByFile.get(file).push(entry);
-        if (!namesByFile.has(file)) namesByFile.set(file, new Set());
-        namesByFile.get(file).add(entry.name);
-      }
-    }
-    return { base, changed, byIdentity, byBodyHash, byAnchor, functionsByFile, namesByFile };
+    const extracted = extractBaselineFiles(projectDir, base, changedHere, temporaryDir);
+    const index = extracted ? indexBaselineCheckout(temporaryDir, exclude, runLizard) : emptyBaselineIndex();
+    return { base, changed, ...index };
   } finally {
     fs.rmSync(temporaryDir, { recursive: true, force: true });
+  }
+}
+
+/** A claimed baseline row is spent: the next current function asking for it has to look elsewhere. */
+function claimFirstUnclaimed(bucket, claimed) {
+  for (const candidate of bucket || []) {
+    if (claimed.has(candidate)) continue;
+    claimed.add(candidate);
+    return candidate;
+  }
+  return null;
+}
+
+function matchByText(baseline, entry, claimed) {
+  if (!entry.bodyHash) return null;
+  return claimFirstUnclaimed(baseline.byBodyHash.get(textKey(entry.file, entry.bodyHash)), claimed);
+}
+
+function matchByName(baseline, entry, claimed) {
+  if (entry.function === ANONYMOUS_NAME) return null;
+  return claimFirstUnclaimed(baseline.byIdentity.get(identityKey(entry.file, entry.function, entry.ordinal)), claimed);
+}
+
+function matchByAnchor(baseline, entry, claimed) {
+  if (entry.function !== ANONYMOUS_NAME) return null;
+  return claimFirstUnclaimed(baseline.byAnchor.get(anchorKey(entry.file, entry.anchor, entry.anchorOrdinal)), claimed);
+}
+
+function claimRound(match, pairing) {
+  const { functions, baseline, claimed, matches } = pairing;
+  for (const entry of functions) {
+    if (matches.has(entry)) continue;
+    const previous = match(baseline, entry, claimed);
+    if (previous) matches.set(entry, previous);
   }
 }
 
@@ -316,140 +394,180 @@ function baselineFunctions({ projectDir, ratchet, files, exclude, runLizard }) {
  * Pairing has to survive an insertion anywhere in the file: one added function shifts every later
  * position, and names repeat (two classes with a `run`, two components with a `render`), so neither
  * position nor name on its own identifies a function. Byte-identical source text is the strongest
- * identity, and it carries the same complexity whichever copy it pairs with, so it is tried first.
+ * identity, so it claims across every function before a weaker lookup runs: an inserted namesake must
+ * not take the row its untouched twin can prove it owns. Pairing is one-to-one, so a current function
+ * left without a row is one the baseline copy of the file cannot account for.
  */
-function baselineMatch(baseline, entry) {
-  if (entry.bodyHash) {
-    const sameText = baseline.byBodyHash.get(`${entry.file}\u0000${entry.bodyHash}`);
-    if (sameText) return sameText;
-  }
-  if (entry.function !== ANONYMOUS_NAME) {
-    return baseline.byIdentity.get(`${entry.file}\u0000${entry.function}\u0000${entry.ordinal}`) ?? null;
-  }
-  return baseline.byAnchor.get(`${entry.file}\u0000${entry.anchor ?? ''}\u0000${entry.anchorOrdinal}`) ?? null;
+function pairWithBaseline(functions, baseline) {
+  const pairing = { functions, baseline, claimed: new Set(), matches: new Map() };
+  claimRound(matchByText, pairing);
+  claimRound(matchByName, pairing);
+  claimRound(matchByAnchor, pairing);
+  return pairing.matches;
 }
 
-function crapReport(options) {
-  const projectDir = path.resolve(options.projectDir ?? process.cwd());
-  const config = readConfig(projectDir);
-  const max = Number(options.max ?? config.max ?? DEFAULT_MAX);
-  if (!Number.isFinite(max) || max <= 0) throw new PrerequisiteError('--max must be a positive number', 'pass --max <n> or set max in the config');
-  const ratchet = options.ratchet ?? config.ratchet ?? null;
-  const sources = config.sources?.length ? config.sources : ['.'];
-  const exclude = config.exclude ?? [];
-  const coverageCommand = options.coverageCommand ?? config.coverageCommand ?? null;
-  const runLizard = options.runLizard ?? lizardRunner();
+function newTally() {
+  return { failures: [], atOrAboveMax: 0, preExistingAtOrAboveMax: 0, movedNamesakes: new Set() };
+}
 
-  if (coverageCommand) runCoverageCommand(coverageCommand, projectDir);
+function countPreExisting(tally, entry, max) {
+  if (entry.crap >= max) tally.preExistingAtOrAboveMax += 1;
+}
 
-  const lcovPath = path.resolve(projectDir, options.lcov ?? config.lcov ?? DEFAULT_LCOV);
-  let lcovText;
-  try {
-    lcovText = fs.readFileSync(lcovPath, 'utf8');
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw new PrerequisiteError(`could not read ${lcovPath}: ${error.message}`, 'check the lcov path');
-    throw new PrerequisiteError(
-      `no lcov coverage at ${lcovPath}`,
-      coverageCommand ? 'the coverage command ran but wrote no lcov there' : 'run your coverage command first, or set coverageCommand in the config',
-    );
-  }
-  const coverage = coverageByFile(lcovText, projectDir);
+/** A paired function answers only to its own baseline row, both sides scored from this run's coverage. */
+function judgeMatched(tally, entry, previous, max) {
+  countPreExisting(tally, entry, max);
+  const baselineCrap = rounded(crapScore(previous.complexity, entry.coverage), 2);
+  if (entry.crap <= baselineCrap) return;
+  tally.failures.push({ ...entry, reason: 'ratchet', baselineCc: previous.complexity, baselineCrap });
+}
 
-  const complexityCsv = options.complexity
-    ? fs.readFileSync(path.resolve(projectDir, options.complexity), 'utf8')
-    : runLizard({ cwd: projectDir, sources, exclude });
-  const functions = measure(parseLizardCsv(complexityCsv, projectDir), coverage, projectDir);
+function baselineKnewName(baseline, entry) {
+  const names = baseline ? baseline.namesByFile.get(entry.file) : null;
+  return Boolean(names && names.has(entry.function));
+}
 
-  let baseline = null;
-  if (ratchet) {
-    baseline = baselineFunctions({
-      projectDir,
-      ratchet,
-      files: new Set(functions.map((entry) => entry.file)),
-      exclude,
-      runLizard,
-    });
-  }
+/**
+ * Pairing already gave every baseline row to at most one current function, so a function left without
+ * one is code the baseline copy of this file cannot account for: it answers to the ceiling on its own,
+ * copy-pasted or freshly written. A name the baseline already carried only marks the file for the
+ * aggregate line in the report; it no longer excuses the function.
+ */
+function judgeUnmatched(tally, entry, baseline, max) {
+  if (entry.crap < max) return;
+  tally.atOrAboveMax += 1;
+  tally.failures.push({ ...entry, reason: 'ceiling' });
+  if (baselineKnewName(baseline, entry)) tally.movedNamesakes.add(entry.file);
+}
 
-  const failures = [];
-  let atOrAboveMax = 0;
-  let preExistingAtOrAboveMax = 0;
-  const ambiguousByFile = new Map();
-  for (const entry of functions) {
-    const previous = baseline ? baselineMatch(baseline, entry) : null;
-    if (previous) {
-      if (entry.crap >= max) preExistingAtOrAboveMax += 1;
-      const baselineCrap = rounded(crapScore(previous.complexity, entry.coverage), 2);
-      if (entry.crap > baselineCrap) failures.push({ ...entry, reason: 'ratchet', baselineCc: previous.complexity, baselineCrap });
-      continue;
-    }
-    if (baseline && !baseline.changed.has(entry.file)) {
-      if (entry.crap >= max) preExistingAtOrAboveMax += 1;
-      continue;
-    }
-    // A function whose name the baseline copy of this file already carried is ambiguous, not new:
-    // same-named siblings shift position whenever the file gains or loses one of them, so a missing
-    // match proves nothing about this particular function. Judge the file as a whole once every entry
-    // has been scanned. A name the baseline never had is genuinely new and answers to the ceiling.
-    if (baseline && baseline.namesByFile.get(entry.file)?.has(entry.function)) {
-      if (!ambiguousByFile.has(entry.file)) ambiguousByFile.set(entry.file, []);
-      ambiguousByFile.get(entry.file).push(entry);
-      continue;
-    }
-    if (entry.crap >= max) {
-      atOrAboveMax += 1;
-      failures.push({ ...entry, reason: 'ceiling' });
-    }
-  }
+function judgeEntry(tally, entry, previous, baseline, max) {
+  if (previous) return judgeMatched(tally, entry, previous, max);
+  if (baseline && !baseline.changed.has(entry.file)) return countPreExisting(tally, entry, max);
+  return judgeUnmatched(tally, entry, baseline, max);
+}
 
-  const ambiguousMatches = [];
-  for (const [file, entries] of ambiguousByFile) {
-    const baselineEntries = baseline.functionsByFile.get(file) ?? [];
-    const fileFunctions = functions.filter((candidate) => candidate.file === file);
-    // The baseline copy was measured without today's coverage, so its own functions only carry raw
-    // complexity; comparing complexity ceilings on both sides is the closest apples-to-apples aggregate.
-    const current = {
-      overCeiling: fileFunctions.filter((candidate) => candidate.crap >= max).length,
-      maxComplexity: fileFunctions.reduce((highest, candidate) => Math.max(highest, candidate.cc), 0),
-    };
-    const baselineAggregate = {
-      overCeiling: baselineEntries.filter((candidate) => candidate.complexity >= max).length,
-      maxComplexity: baselineEntries.reduce((highest, candidate) => Math.max(highest, candidate.complexity), 0),
-    };
-    const degraded = current.overCeiling > baselineAggregate.overCeiling || current.maxComplexity > baselineAggregate.maxComplexity;
-    ambiguousMatches.push({ file, current, baseline: baselineAggregate, degraded });
-    for (const entry of entries) {
-      if (entry.crap < max) continue;
-      if (degraded) {
-        atOrAboveMax += 1;
-        failures.push({ ...entry, reason: 'ambiguous' });
-      } else {
-        preExistingAtOrAboveMax += 1;
-      }
-    }
-  }
-
-  failures.sort((left, right) => right.crap - left.crap || left.file.localeCompare(right.file) || left.line - right.line);
+function complexityAggregate(complexities, max) {
   return {
-    functions: functions.sort((left, right) => right.crap - left.crap || left.file.localeCompare(right.file) || left.line - right.line),
-    failures,
-    max,
-    ratchet,
-    unmeasured: functions.filter((entry) => entry.unmeasured).length,
-    atOrAboveMax,
-    preExistingAtOrAboveMax: ratchet ? preExistingAtOrAboveMax : null,
-    ambiguousMatches,
+    overCeiling: complexities.filter((value) => value >= max).length,
+    maxComplexity: complexities.reduce((highest, value) => Math.max(highest, value), 0),
   };
 }
 
-function formatReport(report) {
-  const lines = report.failures.map(
-    (entry) => `${entry.file}:${entry.line} ${entry.function} cc=${entry.cc} coverage=${Math.round(entry.coverage * 100)}% CRAP=${entry.crap}`,
-  );
-  for (const ambiguous of report.ambiguousMatches ?? []) {
-    const verb = ambiguous.degraded ? 'aggregate got worse' : 'aggregate holds';
-    lines.push(`${ambiguous.file}: ambiguous match (same-named functions moved; ${verb})`);
+/**
+ * Report only, and scored by complexity on both sides because the baseline copy was measured without
+ * today's coverage. It says how the file as a whole moved when same-named functions lost their place;
+ * a tie proves nothing either way, which is why it no longer clears anything.
+ */
+function namesakeAggregates(files, functions, baseline, max) {
+  const aggregates = [];
+  for (const file of files) {
+    const current = complexityAggregate(functions.filter((entry) => entry.file === file).map((entry) => entry.cc), max);
+    const previous = complexityAggregate((baseline.functionsByFile.get(file) || []).map((entry) => entry.complexity), max);
+    const degraded = current.overCeiling > previous.overCeiling || current.maxComplexity > previous.maxComplexity;
+    aggregates.push({ file, current, baseline: previous, degraded });
   }
+  return aggregates;
+}
+
+function gateFunctions(functions, baseline, max) {
+  const matches = baseline ? pairWithBaseline(functions, baseline) : new Map();
+  const tally = newTally();
+  for (const entry of functions) judgeEntry(tally, entry, matches.get(entry), baseline, max);
+  return {
+    failures: tally.failures,
+    atOrAboveMax: tally.atOrAboveMax,
+    preExistingAtOrAboveMax: tally.preExistingAtOrAboveMax,
+    ambiguousMatches: namesakeAggregates(tally.movedNamesakes, functions, baseline, max),
+  };
+}
+
+function firstDefined(values) {
+  const found = values.find((value) => value !== undefined && value !== null);
+  return found === undefined ? null : found;
+}
+
+function resolvedMax(options, config) {
+  const max = Number(firstDefined([options.max, config.max, DEFAULT_MAX]));
+  if (!Number.isFinite(max) || max <= 0) throw new PrerequisiteError('--max must be a positive number', 'pass --max <n> or set max in the config');
+  return max;
+}
+
+function resolveSettings(options, config) {
+  return {
+    max: resolvedMax(options, config),
+    ratchet: firstDefined([options.ratchet, config.ratchet]),
+    sources: config.sources?.length ? config.sources : ['.'],
+    exclude: firstDefined([config.exclude, []]),
+    coverageCommand: firstDefined([options.coverageCommand, config.coverageCommand]),
+    lcov: firstDefined([options.lcov, config.lcov, DEFAULT_LCOV]),
+    runLizard: options.runLizard || lizardRunner(),
+  };
+}
+
+function missingLcovHint(coverageCommand) {
+  if (coverageCommand) return 'the coverage command ran but wrote no lcov there';
+  return 'run your coverage command first, or set coverageCommand in the config';
+}
+
+function readLcov(projectDir, settings) {
+  const lcovPath = path.resolve(projectDir, settings.lcov);
+  try {
+    return fs.readFileSync(lcovPath, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw new PrerequisiteError(`could not read ${lcovPath}: ${error.message}`, 'check the lcov path');
+    throw new PrerequisiteError(`no lcov coverage at ${lcovPath}`, missingLcovHint(settings.coverageCommand));
+  }
+}
+
+function complexityCsv(projectDir, options, settings) {
+  if (!options.complexity) return settings.runLizard({ cwd: projectDir, sources: settings.sources, exclude: settings.exclude });
+  return fs.readFileSync(path.resolve(projectDir, options.complexity), 'utf8');
+}
+
+function byCrapThenPlace(left, right) {
+  return right.crap - left.crap || left.file.localeCompare(right.file) || left.line - right.line;
+}
+
+function crapReport(options) {
+  const projectDir = path.resolve(options.projectDir || process.cwd());
+  const settings = resolveSettings(options, readConfig(projectDir));
+  if (settings.coverageCommand) runCoverageCommand(settings.coverageCommand, projectDir);
+  const coverage = coverageByFile(readLcov(projectDir, settings), projectDir);
+  const functions = measure(parseLizardCsv(complexityCsv(projectDir, options, settings), projectDir), coverage, projectDir);
+  const baseline = settings.ratchet
+    ? baselineFunctions({
+      projectDir,
+      ratchet: settings.ratchet,
+      files: new Set(functions.map((entry) => entry.file)),
+      exclude: settings.exclude,
+      runLizard: settings.runLizard,
+    })
+    : null;
+  const gated = gateFunctions(functions, baseline, settings.max);
+  return {
+    functions: functions.sort(byCrapThenPlace),
+    failures: gated.failures.sort(byCrapThenPlace),
+    max: settings.max,
+    ratchet: settings.ratchet,
+    unmeasured: functions.filter((entry) => entry.unmeasured).length,
+    atOrAboveMax: gated.atOrAboveMax,
+    preExistingAtOrAboveMax: settings.ratchet ? gated.preExistingAtOrAboveMax : null,
+    ambiguousMatches: gated.ambiguousMatches,
+  };
+}
+
+function failureLine(entry) {
+  return `${entry.file}:${entry.line} ${entry.function} cc=${entry.cc} coverage=${Math.round(entry.coverage * 100)}% CRAP=${entry.crap}`;
+}
+
+function ambiguousLine(ambiguous) {
+  const verb = ambiguous.degraded ? 'the file aggregate got worse' : 'the file aggregate held';
+  return `${ambiguous.file}: ambiguous match (same-named functions moved; ${verb}); each unmatched function answered to the ceiling`;
+}
+
+function formatReport(report) {
+  const lines = report.failures.map(failureLine);
+  for (const ambiguous of report.ambiguousMatches || []) lines.push(ambiguousLine(ambiguous));
   const verdict = report.failures.length ? 'failed' : 'passed';
   let summary = `CRAP gate ${verdict}: ${report.atOrAboveMax} of ${report.functions.length} functions at or above ${report.max}`;
   if (report.ratchet) {
