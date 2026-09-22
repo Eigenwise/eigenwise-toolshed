@@ -117,7 +117,8 @@ const {
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinProvenance, readPinOverrides, refreshDetectedPins, writePinOverrides,
+  isValidPin, ourBaseUrls, ownedPinValues, pinProvenance, readPinOverrides, refreshDetectedPins, stalePinUpdates,
+  writePinOverrides,
 } = require('./pins.js');
 
 // Versions through 0.4.1 wrote this unsafe global override. Remove it during
@@ -898,6 +899,40 @@ async function syncGatewayWiring() {
   if (Object.entries(expected).some(([key, value]) => env[key] !== value)) {
     writeEnv(current.scope, false, { mode: current.mode, quiet: true });
   }
+}
+
+// Turning the gateway off for Remote Control removes only ANTHROPIC_BASE_URL and
+// keeps the other gateway keys, pins included. syncGatewayWiring never runs for
+// that project again, so without this each alias stayed on the model it meant
+// the day the gateway was turned off, and /model never offered a newer one.
+// Only a file with no ANTHROPIC_BASE_URL that still carries the gateway's
+// discovery flag is touched, and only pins holding a value this plugin wrote.
+// A file naming any base URL belongs to syncGatewayWiring or to someone else.
+async function syncUnwiredPins() {
+  for (const scope of ['project', 'user']) await syncUnwiredPinsIn(settingsPath(scope));
+}
+
+function readSettingsIfPresent(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+function isUnwiredGatewayEnv(env) {
+  return Boolean(env)
+    && env.ANTHROPIC_BASE_URL === undefined
+    && env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY === STATIC_ENV_BLOCK.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY
+    && Object.values(PIN_ALIASES).some((key) => typeof env[key] === 'string');
+}
+
+async function syncUnwiredPinsIn(file) {
+  const settings = readSettingsIfPresent(file);
+  if (!isUnwiredGatewayEnv(settings?.env)) return;
+  await refreshDetectedPins();
+  const updates = stalePinUpdates(settings.env);
+  if (!updates.length) return;
+  for (const { key, to } of updates) settings.env[key] = to;
+  writeSettings(file, settings);
+  const changes = updates.map(({ key, from, to }) => `${key} ${from} -> ${to}`).join(', ');
+  log(`model-gateway: updated stale Claude alias pins in ${file} (${changes}). Start a new Claude Code session to use them.`);
 }
 
 async function envCommand() {
@@ -2558,6 +2593,7 @@ const commands = {
         effectiveWiring,
         projectWirings: registeredProjectWirings(),
       }));
+      await syncUnwiredPins();
     } else {
       // isWired() accepts a base URL exported by the shell, which is how a machine ends up routed only in the
       // terminal that exported it: background sessions and executor worktrees start unwired, and the only place
@@ -2603,6 +2639,7 @@ module.exports = {
   isWired,
   wiredMode,
   writeEnv,
+  syncUnwiredPins,
   migrateLegacyProjectSettings,
   effectiveBaseUrl,
   sessionStartWiringNotice,

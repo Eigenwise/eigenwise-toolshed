@@ -37,6 +37,15 @@ function normalizedDetectedPin(alias, value) {
   return `${concrete}[1m]`;
 }
 
+function readRetiredPins(saved) {
+  return Object.fromEntries(Object.keys(PIN_ALIASES).map((alias) => [
+    alias,
+    [].concat(saved.retired?.[alias] ?? [])
+      .map((value) => normalizedDetectedPin(alias, value))
+      .filter(Boolean),
+  ]));
+}
+
 function readDetectedPinCache() {
   try {
     const saved = JSON.parse(fs.readFileSync(PIN_CACHE_PATH, 'utf8'));
@@ -49,7 +58,7 @@ function readDetectedPinCache() {
       alias,
       typeof saved.detectedFor?.[alias] === 'string' ? saved.detectedFor[alias] : cliVersion,
     ]));
-    return { cliVersion, updatedAt: Number(saved.updatedAt) || 0, pins, detectedFor };
+    return { cliVersion, updatedAt: Number(saved.updatedAt) || 0, pins, detectedFor, retired: readRetiredPins(saved) };
   } catch { return null; }
 }
 
@@ -57,6 +66,22 @@ function currentDetectedPins(cache) {
   if (!cache?.cliVersion) return {};
   return Object.fromEntries(Object.entries(cache.pins)
     .filter(([alias]) => cache.detectedFor[alias] === cache.cliVersion));
+}
+
+// A detected pin that a newer probe replaced is still a value this plugin wrote
+// into some settings file. Keeping it here keeps ownership stable across model
+// releases: without it, a project pinned two releases ago looks user-typed.
+const RETIRED_PIN_LIMIT = 16;
+
+function retirePin(list, value) {
+  return [value, ...(list || []).filter((entry) => entry !== value)].slice(0, RETIRED_PIN_LIMIT);
+}
+
+function recordDetectedPin(cache, alias, pin, version) {
+  const previous = cache.pins[alias];
+  if (previous && previous !== pin) cache.retired[alias] = retirePin(cache.retired[alias], previous);
+  cache.pins[alias] = pin;
+  cache.detectedFor[alias] = version;
 }
 
 function detectedPinDefaults() {
@@ -204,14 +229,14 @@ async function refreshDetectedPins({ force = false } = {}) {
 
     const pins = { ...(cached?.pins || {}) };
     const detectedFor = { ...(cached?.detectedFor || {}) };
+    const retired = { ...cached?.retired };
     const recordedVersion = version || cached?.cliVersion || 'unknown';
     for (const [index, alias] of aliasesToProbe.entries()) {
       if (!detected[index]) continue;
-      pins[alias] = detected[index];
-      detectedFor[alias] = recordedVersion;
+      recordDetectedPin({ pins, detectedFor, retired }, alias, detected[index], recordedVersion);
     }
     if (detected.some(Boolean)) {
-      writeDetectedPinCache({ cliVersion: recordedVersion, updatedAt: Date.now(), pins, detectedFor });
+      writeDetectedPinCache({ cliVersion: recordedVersion, updatedAt: Date.now(), pins, detectedFor, retired });
     }
     return pins;
   } catch { return cached?.pins || {}; } finally {
@@ -271,13 +296,28 @@ function gatewayEnvBlock() {
 // only if it still holds a value we could have written: the current effective
 // pin, the detected-pin cache, a saved override, or the built-in default. A
 // value outside that set was typed by the user and survives `env --remove`.
+// Detected pins a later probe replaced stay in the set, so a settings file
+// written before the last model release is still recognised as ours.
 function ownedPinValues() {
   const overrides = readPinOverrides();
-  const cached = readDetectedPinCache()?.pins || {};
+  const cache = readDetectedPinCache();
+  const cached = cache?.pins || {};
   return Object.fromEntries(Object.keys(PIN_ALIASES).map((alias) => [
     PIN_ALIASES[alias],
-    new Set([KNOWN_GOOD_PINS[alias], cached[alias], overrides[alias], detectedPinDefaults()[alias]].filter(Boolean)),
+    new Set([
+      KNOWN_GOOD_PINS[alias], cached[alias], overrides[alias], detectedPinDefaults()[alias],
+      ...(cache?.retired?.[alias] || []),
+    ].filter(Boolean)),
   ]));
+}
+
+// Pins in `env` that this plugin wrote but that no longer match the effective
+// pin. Keys the user set to a value we could not have written are left out.
+function stalePinUpdates(env) {
+  const owned = ownedPinValues();
+  return Object.entries(pinEnvBlock())
+    .filter(([key, value]) => typeof env?.[key] === 'string' && env[key] !== value && owned[key].has(env[key]))
+    .map(([key, value]) => ({ key, from: env[key], to: value }));
 }
 
 function envBlockFor(mode) {
@@ -289,5 +329,5 @@ function ourBaseUrls() { return [DEFAULT_BASE_URL, COMPAT_BASE_URL]; }
 module.exports = {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
   isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, pinProvenance, probeClaudeAlias, readPinOverrides,
-  refreshDetectedPins, writePinOverrides,
+  refreshDetectedPins, stalePinUpdates, writePinOverrides,
 };

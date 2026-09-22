@@ -106,7 +106,8 @@ bring auth back, or you kill the session that was about to use it.
   real 1M aliases (Opus, Sonnet, Fable) to `[1m]` ids so a gateway session on one gets its full 1M
   window instead of the 200k gateway default; Haiku stays unpinned (it's 200k). An `env --write-*`
   command resolves those aliases through the installed Claude CLI's credential-free headless probe;
-  SessionStart refreshes its cache after the CLI changes or the cache ages out. A failed probe keeps
+  SessionStart refreshes its cache after the CLI changes or the cache ages out, and rewrites stale pins
+  it wrote, including in a project where the gateway was turned off for Remote Control. A failed probe keeps
   the last good pin, then a shipped safe default. Set a persistent per-alias override with
   `pin --opus claude-opus-4-8[1m]` (same for `--sonnet` and `--fable`), or use `pin --opus default`
   to return to auto-detection. Overrides always win. `pin` with no arguments shows each effective
