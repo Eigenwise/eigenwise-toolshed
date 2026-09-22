@@ -56,7 +56,7 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     measurement: 'unmeasured default for Codex proxy rows absent from this table',
     pickerAliasTemplate: 'claude-{backendId}[1m]',
     advertisedWindow: 920000,
-    sentry: 'codex-synthetic-413',
+    sentry: 'synthetic-413',
   }),
   'gpt-5.6-sol': Object.freeze({
     backend: 'codex',
@@ -65,7 +65,7 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     measurement: 'measured 2026-09-05: 920012 accepted; 935012 refused',
     pickerAlias: 'claude-gpt-5.6-sol[1m]',
     advertisedWindow: 920000,
-    sentry: 'codex-synthetic-413',
+    sentry: 'synthetic-413',
   }),
   'gpt-5.6-terra': Object.freeze({
     backend: 'codex',
@@ -74,7 +74,7 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     measurement: 'measured 2026-09-05: 920012 accepted; 935012 refused',
     pickerAlias: 'claude-gpt-5.6-terra[1m]',
     advertisedWindow: 920000,
-    sentry: 'codex-synthetic-413',
+    sentry: 'synthetic-413',
   }),
   'gpt-5.6-luna': Object.freeze({
     backend: 'codex',
@@ -83,7 +83,7 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     measurement: 'measured 2026-09-05: 920012 accepted; 935012 refused',
     pickerAlias: 'claude-gpt-5.6-luna[1m]',
     advertisedWindow: 920000,
-    sentry: 'codex-synthetic-413',
+    sentry: 'synthetic-413',
   }),
   'gpt-6-astra': Object.freeze({
     backend: 'codex',
@@ -92,7 +92,7 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     measurement: 'measured 2026-09-05: 920012 accepted; 935012 refused',
     pickerAlias: 'claude-gpt-6-astra[1m]',
     advertisedWindow: 920000,
-    sentry: 'codex-synthetic-413',
+    sentry: 'synthetic-413',
   }),
   'grok-4.5': Object.freeze({
     backend: 'grok',
@@ -101,7 +101,7 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     measurement: 'measured 2026-09-05 from grok-backend.js GROK_MODELS',
     pickerAlias: 'claude-grok-4.5[1m]',
     advertisedWindow: 500000,
-    sentry: 'none',
+    sentry: 'synthetic-413',
   }),
   anthropic: Object.freeze({
     backend: 'anthropic',
