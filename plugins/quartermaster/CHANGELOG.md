@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.11.3 (2026-09-22)
+
+Released in v3.574.0, up from 0.11.2.
+
+### Fixes
+
+- Repair complete inventoried privacy and signal routing documentation (SQ-3019)
+  Correct privacy storage wording and document the consent-filtered log outbox with separate trace and metric Collector sink pipelines.
+- Restore lost privacy matrix assertions (SQ-3024)
+  Restore two SQ-3013 privacy-matrix test protections dropped in SQ-3019: exact
+  Windows/fallback `observability.json` path checks and the setup-reference
+  "private config" / "current-user-only permissions" prohibitions. Test-only
+  fix, no runtime or documentation prose changes.
+- Clarify Gateway recovery and RC hosts handling (SQ-3026)
+  Clarifies Gateway recovery after attributed OpenAI rejections and the confirmation-gated RC hosts update. The `env` RC-compatibility line now points users at `remote-control enable --confirm`, the command that actually backs up and writes the hosts entry, instead of telling them to add it themselves.
+
 ## 0.11.2 (2026-09-19)
 
 Released in v3.572.0, up from 0.11.1.
