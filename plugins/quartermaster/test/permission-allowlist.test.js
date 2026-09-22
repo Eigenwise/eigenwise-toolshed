@@ -195,9 +195,9 @@ test('enabling automation writes only the project-local opt-in marker', () => {
   assert.equal(fs.existsSync(path.join(projectDir, '.claude', 'settings.local.json')), true);
 });
 
-// Representative subset of the 33 offending fingerprints from the
-// cardinventorymanagement report (2026-09-16), one per veto class, plus the
-// existing allowed set to prove the new vetoes do not regress it.
+// Representative subset of the offending fingerprints from a field report
+// (2026-09-16), one per veto class, plus the existing allowed set to prove
+// the new vetoes do not regress it.
 const BLOCKED_FINGERPRINTS = [
   // Class 1: shell control keywords as the executable.
   ['permission:Bash:for j', 'shell control keyword'],
@@ -212,14 +212,39 @@ const BLOCKED_FINGERPRINTS = [
   ['permission:Bash:pwd &&', 'compound command fragment'],
   ['permission:Bash:echo foo|', 'compound command fragment'],
   ['permission:Bash:tar \\', 'compound command fragment'],
+  // Class 2b: a redirection is an operator too, so it vetoes the same way.
+  ['permission:Bash:cat >out.txt', 'compound command fragment'],
+  ['permission:Bash:tee >>~/.bashrc', 'compound command fragment'],
+  ['permission:Bash:sort <input.txt', 'compound command fragment'],
+  ['permission:Bash:cat <<EOF', 'compound command fragment'],
   // Class 3: variable-only or empty cd target, and bare variable arguments.
   ['permission:Bash:cd $s', 'variable or empty cd target'],
   ['permission:Bash:cd "$w"', 'variable or empty cd target'],
   ['permission:Bash:cd', 'variable or empty cd target'],
   ['permission:Bash:export $PATH', 'bare shell variable argument'],
+  // Class 3b: a command substitution is just as runtime-resolved.
+  ['permission:Bash:$(which node)', 'command substitution'],
+  ['permission:Bash:`which node`', 'command substitution'],
+  ['permission:Bash:echo $(whoami)', 'command substitution'],
   // Class 4: version-pinned plugin cache path, per-session scratchpad path.
   ['permission:Bash:cat ~/.claude/plugins/cache/eigenwise-toolshed/quartermaster/0.11.1/lib/foo.js', 'version-pinned or session-scoped path'],
   ['permission:Bash:cat /tmp/claude-1000/-home-john-project/session-abc/scratchpad/notes.txt', 'version-pinned or session-scoped path'],
+  // Class 4b: the version/scratchpad segment itself, the new directory
+  // layout, and a case-insensitive match now that the fingerprint keeps case.
+  ['permission:Bash:cd ~/.claude/plugins/cache/eigenwise-toolshed/quartermaster/0.11.2', 'version-pinned or session-scoped path'],
+  ['permission:Bash:cat ~/.CLAUDE/plugins/cache/eigenwise-toolshed/quartermaster/0.11.1/lib/foo.js', 'version-pinned or session-scoped path'],
+  ['permission:Bash:cat /tmp/claude/myproject/session123/scratchpad/notes.txt', 'version-pinned or session-scoped path'],
+  // Class 5: a wrapper hides the interpreter, or is bare, or is itself
+  // arbitrary execution (`source`, `.`).
+  ['permission:Bash:timeout 60', 'arbitrary execution'],
+  ['permission:Bash:stdbuf', 'arbitrary execution'],
+  ['permission:Bash:nohup node', 'arbitrary execution'],
+  ['permission:Bash:nice node', 'arbitrary execution'],
+  ['permission:Bash:setsid bash', 'arbitrary execution'],
+  ['permission:Bash:command node', 'arbitrary execution'],
+  ['permission:Bash:watch node', 'arbitrary execution'],
+  ['permission:Bash:source ./script.sh', 'arbitrary execution'],
+  ['permission:Bash:. ./script.sh', 'arbitrary execution'],
 ];
 
 const ALLOWED_FINGERPRINTS = [
@@ -241,6 +266,23 @@ test('the veto leaves the existing allowed set alone', () => {
   for (const fingerprint of ALLOWED_FINGERPRINTS) {
     assert.equal(ruleTooBroadReason(fingerprint), null, `expected ${fingerprint} to remain allowed`);
   }
+});
+
+test('a compound command earns no fingerprint at all, even when the separator falls outside the kept prefix', () => {
+  const compoundCommands = [
+    'pwd -P && npm publish',
+    'cd build && npm publish',
+    'echo one | tee two',
+    'sleep 5 & npm publish',
+    'ls -la\nnpm publish',
+    'cd build\nnpm publish',
+    'tar \\',
+  ];
+  for (const command of compoundCommands) {
+    assert.equal(fingerprintFor('Bash', { command }), null, `expected ${JSON.stringify(command)} to yield no fingerprint`);
+  }
+  // An ordinary command on either side of the check still fingerprints.
+  assert.equal(fingerprintFor('Bash', { command: 'npm test -- --unit' }), 'permission:Bash:npm test');
 });
 
 test('a mixed-case command keeps its case so the written rule matches it on a case-sensitive host', async () => {

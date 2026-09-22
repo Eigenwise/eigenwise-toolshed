@@ -17,7 +17,12 @@ const DESTRUCTIVE_PHRASE = /\bgit\s+(?:push[^\n]*(?:\s--force(?:\b|=)|\s-f\b)|re
 // A rule is a PREFIX wildcard, so it grants far more than the command that
 // earned it: `git push origin main` would become `Bash(git push:*)`, which also
 // permits `git push --force`. These never get a rule, however often approved.
-const ARBITRARY_EXECUTION = /^(?:node|nodejs|deno|bun|python|python2|python3|py|ruby|perl|php|sh|bash|zsh|dash|pwsh|powershell|cmd|wsl|ssh|eval|exec|npx|pnpx|uvx|env|sudo|doas|xargs|start|call)$/i;
+// The wrapper family (`nohup`, `timeout`, `nice`, `setsid`, `stdbuf`,
+// `command`, `builtin`, `watch`, `script`, `chroot`) is included because a
+// wrapper in the executable slot otherwise hides the real interpreter one
+// word over, where nothing checks it. `source` and `.` run a file's contents
+// in the current shell, the same blast radius as `bash script.sh`.
+const ARBITRARY_EXECUTION = /^(?:node|nodejs|deno|bun|python|python2|python3|py|ruby|perl|php|sh|bash|zsh|dash|pwsh|powershell|cmd|wsl|ssh|eval|exec|npx|pnpx|uvx|env|sudo|doas|xargs|start|call|source|\.|nohup|timeout|nice|setsid|stdbuf|command|builtin|watch|script|chroot)$/i;
 const NEEDS_SUBCOMMAND = /^(?:git|docker|podman|kubectl|helm|terraform|aws|gcloud|az|npm|pnpm|yarn|cargo|go|dotnet|gh|systemctl|sc|net)$/i;
 const DESTRUCTIVE_FAMILY = /^(?:git\s+(?:push|reset|clean|branch|rm|checkout|restore)|docker\s+\S+|podman\s+\S+|kubectl\s+\S+|npm\s+(?:publish|unpublish|version))$/i;
 
@@ -27,15 +32,32 @@ const SHELL_CONTROL_KEYWORD = /^(?:for|while|until|if|case|select|function|time|
 // The fingerprint is only ever the first one or two words of the observed
 // command, so a separator or operator inside it means the rest of a compound
 // command was cut off the fingerprint but not off the permission it grants.
-const COMPOUND_OPERATOR = /[;&|]/;
+// Redirections (`<`, `>`) are included: they cut a command off from what it
+// reads or writes just as surely as a pipe cuts it off from the next stage.
+const COMPOUND_OPERATOR = /[;&|<>]/;
+// fingerprintFor tests the RAW command against this, before normalization
+// truncates it to one or two words: a separator, a newline, or a trailing
+// line-continuation backslash further into a longer compound command is
+// otherwise silently dropped, and the harmless half in the kept prefix earns
+// a rule the rest of the command never sees.
+const RAW_COMPOUND_SEPARATOR = /[;&|\r\n]|\\\s*$/;
 // `"$w"`, `'$w'`, `$w`, `${w}` and quoted/braced variants: a target or
 // argument that resolves only at runtime, from whatever the caller's
-// environment happens to hold.
-const VARIABLE_ONLY_ARG = /^["']?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?["']?$/;
+// environment happens to hold. The apostrophe is written as \x27: a literal
+// one here makes lizard's JS tokenizer misread the character class as an
+// unterminated string and miscount every function in the file.
+const VARIABLE_ONLY_ARG = /^["\x27]?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?["\x27]?$/;
+// `$(...)`, `${...}`, and a backtick all resolve to whatever that subcommand
+// prints at runtime, the same reasoning as a bare variable argument. The
+// backtick is written as \x60: a literal one here breaks lizard's JS
+// tokenizer the same way the apostrophe in VARIABLE_ONLY_ARG used to.
+const COMMAND_SUBSTITUTION = /\$\(|\$\{|\x60/;
 // A plugin cache path is dead the moment the pinned version updates; a
-// scratchpad path is dead the moment the session ends.
-const PLUGIN_CACHE_PATH = /\.claude[\\/]plugins[\\/]cache[\\/][^\\/]+[\\/][^\\/]+[\\/][^\\/]+[\\/]/;
-const SESSION_SCRATCHPAD_PATH = /claude-[^\\/]+[\\/][\s\S]*[\\/]scratchpad(?:[\\/]|$)/i;
+// scratchpad path is dead the moment the session ends. Both match
+// case-insensitively and accept the version/scratchpad segment itself with
+// no trailing separator required, not just a path further inside it.
+const PLUGIN_CACHE_PATH = /\.claude[\\/]plugins[\\/]cache[\\/][^\\/]+[\\/][^\\/]+[\\/][^\\/]+(?:[\\/]|$)/i;
+const SESSION_SCRATCHPAD_PATH = /claude[-\\/][^\\/]+[\\/][\s\S]*[\\/]scratchpad(?:[\\/]|$)/i;
 
 function settingsFile(projectDir) {
   return path.join(projectDir, '.claude', 'settings.local.json');
@@ -71,7 +93,13 @@ function normalizedCommandPrefix(command) {
 function fingerprintFor(name, input) {
   if (!name) return null;
   if (name === 'Bash') {
-    const prefix = normalizedCommandPrefix(input?.command);
+    const command = input?.command;
+    // Checked on the raw command, before normalizedCommandPrefix collapses
+    // whitespace and truncates it to a word or two: a separator, newline, or
+    // trailing backslash anywhere in the command means the rest of it is
+    // unaccounted for, so it earns no fingerprint at all.
+    if (RAW_COMPOUND_SEPARATOR.test(command)) return null;
+    const prefix = normalizedCommandPrefix(command);
     return prefix ? `permission:Bash:${prefix}` : null;
   }
   return `permission:${name}`;
@@ -97,42 +125,74 @@ function isDestructive(input) {
 // The rule, not the observed command, is what gets granted, so it carries its
 // own veto: anything that runs caller-supplied code, a bare tool whose
 // subcommands differ wildly in blast radius, or a family with a destructive
-// sibling the wildcard would cover.
+// sibling the wildcard would cover. Each check is independent of the others,
+// so they are walked as a table by a single `find` rather than a chain of
+// ifs; add the next veto class by adding the next row.
+const TOO_BROAD_RULES = [
+  // A loop or branch keyword, or a `{`/`(` subshell opener, grants its whole
+  // body, not the keyword: the body is arbitrary execution the fingerprint
+  // never captures.
+  {
+    reason: 'shell control keyword',
+    test: ({ executable }) => SHELL_CONTROL_KEYWORD.test(executable) || executable.startsWith('{') || executable.startsWith('('),
+  },
+  // The fingerprint is a two-word slice of a longer, still-attached compound
+  // command; a separator or redirection proves the harmless half was cut off
+  // mid-command.
+  {
+    reason: 'compound command fragment',
+    test: ({ prefix }) => COMPOUND_OPERATOR.test(prefix) || prefix.endsWith('\\'),
+  },
+  // `cd` with no target, or a target that only resolves at runtime, goes
+  // wherever that variable happened to point when it was approved.
+  {
+    reason: 'variable or empty cd target',
+    test: ({ executable, firstArg }) => executable.toLowerCase() === 'cd' && (!firstArg || VARIABLE_ONLY_ARG.test(firstArg)),
+  },
+  // Any other first argument that is nothing but a bare variable reference is
+  // just as runtime-dependent, regardless of which command it follows.
+  {
+    reason: 'bare shell variable argument',
+    test: ({ firstArg }) => Boolean(firstArg) && VARIABLE_ONLY_ARG.test(firstArg),
+  },
+  // A command substitution resolves to whatever that subcommand prints,
+  // same reasoning as a bare variable, just not anchored to one argument.
+  {
+    reason: 'command substitution',
+    test: ({ prefix }) => COMMAND_SUBSTITUTION.test(prefix),
+  },
+  // A version-pinned plugin cache path or per-session scratchpad path is dead
+  // the instant the version bumps or the session ends.
+  {
+    reason: 'version-pinned or session-scoped path',
+    test: ({ prefix }) => PLUGIN_CACHE_PATH.test(prefix) || SESSION_SCRATCHPAD_PATH.test(prefix),
+  },
+  // A wrapper word or the interpreter itself, anywhere in the prefix, runs
+  // caller-supplied code; a bare wrapper alone grants the wrapped command.
+  {
+    reason: 'arbitrary execution',
+    test: ({ words }) => words.some((word) => ARBITRARY_EXECUTION.test(word)),
+  },
+  {
+    reason: 'bare tool',
+    test: ({ prefix, executable }) => !prefix.includes(' ') && NEEDS_SUBCOMMAND.test(executable),
+  },
+  {
+    reason: 'wildcard would cover destructive siblings',
+    test: ({ prefix }) => DESTRUCTIVE_FAMILY.test(prefix),
+  },
+];
+
 function ruleTooBroadReason(fingerprint) {
   if (fingerprint === 'permission:PowerShell') return 'unsafe shell rule';
   const match = /^permission:Bash:(.+)$/.exec(fingerprint);
   if (!match) return null;
   const prefix = match[1];
-  const [executable, ...rest] = prefix.split(' ');
+  const words = prefix.split(' ');
+  const [executable, ...rest] = words;
   const firstArg = rest.length ? rest.join(' ') : null;
-  // A loop or branch keyword, or a `{`/`(` subshell opener, grants its whole
-  // body, not the keyword: the body is arbitrary execution the fingerprint
-  // never captures.
-  if (SHELL_CONTROL_KEYWORD.test(executable) || executable.startsWith('{') || executable.startsWith('(')) {
-    return 'shell control keyword';
-  }
-  // The fingerprint is a two-word slice of a longer, still-attached compound
-  // command; the separator proves the harmless half was cut off mid-command.
-  if (COMPOUND_OPERATOR.test(prefix) || prefix.endsWith('\\')) {
-    return 'compound command fragment';
-  }
-  // `cd` with no target, or a target that only resolves at runtime, goes
-  // wherever that variable happened to point when it was approved.
-  if (executable.toLowerCase() === 'cd' && (!firstArg || VARIABLE_ONLY_ARG.test(firstArg))) {
-    return 'variable or empty cd target';
-  }
-  // Any other first argument that is nothing but a bare variable reference is
-  // just as runtime-dependent, regardless of which command it follows.
-  if (firstArg && VARIABLE_ONLY_ARG.test(firstArg)) return 'bare shell variable argument';
-  // A version-pinned plugin cache path or per-session scratchpad path is dead
-  // the instant the version bumps or the session ends.
-  if (PLUGIN_CACHE_PATH.test(prefix) || SESSION_SCRATCHPAD_PATH.test(prefix)) {
-    return 'version-pinned or session-scoped path';
-  }
-  if (ARBITRARY_EXECUTION.test(executable)) return 'arbitrary execution';
-  if (!prefix.includes(' ') && NEEDS_SUBCOMMAND.test(executable)) return 'bare tool';
-  if (DESTRUCTIVE_FAMILY.test(prefix)) return 'wildcard would cover destructive siblings';
-  return null;
+  const rule = TOO_BROAD_RULES.find((entry) => entry.test({ prefix, executable, firstArg, words }));
+  return rule ? rule.reason : null;
 }
 
 function ruleIsBlocked(entry) {
