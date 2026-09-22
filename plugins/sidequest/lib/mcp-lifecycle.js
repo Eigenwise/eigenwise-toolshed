@@ -975,10 +975,10 @@ const tools = [
         const groupUsesGit = store.submissionUsesGit(ticket);
         if (groupUsesGit) {
           const lock = await publish.publishLockStatus(meta.path);
-          if (lock.locked && !publish.publishLockOwnedBySession(meta.path, sessionOf(args))) {
+          if (lock.locked && !publish.publishLockOwnedBySession(meta.path, { by, sessionId: sessionOf(args) })) {
             return mutationAck(slug, combinedRefusal(ticket, [{
               reason: "publish_lock_required",
-              message: `integrate: publish lock is held by ${lock.holder?.by || lock.holder?.sessionId || "another session"}; acquire or re-acquire it before delivery.`
+              message: `integrate: publish lock is held by ${lock.holder?.by || lock.holder?.sessionId || "another session"} (lock session ${lock.holder?.sessionId || "unavailable"}; MCP runtime session ${sessionOf(args) || "unavailable"}); acquire or re-acquire it before delivery.`
             }]));
           }
         }
@@ -1016,10 +1016,10 @@ const tools = [
       const usesGit = store.submissionUsesGit(ticket);
       if (usesGit) {
         const lock = await publish.publishLockStatus(meta.path);
-        if (lock.locked && !publish.publishLockOwnedBySession(meta.path, sessionOf(args))) {
+        if (lock.locked && !publish.publishLockOwnedBySession(meta.path, { by, sessionId: sessionOf(args) })) {
           failures.push({
             reason: "publish_lock_required",
-            message: `integrate: publish lock is held by ${lock.holder?.by || lock.holder?.sessionId || "another session"}; acquire or re-acquire it before delivery.`
+            message: `integrate: publish lock is held by ${lock.holder?.by || lock.holder?.sessionId || "another session"} (lock session ${lock.holder?.sessionId || "unavailable"}; MCP runtime session ${sessionOf(args) || "unavailable"}); acquire or re-acquire it before delivery.`
           });
         }
       }

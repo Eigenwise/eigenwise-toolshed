@@ -51,6 +51,7 @@ const db = require('../lib/db.js');
 const sourceRevisionCapability = require('../lib/source-revision-capability.js');
 const { runCapturedVerification, runVerifyCapture, recordCapture } = require('../lib/verify-capture.js');
 const worktrees = require('../lib/worktrees.js');
+const publish = require('../lib/publish.js');
 const { createCheckoutInstanceMarker } = require('../lib/kernel/worktree.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
 const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket, and this board has no autoApproveScope policy that can grant the first request. Dispatch will refuse unless you declare files or explicitly allow an unscoped run.';
@@ -2320,6 +2321,31 @@ test('MCP delivery reclaims a terminal isolated worktree immediately', async (co
   assert.equal(integrated.ok, true, integrated.message || integrated.reason);
   assert.equal(store.getTicket(project, ticket.ref).status, 'done');
   assert.equal(fs.existsSync(worktree), false);
+});
+
+test('MCP integrate accepts its worker lock across runtime sessions and refuses another worker', async (context: any) => {
+  const primary = createGitWorktree();
+  const project = store.ensureProject(primary).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main', worktreeBase: 'local-main' });
+  const ticket = store.createTicket(project, {
+    title: 'integrate through a different MCP runtime session', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'prove the worker lock follows the host orchestrator instead of the MCP server session',
+  });
+  const by = 'host-orchestrator';
+  const worktree = prepareIsolatedWorktreeDispatch(project, primary, ticket, by);
+  context.after(() => publish.releasePublishLock(primary, { by, force: true }));
+  context.after(() => removeTestWorktree(primary, worktree));
+  await submitIsolatedDeliveryCandidate(project, ticket, by, worktree);
+  await publish.acquirePublishLock(primary, { by, sessionId: 'host-session-a', transient: true });
+
+  const refused = await callToolAsSession('mcp-runtime-b', 'integrate', { project, ref: ticket.ref, by: 'other-orchestrator' });
+  assert.equal(refused.reason, 'publish_lock_required');
+  assert.match(refused.message, /lock session host-session-a/);
+  assert.match(refused.message, /MCP runtime session mcp-runtime-b/);
+
+  const integrated = await callToolAsSession('mcp-runtime-b', 'integrate', { project, ref: ticket.ref, by });
+  assert.equal(integrated.ok, true, integrated.message || integrated.reason);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'done');
 });
 
 // The reviewer's cli-delivery probe: ordinary `sidequest integrate` delivered and closed the ticket
