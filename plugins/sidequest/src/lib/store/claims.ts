@@ -43,57 +43,107 @@ function createClaims(dependencies: any) {
     ['failed-check', 'failed_check'],
   ]);
   const NEGATIVE_CONTROL_COMMENT = '[sidequest:negative-control] ';
-  const RELEASE_KINDS = new Set(['handback', 'oracle']);
+  const RELEASE_KINDS = new Set(['technical_blocker', 'contradiction', 'oracle', 'handback']);
+  type ReleaseEvidence = { command: string; exitCode?: number; kind: string; outputTail: string };
+  type ReleaseInput = { reason: string; oracle: string; releaseKind: string; command: string; outputTail: string; rawExitCode: unknown; exitCode: number };
+  type ReleaseResult = { ok: true; evidence: ReleaseEvidence | null; releaseKind: string | null } | { ok: false; message: string; reason: string };
 
-  function technicalBlockerRelease(args?: { releaseKind?: unknown; command?: unknown; exitCode?: unknown; oracle?: unknown; outputTail?: unknown; reason?: unknown }): { ok: true; evidence: { command: string; exitCode?: number; kind: string; outputTail: string } | null; releaseKind: string | null } | { ok: false; message: string; reason: string } {
-    const reason = String(args?.reason || '').trim();
-    const oracle = String(args?.oracle || '').trim();
-    const releaseKind = String(args?.releaseKind || '').trim();
-    const command = String(args?.command || '').trim();
-    const outputTail = String(args?.outputTail || '').trim();
-    const exitCode = typeof args?.exitCode === 'number'
-      ? args.exitCode
-      : typeof args?.exitCode === 'string' && /^-?\d+$/.test(args.exitCode.trim())
-        ? Number(args.exitCode)
-        : Number.NaN;
-    if (releaseKind === 'technical_blocker') {
-      if (!reason || !command || !Number.isInteger(exitCode) || exitCode === 0 || !outputTail) {
-        return {
-          ok: false,
-          reason: 'technical_blocker_evidence_required',
-          message: 'release: technical_blocker requires a non-empty reason and command, a non-zero integer exitCode, and a non-empty outputTail. Capture the failed command result, then release again with all four fields.',
-        };
-      }
-      return { ok: true, releaseKind, evidence: { kind: releaseKind, command, exitCode, outputTail } };
-    }
-    if (releaseKind === 'contradiction') {
-      if (!reason || !command || !outputTail || (args?.exitCode != null && !Number.isInteger(exitCode))) {
-        return {
-          ok: false,
-          reason: 'contradiction_evidence_required',
-          message: 'release: contradiction requires a non-empty reason and command, a non-empty outputTail, and an integer exitCode when supplied. Capture the verbatim probe and its output, then release again with all required fields.',
-        };
-      }
-      return { ok: true, releaseKind, evidence: { kind: releaseKind, command, ...(Number.isInteger(exitCode) ? { exitCode } : {}), outputTail } };
-    }
-    if (!reason && !oracle && !releaseKind) return { ok: true, releaseKind: null, evidence: null };
-    if (!releaseKind && oracle) return { ok: true, releaseKind: null, evidence: null };
-    if (releaseKind === 'oracle') {
-      if (!oracle) {
-        return {
-          ok: false,
-          reason: 'oracle_ask_required',
-          message: 'release: oracle requires a non-empty oracle ask that states what the human must judge. Park the ticket and exit instead of holding its claim for a verdict.',
-        };
-      }
-      return { ok: true, releaseKind, evidence: null };
-    }
-    if (RELEASE_KINDS.has(releaseKind)) return { ok: true, releaseKind, evidence: null };
+  function releaseFailure(reason: string, message: string): ReleaseResult {
+    return { ok: false as const, reason, message };
+  }
+
+  function releaseText(value: unknown): string {
+    return String(value ?? '').trim();
+  }
+
+  function releaseExitCode(value: unknown): number {
+    if (typeof value === 'number') return value;
+    if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) return Number(value);
+    return Number.NaN;
+  }
+
+  function releaseInput(args?: { releaseKind?: unknown; command?: unknown; exitCode?: unknown; oracle?: unknown; outputTail?: unknown; reason?: unknown }): ReleaseInput {
+    const rawExitCode = args?.exitCode;
     return {
-      ok: false,
-      reason: 'release_kind_required',
-      message: 'release: choose kind "technical_blocker" for a failed command, "contradiction" for an absent target with probe evidence, "oracle" to park for a human verdict, or "handback" for another non-technical release. Technical blockers need command, exitCode, and outputTail; contradictions need command and outputTail.',
+      reason: releaseText(args?.reason),
+      oracle: releaseText(args?.oracle),
+      releaseKind: releaseText(args?.releaseKind),
+      command: releaseText(args?.command),
+      outputTail: releaseText(args?.outputTail),
+      rawExitCode,
+      exitCode: releaseExitCode(rawExitCode),
     };
+  }
+
+  function releaseArgumentFailure(input: ReleaseInput): ReleaseResult | null {
+    const missing = [
+      !input.reason && !input.oracle ? 'reason: non-empty text' : null,
+      !RELEASE_KINDS.has(input.releaseKind) ? 'kind: technical_blocker | contradiction | oracle | handback' : null,
+    ].filter(Boolean);
+    return missing.length ? releaseFailure('release_arguments_required', `release: ${missing.join('; ')}.`) : null;
+  }
+
+  function requiredReleaseTextPresent(...values: string[]): boolean {
+    return values.every(Boolean);
+  }
+
+  function nonZeroIntegerExitCode(exitCode: number): boolean {
+    return Number.isInteger(exitCode) && exitCode !== 0;
+  }
+
+  function suppliedExitCodeIsInteger(input: ReleaseInput): boolean {
+    return input.rawExitCode == null || Number.isInteger(input.exitCode);
+  }
+
+  function technicalBlockerEvidence(input: ReleaseInput): ReleaseResult {
+    const complete = requiredReleaseTextPresent(input.reason, input.command, input.outputTail) && nonZeroIntegerExitCode(input.exitCode);
+    if (!complete) {
+      return releaseFailure('technical_blocker_evidence_required', 'release: technical_blocker requires a non-empty reason and command, a non-zero integer exitCode, and a non-empty outputTail. Capture the failed command result, then release again with all four fields.');
+    }
+    return { ok: true as const, releaseKind: input.releaseKind, evidence: { kind: input.releaseKind, command: input.command, exitCode: input.exitCode, outputTail: input.outputTail } };
+  }
+
+  function contradictionEvidence(input: ReleaseInput): ReleaseResult {
+    const complete = requiredReleaseTextPresent(input.reason, input.command, input.outputTail) && suppliedExitCodeIsInteger(input);
+    if (!complete) {
+      return releaseFailure('contradiction_evidence_required', 'release: contradiction requires a non-empty reason and command, a non-empty outputTail, and an integer exitCode when supplied. Capture the verbatim probe and its output, then release again with all required fields.');
+    }
+    return { ok: true as const, releaseKind: input.releaseKind, evidence: { kind: input.releaseKind, command: input.command, ...(Number.isInteger(input.exitCode) ? { exitCode: input.exitCode } : {}), outputTail: input.outputTail } };
+  }
+
+  function oracleRelease(input: ReleaseInput): ReleaseResult {
+    return input.oracle
+      ? { ok: true as const, releaseKind: input.releaseKind, evidence: null }
+      : releaseFailure('oracle_ask_required', 'release: oracle requires a non-empty oracle ask that states what the human must judge. Park the ticket and exit instead of holding its claim for a verdict.');
+  }
+
+  function handbackRelease(input: ReleaseInput): ReleaseResult {
+    return { ok: true as const, releaseKind: input.releaseKind, evidence: null };
+  }
+
+  const RELEASE_VALIDATORS = new Map<string, (input: ReleaseInput) => ReleaseResult>([
+    ['technical_blocker', technicalBlockerEvidence],
+    ['contradiction', contradictionEvidence],
+    ['oracle', oracleRelease],
+    ['handback', handbackRelease],
+  ]);
+
+  // A release with no kind, and either an oracle ask or nothing at all, is the CLI's admin
+  // cleanup form. The MCP executor surface never accepts it: it passes requireClassification.
+  function unclassifiedRelease(input: ReleaseInput): boolean {
+    return !input.releaseKind && (Boolean(input.oracle) || !input.reason);
+  }
+
+  function technicalBlockerRelease(
+    args?: { releaseKind?: unknown; command?: unknown; exitCode?: unknown; oracle?: unknown; outputTail?: unknown; reason?: unknown },
+    { requireClassification = false }: { requireClassification?: boolean } = {},
+  ): ReleaseResult {
+    const input = releaseInput(args);
+    if (!requireClassification && unclassifiedRelease(input)) return { ok: true as const, releaseKind: null, evidence: null };
+    const failure = releaseArgumentFailure(input);
+    if (failure) return failure;
+    const validator = RELEASE_VALIDATORS.get(input.releaseKind);
+    return validator ? validator(input) : releaseFailure('release_kind_required', 'release: kind must be technical_blocker, contradiction, oracle, or handback.');
   }
 
   function releaseCommentBody(reason?: unknown, evidence?: { command: string; exitCode?: number; kind: string; outputTail: string } | null) {

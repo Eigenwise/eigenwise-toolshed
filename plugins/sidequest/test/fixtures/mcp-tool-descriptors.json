@@ -202,6 +202,9 @@
         "by": {
           "type": "string"
         },
+        "full": {
+          "type": "boolean"
+        },
         "rotate": {
           "type": "boolean"
         }
@@ -922,14 +925,13 @@
       },
       "required": [
         "ref",
-        "by",
         "reason"
       ]
     }
   },
   {
     "name": "release",
-    "description": "reason required; oracle handoff.",
+    "description": "reason/kind required; oracle handoff.",
     "inputSchema": {
       "type": "object",
       "properties": {
