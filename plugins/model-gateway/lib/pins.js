@@ -21,6 +21,31 @@ function codexBaseFromId(id) {
   return base && CODEX_FAMILY_RE.test(base) ? base : null;
 }
 
+function pinVersion(value) {
+  const bare = value.endsWith('[1m]') ? value.slice(0, -4) : value;
+  const segments = bare.split('-');
+  const [prefix, family, majorText, minorText = '0'] = segments;
+  if (prefix !== 'claude') return null;
+  if (![3, 4].includes(segments.length)) return null;
+  const major = Number.parseInt(majorText, 10);
+  const minor = Number.parseInt(minorText, 10);
+  if (`${major}:${minor}` !== `${majorText}:${minorText}`) return null;
+  return [family.toLowerCase(), major, minor];
+}
+
+function comparePinVersions(first, second) {
+  const firstVersion = pinVersion(first);
+  const secondVersion = pinVersion(second);
+  if (!firstVersion || !secondVersion || firstVersion[0] !== secondVersion[0]) return null;
+  return Math.sign(firstVersion[1] - secondVersion[1]) || Math.sign(firstVersion[2] - secondVersion[2]);
+}
+
+function pinLagNotice(alias, pin) {
+  if (comparePinVersions(pin.default, pin.shipped) !== -1) return null;
+  const override = pin.override ? ` Your override ${pin.override} overrides detected ${pin.default}.` : '';
+  return `Claude CLI ${alias} alias lags: ${pin.default} is older than ${pin.shipped}. Run pin --${alias} ${pin.shipped} to update it.${override}`;
+}
+
 function isGatewayModelId(id) {
   return codexBaseFromId(id) != null || (typeof id === 'string' && id.startsWith(GROK_PREFIX));
 }
@@ -287,7 +312,7 @@ function envBlockFor(mode) {
 function ourBaseUrls() { return [DEFAULT_BASE_URL, COMPAT_BASE_URL]; }
 
 module.exports = {
-  codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, pinProvenance, probeClaudeAlias, readPinOverrides,
+  codexBaseFromId, comparePinVersions, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
+  isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, pinLagNotice, pinProvenance, probeClaudeAlias, readPinOverrides,
   refreshDetectedPins, writePinOverrides,
 };

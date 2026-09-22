@@ -178,7 +178,7 @@ const PIN_ALIASES = {
   fable: 'ANTHROPIC_DEFAULT_FABLE_MODEL',
 };
 const KNOWN_GOOD_PINS = {
-  opus: 'claude-opus-5[1m]',
+  opus: 'claude-opus-5-5[1m]',
   sonnet: 'claude-sonnet-5[1m]',
   fable: 'claude-fable-5-1[1m]',
 };
