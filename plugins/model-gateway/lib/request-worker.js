@@ -177,35 +177,36 @@ function statelessBackendThreadRefusal(payload) {
   };
 }
 
-const CODEX_SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
+const SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
 const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
 const CODEX_COMPACT_HEADROOM = 40000;
 
-function effectiveCodexSentryPolicy(policy, compactTrigger = configuredCompactTrigger) {
-  if (policy?.sentry !== 'codex-synthetic-413') return null;
-  if (!Number.isFinite(policy.backendWindow) || policy.backendWindow <= CODEX_COMPACT_HEADROOM) {
-    throw new Error(`model-gateway: invalid Codex sentry backend window for ${policy.backendId}`);
+function sentryBackendWindow(policy) {
+  const backendWindow = policy.backendWindow;
+  if (!Number.isFinite(backendWindow) || backendWindow <= CODEX_COMPACT_HEADROOM) {
+    throw new Error(`model-gateway: invalid sentry backend window for ${policy.backendId}`);
   }
-  const derivedTrigger = policy.backendWindow - CODEX_COMPACT_HEADROOM;
-  if (Number.isFinite(compactTrigger) && compactTrigger > 0 && compactTrigger <= derivedTrigger) {
-    return { backendWindow: policy.backendWindow, compactTrigger, source: 'env' };
-  }
-  return { backendWindow: policy.backendWindow, compactTrigger: derivedTrigger, source: 'derived' };
+  return backendWindow;
+}
+
+function effectiveSentryPolicy(policy, compactTrigger = configuredCompactTrigger) {
+  if (policy?.sentry !== 'synthetic-413') return null;
+  const backendWindow = sentryBackendWindow(policy);
+  const derivedTrigger = backendWindow - CODEX_COMPACT_HEADROOM;
+  const useConfiguredTrigger = Number.isFinite(compactTrigger) && compactTrigger > 0 && compactTrigger <= derivedTrigger;
+  return useConfiguredTrigger
+    ? { backendWindow, compactTrigger, source: 'env' }
+    : { backendWindow, compactTrigger: derivedTrigger, source: 'derived' };
 }
 
 function sentryPolicyFor(model) {
-  const policy = resolveGatewayModelPolicy(model);
-  const sentryPolicy = effectiveCodexSentryPolicy(policy);
-  if (sentryPolicy && policy.backend !== 'codex') {
-    throw new Error(`model-gateway: non-Codex model ${policy.backendId} cannot use the Codex sentry`);
-  }
-  return sentryPolicy;
+  return effectiveSentryPolicy(resolveGatewayModelPolicy(model));
 }
 
 function assertAnthropicPassthroughSentryIsDisabled(model) {
   const policy = resolveGatewayModelPolicy(model);
   if (policy?.backend === 'anthropic' && policy.sentry !== 'none') {
-    throw new Error(`model-gateway: Anthropic passthrough model ${policy.backendId} must not use the Codex sentry`);
+    throw new Error(`model-gateway: Anthropic passthrough model ${policy.backendId} must not use the synthetic sentry`);
   }
 }
 const configuredSseHeartbeatSeconds = Number(process.env.CODEX_GATEWAY_SSE_HEARTBEAT_S);
@@ -933,8 +934,8 @@ function runWorker() {
     }
   }
 
-  function codexSessionId(req) {
-    return CODEX_SENTRY_ENABLED ? requestSessionId(req) : null;
+  function sentrySessionId(req) {
+    return SENTRY_ENABLED ? requestSessionId(req) : null;
   }
 
   function sentryModel(model) {
@@ -942,7 +943,7 @@ function runWorker() {
     let state = sentryModels.get(modelId);
     if (!state) {
       const sentryPolicy = sentryPolicyFor(model);
-      if (!sentryPolicy) throw new Error(`model-gateway: no Codex sentry policy for ${modelId}`);
+      if (!sentryPolicy) throw new Error(`model-gateway: no sentry policy for ${modelId}`);
       state = { ...sentryPolicy, observedCeiling: null };
       sentryModels.set(modelId, state);
     }
@@ -967,6 +968,7 @@ function runWorker() {
 
   function recordSentryUsage(sessionId, event, model) {
     if (!sessionId || event.type !== 'message_delta' || !event.usage) return;
+    if (!sentryPolicyFor(model)) return;
     const usage = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']
       .reduce((total, field) => total + (Number.isFinite(event.usage[field]) ? event.usage[field] : 0), 0);
     if (usage <= 0) return;
@@ -993,8 +995,9 @@ function runWorker() {
     const compactTrigger = sentryModel(model).compactTrigger;
     if (!state || state.fired || state.usage <= compactTrigger) return false;
     state.fired = true;
+    const backendName = resolveGatewayModelPolicy(model)?.backend === 'grok' ? 'Grok' : 'Codex';
     const body = contextOverflowBody(state.usage, compactTrigger,
-      'Prompt is too long for the Codex context window; compact and retry.');
+      `Prompt is too long for the ${backendName} context window; compact and retry.`);
     res.writeHead(413, {
       'content-type': 'application/json',
       'content-length': Buffer.byteLength(body),
@@ -1032,7 +1035,7 @@ function runWorker() {
 
   function logAdvertisedSentryPolicies() {
     for (const policy of Object.values(MODEL_WINDOW_POLICY)) {
-      const sentryPolicy = effectiveCodexSentryPolicy(policy);
+      const sentryPolicy = effectiveSentryPolicy(policy);
       if (!sentryPolicy) {
         console.log(`model-gateway: sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=none`);
         continue;
@@ -1371,7 +1374,7 @@ function runWorker() {
           });
           routeTelemetry?.finish(upRes.statusCode, statusOverride);
           // The status line is gone but the sentry's learned ceiling is not.
-          if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) noteGenuineOverflow(sessionId, contextModel);
+          if (normalizeContextErrors && SENTRY_ENABLED && upRes.statusCode === 413) noteGenuineOverflow(sessionId, contextModel);
           if (normalizeContextErrors) noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, Buffer.concat(chunks));
           const authenticationFailure = codexAuthenticationFailure(Buffer.concat(chunks), upRes.statusCode);
           const error = authenticationFailure ? JSON.parse(authenticationFailure).error : {
@@ -1449,7 +1452,7 @@ function runWorker() {
         upRes.once('aborted', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_aborted'));
         upRes.once('error', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_error'));
       }
-      if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) {
+      if (normalizeContextErrors && SENTRY_ENABLED && upRes.statusCode === 413) {
         const chunks = [];
         let settled = false;
         const failBufferedResponse = (statusOverride) => {
@@ -1507,7 +1510,7 @@ function runWorker() {
           noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, upstreamBody);
           const text = upstreamBody.toString();
           if (/context window|context length|input exceeds|prompt token count|too many tokens/i.test(text)) {
-            const normalized = CODEX_SENTRY_ENABLED
+            const normalized = SENTRY_ENABLED
               ? contextOverflowBody(noteGenuineOverflow(sessionId, contextModel) || codexContextWindow(contextModel) + 1,
                 codexContextWindow(contextModel), 'Input exceeds the model context window; compact and retry.')
               : JSON.stringify({
@@ -1558,7 +1561,7 @@ function runWorker() {
           const inference = attempt || newCompactAttempt();
           const observeEvent = (event) => {
             noteCompactEvent(inference, event);
-            if (filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId)) recordSentryUsage(sessionId, event, contextModel);
+            if (filterPlanTools || (SENTRY_ENABLED && sessionId)) recordSentryUsage(sessionId, event, contextModel);
             usageCapture?.observeEvent(event);
           };
           const emit = attempt
@@ -1672,7 +1675,7 @@ function runWorker() {
       clientRes.writeHead(upRes.statusCode, resHeaders);
       if (successful && contentType.includes('text/event-stream')) {
         if (normalizeContextErrors) keepSseAlive(upRes, clientRes);
-        const observeSentry = normalizeContextErrors && CODEX_SENTRY_ENABLED && sessionId;
+        const observeSentry = normalizeContextErrors && SENTRY_ENABLED && sessionId;
         if (observeSentry || usageCapture) {
           const observer = createSseEventObserver(
             (event) => {
@@ -1731,7 +1734,7 @@ function runWorker() {
     else clientReq.pipe(upReq);
   }
 
-  async function forwardGrok(clientReq, clientRes, payload, model, advertisedModel, routeTelemetry, usageCapture) {
+  async function forwardGrok(clientReq, clientRes, payload, model, advertisedModel, sessionId, routeTelemetry, usageCapture) {
     let token;
     try {
       token = await grokBackend.grokAccessToken();
@@ -1802,7 +1805,11 @@ function runWorker() {
             try {
               const event = JSON.parse(data);
               transformer.event(event);
-              if (event?.response?.usage) usageCapture?.observeEvent({ type: 'message_delta', usage: grokBackend.anthropicUsage(event.response.usage) });
+              if (event?.response?.usage) {
+                const usage = grokBackend.anthropicUsage(event.response.usage);
+                usageCapture?.observeEvent({ type: 'message_delta', usage });
+                recordSentryUsage(sessionId, { type: 'message_delta', usage }, model);
+              }
             } catch {}
           }
         };
@@ -1816,6 +1823,8 @@ function runWorker() {
       upstream.on('end', () => {
         let response;
         try { response = JSON.parse(Buffer.concat(chunks).toString()); } catch { response = null; }
+        const usage = response?.usage && grokBackend.anthropicUsage(response.usage);
+        if (usage) recordSentryUsage(sessionId, { type: 'message_delta', usage }, model);
         const translated = grokBackend.translateResponse(response, advertisedModel);
         const translatedBody = Buffer.from(JSON.stringify(translated));
         usageCapture?.observeJson(translatedBody);
@@ -2041,7 +2050,7 @@ function runWorker() {
               via: dispatchVia || 'direct',
             });
             const requestBodySessionId = requestSessionId(req);
-            const sessionId = codexSessionId(req);
+            const sessionId = sentrySessionId(req);
             if (pathOnly === '/v1/messages' && fireContextSentry(res, sessionId, parsed.model)) {
               routeTelemetry.finish(413);
               return;
@@ -2107,6 +2116,11 @@ function runWorker() {
               fallback: false,
               via: 'direct',
             });
+            const sessionId = sentrySessionId(req);
+            if (fireContextSentry(res, sessionId, model)) {
+              routeTelemetry.finish(413);
+              return;
+            }
             recordRequestBodyHighWater(requestSessionId(req), raw.length);
             const usageCapture = usageEmitter.enabled
               ? usageEmitter.start({
@@ -2116,7 +2130,7 @@ function runWorker() {
                 route: { requestedModel: advertisedModel, effectiveModel: model, backend: 'grok', effort, via: 'direct' },
               })
               : null;
-            return forwardGrok(req, res, parsed, model, advertisedModel, routeTelemetry, usageCapture);
+            return forwardGrok(req, res, parsed, model, advertisedModel, sessionId, routeTelemetry, usageCapture);
           }
         } catch { /* not JSON; fall through to passthrough */ }
       }
@@ -2203,4 +2217,4 @@ function runWorker() {
   }
 }
 
-module.exports = { createHostsBypassResolver, effectiveCodexSentryPolicy, gatewayModel, runWorker };
+module.exports = { createHostsBypassResolver, effectiveSentryPolicy, gatewayModel, runWorker };

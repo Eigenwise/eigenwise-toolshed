@@ -370,7 +370,7 @@ const tools: ToolDefinition[] = [
         warnings,
         spawn,
         guidance: prepared.recovery?.kind === 'live_claim_resume'
-          ? `Live claim recovered for ${prepared.ticket.ref}. Pass spawn unchanged; it carries a fresh token for the rebound linked worktree.`
+          ? `Live claim recovered for ${prepared.ticket.ref}. Pass spawn unchanged; it carries a fresh token for the rebound linked worktree and no isolation field.`
           : prepared.recovery
             ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`
             : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token.`,

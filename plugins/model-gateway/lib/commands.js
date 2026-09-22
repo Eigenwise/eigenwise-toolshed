@@ -1089,7 +1089,7 @@ function modelWindowPolicyRow(id, pickerId = gatewayClientModelId(id)) {
   if (!policy) return null;
   const clientWindow = pickerId.endsWith('[1m]') ? 1000000 : CODEX_UNKNOWN_MODEL_WINDOW;
   const autoCompact = configuredAutoCompactWindow();
-  const sentryPolicy = effectiveCodexSentryPolicy(policy);
+  const sentryPolicy = effectiveSentryPolicy(policy);
   return {
     backend: policy.backend,
     backendId: policy.backend === 'anthropic' ? id.replace(/\[1m\]$/, '') : policy.backendId,
@@ -1940,7 +1940,7 @@ function requestHeader(req, name) {
   return typeof value === 'string' ? value : null;
 }
 
-const { effectiveCodexSentryPolicy, runWorker } = require('./request-worker.js');
+const { effectiveSentryPolicy, runWorker } = require('./request-worker.js');
 function createShimRelay({
   httpClient = http,
   getWorker = () => null,
