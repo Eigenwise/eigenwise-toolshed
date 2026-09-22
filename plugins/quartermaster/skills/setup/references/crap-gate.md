@@ -94,9 +94,23 @@ The defaults are `coverage/lcov.info`, sources `.`, no exclusions, threshold 6, 
 revision used to identify changed functions. The shared parser and score implementation lives under
 `scripts/quality`; Quartermaster only supplies project-specific LCOV and command wiring.
 
+The gate measures the git toplevel of the directory it runs in, so a per-ticket linked worktree is
+measured in place instead of the main checkout, and the base comparison resolves against that same
+root. `--project` only names where the config is read, not the tree measured; without it the config
+comes from the measured root, so a run from a subdirectory gets the same gate. Never write `--project`
+with a hard-coded absolute path into a live rule or any other file that outlives this setup session:
+a worktree that runs it later would read another checkout's config. Run it with:
+
 ```text
-node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"
+node "<quartermaster plugin root>/bin/quartermaster.js" crap
 ```
+
+The gate sets `QUARTERMASTER_COVERAGE_DIR` to a fresh directory for each run. A coverage command that
+writes `lcov.info` there keeps concurrent runs on one checkout from reading each other's coverage, for
+example `c8 --reporter=lcov --reports-dir "$QUARTERMASTER_COVERAGE_DIR" npm test`. Leave `lcov` unset
+for such a command, because an explicit `lcov` is read exactly where it points. A coverage command that
+exits 0 but writes neither that file nor a fresh `coverage/lcov.info` exits 2 instead of scoring stale
+coverage.
 
 Use this live rule after the command has passed:
 
@@ -105,7 +119,7 @@ Use this live rule after the command has passed:
 description: Keep changed code within the CRAP ceiling
 priority: 85
 ---
-Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"`.
+Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap`.
 Keep every new or modified function strictly below 6. Cover it or split it. Untouched legacy functions are out of scope.
 Exit 2 means a prerequisite or measurement is missing. Follow the printed install or measurement hint, then rerun the gate. Do not skip it.
 ```

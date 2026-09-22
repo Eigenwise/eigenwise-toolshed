@@ -124,7 +124,7 @@ priority: 85
 description: Keep changed code within the CRAP ceiling
 priority: 85
 ---
-Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"`.
+Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap`.
 Keep every new or modified function strictly below 6. Cover it or split it. Untouched legacy functions are out of scope.
 Exit 2 means a prerequisite or measurement is missing. Follow the printed install or measurement hint, then rerun the gate. Do not skip it.
 ```

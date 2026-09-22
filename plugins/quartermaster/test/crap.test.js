@@ -7,7 +7,7 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { test } = require('node:test');
 
-const { crapReport, crapScore, formatReport, PrerequisiteError } = require('../lib/crap.js');
+const { COVERAGE_DIR_ENV, crapReport, crapScore, formatReport, PrerequisiteError, realDir, sameDir } = require('../lib/crap.js');
 
 const CLI = path.resolve(__dirname, '../bin/quartermaster.js');
 
@@ -49,6 +49,49 @@ function runner(current, base) {
 function atLine(report, line) {
   return report.functions.find((entry) => entry.line === line);
 }
+
+function gitIn(cwd, argumentsForGit) {
+  return execFileSync('git', argumentsForGit, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+/**
+ * The gate realpath-normalizes a git root, which expands Windows 8.3 short names and symlinks, so a raw
+ * comparison against the fixture's own temp path would disagree on Windows for the same directory.
+ */
+function sameRealDir(left, right) {
+  return sameDir(realDir(left), realDir(right));
+}
+
+/** A coverage command stand-in: a script file, so no test has to quote JavaScript through a shell. */
+function coverageStub(lines) {
+  const scriptPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-stub-')), 'coverage-stub.js');
+  fs.writeFileSync(scriptPath, ["const fs = require('fs');", "const path = require('path');", ...lines].join('\n'), 'utf8');
+  return { command: `"${process.execPath}" "${scriptPath}"`, dir: path.dirname(scriptPath) };
+}
+
+function makeStale(filePath) {
+  const dayAgo = (Date.now() - 24 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(filePath, dayAgo, dayAgo);
+}
+
+test('sameRealDir resolves a symlinked alias the way native realpath does, unlike plain realpathSync', () => {
+  // A symlink alias stands in for a Windows 8.3 short name, and the non-native realpathSync is stubbed to
+  // leave its input unresolved the way it leaves short names unexpanded on Windows.
+  const realDirPath = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-real-'));
+  const aliasDirPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-alias-')), 'alias');
+  fs.symlinkSync(realDirPath, aliasDirPath, 'dir');
+
+  const originalRealpathSync = fs.realpathSync;
+  const stubbedRealpathSync = (target) => target;
+  stubbedRealpathSync.native = originalRealpathSync.native;
+  fs.realpathSync = stubbedRealpathSync;
+  try {
+    assert.equal(fs.realpathSync(aliasDirPath), aliasDirPath, 'the stub leaves the alias unresolved, like an unexpanded 8.3 short name');
+    assert.ok(sameRealDir(aliasDirPath, realDirPath), 'realDir must resolve through realpathSync.native, which still dereferences the symlink');
+  } finally {
+    fs.realpathSync = originalRealpathSync;
+  }
+});
 
 test('gates only new or modified functions at the strict threshold', () => {
   const projectDir = fixtureProject({
@@ -329,6 +372,144 @@ test('an unresolvable lizard exits two with the install hint', () => {
   assert.match(result.stderr, /uv tool install lizard/);
 });
 
+test('without --project the config comes from the measured root, so its base and exclude hold from a subdirectory', () => {
+  const projectDir = fixtureProject({
+    '.claude/quartermaster/crap.json': JSON.stringify({ base: 'crap-base', exclude: ['vendor/**'] }),
+    'src/app.js': 'function subject(value) { return value; }\n',
+    'coverage/lcov.info': lcov([[1, 1]]),
+  });
+  commitBase(projectDir);
+  gitIn(projectDir, ['tag', 'crap-base']);
+  const configuredBase = gitIn(projectDir, ['rev-parse', 'HEAD']);
+  // Moving the default branch past the tag makes the configured base and the default one differ.
+  fs.writeFileSync(path.join(projectDir, 'README.md'), 'after the base\n', 'utf8');
+  gitIn(projectDir, ['add', 'README.md']);
+  gitIn(projectDir, ['commit', '-m', 'after the base']);
+
+  const subDir = path.join(projectDir, 'src');
+  const lizardCalls = [];
+  const runLizard = (call) => {
+    lizardCalls.push(call);
+    return csv([{ complexity: 1, name: 'subject', start: 1, end: 1 }]);
+  };
+  for (const [label, options] of [
+    ['from the root', { projectDir, cwd: projectDir }],
+    ['from a subdirectory', { projectDir: subDir, cwd: subDir }],
+    ['from a subdirectory with --project', { projectDir, cwd: subDir, projectPathGiven: true }],
+  ]) {
+    const report = crapReport({ ...options, runLizard });
+    assert.equal(report.base, configuredBase, `${label}: the config's base, not the default branch`);
+    assert.deepEqual(lizardCalls.at(-1).exclude, ['vendor/**'], `${label}: the config's exclude`);
+    assert.ok(sameRealDir(report.root, projectDir), `${label}: measured the repository root, got ${report.root}`);
+  }
+});
+
+test('from a linked worktree with --project naming the main checkout, the gate measures the worktree with the main config', () => {
+  const mainDir = fixtureProject({ 'README.md': 'main\n' });
+  commitBase(mainDir);
+  const worktreeDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-worktree-')), 'wt');
+  gitIn(mainDir, ['worktree', 'add', '-b', 'wt-branch', worktreeDir, 'main']);
+  // Untracked, so only the main checkout has it: seeing it applied proves --project picked the config.
+  fs.mkdirSync(path.join(mainDir, '.claude', 'quartermaster'), { recursive: true });
+  fs.writeFileSync(path.join(mainDir, '.claude', 'quartermaster', 'crap.json'), JSON.stringify({ exclude: ['vendor/**'] }), 'utf8');
+  const stub = coverageStub([
+    "fs.mkdirSync('coverage', { recursive: true });",
+    "fs.writeFileSync(path.join('coverage', 'lcov.info'), 'SF:a.js\\nDA:1,1\\nend_of_record\\n', 'utf8');",
+    "fs.writeFileSync(path.join(__dirname, 'marker.json'), JSON.stringify({ cwd: process.cwd() }));",
+  ]);
+  const lizardCalls = [];
+
+  const report = crapReport({
+    projectDir: mainDir,
+    cwd: worktreeDir,
+    projectPathGiven: true,
+    coverageCommand: stub.command,
+    runLizard: (call) => {
+      lizardCalls.push(call);
+      return '';
+    },
+  });
+
+  assert.ok(sameRealDir(report.root, worktreeDir), `expected ${report.root} to be the worktree ${worktreeDir}`);
+  assert.equal(lizardCalls.length, 1);
+  assert.ok(sameRealDir(lizardCalls[0].cwd, worktreeDir), `expected lizard cwd ${lizardCalls[0].cwd} to be the worktree`);
+  assert.deepEqual(lizardCalls[0].exclude, ['vendor/**'], 'the config came from the --project checkout');
+  const marker = JSON.parse(fs.readFileSync(path.join(stub.dir, 'marker.json'), 'utf8'));
+  assert.ok(sameRealDir(marker.cwd, worktreeDir), 'the coverage command ran in the worktree');
+  assert.equal(fs.existsSync(path.join(mainDir, 'coverage')), false, 'the main checkout never got coverage written to it');
+});
+
+test('two runs on one checkout each read the lcov their own coverage command wrote', () => {
+  const workDir = fixtureProject({
+    'complexity.csv': csv([{ complexity: 2, name: 'add', start: 1, end: 4 }], 'src/sample.js'),
+    // An old shared lcov must neither shadow a run's own report nor trip the staleness refusal.
+    'coverage/lcov.info': lcov([[2, 1], [3, 1]], 'src/sample.js'),
+  });
+  makeStale(path.join(workDir, 'coverage', 'lcov.info'));
+  const stub = coverageStub([
+    `const dir = process.env[${JSON.stringify(COVERAGE_DIR_ENV)}];`,
+    "fs.appendFileSync(path.join(__dirname, 'dirs.log'), dir + '\\n');",
+    "fs.writeFileSync(path.join(dir, 'lcov.info'), process.env.CRAP_TEST_LCOV, 'utf8');",
+  ]);
+  const runWith = (lcovBody) => {
+    process.env.CRAP_TEST_LCOV = lcovBody;
+    try {
+      return crapReport({ projectDir: workDir, complexity: 'complexity.csv', coverageCommand: stub.command });
+    } finally {
+      delete process.env.CRAP_TEST_LCOV;
+    }
+  };
+
+  const first = runWith(lcov([[2, 1], [3, 0]], 'src/sample.js'));
+  const second = runWith(lcov([[2, 0], [3, 0]], 'src/sample.js'));
+
+  const dirs = fs.readFileSync(path.join(stub.dir, 'dirs.log'), 'utf8').trim().split('\n');
+  assert.equal(dirs.length, 2, 'both runs recorded a coverage directory');
+  assert.notEqual(dirs[0], dirs[1], 'two runs must not share a coverage report directory');
+  assert.equal(first.functions[0].coverage, 0.5, "the first run reads its own run's lcov");
+  assert.equal(second.functions[0].coverage, 0, "the second run reads its own run's lcov");
+});
+
+test('a coverage command that exits 0 without rewriting the default lcov exits two, and one that rewrites it passes', () => {
+  const projectDir = fixtureProject({
+    'complexity.csv': csv([{ complexity: 1, name: 'subject', start: 1, end: 1 }]),
+    'coverage/lcov.info': lcov([[1, 1]]),
+  });
+  makeStale(path.join(projectDir, 'coverage', 'lcov.info'));
+
+  const silent = coverageStub(['process.exit(0);']);
+  const stale = runCli(['--complexity', 'complexity.csv', '--coverage-command', silent.command], projectDir);
+  assert.equal(stale.status, 2, stale.stderr);
+  assert.match(stale.stderr, /coverage\/lcov\.info predates this run's coverage command/);
+
+  const rewriting = coverageStub(["fs.writeFileSync(path.join('coverage', 'lcov.info'), 'SF:src/app.js\\nDA:1,1\\nend_of_record\\n', 'utf8');"]);
+  const fresh = runCli(['--complexity', 'complexity.csv', '--coverage-command', rewriting.command], projectDir);
+  assert.equal(fresh.status, 0, fresh.stderr);
+  assert.match(fresh.stdout, /CRAP gate passed: 0 of 1 changed or new functions/);
+});
+
+/** A plain recursive walk rather than readdirSync's `recursive` option, so it runs the same on every supported Node. */
+function collectFiles(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const fullPath = path.join(dir, entry.name);
+    return entry.isDirectory() ? collectFiles(fullPath) : [fullPath];
+  });
+}
+
+test('the generated live rule and every file under skills/ run the gate without a hard-coded --project', () => {
+  const crapGateDoc = fs.readFileSync(path.join(__dirname, '..', 'skills', 'setup', 'references', 'crap-gate.md'), 'utf8');
+  const liveRuleMatch = crapGateDoc.match(/```markdown\n([\s\S]*?)```/);
+  assert.ok(liveRuleMatch, 'the reference doc has a fenced live-rule template');
+  assert.match(liveRuleMatch[1], /quartermaster\.js" crap`/);
+  assert.doesNotMatch(liveRuleMatch[1], /--project/);
+
+  const skillsDir = path.join(__dirname, '..', 'skills');
+  const offenders = collectFiles(skillsDir)
+    .filter((filePath) => fs.readFileSync(filePath, 'utf8').includes('crap --project'))
+    .map((filePath) => path.relative(skillsDir, filePath));
+  assert.deepEqual(offenders, [], 'no file under skills/ may tell an agent to pass --project to the crap gate');
+});
+
 test('the real lizard backend measures a changed JavaScript file end to end', () => {
   const probe = spawnSync('lizard', ['--version'], { encoding: 'utf8' });
   if (probe.error || probe.status !== 0) return;
@@ -342,6 +523,8 @@ test('the real lizard backend measures a changed JavaScript file end to end', ()
   const result = runCli(['--json'], projectDir);
   assert.equal(result.status, 0, result.stderr);
   const report = JSON.parse(result.stdout);
+  assert.ok(sameRealDir(report.root, projectDir), 'a --project outside the runner\'s repository is measured where it points');
+  assert.match(result.stderr, /quartermaster crap: measured /);
   assert.equal(report.checked, 1);
   assert.equal(report.failures.length, 0);
   assert.equal(crapScore(2, 1), 2);
