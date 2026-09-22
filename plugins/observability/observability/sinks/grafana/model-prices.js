@@ -9,6 +9,7 @@ const ANTHROPIC_PRICES_PER_MILLION = {
   'claude-opus-4-7': { input: 5, cacheRead: 0.5, cacheCreation: 6.25, output: 25 },
   'claude-opus-4-8': { input: 5, cacheRead: 0.5, cacheCreation: 6.25, output: 25 },
   'claude-opus-5': { input: 5, cacheRead: 0.5, cacheCreation: 6.25, output: 25 },
+  'claude-opus-5-5': { input: 4, cacheRead: 0.2, cacheCreation: 5, output: 20 },
   'claude-sonnet-4-6': { input: 3, cacheRead: 0.3, cacheCreation: 3.75, output: 15 },
   'claude-sonnet-5': { input: 3, cacheRead: 0.3, cacheCreation: 3.75, output: 15 },
   'claude-fable-5': { input: 10, cacheRead: 1, cacheCreation: 12.5, output: 50 },
@@ -63,13 +64,32 @@ const GATEWAY_RESOLVED_MODEL_ALIASES = {
   'gpt-6-astra-fast': CODEX_ASTRA_PRICES_PER_MILLION['claude-gpt-6-astra-fast'],
 };
 
-const MODEL_PRICES_PER_MILLION = {
+const ANTHROPIC_ONE_MILLION_CONTEXT_MODEL_PRICES_PER_MILLION = Object.fromEntries([
+  'claude-opus-4-8',
+  'claude-opus-5',
+  'claude-opus-5-5',
+  'claude-sonnet-5',
+  'claude-fable-5',
+  'claude-fable-5-1',
+].map((model) => [`${model}[1m]`, ANTHROPIC_PRICES_PER_MILLION[model]]));
+
+const ANTHROPIC_MODEL_PRICES_PER_MILLION = {
   ...ANTHROPIC_PRICES_PER_MILLION,
-  'claude-opus-4-8[1m]': ANTHROPIC_PRICES_PER_MILLION['claude-opus-4-8'],
-  'claude-opus-5[1m]': ANTHROPIC_PRICES_PER_MILLION['claude-opus-5'],
-  'claude-sonnet-5[1m]': ANTHROPIC_PRICES_PER_MILLION['claude-sonnet-5'],
-  'claude-fable-5[1m]': ANTHROPIC_PRICES_PER_MILLION['claude-fable-5'],
-  'claude-fable-5-1[1m]': ANTHROPIC_PRICES_PER_MILLION['claude-fable-5-1'],
+  ...ANTHROPIC_ONE_MILLION_CONTEXT_MODEL_PRICES_PER_MILLION,
+};
+
+const ANTHROPIC_FAMILY_FALLBACK_PRICES = Object.fromEntries(
+  ['opus', 'sonnet', 'haiku', 'fable'].map((family) => [
+    family,
+    Object.entries(ANTHROPIC_PRICES_PER_MILLION)
+      .filter(([model]) => model.startsWith(`claude-${family}-`))
+      .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
+      .at(-1)[1],
+  ]),
+);
+
+const MODEL_PRICES_PER_MILLION = {
+  ...ANTHROPIC_MODEL_PRICES_PER_MILLION,
   ...CODEX_PRICES_PER_MILLION,
   ...CODEX_ASTRA_PRICES_PER_MILLION,
   ...LEGACY_CODEX_PRICES_PER_MILLION,
@@ -103,8 +123,15 @@ function pricesForRequest(prices, tokenUsage) {
   return requestInputTokens(tokenUsage) > prices.inputTokenThreshold ? prices.long : prices.short;
 }
 
+const ANTHROPIC_FAMILY_MODEL_PATTERN = /^claude-([a-z]+)-\d+(?:[-.]\d+)*(?:\[1m\])?$/;
+
+function fallbackAnthropicPrices(model) {
+  const [, family] = ANTHROPIC_FAMILY_MODEL_PATTERN.exec(model) || [];
+  return ANTHROPIC_FAMILY_FALLBACK_PRICES[family] || null;
+}
+
 function modelRequestCost(model, tokenUsage) {
-  const prices = MODEL_PRICES_PER_MILLION[model];
+  const prices = MODEL_PRICES_PER_MILLION[model] || fallbackAnthropicPrices(model);
   if (!prices) return null;
   const requestPrices = pricesForRequest(prices, tokenUsage);
   return Object.entries(GATEWAY_MEASUREMENT_BY_PRICE_TYPE).reduce(
@@ -162,6 +189,11 @@ const GATEWAY_REQUEST_INPUT_TOKENS_TEMPLATE = '(add (add (default "0" .workbench
 // label so a single scan covers every model: 48 legs sharing one unnarrowed selector made
 // Loki reread the whole stream 48 times, measured at 229MB to return one number, against
 // a window holding ~5,500 entries (SQ-1521). Collapsed, the same window reads 18MB.
+function gatewayFallbackPriceTemplate(type) {
+  return Object.entries(ANTHROPIC_FAMILY_FALLBACK_PRICES).map(([family, prices]) =>
+    `{{ else if regexMatch ${JSON.stringify(`^claude-${family}-\\d+(?:[-.]\\d+)*(?:\\[1m\\])?$`)} .workbench_attribute_model }}${prices[type] * 100}`).join('');
+}
+
 function gatewayPriceTemplate(entries, type) {
   const priceInCents = (price) => price * 100;
   const requestPriceTemplate = ([, prices]) => {
@@ -169,7 +201,7 @@ function gatewayPriceTemplate(entries, type) {
     return `{{ if gt ${GATEWAY_REQUEST_INPUT_TOKENS_TEMPLATE} ${prices.inputTokenThreshold} }}${priceInCents(prices.long[type])}{{ else }}${priceInCents(prices.short[type])}{{ end }}`;
   };
   const [first, ...rest] = entries;
-  return `{{ if eq .workbench_attribute_model ${JSON.stringify(first[0])} }}${requestPriceTemplate(first)}${rest.map((entry) => `{{ else if eq .workbench_attribute_model ${JSON.stringify(entry[0])} }}${requestPriceTemplate(entry)}`).join('')}{{ else }}0{{ end }}`;
+  return `{{ if eq .workbench_attribute_model ${JSON.stringify(first[0])} }}${requestPriceTemplate(first)}${rest.map((entry) => `{{ else if eq .workbench_attribute_model ${JSON.stringify(entry[0])} }}${requestPriceTemplate(entry)}`).join('')}${gatewayFallbackPriceTemplate(type)}{{ else }}0{{ end }}`;
 }
 
 function gatewayUsageExpression(entries, type, bucket = '$bucket', extraFilter = '') {
@@ -263,6 +295,7 @@ function unpricedModelsExpression(bucket = '$bucket') {
 }
 
 module.exports = {
+  ANTHROPIC_MODEL_PRICES_PER_MILLION,
   MODEL_PRICES_PER_MILLION,
   UNPRICEABLE_VIRTUAL_DISPATCH_MODELS,
   gatewayModelCostTargets,
