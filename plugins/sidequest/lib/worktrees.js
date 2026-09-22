@@ -37,11 +37,20 @@ function atRiskStatusEntries(stdout, worktree, recordedLinks) {
 function installedDependencyCacheFile(worktree, entry) {
   if (entry.code !== "!!" || !dependencyCachePath(entry.path) || entry.path.endsWith("/")) return false;
   const segments = entry.path.split(/[\\/]+/).filter(Boolean);
+  const canonicalWorktree = canonicalPath(worktree);
+  let current = worktree;
   try {
-    for (let depth = 1; depth <= segments.length; depth += 1) {
-      const stats = nativeFs.lstatSync(path.join(worktree, ...segments.slice(0, depth)));
-      if (stats.isSymbolicLink()) return false;
-      if (depth === segments.length) return stats.isFile();
+    for (let depth = 0; depth < segments.length; depth += 1) {
+      current = path.join(current, segments[depth]);
+      let stats = nativeFs.lstatSync(current);
+      if (stats.isSymbolicLink()) {
+        const resolved = linkTargetPath(current, nativeFs.readlinkSync(current));
+        if (!pathIsInside(canonicalWorktree, resolved)) return false;
+        current = resolved;
+        stats = nativeFs.lstatSync(current);
+        if (stats.isSymbolicLink()) return false;
+      }
+      if (depth === segments.length - 1) return stats.isFile();
     }
   } catch (_) {
     return false;
@@ -1161,6 +1170,35 @@ function linkTargetPath(linkPath, target) {
   const withoutWindowsNamespace = target.replace(/^\\\\\?\\/, "");
   return canonicalPath(path.isAbsolute(withoutWindowsNamespace) ? withoutWindowsNamespace : path.resolve(path.dirname(linkPath), withoutWindowsNamespace));
 }
+function dependencyLinkDisplayPath(root, pathname) {
+  const relative = path.relative(root, pathname).split(path.sep).join("/");
+  return relative && relative !== ".." && !relative.startsWith("../") && !path.isAbsolute(relative) ? relative : pathname;
+}
+function untrustedDependencyLinkRefusal(root, linkPath, trustedRoots, owned) {
+  if (owned(linkPath)) return null;
+  let target;
+  try {
+    target = nativeFs.readlinkSync(linkPath);
+  } catch (_) {
+    return { reason: "dependency_link_unreadable", detail: `unreadable ${dependencyLinkDisplayPath(root, linkPath)}` };
+  }
+  const resolved = linkTargetPath(linkPath, target);
+  if (trustedRoots.some((trustedRoot) => pathIsInside(trustedRoot, resolved))) return null;
+  return {
+    reason: "dependency_link_untrusted",
+    detail: `${dependencyLinkDisplayPath(root, linkPath)} escapes worktree -> ${resolved}`
+  };
+}
+function firstUntrustedDependencyLink(root, owned = () => false, additionalTrustedRoot = null) {
+  const trustedRoots = additionalTrustedRoot ? [canonicalPath(root), canonicalPath(additionalTrustedRoot)] : [canonicalPath(root)];
+  const links = worktreeSymbolicLinks(root);
+  if (!links) return { reason: "dependency_link_unreadable", detail: `unreadable ${root}` };
+  for (const linkPath of links) {
+    const refusal = untrustedDependencyLinkRefusal(root, linkPath, trustedRoots, owned);
+    if (refusal) return refusal;
+  }
+  return null;
+}
 function ownedDependencyLinkMatches(linkPath, record) {
   try {
     const status = nativeFs.lstatSync(linkPath);
@@ -1186,9 +1224,18 @@ function recordedDependencyLinkPaths(worktree, ticketOrDispatch) {
 }
 function dependencyLinkSafety(worktree, ticketOrDispatch, lease) {
   const records = ownedDependencyLinks(ticketOrDispatch, worktree, lease);
-  if (!records) return { safe: false, links: [] };
+  if (!records) {
+    return {
+      safe: false,
+      links: [],
+      detail: lease ? "recorded links do not match this checkout" : "no lease for recorded links"
+    };
+  }
   const recordsByPath = new Map(records.map((record) => [record.relativePath, record]));
-  if (recordsByPath.size !== records.length) return { safe: false, links: [] };
+  if (recordsByPath.size !== records.length) {
+    const duplicate = records.find((record, index) => records.findIndex((other) => other.relativePath === record.relativePath) !== index);
+    return { safe: false, links: [], detail: `duplicate recorded link ${duplicate.relativePath}` };
+  }
   const links = [];
   for (const record of records) {
     const linkPath = path.resolve(worktree, record.relativePath);
@@ -1196,36 +1243,19 @@ function dependencyLinkSafety(worktree, ticketOrDispatch, lease) {
       nativeFs.lstatSync(linkPath);
     } catch (error) {
       if (error?.code === "ENOENT") continue;
-      return { safe: false, links: [] };
+      return { safe: false, links: [], detail: `unreadable ${record.relativePath}` };
     }
-    if (!ownedDependencyLinkMatches(linkPath, record)) return { safe: false, links: [] };
+    if (!ownedDependencyLinkMatches(linkPath, record)) {
+      return { safe: false, links: [], detail: `owned link target moved ${record.relativePath}` };
+    }
     links.push(linkPath);
   }
-  const scan = (pathname) => {
-    let status;
-    try {
-      status = nativeFs.lstatSync(pathname);
-    } catch (_) {
-      return false;
-    }
-    if (status.isSymbolicLink()) {
-      const relativePath = normalizedWorktreeRelativePath(worktree, pathname);
-      const record = relativePath ? recordsByPath.get(relativePath) : null;
-      return Boolean(record && ownedDependencyLinkMatches(pathname, record));
-    }
-    if (!status.isDirectory()) return true;
-    let entries;
-    try {
-      entries = nativeFs.readdirSync(pathname, { withFileTypes: true });
-    } catch (_) {
-      return false;
-    }
-    for (const entry of entries) {
-      if (!scan(path.join(pathname, entry.name))) return false;
-    }
-    return true;
-  };
-  return { safe: scan(worktree), links };
+  const refusal = firstUntrustedDependencyLink(worktree, (linkPath) => {
+    const relativePath = normalizedWorktreeRelativePath(worktree, linkPath);
+    const record = relativePath ? recordsByPath.get(relativePath) : null;
+    return Boolean(record && ownedDependencyLinkMatches(linkPath, record));
+  });
+  return refusal ? { safe: false, links: [], detail: refusal.detail } : { safe: true, links, detail: "" };
 }
 function unlinkOwnedDependencyLinks(links) {
   for (const linkPath of links) {
@@ -1278,22 +1308,25 @@ async function lateContentInMovedWorktree(destination, classifiedHead, recordedL
   if (!tip.ok) return blockedBy(`the moved tree's branch ${branch} could not be read again: ${tip.stderr || `git rev-parse exited ${tip.status}`}`);
   return { blocked: null, head: head.stdout, branchTip: tip.stdout };
 }
-function releaseQuarantinedDependencyLinks(destination, recordedLinks) {
+function releaseQuarantinedDependencyLinks(destination, recordedLinks, vacatedSource) {
   if (!unlinkOwnedDependencyLinks(recordedLinks.map((relativePath) => path.resolve(destination, relativePath)))) {
-    return { ok: false, reason: "dependency_link_unlink_failed" };
+    return { ok: false, reason: "dependency_link_unlink_failed", detail: "a recorded dependency link could not be released" };
   }
-  const remaining = worktreeSymbolicLinks(destination);
-  if (!remaining) return { ok: false, reason: "dependency_link_unreadable" };
-  return remaining.length ? { ok: false, reason: "dependency_link_untrusted" } : { ok: true, reason: "" };
+  const refusal = firstUntrustedDependencyLink(destination, void 0, vacatedSource);
+  return refusal ? { ok: false, reason: refusal.reason, detail: refusal.detail } : { ok: true, reason: "", detail: "" };
 }
 function releaseWorktreeDependencyLinks(worktree, ticketOrDispatch, lease) {
   const verified = dependencyLinkSafety(worktree, ticketOrDispatch, lease);
   const links = verified.safe ? verified.links : worktreeSymbolicLinks(worktree);
-  if (!links) return { ok: false, reason: "dependency_link_unreadable" };
-  if (!unlinkOwnedDependencyLinks(links)) return { ok: false, reason: "dependency_link_unlink_failed" };
-  const remaining = worktreeSymbolicLinks(worktree);
-  if (!remaining) return { ok: false, reason: "dependency_link_unreadable" };
-  return remaining.length ? { ok: false, reason: "dependency_link_changed" } : { ok: true };
+  if (!links) return { ok: false, reason: "dependency_link_unreadable", detail: `unreadable ${worktree}` };
+  if (!unlinkOwnedDependencyLinks(links)) return { ok: false, reason: "dependency_link_unlink_failed", detail: "a dependency link could not be released" };
+  const remaining = firstUntrustedDependencyLink(worktree);
+  if (!remaining) return { ok: true };
+  return {
+    ok: false,
+    reason: remaining.reason === "dependency_link_unreadable" ? remaining.reason : "dependency_link_changed",
+    detail: remaining.detail
+  };
 }
 function reclaimUnclaimedDispatchWorktree(repository, dispatch, facts = {}) {
   const worktree = String(dispatch?.worktree || "").trim();
@@ -1407,7 +1440,7 @@ function reclaimUnclaimedDispatchWorktree(repository, dispatch, facts = {}) {
       worktree: entry.worktree,
       reclaimed: false,
       reason: dependencyLinksReleased.reason,
-      message: "immutable recovery fact: owned dependency links could not be proven safe for cleanup."
+      message: `immutable recovery fact: owned dependency links could not be proven safe for cleanup${dependencyLinksReleased.detail ? `: ${dependencyLinksReleased.detail}` : ""}.`
     };
   }
   execFileSync("git", ["worktree", "remove", entry.worktree], { cwd: repository, windowsHide: true });
@@ -1785,9 +1818,10 @@ async function sweep(repo, tickets, options = {}) {
         continue;
       }
       const destination = quarantine.destination;
-      const park = async (reason, message) => {
+      const park = async (reason, message, detail = "") => {
         entry.action = "quarantine";
         entry.reason = reason;
+        if (detail) entry.detail = detail;
         entry.quarantine = destination;
         entry.quarantineRegistrationRepaired = await repairParkedRegistration(repo, destination);
         quarantined.push({ path: entry.path, destination, message });
@@ -1815,9 +1849,13 @@ async function sweep(repo, tickets, options = {}) {
         await park("detached_head_unpinned", `classified ${classifiedReason}, but its detached HEAD ${shortCommit(movedRead.head)} is held by no other ref, so the moved tree was parked instead of deleted`);
         continue;
       }
-      const dependencyLinksReleased = releaseQuarantinedDependencyLinks(destination, recordedLinks);
+      const dependencyLinksReleased = releaseQuarantinedDependencyLinks(destination, recordedLinks, entry.path);
       if (!dependencyLinksReleased.ok) {
-        await park(dependencyLinksReleased.reason, `classified ${classifiedReason}, but the moved tree still holds a dependency link, so it was parked instead of deleted`);
+        await park(
+          dependencyLinksReleased.reason,
+          `classified ${classifiedReason}, but the moved tree still holds a dependency link (${dependencyLinksReleased.detail}), so it was parked instead of deleted`,
+          dependencyLinksReleased.detail
+        );
         continue;
       }
       try {
@@ -1900,4 +1938,4 @@ async function sweep(repo, tickets, options = {}) {
     failures
   };
 }
-module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };
+module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, dependencyLinkSafety, releaseQuarantinedDependencyLinks, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };
