@@ -18,6 +18,28 @@ checks only functions the change added or modified. Untouched legacy functions, 
 a changed file, never fail or appear in the failure list. A changed function below 6 passes even when
 its prior score was lower.
 
+Deciding which functions the change touched means pairing each of today's functions with its copy in
+the baseline revision. Position alone cannot do that: adding one function shifts every function below
+it, and names repeat inside a file, because lizard names every arrow function or closure it cannot
+attribute to a declaration `(anonymous)` and two classes can each carry a `run`. So the gate pairs by
+source text first, then by name and position among its namesakes, and leaves the rest unpaired.
+
+Pairing is one-to-one. A baseline function is claimed by at most one of today's functions, source text
+claims across the whole file before name and position is consulted at all, and **a function that claims
+nothing is new code judged on its own number**. So an untouched over-ceiling `run` keeps passing when a
+new `run` lands above it, while a byte-identical copy of an over-ceiling function is new code over the
+ceiling even though its twin is untouched, and a third `run` in a file that already had two is gated on
+its own number.
+
+The source text is the line span lizard reports, with runs of whitespace collapsed, so reindenting a
+function alone does not make it changed. For a nested closure in a JavaScript file that span can be
+wider than the closure itself; when it picks up an unrelated edit, pairing falls back to name and
+position, and the function is judged as changed.
+
+The source-text key is file-scoped: a function moved untouched from one file to another finds no
+baseline copy and answers to the ceiling like anything else new. Cover it, shrink it, or land the move
+first and rerun the gate against the branch that already has it.
+
 ## Prerequisite
 
 Quartermaster needs [lizard](https://github.com/terryyin/lizard) to measure complexity. It never
@@ -72,9 +94,23 @@ The defaults are `coverage/lcov.info`, sources `.`, no exclusions, threshold 6, 
 revision used to identify changed functions. The shared parser and score implementation lives under
 `scripts/quality`; Quartermaster only supplies project-specific LCOV and command wiring.
 
+The gate measures the git toplevel of the directory it runs in, so a per-ticket linked worktree is
+measured in place instead of the main checkout, and the base comparison resolves against that same
+root. `--project` only names where the config is read, not the tree measured; without it the config
+comes from the measured root, so a run from a subdirectory gets the same gate. Never write `--project`
+with a hard-coded absolute path into a live rule or any other file that outlives this setup session:
+a worktree that runs it later would read another checkout's config. Run it with:
+
 ```text
-node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"
+node "<quartermaster plugin root>/bin/quartermaster.js" crap
 ```
+
+The gate sets `QUARTERMASTER_COVERAGE_DIR` to a fresh directory for each run. A coverage command that
+writes `lcov.info` there keeps concurrent runs on one checkout from reading each other's coverage, for
+example `c8 --reporter=lcov --reports-dir "$QUARTERMASTER_COVERAGE_DIR" npm test`. Leave `lcov` unset
+for such a command, because an explicit `lcov` is read exactly where it points. A coverage command that
+exits 0 but writes neither that file nor a fresh `coverage/lcov.info` exits 2 instead of scoring stale
+coverage.
 
 Use this live rule after the command has passed:
 
@@ -83,7 +119,7 @@ Use this live rule after the command has passed:
 description: Keep changed code within the CRAP ceiling
 priority: 85
 ---
-Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"`.
+Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap`.
 Keep every new or modified function strictly below 6. Cover it or split it. Untouched legacy functions are out of scope.
 Exit 2 means a prerequisite or measurement is missing. Follow the printed install or measurement hint, then rerun the gate. Do not skip it.
 ```
