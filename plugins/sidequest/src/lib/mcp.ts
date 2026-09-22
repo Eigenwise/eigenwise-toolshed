@@ -116,7 +116,11 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // revision, not the working tree" condition have to be right on the FIRST call; and update addFiles /
 // removeFiles with scopeRequest grant (GitHub #173). +911 and +395 bytes compacted, so whichever
 // merges second still preserves the 2.5KB reserve.
-const MCP_TOOLS_LIST_MAX_BYTES = 25400;
+// Then raised from 25400 to 25600, measured with GitHub #144 and #173 merged together: review
+// follow-ups grew #144 from the estimated +911 to +980 bytes and #173 from +395 to +535, so the
+// combined payload is 23040 against the 21525 base and 25400 leaves only 2360 of the 2500-byte
+// reserve. 25600 is the smallest round value that restores it for either landing order.
+const MCP_TOOLS_LIST_MAX_BYTES = 25600;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
