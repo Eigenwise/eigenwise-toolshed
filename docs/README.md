@@ -17,7 +17,7 @@ file. Those reference pages are generated output, so never edit them by hand. Ed
 manifest or generator instead.
 
 The screenshot command runs `docs/screenshots/capture.mjs`. It seeds an isolated Sidequest board with
-fixed synthetic records, starts disposable local services, and captures six images into
+fixed synthetic records, starts disposable local services, and captures fourteen images into
 `src/assets/screenshots/`. The fixture privacy gate rejects environment-derived paths and usernames.
 Never capture a live board or dashboard for committed docs images.
 

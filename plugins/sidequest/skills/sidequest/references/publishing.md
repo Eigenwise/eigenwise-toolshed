@@ -189,12 +189,13 @@ before the merged-tree gate, version assignment, or push. A later failure can th
 ticket with an unpushed commit: finish the push when safe, or record the failure and unpushed state on
 the ticket.
 
-1. **Acquire the publish lock**: `sidequest publish lock`. The lock identity is derived internally
-   from the current session and worker, and the lock lives in the repo's common git dir, so every
-   session, process, and worktree serializes on it. If held, do NOT wait or poll: note the holder from
-   the failure output and retry at the next natural wakeup. `--steal` only when `publish status` shows
-   the holder stale (TTL expired or dead pid). Re-acquiring from the same session refreshes the lock —
-   that is the crash-recovery path for your own interrupted transaction.
+1. **Acquire the publish lock**: `sidequest publish lock`. The lock records the current worker and
+   session in the repo's common git dir, so every session, process, and worktree serializes on it. MCP
+   delivery recognizes that worker for this repository even when its server has a different runtime
+   session; a supplied `session` never changes that runtime identity. If held, do NOT wait or poll:
+   note the holder from the failure output and retry at the next natural wakeup. `--steal` only when
+   `publish status` shows the holder stale (TTL expired or dead pid). Re-acquiring as the same worker
+   refreshes the lock — that is the crash-recovery path for your own interrupted transaction.
 2. **Read the queue**: `sidequest publish queue --json`. Queue admission mechanically revalidates each durable range and its submit-time admitted scope snapshot. Rejected entries name their offending paths and stay parked. A legacy entry without a scope snapshot stays parked until its executor resubmits it.
 3. **Read each submitted handoff**: before integrating or closing a ticket, run
    `sidequest comments <ref> --json` for it. The queue is intentionally compact and does not replace the

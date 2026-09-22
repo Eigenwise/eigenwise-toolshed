@@ -9,12 +9,13 @@ on-disk queue so nothing is lost if the observer is briefly down.
 
 ```
 Claude Code / Agent SDK OTLP  ->  127.0.0.1:4318  (this collector)
-  memory_limiter -> filter/signals -> transform/redact -> batch
+  logs, traces, metrics -> memory_limiter -> filter/signals -> transform/redact -> batch
   -> file_storage queue -> otlphttp/observer -> 127.0.0.1:14319
-  -> optional otlphttp/sink -> declared Grafana or generic OTLP endpoint
+  logs -> observer's consent-filtered outbox -> optional configured sink
+  traces, metrics -> optional otlphttp/sink -> declared Grafana or generic OTLP endpoint
 ```
 
-The observer stays the canonical ledger. For `grafana-lgtm` and `otlp`, the collector also sends the original redacted signal to the declared sink; `none` keeps only the observer exporter. The same processor chain applies to both exporters. Its transform copies the pseudonymous `project.id` resource attribute onto metric datapoints, giving each backend a native `project_id` label without a `target_info` join.
+The observer stays the canonical ledger. Logs can reach a configured sink only through its consent-filtered outbox. For `grafana-lgtm` and `otlp`, separate Collector sink pipelines send traces and metrics to the declared sink; `none` keeps only the observer exporter. The transform copies the pseudonymous `project.id` resource attribute onto metric datapoints, giving each backend a native `project_id` label without a `target_info` join.
 
 ## Config
 
