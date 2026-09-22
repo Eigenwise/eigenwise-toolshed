@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
@@ -21,6 +22,13 @@ test('quiet ensure stops waiting inside its hook budget when the proxy never ans
   assert.equal(timeout, 12000);
   assert.deepEqual(result, { ok: false, timedOut: true });
   assert.equal(now, timeout);
+
+  const hookManifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'hooks', 'hooks.json'), 'utf8'));
+  const verifySkill = fs.readFileSync(path.join(__dirname, '..', '.claude', 'skills', 'verify', 'SKILL.md'), 'utf8');
+  assert.match(hookManifest.description, /waits up to 12 seconds.*exits 0.*retry.*background/);
+  assert.match(verifySkill, /always exits 0.*structured hook notice.*settings mutation/s);
+  assert.match(verifySkill, /12-second wait.*asks for a retry.*background/s);
+  assert.match(gateway.usage, /remote-control <enable\|disable\|doctor> \[--confirm\]/);
 });
 
 test('a current wired shim lets login leave its listener alone', () => {

@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "path": "rules/code-as-poetry.md",
+      "hash": "c53bd786a4ef5e27cc9ef0b188bf2215e3186e3d5a5635605a0ec6271d4ea753",
+      "description": "Code as poetry",
+      "globs": [],
+      "dirs": [],
+      "prompt": [],
+      "priority": 0,
+      "enabled": true,
+      "include": []
+    }
+  ]
+}

@@ -178,9 +178,16 @@ const PIN_ALIASES = {
   fable: 'ANTHROPIC_DEFAULT_FABLE_MODEL',
 };
 const KNOWN_GOOD_PINS = {
-  opus: 'claude-opus-5[1m]',
+  opus: 'claude-opus-5-5[1m]',
   sonnet: 'claude-sonnet-5[1m]',
   fable: 'claude-fable-5-1[1m]',
+};
+// Defaults this plugin shipped earlier. A wired project still holding one was written by the
+// gateway, not typed by the user, so a pin change must still be allowed to replace it.
+const RETIRED_SHIPPED_PINS = {
+  opus: ['claude-opus-5[1m]', 'claude-opus-4-8[1m]'],
+  sonnet: [],
+  fable: [],
 };
 const PIN_OVERRIDE_PATH = path.join(STATE, 'pins.json');
 const PIN_CACHE_PATH = path.join(STATE, 'detected-pins.json');
@@ -325,7 +332,7 @@ module.exports = {
   LEGACY_ENV_BLOCK, LIST_DISPATCH_MODEL, LOGS, MIN_PROXY_VERSION, PIN_ALIASES, PIN_CACHE_PATH,
   PIN_CACHE_TTL_MS, PIN_OVERRIDE_PATH, PIN_PROBE_TIMEOUT_MS, PLUGIN_VERSION, PREFIX, PROXY_BIN,
   PROXY_PORT, PUBLIC_SHIM_PORT, REPO, REQUEST_ROUTE_LOG, REQUEST_ROUTE_LOG_PATH, LIFECYCLE_LOG_PATH,
-  PROJECT_WIRING_REGISTRY_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_FAILURE_PATH, SHIM_PORT, SOCKET_PATH, STATE,
+  PROJECT_WIRING_REGISTRY_PATH, RETIRED_SHIPPED_PINS, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_FAILURE_PATH, SHIM_PORT, SOCKET_PATH, STATE,
   STATIC_ENV_BLOCK, STABLE_COMMAND_PATH, TRACE_HEADERS, WIRING_CONFIG_PATH, WIN, CLI_PATH, CLAUDE_CONFIG_DIR, mkdirs,
   canReplaceInstalledCliPath, codexClientModelId, codexContextWindow, codexContextWindowModelId,
   codexReadinessMessage,

@@ -542,7 +542,7 @@ test('stores sink selection separately from project settings', async (t) => {
   assert.equal(Object.hasOwn(result.settings.settings.env, 'WORKBENCH_OBSERVABILITY_SINK'), false);
 });
 
-test('configures generic OTLP from the private sink config and parses explicit CLI selection', () => {
+test('configures generic OTLP from stored local sink config and parses explicit CLI selection', () => {
   const plan = setupPlan({ dataDir: 'C:/Workbench', projectDir: '.' });
   const config = configuredSink(plan, {
     sink: 'otlp',

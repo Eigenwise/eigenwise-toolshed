@@ -1,5 +1,5 @@
 {
-  "description": "model-gateway: keep the local Codex gateway (proxy + shim) alive so sessions routed through it never start against a dead port",
+  "description": "model-gateway: SessionStart waits up to 12 seconds for the local Codex gateway (proxy + shim), then exits 0 and may ask for a retry while startup finishes in the background",
   "hooks": {
     "SessionStart": [
       {

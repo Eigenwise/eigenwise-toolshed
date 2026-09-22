@@ -3,6 +3,7 @@
 const path = require("path");
 const os = require("os");
 const fs = require("node:fs/promises");
+const { existsSync } = require("node:fs");
 const http = require("http");
 const { spawn, execFileSync } = require("child_process");
 const store = require("../lib/store");
@@ -40,7 +41,8 @@ function worktreeSweepEntryLine(entry) {
   const ahead = entry.ahead == null ? "unavailable" : entry.ahead;
   const patchEquivalent = entry.patchEquivalent == null ? "unavailable" : entry.patchEquivalent;
   const age = entry.ageMs == null ? "unavailable" : `${Math.round(entry.ageMs / 6e4)}m`;
-  return `  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}; ${cleanliness}; ahead ${ahead}; patch-equivalent ${patchEquivalent}; age ${age}]`;
+  const quarantine = entry.quarantine ? `; quarantined ${entry.quarantine}` : "";
+  return `  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}; ${cleanliness}; ahead ${ahead}; patch-equivalent ${patchEquivalent}; age ${age}${quarantine}]`;
 }
 function formatBytes(bytes) {
   if (bytes == null) return "unavailable";
@@ -55,8 +57,33 @@ function formatBytes(bytes) {
 }
 function printStorage(storage) {
   console.log(`  worktrees: ${formatBytes(storage.worktrees.bytes)} (${storage.worktrees.path})`);
-  console.log(`  backups: ${formatBytes(storage.backups.bytes)} (${storage.backups.path})`);
+  for (const directory of storage.worktrees.directories || []) {
+    console.log(`    ${formatBytes(directory.bytes)} ${directory.path}`);
+  }
   console.log(`  quarantine: ${formatBytes(storage.quarantine.bytes)} (${storage.quarantine.path})`);
+  const total = [storage.worktrees.bytes, storage.quarantine.bytes].filter((bytes) => bytes != null).reduce((sum, bytes) => sum + bytes, 0);
+  console.log(`  total: ${formatBytes(total)}`);
+}
+function printSweepResult(result, name, minAgeHours, recoveryRetentionAgeHours) {
+  console.log(`worktrees sweep: ${result.dryRun ? "dry run" : "executed"} for ${name} (minimum age ${minAgeHours}h; quarantine retention ${recoveryRetentionAgeHours}h by age alone)`);
+  if (result.upstreamFallback) console.log(`  the configured integration ref is unavailable; settled checks used the fallback ${result.upstream}.`);
+  if (result.storage.worktrees.bytes != null) printStorage(result.storage);
+  for (const entry of result.entries) console.log(worktreeSweepEntryLine(entry));
+  for (const entry of result.strayDirectories || []) {
+    console.log(`  ${entry.action.toUpperCase()} STRAY ${entry.path} [${entry.reason}; ${entry.entries} entr${entry.entries === 1 ? "y" : "ies"}${entry.repository ? `; repository ${entry.repository}` : ""}]`);
+  }
+  for (const entry of result.recovery.quarantine.entries.filter((entry2) => entry2.action === "remove")) {
+    console.log(`  REMOVE ${entry.store.toUpperCase()} ${entry.path} [${entry.reason}; ${formatBytes(entry.sizeBytes)}]`);
+  }
+  if (result.dryRun) console.log("  pass --yes to remove the planned worktree and recovery entries.");
+  if (result.removed.length) console.log(`  removed ${result.counts.removedWorktrees} worktree(s) and deleted ${result.counts.deletedBranches} branch(es).`);
+  for (const entry of result.retainedBranches || []) console.log(`  KEPT BRANCH ${entry.branch} from ${entry.path}; ${worktrees.retainedBranchExplanation(entry.reason, result.upstream)}.`);
+  if (result.counts.removedStrayDirectories) console.log(`  removed ${result.counts.removedStrayDirectories} empty stray worktree directory(s).`);
+  if (result.counts.removedRecoveryEntries) console.log(`  removed ${result.counts.removedRecoveryEntries} recovery entry(s), reclaimed ${formatBytes(result.counts.reclaimedBytes)}.`);
+  for (const entry of result.salvaged || []) console.log(`  SALVAGED ${entry.path} at ${entry.ref}; recover with ${entry.recovery}`);
+  if (result.prunedOrphanBranches.length) console.log(`  pruned ${result.counts.prunedOrphanBranches} orphan worktree branch(es).`);
+  if (result.remainingCandidates) console.log(`  ${result.remainingCandidates} candidate(s) remain past this run's limit; re-run to continue.`);
+  for (const failure of result.failures) console.log(`  ERROR ${failure.path || "prune"}: ${failure.message}`);
 }
 async function cmdWorktrees(opts, positional) {
   const action = String(positional[0] || "").toLowerCase();
@@ -78,50 +105,55 @@ async function cmdWorktrees(opts, positional) {
   if (!Number.isFinite(minAgeHours) || minAgeHours < 0) fail("worktrees sweep: --min-age-hours must be a non-negative number.");
   const config = store.boardConfig(slug) || {};
   const recoveryRetentionAgeHours = opts["recovery-retention-age-hours"] == null ? Number(config.worktreeRecoveryRetentionAgeHours || 14 * 24) : Number(opts["recovery-retention-age-hours"]);
-  const recoveryRetentionMaxPerAgent = opts["recovery-retention-max-per-agent"] == null ? Number(config.worktreeRecoveryRetentionMaxPerAgent || 3) : Number(opts["recovery-retention-max-per-agent"]);
   if (!Number.isFinite(recoveryRetentionAgeHours) || recoveryRetentionAgeHours < 0) {
     fail("worktrees sweep: --recovery-retention-age-hours must be a non-negative number.");
   }
-  if (!Number.isInteger(recoveryRetentionMaxPerAgent) || recoveryRetentionMaxPerAgent < 1) {
-    fail("worktrees sweep: --recovery-retention-max-per-agent must be a whole number of at least 1.");
-  }
-  let result;
-  try {
-    result = await worktrees.sweep(meta.path, store.worktreeGcTickets(), {
-      execute: !!opts.yes && !opts["dry-run"],
-      currentPath: store.nearestRepoRoot(process.cwd()),
-      integrationTarget: store.integrationTarget(slug),
-      minAgeMs: minAgeHours * 60 * 60 * 1e3,
-      recoveryRetentionAgeMs: recoveryRetentionAgeHours * 60 * 60 * 1e3,
-      recoveryRetentionMaxPerAgent,
-      includeStoreUsage: true,
-      onProgress: (progress) => {
-        const output = `${worktreeSweepProgressLine(progress)}
+  const integrationTargetOrFallback = (projectSlug) => {
+    try {
+      return store.integrationTarget(projectSlug);
+    } catch (_) {
+      return null;
+    }
+  };
+  const targets = opts["all-projects"] ? store.listProjects({ all: true }).filter((project) => project && project.slug && project.path && existsSync(project.path)).sort((left, right) => String(left.slug).localeCompare(String(right.slug))).map((project) => ({ slug: project.slug, name: project.name || project.slug, path: project.path })) : [{ slug, name: meta.name, path: meta.path }];
+  const results = [];
+  for (const [index, target] of targets.entries()) {
+    let result;
+    try {
+      result = await worktrees.sweep(target.path, store.worktreeGcTickets(), {
+        execute: !!opts.yes && !opts["dry-run"],
+        currentPath: store.nearestRepoRoot(process.cwd()),
+        integrationTarget: integrationTargetOrFallback(target.slug),
+        minAgeMs: minAgeHours * 60 * 60 * 1e3,
+        recoveryRetentionAgeMs: recoveryRetentionAgeHours * 60 * 60 * 1e3,
+        // The store lives in one shared home, so measuring it once per run is
+        // enough; repeating the walk per project is just slower.
+        includeStoreUsage: index === 0,
+        onProgress: (progress) => {
+          const output = `${worktreeSweepProgressLine(progress)}
 `;
-        (opts.json ? process.stderr : process.stdout).write(output);
-      }
-    });
-  } catch (error) {
-    fail(`worktrees: ${error && error.message || error}`);
+          (opts.json ? process.stderr : process.stdout).write(output);
+        }
+      });
+    } catch (error) {
+      if (!opts["all-projects"]) fail(`worktrees: ${error && error.message || error}`);
+      result = { project: target.slug, failures: [{ path: target.path, message: error && error.message || String(error) }] };
+    }
+    results.push(Object.assign({ project: target.slug }, result));
   }
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, result), null, 2) + "\n");
-    if (result.failures.length) process.exitCode = 1;
+    process.stdout.write(JSON.stringify(opts["all-projects"] ? { projects: results } : results[0], null, 2) + "\n");
+    if (results.some((entry) => entry.failures?.length)) process.exitCode = 1;
     return;
   }
-  console.log(`worktrees sweep: ${result.dryRun ? "dry run" : "executed"} for ${meta.name} (minimum age ${minAgeHours}h; recovery retention ${recoveryRetentionAgeHours}h, ${recoveryRetentionMaxPerAgent} per agent)`);
-  printStorage(result.storage);
-  for (const entry of result.entries) console.log(worktreeSweepEntryLine(entry));
-  for (const entry of [...result.recovery.backups.entries, ...result.recovery.quarantine.entries].filter((entry2) => entry2.action === "remove")) {
-    console.log(`  REMOVE ${entry.store.toUpperCase()} ${entry.path} [${entry.reason}; ${formatBytes(entry.sizeBytes)}]`);
+  for (const [index, result] of results.entries()) {
+    if (!result.entries) {
+      for (const failure of result.failures) console.log(`worktrees sweep: skipped ${targets[index].name}: ${failure.message}`);
+      continue;
+    }
+    printSweepResult(result, targets[index].name, minAgeHours, recoveryRetentionAgeHours);
   }
-  if (result.dryRun) console.log("  pass --yes to remove the planned worktree and recovery entries.");
-  if (result.removed.length) console.log(`  removed ${result.counts.removedWorktrees} worktree(s) and deleted ${result.counts.deletedBranches} branch(es).`);
-  if (result.counts.removedRecoveryEntries) console.log(`  removed ${result.counts.removedRecoveryEntries} recovery entry(s), reclaimed ${formatBytes(result.counts.reclaimedBytes)}.`);
-  for (const entry of result.salvaged || []) console.log(`  SALVAGED ${entry.path} at ${entry.ref}; recover with ${entry.recovery}`);
-  if (result.prunedOrphanBranches.length) console.log(`  pruned ${result.counts.prunedOrphanBranches} orphan worktree branch(es).`);
-  for (const failure of result.failures) console.log(`  ERROR ${failure.path || "prune"}: ${failure.message}`);
-  if (result.failures.length) process.exitCode = 1;
+  if (results.some((entry) => entry.failures?.length)) process.exitCode = 1;
 }
 async function cmdRecoverShared(opts) {
   const { meta } = await resolveProject(opts);

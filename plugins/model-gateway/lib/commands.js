@@ -19,12 +19,12 @@
  * built-in /remote-control only lights up when ANTHROPIC_BASE_URL is exactly
  * the real Anthropic host. There's no supported way to get gateway routing
  * and that exact host at once without touching the OS resolver, so it's an
- * opt-in "RC-compatibility" mode: the user (never this plugin) adds one hosts
- * entry mapping api.anthropic.com to loopback, and once detected the shim
- * additionally binds loopback:80 and Claude Code's env is pointed at
- * http://api.anthropic.com instead of 127.0.0.1:<shim port>. See
- * detectHostsCompat / syncCompatMode below. Never automatic on the hosts side;
- * only the env switch and the extra listener are automatic.
+ * opt-in "RC-compatibility" mode: after the user confirms, the remote-control
+ * command backs up and writes one hosts entry mapping api.anthropic.com to
+ * loopback. The shim then additionally binds loopback:80 and Claude Code's env
+ * is pointed at http://api.anthropic.com instead of 127.0.0.1:<shim port>. See
+ * detectHostsCompat / syncCompatMode below. Hosts writes require confirmation;
+ * the env switch and extra listener follow automatically.
  */
 
 const { fork, spawn, spawnSync } = require('node:child_process');
@@ -117,7 +117,7 @@ const {
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinProvenance, readPinOverrides, refreshDetectedPins, writePinOverrides,
+  isValidPin, ourBaseUrls, ownedPinValues, pinLagNotice, pinProvenance, readPinOverrides, refreshDetectedPins, writePinOverrides,
 } = require('./pins.js');
 
 // Versions through 0.4.1 wrote this unsafe global override. Remove it during
@@ -135,7 +135,9 @@ const USAGE = `usage: model-gateway.js <command>
   ensure [--quiet] start whatever isn't running; used by the SessionStart hook
   status           show what's running
   models           show the model list the shim advertises to Claude Code
-  catalog [--json] [--refresh] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')})
+  catalog [--json] [--refresh] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')});
+                   --refresh exits non-zero and says why on stderr when it could not write a
+                   fresh one, and prints the retained catalog unchanged
   pin [--opus|--sonnet|--fable <model|default>]
                    show or persist Claude alias pins (${PIN_OVERRIDE_PATH})
   env [--write-project | --write-user | --remove] [--reconcile]
@@ -143,7 +145,7 @@ const USAGE = `usage: model-gateway.js <command>
                    (--write-project writes .claude/settings.local.json; --write-user
                    is an opt-in shared fallback in ~/.claude/settings.json)
   doctor           full health check
-  remote-control <enable|disable|doctor>
+  remote-control <enable|disable|doctor> [--confirm]
                    manage the opt-in hosts-file compatibility mode; enable refuses an effective
                    HTTPS api.anthropic.com process URL before hosts changes
   serve-shim       (internal) run the router in the foreground
@@ -212,8 +214,8 @@ const {
 
 const {
   cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isWired, migrateLegacyProjectSettings,
-  processEnvGatewayBypass, readSettingsForWrite, reconcileRegisteredProjectWirings, recordProjectWiring, registeredProjectWirings,
-  selectedWiringScope, retireWiringModeConfig, settingsPath, unsafeRemoteControlProcessEnv, wiredMode, writeSettings,
+  processEnvGatewayBypass, readSettingsForWrite, reconcileRegisteredProjectWirings, recordProjectWiring, registeredProjectPinDisagreements, registeredProjectWirings,
+  selectedWiringScope, retireWiringModeConfig, settingsPath, syncRegisteredProjectPins, unsafeRemoteControlProcessEnv, wiredMode, writeSettings,
 } = require('./settings-wiring.js');
 
 // ------------------------------------------------- RC-compatibility hosts
@@ -531,7 +533,7 @@ async function setup() {
     return;
   }
   log('ChatGPT auth: valid');
-  await refreshDetectedPins({ force: true });
+  await refreshDetectedPinsAndWiring({ force: true });
   const { mode } = await resolveIntendedMode();
   if (isWired()) {
     const current = wiredMode();
@@ -859,36 +861,69 @@ async function statusReport({ readiness = null } = {}) {
 
 // -------------------------------------------------------------- env wiring
 
+function reportRegisteredPinSync(result) {
+  for (const wiring of result.changed) log(`updated gateway pins in ${wiring.file}`);
+  for (const wiring of result.skipped) {
+    const detail = wiring.key ? `${wiring.key}=${wiring.value}` : wiring.reason;
+    log(`skipped ${wiring.file}: ${detail} (${wiring.reason})`);
+  }
+  for (const pruned of result.pruned) log(`pruned registered project ${pruned.project}: ${pruned.reason}`);
+}
+
+function refreshRegisteredProjectPins(ownedPins) {
+  return reportRegisteredPinSync(syncRegisteredProjectPins({ ownedPins }));
+}
+
+async function refreshDetectedPinsAndWiring(options = {}) {
+  const previousPins = effectivePins();
+  const ownedPins = ownedPinValues();
+  await refreshDetectedPins(options);
+  const changed = Object.entries(effectivePins()).some(([alias, pin]) => (
+    previousPins[alias].override === null && previousPins[alias].value !== pin.value
+  ));
+  if (changed) refreshRegisteredProjectPins(ownedPins);
+}
+
+function reportEffectivePins(label = '', suffix = '') {
+  for (const [alias, pin] of Object.entries(effectivePins())) {
+    log(`${label}${alias}${suffix}: ${pin.value} (${pinProvenance(pin)})`);
+    const notice = pinLagNotice(alias, pin);
+    if (notice) log(notice);
+  }
+}
+
+function updatePinOverride(overrides, option, value) {
+  const alias = option && option.startsWith('--') ? option.slice(2) : null;
+  if (!Object.hasOwn(PIN_ALIASES, alias) || value == null) {
+    die('pin expects --opus, --sonnet, or --fable followed by a model id or default', 2);
+  }
+  if (value === 'default') {
+    delete overrides[alias];
+    return;
+  }
+  if (!isValidPin(value)) die(`invalid ${alias} pin: use a non-empty model id without whitespace or shell characters`, 2);
+  overrides[alias] = value;
+}
+
 function pinCommand() {
   if (args.length === 0) {
-    for (const [alias, pin] of Object.entries(effectivePins())) {
-      log(`${alias}: ${pin.value} (${pinProvenance(pin)})`);
-    }
+    reportEffectivePins();
     return;
   }
 
+  const ownedPins = ownedPinValues();
   const overrides = readPinOverrides();
   for (let index = 0; index < args.length; index += 2) {
-    const option = args[index];
-    const alias = option && option.startsWith('--') ? option.slice(2) : null;
-    const value = args[index + 1];
-    if (!Object.hasOwn(PIN_ALIASES, alias) || value == null) {
-      die('pin expects --opus, --sonnet, or --fable followed by a model id or default', 2);
-    }
-    if (value === 'default') {
-      delete overrides[alias];
-      continue;
-    }
-    if (!isValidPin(value)) die(`invalid ${alias} pin: use a non-empty model id without whitespace or shell characters`, 2);
-    overrides[alias] = value;
+    updatePinOverride(overrides, args[index], args[index + 1]);
   }
   writePinOverrides(overrides);
+  refreshRegisteredProjectPins(ownedPins);
   log(`saved Claude alias pins to ${PIN_OVERRIDE_PATH}`);
-  log('Rewire this project with env --write-project, then start a new Claude Code session for the change to apply.');
+  log('Applied the pin change to registered wired projects. Restart open Claude Code sessions to pick it up.');
 }
 
 async function syncGatewayWiring() {
-  await refreshDetectedPins();
+  await refreshDetectedPinsAndWiring();
   const current = wiredMode();
   if (!current?.scope) return;
   const env = readSettingsForWrite(settingsPath(current.scope)).env || {};
@@ -917,13 +952,13 @@ async function envCommand() {
     log('\nor use /model-gateway:model-gateway to run its env --write-project command');
     log('\nProject wiring is the default: this local block keeps this project and its executor worktrees routed after restart.');
     log('Use env --write-user only when you deliberately want the same fallback URL in every project.');
-    log('RC-compatibility mode is opt-in once you add the hosts entry yourself; it configures compatibility transport, not verified end-to-end Remote Control.');
+    log('RC-compatibility mode is opt-in: run remote-control enable, then re-run with --confirm to let it back up and write the hosts entry for you. It configures compatibility transport, not verified end-to-end Remote Control.');
     return;
   }
 
   const scope = writeUser ? 'user' : 'project';
   recordProjectWiring();
-  if (!remove) await refreshDetectedPins({ force: true });
+  if (!remove) await refreshDetectedPinsAndWiring({ force: true });
   writeEnv(scope, remove, { mode: remove ? 'default' : (await resolveIntendedMode()).mode });
   retireWiringModeConfig();
   if (remove || !writeUser) return;
@@ -1143,6 +1178,16 @@ async function reportLiveShimModelPolicy() {
   return false;
 }
 
+function reportRegisteredProjectPinDisagreements() {
+  const result = registeredProjectPinDisagreements();
+  for (const pruned of result.pruned) log(`pruned registered project ${pruned.project}: ${pruned.reason}`);
+  for (const disagreement of result.disagreements) {
+    const staleValue = disagreement.staleValue === undefined ? 'missing' : disagreement.staleValue;
+    console.error(`model-gateway: ERROR: registered project pin disagrees in ${disagreement.file}: ${disagreement.key}=${staleValue} (expected ${disagreement.expectedValue}).`);
+  }
+  return result.disagreements.length > 0;
+}
+
 async function doctor({ readiness: suppliedReadiness = null } = {}) {
   recordedGatewayPids();
   const readiness = suppliedReadiness || await getCodexReadiness();
@@ -1183,9 +1228,8 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
     ? `catalog: ${catalog.models.length} models at ${CATALOG_PATH} (writtenBy: ${catalog.writtenBy || 'unknown'})`
     : 'catalog: not written yet');
   await reportGatewayDiscoveryCache();
-  for (const [alias, pin] of Object.entries(effectivePins())) {
-    log(`Claude ${alias} pin: ${pin.value} (${pinProvenance(pin)})`);
-  }
+  reportEffectivePins('Claude ', ' pin');
+  if (reportRegisteredProjectPinDisagreements()) process.exitCode = 1;
   await reportLiveShimModelPolicy();
   const activeScope = selectedWiringScope();
   const effective = effectiveBaseUrl();
@@ -1693,7 +1737,10 @@ async function writeCatalog() {
   const shimModels = await fetchShimModels();
   writeGatewayDiscoveryCache(shimModels);
   const ids = shimModels.map((model) => model.id).filter((id) => modelCatalogDetails(id) != null);
-  if (!ids.length) return null;
+  // A zero-model catalog would merge straight back to the stored models with a fresh timestamp, so
+  // publishing it would make a shim that advertises nothing routable look like a successful refresh.
+  // Refusing is right; returning null was not, because every caller read that as "nothing to do".
+  if (!ids.length) throw new Error(`shim advertised ${shimModels.length} model(s), none of them a gateway id`);
   const readiness = await getCodexReadiness();
   const catalog = buildCatalog(ids, readiness);
   mkdirs();
@@ -1709,10 +1756,22 @@ async function catalogCommand() {
   const refresh = flag('--refresh');
   let catalog = readCatalog();
   const stale = !catalog || (Date.now() - Date.parse(catalog.updatedAt || 0) > CATALOG_STALE_MS);
-  if ((refresh || stale) && (await shimHealthy())) {
-    catalog = (await writeCatalog().catch(() => null)) || catalog;
+  let refusal = null;
+  if (refresh || stale) {
+    try {
+      if (!(await shimHealthy())) throw new Error(`shim is not answering /healthz on 127.0.0.1:${SHIM_PORT}`);
+      catalog = await writeCatalog();
+    } catch (error) {
+      refusal = error.message;
+    }
   }
-  if (!catalog) die('no catalog available yet (run setup or start first)');
+  if (!catalog) die(`no catalog available yet (${refusal || 'run setup or start first'})`);
+  // A refresh that fell back to the stored catalog used to be indistinguishable from one that
+  // wrote: exit 0, no diagnostic, an unchanged file the caller then discards as stale (issue #227).
+  // stdout stays a machine contract, so the reason goes to stderr, and an explicitly requested
+  // refresh also fails the exit code, which is what sidequest's refresh checks.
+  if (refusal) console.error(`model-gateway: catalog refresh did not write (${refusal}); kept the stored catalog from ${catalog.updatedAt || 'an unknown time'}`);
+  if (refusal && refresh) process.exitCode = 1;
   if (jsonOut) process.stdout.write(JSON.stringify(catalog) + '\n');
   else log(JSON.stringify(catalog, null, 2));
 }

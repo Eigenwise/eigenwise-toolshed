@@ -16,6 +16,7 @@ import './_sidequest-install-fixture.js';
  */
 const test = require('node:test');
 const assert = require('node:assert');
+const { creationGeneration } = require('./_creation-generation.js');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
@@ -50,6 +51,7 @@ const db = require('../lib/db.js');
 const sourceRevisionCapability = require('../lib/source-revision-capability.js');
 const { runCapturedVerification, runVerifyCapture, recordCapture } = require('../lib/verify-capture.js');
 const worktrees = require('../lib/worktrees.js');
+const publish = require('../lib/publish.js');
 const { createCheckoutInstanceMarker } = require('../lib/kernel/worktree.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
 const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket, and this board has no autoApproveScope policy that can grant the first request. Dispatch will refuse unless you declare files or explicitly allow an unscoped run.';
@@ -332,7 +334,7 @@ function prepareIsolatedWorktreeDispatch(project: string, primary: string, ticke
   const gitDirectoryValue = gitAt(worktree, ['rev-parse', '--git-dir']);
   const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
   createCheckoutInstanceMarker(gitDirectory);
-  const worktreeCompletion = store.completeDispatchWorktreeCreation(project, sessionId, worktree);
+  const worktreeCompletion = store.completeDispatchWorktreeCreation(project, sessionId, worktree, creationGeneration(project, sessionId, worktree));
   assert.equal(worktreeCompletion.ok, true, JSON.stringify(worktreeCompletion));
   assert.equal(store.claimTicket(project, ticket.ref, by, {
     token: prepared.token,
@@ -408,10 +410,16 @@ test('tools/list advertises the board tools with input schemas', async () => {
   for (const t of resp.result.tools) {
     assert.strictEqual(t.inputSchema.type, 'object', `${t.name} has an object input schema`);
   }
+  const dispatch = resp.result.tools.find((tool: any) => tool.name === 'dispatch');
+  assert.match(dispatch.inputSchema.properties.recoveryEvidence.description, /latest signal grace/);
+  // The one fact a caller cannot recover from the schema shape: its own comments do not hold an attempt open.
+  assert.match(dispatch.inputSchema.properties.recoveryEvidence.description, /only the bound runtime name counts/);
+  assert.match(dispatch.inputSchema.properties.recoveryEvidence.description, /Unverified/);
+  const groomCloseTool = resp.result.tools.find((tool: any) => tool.name === 'groomClose');
+  assert.match(groomCloseTool.inputSchema.properties.recoveryEvidence.description, /CLI too/);
   const contextPage = resp.result.tools.find((tool: any) => tool.name === 'context_page');
   assert.deepEqual(contextPage.inputSchema.required, ['handle', 'cursor', 'expectedRevision']);
   assert.equal(contextPage.inputSchema.properties.limit.maximum, 70 * 1024);
-  assert.match(contextPage.inputSchema.properties.limit.description, /UTF-8 bytes/);
   const rework = resp.result.tools.find((tool: any) => tool.name === 'rework');
   assert.deepEqual(rework.inputSchema.required, ['ref', 'by', 'review', 'reason']);
   assert.match(rework.description, /repair unbound/);
@@ -429,7 +437,7 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.ok(resp.result.tools.find((tool: any) => tool.name === 'done').inputSchema.required.includes('body'), 'done requires the final report');
   const doneDescriptor = resp.result.tools.find((tool: any) => tool.name === 'done');
   assert.equal(doneDescriptor.inputSchema.properties.verify.maxLength, 4000, 'done accepts bounded typed verification evidence');
-  assert.match(doneDescriptor.description, /commandless working-tree needs verify/);
+  assert.match(doneDescriptor.description, /commandless needs verify/);
   const groomClose = resp.result.tools.find((tool: any) => tool.name === 'groomClose');
   assert.ok(groomClose.inputSchema.properties.deliveryCommit, 'groomClose records hand-delivered commits');
   assert.match(groomClose.description, /reset\/working-tree\/manual: pinned candidate/i);
@@ -1030,27 +1038,58 @@ test('story_log reads, appends from a claimed member, and rotates after promotio
   const denied = await callToolRaw('story_log', { project, story: story.ref, rotate: true, by: 'log-worker' });
   assert.equal(denied.isError, true);
   assert.match(denied.content[0].text, /rotate:true requires by:"orchestrator"/);
+
+  await callTool('story_log', {
+    project, story: story.ref, entry: `DECISION: ${'x'.repeat(16_000)}`,
+  });
+  await callTool('story_log', {
+    project, story: story.ref, entry: `DECISION: ${'y'.repeat(400)}`,
+  });
+  const full = await callToolRaw('story_log', {
+    project, story: story.ref, entry: 'DECISION: rotate before adding another entry.',
+  });
+  assert.equal(full.isError, true);
+  assert.match(full.content[0].text, /decision log is full/);
+  assert.match(full.content[0].text, /story_log\(\{ project: .*story: .*rotate: true, by: "orchestrator" \}\)/);
+
+  const rotatedAndAppended = await callTool('story_log', {
+    project, story: story.ref, rotate: true, by: 'orchestrator', entry: 'DECISION: Rotation retains the new entry.',
+  });
+  assert.deepEqual(rotatedAndAppended.story.entries.map((entry: any) => entry.text), ['Rotation retains the new entry.']);
+  assert.equal(rotatedAndAppended.story.archivedEntries, 3);
 });
 
-test('MCP comment attribution keeps the control plane distinct from a claim holder', async () => {
+// The orchestrator, every teammate and every resumed executor reach this server on the one
+// session id its process holds, so the session says which board wrote, never who (SQ-3058).
+// Each case is its own ticket and its own caught failure so the first one cannot hide the rest.
+test('MCP comment attribution credits the caller or the claim, never an unobserved role', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-comment-attribution-'))).slug;
-  const ticket = store.createTicket(project, { title: 'Comment authoring' });
-  assert.equal(store.claimTicket(project, ticket.ref, 'claim-holder', { direct: true, sessionId: 'executor-session' }).ok, true);
-
-  const controlPlane = freshMcpServer();
-  const controlPlaneComment = await callToolOn(controlPlane, 'comment', { project, ref: ticket.ref, body: 'Control-plane comment.' });
-  assert.ok(controlPlaneComment.commentId, 'control-plane comment is acknowledged');
-  const storedControlPlaneComment = store.getTicket(project, ticket.ref).comments.at(-1);
-  assert.equal(storedControlPlaneComment.by, `orchestrator-${MCP_SESSION_ID.slice(0, 12)}`);
-  assert.equal(storedControlPlaneComment.sourceSession, MCP_SESSION_ID);
-  assert.equal(storedControlPlaneComment.actor, storedControlPlaneComment.by);
-  assert.equal(storedControlPlaneComment.operation, 'comment');
-
-  await callTool('comment', { project, ref: ticket.ref, body: 'Executor comment.', by: 'claim-holder' });
-  assert.equal(store.getTicket(project, ticket.ref).comments.at(-1).by, 'claim-holder');
-
-  await callTool('comment', { project, ref: ticket.ref, body: 'Named control-plane comment.', by: 'orchestrator-review' });
-  assert.equal(store.getTicket(project, ticket.ref).comments.at(-1).by, 'orchestrator-review');
+  const sessionLabel = `session-${MCP_SESSION_ID.slice(0, 12)}`;
+  const scenarios = [
+    { name: 'no claim, no by', claimSession: null, args: {}, expected: sessionLabel },
+    { name: 'claim bound to this session, no by', claimSession: MCP_SESSION_ID, args: {}, expected: 'claim-holder' },
+    { name: 'claim bound to another session, no by', claimSession: 'executor-session', args: {}, expected: sessionLabel },
+    { name: 'explicit by outranks the claim', claimSession: MCP_SESSION_ID, args: { by: 'orchestrator-review' }, expected: 'orchestrator-review' },
+  ];
+  const failures: string[] = [];
+  for (const scenario of scenarios) {
+    const ticket = store.createTicket(project, { title: scenario.name });
+    if (scenario.claimSession) {
+      assert.equal(store.claimTicket(project, ticket.ref, 'claim-holder', { direct: true, sessionId: scenario.claimSession }).ok, true);
+    }
+    try {
+      const ack = await callTool('comment', { project, ref: ticket.ref, body: `Findings for ${scenario.name}.`, ...scenario.args });
+      assert.ok(ack.commentId, 'comment is acknowledged');
+      const stored = store.getTicket(project, ticket.ref).comments.at(-1);
+      assert.equal(stored.by, scenario.expected);
+      assert.equal(stored.actor, stored.by);
+      assert.equal(stored.sourceSession, MCP_SESSION_ID);
+      assert.equal(stored.operation, 'comment');
+    } catch (error: any) {
+      failures.push(`${scenario.name}: ${error?.message}`);
+    }
+  }
+  assert.deepEqual(failures, []);
 });
 
 test('MCP accepts curated natural aliases and names each accepted mapping', async () => {
@@ -1266,13 +1305,16 @@ test('tools/list preserves MCP contracts within the payload budget', async (cont
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /token and spawn spec/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /retireOnly/);
-  assert.match(tools.find((tool: any) => tool.name === 'dispatch').inputSchema.properties.recoveryEvidence.description, /expired bound/);
-  assert.match(tools.find((tool: any) => tool.name === 'done').description, /declared external needs current capture/);
+  assert.match(tools.find((tool: any) => tool.name === 'dispatch').inputSchema.properties.recoveryEvidence.description, /latest signal grace/);
+  assert.match(tools.find((tool: any) => tool.name === 'done').description, /pinned command needs capture; commandless needs verify/);
   assert.match(tools.find((tool: any) => tool.name === 'list').description, /changes\/pulse/);
   const list = tools.find((tool: any) => tool.name === 'list');
   assert.match(list.inputSchema.properties.detail.description, /Full comments/);
   const comments = tools.find((tool: any) => tool.name === 'comments');
-  assert.match(comments.inputSchema.properties.full.description, /Whole bodies/);
+  // SQ-2961: `full` carried 'Whole bodies.', which only restates its own property name, and the bound-runtime
+  // sentence on `dispatch.recoveryEvidence` had to come out of the same payload budget. Same pin as SQ-2955's:
+  // a description that adds nothing over the property name does not grow back here.
+  assert.equal(comments.inputSchema.properties.full.description, undefined);
   assert.match(comments.inputSchema.properties.since.description, /Comment id.*ISO timestamp/);
   const add = tools.find((tool: any) => tool.name === 'add');
   assert.match(add.inputSchema.properties.complexity.description, /why required/);
@@ -1389,20 +1431,15 @@ test('board_config sets worktree recovery retention', async () => {
   const configured = await callTool('board_config', {
     project,
     worktreeRecoveryRetentionAgeHours: 336,
-    worktreeRecoveryRetentionMaxPerAgent: 5,
   });
   assert.equal(configured.worktreeRecoveryRetentionAgeHours, 336);
-  assert.equal(configured.worktreeRecoveryRetentionMaxPerAgent, 5);
   const cli = runCli([
     'board-config', '--project', root,
     '--worktree-recovery-retention-age-hours', '504',
-    '--worktree-recovery-retention-max-per-agent', '6',
     '--json',
   ]);
   assert.equal(cli.worktreeRecoveryRetentionAgeHours, 504);
-  assert.equal(cli.worktreeRecoveryRetentionMaxPerAgent, 6);
   await assert.rejects(() => callTool('board_config', { project, worktreeRecoveryRetentionAgeHours: 0 }), /at least 1 hour/);
-  await assert.rejects(() => callTool('board_config', { project, worktreeRecoveryRetentionMaxPerAgent: 0 }), /at least 1/);
 });
 
 test('board_config sets the unintegrated worktree salvage age', async () => {
@@ -2305,6 +2342,60 @@ test('MCP delivery reclaims a terminal isolated worktree immediately', async (co
   assert.equal(fs.existsSync(worktree), false);
 });
 
+test('MCP integrate accepts its worker lock across runtime sessions and refuses another worker', async (context: any) => {
+  const primary = createGitWorktree();
+  const project = store.ensureProject(primary).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main', worktreeBase: 'local-main' });
+  const ticket = store.createTicket(project, {
+    title: 'integrate through a different MCP runtime session', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'prove the worker lock follows the host orchestrator instead of the MCP server session',
+  });
+  const by = 'host-orchestrator';
+  const worktree = prepareIsolatedWorktreeDispatch(project, primary, ticket, by);
+  context.after(() => publish.releasePublishLock(primary, { by, force: true }));
+  context.after(() => removeTestWorktree(primary, worktree));
+  await submitIsolatedDeliveryCandidate(project, ticket, by, worktree);
+  await publish.acquirePublishLock(primary, { by, sessionId: 'host-session-a', transient: true });
+
+  const refused = await callToolAsSession('mcp-runtime-b', 'integrate', { project, ref: ticket.ref, by: 'other-orchestrator' });
+  assert.equal(refused.reason, 'publish_lock_required');
+  assert.match(refused.message, /lock session host-session-a/);
+  assert.match(refused.message, /MCP runtime session mcp-runtime-b/);
+
+  const integrated = await callToolAsSession('mcp-runtime-b', 'integrate', { project, ref: ticket.ref, by });
+  assert.equal(integrated.ok, true, integrated.message || integrated.reason);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'done');
+});
+
+// The reviewer's cli-delivery probe: ordinary `sidequest integrate` delivered and closed the ticket
+// without any sweep, so a 1.37-second-old isolated worktree stayed on disk and registered until the
+// next SessionStart (SQ-2952 HIGH). Both CLI delivery commands run the same advance-then-sweep block.
+test('CLI integrate reclaims a terminal isolated worktree in the same command', async (context: any) => {
+  const primary = createGitWorktree();
+  const project = store.ensureProject(primary).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main', worktreeBase: 'local-main' });
+  const ticket = store.createTicket(project, {
+    title: 'reclaim delivered worktree through the CLI', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'exercise delivery-time cleanup through the ordinary CLI integrate command',
+  });
+  const by = 'cli-delivery-worker';
+  const worktree = prepareIsolatedWorktreeDispatch(project, primary, ticket, by);
+  context.after(() => removeTestWorktree(primary, worktree));
+  await submitIsolatedDeliveryCandidate(project, ticket, by, worktree);
+  assert.equal(fs.existsSync(worktree), true, 'the candidate worktree is seconds old when integration starts');
+
+  const integrated = spawnSync(process.execPath, [
+    path.join(__dirname, '..', 'bin', 'sidequest.js'), 'integrate', ticket.ref,
+    '--project', primary, '--by', 'cli-delivery-integrator', '--json',
+  ], { encoding: 'utf8', windowsHide: true });
+
+  assert.equal(integrated.status, 0, integrated.stderr);
+  assert.equal(JSON.parse(integrated.stdout).ok, true, integrated.stdout);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'done');
+  assert.equal(fs.existsSync(worktree), false, 'CLI integration reclaimed the worktree in the same command');
+  assert.equal(gitAt(primary, ['worktree', 'list']).includes(worktree), false, 'and left it unregistered');
+});
+
 test('MCP delivery preserves a retained continuation worktree', async (context: any) => {
   const primary = createGitWorktree();
   const project = store.ensureProject(primary).slug;
@@ -2357,7 +2448,7 @@ test('MCP groomClose abandons an unconsumed prepared dispatch without waiting fo
   store.prepareDispatch(project, preparedTicket.ref, { sharedTree: true });
 
   const closed = await callTool('groomClose', {
-    project, ref: preparedTicket.ref, by: 'groomer', reason: 'The prepared ticket is obsolete.',
+    project, ref: preparedTicket.ref, reason: 'The prepared ticket is obsolete.',
   });
   assert.equal(closed.ok, true, closed.message || closed.reason);
   const completed = store.getTicket(project, preparedTicket.ref);
@@ -4189,6 +4280,212 @@ test('MCP board archive tools match the CLI archive-board lifecycle', async () =
   assert.equal(cliRestored.ok, true);
   assert.equal(store.findProject(project).meta.archivedAt, undefined);
 });
+test('SQ-2944: MCP pulse and recovery evidence agree at every retirement boundary', async () => {
+  const projectSlug = store.ensureProject(PROJ).slug;
+  store.setCategory({ id: 'mcp-retirement-boundary', name: 'MCP retirement boundary', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
+  const originalNow = Date.now;
+  const fixedNow = Date.UTC(2026, 0, 2, 12);
+  const stamp = (at: number) => new Date(at).toISOString();
+  const writeTicket = (ticket: any) => db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: ticket.id, project: projectSlug, ref: ticket.ref, status: ticket.status, archived: 0, ord: ticket.order,
+    claim_by: ticket.claim?.by || null, data: ticket,
+  });
+  const fixture = async (shape: string, signalAt: number) => {
+    const added = await callTool('add', {
+      title: 'retirement boundary ' + shape,
+      description: DISPATCH_DESCRIPTION,
+      category: 'mcp-retirement-boundary',
+      files: ['tracked.js'],
+    });
+    const dispatched = await callToolAsSession('mcp-retirement-' + added.ref, 'dispatch', { ref: added.ref, full: true });
+    let ticket = store.getTicket(projectSlug, added.ref);
+    assert.equal(store.recordDispatchLaunch(projectSlug, ticket.ref, {
+      token: dispatched.token,
+      executor: ticket.dispatchExecutor,
+      sessionId: ticket.dispatch.sessionId,
+    }).ok, true);
+    ticket = store.getTicket(projectSlug, added.ref);
+    if (shape === 'bound') {
+      assert.equal(store.bindDispatchAgent(ticket.dispatch.sessionId, ticket.dispatchExecutor, 'retirement-' + ticket.id, 'retirement-' + ticket.id).ok, true);
+    }
+    if (shape === 'provisioning' || shape === 'provisioned') {
+      const worktree = path.join(FIXTURE_ROOT, 'retirement-' + ticket.id);
+      assert.equal(store.bindDispatchWorktreeCreation(projectSlug, ticket.dispatch.sessionId, worktree).ok, true);
+      if (shape === 'provisioned') assert.equal(store.recordDispatchWorktreeProvisioned(projectSlug, ticket.dispatch.sessionId, worktree, creationGeneration(projectSlug, ticket.dispatch.sessionId, worktree)).ok, true);
+    }
+    ticket = store.getTicket(projectSlug, added.ref);
+    const dispatch = ticket.dispatch;
+    for (const field of ['preparedAt', 'launchedAt', 'worktreeBoundAt', 'worktreeCreationCompletedAt', 'worktreeProvisionedAt', 'boundAt', 'briefedAt', 'claimedAt']) {
+      if (dispatch[field]) dispatch[field] = stamp(signalAt - 1_000);
+    }
+    const field = shape === 'briefed' ? 'briefedAt' : shape === 'provisioned' ? 'worktreeProvisionedAt' : shape === 'provisioning' ? 'worktreeBoundAt' : 'boundAt';
+    dispatch[field] = stamp(signalAt);
+    writeTicket(ticket);
+    return ticket.ref;
+  };
+  try {
+    for (const shape of ['briefed', 'provisioned', 'provisioning', 'bound']) {
+      const signalAt = fixedNow - (shape === 'provisioning' ? store.claimIdleMs() : store.claimGraceMs());
+      for (const offset of [-1, 0, 1]) {
+        const ref = await fixture(shape, signalAt);
+        const deadline = signalAt + (shape === 'provisioning' ? store.claimIdleMs() : store.claimGraceMs());
+        Date.now = () => deadline + offset;
+        const pulse = await callTool('pulse', { ref, full: true });
+        const retirement = await callToolRaw('dispatch', {
+          ref,
+          recoveryEvidence: 'The host reported the runtime ended before it claimed.',
+          retireOnly: true,
+        });
+        const retired = !retirement.isError && JSON.parse(retirement.content[0].text).retired === true;
+        assert.equal(pulse.liveness === 'stalled', retired, shape + ' disagreed at ' + offset + 'ms: ' + pulse.livenessEvidence);
+        assert.equal(retired, offset >= 0, shape + ' must become retirable at its deadline');
+        if (offset < 0) assert.match(pulse.livenessEvidence, /starting until/);
+        if (offset >= 0) assert.match(pulse.livenessEvidence, /--retire-only/);
+      }
+    }
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+// SQ-2949 finding 1: groomClose reached retirement through a door that never asked the deadline, so it
+// retired an unbound attempt that had been launched seconds earlier. It refuses with the dispatch call's own
+// countdown now, and the same call closes the ticket once that countdown has run out (SQ-2951).
+test('SQ-2951: groomClose recovery evidence obeys the retirement countdown', async () => {
+  const projectSlug = store.ensureProject(PROJ).slug;
+  store.setCategory({ id: 'mcp-groom-retirement', name: 'MCP groom retirement', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
+  const added = await callTool('add', {
+    title: 'groom retirement countdown',
+    description: DISPATCH_DESCRIPTION,
+    category: 'mcp-groom-retirement',
+    files: ['tracked.js'],
+  });
+  const dispatched = await callToolAsSession(`mcp-groom-${added.ref}`, 'dispatch', { ref: added.ref, full: true });
+  const prepared = store.getTicket(projectSlug, added.ref);
+  assert.equal(store.recordDispatchLaunch(projectSlug, added.ref, {
+    token: dispatched.token,
+    executor: prepared.dispatchExecutor,
+    sessionId: prepared.dispatch.sessionId,
+  }).ok, true);
+
+  const groomClose = () => callToolRaw('groomClose', {
+    ref: added.ref,
+    by: 'control-plane',
+    reason: 'The host reported this runtime gone before it ever claimed.',
+    recoveryEvidence: 'Host task notification: the agent ended with status failed before claiming.',
+  });
+
+  const refused = JSON.parse((await groomClose()).content[0].text);
+  assert.equal(refused.ok, false, `a launch seconds old must not be groomed away: ${JSON.stringify(refused)}`);
+  assert.equal(refused.reason, 'unclaimed_launch_not_supersedable');
+  assert.match(refused.message, /becomes retirable on evidence at .*, in \d+ minutes?, unless/);
+  assert.match(refused.message, /last runtime signal: launch recorded at/);
+  assert.equal(store.getTicket(projectSlug, added.ref).dispatch.terminalAt, null);
+
+  // Only the launch moves back: `preparedAt` is the board stamping its own token, not a runtime signal, so a
+  // deadline that still counted it would leave this refused.
+  const launched = store.getTicket(projectSlug, added.ref);
+  launched.dispatch.launchedAt = new Date(Date.now() - store.claimGraceMs()).toISOString();
+  db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: launched.id, project: projectSlug, ref: launched.ref, status: launched.status, archived: 0, ord: launched.order,
+    claim_by: launched.claim?.by || null, data: launched,
+  });
+
+  const closed = JSON.parse((await groomClose()).content[0].text);
+  assert.notEqual(closed.ok, false, `past the grace the same call must close: ${JSON.stringify(closed)}`);
+  const done = store.getTicket(projectSlug, added.ref);
+  assert.equal(done.status, 'done');
+  assert.ok(done.dispatch.terminalAt, 'the same call retires the attempt it was refused for a moment ago');
+  assert.equal(done.dispatchNonce, null);
+});
+
+// SQ-2959 finding 3: `sidequest groom-close --recovery-evidence` accepted the flag, never read it, and went
+// straight to completeTicketAsControlPlane, so it refused `active_dispatch` both inside AND past the deadline
+// while MCP counted down and then retired and closed atomically. The advertised CLI recovery door could never
+// open. Both surfaces call one store authority now, so they answer the same evidence the same way.
+test('SQ-2961: CLI and MCP groom-close answer recovery evidence with one retirement authority', async () => {
+  const projectSlug = store.ensureProject(PROJ).slug;
+  store.setCategory({ id: 'groom-parity', name: 'Groom parity', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
+  const evidence = 'Host task notification: the agent ended with status failed before claiming.';
+  const reason = 'The host reported this runtime gone before it ever claimed.';
+
+  const boundUnclaimed = async (label: string) => {
+    const added = await callTool('add', {
+      title: `groom parity ${label}`,
+      description: DISPATCH_DESCRIPTION,
+      category: 'groom-parity',
+      files: ['tracked.js'],
+    });
+    const dispatched = await callToolAsSession(`groom-parity-${added.ref}`, 'dispatch', { ref: added.ref, full: true });
+    const prepared = store.getTicket(projectSlug, added.ref);
+    assert.equal(store.recordDispatchLaunch(projectSlug, added.ref, {
+      token: dispatched.token,
+      executor: prepared.dispatchExecutor,
+      sessionId: prepared.dispatch.sessionId,
+    }).ok, true);
+    const ticket = store.getTicket(projectSlug, added.ref);
+    const agent = `groom-parity-${ticket.id}`;
+    assert.equal(store.bindDispatchAgent(ticket.dispatch.sessionId, ticket.dispatchExecutor, agent, agent).ok, true);
+    return added.ref;
+  };
+
+  // One clock for both surfaces: every runtime signal on both attempts is stamped at the same instant, so the
+  // two doors are asked exactly the same question and owe exactly the same deadline.
+  const freezeSignals = (ref: string, at: string) => {
+    const ticket = store.getTicket(projectSlug, ref);
+    for (const field of ['preparedAt', 'launchedAt', 'boundAt', 'briefedAt']) {
+      if (ticket.dispatch[field]) ticket.dispatch[field] = at;
+    }
+    persistTicket(projectSlug, ticket);
+  };
+  const groomCloseCli = (ref: string) => {
+    const result = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'sidequest.js'), 'groom-close', ref,
+      '--by', 'control-plane', '--reason', reason, '--recovery-evidence', evidence, '--json',
+    ], { cwd: PROJ, encoding: 'utf8', windowsHide: true, env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ }) });
+    return { status: result.status, payload: JSON.parse(String(result.stdout).trim()) };
+  };
+  const groomCloseMcp = async (ref: string) => JSON.parse((await callToolRaw('groomClose', {
+    ref, by: 'control-plane', reason, recoveryEvidence: evidence,
+  })).content[0].text);
+  const withoutRef = (message: string, ref: string) => String(message).split(ref).join('<ref>');
+
+  const mcpRef = await boundUnclaimed('mcp');
+  const cliRef = await boundUnclaimed('cli');
+  const inside = new Date(Date.now() - Math.floor(store.claimGraceMs() / 2)).toISOString();
+  freezeSignals(mcpRef, inside);
+  freezeSignals(cliRef, inside);
+
+  const mcpRefused = await groomCloseMcp(mcpRef);
+  const cliRefused = groomCloseCli(cliRef);
+  assert.equal(mcpRefused.ok, false, `MCP groomed away a bound attempt inside its deadline: ${JSON.stringify(mcpRefused)}`);
+  assert.equal(cliRefused.status, 1, 'the CLI must exit nonzero when the countdown refuses');
+  assert.equal(cliRefused.payload.reason, mcpRefused.reason, 'the two surfaces gave different refusal reasons');
+  assert.equal(mcpRefused.reason, 'unclaimed_launch_not_supersedable');
+  assert.equal(withoutRef(cliRefused.payload.message, cliRef), withoutRef(mcpRefused.message, mcpRef));
+  assert.match(mcpRefused.message, /becomes retirable on evidence at .*, in \d+ minutes?, unless/);
+  for (const ref of [mcpRef, cliRef]) {
+    const held = store.getTicket(projectSlug, ref);
+    assert.equal(held.dispatch.terminalAt, null, `${ref} was retired inside its deadline`);
+    assert.ok(held.dispatchNonce, `${ref} lost its nonce inside its deadline`);
+  }
+
+  // Past the deadline both retire the bound attempt that never claimed and close the ticket in the same call.
+  const past = new Date(Date.now() - store.claimGraceMs() - 60_000).toISOString();
+  freezeSignals(mcpRef, past);
+  freezeSignals(cliRef, past);
+  const mcpClosed = await groomCloseMcp(mcpRef);
+  const cliClosed = groomCloseCli(cliRef);
+  assert.notEqual(mcpClosed.ok, false, `past the deadline MCP must close: ${JSON.stringify(mcpClosed)}`);
+  assert.equal(cliClosed.status, 0, `past the deadline the CLI must close: ${JSON.stringify(cliClosed.payload)}`);
+  for (const ref of [mcpRef, cliRef]) {
+    const done = store.getTicket(projectSlug, ref);
+    assert.equal(done.status, 'done', `${ref} did not reach the same terminal state`);
+    assert.ok(done.dispatch.terminalAt, `${ref} closed without retiring its attempt`);
+    assert.equal(done.dispatchNonce, null, `${ref} closed with a live nonce`);
+  }
+});
+
 test('dispatch returns a stable executor, one spawn prompt, and a token', async () => {
   const d = mcp.toolDescriptors().find((t: any) => t.name === 'dispatch');
   assert.ok(d);
@@ -5013,12 +5310,16 @@ test('MCP done requires a final report and release records its reason', async ()
 
   const released = await callTool('add', { title: 'required release reason', complexity: 2, why: 'exercise durable release-reason validation', labels: ['direct-ok'] });
   await callTool('claim', { ref: released.ref, by: 'mcp-release-worker', direct: true, reason: 'The release-reason fixture needs a direct claim.' });
-  const missingReason = await callToolRaw('release', { ref: released.ref, by: 'mcp-release-worker' });
-  assert.ok(missingReason.isError, 'release refuses a missing reason');
-  assert.match(missingReason.content[0].text, /"reason" is required.*why.*released/i);
-  const unclassified = await callTool('release', { ref: released.ref, by: 'mcp-release-worker', reason: 'Scope path was refused.', status: 'todo' });
-  assert.equal(unclassified.ok, false, 'release refuses an unclassified reasoned handback');
-  assert.equal(unclassified.reason, 'release_kind_required');
+  const missingFields = await callTool('release', { ref: released.ref, by: 'mcp-release-worker' });
+  assert.equal(missingFields.ok, false, 'release refuses missing reason and kind together');
+  assert.equal(missingFields.reason, 'release_arguments_required');
+  assert.match(missingFields.message, /reason: non-empty text/);
+  assert.match(missingFields.message, /kind: technical_blocker \| contradiction \| oracle \| handback/);
+  assert.ok(store.getTicket(released.project, released.ref).claim, 'argument validation keeps the claim');
+  const missingKind = await callTool('release', { ref: released.ref, by: 'mcp-release-worker', reason: 'Scope path was refused.', status: 'todo' });
+  assert.equal(missingKind.ok, false, 'release requires a classification with a reason');
+  assert.equal(missingKind.reason, 'release_arguments_required');
+  assert.match(missingKind.message, /kind: technical_blocker \| contradiction \| oracle \| handback/);
   await callTool('release', { ref: released.ref, by: 'mcp-release-worker', reason: 'Scope path was refused.', kind: 'handback', status: 'todo' });
   const afterRelease = store.getTicket(released.project, released.ref);
   assert.equal(afterRelease.claim, null);
@@ -6030,7 +6331,7 @@ function isolatedDispatch(prefix: string, agentId: string, files: string[], veri
   assert.equal(store.bindDispatchWorktreeCreation(project, sessionId, worktree).ok, true);
   gitAt(repo, ['worktree', 'add', '-q', '-b', `agent-${agentId}`, worktree, 'HEAD']);
   createCheckoutInstanceMarker(gitAt(worktree, ['rev-parse', '--git-dir']));
-  const worktreeCompletion = store.completeDispatchWorktreeCreation(project, sessionId, worktree);
+  const worktreeCompletion = store.completeDispatchWorktreeCreation(project, sessionId, worktree, creationGeneration(project, sessionId, worktree));
   assert.equal(worktreeCompletion.ok, true, JSON.stringify(worktreeCompletion));
   assert.equal(
     store.bindDispatchAgent(
@@ -6092,6 +6393,9 @@ test('SQ-2391: done refuses an ordinary writable clean scope even after its pinn
   assert.equal(refused.reason, 'submission_required');
   assert.match(refused.message, /externalDeliverable:true/, 'the refusal names the ticket declaration');
   assert.match(refused.message, /orchestrator can set.*through update/i, 'the refusal names the mid-claim recovery');
+  assert.match(refused.message, /otherwise supply explicit done --verify evidence/);
+  const externalRefusal = store.externalDeliverableCloseout(fixture.project, store.getTicket(fixture.project, fixture.ref));
+  assert.match(externalRefusal.message, /commandless requirement needs explicit done --verify evidence/);
   assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
 
   const updated = await callToolAsSession('sq2391-different-main-session', 'update', {
@@ -6121,6 +6425,136 @@ test('SQ-2391: done refuses an ordinary writable clean scope even after its pinn
   assert.equal(done.completion.externalDeliverable.candidate.value, capture.candidate.value);
   assert.equal(done.completion.externalDeliverable.capture.id, capture.id);
   assert.equal(done.completion.externalDeliverable.verification.command, verifyCommand);
+});
+
+// SQ-2968. A no-source-command ticket (e.g. research with a manual verifier)
+// never had a command to capture, so externalDeliverableCloseout must accept
+// the executor's typed --verify evidence instead — it just dropped it on the
+// floor and always refused "required manual verification evidence is missing".
+test('SQ-2968: done passes manual verify evidence through external-deliverable closeout for a no-source ticket', async () => {
+  const fixture = isolatedDispatch('sq-2968-manual-', 'a2968manual', ['research-notes.md'], undefined, {
+    executorVerifyKind: 'manual',
+    executorVerify: 'manual: record where the research findings were written up and who confirmed them',
+    externalDeliverable: true,
+  });
+
+  const missingEvidence = await callTool('done', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    model: 'opus',
+    effort: 'high',
+    body: 'The research is complete and the repository scope is clean; no source to submit.',
+  });
+  assert.equal(missingEvidence.ok, false);
+  assert.match(missingEvidence.message, /required manual verification evidence is missing/);
+  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
+
+  const closed = await callTool('done', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    model: 'opus',
+    effort: 'high',
+    body: 'The research is complete and the repository scope is clean; no source to submit.',
+    verify: 'manual: findings recorded in the shared research doc, confirmed by a teammate',
+  });
+  assert.equal(closed.ok, true, 'done was refused: ' + closed.message);
+  const done = store.getTicket(fixture.project, fixture.ref);
+  assert.equal(done.status, 'done');
+  assert.equal(done.completion.purpose, 'external-deliverable');
+  assert.equal(done.completion.externalDeliverable.declared, true);
+  assert.equal(done.completion.externalDeliverable.verification.kind, 'manual');
+  assert.equal(done.completion.externalDeliverable.verification.evidence, 'manual: findings recorded in the shared research doc, confirmed by a teammate');
+});
+
+test('SQ-2968: manual-verifier external-deliverable closeout still refuses a dirty declared scope, verify evidence or not', async () => {
+  const fixture = isolatedDispatch('sq-2968-dirty-', 'a2968dirty', ['research-notes.md'], undefined, {
+    executorVerifyKind: 'manual',
+    executorVerify: 'manual: record where the research findings were written up',
+    externalDeliverable: true,
+  });
+  fs.writeFileSync(path.join(fixture.worktree, 'research-notes.md'), 'uncommitted notes\n');
+
+  const refused = await callTool('done', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    model: 'opus',
+    effort: 'high',
+    body: 'The research is complete.',
+    verify: 'manual: findings recorded in the shared research doc',
+  });
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /external_deliverable_scope_dirty|has declared repository changes/);
+  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
+});
+
+test('SQ-2968: a pinned command verifier still refuses a missing capture; verify text cannot replace it', async () => {
+  const verifyCommand = 'node -p "process.cwd()"';
+  const fixture = isolatedDispatch('sq-2968-command-', 'a2968command', ['src/engine.js'], verifyCommand, { externalDeliverable: true });
+
+  const refused = await callTool('done', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    model: 'opus',
+    effort: 'high',
+    body: 'The declared external deliverable is complete and the repository scope is clean.',
+    verify: 'manual: I ran it locally and it passed',
+  });
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /No completed passed verification capture exists/);
+  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
+});
+
+test('SQ-2968: a review-pinned ticket stays unsupported for external-deliverable closeout even with verify evidence', async () => {
+  const fixture = isolatedDispatch('sq-2968-review-', 'a2968review', ['research-notes.md'], undefined, {
+    executorVerifyKind: 'review',
+    executorVerify: 'independent review is required before this research closes',
+    externalDeliverable: true,
+  });
+
+  const refused = await callTool('done', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    model: 'opus',
+    effort: 'high',
+    body: 'The research is complete.',
+    verify: 'manual: I reviewed my own work',
+  });
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /cannot accept review verification/);
+  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
+});
+
+test('SQ-2968: the CLI done path accepts the same manual verify evidence as MCP', () => {
+  const fixture = isolatedDispatch('sq-2968-cli-', 'a2968cli', ['research-notes.md'], undefined, {
+    executorVerifyKind: 'manual',
+    executorVerify: 'manual: record where the research findings were written up',
+    externalDeliverable: true,
+  });
+  const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
+  const env = { ...process.env, SIDEQUEST_HOME };
+
+  const missingEvidence = spawnSync(process.execPath, [
+    cli, 'done', fixture.ref, '--project', fixture.project, '--by', fixture.by,
+    '--body', 'The research is complete; no source to submit.', '--json',
+  ], { encoding: 'utf8', windowsHide: true, env });
+  assert.equal(missingEvidence.status, 1);
+  assert.match(JSON.parse(missingEvidence.stdout).message, /required manual verification evidence is missing/);
+  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
+
+  const closed = spawnSync(process.execPath, [
+    cli, 'done', fixture.ref, '--project', fixture.project, '--by', fixture.by,
+    '--body', 'The research is complete; no source to submit.',
+    '--verify', 'manual: findings recorded in the shared research doc, confirmed by a teammate', '--json',
+  ], { encoding: 'utf8', windowsHide: true, env });
+  assert.equal(closed.status, 0, closed.stderr);
+  const closedTicket = JSON.parse(closed.stdout).ticket;
+  assert.equal(closedTicket.status, 'done');
+  assert.equal(closedTicket.completion.externalDeliverable.verification.kind, 'manual');
 });
 
 test('SQ-2397: MCP handler grant is explicit while CLI source, by, and session stay non-authoritative', async () => {

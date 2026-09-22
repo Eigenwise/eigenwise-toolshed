@@ -108,12 +108,13 @@ bring auth back, or you kill the session that was about to use it.
   command resolves those aliases through the installed Claude CLI's credential-free headless probe;
   SessionStart refreshes its cache after the CLI changes or the cache ages out. A failed probe keeps
   the last good pin, then a shipped safe default. Set a persistent per-alias override with
-  `pin --opus claude-opus-4-8[1m]` (same for `--sonnet` and `--fable`), or use `pin --opus default`
-  to return to auto-detection. Overrides always win. `pin` with no arguments shows each effective
-  pin and whether it is overridden. Overrides live in `~/.claude/model-gateway/pins.json`, outside
-  the plugin cache. After a pin change or Claude CLI upgrade, run `env --write-project` (or
-  `env --write-user` for a shared fallback) and start a new Claude Code session; changing a saved value alone cannot alter
-  an open session.
+  `pin --opus claude-opus-5-5[1m]` (same for `--sonnet` and `--fable`), or use `pin --opus default`
+  to return to auto-detection. Overrides always win. `pin` with no arguments and `doctor` show each
+  effective pin, whether it is overridden, and when a CLI alias lags a newer shipped model. Overrides live in
+  `~/.claude/model-gateway/pins.json`, outside
+  the plugin cache. A pin change updates every registered wired project's gateway-owned pins and
+  skips any project with a user-owned pin value. Restart every open Claude Code session in an
+  affected project; changing a saved value cannot alter an open session.
 - Do NOT set a
   global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to both providers and can make Codex
   `/compact` fail after history already exceeds the Codex limit.
@@ -201,11 +202,7 @@ restart. If a host replaces it, use the supported Claude Code CLI on the wired p
 Desktop routing is unsupported under forced overrides on Windows and macOS, and settings, parent,
 or User-scope edits cannot be promised to win. Disabling stays available.
 
-- The user (never this plugin, never automatically) adds one hosts entry mapping
-  `api.anthropic.com` to loopback — `127.0.0.1 api.anthropic.com` on Windows
-  (`C:\Windows\System32\drivers\etc\hosts`, needs Administrator), macOS, and Linux (`/etc/hosts`,
-  needs `sudo`). If asked to help with this, tell the user the exact line and file, and that they
-  need elevated privileges to save it; do not attempt to edit the hosts file yourself.
+- After the user directly confirms `remote-control enable --confirm`, the plugin creates a backup and writes its marked hosts block mapping `api.anthropic.com` to loopback: `127.0.0.1 api.anthropic.com` on Windows (`C:\Windows\System32\drivers\etc\hosts`, needs Administrator), macOS, and Linux (`/etc/hosts`, needs `sudo`). Do not edit the hosts file outside that procedure.
 - `ensure`/`setup`/`doctor` detect the entry (read-only) and, only after confirming the shim can
   actually bind loopback port 80, switch `ANTHROPIC_BASE_URL` to `http://api.anthropic.com` and
   start a second listener on port 80 next to the usual `127.0.0.1:18764`. Exactly one line tells
@@ -257,9 +254,18 @@ agree).
 - **`doctor` says `upstream-unavailable`**: a final Codex inference failed in the last 60 seconds.
   It records completed request outcomes, not `/v1/models` or a health check, and clears only after
   a completed successful Codex response. The 60-second expiry means there is no recent failure
-  evidence, not that Codex is live. An `upstream-blocked` OpenAI/auth rejection stays separate
-  and does not expire; `setup` deliberately clears either record. Sidequest consumes a cached
-  catalog and can lag this state by up to five minutes.
+  evidence, not that Codex is live. An attributed OpenAI 401, 403, or 429 rejection enters
+  `upstream-blocked`. An attributed 429 has no TTL: `setup` or a completed successful Codex
+  response clears it, and a later rejected request can latch it again. That persistent 429
+  blocking is a known limitation ([issue #190](https://github.com/Eigenwise/eigenwise-toolshed/issues/190));
+  do not promise a retry or expiry as a cure. Sidequest consumes a cached catalog and can lag this
+  state by up to five minutes.
+- **Gateway models vanish from a Sidequest board a few minutes after the shim starts**: Sidequest
+  discards a catalog older than five minutes and refreshes it by running `catalog --refresh --json`.
+  Run that command by hand and read stderr plus the exit code. It exits non-zero and names the reason
+  when it declines to write (shim not answering `/healthz`, `/v1/models` erroring, or a model list
+  with no gateway ids in it), leaving the stored catalog and its timestamp untouched. Exit 0 with no
+  diagnostic means it did write, so compare the printed `updatedAt` with the stored file.
 - **Startup, recovery, restart, or drain refuses to touch a listener**: each ownership probe shares one
   `CODEX_GATEWAY_PROBE_TIMEOUT_MS` budget (2 seconds by default, 8 seconds on Windows, where the Win32_Process
   lookup itself typically takes 1.8-2.4 seconds). When that budget expires, the refusal says so, names the elapsed

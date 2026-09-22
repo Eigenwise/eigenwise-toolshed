@@ -26,13 +26,35 @@ Setup reads the project, mines recent session history across your projects, asks
 
 Before it names a plugin in that plan, setup can check current sources for whether the plugin is still maintained, whether the description in the local catalog has gone stale, and whether something fits better, including something from a marketplace you have not added yet. Those lookups are bounded to the few candidates that would lead to an install, and searches use generic capability terms, so your project names and file paths stay out of the search engine's logs. With `WebSearch` and `WebFetch` turned off, Claude skips the check and labels the proposals unresearched rather than implying they were verified. What it reads informs the proposal; your approval is still what authorizes the install.
 
+### Host capabilities
+
+When work needs a coding-agent feature such as delegation, Quartermaster first identifies the host
+from available evidence. It separately checks native support, installed extensions, and tools that are
+actually usable in the current session. A working native or live capability needs no duplicate
+extension. An installed extension that has not loaded calls for the host's activation step and a live
+check, not another install. A local catalog only describes the installations it actually inventories;
+it cannot answer what another host has installed.
+
+If the capability is absent, Quartermaster checks the identified host's official extensions and
+examples before suitable third-party packages. It labels an example as source material that may need
+local adaptation, and only presents an install command when the checked source supplies one that fits
+the host. Each installation or configuration change still needs explicit approval, followed by the
+host's reload or restart boundary and a live-usability check. Missing host or tool evidence stays
+uncertain instead of assuming a Claude Code command or package ecosystem.
+
+For Pi coding agent, the checked upstream [Subagent Example](https://github.com/earendil-works/pi/tree/main/packages/coding-agent/examples/extensions/subagent)
+launches separate Pi processes and documents linking the extension, agent definitions, and workflow
+prompts into Pi configuration directories. That makes it a local-fit example, not a universal
+marketplace package. Quartermaster can recommend researching it for a proven delegation gap without
+claiming Quartermaster runs on Pi.
+
 Setup installs the approved plugins and writes the approved project files, then pauses at the activation boundary. Run `/reload-plugins`, or restart Claude Code when the change affects the process environment, and tell Claude `continue`. Setup verifies the selected plugins and project configuration after that boundary.
 
 ### Keep complex code tested
 
 Setup proposes a CRAP gate for a codebase. CRAP combines a function's branching complexity and test
-coverage, so a large function with little coverage gets a high score. The default ceiling is 6: keep
-each function small or cover it well.
+coverage, so a large function with little coverage gets a high score. The fixed threshold is 6, and
+6 fails. It checks every new or modified function, while untouched legacy functions stay out of scope.
 
 When you approve it, setup writes `.claude/quartermaster/crap.json` and a live rule that runs:
 
@@ -42,7 +64,8 @@ node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project
 
 It also shows the coverage command for your stack and asks you to pick the threshold. The gate needs
 [lizard](https://github.com/terryyin/lizard) for complexity measurement. Setup never installs it. Exit
-2 means a prerequisite or coverage input is missing. Follow the printed hint, then run the gate again.
+2 means a prerequisite or measurement input is missing, including lizard finding zero functions for a
+file that has function-like source tokens. Follow the printed hint, then run the gate again.
 
 When setup wires Model Gateway or Sidequest routing, Quartermaster can offer the optional `325000` `autoCompactWindow` setting for a consistent Codex compaction point. Setup asks before writing it. If user or project settings already has a value, it reports which one wins and preserves that value.
 

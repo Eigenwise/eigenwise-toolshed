@@ -77,6 +77,52 @@ This route still fails closed. Do not skip a verifier or review, substitute curr
 Set the board default with `sidequest board-config --delivery merge|replay|apply`. Consumer boards
 usually want `apply` or `replay`; use `merge` where the repository's release flow owns integration.
 
+### A repair whose range inherits a rejected candidate
+
+When a repair is built on top of an oracle-rejected candidate, its submitted range legitimately contains
+that candidate's commits. Sidequest admits that overlap instead of refusing it as a duplicate, and it does
+NOT shorten the range to do so: the repair submits with no explicit base, against the base its dispatch
+recorded, so review, delivery, and supersession all read the inherited bytes plus the repair delta.
+
+File the repair so all of this holds before dispatching it:
+
+- Link it `related` to the rejected source (`sidequest link <repair> related <source>`). Without that link
+  the overlap is refused; an unrelated submitted range is never inherited.
+- The source's candidate needs an oracle-confirmed rejection: a bound `review-audit` ticket whose verdict
+  rejected that exact candidate. A source-side `submission.review` mirror alone is not authority, and a
+  rejection pinned to a different commit than the submission now records does not count.
+- Declare the union of the inherited paths and the repair's own, including paths the rejected candidate
+  deleted or added and the repair never touches. Scope admission covers every path in the range.
+- The rejected range is inherited whole. A range carrying only part of it is refused.
+
+An active, unrelated, unreviewed, or not-yet-rejected overlapping submission still refuses
+`duplicate_submission`, and the refusal names which half is missing. Do not answer that refusal with
+`--base`, a squash, or a rebuilt exact-tree candidate: those hide the inherited commits from the
+authorities that read them. `merge` and `replay` deliver the whole inherited tree, and
+`supersede_submission` then closes the rejected source with `reviewedReplacements` only for the paths the
+repair actually changed.
+
+`apply` needs one more step, because it materializes the range into the integration working tree instead
+of a commit: the head it records holds none of the delivered bytes, so per-path lineage has nothing to
+read and `supersede_submission` refuses `lineage_content_diverged`. Do not answer that by claiming
+unchanged inherited paths as `reviewedReplacements`; they were not replaced. Commit the materialized tree
+and bind it:
+
+1. On the recorded integration branch, commit the applied tree unchanged:
+   `git add -A <the delivered paths>` then `git commit`. Do not amend the content while committing it.
+2. Bind that commit to the delivery record: MCP `groomClose` with `ref`, `by`, `reason`, and
+   `deliveryCommit: <that commit>` (CLI `sidequest groom-close <ref> --delivery-commit <sha> --reason "…"`).
+   The repair is already closed, so this completes its delivery record rather than closing it again. It
+   re-runs the merged-tree verifier and refuses any commit that is not reachable from the recorded target,
+   or whose tree differs from the reviewed candidate on a submitted path. Every refusal here, a failing
+   verifier included, leaves the delivery record exactly as delivered, so fix the cause and bind the same
+   commit again.
+3. Then run `supersede_submission` as above, with `reviewedReplacements` only for the genuinely repaired
+   paths. The inherited addition and deletion now prove themselves from the committed tree.
+
+`integrate` with `deliveryCommit` refuses a closed repair with `submission_required`; the refusal names
+this same flow. Nothing here edits board state by hand or moves the immutable candidate.
+
 If a repair ticket deliberately delivers an earlier parked submission, do not replay the obsolete range. Use MCP `supersede_submission` with the earlier ref, the later integrated repair ref, concise closure evidence, and `reviewedReplacements` for every original path whose delivered content intentionally differs. The control plane requires the repair's recorded delivery to include every original changed path, preserves the earlier submission and its lineage under `supersededBy`, marks it done, and removes its pending-submission warning. A missing path, an unintegrated repair, or unreviewed divergent content leaves the original submission parked.
 
 ## Integration mode: where delivery happens versus what proves a candidate landed
@@ -123,12 +169,13 @@ before the merged-tree gate, version assignment, or push. A later failure can th
 ticket with an unpushed commit: finish the push when safe, or record the failure and unpushed state on
 the ticket.
 
-1. **Acquire the publish lock**: `sidequest publish lock`. The lock identity is derived internally
-   from the current session and worker, and the lock lives in the repo's common git dir, so every
-   session, process, and worktree serializes on it. If held, do NOT wait or poll: note the holder from
-   the failure output and retry at the next natural wakeup. `--steal` only when `publish status` shows
-   the holder stale (TTL expired or dead pid). Re-acquiring from the same session refreshes the lock —
-   that is the crash-recovery path for your own interrupted transaction.
+1. **Acquire the publish lock**: `sidequest publish lock`. The lock records the current worker and
+   session in the repo's common git dir, so every session, process, and worktree serializes on it. MCP
+   delivery recognizes that worker for this repository even when its server has a different runtime
+   session; a supplied `session` never changes that runtime identity. If held, do NOT wait or poll:
+   note the holder from the failure output and retry at the next natural wakeup. `--steal` only when
+   `publish status` shows the holder stale (TTL expired or dead pid). Re-acquiring as the same worker
+   refreshes the lock — that is the crash-recovery path for your own interrupted transaction.
 2. **Read the queue**: `sidequest publish queue --json`. Queue admission mechanically revalidates each durable range and its submit-time admitted scope snapshot. Rejected entries name their offending paths and stay parked. A legacy entry without a scope snapshot stays parked until its executor resubmits it.
 3. **Read each submitted handoff**: before integrating or closing a ticket, run
    `sidequest comments <ref> --json` for it. The queue is intentionally compact and does not replace the
