@@ -118,7 +118,11 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // deliberately higher because GitHub #144 raises the same constant for its own properties: a shared
 // ceiling lets the two land in either order without the second one re-measuring. Any further addition
 // measures its own payload instead of inheriting this.
-const MCP_TOOLS_LIST_MAX_BYTES = 25400;
+// Then raised from 25400 to 25600, measured with GitHub #144 and #173 merged together: review
+// follow-ups grew #144 from the estimated +911 to +980 bytes and #173 from +395 to +535, so the
+// combined payload is 23040 against the 21525 base and 25400 leaves only 2360 of the 2500-byte
+// reserve. 25600 is the smallest round value that restores it for either landing order.
+const MCP_TOOLS_LIST_MAX_BYTES = 25600;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
