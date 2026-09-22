@@ -13,10 +13,10 @@ which keeps every function either small or tested.
 
 ## Threshold policy
 
-For a new project, set `max` to 6 and apply it to every function. For an existing project, set
-`ratchet` to the default branch and keep the ceiling for new functions. The gate reports the current
-number of functions at or above the ceiling, including how many predate the branch, so the user can
-choose a different ceiling with real numbers in front of them.
+The threshold is fixed at 6, and 6 fails. The gate compares against the configured base revision and
+checks only functions the change added or modified. Untouched legacy functions, including functions in
+a changed file, never fail or appear in the failure list. A changed function below 6 passes even when
+its prior score was lower.
 
 ## Prerequisite
 
@@ -29,8 +29,10 @@ pipx install lizard
 pip install lizard
 ```
 
-Exit 2 also covers a missing LCOV file or a configured coverage command that fails. Fix the printed
-problem, then run the gate again.
+Exit 2 also covers a missing LCOV file, a configured coverage command that fails, or an unverified
+measurement. A file where lizard finds zero functions despite function-like source tokens, or a changed
+function without coverage data, is unverified rather than a pass. Fix the printed problem, then run the
+gate again.
 
 ## React files (.tsx and .jsx)
 
@@ -86,14 +88,15 @@ Create `.claude/quartermaster/crap.json`. Every key is optional and command-line
   "lcov": "coverage/lcov.info",
   "sources": ["src"],
   "exclude": ["**/*.test.*"],
-  "max": 6,
-  "ratchet": "main"
+  "base": "main"
 }
 ```
 
-The defaults are `coverage/lcov.info`, sources `.` , no exclusions, `max` 6, no ratchet, and no
-coverage command. Use `--max`, `--ratchet`, `--lcov`, `--complexity`, or `--coverage-command` for a
-one-off override. Run it with:
+The defaults are `coverage/lcov.info`, sources `.`, no exclusions, threshold 6, the repository's
+`develop`, `main`, or `master` branch as the base, and no coverage command. Use `--lcov`,
+`--complexity`, or `--coverage-command` for a one-off override. `base` in the config selects the
+revision used to identify changed functions. The shared parser and score implementation lives under
+`scripts/quality`; Quartermaster only supplies project-specific LCOV and command wiring.
 
 ```text
 node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"
@@ -107,6 +110,6 @@ description: Keep changed code within the CRAP ceiling
 priority: 85
 ---
 Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"`.
-Keep every changed or new function under the ceiling. Cover it or split it.
-Exit 2 means a prerequisite is missing. Follow the printed install hint, then rerun the gate. Do not skip it.
+Keep every new or modified function strictly below 6. Cover it or split it. Untouched legacy functions are out of scope.
+Exit 2 means a prerequisite or measurement is missing. Follow the printed install or measurement hint, then rerun the gate. Do not skip it.
 ```

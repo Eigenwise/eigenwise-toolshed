@@ -12,12 +12,15 @@ function readSkill(name) {
 test('documents namespaced Quartermaster commands and Live Rules deduplication', () => {
   const doctor = readSkill('toolshed-doctor');
   const setup = readSkill('setup');
+  const updateToolshed = readSkill('update-toolshed');
 
   assert.match(doctor, /`\/quartermaster:update-toolshed`, then `\/reload-plugins`/);
   assert.doesNotMatch(doctor, /`\/update-toolshed`/);
   assert.match(setup, /injects a rule again only when it newly matches or its content\/hash changes/);
   assert.match(setup, /Unchanged rules do not repeat on every prompt or edit/);
   assert.doesNotMatch(setup, /every prompt for the always-on ones/);
+  assert.match(updateToolshed, /can persist an explicit id.*does not prove a later request reaches Model Gateway/s);
+  assert.match(updateToolshed, /Normal\s+gateway mode is the verified inference path/);
 });
 
 test('names clean-code principles as the seeded baseline', () => {

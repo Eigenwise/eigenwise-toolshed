@@ -83,6 +83,8 @@ test('prices every active model label and token type from one table', () => {
     'claude-opus-4-8[1m]',
     'claude-opus-5',
     'claude-opus-5[1m]',
+    'claude-opus-5-5',
+    'claude-opus-5-5[1m]',
     'claude-sonnet-5',
     'claude-sonnet-5[1m]',
     'claude-fable-5',
@@ -119,6 +121,11 @@ test('prices every active model label and token type from one table', () => {
   assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-gpt-5.6-luna'], { input: 1, cacheRead: 0.1, cacheCreation: 1, output: 6 });
   assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-haiku-4-5'], { input: 1, cacheRead: 0.1, cacheCreation: 1.25, output: 5 });
   assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-haiku-4-5-20251001'], { input: 1, cacheRead: 0.1, cacheCreation: 1.25, output: 5 });
+  assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-opus-5-5'], { input: 4, cacheRead: 0.2, cacheCreation: 5, output: 20 });
+  assert.equal(MODEL_PRICES_PER_MILLION['claude-opus-5-5[1m]'], MODEL_PRICES_PER_MILLION['claude-opus-5-5']);
+  const opusTokenUsage = { input: 1_000_000, cacheRead: 1_000_000, cacheCreation: 1_000_000, output: 1_000_000 };
+  assert.equal(modelRequestCost('claude-opus-5-5[1m]', opusTokenUsage), 29.2);
+  assert.equal(modelRequestCost('claude-opus-6', opusTokenUsage), 29.2);
   const target = modelCostTargets().find(({ legendFormat }) => legendFormat === 'claude-gpt-5.6-terra');
   assert.match(target.expr, /type="input"/);
   assert.match(target.expr, /type="cacheRead"/);
@@ -138,6 +145,8 @@ test('prices every active model label and token type from one table', () => {
   assert.match(gatewayTarget.expr, /workbench_measurement_cache_creation_tokens_value/);
   assert.match(gatewayTarget.expr, /workbench_measurement_output_tokens_value/);
   assert.match(gatewayTarget.expr, /if eq \.workbench_attribute_model "gpt-5\.6-terra" }}250/);
+  assert.match(gatewayTarget.expr, /regexMatch "\^claude-opus-/);
+  assert.match(gatewayTarget.expr, /}}400{{ else if regexMatch/);
   assert.equal((gatewayTarget.expr.match(/sum_over_time/g) || []).length, 4);
   const projectTargets = gatewayProjectCostTargets([{ project_name: 'atlas' }]);
   assert.equal(projectTargets[0].legendFormat, 'atlas');
@@ -193,6 +202,7 @@ test('keeps unpriced resolved models visible without assigning them a cost', () 
   assert.ok(priced.test('gpt-5.6-terra'));
   assert.ok(priced.test('gpt-6-astra'));
   assert.ok(priced.test('gpt-6-astra-fast'));
+  assert.ok(!priced.test('claude-opus-6'));
   assert.ok(!priced.test('arbitrary-new-model'));
   for (const measurement of ['input_tokens', 'cache_read_tokens', 'cache_creation_tokens', 'output_tokens']) {
     assert.equal(
@@ -227,6 +237,7 @@ test('keeps only unknown exact model labels in the unpriced query', () => {
   assert.ok(priced.test('claude-gpt-6-astra-fast[1m]'));
   assert.ok(priced.test('gpt-6-astra'));
   assert.ok(priced.test('gpt-6-astra-fast'));
+  assert.ok(!priced.test('claude-opus-6'));
   assert.ok(!priced.test('claude-opus-51'));
   assert.ok(!priced.test('claude-gpt-5.6-unknown'));
 });
@@ -634,7 +645,7 @@ test('validates explicit generic OTLP egress and credentials', () => {
   }), /project API key/);
 });
 
-test('persists sink config in a private dedicated file', (t) => {
+test('persists sink config with a POSIX-only mode assertion', (t) => {
   const directory = temporaryDirectory();
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const configPath = path.join(directory, 'observability.json');
