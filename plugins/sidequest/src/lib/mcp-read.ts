@@ -80,6 +80,7 @@ type StoryLogArgs = {
   entry?: unknown;
   ref?: unknown;
   by?: unknown;
+  full?: boolean;
   rotate?: boolean;
 };
 
@@ -93,34 +94,27 @@ function readySummary(payload?: any) {
   };
 }
 
-function storyLogRotationCall(args?: StoryLogArgs) {
-  const project = args?.project == null ? '' : `project: ${JSON.stringify(args.project)}, `;
-  return `story_log({ ${project}story: ${JSON.stringify(args?.story)}, rotate: true, by: "orchestrator" })`;
-}
-
-function storyLogFullRefusal(args?: StoryLogArgs, story?: unknown) {
-  const log = store.storyDecisionLog(story, { full: true });
-  if (log.bytes < log.capacity) return null;
-  return `story_log: decision log is full. Clear it with \`${storyLogRotationCall(args)}\`, then append again.`;
-}
-
 function rotatedStoryLog(slug: string, args: StoryLogArgs) {
   if (args.by !== 'orchestrator') throw new Error('story_log: rotate:true requires by:"orchestrator".');
-  const story = store.rotateStoryLog(slug, args.story);
-  if (!story || args.entry === undefined) return { story, advisory: null };
-  return { story: store.appendStoryLogEntry(slug, args.story, { entry: args.entry, ref: args.ref, by: args.by }), advisory: store.storyLogEntryAdvisory(args.entry) };
+  const rotation = store.rotateStoryLogResult(slug, args.story);
+  if (!rotation.story || args.entry === undefined) return { ...rotation, advisory: null };
+  const appended = store.appendStoryLogEntryResult(slug, args.story, { entry: args.entry, ref: args.ref, by: args.by });
+  return {
+    story: appended.story,
+    advisory: store.storyLogEntryAdvisory(args.entry),
+    rotated: rotation.rotated || appended.rotated,
+    movedEntries: rotation.movedEntries + appended.movedEntries,
+  };
 }
 
 function appendedStoryLog(slug: string, args: StoryLogArgs) {
-  const existingStory = store.getStory(slug, args.story);
-  const refusal = existingStory && storyLogFullRefusal(args, existingStory);
-  if (refusal) throw new Error(refusal);
-  return { story: store.appendStoryLogEntry(slug, args.story, { entry: args.entry, ref: args.ref, by: args.by }), advisory: store.storyLogEntryAdvisory(args.entry) };
+  const appended = store.appendStoryLogEntryResult(slug, args.story, { entry: args.entry, ref: args.ref, by: args.by });
+  return { ...appended, advisory: store.storyLogEntryAdvisory(args.entry) };
 }
 
 function storyLogResult(slug: string, args: StoryLogArgs) {
   if (args.rotate) return rotatedStoryLog(slug, args);
-  if (args.entry === undefined) return { story: store.getStory(slug, args.story), advisory: null };
+  if (args.entry === undefined) return { story: store.getStory(slug, args.story), advisory: null, rotated: false, movedEntries: 0 };
   return appendedStoryLog(slug, args);
 }
 
@@ -128,11 +122,13 @@ function storyLogHandler(args: StoryLogArgs) {
   const { slug, meta } = resolveProject(args.project);
   const result = storyLogResult(slug, args);
   if (!result.story) throw new Error(`story_log: no story "${args.story}" in ${meta.name}`);
-  const log = store.storyDecisionLog(result.story);
+  const log = store.storyDecisionLog(result.story, { full: args.full });
   return {
     ok: true,
     project: slug,
     projectName: meta.name,
+    rotated: result.rotated,
+    movedEntries: result.movedEntries,
     story: {
       ref: result.story.ref,
       logBytes: log.bytes,
@@ -340,7 +336,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'story_log',
-    description: 'Read, append, or rotate a story decision log.',
+    description: 'Story log reads, appends, or archives entries. Appends automatically archive older entries when the live log exceeds its briefing window; full:true returns archived history first.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -348,8 +344,9 @@ const tools: ToolDefinition[] = [
         story: { type: 'string', description: 'Story ref or id.' },
         entry: { type: 'string', pattern: '^(DECISION|CONSTRAINT|DISCOVERY)\\s*:', description: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:. Text after the prefix is at most 16,000 UTF-8 bytes.' },
         ref: { type: 'string', description: 'Claimed member ticket ref for an append.' },
-        by: { type: 'string', description: 'Claim owner for an append, or orchestrator to clear.' },
-        rotate: { type: 'boolean', description: 'Archive current entries before starting a new log.' },
+        by: { type: 'string', description: 'Claim owner for an append, or orchestrator to rotate.' },
+        full: { type: 'boolean', description: 'Return archived entries followed by the live log.' },
+        rotate: { type: 'boolean', description: 'Archive current live entries early; an empty log reports a no-op.' },
       },
       required: ['story'],
     },

@@ -1014,6 +1014,10 @@ test('story_log reads, appends from a claimed member, and rotates after promotio
   assert.equal(empty.story.logRevision, 0);
   assert.deepEqual(empty.story.entries, []);
 
+  const emptyRotation = await callTool('story_log', { project, story: story.ref, rotate: true, by: 'orchestrator' });
+  assert.equal(emptyRotation.rotated, false);
+  assert.equal(emptyRotation.movedEntries, 0);
+
   const appended = await callTool('story_log', {
     project, story: story.ref, ref: ticket.ref, by: 'log-worker', entry: 'DISCOVERY: CLI and MCP share the same store API.',
   });
@@ -1030,6 +1034,8 @@ test('story_log reads, appends from a claimed member, and rotates after promotio
   assert.match(malformed.content[0].text, /story log entry must begin with DECISION:, CONSTRAINT:, or DISCOVERY:/);
 
   const rotated = await callTool('story_log', { project, story: story.ref, rotate: true, by: 'orchestrator' });
+  assert.equal(rotated.rotated, true);
+  assert.equal(rotated.movedEntries, 1);
   assert.equal(rotated.story.logBytes, 0);
   assert.equal(rotated.story.logCapacity, 16 * 1024);
   assert.equal(rotated.story.logRevision, 1);
@@ -1042,19 +1048,23 @@ test('story_log reads, appends from a claimed member, and rotates after promotio
   await callTool('story_log', {
     project, story: story.ref, entry: `DECISION: ${'x'.repeat(16_000)}`,
   });
-  await callTool('story_log', {
+  const automaticallyRotated = await callTool('story_log', {
     project, story: story.ref, entry: `DECISION: ${'y'.repeat(400)}`,
   });
-  const full = await callToolRaw('story_log', {
-    project, story: story.ref, entry: 'DECISION: rotate before adding another entry.',
-  });
-  assert.equal(full.isError, true);
-  assert.match(full.content[0].text, /decision log is full/);
-  assert.match(full.content[0].text, /story_log\(\{ project: .*story: .*rotate: true, by: "orchestrator" \}\)/);
+  assert.equal(automaticallyRotated.rotated, true);
+  assert.equal(automaticallyRotated.movedEntries, 1);
+  assert.deepEqual(automaticallyRotated.story.entries.map((entry: any) => entry.text), ['y'.repeat(400)]);
+  assert.equal(automaticallyRotated.story.archivedEntries, 2);
+
+  const full = await callTool('story_log', { project, story: story.ref, full: true });
+  assert.deepEqual(full.story.entries.map((entry: any) => entry.seq), [1, 2, 3]);
+  assert.equal(full.story.omittedEntries, 0);
 
   const rotatedAndAppended = await callTool('story_log', {
     project, story: story.ref, rotate: true, by: 'orchestrator', entry: 'DECISION: Rotation retains the new entry.',
   });
+  assert.equal(rotatedAndAppended.rotated, true);
+  assert.equal(rotatedAndAppended.movedEntries, 1);
   assert.deepEqual(rotatedAndAppended.story.entries.map((entry: any) => entry.text), ['Rotation retains the new entry.']);
   assert.equal(rotatedAndAppended.story.archivedEntries, 3);
 });
