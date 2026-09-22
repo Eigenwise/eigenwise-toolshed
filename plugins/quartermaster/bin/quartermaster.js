@@ -41,6 +41,9 @@ Blocked allowlist candidates are summarized by default; --blocked includes up to
 crap reads .claude/quartermaster/crap.json (coverageCommand, lcov, sources, exclude, max, ratchet), needs
 lizard (lizard on PATH, else uvx lizard, else pipx run lizard), and exits 0 pass, 1 gate failed,
 2 prerequisite missing (lizard unresolvable, no lcov, coverage command failed). Default --max ${DEFAULT_MAX}.
+crap measures .tsx and .jsx with lizard's TypeScript reader, not its TSX one, because the TSX reader
+loses brace balance on ordinary JSX and folds the functions below a tag into it. Every offender line
+for those files names its measurement (source=lizard-typescript), and --json carries source per function.
 `;
 
 const BLOCKED_SUMMARY_LIMIT = 5;

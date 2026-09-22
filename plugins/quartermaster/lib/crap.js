@@ -7,6 +7,20 @@ const { spawnSync } = require('node:child_process');
 
 const DEFAULT_MAX = 6;
 const DEFAULT_LCOV = 'coverage/lcov.info';
+/**
+ * lizard's TSX reader abandons an opening tag the moment an attribute is not `name="text"` or
+ * `name={expr}` — a hyphenated or valueless attribute, a spread, even tag text holding `(`, `)`, `;`
+ * or `=` — and re-emits the `{` of every brace attribute it had already matched. Those unbalanced
+ * braces keep the enclosing component open, so it swallows the rest of the file: it reads a
+ * complexity nothing in it branches on, and the functions it swallowed are never gated at all. Its
+ * TypeScript reader never opens that tag tokenizer, so the same bytes under a `.ts`/`.js` name
+ * measure the file honestly. The copy is byte for byte the real file, so line numbers — and with them
+ * coverage ranges and baseline identity — still come from the real file.
+ */
+const READER_SUBSTITUTE_EXTENSION = new Map([['.tsx', '.ts'], ['.jsx', '.js']]);
+const LIZARD_SOURCE = 'lizard';
+const LIZARD_TSX_SOURCE = 'lizard-tsx';
+const LIZARD_SUBSTITUTE_SOURCE = 'lizard-typescript';
 const CONFIG_RELATIVE_PATH = path.join('.claude', 'quartermaster', 'crap.json');
 const INSTALL_HINT = 'install lizard with `uv tool install lizard`, `pipx install lizard`, or `pip install lizard`';
 const LIZARD_CANDIDATES = [
@@ -37,6 +51,27 @@ function comparablePath(projectDir, filePath) {
 function displayPath(projectDir, filePath) {
   const relative = path.relative(projectDir, path.resolve(projectDir, String(filePath).trim()));
   return relative.replaceAll('\\', '/');
+}
+
+/** The name a copy needs for lizard to read it with the TypeScript reader instead of the TSX one. */
+function readerSubstitutePath(relativePath) {
+  const extension = path.extname(relativePath);
+  const substitute = READER_SUBSTITUTE_EXTENSION.get(extension.toLowerCase());
+  return substitute ? `${relativePath.slice(0, -extension.length)}${substitute}` : null;
+}
+
+/** Which measurement a report line came from, so a phantom complexity is diagnosable from the output. */
+function readerSource(relativePath) {
+  return readerSubstitutePath(relativePath) ? LIZARD_TSX_SOURCE : LIZARD_SOURCE;
+}
+
+/** Copies one file into a scratch tree under the name that picks its reader, and returns that name. */
+function writeForReader(targetDir, relativePath, contents) {
+  const copyPath = readerSubstitutePath(relativePath) ?? relativePath;
+  const target = path.join(targetDir, copyPath);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, contents);
+  return copyPath;
 }
 
 function readConfig(projectDir) {
@@ -125,6 +160,7 @@ function rounded(value, places) {
 
 function measure(lizardFunctions, coverage, projectDir) {
   return lizardFunctions.map((entry) => {
+    const file = displayPath(projectDir, entry.file);
     const lines = coverage.get(comparablePath(projectDir, entry.file));
     let executable = 0;
     let covered = 0;
@@ -136,7 +172,7 @@ function measure(lizardFunctions, coverage, projectDir) {
     }
     const ratio = executable ? covered / executable : 0;
     return {
-      file: displayPath(projectDir, entry.file),
+      file,
       line: entry.start,
       function: entry.name,
       ordinal: entry.ordinal,
@@ -144,8 +180,63 @@ function measure(lizardFunctions, coverage, projectDir) {
       coverage: rounded(ratio, 4),
       crap: rounded(crapScore(entry.complexity, ratio), 2),
       unmeasured: executable === 0,
+      source: entry.source ?? readerSource(file),
     };
   });
+}
+
+/**
+ * Measures the .tsx/.jsx files lizard already read, again, through its TypeScript reader. Returns the
+ * replacement rows keyed by the real project-relative path, or null when the project has none.
+ */
+function substituteReaderFunctions({ projectDir, files, runLizard }) {
+  const jsxFiles = [...files].filter((file) => readerSubstitutePath(file));
+  if (!jsxFiles.length) return null;
+
+  const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-jsx-'));
+  try {
+    const realPathByCopy = new Map();
+    for (const file of jsxFiles) {
+      let contents;
+      try {
+        contents = fs.readFileSync(path.resolve(projectDir, file));
+      } catch {
+        continue; // lizard read it and we cannot: leave that file's TSX-reader rows in place.
+      }
+      realPathByCopy.set(writeForReader(temporaryDir, file, contents), file);
+    }
+    if (!realPathByCopy.size) return null;
+
+    const byFile = new Map();
+    // The copies are exactly the files the project run already measured, so this run excludes nothing.
+    for (const entry of parseLizardCsv(runLizard({ cwd: temporaryDir, sources: ['.'], exclude: [] }))) {
+      const file = realPathByCopy.get(displayPath(temporaryDir, entry.file));
+      if (!file) continue;
+      if (!byFile.has(file)) byFile.set(file, []);
+      byFile.get(file).push({ ...entry, file, source: LIZARD_SUBSTITUTE_SOURCE });
+    }
+    return byFile;
+  } finally {
+    fs.rmSync(temporaryDir, { recursive: true, force: true });
+  }
+}
+
+/** Swaps in the TypeScript reader's rows per file, keeping the TSX reader's rows for any file it measured empty. */
+function applySubstituteReader(entries, projectDir, byFile) {
+  const swapped = new Set();
+  const merged = [];
+  for (const entry of entries) {
+    const file = displayPath(projectDir, entry.file);
+    const substitute = byFile?.get(file);
+    if (!substitute?.length) {
+      merged.push({ ...entry, file, source: readerSource(file) });
+      continue;
+    }
+    if (swapped.has(file)) continue;
+    swapped.add(file);
+    merged.push(...substitute);
+  }
+  return merged;
 }
 
 function git(projectDir, args, hint) {
@@ -180,7 +271,7 @@ function runCoverageCommand(command, projectDir) {
   }
 }
 
-function baselineFunctions({ projectDir, ratchet, files, exclude, runLizard }) {
+function baselineFunctions({ projectDir, ratchet, files, runLizard }) {
   const hint = `check that ${JSON.stringify(ratchet)} is a git ref this repository knows`;
   const base = git(projectDir, ['merge-base', 'HEAD', ratchet], hint).trim();
   const changed = new Set(
@@ -194,19 +285,22 @@ function baselineFunctions({ projectDir, ratchet, files, exclude, runLizard }) {
 
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-base-'));
   try {
-    let extracted = 0;
+    // The baseline copies pick their reader the same way the working tree's do, or a .tsx file would
+    // be compared against a phantom complexity on one side of the ratchet and its real one on the other.
+    const realPathByCopy = new Map();
     for (const file of changedHere) {
       const show = spawnSync('git', ['show', `${base}:${file}`], { cwd: projectDir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
       if (show.status !== 0) continue;
-      const target = path.join(temporaryDir, file);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, show.stdout, 'utf8');
-      extracted += 1;
+      realPathByCopy.set(writeForReader(temporaryDir, file, show.stdout), file);
     }
     const byIdentity = new Map();
-    if (extracted) {
-      for (const entry of parseLizardCsv(runLizard({ cwd: temporaryDir, sources: ['.'], exclude }))) {
-        byIdentity.set(`${displayPath(temporaryDir, entry.file)}\u0000${entry.name}\u0000${entry.ordinal}`, entry);
+    if (realPathByCopy.size) {
+      // The scratch tree holds only files the project run already measured, so it excludes nothing of
+      // its own: an exclusion written for `.tsx` would no longer match the `.ts` copy anyway.
+      for (const entry of parseLizardCsv(runLizard({ cwd: temporaryDir, sources: ['.'], exclude: [] }))) {
+        const copyPath = displayPath(temporaryDir, entry.file);
+        const file = realPathByCopy.get(copyPath) ?? copyPath;
+        byIdentity.set(`${file}\u0000${entry.name}\u0000${entry.ordinal}`, entry);
       }
     }
     return { base, changed, byIdentity };
@@ -244,7 +338,15 @@ function crapReport(options) {
   const complexityCsv = options.complexity
     ? fs.readFileSync(path.resolve(projectDir, options.complexity), 'utf8')
     : runLizard({ cwd: projectDir, sources, exclude });
-  const functions = measure(parseLizardCsv(complexityCsv), coverage, projectDir);
+  const parsed = parseLizardCsv(complexityCsv);
+  const substituteReader = options.complexity
+    ? null
+    : substituteReaderFunctions({
+      projectDir,
+      files: new Set(parsed.map((entry) => displayPath(projectDir, entry.file))),
+      runLizard,
+    });
+  const functions = measure(applySubstituteReader(parsed, projectDir, substituteReader), coverage, projectDir);
 
   let baseline = null;
   if (ratchet) {
@@ -252,7 +354,6 @@ function crapReport(options) {
       projectDir,
       ratchet,
       files: new Set(functions.map((entry) => entry.file)),
-      exclude,
       runLizard,
     });
   }
@@ -291,9 +392,12 @@ function crapReport(options) {
 }
 
 function formatReport(report) {
-  const lines = report.failures.map(
-    (entry) => `${entry.file}:${entry.line} ${entry.function} cc=${entry.cc} coverage=${Math.round(entry.coverage * 100)}% CRAP=${entry.crap}`,
-  );
+  const lines = report.failures.map((entry) => {
+    // Name the measurement for the file types lizard has more than one reader for, so a complexity
+    // nothing in the function branches on can be traced to the reader that produced it.
+    const source = entry.source && entry.source !== LIZARD_SOURCE ? ` source=${entry.source}` : '';
+    return `${entry.file}:${entry.line} ${entry.function} cc=${entry.cc} coverage=${Math.round(entry.coverage * 100)}% CRAP=${entry.crap}${source}`;
+  });
   const verdict = report.failures.length ? 'failed' : 'passed';
   let summary = `CRAP gate ${verdict}: ${report.atOrAboveMax} of ${report.functions.length} functions at or above ${report.max}`;
   if (report.ratchet) {

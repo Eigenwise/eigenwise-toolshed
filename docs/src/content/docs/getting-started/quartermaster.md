@@ -66,6 +66,11 @@ It also shows the coverage command for your stack and asks you to pick the thres
 [lizard](https://github.com/terryyin/lizard) for complexity measurement. Setup never installs it. Exit
 2 means a prerequisite or coverage input is missing. Follow the printed hint, then run the gate again.
 
+React files get one extra step. lizard's TSX reader miscounts ordinary JSX badly enough to score a
+component for code that is not in it, so the gate measures `.tsx` and `.jsx` with lizard's TypeScript
+reader instead, from a byte-for-byte copy of your file. Every offender line for those files says which
+measurement produced it (`source=lizard-typescript`).
+
 When setup wires Model Gateway or Sidequest routing, Quartermaster can offer the optional `325000` `autoCompactWindow` setting for a consistent Codex compaction point. Setup asks before writing it. If user or project settings already has a value, it reports which one wins and preserves that value.
 
 If you choose telemetry, Claude hands the setup to Observability and tells you when a restart is needed. You can also decline and continue without it.

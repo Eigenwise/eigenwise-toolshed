@@ -32,6 +32,32 @@ pip install lizard
 Exit 2 also covers a missing LCOV file or a configured coverage command that fails. Fix the printed
 problem, then run the gate again.
 
+## React files (.tsx and .jsx)
+
+lizard 1.24.0, the current release, has a TSX reader that abandons an opening tag as soon as one of
+its attributes is not `name="text"` or `name={expr}`. A hyphenated attribute (`data-testid`), a
+valueless one (`required`), a spread (`{...props}`), even tag text holding `(`, `)`, `;` or `=` is
+enough. It then re-emits the `{` of every brace attribute it had already matched, and those
+unbalanced braces keep the enclosing component open to the end of the file. The component reads a
+complexity nothing in it branches on, and the functions it swallowed are never gated at all.
+
+So the gate measures `.tsx` and `.jsx` through lizard's TypeScript reader instead, by handing lizard a
+byte-for-byte copy of the file under a `.ts` or `.js` name. Nothing in the source is rewritten: line
+numbers, and with them coverage ranges and the ratchet's baseline pairing, still come from the real
+file, and the baseline side of the ratchet is read the same way.
+
+Every offender line for one of these files names the measurement behind it, and `--json` carries the
+same `source` for every function:
+
+```text
+src/sale.tsx:27 SaleTotals cc=3 coverage=0% CRAP=12 source=lizard-typescript
+```
+
+`source=lizard-typescript` is the reader above. `source=lizard-tsx` means the file was measured by
+lizard's TSX reader after all, which happens only when the gate was handed a ready-made
+`--complexity` CSV or could not read the file; treat a complexity that no branch in the function
+explains as this defect, not as real complexity.
+
 ## Produce LCOV coverage
 
 Pick the row for the detected stack and use its output path in `lcov`. The test command is still the

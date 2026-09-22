@@ -41,6 +41,15 @@ function functionNamed(report, name) {
   return report.functions.find((entry) => entry.function === name);
 }
 
+/** The gate resolves lizard itself; skip only when none of the three ways to reach it works here. */
+function lizardResolves() {
+  for (const [command, leading] of [['lizard', []], ['uvx', ['lizard']], ['pipx', ['run', 'lizard']]]) {
+    const probe = spawnSync(command, [...leading, '--version'], { encoding: 'utf8' });
+    if (!probe.error && probe.status === 0) return true;
+  }
+  return false;
+}
+
 test('CRAP comes from the lcov lines inside each function, whatever slashes the lcov used', () => {
   const projectDir = fixtureProject({
     // lizard reports src/sample.js with forward slashes and src\sample.py with backslashes; the lcov
@@ -241,4 +250,103 @@ test('the real lizard backend measures a JavaScript and a Python file end to end
     ['src/sample.js cc=2 crap=2.5', 'src/sample.py cc=2 crap=2.15'],
   );
   assert.equal(report.unmeasured, 0);
+});
+
+test('a .tsx tag lizard gives up on cannot invent complexity, or hide the function it swallowed', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  // lizard's own TSX reader reads this fixture as one SaleField spanning lines 16-33 at cc=3 and never
+  // reports SaleTotals at all. The hand counts in the fixture are SaleField 1, packsLabel 2, SaleTotals 3.
+  const projectDir = fs.realpathSync.native(
+    fixtureProject({
+      'src/sale.tsx': fs.readFileSync(path.join(__dirname, 'fixtures', 'jsx-phantom-complexity.tsx'), 'utf8'),
+      'coverage/lcov.info': 'SF:src/sale.tsx\nDA:17,1\nDA:28,0\nend_of_record\n',
+    }),
+  );
+
+  const result = runCli(['--json', '--max', '20'], projectDir);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(
+    report.functions.map((entry) => `${entry.function}@${entry.line} cc=${entry.cc} ${entry.source}`).sort(),
+    [
+      'SaleField@16 cc=1 lizard-typescript',
+      'SaleTotals@27 cc=3 lizard-typescript',
+      'packsLabel@25 cc=2 lizard-typescript',
+    ],
+  );
+
+  const gated = runCli(['--max', '2'], projectDir);
+  assert.equal(gated.status, 1, gated.stderr);
+  assert.match(gated.stdout, /^src\/sale\.tsx:27 SaleTotals cc=3 coverage=0% CRAP=12 source=lizard-typescript$/m);
+});
+
+test('the TypeScript reader measures the real .tsx bytes, under a name that only picks the reader', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'fixtures', 'jsx-phantom-complexity.tsx'), 'utf8');
+  const projectDir = fs.realpathSync.native(
+    fixtureProject({ 'src/sale.tsx': source, 'coverage/lcov.info': 'SF:src/sale.tsx\nDA:17,1\nend_of_record\n' }),
+  );
+  const copies = [];
+  const runLizard = ({ cwd }) => {
+    if (path.resolve(cwd) === path.resolve(projectDir)) {
+      return '5,3,40,1,18,"SaleField@16-33@./src/sale.tsx","./src/sale.tsx","SaleField","SaleField ( props )",16,33\n';
+    }
+    // The scratch tree is gone by the time crapReport returns, so read it while lizard would have.
+    copies.push({ names: fs.readdirSync(path.join(cwd, 'src')), text: fs.readFileSync(path.join(cwd, 'src', 'sale.ts'), 'utf8') });
+    return '5,1,40,1,5,"SaleField@16-20@./src/sale.ts","./src/sale.ts","SaleField","SaleField ( props )",16,20\n';
+  };
+
+  const report = crapReport({ projectDir, runLizard });
+
+  assert.deepEqual(copies.map((copy) => copy.names), [['sale.ts']], 'the copy is named for the reader, not rewritten in place');
+  assert.equal(copies[0].text, source, 'the copy is the real file byte for byte');
+  assert.deepEqual(
+    report.functions.map((entry) => `${entry.file}:${entry.line} cc=${entry.cc} ${entry.source}`),
+    ['src/sale.tsx:16 cc=1 lizard-typescript'],
+    'the row comes back under the real .tsx path',
+  );
+});
+
+test('the ratchet reads both sides of a .tsx through the same reader', () => {
+  const projectDir = fs.realpathSync.native(
+    fixtureProject({
+      'src/sale.tsx': 'const SaleField = () => <input className={a} data-testid="x" />;\n',
+      'coverage/lcov.info': 'SF:src/sale.tsx\nDA:1,1\nend_of_record\n',
+    }),
+  );
+  const git = (args) => execFileSync('git', args, { cwd: projectDir, encoding: 'utf8', windowsHide: true });
+  git(['init', '-b', 'main']);
+  git(['config', 'user.name', 'CRAP test']);
+  git(['config', 'user.email', 'crap-test@example.invalid']);
+  git(['add', '.']);
+  git(['commit', '-m', 'base']);
+  fs.writeFileSync(
+    path.join(projectDir, 'src', 'sale.tsx'),
+    'const SaleField = (a: boolean) => <input className={a} data-testid={a ? "x" : "y"} />;\n',
+    'utf8',
+  );
+
+  const seen = [];
+  const runLizard = ({ cwd }) => {
+    if (path.resolve(cwd) === path.resolve(projectDir)) {
+      return '1,9,40,1,1,"SaleField@1-1@./src/sale.tsx","./src/sale.tsx","SaleField","SaleField ( )",1,1\n';
+    }
+    seen.push(fs.readFileSync(path.join(cwd, 'src', 'sale.ts'), 'utf8'));
+    return seen.length === 1
+      ? '1,3,40,1,1,"SaleField@1-1@./src/sale.ts","./src/sale.ts","SaleField","SaleField ( )",1,1\n'
+      : '1,2,40,1,1,"SaleField@1-1@./src/sale.ts","./src/sale.ts","SaleField","SaleField ( )",1,1\n';
+  };
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.equal(seen.length, 2, 'the working tree and the baseline each get a TypeScript-reader copy');
+  assert.match(seen[0], /a \? "x" : "y"/, 'the first copy is the working tree');
+  assert.match(seen[1], /data-testid="x"/, 'the second copy is the committed baseline');
+  assert.deepEqual(
+    report.failures.map((entry) => `${entry.file} ${entry.reason} cc=${entry.cc} baselineCc=${entry.baselineCc} ${entry.source}`),
+    ['src/sale.tsx ratchet cc=3 baselineCc=2 lizard-typescript'],
+    'the baseline row pairs with the working-tree row under the real .tsx path',
+  );
 });
