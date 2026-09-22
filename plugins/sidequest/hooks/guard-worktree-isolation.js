@@ -156,6 +156,22 @@ function canonicalPath(value) {
   const kernel = require(runtimeModule("kernel/worktree"));
   return kernel.canonicalPath(value);
 }
+function boardVerificationEvidencePath(target, evidenceDirectory) {
+  try {
+    const store = require(runtimeModule("store"));
+    return store.boardVerificationEvidencePath(target, evidenceDirectory);
+  } catch (_) {
+    return false;
+  }
+}
+function dispatchEvidenceDirectory(found) {
+  try {
+    const store = require(runtimeModule("store"));
+    return store.dispatchEvidenceDirectory(found.project, found.ref);
+  } catch (_) {
+    return null;
+  }
+}
 function executorAgent(type) {
   if (!type) return false;
   try {
@@ -379,6 +395,7 @@ function main() {
     bindObservedRuntimeIdentity(input, agentId, executor, repo.root);
     found = isolationExpectation(input, agentId, executor, true, repo.root);
   }
+  if (boardVerificationEvidencePath(target, dispatchEvidenceDirectory(found))) return;
   if (found?.terminal) {
     writeDeny("PreToolUse", terminalRefusal(found, target));
     return;

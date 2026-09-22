@@ -102,6 +102,28 @@ function createDispatch(dependencies) {
     const insideRepository = relative === "" || !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
     return insideRepository ? path.join(path.dirname(path.resolve(repository)), ".sidequest-verification", safeSlug, safeRef) : directory;
   }
+  function dispatchEvidenceDirectory(project, ref) {
+    const state = dispatchState(getTicket(project, ref));
+    return state && state.evidenceDirectory ? String(state.evidenceDirectory) : null;
+  }
+  function segmentsUnder(root, target) {
+    const relative = path.relative(canonicalPath(root), canonicalPath(path.resolve(target))).replace(/\\/g, "/");
+    const outside = !relative || relative === ".." || relative.startsWith("../") || path.isAbsolute(relative);
+    return outside ? [] : relative.split("/");
+  }
+  function trimmedString(value) {
+    return String(value || "").trim();
+  }
+  function boardVerificationEvidencePath(target, evidenceDirectory) {
+    const requested = trimmedString(target);
+    const root = trimmedString(evidenceDirectory);
+    if (!requested || !root) return false;
+    try {
+      if (fs.lstatSync(requested).isSymbolicLink()) return false;
+    } catch (_) {
+    }
+    return segmentsUnder(root, requested).length > 0;
+  }
   function writeDispatchTokenFile(ticket) {
     const file = dispatchTokenFile(ticket);
     if (!file) throw new Error("dispatch token file is unavailable");
@@ -2773,6 +2795,8 @@ function createDispatch(dependencies) {
     dispatchIdentityDiagnosis,
     dispatchIsolationExpectation,
     dispatchUnboundClaim,
+    boardVerificationEvidencePath,
+    dispatchEvidenceDirectory,
     recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,

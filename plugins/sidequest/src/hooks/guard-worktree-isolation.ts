@@ -6,7 +6,9 @@ import { writeDeny } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 import {
   bindObservedRuntimeIdentity,
+  boardVerificationEvidencePath,
   canonicalPath,
+  dispatchEvidenceDirectory,
   enclosingCheckout,
   executorAgent,
   identityDiagnosis,
@@ -220,6 +222,9 @@ function main(): void {
 
   const target = targetPath(input);
   if (!target) return;
+  // No enclosing checkout at all already means the guard allows the write, so that case is resolved
+  // first: it is the common shape of an evidence or scratch write, and it must not pay for loading
+  // `lib/store.js` just to learn what the next line would have told it for free.
   const repo = enclosingCheckout(path.dirname(canonicalPath(target)));
   if (!repo) return;
   let found = isolationExpectation(input, agentId, executor, true, repo.root);
@@ -227,6 +232,11 @@ function main(): void {
     bindObservedRuntimeIdentity(input, agentId, executor, repo.root);
     found = isolationExpectation(input, agentId, executor, true, repo.root);
   }
+  // The board's evidence directory can itself sit inside a Git checkout that belongs to nobody's
+  // dispatch, and resolving that checkout is what turned the write the briefing asked for into a lease
+  // refusal (GH-163). Checked against the just-resolved dispatch's OWN recorded evidenceDirectory,
+  // never a path shape, so an invented slug or another ticket's directory stays refused.
+  if (boardVerificationEvidencePath(target, dispatchEvidenceDirectory(found))) return;
   if (found?.terminal) {
     writeDeny('PreToolUse', terminalRefusal(found, target));
     return;
