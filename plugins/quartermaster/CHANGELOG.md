@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.4 (2026-09-22)
+
+Released in v3.575.0, up from 0.11.3.
+
+### Fixes
+
+- Align CRAP gates with the strict six-point standard (SQ-3047)
+  Makes CRAP measurement fail closed, checks only functions a change writes, and uses the shared quality parser for Quartermaster and plugin sources.
+
 ## 0.11.3 (2026-09-22)
 
 Released in v3.574.0, up from 0.11.2.
