@@ -150,7 +150,7 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(byName.get('update')?.inputSchema.properties?.verify?.description, addVerify);
   assert.match(byName.get('add')?.inputSchema.properties?.complexity?.description ?? '', /why required/);
   assert.match(byName.get('supersede_submission')?.inputSchema.properties?.supersededBy?.description ?? '', /ticket ref, not a commit/);
-  assert.match(byName.get('release')?.description ?? '', /reason required/);
+  assert.match(byName.get('release')?.description ?? '', /reason\/kind required/);
   assert.match(byName.get('groomClose')?.description ?? '', /Frozen ticket target/);
   assert.match(byName.get('groomClose')?.description ?? '', /abandonSubmission:true/);
   assert.match(byName.get('groomClose')?.description ?? '', /reset\/working-tree\/manual/);
