@@ -123,6 +123,19 @@ and bind it:
 `integrate` with `deliveryCommit` refuses a closed repair with `submission_required`; the refusal names
 this same flow. Nothing here edits board state by hand or moves the immutable candidate.
 
+### A squash-merged branch whose source was deleted
+
+`integrate` refuses `expected_upstream_diverged` when the dispatch's frozen expected upstream no longer
+resolves from the target — typically because a maintainer squashed and deleted the branch by hand, so the
+candidate's own commit never lands and no automatic merge can reconcile it. The refusal names the
+recovery:
+
+1. Re-apply the verified candidate onto the current target (cherry-pick or squash) and re-gate it there.
+2. Record it with `groomClose`, passing `deliveryCommit: <the pinned candidate>` and
+   `deliveryMethod: "manual"` (CLI `--delivery-commit <sha> --delivery-method manual`).
+3. Keep the candidate's content present in the integration working tree; the merged-tree verifier and
+   content check still run against it.
+
 If a repair ticket deliberately delivers an earlier parked submission, do not replay the obsolete range. Use MCP `supersede_submission` with the earlier ref, the later integrated repair ref, concise closure evidence, and `reviewedReplacements` for every original path whose delivered content intentionally differs. The control plane requires the repair's recorded delivery to include every original changed path, preserves the earlier submission and its lineage under `supersededBy`, marks it done, and removes its pending-submission warning. A missing path, an unintegrated repair, or unreviewed divergent content leaves the original submission parked.
 
 ## Integration mode: where delivery happens versus what proves a candidate landed

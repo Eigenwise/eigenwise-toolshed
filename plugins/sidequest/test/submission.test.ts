@@ -1576,8 +1576,9 @@ test('SQ-2355: integration reports a diverged expected upstream without an empty
     assert.strictEqual(refused.reason, 'expected_upstream_diverged');
     assert.match(refused.message, new RegExp(`recorded expected upstream ${expectedUpstream}`));
     assert.match(refused.message, new RegExp(`no longer reachable from target branch ${divergenceBranch}`));
-    assert.match(refused.message, /manually merge the verified candidate onto the current target, re-gate it/);
-    assert.match(refused.message, /groomClose using deliveryCommit/);
+    assert.match(refused.message, /re-apply the verified candidate onto the current target, re-gate it/);
+    assert.match(refused.message, /groomClose passing deliveryCommit/);
+    assert.match(refused.message, /deliveryMethod/);
     assert.doesNotMatch(refused.message, /outside its admitted scope:/);
   } finally {
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
@@ -1585,14 +1586,15 @@ test('SQ-2355: integration reports a diverged expected upstream without an empty
   }
 });
 
-// The refusal above prescribes a recovery — merge the candidate by hand, re-gate it,
-// then record delivery with groomClose using deliveryCommit — and the same expected
-// upstream check then refused that recovery, so a candidate whose integration branch
-// was squash-merged and deleted before it submitted had no closing move but
-// abandonSubmission, which records shipped work as discarded (SQ-23,
-// cardinventorymanagement SQ-212). The ancestry assertion guards the merge integrate
-// performs; a recorded manual delivery proves its own landing from the pinned
-// candidate's content, so it no longer inherits that guard.
+// The refusal above prescribes a recovery — re-apply the candidate by hand, re-gate it,
+// then record delivery with groomClose passing deliveryCommit and deliveryMethod
+// "manual" — and the same expected upstream check then refused that recovery, so a
+// candidate whose integration branch was squash-merged and deleted before it submitted
+// had no closing move but abandonSubmission, which records shipped work as discarded
+// (SQ-23, GH-233). The ancestry assertion guards the merge integrate performs; a
+// recorded manual delivery proves its own landing from the pinned candidate's content,
+// so it no longer inherits that guard — but only once that candidate is itself
+// unreachable from the target, not merely because a method was named (GH-233 review).
 test('SQ-23: groomClose records the manual recovery its own expected_upstream_diverged refusal prescribes', async () => {
   cleanBranch();
   const originalConfig = store.boardConfig(slug);
@@ -1664,7 +1666,8 @@ test('SQ-23: groomClose records the manual recovery its own expected_upstream_di
     });
     assert.strictEqual(refusedIntegration.ok, false);
     assert.strictEqual(refusedIntegration.reason, 'expected_upstream_diverged');
-    assert.match(refusedIntegration.message, /record delivery with groomClose using deliveryCommit/);
+    assert.match(refusedIntegration.message, /record it with groomClose passing deliveryCommit/);
+    assert.match(refusedIntegration.message, /deliveryMethod/);
 
     // The waiver belongs to the recorded reset, working-tree or manual delivery, which
     // names the pinned candidate and proves its content. A delivery that claims the
@@ -1696,6 +1699,139 @@ test('SQ-23: groomClose records the manual recovery its own expected_upstream_di
     assert.strictEqual(recorded.submission.integration.deliveryIdentity.kind, 'pinned-working-tree');
     assert.strictEqual(recorded.submission.integration.deliveryIdentity.method, 'manual');
     assert.strictEqual(recorded.submission.integration.contentCommit, candidate);
+
+    // GH-233 review item 3: MCP `integrate`'s admission pre-gate forwarded deliveryCommit
+    // and deliveryInteractionCommit to validateIntegrationSubmission but dropped
+    // deliveryMethod, so integrate refused this exact recovery even though groomClose
+    // (which calls recordDeliveredSubmission directly) already accepted it above.
+    // Reproduce the same squash-and-delete shape for a second ticket and exercise the
+    // integrate surface instead of groomClose.
+    const recoveryFile2 = path.join(PROJECT_DIR, 'lib', 'squash-recovery-mcp.js');
+    const ticket2 = addTicket('squash-merged upstream recovery via MCP integrate', { files: ['lib/squash-recovery-mcp.js'] });
+    fs.writeFileSync(recoveryFile2, 'candidate-mcp\n');
+    git(['add', 'lib/squash-recovery-mcp.js']);
+    git(['commit', '-m', 'mcp candidate work']);
+    fs.writeFileSync(recoveryFile2, 'candidate-mcp\ncandidate-mcp-follow-up\n');
+    git(['commit', '-am', 'mcp candidate follow-up']);
+    const candidate2 = git(['rev-parse', 'HEAD']);
+    const candidateCommits2 = git(['rev-list', '--reverse', `${deliveredSquash}..${candidate2}`]).split('\n');
+    pin(ticket2, candidate2);
+    assert.strictEqual(store.claimTicket(slug, ticket2.ref, 'squash-recovery-mcp-source', {
+      direct: true,
+      reason: 'The squash-recovery MCP fixture requires a local direct claim.',
+    }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, ticket2.ref, 'squash-recovery-mcp-source', {
+      commit: candidate2,
+      verify: 'node -e "process.exit(0)"',
+    }).ok, true);
+    const submitted2 = store.getTicket(slug, ticket2.ref);
+    Object.assign(submitted2.submission, {
+      base: deliveredSquash,
+      upstream: targetBranch,
+      upstreamCommit: deliveredSquash,
+      integrationMode: 'local',
+      integrationBranch: targetBranch,
+      commits: candidateCommits2,
+      changedPaths: ['lib/squash-recovery-mcp.js'],
+    });
+    submitted2.dispatch = {
+      outcome: 'submitted',
+      terminalAt: new Date(Date.now() - 60_000).toISOString(),
+      attempts: [{ outcome: 'submitted', commit: candidate2, agentId: 'squash-recovery-mcp-source', terminalAt: new Date(Date.now() - 60_000).toISOString() }],
+    };
+    persist(submitted2);
+
+    // Land the mcp candidate's content on a branch built fresh from origin/main, disjoint
+    // from deliveredSquash, so the recorded expected upstream (deliveredSquash) is itself
+    // unreachable from the recreated target too — the same squash-and-delete shape as the
+    // groomClose case above, exercised through integrate instead.
+    git(['checkout', '-f', '-B', `${mainBranch}-mcp`, 'origin/main']);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(recoveryFile2, 'candidate-mcp\ncandidate-mcp-follow-up\n');
+    git(['add', 'lib/squash-recovery-mcp.js']);
+    git(['commit', '-m', 'squash merge of the mcp re-gated branch']);
+    const deliveredSquash2 = git(['rev-parse', 'HEAD']);
+    git(['checkout', '-f', '-B', targetBranch, deliveredSquash2]);
+    assert.notStrictEqual(git(['merge-base', deliveredSquash, deliveredSquash2]), deliveredSquash, 'the recorded expected upstream is unreachable from the recreated target');
+    assert.notStrictEqual(git(['merge-base', candidate2, deliveredSquash2]), candidate2, 'the candidate itself is unreachable from the recreated target');
+
+    const deliveredViaIntegrate = await callMcp('integrate', {
+      project: PROJECT_DIR,
+      ref: ticket2.ref,
+      by: 'squash-recovery-integrator',
+      deliveryCommit: candidate2,
+      deliveryMethod: 'manual',
+      reason: 'The candidate was cherry-picked onto the recreated target, re-gated, and squash-merged; the target retains its content.',
+    });
+    assert.strictEqual(deliveredViaIntegrate.ok, true, deliveredViaIntegrate.message);
+
+    const recorded2 = store.getTicket(slug, ticket2.ref);
+    assert.strictEqual(recorded2.status, 'done');
+    assert.strictEqual(recorded2.submission.integration.mode, 'recorded-working-tree');
+    assert.strictEqual(recorded2.submission.integration.deliveryCommit, candidate2);
+    assert.strictEqual(recorded2.submission.integration.deliveryIdentity.kind, 'pinned-working-tree');
+    assert.strictEqual(recorded2.submission.integration.deliveryIdentity.method, 'manual');
+    assert.strictEqual(recorded2.submission.integration.contentCommit, candidate2);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+// GH-233 review item 5: a mistyped deliveryMethod used to run into
+// recordDeliveredSubmission's own diverged-upstream preflight before its
+// deliveryMethod validation ran, so the refusal named expected_upstream_diverged
+// instead of the actual mistake. Validating deliveryMethod first names it correctly
+// even against the exact diverged-upstream shape that used to mask it.
+test('groomClose: a mistyped deliveryMethod names itself instead of the diverged-upstream preflight it would otherwise trip', async () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const divergenceBranch = `invalid-method-diverged-${process.pid}-${Date.now()}`;
+  try {
+    const ticket = addTicket('invalid delivery method upstream recovery', { files: ['lib/invalid-method.js'] });
+    const expectedUpstream = git(['rev-parse', 'HEAD']);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'invalid-method.js'), 'candidate\n');
+    git(['add', 'lib/invalid-method.js']);
+    git(['commit', '-m', 'invalid-method candidate']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'invalid-method-worker', {
+      direct: true,
+      reason: 'The invalid-deliveryMethod fixture requires a local direct claim.',
+    }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'invalid-method-worker', {
+      commit: candidate,
+      verify: 'node -e "process.exit(0)"',
+    }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    Object.assign(submitted.submission, {
+      base: expectedUpstream,
+      upstream: divergenceBranch,
+      upstreamCommit: expectedUpstream,
+      integrationBranch: divergenceBranch,
+      commits: [candidate],
+      changedPaths: ['lib/invalid-method.js'],
+    });
+    persist(submitted);
+
+    git(['checkout', '--orphan', divergenceBranch]);
+    git(['rm', '-rf', '.']);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'replacement integration history\n');
+    git(['add', 'README.md']);
+    git(['commit', '-m', 'replacement integration history']);
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: divergenceBranch });
+
+    const refused = await callMcp('groomClose', {
+      project: PROJECT_DIR,
+      ref: ticket.ref,
+      by: 'invalid-method-integrator',
+      deliveryCommit: candidate,
+      deliveryMethod: 'Manual',
+      reason: 'A mistyped deliveryMethod must name itself, not the diverged upstream it would otherwise trip.',
+    });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'invalid_delivery_method');
   } finally {
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
     cleanBranch();
