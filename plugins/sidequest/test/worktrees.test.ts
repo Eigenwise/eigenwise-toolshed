@@ -140,6 +140,19 @@ function createInstalledBinaryLinks(worktree: string, names: readonly string[]):
   }
 }
 
+// A Windows junction can only hold an absolute target, so a shim `createInstalledBinaryLinks` writes
+// there resolves under whatever tree it was created in -- always absolute, on every platform, so the
+// fixture reproduces the same shape without depending on junction support.
+function createAbsoluteInTreeDependencyLink(root: string, relativePath: string, targetRelativePath: string): string {
+  const target = path.join(root, ...targetRelativePath.split('/'));
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, 'sentinel.txt'), 'installed by npm ci');
+  const link = path.join(root, ...relativePath.split('/'));
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+  return link;
+}
+
 function matchingWorktreeLease(worktree: string, ticket: any) {
   const dispatch = ticket.dispatch;
   return {
@@ -1833,6 +1846,35 @@ test('a recorded dependency link still refuses without a lease and when its targ
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
     fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+// releaseQuarantinedDependencyLinks judges the moved tree at its quarantine destination, so an
+// in-tree link with an absolute target -- the only shape a Windows junction can take, and what
+// createInstalledBinaryLinks writes on win32 -- still resolves under the path the tree was renamed
+// from. Without that vacated source root, the safety walk read it as escaping and parked the tree
+// instead of deleting it (#223 review item 1); passing it is what tells the walk the target still
+// stays with the tree.
+test('releaseQuarantinedDependencyLinks accepts an absolute-target link that still resolves in the path the tree was renamed from', async () => {
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-vacated-source-quarantine-'));
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-vacated-source-'));
+  createAbsoluteInTreeDependencyLink(source, 'node_modules/.bin/tsx', 'node_modules/tsx/dist');
+  try {
+    const quarantine = await worktrees.quarantineCandidate({ path: source }, 'moved for test', { quarantineDir });
+    assert.equal(quarantine.ok, true);
+    const destination = quarantine.destination;
+
+    const withoutVacatedSource = worktrees.releaseQuarantinedDependencyLinks(destination, [], destination);
+    assert.equal(withoutVacatedSource.ok, false);
+    assert.equal(withoutVacatedSource.reason, 'dependency_link_untrusted');
+    assert.match(withoutVacatedSource.detail, /escapes worktree/);
+
+    const withVacatedSource = worktrees.releaseQuarantinedDependencyLinks(destination, [], source);
+    assert.equal(withVacatedSource.ok, true);
+    assert.equal(fs.lstatSync(path.join(destination, 'node_modules', '.bin', 'tsx')).isSymbolicLink(), true);
+  } finally {
+    if (fs.existsSync(source)) fs.rmSync(source, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
   }
 });
 
