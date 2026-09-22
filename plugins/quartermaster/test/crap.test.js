@@ -333,6 +333,7 @@ test('the ratchet reads both sides of a .tsx through the same reader', () => {
     if (path.resolve(cwd) === path.resolve(projectDir)) {
       return '1,9,40,1,1,"SaleField@1-1@./src/sale.tsx","./src/sale.tsx","SaleField","SaleField ( )",1,1\n';
     }
+    assert.deepEqual(fs.readdirSync(path.join(cwd, 'src')), ['sale.ts'], 'the copy is named for the reader');
     seen.push(fs.readFileSync(path.join(cwd, 'src', 'sale.ts'), 'utf8'));
     return seen.length === 1
       ? '1,3,40,1,1,"SaleField@1-1@./src/sale.ts","./src/sale.ts","SaleField","SaleField ( )",1,1\n'
