@@ -220,6 +220,44 @@ test('deliveryRevision must resolve in the integration checkout and be reachable
   assert.match(unreachable.message, /main/);
 });
 
+test('a deliveryRevision at or below the candidate base cannot hold the landing, attested or not', () => {
+  const fixture = deliveryFixture('predates');
+  const base = store.getTicket(fixture.slug, fixture.ticket.ref).submission.base;
+
+  const predates = record(fixture, { deliveryRevision: fixture.base });
+  assert.equal(predates.ok, false, 'the candidate base predates every line of the candidate');
+  assert.equal(predates.reason, 'delivery_revision_predates_candidate');
+  assert.match(predates.message, new RegExp(base));
+
+  const attested = record(fixture, {
+    deliveryRevision: fixture.base,
+    resolvedPaths: fixture.submittedPaths,
+  });
+  assert.equal(attested.ok, false, 'attesting every submitted path cannot buy back an ancestor revision');
+  assert.equal(attested.reason, 'delivery_revision_predates_candidate');
+});
+
+test('resolvedPaths on a delivery the branch already contains refuses instead of being dropped', () => {
+  const fixture = deliveryFixture('reachable');
+  // -s ours keeps the merge conflict-free: reachability is what this refusal reads,
+  // and it answers before any content proof runs.
+  git(['merge', '-s', 'ours', '--no-edit', '-m', 'land the candidate', fixture.candidate], fixture.repo);
+  assert.equal(git(['merge-base', fixture.candidate, 'HEAD'], fixture.repo), fixture.candidate);
+
+  const attested = record(fixture, {
+    deliveryRevision: fixture.landed,
+    resolvedPaths: [DRIFTED_FILE],
+  });
+  assert.equal(attested.ok, false);
+  assert.equal(attested.reason, 'resolved_paths_invalid');
+  assert.match(attested.message, /already reachable/);
+
+  const delivered = record(fixture, { deliveryRevision: fixture.landed });
+  assert.equal(delivered.ok, true, delivered.message);
+  assert.equal(delivered.integration.contentEvidence, 'candidate_ancestor');
+  assert.equal(delivered.integration.deliveryIdentity.revision, undefined, 'deliveryRevision stays ignored when reachable');
+});
+
 test('a candidate deletion absent from the integration working tree stays preserved content', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-delivery-revision-deletion-'));
   git(['init', '-b', 'main'], repo);

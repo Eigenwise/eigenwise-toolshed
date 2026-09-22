@@ -170,8 +170,10 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
     assert.equal(properties?.deliveryRevision?.pattern, '^[0-9a-fA-F]{7,64}$', `${tool} deliveryRevision`);
     assert.match(properties?.deliveryRevision?.description ?? '', /not the working tree/);
     assert.match(properties?.deliveryRevision?.description ?? '', /Ignored when reachable/);
+    assert.match(properties?.deliveryRevision?.description ?? '', /never an ancestor of the candidate base/);
     assert.equal(properties?.resolvedPaths?.items?.type, 'string', `${tool} resolvedPaths`);
     assert.match(properties?.resolvedPaths?.description ?? '', /needs deliveryRevision/);
+    assert.match(properties?.resolvedPaths?.description ?? '', /refused when reachable/);
   }
   assert.match(byName.get('groomClose')?.description ?? '', /deliveryRevision/);
   assert.match(byName.get('integrate')?.description ?? '', /deliveryRevision/);

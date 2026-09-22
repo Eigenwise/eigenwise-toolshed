@@ -70,14 +70,20 @@ gate covers the newer target content. An assembly refusal leaves every submitted
 - A candidate that was rebased, squash-merged, or conflict-resolved before it landed never matches that
   working tree byte for byte, and later merges keep moving it. Add `--delivery-revision <sha>` (MCP
   `deliveryRevision`) naming the landed revision. It must resolve in the integration checkout and be
-  reachable from the recorded target, or delivery refuses `delivery_revision_not_reachable`. Each
-  submitted path is then proven at that revision's tree instead of the working tree: identical blob,
-  candidate deletion absent there, or the candidate's base-relative patch reverse-applying onto that
-  tree. Anything left over refuses `delivery_content_diverged` and names it.
+  reachable from the recorded target, or delivery refuses `delivery_revision_not_reachable`. A revision
+  that is an ancestor of the candidate's own base predates every line of the candidate and refuses
+  `delivery_revision_predates_candidate`, attested or not. Each submitted path is then proven at that
+  revision's tree instead of the working tree: identical blob, candidate deletion absent there, or the
+  candidate's base-relative patch reverse-applying onto that tree. Anything left over refuses
+  `delivery_content_diverged` and names it. Reverse-apply proves the candidate's own hunks are present
+  in that tree, not that the landed blob equals the reviewed one, so a landing that also carries
+  unrelated drift still records as `reverseApplied`.
 - Name a genuinely hand-resolved path with `--resolved-path <path>` (MCP `resolvedPaths`), repeated per
   path, and let the closure reason carry the resolution evidence. Only submitted paths the proof itself
   found diverging may be attested — anything else, including `resolvedPaths` without
-  `deliveryRevision`, refuses `resolved_paths_invalid`. The record keeps `contentEvidence`
+  `deliveryRevision` and `resolvedPaths` on a delivery whose candidate is already reachable, refuses
+  `resolved_paths_invalid`. `deliveryRevision` alone stays ignored on a reachable delivery, but an
+  attestation there can only be a mistake, so it is refused rather than dropped. The record keeps `contentEvidence`
   `delivery_revision_contains_candidate`, or `:operator_resolved` when anything was attested, plus a
   `contentProof` listing the identical, reverse-applied, deleted, and operator-resolved paths.
 - When a working-tree delivery cannot record its initial dirty baseline, it still dispatches without an inherited-path exemption, so every dirty path is attributed to the executor at closeout.

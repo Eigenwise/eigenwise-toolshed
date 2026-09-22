@@ -110,11 +110,13 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 24000 for VERIFICATION_WAIVER_PROP's type: 'object' (SQ-2 / GitHub #109): an MCP host that
 // enforces the declared schema type refused a top-level verificationWaiver because the property listed
 // `properties` without `type: 'object'`. +91 bytes compacted, while preserving the 2.5KB reserve.
-// Raised from 24100 for groomClose/integrate deliveryRevision and resolvedPaths (GitHub #144): they are
-// the only route that closes a candidate rebased or squash-merged before it landed, and both the input
-// shape and the "reachable revision, not the working tree" condition have to be right on the FIRST call.
-// +850 bytes compacted, while preserving the 2.5KB reserve.
-const MCP_TOOLS_LIST_MAX_BYTES = 25000;
+// Raised from 24100 for two additions that land off the same base and both add schema bytes:
+// groomClose/integrate deliveryRevision and resolvedPaths (GitHub #144), the only route that closes a
+// candidate rebased or squash-merged before it landed, where the input shape and the "reachable
+// revision, not the working tree" condition have to be right on the FIRST call; and update addFiles /
+// removeFiles with scopeRequest grant (GitHub #173). +911 and +395 bytes compacted, so whichever
+// merges second still preserves the 2.5KB reserve.
+const MCP_TOOLS_LIST_MAX_BYTES = 25400;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -307,8 +309,8 @@ async function runTool(tool: ToolDefinition, rawArgs: any) {
 const ATTESTATION_VERIFY_CONTRACT = 'For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.';
 // A rebased or squash-merged candidate never byte-matches the working tree, and the
 // refusal only reaches an operator who already knows these two properties exist.
-const DELIVERY_REVISION_CONTRACT = 'Landed revision reachable from the target; proves each submitted path at its tree, not the working tree. Ignored when reachable.';
-const RESOLVED_PATHS_CONTRACT = 'Diverging submitted paths resolved by hand; needs deliveryRevision. reason is the evidence.';
+const DELIVERY_REVISION_CONTRACT = 'Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable.';
+const RESOLVED_PATHS_CONTRACT = 'Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable. reason is the evidence.';
 
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> = {
   context_page: {
