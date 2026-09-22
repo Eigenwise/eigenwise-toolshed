@@ -128,12 +128,28 @@ function functionIdentity(entry) {
   return `${entry.file}\u0000${entry.function}\u0000${entry.ordinal}`;
 }
 
+function fingerprintIdentity(entry) {
+  return `${entry.file}\u0000${entry.fingerprint}`;
+}
+
+/** Every bucket is a queue, so pairing can hand one baseline row to one current function and no more. */
+function pushBucket(index, key, entry) {
+  const bucket = index.get(key);
+  if (bucket) bucket.push(entry);
+  else index.set(key, [entry]);
+}
+
+function indexBaselineEntry(index, entry) {
+  pushBucket(index.byIdentity, functionIdentity(entry), entry);
+  if (entry.fingerprint) pushBucket(index.byFingerprint, fingerprintIdentity(entry), entry);
+}
+
 function baselineFunctions({ projectDir, baseReference, files, exclude, runLizard }) {
   const hint = `check that ${JSON.stringify(baseReference)} is a git ref this repository knows`;
   const base = git(projectDir, ['merge-base', 'HEAD', baseReference], hint).trim();
   const changed = new Set(git(projectDir, ['diff', '--name-only', '--relative', base], hint).split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
   const changedHere = [...files].filter((file) => changed.has(file));
-  const byIdentity = new Map();
+  const index = { byIdentity: new Map(), byFingerprint: new Map() };
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-base-'));
   try {
     for (const file of changedHere) {
@@ -143,10 +159,10 @@ function baselineFunctions({ projectDir, baseReference, files, exclude, runLizar
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, show.stdout, 'utf8');
       for (const entry of measure(parseLizardCsv(runLizard({ cwd: temporaryDir, sources: [file], exclude })), new Map(), temporaryDir)) {
-        byIdentity.set(functionIdentity(entry), entry);
+        indexBaselineEntry(index, entry);
       }
     }
-    return { base, changed, byIdentity };
+    return { base, changed, ...index };
   } finally {
     fs.rmSync(temporaryDir, { recursive: true, force: true });
   }
@@ -196,13 +212,55 @@ function unmeasuredLizardFiles(projectDir, sources, entries, changed) {
     .map((file) => displayPath(projectDir, file));
 }
 
+/** A claimed baseline row is spent: the next current function asking for it has to look elsewhere. */
+function claimFirstUnclaimed(bucket, claimed) {
+  for (const candidate of bucket ?? []) {
+    if (claimed.has(candidate)) continue;
+    claimed.add(candidate);
+    return candidate;
+  }
+  return null;
+}
+
+function matchByFingerprint(baseline, entry, claimed) {
+  if (!entry.fingerprint) return null;
+  return claimFirstUnclaimed(baseline.byFingerprint.get(fingerprintIdentity(entry)), claimed);
+}
+
+function matchByPosition(baseline, entry, claimed) {
+  return claimFirstUnclaimed(baseline.byIdentity.get(functionIdentity(entry)), claimed);
+}
+
+function claimRound(match, pairing) {
+  for (const entry of pairing.functions) {
+    if (pairing.pairs.has(entry)) continue;
+    const previous = match(pairing.baseline, entry, pairing.claimed);
+    if (previous) pairing.pairs.set(entry, previous);
+  }
+}
+
+/**
+ * Position among namesakes cannot identify a function across an insertion: one added `run` shifts every
+ * later `run` onto a sibling's baseline row, so untouched code reads as changed and answers to the
+ * ceiling it was already over. Identical source text, whitespace aside, is the stronger claim, so it pairs
+ * across every function before position is consulted at all. Pairing is one-to-one, which is what keeps a
+ * copy-pasted function new: the baseline copy of the file has only one row to give, and its twin took it.
+ */
+function pairWithBaseline(functions, baseline) {
+  const pairing = { functions, baseline, claimed: new Set(), pairs: new Map() };
+  claimRound(matchByFingerprint, pairing);
+  claimRound(matchByPosition, pairing);
+  return pairing.pairs;
+}
+
+function sameFingerprint(entry, previous) {
+  return Boolean(entry.fingerprint && entry.fingerprint === previous?.fingerprint);
+}
+
 function changedFunctions(functions, baseline) {
   if (!baseline) return functions;
-  return functions.filter((entry) => {
-    if (!baseline.changed.has(entry.file)) return false;
-    const previous = baseline.byIdentity.get(functionIdentity(entry));
-    return !previous || !entry.fingerprint || !previous.fingerprint || entry.fingerprint !== previous.fingerprint;
-  });
+  const pairs = pairWithBaseline(functions, baseline);
+  return functions.filter((entry) => baseline.changed.has(entry.file) && !sameFingerprint(entry, pairs.get(entry)));
 }
 
 function crapReport(options) {
