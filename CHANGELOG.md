@@ -8,6 +8,21 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.576.0 (2026-09-22)
+
+### sidequest 5.3.0 → 5.3.1
+
+#### Fixes
+
+- Sidequest MCP refusals name the complete next call (SQ-3068)
+  `release` now reports missing reason and kind together before it changes a
+  claim. A full story log names the exact orchestrator rotation call, and that
+  call can rotate then append the pending entry. `groomClose` falls back to the
+  known MCP session identity when `by` is omitted.
+- Story log rotation happens on append (SQ-3069)
+  `story_log` now archives older live entries before an append would exceed the
+  briefing window. `full: true` returns archived history before the live log.
+
 ## v3.575.0 (2026-09-22)
 
 ### Repository
