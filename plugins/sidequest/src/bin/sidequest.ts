@@ -360,8 +360,9 @@ Working the board safely (multi-agent):
     several; "none" clears (update only). 'ready' groups tickets into parallel-safe waves by declared file
     scope: tickets in the same wave never touch overlapping files/directories; untagged tickets never conflict.
   sidequest update ... --add-file path [--add-file path...] / --remove-file path [--remove-file path...]   widen or
-    trim the declared list without replacing it; refused together with --file. Additions apply before removals, so a
-    path named by both is removed. Both are closeout fields, so on a live claim they need MCP update from the
+    trim the declared list without replacing it; refused together with --file, and a --remove-file the ticket does not
+    declare refuses rather than reporting a silent no-op. Additions apply before removals, so a path named by both is
+    removed. Both are closeout fields, so on a live claim they need MCP update from the
     orchestrator's main thread; from the CLI they work once the claim is released. A removal reaches an isolated live
     dispatch at once — it loses a path it may already have written — while a shared-tree dispatch keeps it until
     redispatch. This is how the orchestrator answers a scope refusal without dropping the ticket's existing files —

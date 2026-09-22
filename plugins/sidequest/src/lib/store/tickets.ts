@@ -1165,6 +1165,15 @@ type UpdateTicketOptions = {
   allowLiveClaimCloseoutUpdate?: boolean;
 };
 
+// A removal that matches nothing changed nothing, so a typo would report success and
+// leave the scope the caller thinks it just trimmed. Name the paths instead.
+function assertDeclaredRemovals(ticket?: any, declared?: any[], removals?: any) {
+  const present = new Set(declared!.map((file: string) => file.toLowerCase()));
+  const missing = normalizeFiles(removals).filter((file: string) => !present.has(file.toLowerCase()));
+  if (!missing.length) return;
+  throw new Error(`${ticket.ref}: removeFiles named ${missing.join(', ')}, which this ticket does not declare, so the removal would change nothing. Declared files: ${declared!.join(', ') || '(none)'}.`);
+}
+
 // The declared list this patch asks for, or undefined when it names no file scope at
 // all. files replaces the whole list while addFiles/removeFiles adjust it in place, so
 // a patch carrying both is ambiguous and is rejected here — before any field lands,
@@ -1177,7 +1186,9 @@ function patchedFileScope(ticket?: any, patch?: any) {
   if (!adjusts) return patch.files;
   // Appended first, then dropped: a path named by both addFiles and removeFiles in one
   // call resolves as a removal.
-  return scopeReductionFiles(scopeExpansionFiles(ticket, patch.addFiles), patch.removeFiles);
+  const widened = scopeExpansionFiles(ticket, patch.addFiles);
+  assertDeclaredRemovals(ticket, widened, patch.removeFiles);
+  return scopeReductionFiles(widened, patch.removeFiles);
 }
 
 function patchChangesFiles(ticket?: any, patch?: any) {

@@ -113,8 +113,8 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 24100 for update.addFiles/removeFiles and scopeRequest.grant (GitHub #173). The base
 // carried 75 bytes of slack over the 2.5KB reserve (21525 payload) and had been held there by deleting
 // other property descriptions rather than by raising the cap; these properties and the live-claim rules
-// their descriptions have to state cost 490 bytes, so the payload is 22015 and the ceiling has to be at
-// least 24515. 24600 would be the smallest round value that passes this change alone. 25400 is
+// their descriptions have to state cost 535 bytes, so the payload is 22060 and the ceiling has to be at
+// least 24560. 24600 would be the smallest round value that passes this change alone. 25400 is
 // deliberately higher because GitHub #144 raises the same constant for its own properties: a shared
 // ceiling lets the two land in either order without the second one re-measuring. Any further addition
 // measures its own payload instead of inheriting this.
@@ -319,7 +319,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   update: {
     verify: ATTESTATION_VERIFY_CONTRACT,
     addFiles: 'Appends, keeps rest. Refused with files. Applied before removeFiles.',
-    removeFiles: 'Drops only these, keeps rest. Refused with files. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch.',
+    removeFiles: 'Drops only these, keeps rest. Refused with files, and for a path this ticket does not declare. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch.',
   },
   supersede_submission: { supersededBy: 'Repair ticket ref, not a commit.' },
   comments: {

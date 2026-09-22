@@ -463,7 +463,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Drops only these, keeps rest. Refused with files. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch."
+          "description": "Drops only these, keeps rest. Refused with files, and for a path this ticket does not declare. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch."
         },
         "by": {
           "type": "string"

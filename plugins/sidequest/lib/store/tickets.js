@@ -1006,13 +1006,21 @@ function createTickets(dependencies) {
     const rightFiles = new Set(normalizedRight.map((file) => file.toLowerCase()));
     return normalizedLeft.length === normalizedRight.length && normalizedLeft.every((file) => rightFiles.has(file.toLowerCase()));
   }
+  function assertDeclaredRemovals(ticket, declared, removals) {
+    const present = new Set(declared.map((file) => file.toLowerCase()));
+    const missing = normalizeFiles(removals).filter((file) => !present.has(file.toLowerCase()));
+    if (!missing.length) return;
+    throw new Error(`${ticket.ref}: removeFiles named ${missing.join(", ")}, which this ticket does not declare, so the removal would change nothing. Declared files: ${declared.join(", ") || "(none)"}.`);
+  }
   function patchedFileScope(ticket, patch) {
     const adjusts = patch.addFiles !== void 0 || patch.removeFiles !== void 0;
     if (patch.files !== void 0 && adjusts) {
       throw new Error(`${ticket.ref}: update cannot mix files with addFiles/removeFiles in one call. Use files to replace the declared list, or addFiles/removeFiles to adjust it without dropping the rest.`);
     }
     if (!adjusts) return patch.files;
-    return scopeReductionFiles(scopeExpansionFiles(ticket, patch.addFiles), patch.removeFiles);
+    const widened = scopeExpansionFiles(ticket, patch.addFiles);
+    assertDeclaredRemovals(ticket, widened, patch.removeFiles);
+    return scopeReductionFiles(widened, patch.removeFiles);
   }
   function patchChangesFiles(ticket, patch) {
     const filesPatch = patchedFileScope(ticket, patch);

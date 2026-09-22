@@ -257,7 +257,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   update: {
     verify: ATTESTATION_VERIFY_CONTRACT,
     addFiles: "Appends, keeps rest. Refused with files. Applied before removeFiles.",
-    removeFiles: "Drops only these, keeps rest. Refused with files. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch."
+    removeFiles: "Drops only these, keeps rest. Refused with files, and for a path this ticket does not declare. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch."
   },
   supersede_submission: { supersededBy: "Repair ticket ref, not a commit." },
   comments: {

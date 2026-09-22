@@ -119,6 +119,16 @@ test('removeFiles against a live isolated dispatch strips the path from declared
   assert.equal(updated.dispatch.declaredFiles.includes(declared), false);
 });
 
+test('removeFiles names the paths a ticket does not declare instead of reporting a silent no-op', () => {
+  const { project, store } = freshProject();
+  const ticket = store.createTicket(project, { title: 'a typo is not a success', category: 'debugging', files: ['a.ts', 'b.ts'] });
+  assert.throws(
+    () => store.updateTicket(project, ticket.ref, { removeFiles: ['a.tsx'] }),
+    /removeFiles named a.tsx, which this ticket does not declare/,
+  );
+  assert.deepEqual(store.getTicket(project, ticket.ref).files, ['a.ts', 'b.ts']);
+});
+
 test('addFiles and removeFiles naming the same path in one call resolve as a removal', () => {
   const { project, store } = freshProject();
   const ticket = store.createTicket(project, { title: 'additions apply first', category: 'debugging', files: ['a.ts'] });
