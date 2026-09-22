@@ -1485,6 +1485,8 @@ test('env with no scope flag explains project wiring and writes nothing', () => 
     assert.equal(shown.status, 0, shown.stderr);
     assert.match(shown.stdout, /Project wiring is the default/);
     assert.match(shown.stdout, /env --write-project/);
+    assert.match(shown.stdout, /remote-control enable.*--confirm.*back up and write the hosts entry for you/);
+    assert.doesNotMatch(shown.stdout, /once you add the hosts entry yourself/);
     assert.equal(fs.existsSync(path.join(cwd, '.claude', 'settings.local.json')), false);
 
     const retired = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--mode', 'global'], {

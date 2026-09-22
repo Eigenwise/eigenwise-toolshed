@@ -21,7 +21,7 @@ The PostHog sink sends the canonical Observability observation ledger to PostHog
 }
 ```
 
-Use `https://us.i.posthog.com` or `https://eu.i.posthog.com`. Remote egress requires `allowRemote: true` and HTTPS. `apiKey` must be a PostHog project key (`phc_`), never a personal API key. It stays in the private current-user `observability.json`, is placed only in the HTTPS batch body, and is omitted from health and runtime summaries.
+Use `https://us.i.posthog.com` or `https://eu.i.posthog.com`. Remote egress requires `allowRemote: true` and HTTPS. `apiKey` must be a PostHog project key (`phc_`), never a personal API key. It is stored in `%LOCALAPPDATA%\Eigenwise\Workbench\observability.json` on Windows, or `~/.local/share/Eigenwise/Workbench/observability.json` when `LOCALAPPDATA` is not set, placed only in the HTTPS batch body, and omitted from health and runtime summaries.
 
 Each canonical event becomes `workbench.<canonical event name>`. `session_id` is PostHog's `distinct_id` and `$session_id` when present; observations without a session use `project_id`, then the observation ID. Canonical IDs, schema-approved attributes, and measurements are prefixed as `workbench_*` properties. `$process_person_profile` is disabled. Prompt text, responses, tool inputs/results, raw request bodies, credentials, and environment values never enter the mapping.
 
