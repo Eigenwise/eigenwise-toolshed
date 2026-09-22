@@ -14,10 +14,10 @@ const worktreeLease = require('./kernel/worktree.js') as {
   createWorktreeLease: (facts: any) => any;
   worktreeCleanupDecision: (lease: any, registered: readonly string[]) => { allowed: boolean; reason: string };
   worktreeResumeDecision: (lease: any) => { allowed: boolean; reason: string };
-  legacyWorktreeCleanupDecision: (facts: { registered: boolean; clean: boolean; oldEnough: boolean; settled: boolean }) => { allowed: boolean; reason: string };
 };
 
 const UNMERGED_STATUS_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
+const UNVERSIONED_STATUS_CODES = new Set(['??', '!!']);
 const IN_PROGRESS_GIT_OPERATION_STATE: ReadonlyArray<readonly [string, string]> = [
   ['CHERRY_PICK_HEAD', 'cherry-pick'],
   ['MERGE_HEAD', 'merge'],
@@ -27,11 +27,70 @@ const IN_PROGRESS_GIT_OPERATION_STATE: ReadonlyArray<readonly [string, string]> 
   ['BISECT_LOG', 'bisect'],
 ];
 
+// `git status --porcelain` hides ignored content, and a clean checkout whose committed .gitignore
+// covered a populated nested repository was therefore read as clean and deleted by `git worktree
+// remove` (SQ-2952). Every read of what a worktree holds goes through these arguments: untracked and
+// ignored, every file. `-z` keeps paths verbatim, which quoted porcelain output does not.
+const AT_RISK_STATUS_ARGUMENTS: readonly string[] = ['status', '--porcelain', '--ignored', '--untracked-files=all', '-z'];
+const AT_RISK_STATUS_MAX_BUFFER = 64 * 1024 * 1024;
+
+type WorktreeStatusEntry = { code: string; path: string };
+
+function parseWorktreeStatus(stdout: string): WorktreeStatusEntry[] {
+  const fields = stdout.split('\0');
+  const entries: WorktreeStatusEntry[] = [];
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index]!;
+    if (!field) continue;
+    const code = field.slice(0, 2);
+    entries.push({ code, path: field.slice(3).replace(/\/+$/, '') });
+    // A rename or copy emits its source path as the next NUL-separated field.
+    if (code.startsWith('R') || code.startsWith('C')) index += 1;
+  }
+  return entries;
+}
+
+function atRiskStatusEntries(stdout: string, worktree: string, recordedLinks: readonly string[]): WorktreeStatusEntry[] {
+  return parseWorktreeStatus(stdout)
+    .filter((entry) => !recordedLinks.some((link) => entry.path === link || entry.path.startsWith(`${link}/`)))
+    .filter((entry) => !installedDependencyCacheFile(worktree, entry));
+}
+
+// Worktree setup runs `npm ci`, so every real worktree carries an ignored node_modules that setup
+// regenerates; counting it as data would park every finished worktree for the retention period.
+// Only plain files reached through plain directories are dropped: a link or a nested repository
+// under node_modules is content the sweep did not put there (SQ-2952 CRITICAL 1), so it still
+// travels into quarantine. git status follows a junction and lists the files behind it, which is
+// why every ancestor is checked and not just the leaf.
+function installedDependencyCacheFile(worktree: string, entry: WorktreeStatusEntry): boolean {
+  if (entry.code !== '!!' || !dependencyCachePath(entry.path) || entry.path.endsWith('/')) return false;
+  const segments = entry.path.split(/[\\/]+/).filter(Boolean);
+  try {
+    for (let depth = 1; depth <= segments.length; depth += 1) {
+      const stats = nativeFs.lstatSync(path.join(worktree, ...segments.slice(0, depth)));
+      if (stats.isSymbolicLink()) return false;
+      if (depth === segments.length) return stats.isFile();
+    }
+  } catch (_) {
+    return false;
+  }
+  return false;
+}
+
+function atRiskStatusEntriesSync(worktree: string, ticketOrDispatch: any = null): WorktreeStatusEntry[] {
+  const stdout = execFileSync('git', [...AT_RISK_STATUS_ARGUMENTS], {
+    cwd: worktree,
+    encoding: 'utf8',
+    windowsHide: true,
+    maxBuffer: AT_RISK_STATUS_MAX_BUFFER,
+  });
+  return atRiskStatusEntries(stdout, worktree, recordedDependencyLinkPaths(worktree, ticketOrDispatch));
+}
+
 function unmergedCheckoutPaths(worktree: string): string[] {
-  return execFileSync('git', ['status', '--porcelain'], { cwd: worktree, encoding: 'utf8', windowsHide: true })
-    .split(/\r?\n/)
-    .filter((line: string) => UNMERGED_STATUS_CODES.has(line.slice(0, 2)))
-    .map((line: string) => line.slice(3).trim())
+  return atRiskStatusEntriesSync(worktree)
+    .filter((entry) => UNMERGED_STATUS_CODES.has(entry.code))
+    .map((entry) => entry.path)
     .filter(Boolean);
 }
 
@@ -75,7 +134,23 @@ function retainedWorktreeResumeDecision(lease: any): { allowed: boolean; reason:
 const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1000;
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_RECOVERY_RETENTION_AGE_MS = 14 * 24 * 60 * 60 * 1000;
-const DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT = 3;
+
+const WORKTREE_SWEEP_CLASSIFICATION_ORDER = Object.freeze([
+  'status_unknown',
+  'tracked_changes',
+  'too_young',
+  'upstream_ambiguous',
+  'upstream_unavailable',
+  'untracked_recent',
+  'untracked_quarantined',
+  'ticket_archived',
+  'ticket_done',
+  'branch_reachable',
+  'patch_equivalent',
+  'commits_on_branch',
+  'not_integrated_salvage',
+  'not_integrated',
+]);
 const QUARANTINE_RETRY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 interface GitResult {
@@ -85,19 +160,20 @@ interface GitResult {
   stderr: string;
 }
 
-function git(cwd: string, args: string[]): Promise<GitResult> {
+function git(cwd: string, args: string[], input?: string, environment?: NodeJS.ProcessEnv): Promise<GitResult> {
   return new Promise((resolve) => {
     const child = spawn('git', ['-c', 'core.editor=true', ...args], {
       cwd,
-      env: { ...process.env, GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' },
+      env: { ...process.env, GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true', ...environment },
       timeout: 120_000,
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [input == null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+    if (input != null) child.stdin.end(input);
     child.once('error', (error: NodeJS.ErrnoException) => {
       resolve({ ok: false, status: null, stdout: '', stderr: String(error.message || '').trim() });
     });
@@ -453,20 +529,6 @@ function shouldSkipKnownFailure(pathname: string): boolean {
   return state?.fingerprint === 'filename-too-long' && state.attempts >= 2;
 }
 
-function shouldTryExtendedPath(pathname: string, message: string): boolean {
-  if (process.platform !== 'win32' || !isFilenameTooLong(message)) return false;
-  const state = readFailureState();
-  const key = canonicalPath(pathname);
-  if (state[key]?.extendedPathAttempted) return false;
-  state[key] = { ...(state[key] || { fingerprint: 'filename-too-long', attempts: 0 }), extendedPathAttempted: true };
-  writeFailureState(state);
-  return true;
-}
-
-function extendedWindowsPath(pathname: string): string {
-  return path.win32.toNamespacedPath(path.resolve(pathname));
-}
-
 function parseWorktreeList(output: string): any[] {
   return output.split(/\r?\n\r?\n/).filter(Boolean).map((block) => {
     const entry: Record<string, string> = {};
@@ -499,6 +561,14 @@ function ticketForWorktree(tickets: any[], entry: any): any | null {
 function localBranchName(ref: unknown): string | null {
   const match = /^refs\/heads\/(.+)$/.exec(String(ref || ''));
   return match?.[1] || null;
+}
+
+// The sweep report and the session notice are read by different agents, so they say the same thing
+// about why a branch outlived its worktree.
+function retainedBranchExplanation(reason: string, upstream: string): string {
+  return reason === 'tip_moved'
+    ? 'its tip moved after the sweep read it, so the ref was left alone'
+    : `its commits are not on ${upstream}`;
 }
 
 function worktreePath(entry: any): string {
@@ -536,11 +606,39 @@ function recoveryCommand(entry: any): string {
   return `git worktree add --detach "${worktree}" "${ref}"${uncommittedRef}`;
 }
 
-function integrationUpstream(options: any): string {
+async function verifiedQualifiedRef(repo: string, reference: string): Promise<string | null> {
+  const result = await git(repo, ['rev-parse', '--verify', '--symbolic-full-name', reference]);
+  return result.ok && result.stdout.startsWith('refs/') ? result.stdout : null;
+}
+
+async function qualifiedIntegrationUpstream(repo: string, upstream: string): Promise<{ comparison: string | null; ambiguous: boolean }> {
+  const [local, remote, resolved] = await Promise.all([
+    verifiedQualifiedRef(repo, `refs/heads/${upstream}`),
+    verifiedQualifiedRef(repo, `refs/remotes/${upstream}`),
+    verifiedQualifiedRef(repo, upstream),
+  ]);
+  if (local && remote) return { comparison: null, ambiguous: true };
+  return { comparison: remote || local || resolved, ambiguous: false };
+}
+
+async function resolvedIntegrationUpstream(repo: string, options: any): Promise<{ upstream: string; comparison: string | null; fallback: boolean; ambiguous: boolean }> {
   const target = options.integrationTarget || {};
-  const upstream = String(target.upstream || options.upstream || '').trim();
-  if (!upstream) throw new Error('worktree sweep requires the board integration target.');
-  return upstream;
+  const configured = String(target.upstream || options.upstream || '').trim();
+  if (configured) {
+    const resolved = await qualifiedIntegrationUpstream(repo, configured);
+    return { upstream: configured, fallback: false, ...resolved };
+  }
+  const originDefault = await git(repo, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
+  if (originDefault.ok && originDefault.stdout) {
+    const resolved = await qualifiedIntegrationUpstream(repo, originDefault.stdout);
+    return { upstream: originDefault.stdout, fallback: true, ...resolved };
+  }
+  const head = await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  if (head.ok && head.stdout && head.stdout !== 'HEAD') {
+    const resolved = await qualifiedIntegrationUpstream(repo, head.stdout);
+    return { upstream: head.stdout, fallback: true, ...resolved };
+  }
+  throw new Error('worktree sweep requires the board integration target.');
 }
 
 function finalTicket(ticket: any): boolean {
@@ -658,7 +756,7 @@ type WorktreeSweepFacts = {
   clean: boolean;
   statusKnown: boolean;
   trackedChanges: boolean;
-  untracked: boolean;
+  untrackedOrIgnored: boolean;
   ahead: number | null;
   reachable: boolean;
   patchEquivalent: boolean;
@@ -671,19 +769,19 @@ type WorktreeSweepFacts = {
   oldEnoughToSalvage: boolean;
 };
 
-async function inspectWorktree(entry: { worktree: string }, minAgeMs: number, upstream: string, notIntegratedSalvageAgeMs: number): Promise<WorktreeSweepFacts> {
+async function inspectWorktree(entry: { worktree: string }, ticket: any, minAgeMs: number, upstream: string | null, notIntegratedSalvageAgeMs: number): Promise<WorktreeSweepFacts> {
   const [cleanResult, ageMs, patch, reachable] = await Promise.all([
-    git(entry.worktree, ['status', '--porcelain']),
+    git(entry.worktree, [...AT_RISK_STATUS_ARGUMENTS]),
     worktreeAge(entry.worktree),
-    patchEquivalence(entry.worktree, 'HEAD', upstream),
-    reachableFrom(entry.worktree, 'HEAD', upstream),
+    upstream ? patchEquivalence(entry.worktree, 'HEAD', upstream) : Promise.resolve({ equivalent: false, ahead: null, equivalentCommits: 0, unmatchedCommits: null }),
+    upstream ? reachableFrom(entry.worktree, 'HEAD', upstream) : Promise.resolve(false),
   ]);
-  const statusLines = cleanResult.stdout.split(/\r?\n/).filter(Boolean);
+  const statusEntries = cleanResult.ok ? atRiskStatusEntries(cleanResult.stdout, entry.worktree, recordedDependencyLinkPaths(entry.worktree, ticket)) : [];
   return {
-    clean: cleanResult.ok && statusLines.length === 0,
+    clean: cleanResult.ok && statusEntries.length === 0,
     statusKnown: cleanResult.ok,
-    trackedChanges: cleanResult.ok && statusLines.some((line) => !line.startsWith('?? ')),
-    untracked: cleanResult.ok && statusLines.some((line) => line.startsWith('?? ')),
+    trackedChanges: statusEntries.some((status) => !UNVERSIONED_STATUS_CODES.has(status.code)),
+    untrackedOrIgnored: statusEntries.some((status) => UNVERSIONED_STATUS_CODES.has(status.code)),
     ahead: patch.ahead,
     reachable,
     patchEquivalent: patch.equivalent,
@@ -697,8 +795,8 @@ async function inspectWorktree(entry: { worktree: string }, minAgeMs: number, up
   };
 }
 
-function factsForEntry(facts: WorktreeSweepFacts): Omit<WorktreeSweepFacts, 'statusKnown' | 'trackedChanges' | 'untracked'> {
-  const { statusKnown: _statusKnown, trackedChanges: _trackedChanges, untracked: _untracked, ...entryFacts } = facts;
+function factsForEntry(facts: WorktreeSweepFacts): Omit<WorktreeSweepFacts, 'statusKnown' | 'trackedChanges' | 'untrackedOrIgnored'> {
+  const { statusKnown: _statusKnown, trackedChanges: _trackedChanges, untrackedOrIgnored: _untrackedOrIgnored, ...entryFacts } = facts;
   return entryFacts;
 }
 
@@ -730,6 +828,33 @@ async function reachableFrom(repo: string, revision: string, upstream: string): 
   return (await git(repo, ['merge-base', '--is-ancestor', revision, upstream])).ok;
 }
 
+// Git documents these as per-worktree rather than shared: whichever checkout `for-each-ref` runs in,
+// they belong to that checkout alone and are transient there. The main checkout's own
+// refs/worktree/<name> is visible to the probe below and is not an independent home for a commit
+// (SQ-2986), so it is filtered alongside the branches this sweep is about to delete.
+const PER_WORKTREE_REF_PREFIXES = ['refs/worktree/', 'refs/bisect/', 'refs/rewritten/'];
+
+// Every branch this sweep could still delete. `complete` is false when that could not be established,
+// which makes every detached commit count as unpinned.
+type BranchDeletionPlan = { complete: boolean; refs: ReadonlySet<string> };
+
+// A detached checkout has no branch to compare or to retain, so the only thing rooting its commit is
+// the private HEAD a reclaim prunes. The reviewer's probe committed in such a checkout, left it
+// detached, and the sweep deleted the tree on ticket status alone: the commit was in no ref before
+// classification and in none afterwards (SQ-2985). So deletion asks this first, and the answer has to
+// come from outside the checkout being reclaimed: `for-each-ref` runs in the main checkout, where the
+// candidate's own HEAD, reflog, and per-worktree refs are invisible, and neither a ref this same sweep
+// is about to delete nor a per-worktree ref of the checkout doing the asking is authority. A probe
+// that cannot answer counts as unpinned.
+async function detachedCommitPinned(repo: string, head: string | null, deletable: BranchDeletionPlan): Promise<boolean> {
+  if (!head || !deletable.complete) return false;
+  const containing = await git(repo, ['for-each-ref', '--contains', head, '--format=%(refname)']);
+  if (!containing.ok) return false;
+  return containing.stdout.split(/\r?\n/).filter(Boolean).some((ref) => (
+    !deletable.refs.has(ref) && !PER_WORKTREE_REF_PREFIXES.some((prefix) => ref.startsWith(prefix))
+  ));
+}
+
 function skippedEntry(entry: any, ticket: any, reason: string, current: boolean): any {
   return {
     path: entry.worktree,
@@ -751,13 +876,16 @@ function skippedEntry(entry: any, ticket: any, reason: string, current: boolean)
   };
 }
 
-type ClassifiedWorktreeEntry = { worktree: string; branch?: string };
+type ClassifiedWorktreeEntry = { worktree: string; branch?: string; head?: string };
 type ClassifiedWorktreeTicket = { ref?: string } | null;
 
 function classifiedWorktreeEntry(entry: ClassifiedWorktreeEntry, ticket: ClassifiedWorktreeTicket, facts: WorktreeSweepFacts, action: string, reason: string, current: boolean) {
   return {
     path: entry.worktree,
     branch: entry.branch || null,
+    // The commit the classification saw. A reclaim re-reads the moved tree against it, so work
+    // committed after the snapshot keeps the tree parked instead of going with it (SQ-2958).
+    head: entry.head || null,
     ticket: ticket ? ticket.ref : null,
     ...factsForEntry(facts),
     locked: null,
@@ -767,43 +895,35 @@ function classifiedWorktreeEntry(entry: ClassifiedWorktreeEntry, ticket: Classif
   };
 }
 
-function canReclaimLegacyWorktree(ticket: { archived?: boolean; status?: string } | null): boolean {
-  return !ticket || finalTicket(ticket);
+// The lease answers "is something alive in here?", never "is this worktree's data
+// safe?". Letting metadata confidence (unknown identity, a recreated checkout
+// instance, legacy status) keep a clean settled worktree is what let tens of
+// gigabytes of reclaimable trees pile up, so the lease now holds only the LIVE
+// facts and the data-at-risk facts below decide the rest (SQ-2924).
+function liveWorktreeKeepReason(entry: any, ticket: any, lease: any): string | null {
+  if (entry.locked) return 'locked';
+  if (lease.liveness.status === 'live') return 'live_session';
+  if (ticket && !finalTicket(ticket)) return 'active_ticket';
+  if (lease.identity.status === 'bound' && lease.phase !== 'terminal') return 'active_ticket';
+  return null;
 }
 
-async function classifyWorktree(repo: string, tickets: any[], entry: any, currentPath: string, minAgeMs: number, upstream: string, livePaths: string[] = [], notIntegratedSalvageAgeMs = DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, registeredWorktrees: readonly string[] = []): Promise<any> {
+async function classifyWorktree(repo: string, tickets: any[], entry: any, currentPath: string, minAgeMs: number, upstream: string | null, upstreamSafetyReason: string | null, livePaths: string[] = [], notIntegratedSalvageAgeMs = DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, registeredWorktrees: readonly string[] = []): Promise<any> {
   const ticket = ticketForWorktree(tickets, entry);
-  const facts = await inspectWorktree(entry, minAgeMs, upstream, notIntegratedSalvageAgeMs);
+  const facts = await inspectWorktree(entry, ticket, minAgeMs, upstream, notIntegratedSalvageAgeMs);
   const worktreePath = canonicalPath(entry.worktree);
   const current = worktreePath === canonicalPath(currentPath);
   if (current) return classifiedWorktreeEntry(entry, ticket, facts, 'keep', 'current_worktree', true);
 
   const lease = await worktreeCleanupLease(repo, ticket, entry, livePaths);
   const cleanup = worktreeLease.worktreeCleanupDecision(lease, registeredWorktrees);
-  if (!cleanup.allowed) {
-    if (lease.identity.status === 'unknown' && canReclaimLegacyWorktree(ticket)) {
-      if (entry.locked) return {
-        ...classifiedWorktreeEntry(entry, ticket, facts, 'keep', 'locked', false),
-        lease,
-        leaseDecision: cleanup.reason,
-      };
-      if (lease.liveness.status === 'live') return {
-        ...classifiedWorktreeEntry(entry, ticket, facts, 'keep', 'live_session', false),
-        lease,
-        leaseDecision: cleanup.reason,
-      };
-      const legacyCleanup = worktreeLease.legacyWorktreeCleanupDecision({
-        registered: registeredWorktrees.some((registered) => canonicalPath(registered) === worktreePath),
-        clean: facts.clean,
-        oldEnough: facts.oldEnough,
-        settled: facts.reachable || facts.patchEquivalent,
-      });
-      return {
-        ...classifiedWorktreeEntry(entry, ticket, facts, legacyCleanup.allowed ? 'remove' : 'keep', legacyCleanup.allowed ? 'legacy_no_lease' : 'legacy_unreclaimed', false),
-        lease,
-        leaseDecision: cleanup.reason,
-      };
-    }
+  const live = liveWorktreeKeepReason(entry, ticket, lease);
+  if (live) return {
+    ...classifiedWorktreeEntry(entry, ticket, facts, 'keep', live, false),
+    lease,
+    leaseDecision: cleanup.reason,
+  };
+  if (!cleanup.allowed && !registeredWorktrees.some((registered) => canonicalPath(registered) === worktreePath)) {
     return {
       ...classifiedWorktreeEntry(entry, ticket, facts, 'keep', leaseCleanupSkipReason(cleanup), false),
       lease,
@@ -811,28 +931,33 @@ async function classifyWorktree(repo: string, tickets: any[], entry: any, curren
     };
   }
 
+  const branch = localBranchName(entry.branch);
   let action = 'keep';
   let reason = 'not_integrated';
   if (!facts.statusKnown) reason = 'status_unknown';
-  else if (ticket?.archived && !facts.trackedChanges) {
+  else if (facts.trackedChanges) reason = 'tracked_changes';
+  else if (!facts.oldEnough) reason = 'too_young';
+  else if (upstreamSafetyReason) reason = upstreamSafetyReason;
+  else if (facts.untrackedOrIgnored) {
+    if (facts.oldEnoughToSalvage) {
+      action = 'quarantine';
+      reason = 'untracked_quarantined';
+    } else reason = 'untracked_recent';
+  } else if (ticket?.archived) {
     action = 'remove';
     reason = 'ticket_archived';
-  } else if (ticket?.status === 'done' && !facts.trackedChanges) {
+  } else if (ticket?.status === 'done') {
     action = 'remove';
     reason = 'ticket_done';
-  } else if (facts.trackedChanges && (facts.reachable || facts.patchEquivalent)) {
-    // Settled branches are removable only after preserving tracked edits, including
-    // patch-equivalent commits that are absent from the integration branch (SQ-1848).
-    reason = 'tracked_changes';
-  } else if (!facts.oldEnough) reason = 'too_young';
-  else if (facts.reachable) {
+  } else if (facts.reachable) {
     action = 'remove';
     reason = 'branch_reachable';
   } else if (facts.patchEquivalent) {
     action = 'remove';
     reason = 'patch_equivalent';
-  } else if (facts.oldEnoughToSalvage && facts.untracked) {
-    reason = 'unrecoverable_untracked';
+  } else if (facts.clean && branch) {
+    action = 'remove';
+    reason = 'commits_on_branch';
   } else if (facts.oldEnoughToSalvage) {
     action = 'salvage';
     reason = 'not_integrated_salvage';
@@ -881,11 +1006,14 @@ async function classifyOrphanDirectory(tickets: any[], entry: any, livePaths: st
   const [ageMs, contents] = await Promise.all([worktreeAge(entry.worktree), fs.readdir(entry.worktree)]);
   const oldEnough = ageMs != null && ageMs >= minAgeMs;
   if (!oldEnough) return skippedEntry(entry, ticket, 'too_young', false);
+  // A directory git no longer knows about has no patch representation, so only an
+  // empty one can be reclaimed without risking files nothing else holds (SQ-2924).
+  if (contents.length) return skippedEntry(entry, ticket, 'orphan_directory_contents', false);
   return {
     path: entry.worktree,
     branch: null,
     ticket: ticket ? ticket.ref : null,
-    clean: contents.length === 0,
+    clean: true,
     ahead: null,
     reachable: null,
     patchEquivalent: null,
@@ -902,53 +1030,63 @@ async function classifyOrphanDirectory(tickets: any[], entry: any, livePaths: st
   };
 }
 
-function backupRoot(options: any): string {
-  return options.backupDir || path.join(sidequestHome(), 'worktree-backups');
+const STRAY_WORKTREE_HOME_DIRECTORY = /^(agent-|sq.*-recovery-)/;
+
+// A per-repository sweep never looks at the other top-level roots under the worktree
+// home, so whole stranded roots (worktrees cut from a repository that is gone, or
+// from a recovery clone nobody opens) survived every run (SQ-2924). Empty ones are
+// reclaimed; the rest are reported with what git can still say about them.
+async function strayWorktreeHomeDirectories(repo: string): Promise<any[]> {
+  const home = path.join(sidequestHome(), 'worktrees');
+  const own = canonicalPath(worktreeRoot(repo));
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = await fs.readdir(home, { withFileTypes: true });
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  const stray = entries.filter((entry: import('node:fs').Dirent) => entry.isDirectory()
+    && STRAY_WORKTREE_HOME_DIRECTORY.test(entry.name)
+    && canonicalPath(path.join(home, entry.name)) !== own);
+  return Promise.all(stray.map(async (entry: import('node:fs').Dirent) => {
+    const pathname = path.join(home, entry.name);
+    const contents = await fs.readdir(pathname);
+    if (!contents.length) return { path: pathname, entries: 0, repository: null, action: 'remove', reason: 'stray_empty' };
+    let gitMetadata = false;
+    try {
+      await fs.lstat(path.join(pathname, '.git'));
+      gitMetadata = true;
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    if (!gitMetadata) return { path: pathname, entries: contents.length, repository: null, action: 'keep', reason: 'stray_directory' };
+    const commonGitDirectory = await git(pathname, ['rev-parse', '--git-common-dir']);
+    if (!commonGitDirectory.ok) return { path: pathname, entries: contents.length, repository: null, action: 'keep', reason: 'stray_detached_repository' };
+    const resolved = path.isAbsolute(commonGitDirectory.stdout) ? commonGitDirectory.stdout : path.resolve(pathname, commonGitDirectory.stdout);
+    return { path: pathname, entries: contents.length, repository: path.dirname(resolved), action: 'keep', reason: 'stray_other_project' };
+  }));
 }
 
-async function backupDirtyWorktree(repo: string, entry: any, upstream: string, options: any): Promise<string> {
-  const agentId = path.basename(entry.path).replace(/^agent-/, '') || 'unknown-agent';
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const destination = path.join(backupRoot(options), `${agentId}-${timestamp}`);
-  await fs.mkdir(destination, { recursive: true });
-
-  const staged = await git(entry.path, ['add', '-A']);
-  if (!staged.ok) throw new Error(staged.stderr || 'git add -A failed');
-  const diff = await git(entry.path, ['diff', '--cached', 'HEAD']);
-  if (!diff.ok) throw new Error(diff.stderr || 'git diff --cached HEAD failed');
-  const branch = localBranchName(entry.branch);
-  const commits = branch ? await git(repo, ['format-patch', '--stdout', `${upstream}..${branch}`]) : { ok: true, stdout: '', stderr: '' };
-  if (!commits.ok) throw new Error(commits.stderr || 'git format-patch failed');
-
-  await Promise.all([
-    fs.writeFile(path.join(destination, 'working-tree.patch'), diff.stdout ? `${diff.stdout}\n` : '', 'utf8'),
-    fs.writeFile(path.join(destination, 'commits.patch'), commits.stdout ? `${commits.stdout}\n` : '', 'utf8'),
-    fs.writeFile(path.join(destination, 'metadata.json'), JSON.stringify({
-      agentId,
-      ticket: entry.ticket || null,
-      worktree: entry.path,
-      branch,
-      upstream,
-      backedUpAt: new Date().toISOString(),
-    }, null, 2) + '\n', 'utf8'),
-  ]);
-  return destination;
-}
-
-async function backupDirtyOrphanDirectory(entry: any, options: any): Promise<string> {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const destination = path.join(backupRoot(options), `orphan-${path.basename(entry.path)}-${timestamp}`);
-  await fs.mkdir(destination, { recursive: true });
-  await fs.writeFile(path.join(destination, 'metadata.json'), JSON.stringify({
-    agentId: null,
-    ticket: entry.ticket || null,
-    worktree: entry.path,
-    branch: null,
-    upstream: null,
-    backedUpAt: new Date().toISOString(),
-    reason: 'unregistered worktree directory without .git metadata; contents could not be represented as Git patches',
-  }, null, 2) + '\n', 'utf8');
-  return destination;
+async function sweepStrayWorktreeHome(repo: string, execute: boolean, failures: Array<{ path: string | null; message: string }>): Promise<any[]> {
+  let stray: any[];
+  try {
+    stray = await strayWorktreeHomeDirectories(repo);
+  } catch (error: any) {
+    failures.push({ path: null, message: `stray worktree directory scan failed: ${(error && error.message) || error}` });
+    return [];
+  }
+  if (!execute) return stray;
+  for (const entry of stray.filter((candidate) => candidate.action === 'remove')) {
+    try {
+      await fs.rm(entry.path, { recursive: true, force: true });
+    } catch (error: any) {
+      entry.action = 'keep';
+      entry.reason = 'stray_remove_failed';
+      failures.push({ path: entry.path, message: `stray directory removal failed: ${(error && error.message) || error}` });
+    }
+  }
+  return stray;
 }
 
 async function findOrphanBranches(repo: string, checkedOutBranches: Set<string>, upstream: string, maxCandidates: number): Promise<any[]> {
@@ -1246,41 +1384,7 @@ function quarantineRoot(options: any): string {
   return options.quarantineDir || path.join(sidequestHome(), 'worktree-quarantine');
 }
 
-function removableQuarantineDirectory(worktree: string, relativePath: string): string | null {
-  const normalized = relativePath.replace(/[\\/]+$/, '');
-  if (!normalized || path.isAbsolute(normalized)) return null;
-  const candidate = path.resolve(worktree, normalized);
-  return pathIsInside(worktree, candidate) ? candidate : null;
-}
-
-async function regenerableQuarantineDirectories(worktree: string): Promise<string[]> {
-  const ignored = await git(worktree, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']);
-  const listed = ignored.ok ? ignored.stdout.split('\0').filter((entry) => /[\\/]$/.test(entry)) : [];
-  const directories = new Set(listed);
-  directories.add('node_modules/');
-  directories.add('.venv/');
-  return [...directories]
-    .map((relativePath) => removableQuarantineDirectory(worktree, relativePath))
-    .filter((pathname): pathname is string => !!pathname)
-    .sort((left, right) => right.length - left.length);
-}
-
-async function stripRegenerableQuarantineDirectories(worktree: string): Promise<string[]> {
-  const removed: string[] = [];
-  for (const directory of await regenerableQuarantineDirectories(worktree)) {
-    try {
-      const status = await fs.lstat(directory);
-      if (!status.isDirectory()) continue;
-      await fs.rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-      removed.push(directory);
-    } catch (error: any) {
-      if (error?.code !== 'ENOENT') throw error;
-    }
-  }
-  return removed;
-}
-
-async function quarantineCandidate(entry: any, message: string, options: any): Promise<{ ok: boolean; destination?: string; stderr: string; stripped?: string[]; stripFailure?: string }> {
+async function quarantineCandidate(entry: any, message: string, options: any): Promise<{ ok: boolean; destination?: string; stderr: string }> {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const destination = path.join(quarantineRoot(options), `${path.basename(entry.path)}-${timestamp}`);
   try {
@@ -1291,14 +1395,28 @@ async function quarantineCandidate(entry: any, message: string, options: any): P
     recordQuarantineFailure(entry.path, stderr);
     return { ok: false, stderr };
   }
+  recordQuarantine(entry.path, message, destination);
+  return { ok: true, destination, stderr: '' };
+}
+
+// A tree that stays parked was moved out from under its registration by the rename above, so the
+// prunes later in the sweep would take the private HEAD that is the only thing rooting a commit made
+// on a detached HEAD (SQ-2986). `git worktree repair` is git's own answer to a linked worktree moved
+// by hand: it rewrites .git/worktrees/<name>/gitdir to where the tree now lives. The moved tree
+// answers `rev-parse HEAD` either way until the prune runs, so the registration itself is what gets
+// checked: unrepaired, the list still names the path the tree came from.
+async function repairParkedRegistration(repo: string, destination: string): Promise<boolean> {
+  if (!(await git(repo, ['worktree', 'repair', destination])).ok) return false;
+  const listed = await git(repo, ['worktree', 'list', '--porcelain']);
+  return listed.ok && parseWorktreeList(listed.stdout)
+    .some((entry: any) => canonicalPath(entry.worktree) === canonicalPath(destination));
+}
+
+async function linkedPark(destination: string): Promise<boolean> {
   try {
-    const stripped = await stripRegenerableQuarantineDirectories(destination);
-    recordQuarantine(entry.path, message, destination);
-    return { ok: true, destination, stderr: '', stripped };
-  } catch (error: any) {
-    const stripFailure = String((error && error.message) || error);
-    recordQuarantine(entry.path, message, destination);
-    return { ok: true, destination, stderr: '', stripFailure };
+    return (await fs.lstat(path.join(destination, '.git'))).isFile();
+  } catch (_) {
+    return false;
   }
 }
 
@@ -1373,6 +1491,23 @@ function ownedDependencyLinkMatches(linkPath: string, record: OwnedDependencyLin
   }
 }
 
+// The sweep provisions and releases these links itself, so they are the one thing inside a worktree
+// that is not this ticket's data. Every other entry the status read returns is.
+function recordedDependencyLinkPaths(worktree: string, ticketOrDispatch: any): string[] {
+  const dispatch = ticketOrDispatch?.dispatch || ticketOrDispatch;
+  const records = Array.isArray(dispatch?.ownedDependencyLinks) ? dispatch.ownedDependencyLinks : [];
+  const worktreeIdentity = canonicalPath(worktree);
+  const paths: string[] = [];
+  for (const record of records) {
+    const relativePath = String(record?.relativePath || '').replace(/\\/g, '/').replace(/\/+$/, '');
+    const target = String(record?.target || '').trim();
+    if (!relativePath || !target || canonicalPath(String(record?.worktree || '')) !== worktreeIdentity) continue;
+    if (!ownedDependencyLinkMatches(path.resolve(worktree, relativePath), { ...record, target: canonicalPath(target) })) continue;
+    paths.push(relativePath);
+  }
+  return paths;
+}
+
 function dependencyLinkSafety(worktree: string, ticketOrDispatch: any, lease: any): DependencyLinkSafety {
   const records = ownedDependencyLinks(ticketOrDispatch, worktree, lease);
   if (!records) return { safe: false, links: [] };
@@ -1428,25 +1563,85 @@ function unlinkOwnedDependencyLinks(links: readonly string[]): boolean {
   return true;
 }
 
-function releaseVerifiedOwnedDependencyLinks(worktree: string, ticketOrDispatch: any, lease: any): { ok: boolean; reason?: string } {
-  const initial = dependencyLinkSafety(worktree, ticketOrDispatch, lease);
-  if (!initial.safe) return { ok: false, reason: 'dependency_link_untrusted' };
-  if (!unlinkOwnedDependencyLinks(initial.links)) return { ok: false, reason: 'dependency_link_unlink_failed' };
-  return dependencyLinkSafety(worktree, ticketOrDispatch, lease).safe
-    ? { ok: true }
-    : { ok: false, reason: 'dependency_link_changed' };
+function worktreeSymbolicLinks(worktree: string): string[] | null {
+  const links: string[] = [];
+  const walk = (pathname: string): boolean => {
+    let status: import('node:fs').Stats;
+    try {
+      status = nativeFs.lstatSync(pathname);
+    } catch (_) {
+      return false;
+    }
+    if (status.isSymbolicLink()) {
+      links.push(pathname);
+      return true;
+    }
+    if (!status.isDirectory()) return true;
+    let entries: import('node:fs').Dirent[];
+    try {
+      entries = nativeFs.readdirSync(pathname, { withFileTypes: true });
+    } catch (_) {
+      return false;
+    }
+    for (const entry of entries) {
+      if (!walk(path.join(pathname, entry.name))) return false;
+    }
+    return true;
+  };
+  return walk(worktree) ? links : null;
 }
 
-async function removeCandidate(repo: string, entry: any): Promise<{ ok: boolean; stderr: string }> {
-  const remove = async (pathname: string): Promise<{ ok: boolean; stderr: string }> => (
-    git(repo, entry.clean ? ['worktree', 'remove', pathname] : ['worktree', 'remove', '--force', pathname])
-  );
-  const first = await remove(entry.path);
-  if (first.ok || !shouldTryExtendedPath(entry.path, first.stderr)) return first;
-  const extended = await remove(extendedWindowsPath(entry.path));
-  return extended.ok
-    ? extended
-    : { ok: false, stderr: `${first.stderr}; extended-path retry: ${extended.stderr}` };
+// The classification snapshot is already stale by the time the sweep acts on it: the reviewer
+// committed a gitignored nested repository from the progress callback and the tree was deleted with
+// its only commit (SQ-2958). So the moved tree is read again at the quarantine destination, where
+// its .git file still names its gitdir by absolute path — `git worktree prune` is what breaks that
+// read, which is why it runs last.
+async function lateContentInMovedWorktree(
+  destination: string,
+  classifiedHead: string | null,
+  recordedLinks: readonly string[],
+  branch: string | null,
+): Promise<{ blocked: string | null; head: string | null; branchTip: string | null }> {
+  const blockedBy = (blocked: string) => ({ blocked, head: null, branchTip: null });
+  const status = await git(destination, [...AT_RISK_STATUS_ARGUMENTS]);
+  if (!status.ok) return blockedBy(`the moved tree could not be read again: ${status.stderr || `git status exited ${status.status}`}`);
+  const held = atRiskStatusEntries(status.stdout, destination, recordedLinks);
+  if (held.length) return blockedBy(`the moved tree holds ${held.length} entries the classification did not see, starting with ${held[0]!.code} ${held[0]!.path}`);
+  const head = await git(destination, ['rev-parse', 'HEAD']);
+  if (!head.ok) return blockedBy(`the moved tree's HEAD could not be read again: ${head.stderr || `git rev-parse exited ${head.status}`}`);
+  if (classifiedHead && head.stdout !== classifiedHead) return blockedBy(`the moved tree is at ${shortCommit(head.stdout)}, not the classified ${shortCommit(classifiedHead)}`);
+  if (!branch) return { blocked: null, head: head.stdout, branchTip: null };
+  // Deleting the moved copy's files can never be atomic, but losing a commit can be avoided: the tip
+  // read here is the old value the branch delete compares against, so a writer that follows the tree
+  // into quarantine and commits after this read moves the ref and keeps its branch (SQ-2962).
+  const tip = await git(destination, ['rev-parse', '--verify', `refs/heads/${branch}`]);
+  if (!tip.ok) return blockedBy(`the moved tree's branch ${branch} could not be read again: ${tip.stderr || `git rev-parse exited ${tip.status}`}`);
+  return { blocked: null, head: head.stdout, branchTip: tip.stdout };
+}
+
+// Links are released only at the destination, once the tree has actually moved, so a failed move
+// leaves the source record-for-record as well as byte-for-byte (SQ-2952, SQ-2958). The final walk is
+// the gate on deletion: `fs.rm` follows nothing, but a link that is still there is content this
+// sweep did not provision, and the tree stays parked instead.
+function releaseQuarantinedDependencyLinks(destination: string, recordedLinks: readonly string[]): { ok: boolean; reason: string } {
+  if (!unlinkOwnedDependencyLinks(recordedLinks.map((relativePath) => path.resolve(destination, relativePath)))) {
+    return { ok: false, reason: 'dependency_link_unlink_failed' };
+  }
+  const remaining = worktreeSymbolicLinks(destination);
+  if (!remaining) return { ok: false, reason: 'dependency_link_unreadable' };
+  return remaining.length ? { ok: false, reason: 'dependency_link_untrusted' } : { ok: true, reason: '' };
+}
+
+// Failed-creation recovery still hands its checkout to `git worktree remove`, which follows a
+// junction and deletes what it points at, so every link is unlinked before that removal.
+function releaseWorktreeDependencyLinks(worktree: string, ticketOrDispatch: any, lease: any): { ok: boolean; reason?: string } {
+  const verified = dependencyLinkSafety(worktree, ticketOrDispatch, lease);
+  const links = verified.safe ? verified.links : worktreeSymbolicLinks(worktree);
+  if (!links) return { ok: false, reason: 'dependency_link_unreadable' };
+  if (!unlinkOwnedDependencyLinks(links)) return { ok: false, reason: 'dependency_link_unlink_failed' };
+  const remaining = worktreeSymbolicLinks(worktree);
+  if (!remaining) return { ok: false, reason: 'dependency_link_unreadable' };
+  return remaining.length ? { ok: false, reason: 'dependency_link_changed' } : { ok: true };
 }
 
 function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, facts: any = {}): any {
@@ -1472,7 +1667,7 @@ function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, fac
   if (incompleteCreation && dispatch?.worktreeBindingSource !== 'worktree-create') {
     // A continuation attempt inherits a checkout an earlier attempt created, so an attempt that never bound a
     // runtime owns nothing here: there is no checkout of its own to match, and the inherited one stays either
-    // way. Reporting that as a retry blocker locked the ticket until the claim-idle backstop (SQ-2537).
+    // way. Reporting that as a retry blocker locked the ticket until the claim grace elapsed (SQ-2537).
     const retainedCheckout = !dispatch?.boundAt;
     return {
       worktree: entry.worktree,
@@ -1511,17 +1706,13 @@ function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, fac
   });
   const cleanup = worktreeLease.worktreeCleanupDecision(lease, [entry.worktree]);
   if (!cleanup.allowed) return { worktree, reclaimed: false, reason: 'lease_refused', message: `immutable recovery fact: ${cleanup.reason}` };
-  const dirty = execFileSync('git', ['status', '--porcelain'], {
-    cwd: entry.worktree,
-    encoding: 'utf8',
-    windowsHide: true,
-  }).trim();
-  if (dirty) {
+  const atRisk = atRiskStatusEntriesSync(entry.worktree, dispatch);
+  if (atRisk.length) {
     return {
       worktree: entry.worktree,
       reclaimed: false,
       reason: 'dirty_worktree',
-      message: `immutable recovery fact: ${entry.worktree} has uncommitted changes.`,
+      message: `immutable recovery fact: ${entry.worktree} holds uncommitted, untracked or ignored content (${atRisk[0]!.code} ${atRisk[0]!.path}).`,
     };
   }
   const checkpointCommit = String(facts.checkpointCommit || '').trim();
@@ -1567,7 +1758,7 @@ function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, fac
         : `immutable recovery fact: worktree head ${head} and dispatch base ${baseCommit} diverge.`,
     };
   }
-  const dependencyLinksReleased = releaseVerifiedOwnedDependencyLinks(entry.worktree, dispatch, lease);
+  const dependencyLinksReleased = releaseWorktreeDependencyLinks(entry.worktree, dispatch, lease);
   if (!dependencyLinksReleased.ok) {
     return {
       worktree: entry.worktree,
@@ -1577,13 +1768,12 @@ function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, fac
     };
   }
   execFileSync('git', ['worktree', 'remove', entry.worktree], { cwd: repository, windowsHide: true });
-  execFileSync('git', ['worktree', 'prune'], { cwd: repository, windowsHide: true });
   const branch = localBranchName(entry.branch);
   if (branch) execFileSync('git', ['branch', '-D', '--', branch], { cwd: repository, windowsHide: true });
   return { worktree: entry.worktree, branch, reclaimed: true };
 }
 
-type RecoveryStoreName = 'backups' | 'quarantine';
+type RecoveryStoreName = 'quarantine';
 type RecoveryStoreEntry = {
   store: RecoveryStoreName;
   path: string;
@@ -1592,7 +1782,8 @@ type RecoveryStoreEntry = {
   createdAtMs: number;
   ageMs: number;
   action: 'keep' | 'remove';
-  reason: 'within_retention' | 'retention_age' | 'retention_count' | 'retention_age_and_count' | 'live_claim';
+  reason: 'within_retention' | 'retention_age' | 'live_claim';
+  registrationRepaired?: boolean;
   sizeBytes?: number;
 };
 
@@ -1614,15 +1805,6 @@ function recoveryRetentionAgeMs(options: any): number {
   return DEFAULT_RECOVERY_RETENTION_AGE_MS;
 }
 
-function recoveryRetentionMaxPerAgent(options: any): number {
-  const values = [options.recoveryRetentionMaxPerAgent, process.env.SIDEQUEST_TEST_WORKTREE_RECOVERY_RETENTION_MAX_PER_AGENT];
-  for (const value of values) {
-    const parsed = Number(value);
-    if (Number.isInteger(parsed) && parsed >= 1) return parsed;
-  }
-  return DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT;
-}
-
 function recoveryTimestamp(name: string, fallback: number): number {
   const match = /-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)$/.exec(name);
   if (!match) return fallback;
@@ -1630,11 +1812,10 @@ function recoveryTimestamp(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function recoveryAgentId(store: RecoveryStoreName, name: string): string {
-  const timestamp = /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/.exec(name);
+function recoveryAgentId(name: string): string {
+  const timestamp = /-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)$/.exec(name);
   const prefix = timestamp ? name.slice(0, timestamp.index) : name;
-  const agentId = store === 'quarantine' ? prefix.replace(/^agent-/, '') : prefix;
-  return agentId || 'unknown';
+  return prefix.replace(/^agent-/, '') || 'unknown';
 }
 
 async function directoryBytes(root: string): Promise<number> {
@@ -1665,7 +1846,7 @@ async function directoryBytes(root: string): Promise<number> {
   return total;
 }
 
-async function recoveryStoreEntries(store: RecoveryStoreName, root: string, protectedAgentIds: Set<string>, retentionAgeMs: number, retentionMaxPerAgent: number): Promise<RecoveryStoreEntry[]> {
+async function recoveryStoreEntries(store: RecoveryStoreName, root: string, protectedAgentIds: Set<string>, retentionAgeMs: number): Promise<RecoveryStoreEntry[]> {
   let directories: import('node:fs').Dirent[];
   try {
     directories = await fs.readdir(root, { withFileTypes: true });
@@ -1682,36 +1863,23 @@ async function recoveryStoreEntries(store: RecoveryStoreName, root: string, prot
       store,
       path: pathname,
       name: directory.name,
-      agentId: recoveryAgentId(store, directory.name),
+      agentId: recoveryAgentId(directory.name),
       createdAtMs,
       ageMs: Math.max(0, now - createdAtMs),
       action: 'keep' as const,
       reason: 'within_retention' as const,
     };
   }))).sort((left, right) => left.createdAtMs - right.createdAtMs || left.name.localeCompare(right.name));
-  const indexByPath = new Map(entries.map((entry) => [entry.path, entry]));
-  const grouped = new Map<string, RecoveryStoreEntry[]>();
+  // Age alone. A per-agent cap used to delete whichever entries were beyond it, which threw away
+  // 4-day-old work while every agent-facing surface promised 14 days (SQ-2952).
   for (const entry of entries) {
-    const group = grouped.get(entry.agentId) || [];
-    group.push(entry);
-    grouped.set(entry.agentId, group);
-  }
-  for (const group of grouped.values()) {
-    const newestFirst = [...group].sort((left, right) => right.createdAtMs - left.createdAtMs || right.name.localeCompare(left.name));
-    newestFirst.forEach((entry, index) => {
-      const current = indexByPath.get(entry.path)!;
-      if (protectedAgentIds.has(current.agentId)) {
-        current.reason = 'live_claim';
-        return;
-      }
-      const oldEnough = current.ageMs >= retentionAgeMs;
-      const beyondCount = index >= retentionMaxPerAgent;
-      if (!oldEnough && !beyondCount) return;
-      current.action = 'remove';
-      current.reason = oldEnough && beyondCount
-        ? 'retention_age_and_count'
-        : oldEnough ? 'retention_age' : 'retention_count';
-    });
+    if (protectedAgentIds.has(entry.agentId)) {
+      entry.reason = 'live_claim';
+      continue;
+    }
+    if (entry.ageMs < retentionAgeMs) continue;
+    entry.action = 'remove';
+    entry.reason = 'retention_age';
   }
   return entries;
 }
@@ -1728,8 +1896,19 @@ function clearQuarantineFailureForDestination(destination: string): void {
   if (changed) writeFailureState(state);
 }
 
-async function recoveryStoreReport(store: RecoveryStoreName, root: string, protectedAgentIds: Set<string>, retentionAgeMs: number, retentionMaxPerAgent: number, options: any): Promise<RecoveryStoreReport> {
-  const entries = await recoveryStoreEntries(store, root, protectedAgentIds, retentionAgeMs, retentionMaxPerAgent);
+async function reconcileRetainedParkedRegistrations(repo: string, entries: RecoveryStoreEntry[]): Promise<{ unrepaired: boolean; failures: Array<{ path: string; message: string }> }> {
+  const failures: Array<{ path: string; message: string }> = [];
+  for (const entry of entries.filter((candidate) => candidate.action === 'keep')) {
+    if (!await linkedPark(entry.path)) continue;
+    entry.registrationRepaired = await repairParkedRegistration(repo, entry.path);
+    if (!entry.registrationRepaired) {
+      failures.push({ path: entry.path, message: `retained parked worktree at ${entry.path} could not reconcile its Git registration, so repository metadata pruning is deferred` });
+    }
+  }
+  return { unrepaired: failures.length > 0, failures };
+}
+
+async function recoveryStoreReport(store: RecoveryStoreName, root: string, entries: RecoveryStoreEntry[], options: any): Promise<RecoveryStoreReport> {
   const planned = entries.filter((entry) => entry.action === 'remove');
   let removed = 0;
   let reclaimedBytes = 0;
@@ -1752,57 +1931,86 @@ function protectedRecoveryAgentIds(tickets: any[]): Set<string> {
     .filter(Boolean));
 }
 
-async function sweepRecoveryStores(tickets: any[], options: any): Promise<{ retentionAgeMs: number; retentionMaxPerAgent: number; backups: RecoveryStoreReport; quarantine: RecoveryStoreReport; failures: Array<{ path: string | null; message: string }> }> {
+async function sweepRecoveryStores(repo: string, tickets: any[], options: any): Promise<{ retentionAgeMs: number; quarantine: RecoveryStoreReport; registrationUnrepaired: boolean; failures: Array<{ path: string | null; message: string }> }> {
   const retentionAgeMs = recoveryRetentionAgeMs(options);
-  const retentionMaxPerAgent = recoveryRetentionMaxPerAgent(options);
   const protectedAgentIds = protectedRecoveryAgentIds(tickets);
   const failures: Array<{ path: string | null; message: string }> = [];
-  const report = async (store: RecoveryStoreName, root: string): Promise<RecoveryStoreReport> => {
-    try {
-      return await recoveryStoreReport(store, root, protectedAgentIds, retentionAgeMs, retentionMaxPerAgent, options);
-    } catch (error: any) {
-      failures.push({ path: root, message: `recovery retention failed: ${(error && error.message) || error}` });
-      return { path: root, entries: [], bytes: null, planned: 0, removed: 0, reclaimedBytes: 0 };
+  try {
+    const root = quarantineRoot(options);
+    const entries = await recoveryStoreEntries('quarantine', root, protectedAgentIds, retentionAgeMs);
+    const reconciliation = await reconcileRetainedParkedRegistrations(repo, entries);
+    failures.push(...reconciliation.failures);
+    const quarantine = await recoveryStoreReport('quarantine', root, entries, options);
+    if (quarantine.removed && reconciliation.unrepaired) {
+      failures.push({ path: null, message: `removed ${quarantine.removed} expired quarantine entr${quarantine.removed === 1 ? 'y' : 'ies'}, but deferred Git metadata pruning until retained parked worktrees reconcile` });
     }
-  };
-  const [backups, quarantine] = await Promise.all([
-    report('backups', backupRoot(options)),
-    report('quarantine', quarantineRoot(options)),
-  ]);
-  return { retentionAgeMs, retentionMaxPerAgent, backups, quarantine, failures };
+    return { retentionAgeMs, quarantine, registrationUnrepaired: reconciliation.unrepaired, failures };
+  } catch (error: any) {
+    failures.push({ path: quarantineRoot(options), message: `recovery retention failed: ${(error && error.message) || error}` });
+    return { retentionAgeMs, quarantine: { path: quarantineRoot(options), entries: [], bytes: null, planned: 0, removed: 0, reclaimedBytes: 0 }, registrationUnrepaired: true, failures };
+  }
 }
 
-async function storageStatus(options: any = {}): Promise<{ worktrees: { path: string; bytes: number }; backups: { path: string; bytes: number }; quarantine: { path: string; bytes: number } }> {
+// Reported per directory as well as in total, because a single 42 GB number for the
+// whole worktree home never says which root to reclaim first (SQ-2924).
+async function directorySizes(root: string): Promise<DirectorySize[]> {
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  const sizes = await Promise.all(entries
+    .filter((entry: import('node:fs').Dirent) => entry.isDirectory())
+    .map(async (entry: import('node:fs').Dirent) => ({
+      path: path.join(root, entry.name),
+      bytes: await directoryBytes(path.join(root, entry.name)),
+    })));
+  return sizes.sort((left, right) => right.bytes - left.bytes || left.path.localeCompare(right.path));
+}
+
+type DirectorySize = { path: string; bytes: number };
+type StorageReport = {
+  worktrees: { path: string; bytes: number | null; directories: DirectorySize[] };
+  quarantine: { path: string; bytes: number | null };
+};
+
+async function storageStatus(options: any = {}): Promise<StorageReport> {
   const report = async (pathname: string) => ({ path: pathname, bytes: await directoryBytes(pathname) });
+  const worktreeHome = path.join(sidequestHome(), 'worktrees');
+  const directories = await directorySizes(worktreeHome);
   return {
-    worktrees: await report(path.join(sidequestHome(), 'worktrees')),
-    backups: await report(backupRoot(options)),
+    worktrees: {
+      path: worktreeHome,
+      bytes: directories.reduce((total, entry) => total + entry.bytes, 0),
+      directories,
+    },
     quarantine: await report(quarantineRoot(options)),
   };
 }
 
 function recoveryCounts(recovery: Awaited<ReturnType<typeof sweepRecoveryStores>>) {
   return {
-    plannedBackupEntries: recovery.backups.planned,
     plannedQuarantineEntries: recovery.quarantine.planned,
-    removedBackupEntries: recovery.backups.removed,
     removedQuarantineEntries: recovery.quarantine.removed,
-    removedRecoveryEntries: recovery.backups.removed + recovery.quarantine.removed,
-    reclaimedBytes: recovery.backups.reclaimedBytes + recovery.quarantine.reclaimedBytes,
+    removedRecoveryEntries: recovery.quarantine.removed,
+    reclaimedBytes: recovery.quarantine.reclaimedBytes,
   };
 }
 
-async function recoveryStoreSizes(recovery: Awaited<ReturnType<typeof sweepRecoveryStores>>, options: any): Promise<{ worktrees: { path: string; bytes: number | null }; backups: { path: string; bytes: number | null }; quarantine: { path: string; bytes: number | null } }> {
+async function recoveryStoreSizes(recovery: Awaited<ReturnType<typeof sweepRecoveryStores>>, options: any): Promise<StorageReport> {
   const worktreePath = path.join(sidequestHome(), 'worktrees');
   let worktreeBytes: number | null = null;
+  let worktreeDirectories: DirectorySize[] = [];
   if (options.includeStoreUsage) {
     try {
-      worktreeBytes = await directoryBytes(worktreePath);
+      worktreeDirectories = await directorySizes(worktreePath);
+      worktreeBytes = worktreeDirectories.reduce((total, entry) => total + entry.bytes, 0);
     } catch (_) {}
   }
   return {
-    worktrees: { path: worktreePath, bytes: worktreeBytes },
-    backups: { path: recovery.backups.path, bytes: recovery.backups.bytes },
+    worktrees: { path: worktreePath, bytes: worktreeBytes, directories: worktreeDirectories },
     quarantine: { path: recovery.quarantine.path, bytes: recovery.quarantine.bytes },
   };
 }
@@ -1847,27 +2055,26 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   const notIntegratedSalvageAgeMs = Number.isFinite(Number(options.notIntegratedSalvageAgeMs)) && Number(options.notIntegratedSalvageAgeMs) >= 0
     ? Number(options.notIntegratedSalvageAgeMs)
     : DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS;
-  const recovery = options.ticketRef
-    ? {
-      retentionAgeMs: recoveryRetentionAgeMs(options),
-      retentionMaxPerAgent: recoveryRetentionMaxPerAgent(options),
-      backups: { path: backupRoot(options), entries: [], bytes: null, planned: 0, removed: 0, reclaimedBytes: 0 },
-      quarantine: { path: quarantineRoot(options), entries: [], bytes: null, planned: 0, removed: 0, reclaimedBytes: 0 },
-      failures: [],
-    }
-    : await sweepRecoveryStores(tickets, options);
+  const recovery = await sweepRecoveryStores(repo, tickets, options.ticketRef ? { ...options, execute: false } : options);
   const storage = await recoveryStoreSizes(recovery, options);
-  const upstream = integrationUpstream(options);
+  const { upstream, comparison, fallback: upstreamFallback, ambiguous } = await resolvedIntegrationUpstream(repo, options);
+  const upstreamSafetyReason = ambiguous ? 'upstream_ambiguous' : comparison ? null : 'upstream_unavailable';
   if (await repositoryBusy(repo)) {
+    if (recovery.quarantine.removed) {
+      recovery.failures.push({ path: null, message: `removed ${recovery.quarantine.removed} expired quarantine entr${recovery.quarantine.removed === 1 ? 'y' : 'ies'}, but deferred Git metadata pruning because the repository is busy` });
+    }
     return {
       dryRun: !options.execute,
       minAgeMs,
       notIntegratedSalvageAgeMs,
       upstream,
+      upstreamFallback,
       entries: [],
+      strayDirectories: [],
+      retainedBranches: [],
+      remainingCandidates: 0,
       orphanBranches: [],
       removed: [],
-      backups: [],
       salvaged: [],
       deletedBranches: [],
       prunedOrphanBranches: [],
@@ -1878,9 +2085,10 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
         removedWorktrees: 0,
         salvagedWorktrees: 0,
         quarantinedWorktrees: 0,
-        backedUpWorktrees: 0,
         deletedBranches: 0,
+        retainedBranches: 0,
         prunedOrphanBranches: 0,
+        removedStrayDirectories: 0,
         ...recoveryCounts(recovery),
       },
       failures: recovery.failures,
@@ -1895,12 +2103,17 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
     .filter((entry) => isAgentWorktree(repo, entry.worktree))
     .filter((entry) => quarantineRetryDue(entry.worktree))
     .filter((entry) => !options.ticketRef || ticketForWorktree(tickets, entry)?.ref === options.ticketRef);
-  const orphanCandidates: any[] = [];
-  const allCandidates = candidates;
+  const orphanCandidates = options.ticketRef ? [] : await orphanDirectories(repo, registered);
+  const allCandidates = [...candidates, ...orphanCandidates];
   const maxCandidates = Number.isFinite(Number(options.maxCandidates)) && Number(options.maxCandidates) > 0
     ? Math.floor(Number(options.maxCandidates))
     : allCandidates.length;
-  const boundedCandidates = allCandidates.slice(0, maxCandidates);
+  // Oldest first: a bounded run over hundreds of worktrees has to drain from the
+  // back of the queue, or it re-examines the same young ones every session (SQ-2924).
+  const agedCandidates = await Promise.all(allCandidates.map(async (entry: any) => ({ entry, ageMs: (await worktreeAge(entry.worktree)) ?? 0 })));
+  agedCandidates.sort((left, right) => right.ageMs - left.ageMs || String(left.entry.worktree).localeCompare(String(right.entry.worktree)));
+  const boundedCandidates = agedCandidates.slice(0, maxCandidates).map((candidate) => candidate.entry);
+  const remainingCandidates = agedCandidates.length - boundedCandidates.length;
   const livePaths = Array.isArray(options.livePaths) ? options.livePaths.map((pathname: unknown) => String(pathname)) : [];
   const removed: string[] = [];
   const classified: any[] = [];
@@ -1915,11 +2128,54 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
     reportSweepProgress(options, classified, removed, classificationStatus(entry, null));
     const classifiedEntry = entry.orphanDirectory
       ? await classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs)
-      : await classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, upstream, livePaths, notIntegratedSalvageAgeMs, [...registered]);
+      : await classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, comparison, upstreamSafetyReason, livePaths, notIntegratedSalvageAgeMs, [...registered]);
+    classifiedEntry.upstream = upstream;
+    classifiedEntry.upstreamFallback = upstreamFallback;
     classified.push(classifiedEntry);
     reportSweepProgress(options, classified, removed, classificationStatus(entry, classifiedEntry.reason));
     return classifiedEntry;
   }));
+  // Every branch this sweep could still delete, so a detached commit is never called safe on the
+  // strength of one of them. Two passes delete branches: the compare-and-delete below, for entries the
+  // classification found already upstream, and the orphan pass at the end. The orphan pass decides
+  // which worktree-agent branches to take only after the reclaims have run, from what is checked out
+  // by then, so every one of them that no surviving worktree holds counts as deletable here. SQ-2986
+  // reproduced the gap: a branch that was the sole home of a detached commit was accepted as its pin
+  // and then pruned by that same invocation.
+  const runsOrphanPass = !(options.ticketRef || upstreamSafetyReason);
+  const branchesLosingTheirWorktree = new Set(entries
+    .filter((candidate) => candidate.action === 'remove' || candidate.action === 'salvage')
+    .map((candidate) => localBranchName(candidate.branch))
+    .filter((branch): branch is string => !!branch));
+  const branchesKeepingTheirWorktree = new Set(worktreeList
+    .map((entry) => localBranchName(entry.branch))
+    .filter((branch): branch is string => !!branch)
+    .filter((branch) => !branchesLosingTheirWorktree.has(branch)));
+  const agentBranches = runsOrphanPass
+    ? await git(repo, ['for-each-ref', '--format=%(refname)', 'refs/heads/worktree-agent-*'])
+    : { ok: true, stdout: '', stderr: '' };
+  const deletableBranches: BranchDeletionPlan = {
+    complete: agentBranches.ok,
+    refs: new Set([
+      ...entries
+        .filter((candidate) => candidate.action === 'remove' && (candidate.reachable || candidate.patchEquivalent))
+        .map((candidate) => localBranchName(candidate.branch))
+        .filter((branch): branch is string => !!branch)
+        .map((branch) => `refs/heads/${branch}`),
+      ...agentBranches.stdout.split(/\r?\n/).filter(Boolean)
+        .filter((ref) => !branchesKeepingTheirWorktree.has(ref.slice('refs/heads/'.length))),
+    ]),
+  };
+  // The classification decided this tree can go. That decision says nothing about a commit sitting on
+  // a detached HEAD, which has no branch to keep and loses its private HEAD to the prune, so the
+  // reclaim is withheld and the checkout stays where it stands (SQ-2985). Salvage is left alone: it
+  // writes refs/salvage/<name> at that same commit before the tree goes.
+  for (const entry of entries) {
+    if (entry.action !== 'remove' || entry.orphanDirectory || localBranchName(entry.branch)) continue;
+    if (await detachedCommitPinned(repo, entry.head, deletableBranches)) continue;
+    entry.action = 'keep';
+    entry.reason = 'detached_head_unpinned';
+  }
   const sweepingStatus: SweepProgressStatus = {
     phase: 'sweeping',
     candidates: boundedCandidates.length,
@@ -1930,15 +2186,16 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   const completeStatus: SweepProgressStatus = { ...sweepingStatus, phase: 'complete' };
   const execute = !!options.execute;
   reportSweepProgress(options, entries, removed, sweepingStatus);
-  const backups: string[] = [];
   const salvaged: Array<{ path: string; ref: string; uncommittedRef: string | null; recovery: string }> = [];
   const deletedBranches: string[] = [];
+  const retainedBranches: Array<{ branch: string; path: string; reason: string }> = [];
   const prunedOrphanBranches: string[] = [];
   const quarantined: Array<{ path: string; destination: string; message: string }> = [];
   const failures: Array<{ path: string | null; message: string; suppressed?: boolean }> = [...recovery.failures];
+  let registrationUnrepaired = recovery.registrationUnrepaired;
 
   if (execute) {
-    for (const entry of entries.filter((candidate) => candidate.action === 'remove' || candidate.action === 'salvage')) {
+    for (const entry of entries.filter((candidate) => candidate.action === 'remove' || candidate.action === 'salvage' || candidate.action === 'quarantine')) {
       if (shouldSkipKnownFailure(entry.path)) {
         entry.action = 'keep';
         entry.reason = 'known_permanent_failure';
@@ -1946,11 +2203,24 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
         continue;
       }
       const ticket = ticketForWorktree(tickets, { worktree: entry.path });
-      const initialLinkSafety = await dependencyLinkSafety(entry.path, ticket, entry.lease);
-      if (!initialLinkSafety.safe) {
-        entry.action = 'keep';
-        entry.reason = 'dependency_link_untrusted';
-        reportSweepProgress(options, entries, removed, sweepingStatus);
+      if (entry.orphanDirectory) {
+        try {
+          if ((await fs.readdir(entry.path)).length) {
+            entry.action = 'keep';
+            entry.reason = 'orphan_directory_contents';
+            reportSweepProgress(options, entries, removed, sweepingStatus);
+            continue;
+          }
+          await fs.rm(entry.path, { recursive: true, force: true });
+          clearFailure(entry.path);
+          removed.push(entry.path);
+          reportSweepProgress(options, entries, removed, sweepingStatus);
+        } catch (error: any) {
+          entry.action = 'keep';
+          entry.reason = 'orphan_remove_failed';
+          failures.push({ path: entry.path, message: `orphan directory removal failed: ${(error && error.message) || error}` });
+          reportSweepProgress(options, entries, removed, sweepingStatus);
+        }
         continue;
       }
       if (entry.action === 'salvage') {
@@ -1965,57 +2235,104 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
           continue;
         }
       }
-      if (!entry.clean && !entry.salvage) {
-        try {
-          entry.backup = entry.orphanDirectory
-            ? await backupDirtyOrphanDirectory(entry, options)
-            : await backupDirtyWorktree(repo, entry, upstream, options);
-          backups.push(entry.backup);
-        } catch (error: any) {
-          failures.push({ path: entry.path, message: `backup failed: ${(error && error.message) || error}` });
-          continue;
-        }
-      }
-      const dependencyLinksReleased = releaseVerifiedOwnedDependencyLinks(entry.path, ticket, entry.lease);
-      if (!dependencyLinksReleased.ok) {
+      // Nothing is ever deleted where it stands. Every reclaim renames the tree into quarantine
+      // first — rename never follows a link, and a failed rename leaves the source byte-for-byte AND
+      // record-for-record — and a tree that was classified for deletion is deleted only after the
+      // moved copy has been read again and found to be what the classification saw (SQ-2952, SQ-2958).
+      const parking = entry.action === 'quarantine';
+      const moveMessage = parking ? 'untracked work quarantined' : 'reclaimed worktree moved into quarantine';
+      const recordedLinks = recordedDependencyLinkPaths(entry.path, ticket);
+      const quarantine = await quarantineCandidate(entry, moveMessage, options);
+      if (!quarantine.ok || !quarantine.destination) {
+        recordFailure(entry.path, quarantine.stderr);
         entry.action = 'keep';
-        entry.reason = dependencyLinksReleased.reason;
+        entry.reason = 'quarantine_failed';
+        failures.push({ path: entry.path, message: `${moveMessage} failed: ${quarantine.stderr}` });
         reportSweepProgress(options, entries, removed, sweepingStatus);
         continue;
       }
-      const result = await removeCandidate(repo, entry);
-      if (!result.ok) {
-        const message = result.stderr || 'worktree remove failed';
-        recordFailure(entry.path, message);
-        const quarantine = await quarantineCandidate(entry, message, options);
-        if (!quarantine.ok || !quarantine.destination) {
-          entry.action = 'keep';
-          entry.reason = 'quarantine_failed';
-          failures.push({ path: entry.path, message: `${message}; quarantine failed: ${quarantine.stderr}` });
-          reportSweepProgress(options, entries, removed, sweepingStatus);
-          continue;
-        }
+      const destination = quarantine.destination;
+      const park = async (reason: string, message: string) => {
         entry.action = 'quarantine';
-        entry.reason = 'remove_failed_quarantined';
-        entry.quarantine = quarantine.destination;
-        quarantined.push({ path: entry.path, destination: quarantine.destination, message });
-        if (quarantine.stripFailure) {
-          failures.push({ path: quarantine.destination, message: `quarantine cleanup failed: ${quarantine.stripFailure}` });
+        entry.reason = reason;
+        entry.quarantine = destination;
+        entry.quarantineRegistrationRepaired = await repairParkedRegistration(repo, destination);
+        quarantined.push({ path: entry.path, destination, message });
+        if (!entry.quarantineRegistrationRepaired) {
+          // Fail closed: the files are here, the registration still names the path they came from, and
+          // that stale entry is all that holds the private HEAD now. Every prune below is withheld so
+          // the sweep cannot report a park it has quietly stripped of its commit (SQ-2986).
+          registrationUnrepaired = true;
+          failures.push({ path: destination, message: `parked the worktree at ${destination}, but git worktree repair could not move its registration there, so this sweep left the worktree records and the private HEAD alone instead of pruning them` });
         }
         reportSweepProgress(options, entries, removed, sweepingStatus);
+      };
+      if (parking) {
+        if (!unlinkOwnedDependencyLinks(recordedLinks.map((relativePath) => path.resolve(destination, relativePath)))) {
+          failures.push({ path: destination, message: 'quarantined the worktree, but its recorded dependency links could not be released at the quarantine destination' });
+        }
+        await park(entry.reason, moveMessage);
+        continue;
+      }
+      const classifiedReason = entry.reason;
+      const branch = localBranchName(entry.branch);
+      const movedRead = await lateContentInMovedWorktree(destination, entry.head, recordedLinks, branch);
+      if (movedRead.blocked) {
+        await park('late_content_quarantined', `classified ${classifiedReason}, but ${movedRead.blocked}, so the moved tree was parked instead of deleted`);
+        continue;
+      }
+      // The ref that held this detached commit at classification can be gone by now, and the prune
+      // below takes the private HEAD that is left. Read it again here, at the destination, before
+      // anything is deleted (SQ-2985).
+      if (!branch && !await detachedCommitPinned(repo, movedRead.head, deletableBranches)) {
+        await park('detached_head_unpinned', `classified ${classifiedReason}, but its detached HEAD ${shortCommit(movedRead.head)} is held by no other ref, so the moved tree was parked instead of deleted`);
+        continue;
+      }
+      const dependencyLinksReleased = releaseQuarantinedDependencyLinks(destination, recordedLinks);
+      if (!dependencyLinksReleased.ok) {
+        await park(dependencyLinksReleased.reason, `classified ${classifiedReason}, but the moved tree still holds a dependency link, so it was parked instead of deleted`);
+        continue;
+      }
+      try {
+        await fs.rm(destination, { recursive: true, force: true });
+      } catch (error: any) {
+        const message = `deleting the moved tree failed: ${(error && error.message) || error}`;
+        failures.push({ path: destination, message });
+        await park('quarantined_delete_failed', message);
         continue;
       }
       clearFailure(entry.path);
       removed.push(entry.path);
       reportSweepProgress(options, entries, removed, sweepingStatus);
-      if (entry.orphanDirectory) continue;
-      const branch = localBranchName(entry.branch);
-      if (!branch) continue;
-      const deleted = await git(repo, ['branch', '-D', '--', branch]);
-      if (deleted.ok) deletedBranches.push(branch);
-      else failures.push({ path: branch, message: deleted.stderr || 'git branch delete failed' });
+      if (!branch || !movedRead.branchTip) continue;
+      // A branch carrying commits the integration branch does not have is the only
+      // remaining home for that work once its worktree is gone, so the sweep keeps
+      // it and names it in the report instead of deleting it (SQ-2924).
+      if (!entry.reachable && !entry.patchEquivalent) {
+        entry.retainedBranch = branch;
+        retainedBranches.push({ branch, path: entry.path, reason: 'unique_commits' });
+        continue;
+      }
+      // Compare-and-delete against the tip read at the quarantine destination. Worktrees share the
+      // main object store, so a commit made after that read survives as long as its ref does;
+      // `update-ref -d` refuses once the ref has moved, and the branch is reported retained instead.
+      // It runs after the prune because git protects a checked-out branch through `branch -D` alone.
+      // The comparison is by value, so a ref that moved away and back to this exact tip still deletes,
+      // and a commit on a detached HEAD has no ref here to compare at all (SQ-2982).
+      const deleted = await git(repo, ['update-ref', '-d', `refs/heads/${branch}`, movedRead.branchTip]);
+      if (deleted.ok) {
+        deletedBranches.push(branch);
+        continue;
+      }
+      const currentTip = await git(repo, ['rev-parse', '--verify', `refs/heads/${branch}`]);
+      if (currentTip.ok && currentTip.stdout !== movedRead.branchTip) {
+        entry.retainedBranch = branch;
+        retainedBranches.push({ branch, path: entry.path, reason: 'tip_moved' });
+        continue;
+      }
+      failures.push({ path: branch, message: deleted.stderr || 'git update-ref delete failed' });
     }
-    if (removed.length || quarantined.length) {
+    if (!registrationUnrepaired) {
       const prune = await git(repo, ['worktree', 'prune']);
       if (!prune.ok) failures.push({ path: null, message: prune.stderr || 'git worktree prune failed' });
     }
@@ -2027,7 +2344,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   const checkedOutBranches = new Set<string>(remainingWorktrees
     .map((entry) => localBranchName(entry.branch))
     .filter((branch): branch is string => !!branch));
-  const orphanBranches = options.ticketRef ? [] : await findOrphanBranches(repo, checkedOutBranches, upstream, maxCandidates);
+  const orphanBranches = runsOrphanPass ? await findOrphanBranches(repo, checkedOutBranches, comparison!, maxCandidates) : [];
   if (execute) {
     for (const entry of orphanBranches.filter((candidate) => candidate.action === 'prune')) {
       const deleted = await git(repo, ['branch', '-D', '--', entry.branch]);
@@ -2036,16 +2353,21 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
     }
   }
 
+  const strayDirectories = options.ticketRef ? [] : await sweepStrayWorktreeHome(repo, execute, failures);
+
   reportSweepProgress(options, entries, removed, completeStatus);
   return {
     dryRun: !execute,
     minAgeMs,
     notIntegratedSalvageAgeMs,
     upstream,
+    upstreamFallback,
     entries,
+    strayDirectories,
+    retainedBranches,
+    remainingCandidates,
     orphanBranches,
     removed,
-    backups,
     salvaged,
     deletedBranches,
     prunedOrphanBranches,
@@ -2056,13 +2378,14 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       removedWorktrees: removed.length,
       salvagedWorktrees: salvaged.length,
       quarantinedWorktrees: quarantined.length,
-      backedUpWorktrees: backups.length,
       deletedBranches: deletedBranches.length,
+      retainedBranches: retainedBranches.length,
       prunedOrphanBranches: prunedOrphanBranches.length,
+      removedStrayDirectories: strayDirectories.filter((entry: any) => entry.action === 'remove').length,
       ...recoveryCounts(recovery),
     },
     failures,
   };
 }
 
-module.exports = { retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, DEFAULT_RECOVERY_RETENTION_MAX_PER_AGENT, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };
+module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };

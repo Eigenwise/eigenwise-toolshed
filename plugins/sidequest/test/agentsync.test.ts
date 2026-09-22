@@ -1235,6 +1235,7 @@ test('renderTicketBriefing embeds no route marker for a Claude-backed route', ()
   const briefing = agentsync.renderTicketBriefing({
     ref: 'SQ-347', title: 'Claude route', model: 'opus', effort: 'high',
     dispatchExecutor: 'sidequest-exec-high', category: {},
+    dispatch: { verificationRequirement: { kind: 'command', command: 'npm test' } },
   }, 'claude-token-347');
   assert.doesNotMatch(briefing, /\[sidequest-route model=/);
   assert.match(briefing, /Closeout: this prepared dispatch is write-capable\. Commit scoped repo changes, then put the full final report in submit\.body/);
@@ -1242,6 +1243,17 @@ test('renderTicketBriefing embeds no route marker for a Claude-backed route', ()
   assert.match(briefing, /clean declared scope whose ticket explicitly sets externalDeliverable:true closes through done only after the pinned verify-capture wrapper records the current dispatch attempt and revision/);
   assert.match(briefing, /Submit writes the short terminal submission marker/);
   assert.doesNotMatch(briefing, /After submit, keep the terminal board comment/);
+});
+
+test('external-deliverable briefings name supplied manual verification evidence', () => {
+  clearCatalog();
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-2968', title: 'External research', model: 'opus', effort: 'high',
+    dispatchExecutor: 'sidequest-exec-high', category: {},
+    dispatch: { verificationRequirement: { kind: 'manual' } },
+  }, 'external-manual-token');
+  assert.match(briefing, /done --verify evidence for the pinned manual requirement is supplied/);
+  assert.doesNotMatch(briefing, /closes through done only after the pinned verify-capture wrapper/);
 });
 
 test('working-tree briefings split capture and typed-evidence closeout', () => {

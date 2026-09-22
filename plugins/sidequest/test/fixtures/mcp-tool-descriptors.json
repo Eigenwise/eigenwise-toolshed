@@ -18,8 +18,7 @@
           "description": "UTF-8 bytes."
         },
         "expectedRevision": {
-          "type": "string",
-          "description": "Revision."
+          "type": "string"
         }
       },
       "required": [
@@ -824,7 +823,7 @@
   },
   {
     "name": "done",
-    "description": "Finish; declared external needs current capture; commandless working-tree needs verify.",
+    "description": "Finish; external/working-tree: pinned command needs capture; commandless needs verify.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -931,7 +930,8 @@
           "type": "boolean"
         },
         "recoveryEvidence": {
-          "type": "string"
+          "type": "string",
+          "description": "Unverified; retires unclaimed attempts past deadline; CLI too."
         }
       },
       "required": [
@@ -1431,8 +1431,7 @@
           "type": "string"
         },
         "full": {
-          "type": "boolean",
-          "description": "Whole bodies."
+          "type": "boolean"
         },
         "since": {
           "type": "string",
@@ -1540,8 +1539,7 @@
           "type": "string"
         },
         "sharedTree": {
-          "type": "boolean",
-          "description": "Tree."
+          "type": "boolean"
         },
         "reducedAgentSchema": {
           "type": "boolean",
@@ -1558,7 +1556,7 @@
         },
         "recoveryEvidence": {
           "type": "string",
-          "description": "unbound or expired bound"
+          "description": "Unverified; latest signal grace; only the bound runtime name counts."
         },
         "retireOnly": {
           "type": "boolean"
@@ -1567,8 +1565,7 @@
           "type": "string"
         },
         "worktree": {
-          "type": "string",
-          "description": "Checkout."
+          "type": "string"
         },
         "full": {
           "type": "boolean"
@@ -1928,7 +1925,7 @@
             "string",
             "null"
           ],
-          "description": "null clears fallback."
+          "description": "null clears."
         },
         "fallbackEffort": {
           "type": "string",
@@ -2090,10 +2087,6 @@
           "minimum": 168
         },
         "worktreeRecoveryRetentionAgeHours": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "worktreeRecoveryRetentionMaxPerAgent": {
           "type": "integer",
           "minimum": 1
         },

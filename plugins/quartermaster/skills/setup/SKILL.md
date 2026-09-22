@@ -33,6 +33,11 @@ existing CLAUDE.md, existing `.claude/`). Establish:
   live-rules and sidequest.
 - **What is already there**: an existing `.claude/` means augmenting, never clobbering. Read it
   first, merge, and say what you will add and what you will leave alone.
+- **Coding-agent host**: identify the actual host from direct session, configuration, or user
+  evidence. List native capabilities, configured extensions, and tools usable in this session
+  separately. `catalog --installed` only inventories the installations it knows about; it is not a
+  universal host inventory. Follow [references/host-capabilities.md](references/host-capabilities.md)
+  before proposing a host extension.
 - **Git**: if not a repo, ask once whether to `git init` (recommended: it preserves the setup);
   respect a no.
 
@@ -116,6 +121,12 @@ handing off implementation. Draw from three sources, in this order:
   because the cap only bounds the auto-compact trigger. Treat 325000 as a recommendation, not a
   prerequisite. If either user or project settings already has a value, say which one wins and
   leave it alone unless the user asks to change it.
+
+- **Host capabilities**, using [references/host-capabilities.md](references/host-capabilities.md): only
+  when the project needs a capability that direct evidence says the identified host cannot already
+  provide. Check native and live tools before extensions, then distinguish official adaptable
+  examples from maintained installable packages. Keep unknown host state uncertain. The local
+  catalog remains authoritative only for installations it inventories.
 
 - **Stack plugins**, from [references/stack-plugins.md](references/stack-plugins.md) plus the
   catalog (`node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" catalog --query "<stack terms>"`).
@@ -233,6 +244,7 @@ what would make the user's current work easier and whether this setup is earning
 
 ## References
 
+- `references/host-capabilities.md` - identify host capabilities before proposing an extension
 - `references/stack-plugins.md` - stack to plugins/marketplaces/LSP catalog
 - `references/rule-templates.md` - craft-baseline and stack rule reference material
 - `references/crap-gate.md` - CRAP threshold policy, LCOV recipes, config, and live-rule source

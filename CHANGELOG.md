@@ -8,6 +8,87 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.573.0 (2026-09-20)
+
+### sidequest 5.2.0 → 5.2.1
+
+#### Fixes
+
+- Resume safe parked-recovery metadata pruning (SQ-2997)
+  Every safe sweep now runs Git's metadata-only worktree prune after retained parks reconcile, even when that invocation removed no worktrees or quarantine entries. Unresolved parked registrations still veto pruning, so their detached commits remain protected until a later repair succeeds.
+- Sweep-report tests scale their wait bound and bound the startup calibration itself (SQ-3000)
+  The hooks test suite's shared `waitForPath` helper waited a hardcoded 2000ms for a detached sweep worker's report file, which a loaded Windows CI runner could exceed even when nothing was broken. It now scales its bound against a `node -e ''` baseline measured in the same run, with a 5000ms floor, and gained deterministic delayed-report and never-report controls. The baseline measurement itself now carries an explicit 5000ms timeout, so a stalled child process (or an inherited preload that never returns) fails the run loudly instead of hanging test collection indefinitely.
+
+## v3.572.0 (2026-09-19)
+
+### quartermaster 0.11.1 → 0.11.2
+
+#### Fixes
+
+- Fix resupply eval schema (SQ-2995)
+  Make Quartermaster's resupply host-capability evals compatible with skill-creator.
+
+## v3.571.0 (2026-09-19)
+
+### sidequest 5.1.22 → 5.2.0
+
+#### Features
+
+- One retirement authority answers every unclaimed-attempt route, on both surfaces (SQ-2961)
+  A dispatch whose runtime died before its first claim retires on recovery evidence instead of waiting out the hour-long idle backstop, and `groomClose --deliveryCommit` names that retirement as its exit. Recovery evidence is unverified attestation, so the retirement waits for a deadline: 15 minutes by default (`SIDEQUEST_CLAIM_GRACE_MIN`, clamped to the idle backstop) measured from the latest signal the runtime actually produced. An attempt whose WorktreeCreate has not recorded finished provisioning never becomes grace-retirable at all, because a cold `npm ci` looks exactly like a dead hook from the board, so it only ever reaches the idle backstop.
+
+  That deadline is now decided in exactly one place, and both surfaces ask it. `dispatch --recovery-evidence`, `--retire-only`, `groomClose` with `recoveryEvidence`, `pulse`, and `sidequest groom-close --recovery-evidence` all read it, so they print the same instant and flip to acceptance together. `groomClose` used to skip the deadline entirely and could retire a runtime that had launched seconds earlier; it now refuses with the same countdown the dispatch call prints, and once that countdown runs out the same call retires the attempt and closes the ticket, including a bound attempt that never claimed. The CLI accepted `--recovery-evidence` and silently ignored it, refusing `active_dispatch` before and after the deadline alike, so its advertised recovery door could never open. It runs the same store authority as the MCP tool now rather than a second implementation of it.
+
+  Preparing a dispatch is no longer counted as a runtime signal, so the deadline runs from what a runtime actually does: launch, WorktreeCreate start and completion, finished provisioning, bind, briefing fetch, claim, and now a board write from that runtime. The launcher session is the trust boundary for that eighth signal, and on its own it was far too wide: fan-out siblings and the orchestrator all write on the one session the dispatch recorded, and the MCP transport carries no per-agent identity, so matching the session alone let an orchestrator's own progress comments hold a dead attempt open forever. A comment counts only when it lands on the attempt's own ticket, on that launcher session, after launch, before any claim, and under the exact runtime name SubagentStart bound. A same-session caller that deliberately writes under that bound name is trusted as that runtime; any other `by`, a different session, a write dated before launch, or an attempt whose bind recorded only an agent id counts for nothing. An attempt that recorded none of these signals never had a runtime to protect and is retirable at once.
+
+  Five WorktreeCreate callbacks are generation-scoped and have to present the attempt generation they were bound to, checked before anything else: creation completed, finished provisioning, provisioning failure, dependency link, and recovery. A callback with no generation is refused as `missing_attempt`, one from a retired attempt as `stale_attempt`, and both stamp nothing, so a late hook can no longer shorten the protection of the replacement that reused the same session and checkout, and a hook that finds out mid-provisioning that its attempt was retired writes a truthful notice and exits without touching the attempt that now owns the checkout.
+
+  The start binding is the exception, and the docs say so rather than claiming otherwise. The hook learns its generation FROM that call, and a WorktreeCreate payload carries only a session id, a cwd, and a worktree name that resolves to the checkout path already being matched, so there is no per-invocation discriminator to pin before creation: no branch of the code can make the start binding generation-scoped without breaking the hook that needs it. It is scoped to the session and the checkout instead, with the two hijacks that scoping allowed closed. A caller that does know its generation is held to it, so a retired hook presenting its own generation binds nothing. A retired attempt still holding the checkout answers `stale_attempt` rather than letting its late hook bind some other live attempt of the same session. And a second caller with no generation arriving at a checkout a live attempt is still creating is refused, because that attempt's own hook already holds the generation, so a generation-less caller can never acquire a live one mid-creation. A re-entry on a finished checkout still resolves, which is the one case that stamps nothing anyway.
+
+#### Fixes
+
+- Reject dirty Sidequest verification captures (SQ-2936)
+  Sidequest now refuses verification captures from dirty worktrees, so uncommitted changes cannot certify a submitted commit.
+- Keep gateway models visible with discovery overrides (SQ-2937)
+  Discovery overrides now keep the installed gateway catalog available and leave fixture catalogs isolated from gateway refreshes.
+- Recovery refuses a retained checkout stuck mid-replay (SQ-2938)
+  A recovery dispatch that cherry-picked a preserved candidate into a fresh checkout, hit a conflict, and released could hand that same conflicted checkout to the replacement executor. A conflict does not move HEAD, so the checkout still matched its release-time identity and read as a healthy dirty continuation, and an explicit `integrationBranch` recovery base made the briefing agree, because the old base's ancestry passed against a tree that never held the candidate.
+
+  Resume now refuses any retained checkout with unmerged index entries or an in-progress cherry-pick, merge, revert, rebase or bisect, for plain recovery and explicit-base recovery alike. Nothing is resolved or discarded: the conflicted checkout is preserved as failed-replay evidence, the replacement executor gets a fresh isolated checkout, and the refusal names the checkout, its unmerged paths, and the two ways forward. The dirty-worktree continuation briefing also proves the retained revision and the retained changes before it trusts base ancestry.
+- Lifecycle calls resolve the board from the caller's own claim and worktree (SQ-2939)
+  An executor working a ticket on a sibling repository's board no longer has its commits, submissions, checkpoints and dispatch calls land on the spawning session's board when it passes its `worktree`. With `project` omitted, the board comes from the caller's own binding: the ref plus the worktree its dispatch reserved, or the ref plus the claim owner for a shared-tree dispatch. Calls that take no `worktree` argument (comment, release, done, claim, plan, scope requests) still need `project` to reach the sibling board; without it they stay on the session's board. When nothing binds, the call stays on the session's board with its existing refusals unchanged.
+- user-story skill dispatches or prepares confirmed in-scope blockers (SQ-2966)
+  The `user-story` skill's wave-execution guidance now tells the orchestrator
+  to act on a confirmed blocker that falls within the user's delegated work
+  instead of stopping at a status report: dispatch the existing ticket once
+  it's ready, or start the authorized prerequisite preparation, recording the
+  concrete dependency, owner, and resume condition. Unrelated CI or review is
+  not treated as a dependency, and acknowledging or reprioritizing a report
+  does not count as taking ownership of it. Added focused eval prompts under
+  `plugins/sidequest/skills/user-story/evals/evals.json` covering a ready
+  in-scope blocker, a genuine prerequisite, and an out-of-scope peer report.
+- pass manual verification evidence through external-deliverable closeout (SQ-2968)
+  `done` on a `externalDeliverable:true` ticket whose pinned verifier has no
+  command (a manual, document, link, schema, or custom verifier — e.g. no-source
+  research) always refused with "required manual verification evidence is
+  missing", even when the caller supplied `--verify`/`verify` evidence: the CLI
+  and MCP `done` handlers never passed that evidence through to the shared
+  external-deliverable closeout authority, so it always checked an empty string.
+  `externalDeliverableCloseout` now takes and forwards the caller's typed verify
+  evidence, so a clean external deliverable with a non-command pinned verifier
+  can close with valid manual evidence, same as it already could for
+  command-pinned and working-tree-delivery closeout. A dirty declared scope, a
+  missing pinned-command capture, and an unsupported review-pinned requirement
+  all still refuse exactly as before — verify text cannot substitute for a
+  command capture or for independent review. Updated the MCP `done` tool
+  description and the dispatch-briefing closeout text to describe both paths.
+- Admit inherited rejected ancestry, and let a committed apply tree close it (SQ-2983)
+  A repair linked `related` to a source whose exact candidate carries an oracle-confirmed review rejection can now submit the range that inherits it, keeping the full range so review, replay/apply/merge delivery, and per-path supersession still see every inherited byte. Active, unrelated, mirror-only, stale-identity, and partially inherited overlaps stay refused, and each refusal names the missing half.
+
+  `apply` delivery no longer strands the rejected submission it replaces. Because `apply` materializes the range into the integration working tree, the head it records holds none of the delivered bytes, so supersession had nothing to prove per-path lineage against and unchanged inherited paths could only be closed with false replacement evidence. Committing that materialized tree and passing it to `groomClose` as `deliveryCommit` now completes the same verified delivery record: it re-runs the merged-tree verifier, refuses a commit that is unreachable from the recorded target or whose tree differs from the reviewed candidate on any submitted path, and records it as the delivered content supersession reads. `integrate` still refuses a closed repair, and its refusal names that flow.
+
+  That binding is also retryable. The record it completes is already delivered, so a refusal, a failing verifier included, reports the failure and leaves the delivered record, its completion, and the submission exactly as they were. Fix the cause and bind the same commit again; a binding that already succeeded is not recorded twice.
+
 ## v3.570.0 (2026-09-15)
 
 ### quartermaster 0.11.0 → 0.11.1
