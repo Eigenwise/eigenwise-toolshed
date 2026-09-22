@@ -16,7 +16,6 @@ const {
   resolveLifecycleProject,
   runtimeSessionId,
   sessionOf,
-  controlPlaneIdentity,
   requireDispatchSession,
   workflowRecipe,
   requireBy,
@@ -71,6 +70,21 @@ type ToolDefinition = {
   handler: (args: any) => any | Promise<any>;
 };
 
+// The orchestrator, every teammate and every resumed executor reach this server on the one
+// session id its process holds, and that id is not even the host session the CLI and the hooks
+// see. So the session says which board wrote, never who: naming a role it cannot observe put
+// two read-only executors' findings under `orchestrator-<session>` on SQ-3054 and SQ-3055
+// (SQ-3058). Unattributed stays unattributed; the writer's own `by` is the only proof of author.
+function unattributedIdentity(sessionId?: any) {
+  const id = String(sessionId || '').trim();
+  return id ? `session-${id.slice(0, 12)}` : 'unattributed';
+}
+
+function commentAuthor(args?: any, ticket?: any, sessionId?: any) {
+  const claimedOnThisSession = sessionId && ticket?.claim?.runtime?.sessionId === sessionId;
+  return args?.by || (claimedOnThisSession ? ticket.claim.by : unattributedIdentity(sessionId));
+}
+
 const tools: ToolDefinition[] = [
   {
     name: 'supersede_submission',
@@ -124,8 +138,7 @@ const tools: ToolDefinition[] = [
       const { slug } = resolveLifecycleProject(args.project, args, 'comment');
       const ticket = store.getTicket(slug, args.ref);
       const sessionId = sessionOf(args);
-      const claimSessionId = ticket?.claim?.runtime?.sessionId;
-      const by = args.by || (sessionId && claimSessionId === sessionId ? ticket.claim.by : controlPlaneIdentity(null, sessionId));
+      const by = commentAuthor(args, ticket, sessionId);
       const res = store.addComment(slug, args.ref, {
         body: args.body,
         by,

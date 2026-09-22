@@ -1039,25 +1039,37 @@ test('story_log reads, appends from a claimed member, and rotates after promotio
   assert.match(denied.content[0].text, /rotate:true requires by:"orchestrator"/);
 });
 
-test('MCP comment attribution keeps the control plane distinct from a claim holder', async () => {
+// The orchestrator, every teammate and every resumed executor reach this server on the one
+// session id its process holds, so the session says which board wrote, never who (SQ-3058).
+// Each case is its own ticket and its own caught failure so the first one cannot hide the rest.
+test('MCP comment attribution credits the caller or the claim, never an unobserved role', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-comment-attribution-'))).slug;
-  const ticket = store.createTicket(project, { title: 'Comment authoring' });
-  assert.equal(store.claimTicket(project, ticket.ref, 'claim-holder', { direct: true, sessionId: 'executor-session' }).ok, true);
-
-  const controlPlane = freshMcpServer();
-  const controlPlaneComment = await callToolOn(controlPlane, 'comment', { project, ref: ticket.ref, body: 'Control-plane comment.' });
-  assert.ok(controlPlaneComment.commentId, 'control-plane comment is acknowledged');
-  const storedControlPlaneComment = store.getTicket(project, ticket.ref).comments.at(-1);
-  assert.equal(storedControlPlaneComment.by, `orchestrator-${MCP_SESSION_ID.slice(0, 12)}`);
-  assert.equal(storedControlPlaneComment.sourceSession, MCP_SESSION_ID);
-  assert.equal(storedControlPlaneComment.actor, storedControlPlaneComment.by);
-  assert.equal(storedControlPlaneComment.operation, 'comment');
-
-  await callTool('comment', { project, ref: ticket.ref, body: 'Executor comment.', by: 'claim-holder' });
-  assert.equal(store.getTicket(project, ticket.ref).comments.at(-1).by, 'claim-holder');
-
-  await callTool('comment', { project, ref: ticket.ref, body: 'Named control-plane comment.', by: 'orchestrator-review' });
-  assert.equal(store.getTicket(project, ticket.ref).comments.at(-1).by, 'orchestrator-review');
+  const sessionLabel = `session-${MCP_SESSION_ID.slice(0, 12)}`;
+  const scenarios = [
+    { name: 'no claim, no by', claimSession: null, args: {}, expected: sessionLabel },
+    { name: 'claim bound to this session, no by', claimSession: MCP_SESSION_ID, args: {}, expected: 'claim-holder' },
+    { name: 'claim bound to another session, no by', claimSession: 'executor-session', args: {}, expected: sessionLabel },
+    { name: 'explicit by outranks the claim', claimSession: MCP_SESSION_ID, args: { by: 'orchestrator-review' }, expected: 'orchestrator-review' },
+  ];
+  const failures: string[] = [];
+  for (const scenario of scenarios) {
+    const ticket = store.createTicket(project, { title: scenario.name });
+    if (scenario.claimSession) {
+      assert.equal(store.claimTicket(project, ticket.ref, 'claim-holder', { direct: true, sessionId: scenario.claimSession }).ok, true);
+    }
+    try {
+      const ack = await callTool('comment', { project, ref: ticket.ref, body: `Findings for ${scenario.name}.`, ...scenario.args });
+      assert.ok(ack.commentId, 'comment is acknowledged');
+      const stored = store.getTicket(project, ticket.ref).comments.at(-1);
+      assert.equal(stored.by, scenario.expected);
+      assert.equal(stored.actor, stored.by);
+      assert.equal(stored.sourceSession, MCP_SESSION_ID);
+      assert.equal(stored.operation, 'comment');
+    } catch (error: any) {
+      failures.push(`${scenario.name}: ${error?.message}`);
+    }
+  }
+  assert.deepEqual(failures, []);
 });
 
 test('MCP accepts curated natural aliases and names each accepted mapping', async () => {
