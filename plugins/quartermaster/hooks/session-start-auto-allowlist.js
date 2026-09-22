@@ -24,7 +24,7 @@ async function main() {
     process.stdout.write(`quartermaster auto-allowlist: added ${addition.fingerprint} after ${addition.approvals} approvals\n`);
   }
   for (const blocked of result.blocked) {
-    process.stdout.write(`quartermaster auto-allowlist: blocked ${blocked.fingerprint} because it is destructive\n`);
+    process.stdout.write(`quartermaster auto-allowlist: blocked ${blocked.fingerprint} because ${blocked.vetoReason ?? 'it is destructive'}\n`);
   }
 }
 
