@@ -619,7 +619,7 @@ const tools: ToolDefinition[] = [
         abandonSubmission: { type: 'boolean', description: 'Retire a candidate that never landed; refused while it is reachable from this ticket\'s prepared integration target.' },
         recoveryEvidence: { type: 'string', description: 'Terminal-agent evidence that retires an unclaimed prepared or launched dispatch, whether or not a runtime ever bound to it, and closes the ticket in the same call - but only once it is past the retirement deadline one authority sets for every route. Inside that deadline this refuses with the same countdown `dispatch` prints, naming the instant it becomes retirable and the runtime signal it measured from. `sidequest groom-close --recovery-evidence` runs this exact authority, so both surfaces print the same refusal and retire-and-close together. With deliveryMethod:"manual", deliveryCommit must already be reachable from the recorded integration branch.' },
       },
-      required: ['ref', 'by', 'reason'],
+      required: ['ref', 'reason'],
     },
     async handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, 'groomClose');
@@ -726,10 +726,10 @@ const tools: ToolDefinition[] = [
     handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, 'release');
       const by = requireBy(args, 'release');
+      const evidence = store.technicalBlockerRelease(Object.assign({}, args, { releaseKind: args.kind }), { requireClassification: true });
+      if (!evidence.ok) return mutationAck(slug, { ok: false, reason: evidence.reason, message: evidence.message });
       const reason = requiredReleaseReason(args);
       const ticket = store.getTicket(slug, args.ref);
-      const evidence = store.technicalBlockerRelease(Object.assign({}, args, { releaseKind: args.kind }));
-      if (!evidence.ok) return mutationAck(slug, { ok: false, ticket, reason: evidence.reason, message: evidence.message });
       const res = store.releaseTicket(slug, args.ref, by, {
         status: args.kind === 'oracle' ? 'awaiting-oracle' : args.status,
         oracle: args.oracle,
