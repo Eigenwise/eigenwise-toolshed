@@ -117,7 +117,7 @@ const {
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinProvenance, readPinOverrides, refreshDetectedPins, writePinOverrides,
+  isValidPin, ourBaseUrls, ownedPinValues, pinLagNotice, pinProvenance, readPinOverrides, refreshDetectedPins, writePinOverrides,
 } = require('./pins.js');
 
 // Versions through 0.4.1 wrote this unsafe global override. Remove it during
@@ -861,11 +861,17 @@ async function statusReport({ readiness = null } = {}) {
 
 // -------------------------------------------------------------- env wiring
 
+function reportEffectivePins(label = '', suffix = '') {
+  for (const [alias, pin] of Object.entries(effectivePins())) {
+    log(`${label}${alias}${suffix}: ${pin.value} (${pinProvenance(pin)})`);
+    const notice = pinLagNotice(alias, pin);
+    if (notice) log(notice);
+  }
+}
+
 function pinCommand() {
   if (args.length === 0) {
-    for (const [alias, pin] of Object.entries(effectivePins())) {
-      log(`${alias}: ${pin.value} (${pinProvenance(pin)})`);
-    }
+    reportEffectivePins();
     return;
   }
 
@@ -1185,9 +1191,7 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
     ? `catalog: ${catalog.models.length} models at ${CATALOG_PATH} (writtenBy: ${catalog.writtenBy || 'unknown'})`
     : 'catalog: not written yet');
   await reportGatewayDiscoveryCache();
-  for (const [alias, pin] of Object.entries(effectivePins())) {
-    log(`Claude ${alias} pin: ${pin.value} (${pinProvenance(pin)})`);
-  }
+  reportEffectivePins('Claude ', ' pin');
   await reportLiveShimModelPolicy();
   const activeScope = selectedWiringScope();
   const effective = effectiveBaseUrl();
