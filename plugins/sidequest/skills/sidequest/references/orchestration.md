@@ -178,7 +178,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 - **Read bounded briefing comments from the newest end.** A brief can carry a compact newest-first comment packet instead of the full thread. Read compact `comments` pages first, following their cursor only when needed. Read the full chronological thread only when the brief flags a decision or constraint in omitted history; otherwise the latest packet and compact pages carry the current handoff.
 - **Resume Continuation checkpoints with a fresh dispatch.** Executors create a Continuation checkpoint around 100 tool rounds by committing verified declared-scope work, writing a `Continuation checkpoint` comment with the commit, files touched, next steps, and verification state, then releasing to `todo`. On a natural wakeup, use `pulse` and the latest comment to confirm that header, commit, and no live claim. Read the checkpoint before `dispatch <ref>`, then spawn its returned continuation unchanged so it gets a fresh token and context. The dispatch validates the registered retained worktree against the repository before carrying it forward, replays a retained checkpoint onto an advanced integration target, and reports its exact Git validation evidence if it must fall back. A rebase conflict stops the executor for escalation, without resetting the retained checkpoint or resolving toward either side. A live claim means the checkpoint has not completed, so do not launch beside it; use the normal salvage path if that worker stopped.
 - **Record wave links from board results.** Never write an `SQ-n` ref you did not read back from a board response. File related tickets first, collect their returned refs, then use `update` or, preferably, `link` (`blocks`, `depends-on`, or `related`) to record relationships. Links are board data, so they stay correct without prose cross-references.
-- **Read liveness from the board, not notifications.** Notifications wake the orchestrator but do not prove executor state. An idle notification can describe a working, dead, or already-finished executor, so read board truth before acting: use `pulse <ref>` for the ticket's `{claim:{by,at,ageMs}|null, comments, lastComment, git:{commit,dirty}|null}` state. Until `pulse` is available, read claim age, comments, and `git log`. If several tickets need checking, use `changes --since <iso>` for the `{tickets:[...]}` delta, sorted oldest first.
+- **Read liveness from the board, not notifications.** Notifications wake the orchestrator but do not prove executor state. An idle notification can describe a working, dead, or already-finished executor, so read board truth before acting, only on a notification or user prompt, never right after spawning: use `pulse <ref>` for the ticket's `{claim:{by,at,ageMs}|null, comments, lastComment, git:{commit,dirty}|null}` state, or `changes --since <iso>` for the `{tickets:[...]}` delta across several tickets, sorted oldest first. A process list (`tasklist`/`ps`) is never evidence about a dispatch.
 - **Read completion from the board.** An executor stop notification wakes the orchestrator; its terminal
   submit or done state is the completion signal. Do not expect or request a routine
   `SendMessage` report. Read a submission's canonical report body or a done completion comment for what changed, verification evidence, commit hash or
@@ -279,13 +279,15 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   process failure, not caution. The costs to keep honest:
   idle notifications wake the lead at full context, and teams-style flows can run several times the
   token spend of plain subagents, so answer executor questions promptly and retire terminal teammates
-  only after consuming board evidence. After spawning, end the
-  turn. Its stop notification is the only wakeup. On the next natural wakeup, whether a stop notification,
-  user message, or other task notification, make opportunistic liveness checks for work that has run about
-  5–8 minutes or longer. Never hold a session open with foreground or background `sleep`, blocking
-  `TaskOutput` as a delay, or busy-wait loops. A turn with nothing to do ends. At every wakeup, diff board
-  state with `changes --since <iso>` before deciding what to do next. Use synchronous execution only for a
-  tight wave where blindness is acceptable.
+  only after consuming board evidence. After spawning, end the turn naming what is in flight in one
+  line — never a "waiting" paragraph. Its stop notification is the only wakeup. On the next natural
+  wakeup, whether a stop notification, user message, or other task notification, make opportunistic
+  liveness checks for work that has run about 5–8 minutes or longer. Never hold a session open with
+  foreground or background `sleep`, blocking `TaskOutput` as a delay, or busy-wait loops. A host
+  check-in or idle-nudge prompt is not an evidence request: answer it in one line, or continue the
+  pending work, without re-summarizing the wave. At every wakeup, diff board state with `changes
+  --since <iso>` before deciding what to do next. Use synchronous execution only for a tight wave
+  where blindness is acceptable.
 - **No proxy waiters.** The polling ban covers indirect waits too. Never create a Bash, PowerShell,
   `Monitor`, or cron task whose only purpose is to wait for a Sidequest executor or poll for its expected
   report or artifact file (`until [ -f <report> ]; do ...; done`), and never block `TaskOutput` on such a
@@ -293,16 +295,13 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   lifecycle. Native Agent completion arrives on its own; at natural wakeups use `changes --since` / `pulse`,
   and read the artifact only after terminal board evidence. A genuine one-shot readiness watch for a local
   server or build is fine; waiting on an executor through a side channel is not.
-- **Retire terminal teammates.** Once terminal board evidence has been consumed and its submission report,
-  done comment, or recovery handoff has been preserved, call `TaskStop({ task_id: "<agent name>" })` once for
-  that exact native teammate, but only while it is still registered as a running task. This is a Claude Code host action, not a Sidequest tool.
-  It applies to submitted, done, released, failed-before-claim, and superseded attempts. A background native
-  Agent can already have exited on its own before you call this: a `No task found with ID` or `Task <name> is
-  not running (status: completed)` reply means it already exited, needs no retry, and is not a failure to
-  investigate. Never stop a live claim, retained continuation, or candidate awaiting integration. Do not wake a completed executor, poll FleetView, or create a cleanup loop.
-  A `READY_FOR_INTEGRATION` verdict additionally queues the ticket for the publish transaction
-  ([publishing.md](publishing.md)) — publish the wave's submissions in one batch; never respawn an executor for a
-  submitted ticket. Sweep ALL finished executors, not just the one that notified, so session exit only stops live work.
+- **Retire terminal teammates** once terminal board evidence has been consumed and its submission report,
+  done comment, or recovery handoff has been preserved — the TaskStop mandate is authoritative in
+  `SKILL.md`'s "Work a ticket" section, not restated here. It applies to submitted, done, released,
+  failed-before-claim, and superseded attempts. A `READY_FOR_INTEGRATION` verdict additionally queues the
+  ticket for the publish transaction ([publishing.md](publishing.md)) — publish the wave's submissions in
+  one batch; never respawn an executor for a submitted ticket. Sweep ALL finished executors, not just the
+  one that notified, so session exit only stops live work.
 
 - **Reports stay terse:** a submission body carries the canonical full report and its automatic terminal marker stays short; a `done` completion comment carries its report directly. A repo-changing executor records a SUBMITTED commit, never a push — the orchestrator's publish transaction is what makes it reachable from `origin/main`, and the ticket goes done only after that reachability check passes.
 

@@ -52,11 +52,16 @@ test('published guidance excludes retired instructions', () => {
   assert.match(ticketAuthoring, /do not invent a test count/);
   assert.match(orchestration, /read each submit report, then run one combined full gate for the wave/);
   assert.match(orchestration, /Retire terminal teammates/);
-  assert.match(orchestration, /TaskStop\(\{ task_id: "<agent name>" \}\)`\s+once/);
-  assert.match(orchestration, /Claude Code host action, not a Sidequest tool/);
-  assert.match(orchestration, /Never stop a live claim, retained continuation,\s+or candidate awaiting\s+integration/);
-  assert.match(orchestration, /Do not wake a completed executor, poll FleetView, or create a cleanup loop/);
+  assert.match(orchestration, /TaskStop mandate is authoritative in\s+`SKILL\.md`/);
+  assert.match(skill, /TaskStop\(\{ task_id: "<agent name>" \}\)`\s+once/);
+  assert.match(skill, /Claude Code host action, not a Sidequest tool/);
+  assert.match(skill, /Never stop a live claim, retained continuation, or candidate awaiting integration/);
+  assert.match(skill, /do not wake a completed executor, poll FleetView, or create a cleanup loop/);
   assert.match(skill, /TaskStop\(\{ task_id: "<agent name>" \}\)/);
+  assert.match(skill, /a process list \(`tasklist`\/`ps`\) is never evidence about a dispatch/);
+  assert.match(orchestration, /A process list \(`tasklist`\/`ps`\) is never evidence about a dispatch/);
+  assert.match(orchestration, /never a "waiting" paragraph/);
+  assert.match(orchestration, /A host\s+check-in or idle-nudge prompt is not an evidence request/);
   assert.match(executorTemplate, /After terminal closeout, the board terminal state is authoritative/);
 
   for (const source of [skill, orchestration]) {
