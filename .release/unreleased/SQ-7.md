@@ -1,0 +1,13 @@
+---
+ref: SQ-7
+title: Fix temp-cleanup test failure on Node 24 (ERR_FS_EISDIR)
+bump: patch
+plugins:
+  - sidequest
+---
+
+The temp-cleanup test suite's junction-removal cleanup used `fs.rmSync` on a
+symlink-to-directory, which Node >= 24 refuses without `recursive`. Switched
+to `fs.unlinkSync`, which removes the link entry on every supported Node
+version and platform, matching how the shipped cleanup code already handles
+the same case.
