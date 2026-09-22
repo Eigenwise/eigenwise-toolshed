@@ -776,6 +776,18 @@ ${verify.outputTail}` : null
     if (!scopeValidation.ok && opts?.deliveryInteractionCommit && scopeValidation.reason === "reconciled_path_diverged") {
       scopeValidation = Object.assign({}, scopeValidation, { ok: true, reviewedMergedTreeInteraction: true });
     }
+    if (!scopeValidation.ok && scopeValidation.reason === "expected_upstream_diverged" && workingTreeDeliveryMethod(opts?.deliveryMethod)) {
+      let candidateReachable = true;
+      try {
+        integrationGit(project?.path, ["merge-base", "--is-ancestor", ticket.submission.commit, scopeValidation.currentUpstream]);
+      } catch (error) {
+        if (error?.status === 1) candidateReachable = false;
+        else throw error;
+      }
+      if (!candidateReachable) {
+        scopeValidation = commitScope.validateStoredSubmissionRange(project?.path, ticket.submission, ticket.ref, integrationRefs, { allowDivergedExpectedUpstream: true });
+      }
+    }
     if (!scopeValidation.ok) {
       const outside = Array.isArray(scopeValidation.outside) ? scopeValidation.outside : [];
       if (scopeValidation.reason === "expected_upstream_diverged") {
@@ -786,7 +798,7 @@ ${verify.outputTail}` : null
           outside,
           ticket,
           scopeValidation,
-          message: `${ticket.ref} integration refused; recorded expected upstream ${scopeValidation.upstreamCommit} is no longer reachable from target branch ${targetBranch}. Recovery: manually merge the verified candidate onto the current target, re-gate it, then record delivery with groomClose using deliveryCommit.`
+          message: `${ticket.ref} integration refused; recorded expected upstream ${scopeValidation.upstreamCommit} is no longer reachable from target branch ${targetBranch}. Recovery: re-apply the verified candidate onto the current target, re-gate it, then record it with groomClose passing deliveryCommit ${ticket.submission.commit} and deliveryMethod "manual" (CLI --delivery-commit / --delivery-method), with the candidate's content present in the integration working tree.`
         };
       }
       const scopeFailure = scopeValidation.message || (scopeValidation.reason === "missing_scope_snapshot" ? `${ticket.ref} submission has no admitted scope snapshot.` : outside.length ? `${ticket.ref} integration refused; submitted range changes paths outside its admitted scope: ${outside.join(", ")}.` : `${ticket.ref} integration refused; submitted range validation failed: ${scopeValidation.reason || "unknown"}.`);
@@ -1132,9 +1144,21 @@ ${verify.outputTail}` : null
   }
   function recordDeliveredSubmission(slug, idOrRef, opts) {
     opts = opts || {};
+    const deliveryMethod = workingTreeDeliveryMethod(opts.deliveryMethod);
+    const requestedDeliveryMethod = String(opts.deliveryMethod || "").trim();
+    if (requestedDeliveryMethod && !deliveryMethod) {
+      const methodCheckTicket = getTicket(slug, idOrRef);
+      return {
+        ok: false,
+        reason: "invalid_delivery_method",
+        ticket: methodCheckTicket,
+        message: `${methodCheckTicket?.ref || idOrRef} reconciliation refused: deliveryMethod must be reset, working-tree, or manual.`
+      };
+    }
     const preflight = validateIntegrationSubmission(slug, idOrRef, {
       deliveryInteractionCommit: opts.deliveryInteractionCommit,
-      completingApplyDelivery: opts.completingApplyDelivery === true
+      completingApplyDelivery: opts.completingApplyDelivery === true,
+      deliveryMethod: opts.deliveryMethod
     });
     if (!preflight.ok) return preflight;
     const preflightTicket = preflight.ticket;
@@ -1175,16 +1199,6 @@ ${verify.outputTail}` : null
       } catch (error) {
         if (error?.status === 1) reachable = false;
         else throw error;
-      }
-      const deliveryMethod = workingTreeDeliveryMethod(opts.deliveryMethod);
-      const requestedDeliveryMethod = String(opts.deliveryMethod || "").trim();
-      if (requestedDeliveryMethod && !deliveryMethod) {
-        return {
-          ok: false,
-          reason: "invalid_delivery_method",
-          ticket,
-          message: `${ticket.ref} reconciliation refused: deliveryMethod must be reset, working-tree, or manual.`
-        };
       }
       const workingTreeDelivery = deliveryMethod !== null && !reachable;
       if (!reachable && !workingTreeDelivery) {
