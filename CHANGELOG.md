@@ -8,6 +8,98 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.575.0 (2026-09-22)
+
+### Repository
+
+- Add CONTRIBUTING.md and a PR template naming develop and the release fragment (SQ-3045)
+
+### model-gateway 0.51.3 → 0.51.4
+
+#### Fixes
+
+- Correct discovery.ts catalog-refresh rationale and drop a dead gateway helper (SQ-3057)
+  Sidequest's `discovery.ts` comment still described the pre-SQ-3003 behavior of `model-gateway catalog
+  --refresh --json` (exit 0 while printing the stale catalog when the proxy is down). Updated it to match
+  the current contract: a declined refresh now exits non-zero with a stderr reason, and exit 0 means the
+  catalog file is current. No behavior change.
+
+  Also deleted an unreachable catalog-refresh subsystem in `model-gateway`'s `request-worker.js` that
+  duplicated the live implementation in `commands.js`, was never exported or called, and referenced
+  undefined globals that would have thrown if it ever ran.
+- Refresh the shipped Opus fallback and surface stale CLI aliases (SQ-3064)
+  Model Gateway now ships Opus 5.5 as its fallback pin. `pin` and `doctor` report when a Claude CLI alias resolves an older native model, name the newer id, and show the persistent override command.
+- Propagate Claude alias pins to wired projects (SQ-3073)
+  `pin` now updates the gateway-owned `ANTHROPIC_DEFAULT_*_MODEL` values in every registered wired project, skips a project whose value the user typed, and prunes registered projects whose directory is gone. A value an earlier release shipped still counts as gateway-owned, so a project left on an older default gets replaced. `doctor` names registered projects whose pins disagree with the effective pins.
+
+### observability 0.7.33 → 0.7.34
+
+#### Fixes
+
+- Price Claude Opus 5.5 telemetry (SQ-3062)
+  Opus 5.5 and its 1M alias now have list-price estimates, while cache economics derives Anthropic rates from the shared map.
+
+### quartermaster 0.11.3 → 0.11.4
+
+#### Fixes
+
+- Align CRAP gates with the strict six-point standard (SQ-3047)
+  Makes CRAP measurement fail closed, checks only functions a change writes, and uses the shared quality parser for Quartermaster and plugin sources.
+
+### sidequest 5.2.2 → 5.3.0
+
+#### Features
+
+- Route creative-music, research, and writing starter profiles opus-first with fable fallback (SQ-3065)
+  Opus 5.5 now performs at Fable 5.1 level on most creative-music, research, and writing work for far less per MTok. Swapped the seven fable-primary/opus-fallback seed routes so new boards start on opus with fable as fallback, and bumped ROUTING_PROFILE_SEED_REVISION to 8 so existing seeded boards pick up the new default on their next reseed. No live board routes were touched by this ticket.
+
+#### Fixes
+
+- Align CRAP gates with the strict six-point standard (SQ-3047)
+  Makes CRAP measurement fail closed, checks only functions a change writes, and uses the shared quality parser for Quartermaster and plugin sources.
+- Correct discovery.ts catalog-refresh rationale and drop a dead gateway helper (SQ-3057)
+  Sidequest's `discovery.ts` comment still described the pre-SQ-3003 behavior of `model-gateway catalog
+  --refresh --json` (exit 0 while printing the stale catalog when the proxy is down). Updated it to match
+  the current contract: a declined refresh now exits non-zero with a stderr reason, and exit 0 means the
+  catalog file is current. No behavior change.
+
+  Also deleted an unreachable catalog-refresh subsystem in `model-gateway`'s `request-worker.js` that
+  duplicated the live implementation in `commands.js`, was never exported or called, and referenced
+  undefined globals that would have thrown if it ever ran.
+- Unattributed board comments no longer claim to be the orchestrator (SQ-3058)
+  A comment posted through the MCP `comment` tool without `by` used to be stamped
+  `orchestrator-<session>` whenever the ticket had no claim bound to the serving
+  session. Every caller reaches that server on the one session id its process
+  holds, so the label named a role the board never observed: two read-only
+  executors' findings were recorded under an orchestrator identity belonging to a
+  session that wrote neither body.
+
+  Those comments now record what is actually known, the calling session, and
+  nothing about who or what role it was. Passing `by` still wins, and a comment
+  from the live claim holder's session is still credited to the claim holder.
+- Make Claude tier labels follow the wired model pin (SQ-3063)
+- Orchestrator guidance stops treating liveness checks and host prompts as free (SQ-3070)
+  The orchestration reference had the orchestrator calling `TaskStop` after every
+  terminal executor (mostly answered `No task found`, since the host had already
+  unregistered it), checking a freshly spawned Codex executor's liveness by
+  listing `codex.exe` processes, answering the host's periodic "Goal check-in"
+  prompt with a full status report as if it were an evidence request, and ending
+  turns with a "Waiting..." paragraph instead of just ending. Each one burned a
+  wasted turn at the session model's rate.
+
+  `TaskStop` is now said once, in `SKILL.md`; `orchestration.md` points there
+  instead of restating it. Liveness reads are `pulse`/`changes --since` only, on
+  a notification or user prompt, never right after spawning, and a process list
+  is never evidence about a dispatch. A host check-in or idle-nudge prompt gets a
+  one-line answer or the pending work continues, no wave re-summary. After
+  dispatching, the turn ends naming what is in flight in one line.
+- MCP integrate recognizes an orchestrator lock across server sessions (SQ-3072)
+  MCP integration now recognizes the same worker's publish lock for the registered
+  repository when the MCP server has a different runtime session. Lock refusals
+  name both the lock session and the MCP runtime session.
+- Keep Claude routes on their tier while labels follow the wired pin (SQ-3074)
+  A Claude route's `runsModel` stays the tier (`opus`, `sonnet`, `fable`) so dispatch, executor names and briefings keep working; only `apiModel` and the display label follow the pinned model id from the wired `ANTHROPIC_DEFAULT_*_MODEL` values. Test runs no longer inherit those pins from the developer machine.
+
 ## v3.574.0 (2026-09-22)
 
 ### model-gateway 0.51.2 → 0.51.3

@@ -108,12 +108,13 @@ bring auth back, or you kill the session that was about to use it.
   command resolves those aliases through the installed Claude CLI's credential-free headless probe;
   SessionStart refreshes its cache after the CLI changes or the cache ages out. A failed probe keeps
   the last good pin, then a shipped safe default. Set a persistent per-alias override with
-  `pin --opus claude-opus-4-8[1m]` (same for `--sonnet` and `--fable`), or use `pin --opus default`
-  to return to auto-detection. Overrides always win. `pin` with no arguments shows each effective
-  pin and whether it is overridden. Overrides live in `~/.claude/model-gateway/pins.json`, outside
-  the plugin cache. After a pin change or Claude CLI upgrade, run `env --write-project` (or
-  `env --write-user` for a shared fallback) and start a new Claude Code session; changing a saved value alone cannot alter
-  an open session.
+  `pin --opus claude-opus-5-5[1m]` (same for `--sonnet` and `--fable`), or use `pin --opus default`
+  to return to auto-detection. Overrides always win. `pin` with no arguments and `doctor` show each
+  effective pin, whether it is overridden, and when a CLI alias lags a newer shipped model. Overrides live in
+  `~/.claude/model-gateway/pins.json`, outside
+  the plugin cache. A pin change updates every registered wired project's gateway-owned pins and
+  skips any project with a user-owned pin value. Restart every open Claude Code session in an
+  affected project; changing a saved value cannot alter an open session.
 - Do NOT set a
   global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to both providers and can make Codex
   `/compact` fail after history already exceeds the Codex limit.

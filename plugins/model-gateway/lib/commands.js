@@ -117,7 +117,7 @@ const {
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinProvenance, readPinOverrides, refreshDetectedPins, writePinOverrides,
+  isValidPin, ourBaseUrls, ownedPinValues, pinLagNotice, pinProvenance, readPinOverrides, refreshDetectedPins, writePinOverrides,
 } = require('./pins.js');
 
 // Versions through 0.4.1 wrote this unsafe global override. Remove it during
@@ -214,8 +214,8 @@ const {
 
 const {
   cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isWired, migrateLegacyProjectSettings,
-  processEnvGatewayBypass, readSettingsForWrite, reconcileRegisteredProjectWirings, recordProjectWiring, registeredProjectWirings,
-  selectedWiringScope, retireWiringModeConfig, settingsPath, unsafeRemoteControlProcessEnv, wiredMode, writeSettings,
+  processEnvGatewayBypass, readSettingsForWrite, reconcileRegisteredProjectWirings, recordProjectWiring, registeredProjectPinDisagreements, registeredProjectWirings,
+  selectedWiringScope, retireWiringModeConfig, settingsPath, syncRegisteredProjectPins, unsafeRemoteControlProcessEnv, wiredMode, writeSettings,
 } = require('./settings-wiring.js');
 
 // ------------------------------------------------- RC-compatibility hosts
@@ -533,7 +533,7 @@ async function setup() {
     return;
   }
   log('ChatGPT auth: valid');
-  await refreshDetectedPins({ force: true });
+  await refreshDetectedPinsAndWiring({ force: true });
   const { mode } = await resolveIntendedMode();
   if (isWired()) {
     const current = wiredMode();
@@ -861,36 +861,69 @@ async function statusReport({ readiness = null } = {}) {
 
 // -------------------------------------------------------------- env wiring
 
+function reportRegisteredPinSync(result) {
+  for (const wiring of result.changed) log(`updated gateway pins in ${wiring.file}`);
+  for (const wiring of result.skipped) {
+    const detail = wiring.key ? `${wiring.key}=${wiring.value}` : wiring.reason;
+    log(`skipped ${wiring.file}: ${detail} (${wiring.reason})`);
+  }
+  for (const pruned of result.pruned) log(`pruned registered project ${pruned.project}: ${pruned.reason}`);
+}
+
+function refreshRegisteredProjectPins(ownedPins) {
+  return reportRegisteredPinSync(syncRegisteredProjectPins({ ownedPins }));
+}
+
+async function refreshDetectedPinsAndWiring(options = {}) {
+  const previousPins = effectivePins();
+  const ownedPins = ownedPinValues();
+  await refreshDetectedPins(options);
+  const changed = Object.entries(effectivePins()).some(([alias, pin]) => (
+    previousPins[alias].override === null && previousPins[alias].value !== pin.value
+  ));
+  if (changed) refreshRegisteredProjectPins(ownedPins);
+}
+
+function reportEffectivePins(label = '', suffix = '') {
+  for (const [alias, pin] of Object.entries(effectivePins())) {
+    log(`${label}${alias}${suffix}: ${pin.value} (${pinProvenance(pin)})`);
+    const notice = pinLagNotice(alias, pin);
+    if (notice) log(notice);
+  }
+}
+
+function updatePinOverride(overrides, option, value) {
+  const alias = option && option.startsWith('--') ? option.slice(2) : null;
+  if (!Object.hasOwn(PIN_ALIASES, alias) || value == null) {
+    die('pin expects --opus, --sonnet, or --fable followed by a model id or default', 2);
+  }
+  if (value === 'default') {
+    delete overrides[alias];
+    return;
+  }
+  if (!isValidPin(value)) die(`invalid ${alias} pin: use a non-empty model id without whitespace or shell characters`, 2);
+  overrides[alias] = value;
+}
+
 function pinCommand() {
   if (args.length === 0) {
-    for (const [alias, pin] of Object.entries(effectivePins())) {
-      log(`${alias}: ${pin.value} (${pinProvenance(pin)})`);
-    }
+    reportEffectivePins();
     return;
   }
 
+  const ownedPins = ownedPinValues();
   const overrides = readPinOverrides();
   for (let index = 0; index < args.length; index += 2) {
-    const option = args[index];
-    const alias = option && option.startsWith('--') ? option.slice(2) : null;
-    const value = args[index + 1];
-    if (!Object.hasOwn(PIN_ALIASES, alias) || value == null) {
-      die('pin expects --opus, --sonnet, or --fable followed by a model id or default', 2);
-    }
-    if (value === 'default') {
-      delete overrides[alias];
-      continue;
-    }
-    if (!isValidPin(value)) die(`invalid ${alias} pin: use a non-empty model id without whitespace or shell characters`, 2);
-    overrides[alias] = value;
+    updatePinOverride(overrides, args[index], args[index + 1]);
   }
   writePinOverrides(overrides);
+  refreshRegisteredProjectPins(ownedPins);
   log(`saved Claude alias pins to ${PIN_OVERRIDE_PATH}`);
-  log('Rewire this project with env --write-project, then start a new Claude Code session for the change to apply.');
+  log('Applied the pin change to registered wired projects. Restart open Claude Code sessions to pick it up.');
 }
 
 async function syncGatewayWiring() {
-  await refreshDetectedPins();
+  await refreshDetectedPinsAndWiring();
   const current = wiredMode();
   if (!current?.scope) return;
   const env = readSettingsForWrite(settingsPath(current.scope)).env || {};
@@ -925,7 +958,7 @@ async function envCommand() {
 
   const scope = writeUser ? 'user' : 'project';
   recordProjectWiring();
-  if (!remove) await refreshDetectedPins({ force: true });
+  if (!remove) await refreshDetectedPinsAndWiring({ force: true });
   writeEnv(scope, remove, { mode: remove ? 'default' : (await resolveIntendedMode()).mode });
   retireWiringModeConfig();
   if (remove || !writeUser) return;
@@ -1145,6 +1178,16 @@ async function reportLiveShimModelPolicy() {
   return false;
 }
 
+function reportRegisteredProjectPinDisagreements() {
+  const result = registeredProjectPinDisagreements();
+  for (const pruned of result.pruned) log(`pruned registered project ${pruned.project}: ${pruned.reason}`);
+  for (const disagreement of result.disagreements) {
+    const staleValue = disagreement.staleValue === undefined ? 'missing' : disagreement.staleValue;
+    console.error(`model-gateway: ERROR: registered project pin disagrees in ${disagreement.file}: ${disagreement.key}=${staleValue} (expected ${disagreement.expectedValue}).`);
+  }
+  return result.disagreements.length > 0;
+}
+
 async function doctor({ readiness: suppliedReadiness = null } = {}) {
   recordedGatewayPids();
   const readiness = suppliedReadiness || await getCodexReadiness();
@@ -1185,9 +1228,8 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
     ? `catalog: ${catalog.models.length} models at ${CATALOG_PATH} (writtenBy: ${catalog.writtenBy || 'unknown'})`
     : 'catalog: not written yet');
   await reportGatewayDiscoveryCache();
-  for (const [alias, pin] of Object.entries(effectivePins())) {
-    log(`Claude ${alias} pin: ${pin.value} (${pinProvenance(pin)})`);
-  }
+  reportEffectivePins('Claude ', ' pin');
+  if (reportRegisteredProjectPinDisagreements()) process.exitCode = 1;
   await reportLiveShimModelPolicy();
   const activeScope = selectedWiringScope();
   const effective = effectiveBaseUrl();
