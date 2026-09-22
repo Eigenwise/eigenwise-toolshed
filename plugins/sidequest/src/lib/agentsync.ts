@@ -522,6 +522,15 @@ function retainedWorktreeAccess(worktree: string): string[] {
 
 function ticketContinuationPacket(ticket?: any) {
   const continuation = ticket?.dispatch?.continuation;
+  if (continuation?.mode === 'live_claim_resume' && continuation.sourceWorktree && continuation.commit) {
+    return [
+      'Live-claim recovery:',
+      `The prior executor died after claiming this ticket. Continue in its rebound linked worktree ${continuation.sourceWorktree}.`,
+      ...retainedWorktreeAccess(continuation.sourceWorktree),
+      `Before any other work, verify \`git -C ${continuation.sourceWorktree} rev-parse HEAD\` equals \`${continuation.commit}\`.`,
+      'Preserve any retained uncommitted work. The board kept the live claim and binds this ticket to that worktree.',
+    ].join('\n');
+  }
   const resume = continuationResumeDecision(continuation);
   if (continuation?.mode === 'retained_worktree_resume' && continuation.sourceWorktree && continuation.commit && resume.allowed) {
     const branch = continuation.sourceBranch || '(detached HEAD)';
@@ -585,6 +594,12 @@ function ticketWorktreeSync(ticket?: any, projectPath?: any) {
   if (!branch) return null;
   const continuation = dispatch?.continuation;
   const checkpointBase = String(continuation?.baseCommit || '').trim();
+  if (continuation?.mode === 'live_claim_resume' && continuation.sourceWorktree && continuation.commit) {
+    return [
+      `Worktree synchronization (run before work): check \`git -C ${continuation.sourceWorktree} rev-parse HEAD\` equals \`${continuation.commit}\` and \`git -C ${continuation.sourceWorktree} merge-base --is-ancestor ${commit} HEAD\`.`,
+      'If either check fails, stop and report it. Do not reset, rebase, or discard retained work.',
+    ].join(' ');
+  }
   const checkpoint = continuation?.mode === 'retained_worktree_resume' && checkpointBase && continuation.commit;
   if (checkpoint) {
     return [
@@ -718,6 +733,13 @@ function ticketIsolationContract(ticket?: any, projectPath?: any) {
   const dispatch = ticket.dispatch;
   const continuationWorktree = String(dispatch.continuation?.sourceWorktree || '').trim();
   const expected = continuationWorktree || String(dispatch.worktree || '').trim() || '(immutable worktree binding unavailable; writes will be refused)';
+  if (dispatch.continuation?.mode === 'live_claim_resume') {
+    return [[
+      'Live-claim worktree contract: continue in the rebound linked worktree. The prepared spawn intentionally carries no isolation field, so the harness does not create another worktree.',
+      `Expected worktree root: ${expected}`,
+      'Use absolute paths under that worktree. If its Git directory is unavailable, stop and report the lost binding without writing in the shared checkout.',
+    ].join('\n')];
+  }
   return [[
     'Worktree isolation contract: this dispatch runs in its own linked worktree, never in the shared checkout.',
     'The harness refuses heredocs in isolated worktrees; Write scripts to your scratchpad and run them by path.',
@@ -1062,7 +1084,7 @@ function renderTicketBriefing(ticket?: any, nonce?: any, slug?: any, projectPath
 
 function ticketIsolation(ticket?: any, sharedTree?: any) {
   const continuationMode = ticket?.dispatch?.continuation?.mode;
-  return sharedTree === true || continuationMode === 'retained_worktree_resume' || continuationMode === 'dirty_worktree_resume'
+  return sharedTree === true || ['retained_worktree_resume', 'dirty_worktree_resume', 'live_claim_resume'].includes(continuationMode)
     ? null
     : 'worktree';
 }
