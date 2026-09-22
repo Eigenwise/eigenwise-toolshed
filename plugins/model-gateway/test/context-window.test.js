@@ -201,6 +201,7 @@ test('window policy marks measured rows and advertises unmeasured Codex defaults
   for (const policy of Object.values(MODEL_WINDOW_POLICY)) {
     if (policy.backendId === 'default') continue;
     assert.equal(policy.pickerAlias.endsWith('[1m]'), policy.backendWindow > 200000);
+    assert.equal(policy.sentry, policy.backendWindow > 200000 ? 'synthetic-413' : 'none');
   }
   assert.equal(MODEL_WINDOW_POLICY['grok-4.5'].pickerAlias, 'claude-grok-4.5[1m]');
   assert.match(MODEL_WINDOW_POLICY.default.measurement, /^unmeasured/);
@@ -215,30 +216,35 @@ test('window policy marks measured rows and advertises unmeasured Codex defaults
 });
 
 test('Codex sentry derives a headroom-preserving trigger for each policy row', () => {
-  const { effectiveCodexSentryPolicy } = require(WORKER);
+  const { effectiveSentryPolicy } = require(WORKER);
   const { resolveGatewayModelPolicy } = require(RUNTIME);
   const policy = resolveGatewayModelPolicy('gpt-5.2');
 
-  assert.deepEqual(effectiveCodexSentryPolicy(policy, 320000), {
+  assert.deepEqual(effectiveSentryPolicy(policy, 320000), {
     backendWindow: 920000,
     compactTrigger: 320000,
     source: 'env',
   });
-  assert.deepEqual(effectiveCodexSentryPolicy(policy, Number.NaN), {
+  assert.deepEqual(effectiveSentryPolicy(policy, Number.NaN), {
     backendWindow: 920000,
     compactTrigger: 880000,
     source: 'derived',
   });
-  assert.deepEqual(effectiveCodexSentryPolicy({
+  assert.deepEqual(effectiveSentryPolicy({
     backend: 'codex',
     backendId: 'gpt-test-300k',
     backendWindow: 300000,
-    sentry: 'codex-synthetic-413',
+    sentry: 'synthetic-413',
   }, 320000), {
     backendWindow: 300000,
     compactTrigger: 260000,
     source: 'derived',
   });
+  assert.throws(() => effectiveSentryPolicy({
+    backendId: 'gpt-test-40k',
+    backendWindow: 40000,
+    sentry: 'synthetic-413',
+  }), /invalid sentry backend window/);
 });
 
 test('Codex sentry logs a startup policy line for every advertised model row', async (t) => {
@@ -469,6 +475,39 @@ test('Codex sentry returns one client-distinguishable context-overflow 413', asy
   const error = JSON.parse(overflow.body).error;
   assert.equal(error.type, 'request_too_large');
   assert.match(error.message, /^Prompt is too long for the Codex context window; compact and retry\. \(101 tokens > 100 tokens\)$/);
+  assert.equal(forwarded, 1);
+});
+
+test('Grok sentry returns a client-distinguishable context-overflow 413', async (t) => {
+  const authDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-grok-sentry-'));
+  fs.writeFileSync(path.join(authDirectory, 'auth.json'), JSON.stringify({
+    'https://auth.x.ai::fixture-client': { key: 'fixture-token', refresh_token: 'fixture-refresh', expires_at: Date.now() + 3600000, oidc_client_id: 'fixture-client' },
+  }));
+  let forwarded = 0;
+  const upstream = http.createServer((req, res) => {
+    req.resume();
+    req.once('end', () => {
+      forwarded++;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id: 'resp_fixture', output: [], usage: { input_tokens: 101 } }));
+    });
+  });
+  const upstreamPort = await listen(upstream);
+  t.after(() => { upstream.close(); fs.rmSync(authDirectory, { recursive: true, force: true }); });
+  const shimPort = await spawnShim(t, 0, {
+    CODEX_GATEWAY_COMPACT_TRIGGER: '100',
+    CODEX_GATEWAY_GROK_ENDPOINT: `http://127.0.0.1:${upstreamPort}/v1/responses`,
+    CODEX_GATEWAY_GROK_HOME: authDirectory,
+  });
+  const grokBody = JSON.stringify({ model: 'claude-grok-4.5[1m]', max_tokens: 1, messages: [{ role: 'user', content: 'test' }] });
+
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', grokBody, sentrySessionHeaders)).status, 200);
+  const overflow = await request(shimPort, 'POST', '/v1/messages', grokBody, sentrySessionHeaders);
+  assert.equal(overflow.status, 413);
+  assert.deepEqual(JSON.parse(overflow.body).error, {
+    type: 'request_too_large',
+    message: 'Prompt is too long for the Grok context window; compact and retry. (101 tokens > 100 tokens)',
+  });
   assert.equal(forwarded, 1);
 });
 
@@ -1401,7 +1440,7 @@ test('doctor describes project-local wiring as the default', () => {
       encoding: 'utf8',
     });
     assert.match(result.stdout, /wiring: effective none/);
-    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 920000 \| 1000000 \| 967000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 920000 \| 1000000 \| 967000 \| synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
     assert.match(result.stdout, /default wiring target: this project's \.claude\/settings\.local\.json/);
     // Fresh HOME means an empty detected-pin cache, so this value is the shipped constant rather than
@@ -1449,8 +1488,8 @@ test('doctor reports the 1M Codex resolver aliases and a lower explicit cap', ()
       encoding: 'utf8',
     });
     assert.match(result.stdout, /model window policy: auto-compact cap 325000 \(settings project-local\)/);
-    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol\[1m\] \| 920012 \| 920000 \| 1000000 \| 292000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
-    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 920000 \| 1000000 \| 292000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol\[1m\] \| 920012 \| 920000 \| 1000000 \| 292000 \| synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 920000 \| 1000000 \| 292000 \| synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
@@ -1477,7 +1516,7 @@ test('doctor warns when the configured Codex window resolves to the unknown-mode
       isolatedOverrides,
       encoding: 'utf8',
     });
-    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol \| 920012 \| 200000 \| 200000 \| 167000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol \| 920012 \| 200000 \| 200000 \| 167000 \| synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
