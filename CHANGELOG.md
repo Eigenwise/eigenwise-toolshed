@@ -8,6 +8,59 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.574.0 (2026-09-22)
+
+### model-gateway 0.51.2 → 0.51.3
+
+#### Fixes
+
+- catalog --refresh reports a failed refresh instead of reprinting the stale catalog (SQ-3003)
+  `catalog --refresh --json` used to print the stored catalog and exit 0 whenever the refresh declined
+  to write, with nothing on stderr. Sidequest checks only the exit code, so it accepted the unchanged
+  file, found it outside the five-minute freshness window, and dropped the gateway model routes from
+  the board a few minutes after every shim start (#227).
+
+  An explicit `--refresh` that cannot write now exits non-zero and names the reason on stderr: the shim
+  is not answering `/healthz`, `/v1/models` returned an error, or the model list held no gateway ids.
+  stdout is unchanged as a machine contract, still printing the retained catalog with its original
+  `updatedAt`, and nothing rewrites the file or its timestamp on a refusal. A refresh triggered only by
+  staleness, without the flag, still exits 0 and just reports the reason.
+- Clarify Gateway recovery and RC hosts handling (SQ-3026)
+  Clarifies Gateway recovery after attributed OpenAI rejections and the confirmation-gated RC hosts update. The `env` RC-compatibility line now points users at `remote-control enable --confirm`, the command that actually backs up and writes the hosts entry, instead of telling them to add it themselves.
+
+### observability 0.7.32 → 0.7.33
+
+#### Fixes
+
+- Repair complete inventoried privacy and signal routing documentation (SQ-3019)
+  Correct privacy storage wording and document the consent-filtered log outbox with separate trace and metric Collector sink pipelines.
+- Restore lost privacy matrix assertions (SQ-3024)
+  Restore two SQ-3013 privacy-matrix test protections dropped in SQ-3019: exact
+  Windows/fallback `observability.json` path checks and the setup-reference
+  "private config" / "current-user-only permissions" prohibitions. Test-only
+  fix, no runtime or documentation prose changes.
+
+### quartermaster 0.11.2 → 0.11.3
+
+#### Fixes
+
+- Repair complete inventoried privacy and signal routing documentation (SQ-3019)
+  Correct privacy storage wording and document the consent-filtered log outbox with separate trace and metric Collector sink pipelines.
+- Restore lost privacy matrix assertions (SQ-3024)
+  Restore two SQ-3013 privacy-matrix test protections dropped in SQ-3019: exact
+  Windows/fallback `observability.json` path checks and the setup-reference
+  "private config" / "current-user-only permissions" prohibitions. Test-only
+  fix, no runtime or documentation prose changes.
+- Clarify Gateway recovery and RC hosts handling (SQ-3026)
+  Clarifies Gateway recovery after attributed OpenAI rejections and the confirmation-gated RC hosts update. The `env` RC-compatibility line now points users at `remote-control enable --confirm`, the command that actually backs up and writes the hosts entry, instead of telling them to add it themselves.
+
+### sidequest 5.2.1 → 5.2.2
+
+#### Fixes
+
+- Align executor verification guidance (SQ-3011)
+  Executor guidance now commits before pinned verification and checkpoints incomplete work for a fresh continuation.
+
 ## v3.573.0 (2026-09-20)
 
 ### sidequest 5.2.0 → 5.2.1
