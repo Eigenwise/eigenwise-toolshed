@@ -8,7 +8,7 @@ Run it from the repository root:
 node --test plugins/observability/test/observability-demo.e2e.test.js
 ```
 
-The test calls the Observability plugin's setup with a fake local Collector binary and a pinned Claude version. Initialization writes only the temporary project's `.claude/settings.json` and temporary application-data files. The observer is bound to an ephemeral loopback port. Grafana LGTM and a real Claude or Codex request are deliberately not required, because provider evidence and Docker behavior are not deterministic in a unit test.
+The test calls the Observability plugin's setup with a fake local Collector binary and a pinned Claude version. Initialization writes only the temporary project's `.claude/settings.json` and `.claude/settings.local.json`, plus temporary application-data files. The observer is bound to an ephemeral loopback port. Grafana LGTM and a real Claude or Codex request are deliberately not required, because provider evidence and Docker behavior are not deterministic in a unit test.
 
 ## What the report means
 

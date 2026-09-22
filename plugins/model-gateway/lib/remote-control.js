@@ -291,8 +291,7 @@ async function remoteControlVerify({ expectedSupervisorPid = null, requireCompat
   return ready;
 }
 
-// Read-only: model-gateway never writes to the hosts file. Returns
-// { ip, line } when the user has added the exact managed entry, else null.
+// This detection path is read-only. Returns { ip, line } for the managed entry, else null.
 function detectHostsCompat() {
   let text;
   try { text = fs.readFileSync(hostsFilePath(), 'utf8'); } catch { return null; }

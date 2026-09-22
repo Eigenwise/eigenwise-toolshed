@@ -235,4 +235,35 @@ test('every implementation executor leaves candidate reviews to the orchestrator
   }
 });
 
+test('normal Git delivery commits before captured verification and submission', () => {
+  const focusedChecks = executorTemplate.indexOf('**Use focused checks while editing, then commit the final scoped candidate.**');
+  const captureVerification = executorTemplate.indexOf('**Capture verification and submit, never publish.**');
+  const cleanCandidateVerification = executorTemplate.indexOf("Run the ticket's exact verifier on that clean committed candidate");
+  const submit = executorTemplate.indexOf('mcp__plugin_sidequest_board__submit', cleanCandidateVerification);
+  assert.ok(focusedChecks >= 0);
+  assert.ok(captureVerification > focusedChecks);
+  assert.ok(cleanCandidateVerification > captureVerification);
+  assert.ok(submit > cleanCandidateVerification);
+
+  for (const [filename, source] of agentsync.implementationExecutorSources()) {
+    assert.ok(source.includes("Run the ticket's exact verifier on that clean committed candidate"), filename);
+  }
+});
+
+test('dynamic survival guidance checkpoints incomplete work instead of submitting it', () => {
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-3011',
+    model: 'opus',
+    effort: 'high',
+    category: {},
+    executorVerifyKind: 'command',
+    executorVerify: 'npm run typecheck',
+  }, 'ticket-token', undefined, ROOT);
+  assert.match(briefing, /use the existing Continuation checkpoint path/);
+  assert.match(briefing, /exact remaining work and verification status/);
+  assert.match(briefing, /release the ticket to `todo`/);
+  assert.match(briefing, /Do not submit incomplete ticket work as ready/);
+  assert.doesNotMatch(briefing, /commit and submit the verified portion/);
+});
+
 export {};

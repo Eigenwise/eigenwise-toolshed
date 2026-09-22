@@ -8,7 +8,7 @@ description: Maintainer notes on the local boundaries between Toolshed plugins.
 Each plugin can run by itself. Integration uses explicit local files and Claude Code install records so a plugin can discover another plugin without importing its code.
 
 - **Workspace setup:** Quartermaster owns the cross-plugin setup plan for new and existing projects, updates Toolshed plugins, and checks workspace health. It reads the Claude Code install registry to resolve installed Toolshed instances, so it can cooperate with Observability without making either plugin a dependency of the other.
-- **Local observations:** Observability hooks write metadata-only lifecycle observations. Its observer and collector stay on loopback, and the dashboard reads the local store.
+- **Local observations:** Observability hooks write metadata-only lifecycle observations. Its observer and Collector listeners stay on loopback, and the dashboard reads the local store. An optional opt-in remote sink receives logs through the observer outbox and traces or metrics through the Collector path.
 - **Model selection:** Model Gateway owns the API boundary. Its shim sends supported gateway model ids to the local proxy and leaves other ids on their normal path.
 - **Project context:** Codebase Mapper and Live Rules own their project files and update flows. Other plugins consume their outputs as context instead of reaching into their implementation.
 - **Work delivery:** Sidequest owns tickets, stories, categories, routing profiles, dispatch, and executor evidence.
