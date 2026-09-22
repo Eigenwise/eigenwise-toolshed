@@ -19,12 +19,12 @@
  * built-in /remote-control only lights up when ANTHROPIC_BASE_URL is exactly
  * the real Anthropic host. There's no supported way to get gateway routing
  * and that exact host at once without touching the OS resolver, so it's an
- * opt-in "RC-compatibility" mode: the user (never this plugin) adds one hosts
- * entry mapping api.anthropic.com to loopback, and once detected the shim
- * additionally binds loopback:80 and Claude Code's env is pointed at
- * http://api.anthropic.com instead of 127.0.0.1:<shim port>. See
- * detectHostsCompat / syncCompatMode below. Never automatic on the hosts side;
- * only the env switch and the extra listener are automatic.
+ * opt-in "RC-compatibility" mode: after the user confirms, the remote-control
+ * command backs up and writes one hosts entry mapping api.anthropic.com to
+ * loopback. The shim then additionally binds loopback:80 and Claude Code's env
+ * is pointed at http://api.anthropic.com instead of 127.0.0.1:<shim port>. See
+ * detectHostsCompat / syncCompatMode below. Hosts writes require confirmation;
+ * the env switch and extra listener follow automatically.
  */
 
 const { fork, spawn, spawnSync } = require('node:child_process');
@@ -143,7 +143,7 @@ const USAGE = `usage: model-gateway.js <command>
                    (--write-project writes .claude/settings.local.json; --write-user
                    is an opt-in shared fallback in ~/.claude/settings.json)
   doctor           full health check
-  remote-control <enable|disable|doctor>
+  remote-control <enable|disable|doctor> [--confirm]
                    manage the opt-in hosts-file compatibility mode; enable refuses an effective
                    HTTPS api.anthropic.com process URL before hosts changes
   serve-shim       (internal) run the router in the foreground
@@ -917,7 +917,7 @@ async function envCommand() {
     log('\nor use /model-gateway:model-gateway to run its env --write-project command');
     log('\nProject wiring is the default: this local block keeps this project and its executor worktrees routed after restart.');
     log('Use env --write-user only when you deliberately want the same fallback URL in every project.');
-    log('RC-compatibility mode is opt-in once you add the hosts entry yourself; it configures compatibility transport, not verified end-to-end Remote Control.');
+    log('RC-compatibility mode is opt-in: run remote-control enable, then re-run with --confirm to let it back up and write the hosts entry for you. It configures compatibility transport, not verified end-to-end Remote Control.');
     return;
   }
 

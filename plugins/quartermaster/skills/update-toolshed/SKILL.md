@@ -24,7 +24,9 @@ versions but not release notes or commit history, so the updater says that plain
 a changelog. Gateway wiring stays at its recorded scope: the stable updater delegates to setup, which
 preserves per-project `.claude/settings.local.json` or user-level `~/.claude/settings.json` wiring and
 never escalates scope. Remote Control compatibility points the base URL at `api.anthropic.com`, so the
-Codex/Grok rows disappear from `/model`; an explicit id such as `/model claude-gpt-5.6-terra` still works.
+Codex/Grok rows disappear from `/model`; Claude Code can persist an explicit id such as
+`/model claude-gpt-5.6-terra`, but that does not prove a later request reaches Model Gateway. Normal
+gateway mode is the verified inference path.
 Gateway wiring changes apply to new Claude Code sessions, so restart affected sessions. Before any
 mutation, the updater runs a discovered Claude Code command once. It tries `claude` from `PATH`, then
 known desktop-app locations, including the Windows MSIX package cache and `~/.local/bin/claude` on macOS.
