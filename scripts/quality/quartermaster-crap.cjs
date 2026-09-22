@@ -9,6 +9,8 @@ const { crapScore, functionTokenCount, parseLizardCsv } = require('./crap-core.c
 
 const DEFAULT_MAX = 6;
 const DEFAULT_LCOV = 'coverage/lcov.info';
+/** A coverageCommand can write its lcov.info here instead of the shared `coverage/`, so concurrent runs on one checkout stay apart. */
+const COVERAGE_DIR_ENV = 'QUARTERMASTER_COVERAGE_DIR';
 const CONFIG_RELATIVE_PATH = path.join('.claude', 'quartermaster', 'crap.json');
 const INSTALL_HINT = 'install lizard with `uv tool install lizard`, `pipx install lizard`, or `pip install lizard`';
 const LIZARD_CANDIDATES = [
@@ -117,6 +119,55 @@ function git(projectDir, args, hint) {
   return result.stdout;
 }
 
+/** `dir` may not be a git checkout at all, which is a normal, silent case when resolving the measured root. */
+function tryGit(dir, args) {
+  const result = spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true });
+  if (result.error || result.status !== 0) return null;
+  return result.stdout.trim();
+}
+
+/** The native realpath expands Windows 8.3 short names too, so two spellings of one directory compare equal. */
+function realDir(dir) {
+  try {
+    return fs.realpathSync.native(dir);
+  } catch {
+    return path.resolve(dir);
+  }
+}
+
+function sameDir(left, right) {
+  return Boolean(left && right) && comparablePath(left, '.') === comparablePath(right, '.');
+}
+
+function commonGitDir(dir) {
+  const output = tryGit(dir, ['rev-parse', '--git-common-dir']);
+  // git prints --git-common-dir relative to the directory it was asked from, but absolute from a linked
+  // worktree; resolving against `dir` first lands both forms on the same canonical directory.
+  return output ? realDir(path.resolve(dir, output)) : null;
+}
+
+function gitToplevel(dir) {
+  const output = tryGit(dir, ['rev-parse', '--show-toplevel']);
+  return output ? realDir(output) : null;
+}
+
+/** A linked worktree shares its main checkout's common git dir, which an unrelated clone never does. */
+function sameRepository(startDir, projectDir) {
+  return sameDir(commonGitDir(startDir), commonGitDir(projectDir));
+}
+
+/**
+ * `--project` only picks the config. The measured root is the git toplevel of the directory the gate
+ * runs in, so a per-ticket linked worktree measures the code checked out there rather than whatever
+ * the named project's main checkout has on disk. An unrelated `--project` is measured where it points.
+ */
+function resolveWorkDir({ projectDir, cwd, projectPathGiven }) {
+  // cwd and a toplevel are never empty strings, so `||` is as correct as `??` and lizard scores it once.
+  const startDir = path.resolve(cwd || projectDir);
+  if (projectPathGiven && !sameRepository(startDir, projectDir)) return projectDir;
+  return gitToplevel(startDir) || startDir;
+}
+
 function defaultBase(projectDir) {
   for (const candidate of ['develop', 'main', 'master']) {
     if (spawnSync('git', ['rev-parse', '--verify', '--quiet', candidate], { cwd: projectDir, windowsHide: true }).status === 0) return candidate;
@@ -128,12 +179,28 @@ function functionIdentity(entry) {
   return `${entry.file}\u0000${entry.function}\u0000${entry.ordinal}`;
 }
 
+function fingerprintIdentity(entry) {
+  return `${entry.file}\u0000${entry.fingerprint}`;
+}
+
+/** Every bucket is a queue, so pairing can hand one baseline row to one current function and no more. */
+function pushBucket(index, key, entry) {
+  const bucket = index.get(key);
+  if (bucket) bucket.push(entry);
+  else index.set(key, [entry]);
+}
+
+function indexBaselineEntry(index, entry) {
+  pushBucket(index.byIdentity, functionIdentity(entry), entry);
+  if (entry.fingerprint) pushBucket(index.byFingerprint, fingerprintIdentity(entry), entry);
+}
+
 function baselineFunctions({ projectDir, baseReference, files, exclude, runLizard }) {
   const hint = `check that ${JSON.stringify(baseReference)} is a git ref this repository knows`;
   const base = git(projectDir, ['merge-base', 'HEAD', baseReference], hint).trim();
   const changed = new Set(git(projectDir, ['diff', '--name-only', '--relative', base], hint).split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
   const changedHere = [...files].filter((file) => changed.has(file));
-  const byIdentity = new Map();
+  const index = { byIdentity: new Map(), byFingerprint: new Map() };
   const temporaryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-base-'));
   try {
     for (const file of changedHere) {
@@ -143,10 +210,10 @@ function baselineFunctions({ projectDir, baseReference, files, exclude, runLizar
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, show.stdout, 'utf8');
       for (const entry of measure(parseLizardCsv(runLizard({ cwd: temporaryDir, sources: [file], exclude })), new Map(), temporaryDir)) {
-        byIdentity.set(functionIdentity(entry), entry);
+        indexBaselineEntry(index, entry);
       }
     }
-    return { base, changed, byIdentity };
+    return { base, changed, ...index };
   } finally {
     fs.rmSync(temporaryDir, { recursive: true, force: true });
   }
@@ -169,10 +236,61 @@ function lizardRunner() {
   };
 }
 
-function runCoverageCommand(command, projectDir) {
-  const result = spawnSync(command, { cwd: projectDir, shell: true, encoding: 'utf8', windowsHide: true });
+function runCoverageCommand(command, workDir, reportsDir) {
+  const result = spawnSync(command, { cwd: workDir, shell: true, encoding: 'utf8', windowsHide: true, env: { ...process.env, [COVERAGE_DIR_ENV]: reportsDir } });
   if (result.error) throw new PrerequisiteError(`coverage command failed to start: ${result.error.message}`, 'check coverageCommand in the config');
   if (result.status !== 0) throw new PrerequisiteError(`coverage command exited ${result.status}: ${lastLines(result.stderr, 3)}`, 'fix the coverage command, then run the gate again');
+}
+
+function defaultLcovMtime(workDir) {
+  return fs.statSync(path.join(workDir, DEFAULT_LCOV), { throwIfNoEntry: false })?.mtimeMs;
+}
+
+/**
+ * A coverage command that exits 0 without rewriting the fallback lcov leaves an earlier run's coverage
+ * there, and scoring against it would be a wrong answer. Comparing the file's own mtime before and after
+ * the command, rather than against the clock, keeps a fast command from looking stale: the kernel stamps
+ * files from a coarser clock than Date.now().
+ */
+function assertDefaultLcovRewritten(workDir, mtimeBefore) {
+  if (mtimeBefore !== undefined && defaultLcovMtime(workDir) === mtimeBefore) {
+    throw new PrerequisiteError(`${DEFAULT_LCOV} predates this run's coverage command`, 'the coverage command exited 0 but did not write fresh coverage; check coverageCommand in the config');
+  }
+}
+
+/** This run's own report wins; the shared default lcov is only the fallback for a command that ignores COVERAGE_DIR_ENV. */
+function coverageRunLcovPath(workDir, coverageRun) {
+  const isolatedPath = path.join(coverageRun.reportsDir, 'lcov.info');
+  if (fs.existsSync(isolatedPath)) return isolatedPath;
+  assertDefaultLcovRewritten(workDir, coverageRun.defaultLcovMtime);
+  return path.join(workDir, DEFAULT_LCOV);
+}
+
+/** An explicit --lcov or config lcov is read exactly where it points. */
+function resolveLcovPath(workDir, explicitLcov, coverageRun) {
+  if (explicitLcov) return path.resolve(workDir, explicitLcov);
+  if (coverageRun) return coverageRunLcovPath(workDir, coverageRun);
+  return path.join(workDir, DEFAULT_LCOV);
+}
+
+function readLcovText(lcovPath, coverageCommand) {
+  try {
+    return fs.readFileSync(lcovPath, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw new PrerequisiteError(`could not read ${lcovPath}: ${error.message}`, 'check the lcov path');
+    throw new PrerequisiteError(`no lcov coverage at ${lcovPath}`, coverageCommand ? 'the coverage command ran but wrote no lcov there' : 'run your coverage command first, or set coverageCommand in the config');
+  }
+}
+
+function acquireLcovText(workDir, settings) {
+  if (!settings.coverageCommand) return readLcovText(resolveLcovPath(workDir, settings.lcov, null), null);
+  const coverageRun = { reportsDir: fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-coverage-')), defaultLcovMtime: defaultLcovMtime(workDir) };
+  try {
+    runCoverageCommand(settings.coverageCommand, workDir, coverageRun.reportsDir);
+    return readLcovText(resolveLcovPath(workDir, settings.lcov, coverageRun), settings.coverageCommand);
+  } finally {
+    fs.rmSync(coverageRun.reportsDir, { recursive: true, force: true });
+  }
 }
 
 function sourceFiles(directory) {
@@ -196,45 +314,129 @@ function unmeasuredLizardFiles(projectDir, sources, entries, changed) {
     .map((file) => displayPath(projectDir, file));
 }
 
-function changedFunctions(functions, baseline) {
-  if (!baseline) return functions;
-  return functions.filter((entry) => {
-    if (!baseline.changed.has(entry.file)) return false;
-    const previous = baseline.byIdentity.get(functionIdentity(entry));
-    return !previous || !entry.fingerprint || !previous.fingerprint || entry.fingerprint !== previous.fingerprint;
-  });
+/** A claimed baseline row is spent: the next current function asking for it has to look elsewhere. */
+function claimFirstUnclaimed(bucket, claimed) {
+  for (const candidate of bucket ?? []) {
+    if (claimed.has(candidate)) continue;
+    claimed.add(candidate);
+    return candidate;
+  }
+  return null;
 }
 
-function crapReport(options) {
-  const projectDir = path.resolve(options.projectDir ?? process.cwd());
-  const config = readConfig(projectDir);
-  const requestedMax = Number(options.max ?? config.max ?? DEFAULT_MAX);
-  if (requestedMax !== DEFAULT_MAX) throw new PrerequisiteError(`the CRAP threshold is fixed at ${DEFAULT_MAX}`, 'remove max from the command or config');
-  const sources = config.sources?.length ? config.sources : ['.'];
-  const exclude = config.exclude ?? [];
-  const coverageCommand = options.coverageCommand ?? config.coverageCommand ?? null;
-  const runLizard = options.runLizard ?? lizardRunner();
-  if (coverageCommand) runCoverageCommand(coverageCommand, projectDir);
+function matchByFingerprint(baseline, entry, claimed) {
+  if (!entry.fingerprint) return null;
+  return claimFirstUnclaimed(baseline.byFingerprint.get(fingerprintIdentity(entry)), claimed);
+}
 
-  const lcovPath = path.resolve(projectDir, options.lcov ?? config.lcov ?? DEFAULT_LCOV);
-  let lcovText;
-  try {
-    lcovText = fs.readFileSync(lcovPath, 'utf8');
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw new PrerequisiteError(`could not read ${lcovPath}: ${error.message}`, 'check the lcov path');
-    throw new PrerequisiteError(`no lcov coverage at ${lcovPath}`, coverageCommand ? 'the coverage command ran but wrote no lcov there' : 'run your coverage command first, or set coverageCommand in the config');
+function matchByPosition(baseline, entry, claimed) {
+  return claimFirstUnclaimed(baseline.byIdentity.get(functionIdentity(entry)), claimed);
+}
+
+function claimRound(match, pairing) {
+  for (const entry of pairing.functions) {
+    if (pairing.pairs.has(entry)) continue;
+    const previous = match(pairing.baseline, entry, pairing.claimed);
+    if (previous) pairing.pairs.set(entry, previous);
   }
-  const lizardEntries = parseLizardCsv(options.complexity ? fs.readFileSync(path.resolve(projectDir, options.complexity), 'utf8') : runLizard({ cwd: projectDir, sources, exclude }));
-  const functions = measure(lizardEntries, coverageByFile(lcovText, projectDir), projectDir);
-  const baseReference = options.base ?? options.ratchet ?? config.base ?? config.ratchet ?? defaultBase(projectDir);
-  const baseline = baseReference === 'HEAD' ? null : baselineFunctions({ projectDir, baseReference, files: new Set(functions.map((entry) => entry.file)), exclude, runLizard });
-  const candidates = changedFunctions(functions, baseline);
-  const lizardFailures = unmeasuredLizardFiles(projectDir, sources, lizardEntries, baseline?.changed ?? new Set(functions.map((entry) => entry.file)));
+}
+
+/**
+ * Position among namesakes cannot identify a function across an insertion: one added `run` shifts every
+ * later `run` onto a sibling's baseline row, so untouched code reads as changed and answers to the
+ * ceiling it was already over. Identical source text, whitespace aside, is the stronger claim, so it pairs
+ * across every function before position is consulted at all. Pairing is one-to-one, which is what keeps a
+ * copy-pasted function new: the baseline copy of the file has only one row to give, and its twin took it.
+ */
+function pairWithBaseline(functions, baseline) {
+  const pairing = { functions, baseline, claimed: new Set(), pairs: new Map() };
+  claimRound(matchByFingerprint, pairing);
+  claimRound(matchByPosition, pairing);
+  return pairing.pairs;
+}
+
+function sameFingerprint(entry, previous) {
+  return Boolean(entry.fingerprint && entry.fingerprint === previous?.fingerprint);
+}
+
+function changedFunctions(functions, baseline) {
+  if (!baseline) return functions;
+  const pairs = pairWithBaseline(functions, baseline);
+  return functions.filter((entry) => baseline.changed.has(entry.file) && !sameFingerprint(entry, pairs.get(entry)));
+}
+
+/** lizard scores every `??` as two branches, so the command-line-then-config fallbacks go through one lookup. */
+function firstDefined(values) {
+  return values.find((value) => value != null);
+}
+
+function gateSettings(options, config) {
+  if (Number(firstDefined([options.max, config.max, DEFAULT_MAX])) !== DEFAULT_MAX) {
+    throw new PrerequisiteError(`the CRAP threshold is fixed at ${DEFAULT_MAX}`, 'remove max from the command or config');
+  }
+  return {
+    sources: config.sources?.length ? config.sources : ['.'],
+    exclude: firstDefined([config.exclude, []]),
+    coverageCommand: firstDefined([options.coverageCommand, config.coverageCommand]),
+    lcov: firstDefined([options.lcov, config.lcov]),
+    runLizard: firstDefined([options.runLizard, lizardRunner()]),
+    baseReference: firstDefined([options.base, options.ratchet, config.base, config.ratchet]),
+  };
+}
+
+function complexityCsv(workDir, options, settings) {
+  if (options.complexity) return fs.readFileSync(path.resolve(workDir, options.complexity), 'utf8');
+  return settings.runLizard({ cwd: workDir, sources: settings.sources, exclude: settings.exclude });
+}
+
+function baselineFor(workDir, settings, functions) {
+  const baseReference = settings.baseReference ?? defaultBase(workDir);
+  if (baseReference === 'HEAD') return null;
+  return baselineFunctions({ projectDir: workDir, baseReference, files: new Set(functions.map((entry) => entry.file)), exclude: settings.exclude, runLizard: settings.runLizard });
+}
+
+function changedFiles(baseline, functions) {
+  return baseline?.changed ?? new Set(functions.map((entry) => entry.file));
+}
+
+/** A named function, because lizard does not see an arrow whose body is a template literal, and the repository gate refuses what lizard cannot measure. */
+function functionLabel(entry) {
+  return `${entry.file}:${entry.line} ${entry.function}`;
+}
+
+function assertMeasured(workDir, settings, { lizardEntries, changed, candidates }) {
+  const lizardFailures = unmeasuredLizardFiles(workDir, settings.sources, lizardEntries, changed);
   if (lizardFailures.length) throw new PrerequisiteError(`lizard reported zero functions for ${lizardFailures.join(', ')}`, 'measurement is unverified; fix the parser input before passing the gate');
   const unmeasured = candidates.filter((entry) => entry.unmeasured);
-  if (unmeasured.length) throw new PrerequisiteError(`coverage is unverified for ${unmeasured.map((entry) => `${entry.file}:${entry.line} ${entry.function}`).join(', ')}`, 'run coverage that includes every changed function before passing the gate');
-  const failures = candidates.filter((entry) => entry.crap >= DEFAULT_MAX).sort((left, right) => right.crap - left.crap || left.file.localeCompare(right.file) || left.line - right.line).map((entry) => ({ ...entry, reason: 'ceiling' }));
-  return { functions: functions.sort((left, right) => right.crap - left.crap || left.file.localeCompare(right.file) || left.line - right.line), failures, max: DEFAULT_MAX, checked: candidates.length, unmeasured: 0, base: baseline?.base ?? null };
+  if (unmeasured.length) throw new PrerequisiteError(`coverage is unverified for ${unmeasured.map(functionLabel).join(', ')}`, 'run coverage that includes every changed function before passing the gate');
+}
+
+function byCrapThenPlace(left, right) {
+  return right.crap - left.crap || left.file.localeCompare(right.file) || left.line - right.line;
+}
+
+function gateResult(workDir, functions, candidates, baseline) {
+  const failures = candidates.filter((entry) => entry.crap >= DEFAULT_MAX).sort(byCrapThenPlace).map((entry) => ({ ...entry, reason: 'ceiling' }));
+  return { root: workDir, functions: functions.sort(byCrapThenPlace), failures, max: DEFAULT_MAX, checked: candidates.length, unmeasured: 0, base: baseline?.base ?? null };
+}
+
+/**
+ * `--project` (projectPathGiven) only picks the config. The coverage command, the lcov, the lizard scan
+ * and the base comparison all use the measured root, and without `--project` so does the config, so an
+ * agent working in a subdirectory gets the gate the project configured rather than silent defaults.
+ */
+function crapReport(options) {
+  const projectDir = path.resolve(options.projectDir ?? process.cwd());
+  const projectPathGiven = Boolean(options.projectPathGiven);
+  const workDir = resolveWorkDir({ projectDir, cwd: options.cwd, projectPathGiven });
+  const settings = gateSettings(options, readConfig(projectPathGiven ? projectDir : workDir));
+  const lcovText = acquireLcovText(workDir, settings);
+  const lizardEntries = parseLizardCsv(complexityCsv(workDir, options, settings));
+  const functions = measure(lizardEntries, coverageByFile(lcovText, workDir), workDir);
+  const baseline = baselineFor(workDir, settings, functions);
+  const candidates = changedFunctions(functions, baseline);
+  assertMeasured(workDir, settings, { lizardEntries, changed: changedFiles(baseline, functions), candidates });
+  return gateResult(workDir, functions, candidates, baseline);
 }
 
 function formatReport(report) {
@@ -243,4 +445,4 @@ function formatReport(report) {
   return `${lines.join('\n')}\n`;
 }
 
-module.exports = { DEFAULT_MAX, INSTALL_HINT, PrerequisiteError, coverageByFile, crapReport, crapScore, formatReport, parseLizardCsv };
+module.exports = { COVERAGE_DIR_ENV, DEFAULT_MAX, INSTALL_HINT, PrerequisiteError, coverageByFile, crapReport, crapScore, formatReport, parseLizardCsv, realDir, sameDir };
