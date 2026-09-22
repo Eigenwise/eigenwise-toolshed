@@ -174,6 +174,8 @@ function provenNoOpCloseout(slug, ticket, verify) {
 }
 const PROJECT_PROP = { type: "string", description: "Board (current project)." };
 const FILES_PROP = { type: "array", items: { type: "string" }, description: "Declared file scope: paths, directory prefixes covering descendants, or globs matched consistently by hook and commit enforcement." };
+const ADD_FILES_PROP = { type: "array", items: { type: "string" } };
+const REMOVE_FILES_PROP = { type: "array", items: { type: "string" } };
 const LABELS_PROP = { type: "array", items: { type: "string" } };
 const CONTRACT_PROP = (verb) => ({ type: "array", items: { type: "string" }, description: `Named contracts or interfaces this ticket ${verb}.` });
 const MODEL_FILTER_PROP = { type: "string", description: "Filter by resolved model slug." };
@@ -981,6 +983,8 @@ module.exports = {
   provenNoOpCloseout,
   PROJECT_PROP,
   FILES_PROP,
+  ADD_FILES_PROP,
+  REMOVE_FILES_PROP,
   LABELS_PROP,
   CONTRACT_PROP,
   MODEL_FILTER_PROP,

@@ -56,7 +56,7 @@ function isBoardMcpLive(sessionId) {
 }
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 24100;
+const MCP_TOOLS_LIST_MAX_BYTES = 25600;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
@@ -254,7 +254,11 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   },
   add: { complexity: "Legacy score; why required.", verify: ATTESTATION_VERIFY_CONTRACT },
   claim: { force: "Operator-only." },
-  update: { verify: ATTESTATION_VERIFY_CONTRACT },
+  update: {
+    verify: ATTESTATION_VERIFY_CONTRACT,
+    addFiles: "Appends, keeps rest. Refused with files. Applied before removeFiles.",
+    removeFiles: "Drops only these, keeps rest. Refused with files, and for a path this ticket does not declare. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch."
+  },
   supersede_submission: { supersededBy: "Repair ticket ref, not a commit." },
   comments: {
     since: "Comment id or ISO timestamp."
@@ -281,6 +285,9 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   },
   verdict: {
     outcome: "Candidate, not reviewer prose."
+  },
+  scopeRequest: {
+    grant: "Grants every path this claim still has refused; pass no files. Refuses the claim holder’s own by."
   }
 };
 function toolDescriptor(tool) {

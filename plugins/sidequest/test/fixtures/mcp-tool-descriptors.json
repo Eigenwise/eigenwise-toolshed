@@ -451,6 +451,20 @@
             "type": "string"
           }
         },
+        "addFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Appends, keeps rest. Refused with files. Applied before removeFiles."
+        },
+        "removeFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Drops only these, keeps rest. Refused with files, and for a path this ticket does not declare. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch."
+        },
         "by": {
           "type": "string"
         },
@@ -1052,12 +1066,15 @@
             "type": "string"
           },
           "minItems": 1
+        },
+        "grant": {
+          "type": "boolean",
+          "description": "Grants every path this claim still has refused; pass no files. Refuses the claim holder’s own by."
         }
       },
       "required": [
         "ref",
-        "by",
-        "files"
+        "by"
       ]
     }
   },
