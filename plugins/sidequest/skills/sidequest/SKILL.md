@@ -98,7 +98,7 @@ attachment and report missing or unreadable ones, while the spawn keeps that con
 transcript. Never trust a worker's self-report — the
 claim's token and exact executor name are the evidence.
 
-**Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent.model` and `recipe.agent.promptPrefix + prompt` in Agent. Do not manually translate route, gateway, virtual-model, marker, or effort fields. A user-named model for one ticket means set that ticket's `route` override, never edit the category route, which repoints later tickets too. See `references/routing-guide.md`.
+**Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent.model` and `recipe.agent.promptPrefix + prompt` in Agent. Never hand-translate route, gateway, virtual-model, marker, or effort fields. A user-named model for one ticket means set that ticket's `route` override, never edit the category route, which repoints later tickets too. See `references/routing-guide.md`.
 
 **Locations:** CLI: `plugins/sidequest/bin/sidequest.js`; DB: `~/.claude/sidequest/sidequest.db`
 (`SIDEQUEST_HOME`); attachments: `~/.claude/sidequest/projects/<slug>/assets/`. Never scan from root.
@@ -135,29 +135,28 @@ it with `mcp__plugin_sidequest_board__add`, then keep going. Filing a ticket is 
 
 ## Work a ticket (safe with other agents)
 
-The board may be shared: a ticket must be **claimed** before you touch it, and claiming is
-**atomic**. **Never work a ticket you haven't successfully claimed**, even one you just filed.
+The board may be shared: claim a ticket before touching it, atomically. **Never work a ticket you
+haven't successfully claimed**, even one you just filed.
 Lifecycle (executors use the matching MCP tools; CLI forms for inline/admin work):
 `next`/`claim SQ-3 --by <you> --direct --reason "why this is inline-safe"` (only for the
 INLINE-SAFE allowlist) → `commit` (declared ticket paths only) → run the briefing-supplied `verify-capture` wrapper after the final commit (it records the ticket, command, and checked candidate) → `submit --commit <hash> --verify
-"<declared cmd>"` (parks the verified LOCAL commit). Retyping the command or prose cannot replace that completed capture. Manual and attestation verifiers keep their existing evidence flow.
+"<declared cmd>"` (parks the verified LOCAL commit). Retyped commands or prose cannot replace that capture. Manual and attestation verifiers keep their evidence flow.
 or `done --model <model> --effort <level>` (inline/non-repo only) or `release` (drop unfinished,
 optionally `--status todo`).
 
 - **`--by` must be genuinely unique to this session** — a random token generated once (e.g.
   `claude-<8 hex>`); a generic label lets two sessions silently coexist as one worker.
-- **If a claim fails, do not work that ticket.** A denied or unclaimed spawn gets a
-  diagnose-first retry only when `pulse <ref>` identifies a changed dispatch condition. Record unchanged
-  refusals as evidence and surface the failure to the user. Never both resume a prior executor and spawn a
-  fresh one for the same ticket.
+- **If a claim fails, do not work that ticket.** Retry a denied or unclaimed spawn only when `pulse <ref>`
+  shows a changed dispatch condition; otherwise record the refusal and surface it to the user. Never both
+  resume a prior executor and spawn a fresh one for the same ticket.
 - **Read the thread before working a ticket** (`sidequest comments <ref>`). Default reads retain all
   metadata; pass `--full` only for needed elided bodies.
-- **Claims release on observed death, not age**: use `pulse`, never a clock. For useful work needing a decision, `SendMessage` the same agent and keep its claim and worktree. A resume retains claim, token-file path, and worktree binding. On `matches no dispatch record`, its holder calls MCP `dispatch` with `recoveryEvidence`, `claimHolder`, and `worktree`; it re-mints and re-binds. On confirmed death, salvage, release, replace.
-- Agents report automatically. **Never use `TaskOutput`** for a Sidequest task ID or launch name; read liveness only with `pulse <ref>` and `changes --since`, only on a notification or user prompt, never right after spawning — a process list (`tasklist`/`ps`) is never evidence about a dispatch. **Retire terminal teammates** (the one authoritative TaskStop mandate; `orchestration.md` points here): once terminal board evidence is consumed, call `TaskStop({ task_id: "<agent name>" })` once, but only when the host's task list still shows it running AND the board shows terminal evidence (Claude Code host action, not a Sidequest tool). `No task found`/`not running` means it already exited — expected, not worth a retry or a note. Never stop a live claim, retained continuation, or candidate awaiting integration; do not wake a completed executor, poll FleetView, or create a cleanup loop. **Never proxy-wait** with a shell/`Monitor`/cron task only waiting for an executor or artifact (a one-shot local readiness watch is fine).
+- **Claims release on observed death, not age**: use `pulse`, never a clock. For work needing a decision, `SendMessage` the same agent; a resume keeps claim, token-file path, and worktree binding. On `matches no dispatch record`, the holder calls MCP `dispatch` with `recoveryEvidence`, `claimHolder`, and `worktree` to re-mint and re-bind. On confirmed death, salvage, release, replace.
+- Agents report automatically. **Never use `TaskOutput`** for a Sidequest task ID or launch name. Liveness comes only from `pulse <ref>` and `changes --since`, read on a notification or user prompt, never right after spawning; a process list is never dispatch evidence. **Retire terminal teammates** (the one TaskStop mandate): after terminal board evidence is consumed, `TaskStop({ task_id: "<agent name>" })` once, only while the host still lists it running (host action, not Sidequest). `No task found`/`not running` = already exited, no retry. Never stop a live claim, retained continuation, or candidate awaiting integration; never wake a completed executor or build a cleanup loop. **Never proxy-wait** with a shell/`Monitor`/cron task for an executor or artifact (a one-shot local readiness watch is fine).
 
 **Repository publishing is the orchestrator's, alone.** Executors stop at verified local commits and
-`submit` (claim released, parked in `doing`); `submit.body` holds the canonical full report, so do not post a separate pre-submit report comment. The
-terminal comment keeps only the commit hash + verification. **Submit is terminal for the executor:** a
+`submit` (claim released, parked in `doing`); `submit.body` is the canonical report, so no separate pre-submit
+report comment; the terminal comment keeps only commit hash + verification. **Submit is terminal for the executor:** a
 submitted ticket cannot be amended by messaging the executor that produced it, however small the
 follow-up looks. File a follow-up ticket for changes. Redispatch the existing ticket only when it was
 released without a pending submission. The orchestrator is the integrator: choose
@@ -166,21 +165,21 @@ publish transaction (lock → delivery → merged-tree gate → central version 
 `references/publishing.md`.
 **BOOKEND SUPERVISION.** Between dispatch and submission, do nothing with that ticket: no pulses,
 comment reads, or peeks. At integration, read the submit report, deliver the range, and run the
-merged-tree gate once per wave. Judge by that oracle and the submit report, never by opening source or diffs. When sized risk or a weak oracle needs independent review, bind a routed `review-audit` ticket with `reviewTarget`; never orchestrator re-review. Never mark a submitted ticket done without
+merged-tree gate once per wave. Judge by that oracle and the submit report, never by reading diffs. When sized risk or a weak oracle needs independent review, bind a routed `review-audit` ticket with `reviewTarget`; never re-review yourself. Never mark a submitted ticket done without
 integrating it; never re-dispatch one (refused as `submitted`). A dead executor's `done` only proves
 the board transition, never that work shipped: salvage and close it per `references/publishing.md`.
 
 ## Route execution; keep the loop tight
 
-Before routing, the orchestrator decides what improvement is worth making, its concrete benefit, the chosen
-approach, and its boundaries. Gather evidence with direct read-only tools or native `Explore`, then write tickets
-for that selected plan and route implementation. Routes select execution capacity, not product or tradeoff decisions.
+Before routing, the orchestrator decides what improvement is worth making, its benefit, approach, and
+boundaries. Gather evidence with read-only tools or native `Explore`, then ticket that plan and route
+implementation. Routes select execution capacity, not product or tradeoff decisions.
 A direct claim is limited to the INLINE-SAFE allowlist and its 20+ character reason; it cannot retroactively
 legitimize prior inline investigation. Executors own their tickets; investigations return **compressed findings** (~1–2k tokens)
 as comments, not transcripts. Routed implementation uses a freshly dispatched executor.
 `Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness utilities; Explore is a quick
 sweep only, deep or fan-out investigation is a `codebase-exploration` spike; other delegation needs a
-ticketed route.
+ticket.
 
 **The shape is a LOOP, not a hand-off**: spawn a wave → executors return terse reports and
 submit verified commits → read each thread, use scoped verification for each ticket, then run the
