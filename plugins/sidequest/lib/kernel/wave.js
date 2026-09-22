@@ -44,6 +44,9 @@ function sameBaseline(left, right) {
 function participantFor(wave, ref) {
   return wave.participants.find((participant) => participant.ref === ref) || null;
 }
+function invalidationOutsideField(outside) {
+  return outside?.length ? { outside: Object.freeze([...outside]) } : {};
+}
 function invalidation(ref, reason, detail, outside) {
   const recovery = reason === "baseline_moved" ? " The recorded baseline is no longer reachable from the wave target. Recovery: manually merge the verified candidate onto the current target, re-gate it, then record delivery with groomClose using deliveryCommit." : " Candidate submissions remain available. Call integrate with one candidate ref, redispatch a candidate against the current base, or have the integrator use groomClose after a verified reconciled delivery.";
   return Object.freeze({
@@ -51,7 +54,7 @@ function invalidation(ref, reason, detail, outside) {
     state: "invalidated",
     reason,
     detail,
-    ...outside && outside.length ? { outside: Object.freeze([...outside]) } : {},
+    ...invalidationOutsideField(outside),
     message: `${detail}${recovery}`
   });
 }

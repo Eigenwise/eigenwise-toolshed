@@ -87,6 +87,12 @@ function participantFor(wave: Wave, ref: string): WaveParticipant | null {
   return wave.participants.find((participant) => participant.ref === ref) || null;
 }
 
+// Split out so the optional field spread doesn't add its own branch to invalidation()'s
+// complexity on top of the reason ternary already there.
+function invalidationOutsideField(outside?: readonly string[]): Readonly<{ outside: readonly string[] }> | Record<string, never> {
+  return outside?.length ? { outside: Object.freeze([...outside]) } : {};
+}
+
 function invalidation(ref: string, reason: CandidateInvalidation['reason'], detail: string, outside?: readonly string[]): CandidateInvalidation {
   // A moved baseline is the one reason redispatch cannot recover from: the
   // candidate is already verified against a revision the target rewound past, so
@@ -99,7 +105,7 @@ function invalidation(ref: string, reason: CandidateInvalidation['reason'], deta
     state: 'invalidated',
     reason,
     detail,
-    ...(outside && outside.length ? { outside: Object.freeze([...outside]) } : {}),
+    ...invalidationOutsideField(outside),
     message: `${detail}${recovery}`,
   });
 }
@@ -152,7 +158,7 @@ export function assembleWave(wave: Wave, candidates: readonly WaveCandidate[]): 
     }
     // Name the paths. "changed surfaces outside its wave-declared surfaces" sent four
     // integration attempts hunting a baseline mismatch that did not exist, because the
-    // refusal never said which path was outside (cardinventorymanagement SQ-141/SQ-144).
+    // refusal never said which path was outside.
     const outside = candidate.surfaces.filter((surface) => !isInScope(surface, participant.declaredSurfaces));
     if (outside.length) {
       invalidated.push(invalidation(

@@ -804,10 +804,7 @@ ${verify.outputTail}` : null
   }
   function waveDeclaredSurfaces(slug, ticket) {
     const admitted = Array.isArray(ticket?.submission?.admittedScope) ? ticket.submission.admittedScope : [];
-    return Array.from(/* @__PURE__ */ new Set([
-      ...commitScope.ticketCommitScope(executionScope(slug, ticket), ticket?.files, ticket?.ref),
-      ...commitScope.ticketCommitScope(admitted, admitted, ticket?.ref)
-    ]));
+    return admitted.length ? commitScope.ticketCommitScope(admitted, admitted, ticket?.ref) : commitScope.ticketCommitScope(executionScope(slug, ticket), ticket?.files, ticket?.ref);
   }
   function reconciledDeliveryWave(slug, ticket, revision, verification) {
     const baseline = ticket.submission?.baseline || sourceRevisionBaseline(ticket);
@@ -2797,6 +2794,10 @@ ${verify.outputTail}` : null
       baselineCompatible: candidateBaselineIsCurrentOrAncestor(slug, candidate, waveBaseline)
     }));
   }
+  function waveBaselineMismatchDetail(invalidated, opened, waveCandidates) {
+    if (!invalidated.some((entry) => entry.reason === "baseline_moved")) return "";
+    return ` Assembled baseline ${opened.baseline.revision.source}:${opened.baseline.revision.value}; candidate baselines ${waveCandidates.map((candidate) => `${candidate.ref}=${candidate.baseline.revision.source}:${candidate.baseline.revision.value}`).join(", ")}.`;
+  }
   function assembleSubmissionWave(slug, refs, opts) {
     const participantRefs = Array.from(new Set((Array.isArray(refs) ? refs : [refs]).map((ref) => String(ref || "").trim()).filter(Boolean)));
     if (!participantRefs.length) return { ok: false, reason: "wave_participants_required", message: "Wave assembly requires one or more submitted participant refs." };
@@ -2860,8 +2861,8 @@ ${verify.outputTail}` : null
     const decision = assembleWave(opened, waveCandidatesForBaseline(slug, waveCandidates, opened.baseline));
     if (!decision.ok) {
       const deliveryTarget = target?.branch ? `ticket delivery target ${target.branch}` : "the current integration target";
-      const findings = decision.invalidated.map((entry) => `${entry.ref} ${entry.reason}: ${entry.detail}`).join(" ");
-      const baselines = decision.invalidated.some((entry) => entry.reason === "baseline_moved") ? ` Assembled baseline ${opened.baseline.revision.source}:${opened.baseline.revision.value}; candidate baselines ${waveCandidates.map((candidate) => `${candidate.ref}=${candidate.baseline.revision.source}:${candidate.baseline.revision.value}`).join(", ")}.` : "";
+      const findings = decision.invalidated.map((entry) => `${entry.reason}: ${entry.detail}`).join(" ");
+      const baselines = waveBaselineMismatchDetail(decision.invalidated, opened, waveCandidates);
       return {
         ok: false,
         reason: "wave_invalidated",
