@@ -32,21 +32,16 @@ Usage:
   quartermaster decline-resupply [--project <path>]
   quartermaster allowlist [--project <path>] [--days <n>] [--sessions <n>] [--blocked]
   quartermaster enable-auto-allowlist [--project <path>]
-  quartermaster crap [--project <path>] [--max <n>] [--ratchet <git-ref>] [--lcov <path>]
-                     [--complexity <lizard.csv>] [--coverage-command "<cmd>"] [--json]
+  quartermaster crap [--project <path>] [--lcov <path>] [--complexity <lizard.csv>]
+                     [--coverage-command "<cmd>"] [--json]
 
 Everything prints JSON except crap, which prints one line per offender plus a summary unless --json.
 Defaults: --days ${DEFAULT_DAYS}, --sessions ${DEFAULT_SESSIONS}, project = cwd.
 Blocked allowlist candidates are summarized by default; --blocked includes up to 25 detailed entries.
-crap reads .claude/quartermaster/crap.json (coverageCommand, lcov, sources, exclude, max, ratchet), needs
-lizard (lizard on PATH, else uvx lizard, else pipx run lizard), and exits 0 pass, 1 gate failed,
-2 prerequisite missing (lizard unresolvable, no lcov, coverage command failed). Default --max ${DEFAULT_MAX}.
-crap's --project only names the project for config lookup, not the tree it measures or the ratchet
-baseline: when cwd is a linked worktree of that same project, or --project is omitted, the coverage
-command, lcov read, and lizard scan all run against cwd's own git toplevel instead, the ratchet
-resolves against that same measured root, and it prints which root it measured. Set
-QUARTERMASTER_COVERAGE_DIR in coverageCommand's reports-directory flag to give each run its own
-coverage output so concurrent runs sharing a root do not collide.
+crap reads .claude/quartermaster/crap.json (coverageCommand, lcov, sources, exclude, base), needs
+lizard (lizard on PATH, else uvx lizard, else pipx run lizard), and checks only changed or new functions
+at the fixed CRAP threshold ${DEFAULT_MAX}. It exits 0 pass, 1 functions at or above ${DEFAULT_MAX},
+2 unverified measurement (lizard or coverage missing, or coverage command failed).
 `;
 
 const BLOCKED_SUMMARY_LIMIT = 5;
@@ -215,8 +210,6 @@ function runCrap(options) {
   try {
     report = crapReport({
       projectDir: options.projectPath,
-      cwd: process.cwd(),
-      projectPathGiven: options.projectPathGiven,
       max: options.max,
       ratchet: options.ratchet,
       lcov: options.lcov,
@@ -230,7 +223,6 @@ function runCrap(options) {
     process.exitCode = 2;
     return;
   }
-  process.stderr.write(`quartermaster crap: measured ${report.root}\n`);
   if (options.json) printJson(report);
   else process.stdout.write(formatReport(report));
   process.exitCode = report.failures.length ? 1 : 0;

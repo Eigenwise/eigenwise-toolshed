@@ -967,7 +967,7 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
 
   const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
   const legacy = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.json'), 'utf8'));
-  assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]');
+  assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5-5[1m]');
   assert.equal(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
   // Fable is a 1M Claude model too; pin it so a gateway session gets its full
   // window instead of Claude Code's 200k gateway default.
@@ -1063,6 +1063,52 @@ function runPinRefreshes(env) {
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim().split('\n').map(JSON.parse);
 }
+
+test('pin version comparison handles older, equal, newer, and missing minor versions', () => {
+  const { comparePinVersions } = require(PINS);
+  assert.equal(comparePinVersions('claude-opus-5-4[1m]', 'claude-opus-5-5[1m]'), -1);
+  assert.equal(comparePinVersions('claude-opus-5-5[1m]', 'claude-opus-5-5[1m]'), 0);
+  assert.equal(comparePinVersions('claude-opus-6-0[1m]', 'claude-opus-5-5[1m]'), 1);
+  assert.equal(comparePinVersions('claude-opus-5[1m]', 'claude-opus-5-5[1m]'), -1);
+  assert.equal(comparePinVersions('claude-sonnet-5[1m]', 'claude-opus-5-5[1m]'), null);
+  assert.equal(comparePinVersions('claude-opus', 'claude-opus-5-5[1m]'), null);
+  assert.equal(comparePinVersions('claude-opus-5-alpha', 'claude-opus-5-5[1m]'), null);
+  assert.equal(comparePinVersions('other-opus-5', 'claude-opus-5-5[1m]'), null);
+});
+
+test('pins and doctor report when the CLI alias lags the shipped fallback', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-lagging-pin-home-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-lagging-pin-project-'));
+  const cliVersion = 'Claude Code 2.1.280';
+  const cachePath = path.join(home, '.claude', 'model-gateway', 'detected-pins.json');
+  const lagNotice = 'Claude CLI opus alias lags: claude-opus-5[1m] is older than claude-opus-5-5[1m]. Run pin --opus claude-opus-5-5[1m] to update it.';
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  fs.writeFileSync(cachePath, JSON.stringify({
+    cliVersion,
+    updatedAt: Date.now(),
+    pins: { opus: 'claude-opus-5[1m]' },
+    detectedFor: { opus: cliVersion },
+  }));
+  const { ANTHROPIC_BASE_URL, CLAUDE_CODE_MAX_CONTEXT_TOKENS, ...environment } = process.env;
+  const env = { ...environment, HOME: home, USERPROFILE: home };
+  try {
+    const pins = spawnGatewayProcessSync(process.execPath, [CLI, 'pin'], { cwd, env, encoding: 'utf8' });
+    assert.equal(pins.status, 0, pins.stderr);
+    assert.match(pins.stdout, new RegExp(lagNotice.replace(/[.[\]\\]/g, '\\$&')));
+
+    const set = spawnGatewayProcessSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { cwd, env, encoding: 'utf8' });
+    assert.equal(set.status, 0, set.stderr);
+    const overridden = spawnGatewayProcessSync(process.execPath, [CLI, 'pin'], { cwd, env, encoding: 'utf8' });
+    assert.equal(overridden.status, 0, overridden.stderr);
+    assert.match(overridden.stdout, /Your override claude-opus-4-8\[1m\] overrides detected claude-opus-5\[1m\]\./);
+
+    const doctor = spawnGatewayProcessSync(process.execPath, [CLI, 'doctor'], { cwd, env, encoding: 'utf8' });
+    assert.match(doctor.stdout, new RegExp(lagNotice.replace(/[.[\]\\]/g, '\\$&')));
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 test('a failed alias does not carry a stale pin into a new Claude CLI version', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-stale-pin-home-'));
@@ -1275,7 +1321,7 @@ test('rewiring without a Claude CLI wires the shipped pins and caches no detecti
     const wired = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
     assert.equal(wired.status, 0, wired.stderr);
     const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).env;
-    assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]');
+    assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5-5[1m]');
     assert.equal(settings.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
     assert.equal(settings.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5-1[1m]');
     assert.equal(fs.existsSync(path.join(home, '.claude', 'model-gateway', 'detected-pins.json')), false);
@@ -1361,7 +1407,7 @@ test('doctor describes project-local wiring as the default', () => {
     // Fresh HOME means an empty detected-pin cache, so this value is the shipped constant rather than
     // anything measured against the user's CLI. Doctor used to print it as a bare "(default)", which is
     // what made a stale guess look identical to a probed pin.
-    assert.match(result.stdout, /Claude opus pin: claude-opus-5\[1m\] \(shipped fallback, not detected for this CLI\)/);
+    assert.match(result.stdout, /Claude opus pin: claude-opus-5-5\[1m\] \(shipped fallback, not detected for this CLI\)/);
     assert.match(result.stdout, /project settings\.local\.json: not wired .*\[default write target\]/);
     assert.doesNotMatch(result.stdout, /wiring mode: local/);
   } finally {
@@ -1485,6 +1531,8 @@ test('env with no scope flag explains project wiring and writes nothing', () => 
     assert.equal(shown.status, 0, shown.stderr);
     assert.match(shown.stdout, /Project wiring is the default/);
     assert.match(shown.stdout, /env --write-project/);
+    assert.match(shown.stdout, /remote-control enable.*--confirm.*back up and write the hosts entry for you/);
+    assert.doesNotMatch(shown.stdout, /once you add the hosts entry yourself/);
     assert.equal(fs.existsSync(path.join(cwd, '.claude', 'settings.local.json')), false);
 
     const retired = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--mode', 'global'], {

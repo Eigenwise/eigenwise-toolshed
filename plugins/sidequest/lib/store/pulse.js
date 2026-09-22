@@ -57,7 +57,6 @@ function createPulse(dependencies) {
   const {
     boardConfig,
     checkpointProjection,
-    claimIdleMs,
     claimPulse,
     commitScope,
     dispatchState,
@@ -71,7 +70,8 @@ function createPulse(dependencies) {
     readMeta,
     storyContractDriftWarnings,
     storyDecisionLogWarnings,
-    submissionProjection
+    submissionProjection,
+    unclaimedRetirement
   } = dependencies;
   function boundedExcerpt(value, maxChars = 1200) {
     const text = String(value || "");
@@ -173,15 +173,28 @@ function createPulse(dependencies) {
     const record = [dispatch, ...history].find((entry) => diedRecordAttestsAttempt(dispatch, entry, claim));
     return record ? { at: record.terminalAt, source: record.terminalSource || null } : null;
   }
-  function livenessPulse(ticket, dispatch, claim, death) {
+  const PULSE_PRE_RUNTIME_OUTCOMES = /* @__PURE__ */ new Set(["prepared", "launched"]);
+  function livenessPulse(ticket, dispatch, claim, death, now = Date.now()) {
     if (death) return { state: "dead", evidence: `died outcome recorded${death.source ? ` by ${death.source}` : ""}` };
     if (claim?.reclaimable) return { state: "dead", evidence: `claim is reclaimable: ${claim.reclaimable}` };
     if (claim?.verifying) return { state: "alive", evidence: "verification marker is active" };
-    if (dispatch?.outcome === "launched" && !dispatch.boundAt && !dispatch.agentId && !claim && !ticket?.checkpoint) {
-      return { state: "stalled", evidence: "dispatch launched without a bound runtime identity, claim, or checkpoint" };
-    }
-    if (dispatch?.outcome === "launched" && dispatch.boundAt && !dispatch.claimedAt && !claim && !ticket?.checkpoint && Date.now() - Date.parse(dispatch.boundAt) >= claimIdleMs()) {
-      return { state: "stalled", evidence: "dispatch bound a runtime that never claimed, past the claim-idle backstop" };
+    if (PULSE_PRE_RUNTIME_OUTCOMES.has(dispatch?.outcome) && !dispatch.terminalAt && !dispatch.claimedAt && !claim && !ticket?.checkpoint) {
+      const retirement = unclaimedRetirement(ticket, dispatch, now);
+      const command = `sidequest dispatch ${ticket.ref} --recovery-evidence "<observed failure evidence>" --retire-only`;
+      const signal = retirement.signal ? `last runtime signal: ${retirement.signal.label} at ${new Date(retirement.signal.at).toISOString()}` : "no runtime signal recorded";
+      if (now < retirement.retirableAt) {
+        return {
+          state: "starting",
+          evidence: `dispatch is still starting until ${new Date(retirement.retirableAt).toISOString()} (${signal}${retirement.provisioning ? "; WorktreeCreate provisioning is unfinished, so the idle backstop applies" : ""})`
+        };
+      }
+      if (!retirement.signal) {
+        return { state: "stalled", evidence: `dispatch recorded no runtime signal, so evidence retires it now: \`${command}\`` };
+      }
+      return {
+        state: "stalled",
+        evidence: `dispatch never claimed and passed its retirement deadline at ${new Date(retirement.retirableAt).toISOString()} (${signal}); retire it with \`${command}\``
+      };
     }
     if (claim && dispatch && !dispatch.terminalAt && (dispatch.agentId || dispatch.boundAt)) {
       return { state: "unknown", evidence: "a runtime identity was bound, but Sidequest has no process heartbeat" };
@@ -238,7 +251,7 @@ function createPulse(dependencies) {
     const now = Date.now();
     const claim = projectedClaim(ticket, now);
     const died = dispatchDeath(dispatch, ticket.claim);
-    const liveness = livenessPulse(ticket, dispatch, claim, died);
+    const liveness = livenessPulse(ticket, dispatch, claim, died, now);
     const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug), ...scopeDriftWarnings(slug, ticket)];
     return {
       ref: ticket.ref,

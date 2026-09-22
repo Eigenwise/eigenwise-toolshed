@@ -264,6 +264,12 @@ half-finished executor's state is not a decision point. Executors report on thei
 requests, use `SendMessage` for what a message can fix, and never stop-then-redispatch work that is
 still moving.
 
+When a confirmed blocker falls within the user's delegated work, dispatch its existing ticket once
+ready. If preparation is needed, start that preparation rather than ending with a status report. If
+blocked, record the concrete dependency, responsible owner, and condition for resuming. Unrelated CI
+or review is not a dependency. Acknowledging a report or raising its priority does not transfer
+ownership. Preserve permission boundaries and required review throughout.
+
 **Between waves is where re-planning belongs.** Close the wave (every ticket integrated or explicitly
 deferred), read the story log for what the wave learned, then promote each finding needed by the next
 executor into that ticket's description, dependency contract, comment, or the story execution contract

@@ -13,35 +13,10 @@ which keeps every function either small or tested.
 
 ## Threshold policy
 
-For a new project, set `max` to 6 and apply it to every function. For an existing project, set
-`ratchet` to the default branch and keep the ceiling for new functions. The gate reports the current
-number of functions at or above the ceiling, including how many predate the branch, so the user can
-choose a different ceiling with real numbers in front of them.
-
-Adding one function shifts the position of every function below it, and names repeat inside a file:
-lizard names every arrow function or closure it cannot attribute to a declaration `(anonymous)`, and
-two classes can each carry a `run`. So the gate pairs each function with its baseline copy by exact
-source text first, then by name and position among its namesakes, and an anonymous function by its
-position relative to the nearest named function.
-
-Pairing is one-to-one. A baseline function is claimed by at most one of today's functions, exact text
-claims before name or position does, and **a function that claims nothing answers to the ceiling**.
-So a byte-identical copy of an over-ceiling function is new code over the ceiling even though its twin
-is untouched, and a third `run` in a file that already had two is gated on its own number. Exact
-source text comes from the line span lizard reports, which for a nested closure in a JavaScript file
-can be wider than the closure itself; when that span picks up an unrelated edit, pairing falls back to
-name and position.
-
-The source-text key is file-scoped: a function moved untouched from one file to another finds no
-baseline copy and answers to the ceiling like anything else new. Cover it, shrink it, or land the move
-first and rerun the gate against the branch that already has it.
-
-When a function that answered to the ceiling shares a name the baseline copy of its file already
-carried, the gate also prints `<file>: ambiguous match` with the file's worst complexity and its count
-of ceiling breaches on both sides, scored by complexity on both. That line is context, not a verdict.
-A function at or under its matched baseline's complexity never counts as a new offender, and both
-sides are scored from the coverage the gate reports, so rounding alone never pushes a function past
-its baseline.
+The threshold is fixed at 6, and 6 fails. The gate compares against the configured base revision and
+checks only functions the change added or modified. Untouched legacy functions, including functions in
+a changed file, never fail or appear in the failure list. A changed function below 6 passes even when
+its prior score was lower.
 
 ## Prerequisite
 
@@ -54,8 +29,10 @@ pipx install lizard
 pip install lizard
 ```
 
-Exit 2 also covers a missing LCOV file or a configured coverage command that fails. Fix the printed
-problem, then run the gate again.
+Exit 2 also covers a missing LCOV file, a configured coverage command that fails, or an unverified
+measurement. A file where lizard finds zero functions despite function-like source tokens, or a changed
+function without coverage data, is unverified rather than a pass. Fix the printed problem, then run the
+gate again.
 
 ## Produce LCOV coverage
 
@@ -85,29 +62,19 @@ Create `.claude/quartermaster/crap.json`. Every key is optional and command-line
   "lcov": "coverage/lcov.info",
   "sources": ["src"],
   "exclude": ["**/*.test.*"],
-  "max": 6,
-  "ratchet": "main"
+  "base": "main"
 }
 ```
 
-The defaults are `coverage/lcov.info`, sources `.` , no exclusions, `max` 6, no ratchet, and no
-coverage command. Use `--max`, `--ratchet`, `--lcov`, `--complexity`, or `--coverage-command` for a
-one-off override. `--project` only names the project for config lookup, not the tree the gate measures
-or the ratchet baseline: with no `--project`, or with cwd inside a linked worktree of the named
-project, it measures cwd's own git toplevel, so a per-ticket worktree checkout is measured in place
-instead of the main checkout, and the ratchet resolves against that same measured root. Never write
-`--project` with a hard-coded absolute path into a live rule or any other
-file that outlives this setup session - a worktree that runs it later would have it point at the wrong
-tree. Run it from the project root with:
+The defaults are `coverage/lcov.info`, sources `.`, no exclusions, threshold 6, the repository's
+`develop`, `main`, or `master` branch as the base, and no coverage command. Use `--lcov`,
+`--complexity`, or `--coverage-command` for a one-off override. `base` in the config selects the
+revision used to identify changed functions. The shared parser and score implementation lives under
+`scripts/quality`; Quartermaster only supplies project-specific LCOV and command wiring.
 
 ```text
-node "<quartermaster plugin root>/bin/quartermaster.js" crap
+node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"
 ```
-
-If a coverage command needs to isolate its report output for concurrent runs sharing one working tree,
-have it read the `QUARTERMASTER_COVERAGE_DIR` environment variable for its reports-directory flag (for
-example `c8 --reporter=lcov --reports-dir "$QUARTERMASTER_COVERAGE_DIR" <test command>`); quartermaster
-sets it to a fresh per-run directory automatically.
 
 Use this live rule after the command has passed:
 
@@ -116,7 +83,7 @@ Use this live rule after the command has passed:
 description: Keep changed code within the CRAP ceiling
 priority: 85
 ---
-Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap`.
-Keep every changed or new function under the ceiling. Cover it or split it.
-Exit 2 means a prerequisite is missing. Follow the printed install hint, then rerun the gate. Do not skip it.
+Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"`.
+Keep every new or modified function strictly below 6. Cover it or split it. Untouched legacy functions are out of scope.
+Exit 2 means a prerequisite or measurement is missing. Follow the printed install or measurement hint, then rerun the gate. Do not skip it.
 ```

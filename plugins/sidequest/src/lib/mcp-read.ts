@@ -74,6 +74,15 @@ type ToolDefinition = {
   handler: (args: any) => any | Promise<any>;
 };
 
+type StoryLogArgs = {
+  project?: unknown;
+  story?: unknown;
+  entry?: unknown;
+  ref?: unknown;
+  by?: unknown;
+  rotate?: boolean;
+};
+
 function readySummary(payload?: any) {
   const tickets = payload.tickets.map((ticket: any) => ({ ref: ticket.ref, title: ticket.title }));
   return {
@@ -81,6 +90,60 @@ function readySummary(payload?: any) {
     tickets,
     waves: payload.waves,
     waveDependencies: payload.waveDependencies,
+  };
+}
+
+function storyLogRotationCall(args?: StoryLogArgs) {
+  const project = args?.project == null ? '' : `project: ${JSON.stringify(args.project)}, `;
+  return `story_log({ ${project}story: ${JSON.stringify(args?.story)}, rotate: true, by: "orchestrator" })`;
+}
+
+function storyLogFullRefusal(args?: StoryLogArgs, story?: unknown) {
+  const log = store.storyDecisionLog(story, { full: true });
+  if (log.bytes < log.capacity) return null;
+  return `story_log: decision log is full. Clear it with \`${storyLogRotationCall(args)}\`, then append again.`;
+}
+
+function rotatedStoryLog(slug: string, args: StoryLogArgs) {
+  if (args.by !== 'orchestrator') throw new Error('story_log: rotate:true requires by:"orchestrator".');
+  const story = store.rotateStoryLog(slug, args.story);
+  if (!story || args.entry === undefined) return { story, advisory: null };
+  return { story: store.appendStoryLogEntry(slug, args.story, { entry: args.entry, ref: args.ref, by: args.by }), advisory: store.storyLogEntryAdvisory(args.entry) };
+}
+
+function appendedStoryLog(slug: string, args: StoryLogArgs) {
+  const existingStory = store.getStory(slug, args.story);
+  const refusal = existingStory && storyLogFullRefusal(args, existingStory);
+  if (refusal) throw new Error(refusal);
+  return { story: store.appendStoryLogEntry(slug, args.story, { entry: args.entry, ref: args.ref, by: args.by }), advisory: store.storyLogEntryAdvisory(args.entry) };
+}
+
+function storyLogResult(slug: string, args: StoryLogArgs) {
+  if (args.rotate) return rotatedStoryLog(slug, args);
+  if (args.entry === undefined) return { story: store.getStory(slug, args.story), advisory: null };
+  return appendedStoryLog(slug, args);
+}
+
+function storyLogHandler(args: StoryLogArgs) {
+  const { slug, meta } = resolveProject(args.project);
+  const result = storyLogResult(slug, args);
+  if (!result.story) throw new Error(`story_log: no story "${args.story}" in ${meta.name}`);
+  const log = store.storyDecisionLog(result.story);
+  return {
+    ok: true,
+    project: slug,
+    projectName: meta.name,
+    story: {
+      ref: result.story.ref,
+      logBytes: log.bytes,
+      logCapacity: log.capacity,
+      logRevision: log.revision,
+      entries: log.entries,
+      totalEntries: log.totalEntries,
+      omittedEntries: log.omittedEntries,
+      archivedEntries: log.archivedEntries,
+    },
+    ...(result.advisory ? { advisory: result.advisory } : {}),
   };
 }
 
@@ -290,39 +353,7 @@ const tools: ToolDefinition[] = [
       },
       required: ['story'],
     },
-    handler(args) {
-      const { slug, meta } = resolveProject(args.project);
-      if (args.rotate && args.entry !== undefined) throw new Error('story_log: pass an entry or rotate:true, not both.');
-      let story;
-      let advisory = null;
-      if (args.rotate) {
-        if (args.by !== 'orchestrator') throw new Error('story_log: rotate:true requires by:"orchestrator".');
-        story = store.rotateStoryLog(slug, args.story);
-      } else if (args.entry === undefined) {
-        story = store.getStory(slug, args.story);
-      } else {
-        story = store.appendStoryLogEntry(slug, args.story, { entry: args.entry, ref: args.ref, by: args.by });
-        advisory = store.storyLogEntryAdvisory(args.entry);
-      }
-      if (!story) throw new Error(`story_log: no story "${args.story}" in ${meta.name}`);
-      const log = store.storyDecisionLog(story);
-      return {
-        ok: true,
-        project: slug,
-        projectName: meta.name,
-        story: {
-          ref: story.ref,
-          logBytes: log.bytes,
-          logCapacity: log.capacity,
-          logRevision: log.revision,
-          entries: log.entries,
-          totalEntries: log.totalEntries,
-          omittedEntries: log.omittedEntries,
-          archivedEntries: log.archivedEntries,
-        },
-        ...(advisory ? { advisory } : {}),
-      };
-    },
+    handler: storyLogHandler,
   },
   {
     name: 'ready',
