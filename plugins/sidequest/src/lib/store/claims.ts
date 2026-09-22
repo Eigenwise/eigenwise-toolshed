@@ -128,8 +128,18 @@ function createClaims(dependencies: any) {
     ['handback', handbackRelease],
   ]);
 
-  function technicalBlockerRelease(args?: { releaseKind?: unknown; command?: unknown; exitCode?: unknown; oracle?: unknown; outputTail?: unknown; reason?: unknown }): ReleaseResult {
+  // A release with no kind, and either an oracle ask or nothing at all, is the CLI's admin
+  // cleanup form. The MCP executor surface never accepts it: it passes requireClassification.
+  function unclassifiedRelease(input: ReleaseInput): boolean {
+    return !input.releaseKind && (Boolean(input.oracle) || !input.reason);
+  }
+
+  function technicalBlockerRelease(
+    args?: { releaseKind?: unknown; command?: unknown; exitCode?: unknown; oracle?: unknown; outputTail?: unknown; reason?: unknown },
+    { requireClassification = false }: { requireClassification?: boolean } = {},
+  ): ReleaseResult {
     const input = releaseInput(args);
+    if (!requireClassification && unclassifiedRelease(input)) return { ok: true as const, releaseKind: null, evidence: null };
     const failure = releaseArgumentFailure(input);
     if (failure) return failure;
     const validator = RELEASE_VALIDATORS.get(input.releaseKind);

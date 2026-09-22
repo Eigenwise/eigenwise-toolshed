@@ -97,8 +97,12 @@ function createClaims(dependencies) {
     ["oracle", oracleRelease],
     ["handback", handbackRelease]
   ]);
-  function technicalBlockerRelease(args) {
+  function unclassifiedRelease(input) {
+    return !input.releaseKind && (Boolean(input.oracle) || !input.reason);
+  }
+  function technicalBlockerRelease(args, { requireClassification = false } = {}) {
     const input = releaseInput(args);
+    if (!requireClassification && unclassifiedRelease(input)) return { ok: true, releaseKind: null, evidence: null };
     const failure = releaseArgumentFailure(input);
     if (failure) return failure;
     const validator = RELEASE_VALIDATORS.get(input.releaseKind);

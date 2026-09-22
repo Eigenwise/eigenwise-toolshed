@@ -726,7 +726,7 @@ const tools: ToolDefinition[] = [
     handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, 'release');
       const by = requireBy(args, 'release');
-      const evidence = store.technicalBlockerRelease(Object.assign({}, args, { releaseKind: args.kind }));
+      const evidence = store.technicalBlockerRelease(Object.assign({}, args, { releaseKind: args.kind }), { requireClassification: true });
       if (!evidence.ok) return mutationAck(slug, { ok: false, reason: evidence.reason, message: evidence.message });
       const reason = requiredReleaseReason(args);
       const ticket = store.getTicket(slug, args.ref);
