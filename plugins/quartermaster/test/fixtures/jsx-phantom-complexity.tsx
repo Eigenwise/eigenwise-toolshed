@@ -1,4 +1,4 @@
-// Minimised from the report that opened SQ-26. lizard 1.24.0's TSX reader abandons an opening tag the
+// Minimised from the report that opened GitHub issue #239. lizard 1.24.0's TSX reader abandons an opening tag the
 // moment an attribute is not `name="text"` or `name={expr}` -- here `data-testid` -- and re-emits the
 // `{` of the `value={...}` attribute it had already matched. That unbalanced brace keeps `SaleField`
 // open to the end of the file, so `SaleField` is charged with the module-level decisions below it and

@@ -67,8 +67,9 @@ complexity nothing in it branches on, and the functions it swallowed are never g
 
 So the gate measures `.tsx` and `.jsx` through lizard's TypeScript reader instead, by handing lizard a
 byte-for-byte copy of the file under a `.ts` or `.js` name. Nothing in the source is rewritten: line
-numbers, and with them coverage ranges and the ratchet's baseline pairing, still come from the real
-file, and the baseline side of the ratchet is read the same way.
+numbers, and with them coverage ranges and baseline pairing, still come from the real file. The base
+revision's copy of the file is read the same way, so an untouched component pairs with its own
+baseline row instead of a phantom one and is not gated as changed.
 
 Every offender line for one of these files names the measurement behind it, and `--json` carries the
 same `source` for every function:
@@ -79,8 +80,8 @@ src/sale.tsx:27 SaleTotals cc=3 coverage=0% CRAP=12 source=lizard-typescript
 
 `source=lizard-typescript` is the reader above. `source=lizard-tsx` means the file was measured by
 lizard's TSX reader after all, which happens only when the gate was handed a ready-made
-`--complexity` CSV or could not read the file; treat a complexity that no branch in the function
-explains as this defect, not as real complexity.
+`--complexity` CSV, could not read the file, or the TypeScript reader found no function in it; treat a
+complexity that no branch in the function explains as this defect, not as real complexity.
 
 ## Produce LCOV coverage
 

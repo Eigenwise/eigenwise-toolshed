@@ -19,6 +19,20 @@ const LIZARD_CANDIDATES = [
   { command: 'pipx', leading: ['run', 'lizard'] },
 ];
 const SOURCE_EXTENSIONS = new Set(['.c', '.cc', '.cpp', '.cs', '.go', '.h', '.java', '.js', '.jsx', '.kt', '.php', '.py', '.rb', '.rs', '.ts', '.tsx']);
+/**
+ * lizard's TSX reader abandons an opening tag the moment an attribute is not `name="text"` or
+ * `name={expr}` — a hyphenated or valueless attribute, a spread, even tag text holding `(`, `)`, `;`
+ * or `=` — and re-emits the `{` of every brace attribute it had already matched. Those unbalanced
+ * braces keep the enclosing component open, so it swallows the rest of the file: it reads a
+ * complexity nothing in it branches on, and the functions it swallowed are never gated at all. Its
+ * TypeScript reader never opens that tag tokenizer, so the same bytes under a `.ts`/`.js` name
+ * measure the file honestly. The copy is byte for byte the real file, so line numbers — and with them
+ * coverage ranges and baseline pairing — still come from the real file.
+ */
+const READER_SUBSTITUTE_EXTENSION = new Map([['.tsx', '.ts'], ['.jsx', '.js']]);
+const LIZARD_SOURCE = 'lizard';
+const LIZARD_TSX_SOURCE = 'lizard-tsx';
+const LIZARD_SUBSTITUTE_SOURCE = 'lizard-typescript';
 
 class PrerequisiteError extends Error {
   constructor(message, hint) {
@@ -84,32 +98,106 @@ function fingerprint(projectDir, filePath, start, end) {
   }
 }
 
-function measure(lizardFunctions, coverage, projectDir) {
-  return lizardFunctions.map((entry) => {
-    const file = displayPath(projectDir, entry.file);
-    const lines = coverage.get(comparablePath(projectDir, entry.file));
-    let executable = 0;
-    let covered = 0;
-    for (let line = entry.start; line <= entry.end; line += 1) {
-      const hits = lines?.get(line);
-      if (hits !== undefined) {
-        executable += 1;
-        if (hits > 0) covered += 1;
-      }
+/** A named function rather than an inline callback, so V8 coverage can attribute its ranges to it. */
+function measuredFunction(entry, coverage, projectDir) {
+  const file = displayPath(projectDir, entry.file);
+  const lines = coverage.get(comparablePath(projectDir, entry.file));
+  let executable = 0;
+  let covered = 0;
+  for (let line = entry.start; line <= entry.end; line += 1) {
+    const hits = lines?.get(line);
+    if (hits !== undefined) {
+      executable += 1;
+      if (hits > 0) covered += 1;
     }
-    const coverageRatio = executable ? covered / executable : 0;
-    return {
-      file,
-      line: entry.start,
-      function: entry.name,
-      ordinal: entry.ordinal,
-      cc: entry.complexity,
-      coverage: rounded(coverageRatio, 4),
-      crap: rounded(crapScore(entry.complexity, coverageRatio), 2),
-      fingerprint: fingerprint(projectDir, file, entry.start, entry.end),
-      unmeasured: executable === 0,
-    };
+  }
+  const coverageRatio = executable ? covered / executable : 0;
+  return {
+    file,
+    line: entry.start,
+    function: entry.name,
+    ordinal: entry.ordinal,
+    cc: entry.complexity,
+    coverage: rounded(coverageRatio, 4),
+    crap: rounded(crapScore(entry.complexity, coverageRatio), 2),
+    fingerprint: fingerprint(projectDir, file, entry.start, entry.end),
+    unmeasured: executable === 0,
+    source: entry.source,
+  };
+}
+
+function measure(lizardFunctions, coverage, projectDir) {
+  return lizardFunctions.map((entry) => measuredFunction(entry, coverage, projectDir));
+}
+
+/** lizard picks its reader by extension, case-insensitively; undefined for a file its default reader measures honestly. */
+function readerSubstituteExtension(file) {
+  return READER_SUBSTITUTE_EXTENSION.get(path.extname(file).toLowerCase());
+}
+
+/** Which measurement a row came from, so a phantom complexity can be traced from the report to its reader. */
+function readerSource(file) {
+  return readerSubstituteExtension(file) ? LIZARD_TSX_SOURCE : LIZARD_SOURCE;
+}
+
+function withReaderSource(dir, entries) {
+  return entries.map((entry) => {
+    const file = displayPath(dir, entry.file);
+    return { ...entry, file, source: readerSource(file) };
   });
+}
+
+/** A file lizard read but this cannot is left out, so it keeps the TSX reader's rows and the label that says so. */
+function copiesForReader(dir, scratchDir, files) {
+  const realPathByCopy = new Map();
+  for (const file of files) {
+    let contents;
+    try {
+      contents = fs.readFileSync(path.resolve(dir, file));
+    } catch {
+      continue;
+    }
+    // A flat name keeps every copy inside the scratch tree, whatever `..` a configured source put in the path.
+    const copyPath = `${realPathByCopy.size}${readerSubstituteExtension(file)}`;
+    fs.writeFileSync(path.join(scratchDir, copyPath), contents);
+    realPathByCopy.set(copyPath, file);
+  }
+  return realPathByCopy;
+}
+
+function rowsByRealPath(scratchDir, realPathByCopy, runLizard) {
+  const byFile = new Map();
+  // The scratch tree holds only files the first run already measured, so an exclusion has nothing left to
+  // exclude, and a pattern written for `.ts` would wrongly drop the copy of a `.tsx`.
+  for (const entry of parseLizardCsv(runLizard({ cwd: scratchDir, sources: ['.'], exclude: [] }))) {
+    const file = realPathByCopy.get(displayPath(scratchDir, entry.file));
+    pushBucket(byFile, file, { ...entry, file, source: LIZARD_SUBSTITUTE_SOURCE });
+  }
+  return byFile;
+}
+
+/** Measures every .tsx/.jsx file among `entries` again through lizard's TypeScript reader, keyed by the real path. */
+function typeScriptReaderRows(dir, entries, runLizard) {
+  const files = [...new Set(entries.map((entry) => entry.file))].filter(readerSubstituteExtension);
+  if (!files.length) return new Map();
+  const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-jsx-'));
+  try {
+    return rowsByRealPath(scratchDir, copiesForReader(dir, scratchDir, files), runLizard);
+  } finally {
+    fs.rmSync(scratchDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The working tree and every baseline file are measured through here, so both sides of a comparison
+ * read a .tsx/.jsx file with the same reader: a baseline row read by the TSX reader would span a
+ * phantom range and never pair with today's honest one. Per file, the TypeScript reader's rows replace
+ * the TSX reader's; a file it found no function in keeps the TSX reader's rows, labelled as such.
+ */
+function lizardRows(runLizard, request) {
+  const entries = withReaderSource(request.cwd, parseLizardCsv(runLizard(request)));
+  const substitutes = typeScriptReaderRows(request.cwd, entries, runLizard);
+  return [...entries.filter((entry) => !substitutes.has(entry.file)), ...[...substitutes.values()].flat()];
 }
 
 function git(projectDir, args, hint) {
@@ -209,7 +297,7 @@ function baselineFunctions({ projectDir, baseReference, files, exclude, runLizar
       const target = path.join(temporaryDir, file);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, show.stdout, 'utf8');
-      for (const entry of measure(parseLizardCsv(runLizard({ cwd: temporaryDir, sources: [file], exclude })), new Map(), temporaryDir)) {
+      for (const entry of measure(lizardRows(runLizard, { cwd: temporaryDir, sources: [file], exclude }), new Map(), temporaryDir)) {
         indexBaselineEntry(index, entry);
       }
     }
@@ -384,9 +472,10 @@ function gateSettings(options, config) {
   };
 }
 
-function complexityCsv(workDir, options, settings) {
-  if (options.complexity) return fs.readFileSync(path.resolve(workDir, options.complexity), 'utf8');
-  return settings.runLizard({ cwd: workDir, sources: settings.sources, exclude: settings.exclude });
+/** A ready-made --complexity CSV was measured by whichever reader produced it, so its .tsx/.jsx rows say lizard-tsx. */
+function complexityEntries(workDir, options, settings) {
+  if (options.complexity) return withReaderSource(workDir, parseLizardCsv(fs.readFileSync(path.resolve(workDir, options.complexity), 'utf8')));
+  return lizardRows(settings.runLizard, { cwd: workDir, sources: settings.sources, exclude: settings.exclude });
 }
 
 function baselineFor(workDir, settings, functions) {
@@ -431,7 +520,7 @@ function crapReport(options) {
   const workDir = resolveWorkDir({ projectDir, cwd: options.cwd, projectPathGiven });
   const settings = gateSettings(options, readConfig(projectPathGiven ? projectDir : workDir));
   const lcovText = acquireLcovText(workDir, settings);
-  const lizardEntries = parseLizardCsv(complexityCsv(workDir, options, settings));
+  const lizardEntries = complexityEntries(workDir, options, settings);
   const functions = measure(lizardEntries, coverageByFile(lcovText, workDir), workDir);
   const baseline = baselineFor(workDir, settings, functions);
   const candidates = changedFunctions(functions, baseline);
@@ -439,8 +528,13 @@ function crapReport(options) {
   return gateResult(workDir, functions, candidates, baseline);
 }
 
+/** Only file types lizard has more than one reader for name the measurement, so ordinary lines stay unchanged. */
+function readerNote(entry) {
+  return entry.source === LIZARD_SOURCE ? '' : ` source=${entry.source}`;
+}
+
 function formatReport(report) {
-  const lines = report.failures.map((entry) => `${entry.file}:${entry.line} ${entry.function} cc=${entry.cc} coverage=${Math.round(entry.coverage * 100)}% CRAP=${entry.crap}`);
+  const lines = report.failures.map((entry) => `${entry.file}:${entry.line} ${entry.function} cc=${entry.cc} coverage=${Math.round(entry.coverage * 100)}% CRAP=${entry.crap}${readerNote(entry)}`);
   lines.push(`CRAP gate ${report.failures.length ? 'failed' : 'passed'}: ${report.failures.length} of ${report.checked} changed or new functions at or above ${report.max}`);
   return `${lines.join('\n')}\n`;
 }

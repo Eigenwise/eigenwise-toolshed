@@ -46,6 +46,19 @@ function runner(current, base) {
   return ({ cwd }) => (path.basename(cwd).startsWith('quartermaster-crap-base-') ? base : current);
 }
 
+/** The gate resolves lizard itself; skip only when none of the three ways to reach it works here. */
+function lizardResolves() {
+  for (const [command, leading] of [['lizard', []], ['uvx', ['lizard']], ['pipx', ['run', 'lizard']]]) {
+    const probe = spawnSync(command, [...leading, '--version'], { encoding: 'utf8' });
+    if (!probe.error && probe.status === 0) return true;
+  }
+  return false;
+}
+
+function phantomFixture() {
+  return fs.readFileSync(path.join(__dirname, 'fixtures', 'jsx-phantom-complexity.tsx'), 'utf8');
+}
+
 function atLine(report, line) {
   return report.functions.find((entry) => entry.line === line);
 }
@@ -528,4 +541,94 @@ test('the real lizard backend measures a changed JavaScript file end to end', ()
   assert.equal(report.checked, 1);
   assert.equal(report.failures.length, 0);
   assert.equal(crapScore(2, 1), 2);
+});
+
+test('a .tsx tag lizard gives up on cannot invent complexity, or hide the function it swallowed', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  // lizard's own TSX reader reads this fixture as one SaleField spanning lines 16-33 at cc=3 and never
+  // reports SaleTotals at all, so SaleTotals' uncovered line would pass unseen. The hand counts in the
+  // fixture are SaleField 1, packsLabel 2, SaleTotals 3.
+  const projectDir = fs.realpathSync.native(
+    fixtureProject({ 'src/sale.tsx': phantomFixture(), 'coverage/lcov.info': lcov([[17, 1], [25, 1], [28, 0]], 'src/sale.tsx') }),
+  );
+
+  const result = runCli(['--json'], projectDir);
+  assert.equal(result.status, 1, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(
+    report.functions.map((entry) => `${entry.function}@${entry.line} cc=${entry.cc} ${entry.source}`).sort(),
+    [
+      'SaleField@16 cc=1 lizard-typescript',
+      'SaleTotals@27 cc=3 lizard-typescript',
+      'packsLabel@25 cc=2 lizard-typescript',
+    ],
+  );
+
+  const gated = runCli([], projectDir);
+  assert.equal(gated.status, 1, gated.stderr);
+  assert.match(gated.stdout, /^src\/sale\.tsx:27 SaleTotals cc=3 coverage=0% CRAP=12 source=lizard-typescript$/m);
+});
+
+test('the TypeScript reader measures the real .tsx bytes under a name that only picks the reader, and a .ts file keeps the default reader', () => {
+  const source = phantomFixture();
+  const projectDir = fs.realpathSync.native(
+    fixtureProject({
+      'src/sale.tsx': source,
+      'src/total.ts': 'export const total = (values: number[]) => values.length;\n',
+      'coverage/lcov.info': `${lcov([[17, 1]], 'src/sale.tsx')}${lcov([[1, 1]], 'src/total.ts')}`,
+    }),
+  );
+  const copies = [];
+  const runLizard = ({ cwd }) => {
+    if (path.resolve(cwd) === path.resolve(projectDir)) {
+      return `${csv([{ complexity: 3, name: 'SaleField', start: 16, end: 33 }], './src/sale.tsx')}${csv([{ complexity: 1, name: 'total', start: 1, end: 1 }], './src/total.ts')}`;
+    }
+    // The scratch tree is gone by the time crapReport returns, so read it while lizard would have.
+    for (const name of fs.readdirSync(cwd)) copies.push({ name, text: fs.readFileSync(path.join(cwd, name), 'utf8') });
+    return csv([{ complexity: 1, name: 'SaleField', start: 16, end: 20 }], `./${copies[0].name}`);
+  };
+
+  const report = crapReport({ projectDir, runLizard });
+
+  assert.deepEqual(copies.map((copy) => path.extname(copy.name)), ['.ts'], 'only the .tsx is copied, under a name that picks the TypeScript reader');
+  assert.equal(copies[0].text, source, 'the copy is the real file byte for byte');
+  assert.deepEqual(
+    report.functions.map((entry) => `${entry.file}:${entry.line} cc=${entry.cc} ${entry.source}`).sort(),
+    ['src/sale.tsx:16 cc=1 lizard-typescript', 'src/total.ts:1 cc=1 lizard'],
+    'the substitute row comes back under the real .tsx path, and the .ts row is the default reader\'s own',
+  );
+});
+
+test('an untouched component in a changed .tsx keeps its baseline row, because the base revision is read by the same reader', () => {
+  const source = phantomFixture();
+  const projectDir = fs.realpathSync.native(
+    fixtureProject({ 'src/sale.tsx': source, 'coverage/lcov.info': lcov([[17, 1], [25, 1], [28, 0]], 'src/sale.tsx') }),
+  );
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/sale.tsx'), source.replace('"packs" : "none"', '"packs" : "no packs"'), 'utf8');
+  // lizard's two readers as they read this fixture: the TSX reader folds everything below the
+  // `data-testid` tag into SaleField and never reports SaleTotals; the TypeScript reader reports all three.
+  const rowsByReader = {
+    '.tsx': [{ complexity: 3, name: 'SaleField', start: 16, end: 33 }, { complexity: 2, name: 'packsLabel', start: 25, end: 25 }],
+    '.ts': [
+      { complexity: 1, name: 'SaleField', start: 16, end: 20 },
+      { complexity: 2, name: 'packsLabel', start: 25, end: 25 },
+      { complexity: 3, name: 'SaleTotals', start: 27, end: 31 },
+    ],
+  };
+  const reads = [];
+  const runLizard = ({ cwd }) => {
+    const file = fs.existsSync(path.join(cwd, 'src', 'sale.tsx')) ? 'src/sale.tsx' : fs.readdirSync(cwd)[0];
+    reads.push(path.extname(file));
+    return csv(rowsByReader[path.extname(file)], file);
+  };
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard });
+
+  assert.deepEqual(report.failures, [], 'SaleTotals is untouched, so its uncovered line is not this change\'s to gate');
+  assert.equal(report.checked, 1, 'only packsLabel changed');
+  assert.deepEqual(reads, ['.tsx', '.ts', '.tsx', '.ts'], 'the working tree and the base revision each get a TypeScript-reader pass');
 });
