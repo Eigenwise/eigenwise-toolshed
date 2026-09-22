@@ -65,7 +65,7 @@ function shellDefinition(platform = process.platform): ShellDefinition {
   }
   const posixShell = process.env.SHELL || '/bin/sh';
   const isZsh = isZshExecutable(posixShell);
-  const label = isZsh ? `POSIX shell (${posixShell}, nonomatch)` : `POSIX shell (${posixShell})`;
+  const label = isZsh ? `POSIX shell (${posixShell}, nonomatch nobadpattern)` : `POSIX shell (${posixShell})`;
   return Object.freeze({ executable: posixShell, label, scriptExtension: '.sh', isZsh });
 }
 
@@ -91,10 +91,18 @@ function shellScript(command: string, shell: ShellDefinition): string {
       '',
     ].join('\r\n');
   }
-  // `setopt nonomatch` runs before the command subshell and is inherited by it; it must be
-  // written into the script itself (rather than passed as a CLI flag) so it always wins over
-  // whatever a sourced .zshenv set, regardless of -f or login-shell rc behavior.
-  const zshNonomatchPreamble = shell.isZsh ? 'setopt nonomatch\n' : '';
+  // `setopt nonomatch` alone only covers the no-match abort ("no matches found"); an unbalanced
+  // bracket like `src/app/[id/a.ts` still hits zsh's separate bad-pattern abort ("bad pattern")
+  // before the command ever runs, so `nobadpattern` is needed too. Both options run before the
+  // command subshell and are inherited by it; they must be written into the script itself
+  // (rather than passed as a CLI flag) so they always win over whatever a sourced .zshenv set,
+  // regardless of -f or login-shell rc behavior.
+  const zshNonomatchPreamble = shell.isZsh ? 'setopt nonomatch nobadpattern\n' : '';
+  // Consistency note, not a regression: a pinned glob that matches nothing (e.g. `node --test
+  // test/*.test.js` against an empty directory) already reached the command literally and
+  // exited 0 with zero tests run on bash, sh, and Windows; this preamble extends that same
+  // behavior to zsh, which used to abort with exit 1 instead. A silently-empty, "passed" run is
+  // the case a future zero-test guard on the capture would exist for.
   return `${zshNonomatchPreamble}(\n${command}\n)\nsidequest_exit_code=$?\nprintf '\\n__SIDEQUEST_VERIFY_EXIT__=%s\\n' "$sidequest_exit_code"\nexit "$sidequest_exit_code"\n`;
 }
 
@@ -235,4 +243,4 @@ export function createProcessPort(): VerificationProcessPort {
   return Object.freeze({ run: runProcessVerification });
 }
 
-export { shellCommand };
+export { shellCommand, shellScript };

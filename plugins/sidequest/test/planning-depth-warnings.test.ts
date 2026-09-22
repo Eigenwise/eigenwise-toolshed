@@ -864,6 +864,97 @@ test('warns about an unquoted [param]-shaped path in a recorded verify command, 
   );
 });
 
+// Owner review on GH-171: verifyUnquotedGlobIssue's message can no longer state quoting as the
+// one universal fix (quoting a real shell glob like `src/*.ts` breaks a tool that expects the
+// shell to have already expanded it, e.g. tsc or pytest), and its filters had specific false
+// positives and false negatives. Each bullet below is one input the review measured.
+function unquotedGlobWarning(warnings: string[]) {
+  return warnings.find((warning) => warning.includes('unquoted path with shell glob characters')) || null;
+}
+
+test('the unquoted-glob message offers quoting conditionally, not as the one fix', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const flagged = cliJson(['add', '-t', 'conditional quoting advice', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node -e "0" src/app/[id]/a.test.ts']);
+  const warning = unquotedGlobWarning(flagged.warnings);
+  assert.ok(warning, JSON.stringify(flagged.warnings));
+  // The existing "quote it" phrasing must survive (other tests match /quote it/i against it),
+  // but it now names when quoting is the fix and when it is the wrong one, instead of stating
+  // one answer unconditionally.
+  assert.match(warning as string, /quote it/i);
+  assert.match(warning as string, /node --test/);
+  assert.match(warning as string, /tsc|pytest/);
+});
+
+test('false positive: a query string is not an unquoted glob path (GH-171 review section 4)', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const curlUrl = cliJson(['add', '-t', 'curl query string', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node -e "0" && curl https://api.example.com/v1/items?debug']);
+  assert.strictEqual(unquotedGlobWarning(curlUrl.warnings), null, JSON.stringify(curlUrl.warnings));
+});
+
+test('false positive: a bracket quoted inside the token is not flagged, and no malformed suggestion is built (GH-171 review section 4)', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const quotedBracket = cliJson(['add', '-t', 'quoted bracket segment', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node --test src/"[id]"/a.test.js']);
+  assert.strictEqual(unquotedGlobWarning(quotedBracket.warnings), null, JSON.stringify(quotedBracket.warnings));
+});
+
+test('accepted false positive: a regex pattern argument still reads as a path (GH-171 review section 4, not fixed)', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  // The review names this as a false positive but only two of its three examples "deserve a
+  // fix"; the tokenizer cannot tell a `--testPathPattern` regex argument from a real path
+  // without flag-name awareness, so this one stays warn-only, unchanged. Documented, not "fixed".
+  const mochaPattern = cliJson(['add', '-t', 'mocha regex pattern', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'npx mocha --testPathPattern src/a[bc]/x.js']);
+  assert.ok(unquotedGlobWarning(mochaPattern.warnings), JSON.stringify(mochaPattern.warnings));
+});
+
+test('false negative: an = -separated flag value is still checked for glob characters (GH-171 review section 5)', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const jestEquals = cliJson(['add', '-t', 'jest testPathPattern equals', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'npx jest --testPathPattern=src/[id]/x.ts']);
+  const warning = unquotedGlobWarning(jestEquals.warnings);
+  assert.ok(warning, JSON.stringify(jestEquals.warnings));
+  assert.match(warning as string, /--testPathPattern=src\/\[id\]\/x\.ts/);
+});
+
+test('false negative: a leading ../ path is still checked, only a bare .. is exempt (GH-171 review section 5)', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const parentPath = cliJson(['add', '-t', 'relative parent path', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node --test ../src/[id]/a.test.ts']);
+  const warning = unquotedGlobWarning(parentPath.warnings);
+  assert.ok(warning, JSON.stringify(parentPath.warnings));
+  assert.match(warning as string, /\.\.\/src\/\[id\]\/a\.test\.ts/);
+
+  const bareDotDot = cliJson(['add', '-t', 'bare parent dir', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'cd .. && node --test']);
+  assert.strictEqual(unquotedGlobWarning(bareDotDot.warnings), null, JSON.stringify(bareDotDot.warnings));
+});
+
+test('brace expansion and tilde stay unflagged (GH-171 review section 5, no bug)', () => {
+  const scopedFile = path.join(PROJ, 'lib', 'verify.js');
+  fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
+  fs.writeFileSync(scopedFile, 'verify\n');
+
+  const brace = cliJson(['add', '-t', 'brace expansion path', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node --test src/{a,b}/x.test.js']);
+  assert.strictEqual(unquotedGlobWarning(brace.warnings), null, JSON.stringify(brace.warnings));
+
+  const tilde = cliJson(['add', '-t', 'tilde path', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node --test ~/x.test.js']);
+  assert.strictEqual(unquotedGlobWarning(tilde.warnings), null, JSON.stringify(tilde.warnings));
+});
+
 test('rejects unrunnable npm verifies when tickets are added or updated', () => {
   const packageDir = path.join(PROJ, 'plugins', 'package-suite');
   const bareDir = path.join(PROJ, 'plugins', 'bare-suite');

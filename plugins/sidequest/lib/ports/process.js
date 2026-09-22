@@ -20,7 +20,8 @@ var process_exports = {};
 __export(process_exports, {
   createProcessPort: () => createProcessPort,
   runProcessVerification: () => runProcessVerification,
-  shellCommand: () => shellCommand
+  shellCommand: () => shellCommand,
+  shellScript: () => shellScript
 });
 module.exports = __toCommonJS(process_exports);
 const fs = require("node:fs");
@@ -52,7 +53,7 @@ function shellDefinition(platform = process.platform) {
   }
   const posixShell = process.env.SHELL || "/bin/sh";
   const isZsh = isZshExecutable(posixShell);
-  const label = isZsh ? `POSIX shell (${posixShell}, nonomatch)` : `POSIX shell (${posixShell})`;
+  const label = isZsh ? `POSIX shell (${posixShell}, nonomatch nobadpattern)` : `POSIX shell (${posixShell})`;
   return Object.freeze({ executable: posixShell, label, scriptExtension: ".sh", isZsh });
 }
 function commandForShell(scriptPath, shell) {
@@ -73,7 +74,7 @@ function shellScript(command, shell) {
       ""
     ].join("\r\n");
   }
-  const zshNonomatchPreamble = shell.isZsh ? "setopt nonomatch\n" : "";
+  const zshNonomatchPreamble = shell.isZsh ? "setopt nonomatch nobadpattern\n" : "";
   return `${zshNonomatchPreamble}(
 ${command}
 )
@@ -212,5 +213,6 @@ function createProcessPort() {
 0 && (module.exports = {
   createProcessPort,
   runProcessVerification,
-  shellCommand
+  shellCommand,
+  shellScript
 });

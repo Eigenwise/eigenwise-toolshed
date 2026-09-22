@@ -752,23 +752,28 @@ ${String(ticket?.description || "")}`;
     if (!absent.size) return null;
     return `recorded verify references paths absent from this repo: ${[...absent].join(", ")}. This is allowed for greenfield work; confirm the executor creates them before verifying.`;
   }
+  function unquotedTokens(segment) {
+    const tokens = [];
+    for (const match of segment.matchAll(/[^\s;&|()]+/g)) {
+      const word = match[0];
+      if (!/^(["']).*\1$/.test(word)) tokens.push(word);
+    }
+    return tokens;
+  }
+  function globCharacterPathToken(token) {
+    if (!token) return false;
+    const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : token;
+    if (/^(?:-|\.\.?$|[A-Za-z][\w+.-]*:\/\/)/.test(value)) return false;
+    if (!/[\\/]|\.[A-Za-z0-9_-]+$/.test(value)) return false;
+    return /[[\]*?]/.test(value.replace(/["'][^"']*["']/g, ""));
+  }
   function verifyUnquotedGlobIssue(ticket) {
     const verify = String(ticket?.executorVerify || "").trim();
     if (!verify || manualVerify(verify)) return null;
-    const offenders = /* @__PURE__ */ new Set();
-    for (const segment of splitVerifyCommands(verify).segments) {
-      for (const match of segment.matchAll(/(?:["']([^"']*)["']|([^\s;&|()]+))/g)) {
-        if (match[1] !== void 0) continue;
-        const token = match[2];
-        if (!token || token.startsWith("-") || token === "." || token === "..") continue;
-        if (token.includes("=") || token.includes("..")) continue;
-        if (!/[\\/]|\.[A-Za-z0-9_-]+$/.test(token)) continue;
-        if (/[[\]*?]/.test(token)) offenders.add(token);
-      }
-    }
-    if (!offenders.size) return null;
+    const offenders = [...new Set(splitVerifyCommands(verify).segments.flatMap(unquotedTokens).filter(globCharacterPathToken))];
+    if (!offenders.length) return null;
     const [firstOffender] = offenders;
-    return `recorded verify references an unquoted path with shell glob characters: ${[...offenders].join(", ")}. Quote it, e.g. "${firstOffender}", so every shell (including zsh) passes it through literally instead of treating it as a glob pattern.`;
+    return `recorded verify references an unquoted path with shell glob characters: ${offenders.join(", ")}. zsh used to abort the run with "no matches found" (or "bad pattern") when a token like ${JSON.stringify(firstOffender)} didn't match a real file, and bash can silently expand it into whichever different path happens to match instead. Quote it, e.g. "${firstOffender}", so every shell passes it through literally when the tool does its own glob matching (for example a test runner such as node --test); leave it unquoted, relying on the shell to expand it first, when the tool expects already-expanded literal paths (for example tsc or pytest).`;
   }
   function verifyUnquotedGlobWarning(ticket) {
     const issue = verifyUnquotedGlobIssue(ticket);
