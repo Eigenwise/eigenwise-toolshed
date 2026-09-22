@@ -165,6 +165,18 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.match(byName.get('integrate')?.inputSchema.properties?.deliveryInteractionCommit?.description ?? '', /Reviewed descendant/);
   assert.deepEqual(byName.get('groomClose')?.inputSchema.properties?.deliveryMethod?.enum, ['reset', 'working-tree', 'manual']);
   assert.deepEqual(byName.get('integrate')?.inputSchema.properties?.deliveryMethod?.enum, ['reset', 'working-tree', 'manual']);
+  for (const tool of ['groomClose', 'integrate']) {
+    const properties = byName.get(tool)?.inputSchema.properties as Record<string, any> | undefined;
+    assert.equal(properties?.deliveryRevision?.pattern, '^[0-9a-fA-F]{7,64}$', `${tool} deliveryRevision`);
+    assert.match(properties?.deliveryRevision?.description ?? '', /not the working tree/);
+    assert.match(properties?.deliveryRevision?.description ?? '', /Ignored when reachable/);
+    assert.match(properties?.deliveryRevision?.description ?? '', /never an ancestor of the candidate base/);
+    assert.equal(properties?.resolvedPaths?.items?.type, 'string', `${tool} resolvedPaths`);
+    assert.match(properties?.resolvedPaths?.description ?? '', /needs deliveryRevision/);
+    assert.match(properties?.resolvedPaths?.description ?? '', /refused when reachable/);
+  }
+  assert.match(byName.get('groomClose')?.description ?? '', /deliveryRevision/);
+  assert.match(byName.get('integrate')?.description ?? '', /deliveryRevision/);
   assert.equal(byName.get('board_config')?.inputSchema.properties?.worktreeRecoveryRetentionMaxPerAgent, undefined);
 
   const payload = JSON.stringify(descriptors);

@@ -65,14 +65,34 @@ gate covers the newer target content. An assembly refusal leaves every submitted
   is not an ancestor of the integration branch. Pass that candidate as `--delivery-commit` with
   `--delivery-method reset|working-tree|manual` and evidence naming the mechanism. Sidequest compares
   every submitted path against the integration working tree, reruns the delivery gate, then records
-  the pinned candidate with the observed integration revision. A missing or different path refuses.
+  the pinned candidate with the observed integration revision. A missing or different path refuses
+  `delivery_content_missing`; a candidate deletion the tree also lacks counts as preserved.
+- A candidate that was rebased, squash-merged, or conflict-resolved before it landed never matches that
+  working tree byte for byte, and later merges keep moving it. Add `--delivery-revision <sha>` (MCP
+  `deliveryRevision`) naming the landed revision. It must resolve in the integration checkout and be
+  reachable from the recorded target, or delivery refuses `delivery_revision_not_reachable`. A revision
+  that is an ancestor of the candidate's own base predates every line of the candidate and refuses
+  `delivery_revision_predates_candidate`, attested or not. Each submitted path is then proven at that
+  revision's tree instead of the working tree: identical blob, candidate deletion absent there, or the
+  candidate's base-relative patch reverse-applying onto that tree. Anything left over refuses
+  `delivery_content_diverged` and names it. Reverse-apply proves the candidate's own hunks are present
+  in that tree, not that the landed blob equals the reviewed one, so a landing that also carries
+  unrelated drift still records as `reverseApplied`.
+- Name a genuinely hand-resolved path with `--resolved-path <path>` (MCP `resolvedPaths`), repeated per
+  path, and let the closure reason carry the resolution evidence. Only submitted paths the proof itself
+  found diverging may be attested — anything else, including `resolvedPaths` without
+  `deliveryRevision` and `resolvedPaths` on a delivery whose candidate is already reachable, refuses
+  `resolved_paths_invalid`. `deliveryRevision` alone stays ignored on a reachable delivery, but an
+  attestation there can only be a mistake, so it is refused rather than dropped. The record keeps `contentEvidence`
+  `delivery_revision_contains_candidate`, or `:operator_resolved` when anything was attested, plus a
+  `contentProof` listing the identical, reverse-applied, deleted, and operator-resolved paths.
 - When a working-tree delivery cannot record its initial dirty baseline, it still dispatches without an inherited-path exemption, so every dirty path is attributed to the executor at closeout.
 
 ### Overlapping candidates with different pinned verifiers
 
 A wave refuses when participants pin different verifier requirements. Keep those frozen records intact. When reviewed candidates overlap, compose their exact accepted candidate refs in the registered target, run every participant's pinned verifier and the full composed gate against that tree, then record each delivery through `groomClose` with its own immutable candidate as `deliveryCommit` and `deliveryMethod: "manual"`. Omit `integration: true`: that field selects the assembled-wave route and requires a matching delivered wave.
 
-This route still fails closed. Do not skip a verifier or review, substitute current `HEAD` for the pinned candidate, claim an unverified target, or close when the candidate's submitted paths are missing or differ. `groomClose` compares the pinned candidate to the registered target working tree and reruns delivery verification before it records delivery.
+This route still fails closed. Do not skip a verifier or review, substitute current `HEAD` for the pinned candidate, claim an unverified target, or close when the candidate's submitted paths are missing or differ without naming the hand-resolved ones in `resolvedPaths`. `groomClose` compares the pinned candidate to the registered target working tree, or to the tree at `deliveryRevision` when one is named, and reruns delivery verification before it records delivery.
 
 Set the board default with `sidequest board-config --delivery merge|replay|apply`. Consumer boards
 usually want `apply` or `replay`; use `merge` where the repository's release flow owns integration.

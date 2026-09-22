@@ -110,7 +110,17 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 24000 for VERIFICATION_WAIVER_PROP's type: 'object' (SQ-2 / GitHub #109): an MCP host that
 // enforces the declared schema type refused a top-level verificationWaiver because the property listed
 // `properties` without `type: 'object'`. +91 bytes compacted, while preserving the 2.5KB reserve.
-const MCP_TOOLS_LIST_MAX_BYTES = 24100;
+// Raised from 24100 for two additions that land off the same base and both add schema bytes:
+// groomClose/integrate deliveryRevision and resolvedPaths (GitHub #144), the only route that closes a
+// candidate rebased or squash-merged before it landed, where the input shape and the "reachable
+// revision, not the working tree" condition have to be right on the FIRST call; and update addFiles /
+// removeFiles with scopeRequest grant (GitHub #173). +911 and +395 bytes compacted, so whichever
+// merges second still preserves the 2.5KB reserve.
+// Then raised from 25400 to 25600, measured with GitHub #144 and #173 merged together: review
+// follow-ups grew #144 from the estimated +911 to +980 bytes and #173 from +395 to +535, so the
+// combined payload is 23040 against the 21525 base and 25400 leaves only 2360 of the 2500-byte
+// reserve. 25600 is the smallest round value that restores it for either landing order.
+const MCP_TOOLS_LIST_MAX_BYTES = 25600;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -309,6 +319,10 @@ async function runTool(tool: ToolDefinition, rawArgs: any) {
 // full attestation grammar has been on `add.verify` in the source all along and three tickets in a row were still
 // refused for not knowing it (SQ-1955). Anything a caller cannot get right on the FIRST call belongs in this table.
 const ATTESTATION_VERIFY_CONTRACT = 'For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.';
+// A rebased or squash-merged candidate never byte-matches the working tree, and the
+// refusal only reaches an operator who already knows these two properties exist.
+const DELIVERY_REVISION_CONTRACT = 'Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable.';
+const RESOLVED_PATHS_CONTRACT = 'Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable. reason is the evidence.';
 
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> = {
   context_page: {
@@ -335,10 +349,16 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
     reducedAgentSchema: 'Only when name/mode missing; hook needs agent_id+auto|bypass mode.',
     recoveryEvidence: 'Unverified; latest signal grace; only the bound runtime name counts.',
   },
-  integrate: { deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.' },
+  integrate: {
+    deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.',
+    deliveryRevision: DELIVERY_REVISION_CONTRACT,
+    resolvedPaths: RESOLVED_PATHS_CONTRACT,
+  },
   groomClose: {
     deliveryCommit: 'Prepared integration target.',
     deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.',
+    deliveryRevision: DELIVERY_REVISION_CONTRACT,
+    resolvedPaths: RESOLVED_PATHS_CONTRACT,
     recoveryEvidence: 'Unverified; retires unclaimed attempts past deadline; CLI too.',
   },
   verdict: {
