@@ -1585,6 +1585,123 @@ test('SQ-2355: integration reports a diverged expected upstream without an empty
   }
 });
 
+// The refusal above prescribes a recovery — merge the candidate by hand, re-gate it,
+// then record delivery with groomClose using deliveryCommit — and the same expected
+// upstream check then refused that recovery, so a candidate whose integration branch
+// was squash-merged and deleted before it submitted had no closing move but
+// abandonSubmission, which records shipped work as discarded (SQ-23,
+// cardinventorymanagement SQ-212). The ancestry assertion guards the merge integrate
+// performs; a recorded manual delivery proves its own landing from the pinned
+// candidate's content, so it no longer inherits that guard.
+test('SQ-23: groomClose records the manual recovery its own expected_upstream_diverged refusal prescribes', async () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const stamp = `${process.pid}-${Date.now()}`;
+  const targetBranch = `squash-recovery-${stamp}`;
+  const mainBranch = `squash-recovery-main-${stamp}`;
+  const recoveryFile = path.join(PROJECT_DIR, 'lib', 'squash-recovery.js');
+  try {
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+
+    // The integration branch the dispatch froze, at the tip it recorded as the expected upstream.
+    git(['checkout', '-f', '-B', targetBranch, 'origin/main']);
+    fs.writeFileSync(recoveryFile, 'shared\nbranch-work\n');
+    git(['add', 'lib/squash-recovery.js']);
+    git(['commit', '-m', 'branch work the MR later squash-merges']);
+    const expectedUpstream = git(['rev-parse', 'HEAD']);
+
+    // The executor's candidate: two commits on that frozen tip.
+    const ticket = addTicket('squash-merged upstream recovery', { files: ['lib/squash-recovery.js'] });
+    fs.writeFileSync(recoveryFile, 'shared\nbranch-work\ncandidate\n');
+    git(['commit', '-am', 'candidate work']);
+    fs.writeFileSync(recoveryFile, 'shared\nbranch-work\ncandidate\ncandidate-follow-up\n');
+    git(['commit', '-am', 'candidate follow-up']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    const candidateCommits = git(['rev-list', '--reverse', `${expectedUpstream}..${candidate}`]).split('\n');
+    pin(ticket, candidate);
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'squash-recovery-source', {
+      direct: true,
+      reason: 'The squash-recovery fixture requires a local direct claim.',
+    }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'squash-recovery-source', {
+      commit: candidate,
+      verify: 'node -e "process.exit(0)"',
+    }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    Object.assign(submitted.submission, {
+      base: expectedUpstream,
+      upstream: targetBranch,
+      upstreamCommit: expectedUpstream,
+      integrationMode: 'local',
+      integrationBranch: targetBranch,
+      commits: candidateCommits,
+      changedPaths: ['lib/squash-recovery.js'],
+    });
+    submitted.dispatch = {
+      outcome: 'submitted',
+      terminalAt: new Date(Date.now() - 60_000).toISOString(),
+      attempts: [{ outcome: 'submitted', commit: candidate, agentId: 'squash-recovery-source', terminalAt: new Date(Date.now() - 60_000).toISOString() }],
+    };
+    persist(submitted);
+
+    // The MR squash-merged the branch and removed the source branch, so neither the
+    // recorded expected upstream nor either candidate commit survives on the target,
+    // and the collapsed patch carries no candidate patch id to reconcile against.
+    git(['checkout', '-f', '-B', mainBranch, 'origin/main']);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(recoveryFile, 'shared\nbranch-work\ncandidate\ncandidate-follow-up\n');
+    git(['add', 'lib/squash-recovery.js']);
+    git(['commit', '-m', 'squash merge of the re-gated branch']);
+    const deliveredSquash = git(['rev-parse', 'HEAD']);
+    git(['checkout', '-f', '-B', targetBranch, deliveredSquash]);
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: targetBranch });
+    assert.notStrictEqual(git(['merge-base', expectedUpstream, deliveredSquash]), expectedUpstream, 'the recorded expected upstream is unreachable from the recreated target');
+    assert.notStrictEqual(git(['merge-base', candidate, deliveredSquash]), candidate, 'the candidate itself is unreachable from the recreated target');
+
+    const refusedIntegration = store.integrateSubmission(slug, ticket.ref, {
+      mode: 'merge',
+      target: { branch: targetBranch, upstream: `refs/heads/${targetBranch}` },
+    });
+    assert.strictEqual(refusedIntegration.ok, false);
+    assert.strictEqual(refusedIntegration.reason, 'expected_upstream_diverged');
+    assert.match(refusedIntegration.message, /record delivery with groomClose using deliveryCommit/);
+
+    // The waiver belongs to the recorded reset, working-tree or manual delivery, which
+    // names the pinned candidate and proves its content. A delivery that claims the
+    // ordinary reachable route still answers to the recorded expected upstream.
+    const refusedWithoutMethod = await callMcp('groomClose', {
+      project: PROJECT_DIR,
+      ref: ticket.ref,
+      by: 'squash-recovery-integrator',
+      deliveryCommit: candidate,
+      reason: 'A reachable delivery claim over a diverged expected upstream stays refused.',
+    });
+    assert.strictEqual(refusedWithoutMethod.ok, false);
+    assert.strictEqual(refusedWithoutMethod.reason, 'expected_upstream_diverged');
+
+    const delivered = await callMcp('groomClose', {
+      project: PROJECT_DIR,
+      ref: ticket.ref,
+      by: 'squash-recovery-integrator',
+      deliveryCommit: candidate,
+      deliveryMethod: 'manual',
+      reason: 'The candidate was cherry-picked onto the recreated target, re-gated, and squash-merged; the target retains its content.',
+    });
+    assert.strictEqual(delivered.ok, true, delivered.message);
+
+    const recorded = store.getTicket(slug, ticket.ref);
+    assert.strictEqual(recorded.status, 'done');
+    assert.strictEqual(recorded.submission.integration.mode, 'recorded-working-tree');
+    assert.strictEqual(recorded.submission.integration.deliveryCommit, candidate);
+    assert.strictEqual(recorded.submission.integration.deliveryIdentity.kind, 'pinned-working-tree');
+    assert.strictEqual(recorded.submission.integration.deliveryIdentity.method, 'manual');
+    assert.strictEqual(recorded.submission.integration.contentCommit, candidate);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
 // SQ-2528 wanted the transient commit kept out of the dispatch baseline too, but a
 // dispatch cannot tell it apart from an ordinary unpushed local commit, which auto
 // worktree bases must still fork (dispatch-lifecycle.test.ts writerAuto, mcp.test.ts

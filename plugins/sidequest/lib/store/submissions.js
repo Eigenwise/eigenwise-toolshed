@@ -776,6 +776,9 @@ ${verify.outputTail}` : null
     if (!scopeValidation.ok && opts?.deliveryInteractionCommit && scopeValidation.reason === "reconciled_path_diverged") {
       scopeValidation = Object.assign({}, scopeValidation, { ok: true, reviewedMergedTreeInteraction: true });
     }
+    if (!scopeValidation.ok && scopeValidation.reason === "expected_upstream_diverged" && workingTreeDeliveryMethod(opts?.deliveryMethod)) {
+      scopeValidation = commitScope.validateStoredSubmissionRange(project?.path, ticket.submission, ticket.ref, integrationRefs, { allowDivergedExpectedUpstream: true });
+    }
     if (!scopeValidation.ok) {
       const outside = Array.isArray(scopeValidation.outside) ? scopeValidation.outside : [];
       if (scopeValidation.reason === "expected_upstream_diverged") {
@@ -1134,7 +1137,8 @@ ${verify.outputTail}` : null
     opts = opts || {};
     const preflight = validateIntegrationSubmission(slug, idOrRef, {
       deliveryInteractionCommit: opts.deliveryInteractionCommit,
-      completingApplyDelivery: opts.completingApplyDelivery === true
+      completingApplyDelivery: opts.completingApplyDelivery === true,
+      deliveryMethod: opts.deliveryMethod
     });
     if (!preflight.ok) return preflight;
     const preflightTicket = preflight.ticket;

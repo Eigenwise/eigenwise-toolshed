@@ -940,6 +940,17 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
   if (!scopeValidation.ok && opts?.deliveryInteractionCommit && scopeValidation.reason === 'reconciled_path_diverged') {
     scopeValidation = Object.assign({}, scopeValidation, { ok: true, reviewedMergedTreeInteraction: true });
   }
+  // The divergence refusal below prescribes exactly this recovery — merge the verified
+  // candidate by hand, re-gate it, record it with groomClose and deliveryCommit — and
+  // then refused it, leaving a shipped candidate closable only as abandoned (SQ-23,
+  // cardinventorymanagement SQ-212). The expected-upstream ancestry assertion protects
+  // the merge integrate performs, not this record: a reset, working-tree or manual
+  // delivery still has to name the immutable pinned candidate and prove that content is
+  // present, and re-validating rather than waiving keeps every other range and admitted
+  // scope invariant in force.
+  if (!scopeValidation.ok && scopeValidation.reason === 'expected_upstream_diverged' && workingTreeDeliveryMethod(opts?.deliveryMethod)) {
+    scopeValidation = commitScope.validateStoredSubmissionRange(project?.path, ticket.submission, ticket.ref, integrationRefs, { allowDivergedExpectedUpstream: true });
+  }
   if (!scopeValidation.ok) {
     const outside = Array.isArray(scopeValidation.outside) ? scopeValidation.outside : [];
     if (scopeValidation.reason === 'expected_upstream_diverged') {
@@ -1331,6 +1342,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
   const preflight = validateIntegrationSubmission(slug, idOrRef, {
     deliveryInteractionCommit: opts.deliveryInteractionCommit,
     completingApplyDelivery: opts.completingApplyDelivery === true,
+    deliveryMethod: opts.deliveryMethod,
   });
   if (!preflight.ok) return preflight;
   const preflightTicket = preflight.ticket;
