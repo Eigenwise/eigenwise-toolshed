@@ -70,9 +70,10 @@ test('help documents the crap gate, its config file, and its exit codes', () => 
 
   const result = run('help', projectPath);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /quartermaster crap \[--project <path>\] \[--max <n>\] \[--ratchet <git-ref>\] \[--lcov <path>\]/);
+  assert.match(result.stdout, /quartermaster crap \[--project <path>\] \[--lcov <path>\] \[--complexity <lizard\.csv>\]/);
+  assert.match(result.stdout, /fixed CRAP threshold 6/);
   assert.match(result.stdout, /\.claude\/quartermaster\/crap\.json/);
-  assert.match(result.stdout, /2 prerequisite missing/);
+  assert.match(result.stdout, /2 unverified measurement/);
 });
 
 test('decline-resupply records the decline without clearing the current accumulation', () => {
