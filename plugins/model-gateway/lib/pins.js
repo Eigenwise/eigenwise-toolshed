@@ -8,7 +8,7 @@ const {
   CLAUDE_BIN, CLAUDE_BIN_IS_BATCH, CODEX_FAMILY_RE, COMPAT_BASE_URL, DEFAULT_BASE_URL,
   DISPATCH_MODEL_ID, GROK_PREFIX, KNOWN_GOOD_PINS, LEGACY_CODEX_PREFIX, PIN_ALIASES,
   PIN_CACHE_PATH, PIN_CACHE_TTL_MS, PIN_OVERRIDE_PATH, PIN_PROBE_TIMEOUT_MS, PREFIX,
-  STATE, STATIC_ENV_BLOCK, WIN,
+  RETIRED_SHIPPED_PINS, STATE, STATIC_ENV_BLOCK, WIN,
 } = require('./runtime.js');
 
 function codexBaseFromId(id) {
@@ -294,14 +294,15 @@ function gatewayEnvBlock() {
 // ANTHROPIC_DEFAULT_*_MODEL are ordinary Claude Code settings a user may set
 // without this plugin, so unwiring must not claim them by key. A pin is ours
 // only if it still holds a value we could have written: the current effective
-// pin, the detected-pin cache, a saved override, or the built-in default. A
-// value outside that set was typed by the user and survives `env --remove`.
+// pin, the detected-pin cache, a saved override, the built-in default, or a default
+// an earlier release shipped. A value outside that set was typed by the user and
+// survives `env --remove`.
 function ownedPinValues() {
   const overrides = readPinOverrides();
   const cached = readDetectedPinCache()?.pins || {};
   return Object.fromEntries(Object.keys(PIN_ALIASES).map((alias) => [
     PIN_ALIASES[alias],
-    new Set([KNOWN_GOOD_PINS[alias], cached[alias], overrides[alias], detectedPinDefaults()[alias]].filter(Boolean)),
+    new Set([KNOWN_GOOD_PINS[alias], ...RETIRED_SHIPPED_PINS[alias], cached[alias], overrides[alias], detectedPinDefaults()[alias]].filter(Boolean)),
   ]));
 }
 
