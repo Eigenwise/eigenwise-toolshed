@@ -533,6 +533,94 @@ test('pre-tool hook: terminal guard leaves live and submitted executors alone', 
   assert.equal(submittedResult, null);
 });
 
+test('pre-tool hook: a closed sibling never refuses the executor still holding its own claim', () => {
+  const closed = addStopTicket('closed sibling of a live executor');
+  const live = addStopTicket('live executor beside a closed sibling');
+  const sessionId = `cross-ticket-terminal-${++sqSeq}`;
+  // The incident shape: one runtime identity recorded on two sibling dispatches of one
+  // session, reachable because a bind takes any sibling whose own agent id is still unset.
+  const agentId = `cross-ticket-agent-${sqSeq}`;
+  const bindSibling = (ticket?: any, by?: any, agentName?: any) => {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
+    const executor = prepared.ticket.dispatchExecutor;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId, token: prepared.token, executor, agentName,
+    }).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentName).ok, true);
+    const worktree = store.getTicket(slug, ticket.ref).dispatch?.worktree;
+    if (worktree) fs.mkdirSync(worktree, { recursive: true });
+    assert.equal(store.claimTicket(slug, ticket.ref, by, { sessionId, token: prepared.token, executor }).ok, true);
+    return executor;
+  };
+  const executor = bindSibling(closed, 'closed-sibling-worker', `closed-sibling-${sqSeq}`);
+  assert.equal(bindSibling(live, 'live-sibling-worker', `live-sibling-${sqSeq}`), executor);
+  assert.equal(store.getTicket(slug, closed.ref).dispatch.agentId, agentId);
+  assert.equal(store.getTicket(slug, live.ref).dispatch.agentId, agentId);
+
+  assert.equal(store.completeTicket(slug, closed.ref, 'closed-sibling-worker', {
+    model: 'sonnet',
+    effort: 'high',
+    cleanDeclaredScope: true,
+  }).ok, true);
+
+  const stillLive = store.getTicket(slug, live.ref);
+  assert.equal(stillLive.status, 'doing');
+  assert.equal(stillLive.claim.by, 'live-sibling-worker');
+
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    agent_type: executor,
+    agent_id: agentId,
+    cwd: BOARD_PATH,
+    tool_name: 'Bash',
+    tool_input: { command: 'echo diag-probe' },
+  }), null, `${closed.ref} must not deny Bash while ${live.ref} is claimed by the same identity`);
+});
+
+test('pre-tool hook: the name-prefix fallback stands down for an unclaimed live sibling', () => {
+  const closed = addStopTicket('closed sibling reached only through the name-prefix fallback');
+  const live = addStopTicket('live sibling reached only through the name-prefix fallback');
+  const sessionId = `name-prefix-terminal-${++sqSeq}`;
+  // No agent id is ever bound on either dispatch record here; the incoming call's agent_id
+  // reaches the closed sibling through dispatchIdentityMatches' prefix fallback (foo-2
+  // starts with foo-) and the live sibling through its exact-name fallback, the other
+  // route into that function, with no id shared between the two records.
+  const launchWithName = (ticket: any, agentName: string) => {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
+    const executor = prepared.ticket.dispatchExecutor;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId, token: prepared.token, executor, agentName,
+    }).ok, true);
+    return { executor, token: prepared.token };
+  };
+  const { executor, token: closedToken } = launchWithName(closed, 'foo');
+  launchWithName(live, 'foo-2');
+
+  const worktree = store.getTicket(slug, closed.ref).dispatch?.worktree;
+  if (worktree) fs.mkdirSync(worktree, { recursive: true });
+  assert.equal(store.claimTicket(slug, closed.ref, 'name-prefix-closed-worker', {
+    sessionId, token: closedToken, executor,
+  }).ok, true);
+  assert.equal(store.completeTicket(slug, closed.ref, 'name-prefix-closed-worker', {
+    model: 'sonnet',
+    effort: 'high',
+    cleanDeclaredScope: true,
+  }).ok, true);
+
+  const liveTicket = store.getTicket(slug, live.ref);
+  assert.equal(liveTicket.status, 'todo', 'the live sibling stands in unclaimed, through its dispatch record alone');
+  assert.equal(liveTicket.dispatch?.agentId, undefined, 'no agent id is ever bound on the live sibling');
+
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    agent_type: executor,
+    agent_id: 'foo-2',
+    cwd: BOARD_PATH,
+    tool_name: 'Bash',
+    tool_input: { command: 'echo diag-probe' },
+  }), null, `${closed.ref} must not deny Bash while ${live.ref} matches only through the unclaimed name-prefix fallback`);
+});
+
 test('pre-tool hook: an executor cannot redispatch its own active ticket', () => {
   const ticket = store.createTicket(slug, {
     title: 'own dispatch refusal fixture',
