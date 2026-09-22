@@ -188,7 +188,7 @@ test('entries up to 16 KB are stored and long entries advise without blocking', 
   );
 });
 
-test('appends beyond the former aggregate limit and defaults reads to the briefing window', () => {
+test('appends rotate older entries and defaults reads to the briefing window', () => {
   const createdStory = story('Log capacity');
   const ticket = member(createdStory.ref);
   claim(ticket.ref, 'capacity-worker');
@@ -200,7 +200,8 @@ test('appends beyond the former aggregate limit and defaults reads to the briefi
   const stored = store.getStory(slug, createdStory.ref);
   const log = store.storyDecisionLog(stored);
   assert.equal(stored.logRevision, 61);
-  assert.equal(stored.decisionLog.length, 61);
+  assert.ok(stored.decisionLog.length < 61);
+  assert.ok(stored.archivedDecisionLog.length > 0);
   assert.ok(log.entries.length < 61);
   assert.equal(log.omittedEntries, 61 - log.entries.length);
   assert.equal(log.totalEntries, 61);
