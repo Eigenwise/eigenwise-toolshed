@@ -148,12 +148,12 @@ const REFRESH_RETRY_MS = 30 * 1000;
 
 const gatewayRefreshAttempts = new Map<string, { at: number; refreshed: boolean }>();
 
-// Run the refresh for its side effect and re-read the file, which is the authority. Parsing the gateway CLI's
-// stdout made this return null the moment that CLI printed a diagnostic line ahead of the JSON, so the refresh
-// silently did nothing in the exact case it exists for (SQ-2208). Its exit code is not the authority either: it
-// exits 0 printing the stored catalog when the proxy is down, so an attempt only counts as a refresh when the
-// file it left behind is current. Attempts are remembered per catalog file, so readiness and model listing
-// share one child process rather than spawning one each.
+// Run the refresh for its side effect and re-read the file to get the written catalog. Parsing the gateway
+// CLI's stdout made this return null the moment that CLI printed a diagnostic line ahead of the JSON, so the
+// refresh silently did nothing in the exact case it exists for (SQ-2208). The exit code is the authority now:
+// it exits non-zero with a stderr reason when it declines to write, so a 0 means the catalog file is current
+// and safe to read back. Attempts are remembered per catalog file, so readiness and model listing share one
+// child process rather than spawning one each.
 function refreshGatewayCatalog(catalogPath: string): CatalogData | null {
   if (!installedGatewayCatalog(catalogPath)) return null;
   const attempt = gatewayRefreshAttempts.get(catalogPath);
