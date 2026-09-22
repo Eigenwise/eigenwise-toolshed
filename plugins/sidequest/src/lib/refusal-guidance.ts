@@ -25,6 +25,18 @@ export interface WorktreeCreationBindingFailure {
   suppliedWorktree?: string;
   recordedWorktree?: string;
   crossProject?: boolean;
+  ownerRef?: string;
+  ownerClaimHolder?: string;
+  ownerAgentId?: string;
+  checkoutAgentId?: string;
+}
+
+export interface CrossedWorktreeBinding {
+  ref?: string;
+  boundWorktree?: string;
+  actualWorktree?: string;
+  actualHolder?: { ref?: string; claimHolder?: string };
+  boundHolder?: { ref?: string; claimHolder?: string };
 }
 
 function abbreviatedSessionId(value?: string): string {
@@ -111,11 +123,27 @@ const WORKTREE_CREATION_REFUSALS: Readonly<Record<string, (repository: string, f
   missing_attempt: () => 'This checkout is already bound to an attempt whose WorktreeCreate has not finished creating it, so its own hook already holds the attempt generation. A second start binding with no generation is a racing hook, not the owner, and would have acquired that live generation; nothing was stamped. Wait for the owning hook, or retire the attempt with `sidequest dispatch <ref> --recovery-evidence "<observed failure evidence>"` once it is past its deadline.',
   dispatch_launch_unrecorded: (repository) => `The board for ${repository} holds a prepared dispatch for this session but no recorded launch, so no launched attempt exists to reserve this checkout, and a prepared attempt never supplies creation authority. Run \`sidequest pulse <ref>\`, then \`sidequest dispatch <ref> --recovery-evidence "WorktreeCreate refused: the dispatch launch was never recorded"\`.`,
   baseline_unavailable: () => 'The launched dispatch recorded no base commit, so its worktree has no revision to check out. Re-dispatch the ticket for a fresh baseline.',
+  checkout_owned_by_live_claim: (_repository, failure) => `${failure?.ownerRef || '<another ticket>'} holds this checkout under a live claim by "${failure?.ownerClaimHolder || '<claim holder>'}"${failure?.ownerAgentId ? ` and its agent \`${failure.ownerAgentId}\` is bound to it` : ' and it has bound no agent id yet'}, and this creation names ${failure?.checkoutAgentId ? `agent \`${failure.checkoutAgentId}\`` : 'no agent id'}, so it is not that owner re-entering its own checkout. A second executor in an occupied checkout crosses both records and every completion gate then reads the other one's tree, so nothing was bound. Let that claim reach a terminal state, or dispatch this ticket with its own worktree.`,
 });
 
 export function worktreeCreationRefusalMessage(reason: string, repository: string, failure?: WorktreeCreationBindingFailure): string {
   const guidance = WORKTREE_CREATION_REFUSALS[reason];
   return `worktree lease refused creation: ${reason || 'dispatch binding is incomplete'}${guidance ? `. ${guidance(repository, failure)}` : ''}`;
+}
+
+// One message for every gate that can see both facts, so an executor standing in a checkout its dispatch is not
+// bound to reads the same diagnosis from commit, submit and verify-capture. Naming the other live claim is the
+// point: without it the refusal reads as "run it from the bound worktree", which is impossible when another
+// executor owns that tree, and the gates downstream answer with that executor's working state instead (SQ-24).
+export function crossedWorktreeRefusalMessage(gate: string, crossing: CrossedWorktreeBinding): string {
+  const ref = crossing.ref || '<ticket>';
+  const owner = crossing.actualHolder || crossing.boundHolder;
+  const ownership = crossing.actualHolder
+    ? `${crossing.actualHolder.ref || '<another ticket>'} holds ${crossing.actualWorktree} under a live claim by "${crossing.actualHolder.claimHolder || '<claim holder>'}"`
+    : `${crossing.boundHolder?.ref || '<another ticket>'} holds ${crossing.boundWorktree} under a live claim by "${crossing.boundHolder?.claimHolder || '<claim holder>'}"`;
+  return `${gate}: refused ${ref}; its dispatch is bound to worktree ${crossing.boundWorktree}, but this call ran from ${crossing.actualWorktree}, and ${ownership}.`
+    + ` One of these checkouts belongs to another live executor, so this is a crossed worktree binding, not a caller mistake: do not work in it, and do not expect the bound tree to hold this ticket's work - anything the board diffs there reports ${owner?.ref || 'the other ticket'}'s state, test names included.`
+    + ` Keep the commit and its branch where the work is, report the crossing to the orchestrator, and let it rebind with \`sidequest dispatch ${ref} --worktree ${crossing.actualWorktree}\` before a verify-only redispatch.`;
 }
 
 export function routingDisabledMessage(ref: string): string {

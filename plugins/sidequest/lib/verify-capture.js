@@ -6,6 +6,7 @@ const { createHash, randomUUID } = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const { runProcessVerification, shellCommand } = require("./ports/process.js");
 const { canonicalPath } = require("./kernel/worktree.js");
+const { crossedWorktreeRefusalMessage } = require("./refusal-guidance.js");
 const captureSlotTimeoutMilliseconds = 30 * 60 * 1e3;
 const captureSlotRetryMilliseconds = 50;
 const captureSlotOperationRetryLimit = 20;
@@ -402,6 +403,14 @@ function dispatchBoundWorktree(target) {
   const worktree = String(dispatch.worktree || "").trim();
   return worktree || null;
 }
+function crossedCaptureRefusal(target, actualWorktree) {
+  const project = captureProject(target);
+  if (!project) return null;
+  const store = require("./store.js");
+  const ticket = store.getTicket(project.slug, target.ticket);
+  const crossing = store.crossedWorktreeBinding(project.slug, ticket, actualWorktree);
+  return crossing ? crossedWorktreeRefusalMessage("verify-capture", crossing) : null;
+}
 function isWithinWorktree(root, candidate) {
   const relative = path.relative(root, canonicalPath(candidate));
   if (relative === "") return true;
@@ -419,7 +428,7 @@ function resolveCaptureCwd(target, cwd, explicitWorktree) {
     if (canonicalBound && canonicalWorktree !== canonicalBound) {
       return Object.freeze({
         cwd,
-        refusal: `verify-capture: ${target.ticket}'s dispatch is bound to worktree ${canonicalBound}, but --worktree names ${canonicalWorktree}. Only the bound worktree can verify this ticket; run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`
+        refusal: crossedCaptureRefusal(target, canonicalWorktree) || `verify-capture: ${target.ticket}'s dispatch is bound to worktree ${canonicalBound}, but --worktree names ${canonicalWorktree}. Only the bound worktree can verify this ticket; run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`
       });
     }
     if (!isWithinWorktree(canonicalWorktree, cwd)) {
@@ -431,7 +440,7 @@ function resolveCaptureCwd(target, cwd, explicitWorktree) {
   if (canonicalBound && !isWithinWorktree(canonicalBound, cwd)) {
     return Object.freeze({
       cwd,
-      refusal: `verify-capture: ${target.ticket}'s dispatch is bound to worktree ${canonicalBound}, but this command ran from ${cwd}. Run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`
+      refusal: crossedCaptureRefusal(target, cwd) || `verify-capture: ${target.ticket}'s dispatch is bound to worktree ${canonicalBound}, but this command ran from ${cwd}. Run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`
     });
   }
   return Object.freeze({ cwd: target ? captureWorkingDirectory(target, cwd) : cwd, refusal: null });

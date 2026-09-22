@@ -19,7 +19,7 @@ const {
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } = require("./category-defaults.js");
 const commitScope = require("./commit-scope.js");
 const { commitPaths } = commitScope;
-const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, retainedWorktreeResumeDecision } = require("./worktrees.js");
+const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, retainedWorktreeResumeDecision } = require("./worktrees.js");
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, isCanonicalRegisteredWorktree } = require("./kernel/worktree.js");
 const { reviewLockMessage } = require("./kernel/review-binding.js");
 const { migrateIfNeeded } = require("./migrate.js");
@@ -656,6 +656,7 @@ const {
   recordDispatchWorktreeDependencyLink,
   recoverDispatchWorktreeCreation,
   dispatchIdentityDiagnosis,
+  crossedWorktreeBinding,
   dispatchIsolationExpectation,
   dispatchUnboundClaim,
   recordSanctionedCommit,
@@ -726,6 +727,7 @@ const {
   pendingSubmission: pendingSubmissionForTickets,
   agentWorktreePath,
   agentWorktreeCandidates,
+  agentIdFromWorktreePath,
   resolvedAgentWorktree,
   reclaimUnclaimedDispatchWorktree,
   legacyCategoryForComplexity: (...args) => legacyCategoryForComplexity(...args),
@@ -3430,6 +3432,7 @@ module.exports = {
   recoverDispatchWorktreeCreation,
   bindDispatchAgent,
   dispatchIdentityDiagnosis,
+  crossedWorktreeBinding,
   dispatchIsolationExpectation,
   dispatchUnboundClaim,
   recordSanctionedCommit,

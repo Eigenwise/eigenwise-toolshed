@@ -322,6 +322,14 @@ function agentWorktreeCandidates(repository, agentId) {
   const segment = `agent-${String(agentId).trim()}`;
   return agentWorktreeRoots(repository).map((root) => path.join(root, segment));
 }
+function agentIdFromWorktreePath(repository, worktree) {
+  const target = canonicalPath(worktree);
+  const segment = path.basename(target);
+  if (!/^agent-.+$/.test(segment)) return "";
+  const roots = agentWorktreeRoots(repository).map((root) => canonicalPath(root));
+  if (!roots.includes(canonicalPath(path.dirname(target)))) return "";
+  return segment.slice("agent-".length);
+}
 function resolvedAgentWorktree(repository, agentId) {
   const existing = agentWorktreeCandidates(repository, agentId).find((candidate) => nativeFs.existsSync(candidate));
   return existing || agentWorktreePath(repository, agentId);
@@ -1900,4 +1908,4 @@ async function sweep(repo, tickets, options = {}) {
     failures
   };
 }
-module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };
+module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };

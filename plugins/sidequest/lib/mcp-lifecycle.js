@@ -59,7 +59,7 @@ const {
 } = require("./mcp-shared");
 const { sourceRevisionBaseline } = require("./source-revision-capability");
 const { reviewCandidateFromSubmission, sameReviewCandidate } = require("./kernel/review-binding.js");
-const { inheritedRejectedDuplicateGuidance } = require("./refusal-guidance.js");
+const { inheritedRejectedDuplicateGuidance, crossedWorktreeRefusalMessage } = require("./refusal-guidance.js");
 const VERIFICATION_WAIVER_PROP = {
   type: "object",
   description: "Required with skipVerify. Names the human authority, reason, affected gate, and a bounded scope or future expiry. Runtime validation rejects incomplete, expired, or non-object values.",
@@ -748,6 +748,15 @@ const tools = [
           });
         }
       }
+      const crossing = store.crossedWorktreeBinding(slug, ticket, root);
+      if (crossing) {
+        return mutationAck(slug, {
+          ok: false,
+          ticket,
+          reason: "crossed_worktree_binding",
+          message: crossedWorktreeRefusalMessage("commit", crossing)
+        });
+      }
       const scope = ticketCommitScope(slug, ticket);
       const outsideWorktree = commitScope.validateRelativeScopes(scope).outside;
       if (outsideWorktree.length) {
@@ -910,6 +919,15 @@ const tools = [
       const root = submissionRoot(meta, args.worktree, commit, gitRef);
       if (verifyEmbedsWorktreeRoot(args.verify, root)) {
         throw new Error(`submit: refused ${ticket.ref}; verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
+      }
+      const crossing = args.worktree == null ? null : store.crossedWorktreeBinding(slug, ticket, root);
+      if (crossing) {
+        return mutationAck(slug, {
+          ok: false,
+          ticket,
+          reason: "crossed_worktree_binding",
+          message: crossedWorktreeRefusalMessage("submit", crossing)
+        });
       }
       const verify = String(args.verify || "").trim();
       const collected = collectGitSubmissionFacts({ slug, ticket, root, commit, gitRef, base: args.base });

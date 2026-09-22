@@ -415,6 +415,19 @@ function agentWorktreeCandidates(repository: string, agentId: string): string[] 
   return agentWorktreeRoots(repository).map((root) => path.join(root, segment));
 }
 
+// The inverse of agentWorktreeCandidates: a linked checkout is named agent-<agentId> by whichever harness
+// provisioned it, so the name a WorktreeCreate reports IS a per-agent discriminator even before any agent has
+// bound its identity on the board. Returns '' for a checkout outside this repository's worktree roots or one
+// whose name carries no agent id, because a guess there would be worse than no discriminator (SQ-24).
+function agentIdFromWorktreePath(repository: string, worktree: string): string {
+  const target = canonicalPath(worktree);
+  const segment = path.basename(target);
+  if (!/^agent-.+$/.test(segment)) return '';
+  const roots = agentWorktreeRoots(repository).map((root) => canonicalPath(root));
+  if (!roots.includes(canonicalPath(path.dirname(target)))) return '';
+  return segment.slice('agent-'.length);
+}
+
 function resolvedAgentWorktree(repository: string, agentId: string): string {
   const existing = agentWorktreeCandidates(repository, agentId).find((candidate) => nativeFs.existsSync(candidate));
   return existing || agentWorktreePath(repository, agentId);
@@ -2388,4 +2401,4 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   };
 }
 
-module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };
+module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };
