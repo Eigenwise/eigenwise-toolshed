@@ -59,10 +59,16 @@ coverage, so a large function with little coverage gets a high score. The fixed 
 When you approve it, setup writes `.claude/quartermaster/crap.json` and a live rule that runs:
 
 ```text
-node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"
+node "<quartermaster plugin root>/bin/quartermaster.js" crap
 ```
 
-It also shows the coverage command for your stack and asks you to pick the threshold. The gate needs
+The gate measures the Git checkout it runs in, so a linked worktree is measured in place instead of
+the main checkout, and a run from a subdirectory still reads the project's `crap.json`. Each run gives
+its coverage command a fresh `QUARTERMASTER_COVERAGE_DIR` to write `lcov.info` into, so concurrent runs
+on one checkout do not read each other's coverage. A coverage command that exits 0 without writing
+fresh coverage exits 2 instead of scoring stale results.
+
+It also shows the coverage command for your stack. The gate needs
 [lizard](https://github.com/terryyin/lizard) for complexity measurement. Setup never installs it. Exit
 2 means a prerequisite or measurement input is missing, including lizard finding zero functions for a
 file that has function-like source tokens. Follow the printed hint, then run the gate again.
