@@ -917,7 +917,7 @@ async function envCommand() {
     log('\nor use /model-gateway:model-gateway to run its env --write-project command');
     log('\nProject wiring is the default: this local block keeps this project and its executor worktrees routed after restart.');
     log('Use env --write-user only when you deliberately want the same fallback URL in every project.');
-    log('RC-compatibility mode is opt-in once you add the hosts entry yourself; it configures compatibility transport, not verified end-to-end Remote Control.');
+    log('RC-compatibility mode is opt-in: run remote-control enable, then re-run with --confirm to let it back up and write the hosts entry for you. It configures compatibility transport, not verified end-to-end Remote Control.');
     return;
   }
 
