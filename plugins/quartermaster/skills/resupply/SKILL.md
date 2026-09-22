@@ -164,7 +164,7 @@ another ceiling. Show the detected stack's exact LCOV command, the config, and t
 from [setup's CRAP reference](../setup/references/crap-gate.md), plus the gate command:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" crap --project "${CLAUDE_PROJECT_DIR}"
+node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" crap
 ```
 
 The proposal names `lizard` as the prerequisite and its install choices, `uv tool install lizard`,

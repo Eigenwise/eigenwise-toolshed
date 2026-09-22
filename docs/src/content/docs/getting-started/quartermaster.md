@@ -59,13 +59,24 @@ coverage, so a large function with little coverage gets a high score. The fixed 
 When you approve it, setup writes `.claude/quartermaster/crap.json` and a live rule that runs:
 
 ```text
-node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"
+node "<quartermaster plugin root>/bin/quartermaster.js" crap
 ```
 
-It also shows the coverage command for your stack and asks you to pick the threshold. The gate needs
+The gate measures the Git checkout it runs in, so a linked worktree is measured in place instead of
+the main checkout, and a run from a subdirectory still reads the project's `crap.json`. Each run gives
+its coverage command a fresh `QUARTERMASTER_COVERAGE_DIR` to write `lcov.info` into, so concurrent runs
+on one checkout do not read each other's coverage. A coverage command that exits 0 without writing
+fresh coverage exits 2 instead of scoring stale results.
+
+It also shows the coverage command for your stack. The gate needs
 [lizard](https://github.com/terryyin/lizard) for complexity measurement. Setup never installs it. Exit
 2 means a prerequisite or measurement input is missing, including lizard finding zero functions for a
 file that has function-like source tokens. Follow the printed hint, then run the gate again.
+
+React files get one extra step. lizard's TSX reader miscounts ordinary JSX badly enough to score a
+component for code that is not in it, so the gate measures `.tsx` and `.jsx` with lizard's TypeScript
+reader instead, from a byte-for-byte copy of your file. Every offender line for those files says which
+measurement produced it (`source=lizard-typescript`).
 
 When setup wires Model Gateway or Sidequest routing, Quartermaster can offer the optional `325000` `autoCompactWindow` setting for a consistent Codex compaction point. Setup asks before writing it. If user or project settings already has a value, it reports which one wins and preserves that value.
 

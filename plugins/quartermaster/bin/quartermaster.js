@@ -42,6 +42,17 @@ crap reads .claude/quartermaster/crap.json (coverageCommand, lcov, sources, excl
 lizard (lizard on PATH, else uvx lizard, else pipx run lizard), and checks only changed or new functions
 at the fixed CRAP threshold ${DEFAULT_MAX}. It exits 0 pass, 1 functions at or above ${DEFAULT_MAX},
 2 unverified measurement (lizard or coverage missing, or coverage command failed).
+crap measures .tsx and .jsx with lizard's TypeScript reader, not its TSX one, on both sides of the base
+comparison, because the TSX reader loses brace balance on ordinary JSX and folds the functions below a
+tag into it. Every offender line for those files names its measurement (source=lizard-typescript), and
+--json carries source per function.
+crap's --project only names where the config is read; it is not the tree measured. When cwd is inside
+that project or a linked worktree of it, or --project is omitted, the coverage command, lcov, lizard
+scan, and base comparison all run against cwd's git toplevel, and without --project the config comes
+from there too. A --project in another repository is measured where it points. crap prints the root it
+measured. The coverage command gets QUARTERMASTER_COVERAGE_DIR, a fresh directory per run: writing
+lcov.info there keeps concurrent runs on one checkout apart. A command that exits 0 but writes neither
+that file nor a fresh coverage/lcov.info exits 2 rather than scoring stale coverage.
 `;
 
 const BLOCKED_SUMMARY_LIMIT = 5;
@@ -210,6 +221,8 @@ function runCrap(options) {
   try {
     report = crapReport({
       projectDir: options.projectPath,
+      cwd: process.cwd(),
+      projectPathGiven: options.projectPathGiven,
       max: options.max,
       ratchet: options.ratchet,
       lcov: options.lcov,
@@ -223,6 +236,7 @@ function runCrap(options) {
     process.exitCode = 2;
     return;
   }
+  process.stderr.write(`quartermaster crap: measured ${report.root}\n`);
   if (options.json) printJson(report);
   else process.stdout.write(formatReport(report));
   process.exitCode = report.failures.length ? 1 : 0;
