@@ -28,3 +28,15 @@ only the relevant log range on failure. Preserve the command's exit code when fi
 
 If no focused form exists, use the smallest documented check that covers the change. Do not make a
 full suite an edit loop.
+
+## Quote dynamic-route paths
+
+Quote a path that contains brackets, such as a Next.js dynamic-route segment like `[id]`, when you
+pin a verify command. sh and bash glob brackets too, not just zsh; every shell risks it. The shells
+differ only in the no-match case: the capture wrapper no longer aborts on an unquoted one under
+zsh, and sh/bash never aborted either way. The real risk is bigger than a missing-match abort and
+it applies everywhere: an unquoted `[id]`-shaped path can silently expand to a DIFFERENT path that
+happens to match one character from the class, on any of these shells. Quoting is the fix when the
+verify tool matches paths itself (a test runner such as `node --test`); it is the wrong fix for a
+tool that expects the shell to have already expanded the glob into literal paths (`tsc`, `pytest`),
+where quoting turns a passing run into a hard error instead.

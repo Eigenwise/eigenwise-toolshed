@@ -275,6 +275,38 @@ test('dispatch uncertainty warns when a greenfield verify path does not exist', 
   assert.match(agentsync.renderTicketBriefing(ticket, 'greenfield-token', slug, root), /greenfield work/);
 });
 
+// SQ-10: an unquoted `[fulfillmentId]`-shaped dynamic-route path in a pinned verify string
+// used to abort under zsh with "no matches found" before the pinned command ever ran, and the
+// executor could not tell that apart from a real test failure. The wrapper fix restores
+// literal-passthrough glob semantics under zsh; this is the warning half, surfaced in the same
+// "Flagged uncertainty" section of the briefing that already carries dispatch-time warnings.
+test('dispatch uncertainty warns about an unquoted [param] path in a recorded verify command', () => {
+  const root = tmpDir();
+  assert.equal(git(root, ['init', '-b', 'main']).status, 0);
+  assert.equal(git(root, ['config', 'user.name', 'Sidequest Test']).status, 0);
+  assert.equal(git(root, ['config', 'user.email', 'sidequest-test@example.invalid']).status, 0);
+  fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
+  assert.equal(git(root, ['add', '.']).status, 0);
+  assert.equal(git(root, ['commit', '-m', 'fixture']).status, 0);
+
+  const store = require('../lib/store.js');
+  const slug = store.ensureProject(root, 'unquoted glob verify').slug;
+  const unquoted = store.createTicket(slug, {
+    title: 'Fix pick row',
+    executorVerify: 'node -e "0" src/app/fulfillments/[fulfillmentId]/pick/pick-row.test.ts',
+  });
+
+  const warnings = store.dispatchUncertaintyWarnings(unquoted, slug).join('\n');
+  assert.match(warnings, /unquoted path with shell glob characters.*\[fulfillmentId\]/);
+  assert.match(agentsync.renderTicketBriefing(unquoted, 'unquoted-glob-token', slug, root), /quote it/i);
+
+  const quoted = store.createTicket(slug, {
+    title: 'Fix pick row, quoted',
+    executorVerify: 'node -e "0" "src/app/fulfillments/[fulfillmentId]/pick/pick-row.test.ts"',
+  });
+  assert.doesNotMatch(store.dispatchUncertaintyWarnings(quoted, slug).join('\n'), /unquoted path with shell glob characters/);
+});
+
 
 test('SQ-677: briefing comments preserve the full chronological durable thread byte-for-byte', () => {
   const comments = [

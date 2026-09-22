@@ -28,6 +28,7 @@ type ShellDefinition = Readonly<{
   executable: string;
   label: string;
   scriptExtension: '.cmd' | '.sh';
+  isZsh: boolean;
 }>;
 
 type ShellCommand = ShellDefinition & Readonly<{ arguments: readonly string[] }>;
@@ -46,15 +47,26 @@ function windowsPosixShell(): string | null {
     .find((candidate) => fs.existsSync(candidate)) || null;
 }
 
+// zsh, unlike sh/bash, aborts a script with "no matches found" when a command references
+// an unquoted glob-looking path (e.g. a Next.js dynamic-route segment like `[id]`) that
+// doesn't match a file. sh/bash pass the pattern through literally instead. Detecting zsh
+// here lets us restore that literal-passthrough behavior instead of switching everyone's
+// verify shell.
+function isZshExecutable(executable: string): boolean {
+  return /(?:^|[\\/])zsh(?:\.exe)?$/i.test(executable);
+}
+
 function shellDefinition(platform = process.platform): ShellDefinition {
   if (platform === 'win32') {
     const posixShell = windowsPosixShell();
-    if (posixShell) return Object.freeze({ executable: posixShell, label: `POSIX shell (${posixShell})`, scriptExtension: '.sh' });
+    if (posixShell) return Object.freeze({ executable: posixShell, label: `POSIX shell (${posixShell})`, scriptExtension: '.sh', isZsh: false });
     const commandPrompt = process.env.ComSpec || 'cmd.exe';
-    return Object.freeze({ executable: commandPrompt, label: `Command Prompt (${commandPrompt})`, scriptExtension: '.cmd' });
+    return Object.freeze({ executable: commandPrompt, label: `Command Prompt (${commandPrompt})`, scriptExtension: '.cmd', isZsh: false });
   }
   const posixShell = process.env.SHELL || '/bin/sh';
-  return Object.freeze({ executable: posixShell, label: `POSIX shell (${posixShell})`, scriptExtension: '.sh' });
+  const isZsh = isZshExecutable(posixShell);
+  const label = isZsh ? `POSIX shell (${posixShell}, nonomatch nobadpattern)` : `POSIX shell (${posixShell})`;
+  return Object.freeze({ executable: posixShell, label, scriptExtension: '.sh', isZsh });
 }
 
 function commandForShell(scriptPath: string, shell: ShellDefinition): ShellCommand {
@@ -79,7 +91,19 @@ function shellScript(command: string, shell: ShellDefinition): string {
       '',
     ].join('\r\n');
   }
-  return `(\n${command}\n)\nsidequest_exit_code=$?\nprintf '\\n__SIDEQUEST_VERIFY_EXIT__=%s\\n' "$sidequest_exit_code"\nexit "$sidequest_exit_code"\n`;
+  // `setopt nonomatch` alone only covers the no-match abort ("no matches found"); an unbalanced
+  // bracket like `src/app/[id/a.ts` still hits zsh's separate bad-pattern abort ("bad pattern")
+  // before the command ever runs, so `nobadpattern` is needed too. Both options run before the
+  // command subshell and are inherited by it; they must be written into the script itself
+  // (rather than passed as a CLI flag) so they always win over whatever a sourced .zshenv set,
+  // regardless of -f or login-shell rc behavior.
+  const zshNonomatchPreamble = shell.isZsh ? 'setopt nonomatch nobadpattern\n' : '';
+  // Consistency note, not a regression: a pinned glob that matches nothing (e.g. `node --test
+  // test/*.test.js` against an empty directory) already reached the command literally and
+  // exited 0 with zero tests run on bash, sh, and Windows; this preamble extends that same
+  // behavior to zsh, which used to abort with exit 1 instead. A silently-empty, "passed" run is
+  // the case a future zero-test guard on the capture would exist for.
+  return `${zshNonomatchPreamble}(\n${command}\n)\nsidequest_exit_code=$?\nprintf '\\n__SIDEQUEST_VERIFY_EXIT__=%s\\n' "$sidequest_exit_code"\nexit "$sidequest_exit_code"\n`;
 }
 
 function temporaryScript(command: string): Readonly<{ scriptPath: string; shell: ShellCommand }> {
@@ -219,4 +243,4 @@ export function createProcessPort(): VerificationProcessPort {
   return Object.freeze({ run: runProcessVerification });
 }
 
-export { shellCommand };
+export { shellCommand, shellScript };

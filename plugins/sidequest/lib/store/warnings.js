@@ -752,6 +752,33 @@ ${String(ticket?.description || "")}`;
     if (!absent.size) return null;
     return `recorded verify references paths absent from this repo: ${[...absent].join(", ")}. This is allowed for greenfield work; confirm the executor creates them before verifying.`;
   }
+  function unquotedTokens(segment) {
+    const tokens = [];
+    for (const match of segment.matchAll(/[^\s;&|()]+/g)) {
+      const word = match[0];
+      if (!/^(["']).*\1$/.test(word)) tokens.push(word);
+    }
+    return tokens;
+  }
+  function globCharacterPathToken(token) {
+    if (!token) return false;
+    const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : token;
+    if (/^(?:-|\.\.?$|[A-Za-z][\w+.-]*:\/\/)/.test(value)) return false;
+    if (!/[\\/]|\.[A-Za-z0-9_-]+$/.test(value)) return false;
+    return /[[\]*?]/.test(value.replace(/["'][^"']*["']/g, ""));
+  }
+  function verifyUnquotedGlobIssue(ticket) {
+    const verify = String(ticket?.executorVerify || "").trim();
+    if (!verify || manualVerify(verify)) return null;
+    const offenders = [...new Set(splitVerifyCommands(verify).segments.flatMap(unquotedTokens).filter(globCharacterPathToken))];
+    if (!offenders.length) return null;
+    const [firstOffender] = offenders;
+    return `recorded verify references an unquoted path with shell glob characters: ${offenders.join(", ")}. zsh used to abort the run with "no matches found" (or "bad pattern") when a token like ${JSON.stringify(firstOffender)} didn't match a real file, and bash can silently expand it into whichever different path happens to match instead. Quote it, e.g. "${firstOffender}", so every shell passes it through literally when the tool does its own glob matching (for example a test runner such as node --test); leave it unquoted, relying on the shell to expand it first, when the tool expects already-expanded literal paths (for example tsc or pytest).`;
+  }
+  function verifyUnquotedGlobWarning(ticket) {
+    const issue = verifyUnquotedGlobIssue(ticket);
+    return issue ? `Planning-depth warning: ${issue}` : null;
+  }
   function derivedVerifyCommand(ticket, projectPath) {
     if (!projectPath) return null;
     const plugins = /* @__PURE__ */ new Set();
@@ -852,6 +879,8 @@ ${String(ticket?.description || "")}`;
     const projectPath = slug ? readMeta(slug)?.path : null;
     const verifyPath = verifyPathWarning(ticket, projectPath);
     if (verifyPath) warnings.push(verifyPath);
+    const unquotedGlob = verifyUnquotedGlobIssue(ticket);
+    if (unquotedGlob) warnings.push(unquotedGlob);
     const dispatch = dispatchState(ticket);
     if (dispatch) {
       const setupIncomplete = worktreeSetupIncompleteWarning(dispatch);
@@ -1100,6 +1129,8 @@ ${String(ticket?.description || "")}`;
     if (browserReview) warnings.push(browserReview);
     const verify = verifyCommandWarning(ticket, projectPath);
     if (verify) warnings.push(verify);
+    const unquotedGlob = verifyUnquotedGlobWarning(ticket);
+    if (unquotedGlob) warnings.push(unquotedGlob);
     warnings.push(...executorAnchorWarnings(ticket, projectPath));
     if (!projectPath || !Array.isArray(ticket.files)) return warnings;
     warnings.push(...sourceBuildOutputWarnings(ticket, projectPath));
