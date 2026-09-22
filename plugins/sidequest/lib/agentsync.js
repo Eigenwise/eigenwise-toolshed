@@ -512,7 +512,7 @@ function ticketIsolationContract(ticket, projectPath) {
     `Expected worktree root: ${expected}`,
     "Confirm it before your first write, and again after any resume from a coordinator message: `git rev-parse --git-dir` must differ from `git rev-parse --git-common-dir`.",
     `If they match you are in the shared checkout ${root}. Stop. Write nothing, tell the orchestrator this ticket lost its worktree and needs re-dispatch, and name any work you already have staged there so it can be committed out of the shared tree rather than lost.`,
-    `If it is a DIFFERENT linked worktree, the binding is crossed: commit, submit and verify-capture refuse and name the other live claim, because anything the board diffs in ${expected} would be that executor's work, test names included. Do not enter the bound tree or work around the refusal; keep your commit and branch where they are and report the crossing so the orchestrator can rebind this ticket to the checkout you are actually in.`
+    `If it is a DIFFERENT linked worktree, the binding is crossed: commit, submit and verify-capture refuse and name the other live claim, because anything the board diffs in ${expected} would be that executor's work, test names included. Do not enter the bound tree or work around the refusal. Keep your commit and branch where they are, comment that hash as the crossing evidence, then release this ticket with kind \`technical_blocker\`, quoting the refusal as its command and output evidence; nothing rebinds a bound worktree, so the orchestrator redispatches it onto a checkout of its own and salvages your commit by hash.`
   ].join("\n")];
 }
 const DEPENDENCY_LINK_TYPES = /* @__PURE__ */ new Set(["blocks", "blocked-by"]);

@@ -411,6 +411,9 @@ function crossedCaptureRefusal(target, actualWorktree) {
   const crossing = store.crossedWorktreeBinding(project.slug, ticket, actualWorktree);
   return crossing ? crossedWorktreeRefusalMessage("verify-capture", crossing) : null;
 }
+function boundWorktreeRefusal(target, actualWorktree, mismatch) {
+  return crossedCaptureRefusal(target, actualWorktree) || `verify-capture: ${target.ticket}'s dispatch is bound to worktree ${canonicalPath(dispatchBoundWorktree(target))}, but ${mismatch}`;
+}
 function isWithinWorktree(root, candidate) {
   const relative = path.relative(root, canonicalPath(candidate));
   if (relative === "") return true;
@@ -428,7 +431,7 @@ function resolveCaptureCwd(target, cwd, explicitWorktree) {
     if (canonicalBound && canonicalWorktree !== canonicalBound) {
       return Object.freeze({
         cwd,
-        refusal: crossedCaptureRefusal(target, canonicalWorktree) || `verify-capture: ${target.ticket}'s dispatch is bound to worktree ${canonicalBound}, but --worktree names ${canonicalWorktree}. Only the bound worktree can verify this ticket; run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`
+        refusal: boundWorktreeRefusal(target, canonicalWorktree, `--worktree names ${canonicalWorktree}. Only the bound worktree can verify this ticket; run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`)
       });
     }
     if (!isWithinWorktree(canonicalWorktree, cwd)) {
@@ -440,7 +443,7 @@ function resolveCaptureCwd(target, cwd, explicitWorktree) {
   if (canonicalBound && !isWithinWorktree(canonicalBound, cwd)) {
     return Object.freeze({
       cwd,
-      refusal: crossedCaptureRefusal(target, cwd) || `verify-capture: ${target.ticket}'s dispatch is bound to worktree ${canonicalBound}, but this command ran from ${cwd}. Run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`
+      refusal: boundWorktreeRefusal(target, cwd, `this command ran from ${cwd}. Run it from ${canonicalBound}, or pass --worktree ${canonicalBound}.`)
     });
   }
   return Object.freeze({ cwd: target ? captureWorkingDirectory(target, cwd) : cwd, refusal: null });

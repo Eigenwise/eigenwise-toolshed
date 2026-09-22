@@ -2315,29 +2315,94 @@ function worktreeCallbackGenerationRefusal(state?: any, attempt?: any) {
   return claimed === String(state?.preparedAt || '').trim() ? null : { ok: false, reason: 'stale_attempt' };
 }
 
+function liveIsolatedDispatch(state?: any) {
+  return Boolean(state && state.sharedTree === false && !state.terminalAt);
+}
+
+function liveSessionDispatch(state?: any, sessionId?: any) {
+  return liveIsolatedDispatch(state) && state.sessionId === sessionId;
+}
+
+function recordedAtCheckout(state?: any, checkout?: string) {
+  return Boolean(state?.worktree) && canonicalPath(state.worktree) === checkout;
+}
+
+// The occupancy fact both sides of this change read: a live isolated dispatch whose ticket is claimed and whose
+// record names this exact checkout. Creation asks it of the checkout a WorktreeCreate is arriving at; the
+// completion gates ask it of the two checkouts they can see.
+function liveClaimOccupiesCheckout(candidate?: any, state?: any, checkout?: string) {
+  return Boolean(candidate?.claim?.by) && liveIsolatedDispatch(state) && recordedAtCheckout(state, checkout);
+}
+
+// Whether an arrival at an occupied checkout is that owner's own dispatch coming back rather than a second
+// executor. The binding the board already holds is read first, because it is the stronger fact: a binding that
+// did not come from creation-order attribution was proven against the checkout itself - live-claim recovery
+// clears the agent id, keeps the checkout, and moves the record to the recovering session, so its replacement
+// runtime would otherwise be accused of intruding on its own tree. Only then does the checkout name decide, and
+// when the name carries no agent id at all - WorktreeCreate accepts any single path segment - the record's own
+// bound identity is the last thing left to read.
+function reentrantCheckoutOwner(state?: any, checkoutAgentId?: string, sessionId?: string) {
+  if (state?.worktreeBindingSource !== 'worktree-create') return state?.sessionId === sessionId;
+  if (checkoutAgentId) return String(state.agentId || '') === checkoutAgentId;
+  return Boolean(state.agentId) && state.sessionId === sessionId;
+}
+
+function occupiedCheckoutFailure(candidate?: any, state?: any, checkoutAgentId?: string) {
+  return {
+    ownerRef: candidate.ref,
+    ownerClaimHolder: String(candidate.claim.by),
+    ownerAgentId: String(state.agentId || '').trim(),
+    checkoutAgentId: String(checkoutAgentId || ''),
+  };
+}
+
 // A checkout an active claim occupies is never re-attributed to another reservation. The live-owner scan in
 // `bindDispatchWorktreeCreation` only covers a holder whose outcome is still `launched`, so a holder that had
 // already CLAIMED its ticket fell through to creation-order attribution and the occupied checkout was handed to
 // a sibling reservation; every completion gate then read a tree that belongs to somebody else's live executor
-// (SQ-24). The checkout name is the one per-agent discriminator a WorktreeCreate payload carries: a linked
-// checkout is named agent-<agentId>, so the owner's own bound agent id is the only one that can be re-entering
-// its own checkout, and any other arrival is a second agent landing in an occupied tree.
-function occupiedCheckoutOwner(slug?: any, repository?: string, boundWorktree?: string, checkoutAgentId?: string) {
+// (GH-235). The checkout name is the one per-agent discriminator a WorktreeCreate payload carries: a linked
+// checkout is named agent-<agentId>, so the owner's own bound agent id is the one arrival the name can confirm,
+// and any other arrival is a second agent landing in an occupied tree.
+function occupiedCheckoutOwner(slug?: any, boundWorktree?: string, checkoutAgentId?: string, sessionId?: string) {
   for (const candidate of listTickets(slug)) {
     const state = dispatchState(candidate);
-    if (!state || state.sharedTree !== false || state.terminalAt) continue;
-    if (!state.worktree || canonicalPath(state.worktree) !== boundWorktree) continue;
-    if (!candidate.claim?.by) continue;
-    const boundAgentId = String(state.agentId || '').trim();
-    if (checkoutAgentId && boundAgentId && boundAgentId === checkoutAgentId) continue;
-    return {
-      ownerRef: candidate.ref,
-      ownerClaimHolder: String(candidate.claim.by),
-      ownerAgentId: boundAgentId || '',
-      checkoutAgentId: String(checkoutAgentId || ''),
-    };
+    if (!liveClaimOccupiesCheckout(candidate, state, boundWorktree)) continue;
+    if (reentrantCheckoutOwner(state, checkoutAgentId, sessionId)) continue;
+    return occupiedCheckoutFailure(candidate, state, checkoutAgentId);
   }
   return null;
+}
+
+// The start binding is scoped to the session and the checkout, not to a generation, because the hook learns its
+// generation from this very call.
+function holdsThisCheckout(state?: any, sessionId?: string, checkout?: string) {
+  return Boolean(state && state.sessionId === sessionId
+    && state.sharedTree === false && state.worktreeBindingSource === 'worktree-create')
+    && recordedAtCheckout(state, checkout);
+}
+
+// A live owner of this checkout that a start callback can still bind to: one still launched, or one whose ticket
+// is already claimed and whose own dispatch is re-entering. Admitting the re-entry here rather than only
+// excusing it from the refusal matters: an unadmitted callback falls through to creation-order attribution,
+// which is exactly how an occupied checkout reaches a sibling reservation.
+function checkoutOwnerArrival(state?: any, checkoutAgentId?: string, sessionId?: string) {
+  if (state?.outcome === 'launched') return true;
+  return state?.outcome === 'claimed' && reentrantCheckoutOwner(state, checkoutAgentId, sessionId);
+}
+
+// Nothing a start callback may bind to still holds this checkout: either a retired attempt does, or a live claim
+// occupies it and the arrival is not that owner's own dispatch coming back.
+function unbindableCheckoutHolder(slug?: any, sessionId?: string, boundWorktree?: string, checkoutAgentId?: string) {
+  for (const candidate of listTickets(slug)) {
+    const state = dispatchState(candidate);
+    if (holdsThisCheckout(state, sessionId, boundWorktree) && state.terminalAt) return { ok: false, reason: 'stale_attempt' };
+  }
+  const occupied = occupiedCheckoutOwner(slug, boundWorktree, checkoutAgentId, sessionId);
+  return occupied ? {
+    ok: false,
+    reason: 'checkout_owned_by_live_claim',
+    binding: { suppliedSessionId: sessionId, suppliedWorktree: boundWorktree, ...occupied },
+  } : null;
 }
 
 // The start recorder is the one callback that CANNOT present a generation: the hook learns its generation
@@ -2352,9 +2417,9 @@ function occupiedCheckoutOwner(slug?: any, repository?: string, boundWorktree?: 
 //     re-entry that stamps nothing - `createWorktree` no-ops on an intact checkout - so it stays allowed.
 //   - A retired attempt still holding this checkout answers `stale_attempt`, rather than falling through and
 //     handing its late hook some other live attempt in the same session.
-//   - A holder whose ticket is already CLAIMED answers `checkout_owned_by_live_claim` unless the checkout name
-//     says the owner's own agent is re-entering, rather than letting attribution hand an occupied tree to a
-//     sibling reservation (SQ-24).
+//   - A holder whose ticket is already CLAIMED answers `checkout_owned_by_live_claim` unless the binding the
+//     board already holds, or the checkout name, says the owner's own dispatch is re-entering, rather than
+//     letting attribution hand an occupied tree to a sibling reservation (GH-235).
 //
 // Attribution itself still has no per-dispatch discriminator when every sibling reservation is unbound: the
 // payload's only per-agent fact is the checkout name, and at that moment no dispatch has bound an agent id to
@@ -2372,17 +2437,10 @@ function bindDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: an
     .map((candidate: any) => ({ candidate, state: dispatchState(candidate) }))
     .filter(({ state }: any) => Boolean(state));
   const checkoutAgentId = agentIdFromWorktreePath(repository, boundWorktree);
-  const holdsThisCheckout = (state?: any) => Boolean(state && state.sessionId === normalizedSessionId
-    && state.sharedTree === false && state.worktreeBindingSource === 'worktree-create'
-    && state.worktree && canonicalPath(state.worktree) === boundWorktree);
-  // A claimed holder is a live owner too, and its own hook re-entering is the one arrival the checkout name can
-  // confirm; every other arrival at an occupied checkout is refused below instead of re-attributed.
-  const reentrantOwner = (state?: any) => Boolean(checkoutAgentId
-    && String(state?.agentId || '').trim() === checkoutAgentId);
   for (const candidate of listTickets(slug)) {
     const state = dispatchState(candidate);
-    if (!holdsThisCheckout(state) || state.terminalAt) continue;
-    if (state.outcome !== 'launched' && !(state.outcome === 'claimed' && reentrantOwner(state))) continue;
+    if (!holdsThisCheckout(state, normalizedSessionId, boundWorktree) || state.terminalAt) continue;
+    if (!checkoutOwnerArrival(state, checkoutAgentId, normalizedSessionId)) continue;
     if (claimedAttempt && claimedAttempt !== String(state.preparedAt || '').trim()) return { ok: false, reason: 'stale_attempt' };
     if (!claimedAttempt && !state.worktreeCreationCompletedAt) return { ok: false, reason: 'missing_attempt' };
     const baseline = String(state.baseCommit || '').trim();
@@ -2400,18 +2458,8 @@ function bindDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: an
       expectedRevision: state.worktreeObservedRevision || null,
     };
   }
-  for (const candidate of listTickets(slug)) {
-    const state = dispatchState(candidate);
-    if (holdsThisCheckout(state) && state.terminalAt) return { ok: false, reason: 'stale_attempt' };
-  }
-  const occupied = occupiedCheckoutOwner(slug, repository, boundWorktree, checkoutAgentId);
-  if (occupied) {
-    return {
-      ok: false,
-      reason: 'checkout_owned_by_live_claim',
-      binding: { suppliedSessionId: normalizedSessionId, suppliedWorktree: boundWorktree, ...occupied },
-    };
-  }
+  const unavailable = unbindableCheckoutHolder(slug, normalizedSessionId, boundWorktree, checkoutAgentId);
+  if (unavailable) return unavailable;
   for (const candidate of listTickets(slug)) {
     const state = dispatchState(candidate);
     if (!dispatchCreationCandidate(state, normalizedSessionId)) continue;
@@ -2722,44 +2770,52 @@ function dispatchesForObservedWorktree(candidates: any[], observedWorktree: stri
   });
 }
 
+function canonicalCheckout(value?: any) {
+  const trimmed = String(value || '').trim();
+  return trimmed ? canonicalPath(trimmed) : '';
+}
+
+// The two checkouts a completion gate can compare, once both are known and they disagree. Nothing here is a
+// crossing yet: an isolated dispatch running somewhere other than its bound tree is the ordinary shape of a
+// relocation too.
+function mismatchedGateCheckouts(state?: any, actualWorktree?: any) {
+  const actual = canonicalCheckout(actualWorktree);
+  const bound = canonicalCheckout(state?.worktree);
+  if (state?.sharedTree !== false || !actual || !bound || actual === bound) return null;
+  return { boundWorktree: bound, actualWorktree: actual };
+}
+
+// The other side of a crossing, asked of one checkout: the same occupancy fact creation reads, minus the ticket
+// being gated. A holder that has not claimed is deliberately not one - see `crossedWorktreeBinding`.
+function otherLiveClaimOnCheckout(slug?: any, ref?: string, checkout?: string) {
+  for (const candidate of listTickets(slug)) {
+    if (candidate?.ref === ref) continue;
+    const state = dispatchState(candidate);
+    if (!liveClaimOccupiesCheckout(candidate, state, checkout)) continue;
+    return { ref: candidate.ref, claimHolder: String(candidate.claim.by), worktree: String(checkout) };
+  }
+  return null;
+}
+
 // The completion gates are the first authority that learns where an executor ACTUALLY is: commit, submit and
 // verify-capture are all handed the caller's own worktree root, while everything downstream of the dispatch
 // record reads the bound one. When those disagree and one of the two checkouts belongs to a different live
 // claim, the disagreement is a crossing, not a caller mistake, and the gates have to say so: reading the bound
 // tree instead answers with another ticket's working state - the shape that listed a sibling's 27 test names
-// back at an executor as if they were its own (SQ-24).
+// back at an executor as if they were its own (GH-235).
 //
 // Narrowed to a proven crossing on purpose. A mismatch with no other live claim behind it can be an ordinary
 // relocation, a continuation resuming its source checkout among them, and refusing those would strand work the
-// board has no reason to doubt.
+// board has no reason to doubt. The cost of that narrowing is real and accepted: between a sibling's creation
+// binding and its claim there is a window in which the other side holds no claim, so a gate running in that
+// window still reads the foreign tree and is not refused. A claim is the only per-record fact that marks a
+// checkout as somebody's live working tree, and refusing every unclaimed mismatch would cost far more.
 function crossedWorktreeBinding(slug?: any, ticket?: any, actualWorktree?: any) {
-  const state = dispatchState(ticket);
-  const actual = String(actualWorktree || '').trim();
-  const bound = String(state?.worktree || '').trim();
-  if (!state || state.sharedTree !== false || !actual || !bound) return null;
-  const canonicalActual = canonicalPath(actual);
-  const canonicalBound = canonicalPath(bound);
-  if (canonicalActual === canonicalBound) return null;
-  const liveClaimOn = (checkout: string) => {
-    for (const candidate of listTickets(slug)) {
-      if (!candidate || candidate.ref === ticket.ref || !candidate.claim?.by) continue;
-      const other = dispatchState(candidate);
-      if (!other || other.sharedTree !== false || other.terminalAt) continue;
-      if (!other.worktree || canonicalPath(other.worktree) !== checkout) continue;
-      return { ref: candidate.ref, claimHolder: String(candidate.claim.by) };
-    }
-    return null;
-  };
-  const actualHolder = liveClaimOn(canonicalActual);
-  const boundHolder = liveClaimOn(canonicalBound);
-  if (!actualHolder && !boundHolder) return null;
-  return {
-    ref: ticket.ref,
-    boundWorktree: canonicalBound,
-    actualWorktree: canonicalActual,
-    ...(actualHolder ? { actualHolder } : {}),
-    ...(boundHolder ? { boundHolder } : {}),
-  };
+  const checkouts = mismatchedGateCheckouts(dispatchState(ticket), actualWorktree);
+  if (!checkouts) return null;
+  const owner = otherLiveClaimOnCheckout(slug, ticket.ref, checkouts.actualWorktree)
+    || otherLiveClaimOnCheckout(slug, ticket.ref, checkouts.boundWorktree);
+  return owner ? { ref: ticket.ref, ...checkouts, owner } : null;
 }
 
 function dispatchIsolationExpectation(identity?: any) {
@@ -3059,13 +3115,13 @@ function unclaimedCreationReservation(ticket?: any, state?: any, sessionId?: any
 // record holds - the claim carries no path, and a runtime identity is the only fact that binds one - so a sibling
 // that claimed before anybody's SubagentStart corrected the crossing used to freeze it permanently: the reporting
 // agent found no eligible holder, its own bind was refused `worktree_binding_mismatch`, and both records kept a
-// checkout the other executor was running in, which is what every completion gate then read (SQ-24). Identity is
+// checkout the other executor was running in, which is what every completion gate then read (GH-235). Identity is
 // the line that matters, so a holder that has never bound an agent id is still exchangeable, claimed or not,
 // while a holder whose agent proved its checkout keeps it.
-function crossedCreationHolder(ticket?: any, state?: any, sessionId?: any) {
-  return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && !state.terminalAt
+function crossedCreationHolder(state?: any, sessionId?: any) {
+  return liveSessionDispatch(state, sessionId)
     && !state.continuation?.sourceWorktree && !state.agentId
-    && state.worktreeBindingSource === 'worktree-create' && state.worktree);
+    && state.worktreeBindingSource === 'worktree-create' && Boolean(state.worktree);
 }
 
 // What the checkout carries rather than the record: the completion stamp downstream binds require, and the
@@ -3114,7 +3170,7 @@ function applyExchangedCreationBinding(state?: any, facts?: any, otherRef?: any,
 // still unclaimed, the holder claimed or not - so a checkout is never taken from an executor that has proven it
 // owns one, and a path no reservation in this session created still matches nothing and is still refused. A
 // holder's claim cannot stand in for that proof: it names no checkout, so waiting for it only freezes the
-// crossing (SQ-24). Both records are rewritten under one transaction, with the
+// crossing (GH-235). Both records are rewritten under one transaction, with the
 // locks taken in id order so two siblings exchanging at once cannot deadlock and the loser finds nothing to do.
 //
 // The crossing is not always a pair. When a sibling's WorktreeCreate died before it reserved anything, creation
@@ -3129,7 +3185,7 @@ function exchangeCrossedCreationBinding(slug?: any, ticketId?: any, sessionId?: 
   const held = targetState.worktree ? canonicalPath(targetState.worktree) : '';
   if (held === reported) return null;
   const holder = listTickets(slug).find((candidate?: any) => candidate.id !== target.id
-    && crossedCreationHolder(candidate, dispatchState(candidate), sessionId)
+    && crossedCreationHolder(dispatchState(candidate), sessionId)
     && canonicalPath(dispatchState(candidate).worktree) === reported);
   if (!holder) return null;
   const baseline = String(targetState.baseCommit || '').trim();
@@ -3149,7 +3205,7 @@ function exchangeCrossedCreationBinding(slug?: any, ticketId?: any, sessionId?: 
       const state = dispatchState(ticket);
       const eligible = id === target.id
         ? attributableCreationReservation(ticket, state, sessionId)
-        : crossedCreationHolder(ticket, state, sessionId);
+        : crossedCreationHolder(state, sessionId);
       if (!eligible) return null;
       const facts = factsFor.get(id);
       if (facts && state.worktree && canonicalPath(state.worktree) === facts.worktree) return null;

@@ -270,6 +270,28 @@ function submissionRoot(meta, worktree, commit, gitRef) {
     return repository;
   }
 }
+function unlinkedIsolatedCommit(ticket, root) {
+  if (ticket.dispatch?.sharedTree !== false) return false;
+  const location = commitScope.linkedWorktree(root);
+  return !location.ok || !location.linked;
+}
+function commitWorktreeRefusal(slug, ticket, root) {
+  if (unlinkedIsolatedCommit(ticket, root)) {
+    return {
+      reason: "worktree_isolation",
+      message: `commit: refused ${ticket.ref}; this dispatch requires a linked worktree. Do not commit in the shared tree. Report that the executor lost its worktree to the orchestrator and re-dispatch.`
+    };
+  }
+  const crossing = store.crossedWorktreeBinding(slug, ticket, root);
+  return crossing ? { reason: "crossed_worktree_binding", message: crossedWorktreeRefusalMessage("commit", crossing) } : null;
+}
+function submitWorktreeRefusal(slug, ticket, root, args) {
+  if (verifyEmbedsWorktreeRoot(args.verify, root)) {
+    throw new Error(`submit: refused ${ticket.ref}; verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
+  }
+  const crossing = args.worktree == null ? null : store.crossedWorktreeBinding(slug, ticket, root);
+  return crossing ? { reason: "crossed_worktree_binding", message: crossedWorktreeRefusalMessage("submit", crossing) } : null;
+}
 function collectGitSubmissionFacts(options) {
   const { slug, ticket, root, commit, gitRef, base } = options;
   const dispatchTarget = ticket.dispatch && ticket.dispatch.integrationTarget;
@@ -737,26 +759,8 @@ const tools = [
         return mutationAck(slug, { ok: false, ticket, reason: "not_owner", message: `commit: ${ticket.ref} must be claimed by "${by}" before committing.${released}` });
       }
       const root = worktreeRoot(args.worktree, "commit");
-      if (ticket.dispatch && ticket.dispatch.sharedTree === false) {
-        const location = commitScope.linkedWorktree(root);
-        if (!location.ok || !location.linked) {
-          return mutationAck(slug, {
-            ok: false,
-            ticket,
-            reason: "worktree_isolation",
-            message: `commit: refused ${ticket.ref}; this dispatch requires a linked worktree. Do not commit in the shared tree. Report that the executor lost its worktree to the orchestrator and re-dispatch.`
-          });
-        }
-      }
-      const crossing = store.crossedWorktreeBinding(slug, ticket, root);
-      if (crossing) {
-        return mutationAck(slug, {
-          ok: false,
-          ticket,
-          reason: "crossed_worktree_binding",
-          message: crossedWorktreeRefusalMessage("commit", crossing)
-        });
-      }
+      const standing = commitWorktreeRefusal(slug, ticket, root);
+      if (standing) return mutationAck(slug, { ok: false, ticket, ...standing });
       const scope = ticketCommitScope(slug, ticket);
       const outsideWorktree = commitScope.validateRelativeScopes(scope).outside;
       if (outsideWorktree.length) {
@@ -917,18 +921,8 @@ const tools = [
       }
       const gitRef = args.gitRef || `refs/sidequest/${ticket.ref}`;
       const root = submissionRoot(meta, args.worktree, commit, gitRef);
-      if (verifyEmbedsWorktreeRoot(args.verify, root)) {
-        throw new Error(`submit: refused ${ticket.ref}; verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
-      }
-      const crossing = args.worktree == null ? null : store.crossedWorktreeBinding(slug, ticket, root);
-      if (crossing) {
-        return mutationAck(slug, {
-          ok: false,
-          ticket,
-          reason: "crossed_worktree_binding",
-          message: crossedWorktreeRefusalMessage("submit", crossing)
-        });
-      }
+      const standing = submitWorktreeRefusal(slug, ticket, root, args);
+      if (standing) return mutationAck(slug, { ok: false, ticket, ...standing });
       const verify = String(args.verify || "").trim();
       const collected = collectGitSubmissionFacts({ slug, ticket, root, commit, gitRef, base: args.base });
       const { target, range, scope } = collected;

@@ -1916,22 +1916,58 @@ function createDispatch(dependencies) {
     if (!claimed) return { ok: false, reason: "missing_attempt" };
     return claimed === String(state?.preparedAt || "").trim() ? null : { ok: false, reason: "stale_attempt" };
   }
-  function occupiedCheckoutOwner(slug, repository, boundWorktree, checkoutAgentId) {
+  function liveIsolatedDispatch(state) {
+    return Boolean(state && state.sharedTree === false && !state.terminalAt);
+  }
+  function liveSessionDispatch(state, sessionId) {
+    return liveIsolatedDispatch(state) && state.sessionId === sessionId;
+  }
+  function recordedAtCheckout(state, checkout) {
+    return Boolean(state?.worktree) && canonicalPath(state.worktree) === checkout;
+  }
+  function liveClaimOccupiesCheckout(candidate, state, checkout) {
+    return Boolean(candidate?.claim?.by) && liveIsolatedDispatch(state) && recordedAtCheckout(state, checkout);
+  }
+  function reentrantCheckoutOwner(state, checkoutAgentId, sessionId) {
+    if (state?.worktreeBindingSource !== "worktree-create") return state?.sessionId === sessionId;
+    if (checkoutAgentId) return String(state.agentId || "") === checkoutAgentId;
+    return Boolean(state.agentId) && state.sessionId === sessionId;
+  }
+  function occupiedCheckoutFailure(candidate, state, checkoutAgentId) {
+    return {
+      ownerRef: candidate.ref,
+      ownerClaimHolder: String(candidate.claim.by),
+      ownerAgentId: String(state.agentId || "").trim(),
+      checkoutAgentId: String(checkoutAgentId || "")
+    };
+  }
+  function occupiedCheckoutOwner(slug, boundWorktree, checkoutAgentId, sessionId) {
     for (const candidate of listTickets(slug)) {
       const state = dispatchState(candidate);
-      if (!state || state.sharedTree !== false || state.terminalAt) continue;
-      if (!state.worktree || canonicalPath(state.worktree) !== boundWorktree) continue;
-      if (!candidate.claim?.by) continue;
-      const boundAgentId = String(state.agentId || "").trim();
-      if (checkoutAgentId && boundAgentId && boundAgentId === checkoutAgentId) continue;
-      return {
-        ownerRef: candidate.ref,
-        ownerClaimHolder: String(candidate.claim.by),
-        ownerAgentId: boundAgentId || "",
-        checkoutAgentId: String(checkoutAgentId || "")
-      };
+      if (!liveClaimOccupiesCheckout(candidate, state, boundWorktree)) continue;
+      if (reentrantCheckoutOwner(state, checkoutAgentId, sessionId)) continue;
+      return occupiedCheckoutFailure(candidate, state, checkoutAgentId);
     }
     return null;
+  }
+  function holdsThisCheckout(state, sessionId, checkout) {
+    return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && state.worktreeBindingSource === "worktree-create") && recordedAtCheckout(state, checkout);
+  }
+  function checkoutOwnerArrival(state, checkoutAgentId, sessionId) {
+    if (state?.outcome === "launched") return true;
+    return state?.outcome === "claimed" && reentrantCheckoutOwner(state, checkoutAgentId, sessionId);
+  }
+  function unbindableCheckoutHolder(slug, sessionId, boundWorktree, checkoutAgentId) {
+    for (const candidate of listTickets(slug)) {
+      const state = dispatchState(candidate);
+      if (holdsThisCheckout(state, sessionId, boundWorktree) && state.terminalAt) return { ok: false, reason: "stale_attempt" };
+    }
+    const occupied = occupiedCheckoutOwner(slug, boundWorktree, checkoutAgentId, sessionId);
+    return occupied ? {
+      ok: false,
+      reason: "checkout_owned_by_live_claim",
+      binding: { suppliedSessionId: sessionId, suppliedWorktree: boundWorktree, ...occupied }
+    } : null;
   }
   function bindDispatchWorktreeCreation(slug, sessionId, worktree, attempt) {
     const normalizedSessionId = String(sessionId || "").trim();
@@ -1943,12 +1979,10 @@ function createDispatch(dependencies) {
     const boundWorktree = canonicalPath(target);
     const bindingCandidates = listTickets(slug).map((candidate) => ({ candidate, state: dispatchState(candidate) })).filter(({ state }) => Boolean(state));
     const checkoutAgentId = agentIdFromWorktreePath(repository, boundWorktree);
-    const holdsThisCheckout = (state) => Boolean(state && state.sessionId === normalizedSessionId && state.sharedTree === false && state.worktreeBindingSource === "worktree-create" && state.worktree && canonicalPath(state.worktree) === boundWorktree);
-    const reentrantOwner = (state) => Boolean(checkoutAgentId && String(state?.agentId || "").trim() === checkoutAgentId);
     for (const candidate of listTickets(slug)) {
       const state = dispatchState(candidate);
-      if (!holdsThisCheckout(state) || state.terminalAt) continue;
-      if (state.outcome !== "launched" && !(state.outcome === "claimed" && reentrantOwner(state))) continue;
+      if (!holdsThisCheckout(state, normalizedSessionId, boundWorktree) || state.terminalAt) continue;
+      if (!checkoutOwnerArrival(state, checkoutAgentId, normalizedSessionId)) continue;
       if (claimedAttempt && claimedAttempt !== String(state.preparedAt || "").trim()) return { ok: false, reason: "stale_attempt" };
       if (!claimedAttempt && !state.worktreeCreationCompletedAt) return { ok: false, reason: "missing_attempt" };
       const baseline = String(state.baseCommit || "").trim();
@@ -1966,18 +2000,8 @@ function createDispatch(dependencies) {
         expectedRevision: state.worktreeObservedRevision || null
       };
     }
-    for (const candidate of listTickets(slug)) {
-      const state = dispatchState(candidate);
-      if (holdsThisCheckout(state) && state.terminalAt) return { ok: false, reason: "stale_attempt" };
-    }
-    const occupied = occupiedCheckoutOwner(slug, repository, boundWorktree, checkoutAgentId);
-    if (occupied) {
-      return {
-        ok: false,
-        reason: "checkout_owned_by_live_claim",
-        binding: { suppliedSessionId: normalizedSessionId, suppliedWorktree: boundWorktree, ...occupied }
-      };
-    }
+    const unavailable = unbindableCheckoutHolder(slug, normalizedSessionId, boundWorktree, checkoutAgentId);
+    if (unavailable) return unavailable;
     for (const candidate of listTickets(slug)) {
       const state = dispatchState(candidate);
       if (!dispatchCreationCandidate(state, normalizedSessionId)) continue;
@@ -2227,34 +2251,30 @@ function createDispatch(dependencies) {
       return observed === expected || observed.startsWith(`${expected}/`);
     });
   }
+  function canonicalCheckout(value) {
+    const trimmed = String(value || "").trim();
+    return trimmed ? canonicalPath(trimmed) : "";
+  }
+  function mismatchedGateCheckouts(state, actualWorktree) {
+    const actual = canonicalCheckout(actualWorktree);
+    const bound = canonicalCheckout(state?.worktree);
+    if (state?.sharedTree !== false || !actual || !bound || actual === bound) return null;
+    return { boundWorktree: bound, actualWorktree: actual };
+  }
+  function otherLiveClaimOnCheckout(slug, ref, checkout) {
+    for (const candidate of listTickets(slug)) {
+      if (candidate?.ref === ref) continue;
+      const state = dispatchState(candidate);
+      if (!liveClaimOccupiesCheckout(candidate, state, checkout)) continue;
+      return { ref: candidate.ref, claimHolder: String(candidate.claim.by), worktree: String(checkout) };
+    }
+    return null;
+  }
   function crossedWorktreeBinding(slug, ticket, actualWorktree) {
-    const state = dispatchState(ticket);
-    const actual = String(actualWorktree || "").trim();
-    const bound = String(state?.worktree || "").trim();
-    if (!state || state.sharedTree !== false || !actual || !bound) return null;
-    const canonicalActual = canonicalPath(actual);
-    const canonicalBound = canonicalPath(bound);
-    if (canonicalActual === canonicalBound) return null;
-    const liveClaimOn = (checkout) => {
-      for (const candidate of listTickets(slug)) {
-        if (!candidate || candidate.ref === ticket.ref || !candidate.claim?.by) continue;
-        const other = dispatchState(candidate);
-        if (!other || other.sharedTree !== false || other.terminalAt) continue;
-        if (!other.worktree || canonicalPath(other.worktree) !== checkout) continue;
-        return { ref: candidate.ref, claimHolder: String(candidate.claim.by) };
-      }
-      return null;
-    };
-    const actualHolder = liveClaimOn(canonicalActual);
-    const boundHolder = liveClaimOn(canonicalBound);
-    if (!actualHolder && !boundHolder) return null;
-    return {
-      ref: ticket.ref,
-      boundWorktree: canonicalBound,
-      actualWorktree: canonicalActual,
-      ...actualHolder ? { actualHolder } : {},
-      ...boundHolder ? { boundHolder } : {}
-    };
+    const checkouts = mismatchedGateCheckouts(dispatchState(ticket), actualWorktree);
+    if (!checkouts) return null;
+    const owner = otherLiveClaimOnCheckout(slug, ticket.ref, checkouts.actualWorktree) || otherLiveClaimOnCheckout(slug, ticket.ref, checkouts.boundWorktree);
+    return owner ? { ref: ticket.ref, ...checkouts, owner } : null;
   }
   function dispatchIsolationExpectation(identity) {
     const sessionId = String(identity?.sessionId || "").trim();
@@ -2505,8 +2525,8 @@ function createDispatch(dependencies) {
   function unclaimedCreationReservation(ticket, state, sessionId) {
     return Boolean(attributableCreationReservation(ticket, state, sessionId) && state.worktreeBindingSource === "worktree-create" && state.worktree);
   }
-  function crossedCreationHolder(ticket, state, sessionId) {
-    return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && !state.terminalAt && !state.continuation?.sourceWorktree && !state.agentId && state.worktreeBindingSource === "worktree-create" && state.worktree);
+  function crossedCreationHolder(state, sessionId) {
+    return liveSessionDispatch(state, sessionId) && !state.continuation?.sourceWorktree && !state.agentId && state.worktreeBindingSource === "worktree-create" && Boolean(state.worktree);
   }
   function movedCreationRecord(state) {
     return {
@@ -2546,7 +2566,7 @@ function createDispatch(dependencies) {
     if (!reported || !attributableCreationReservation(target, targetState, sessionId)) return null;
     const held = targetState.worktree ? canonicalPath(targetState.worktree) : "";
     if (held === reported) return null;
-    const holder = listTickets(slug).find((candidate) => candidate.id !== target.id && crossedCreationHolder(candidate, dispatchState(candidate), sessionId) && canonicalPath(dispatchState(candidate).worktree) === reported);
+    const holder = listTickets(slug).find((candidate) => candidate.id !== target.id && crossedCreationHolder(dispatchState(candidate), sessionId) && canonicalPath(dispatchState(candidate).worktree) === reported);
     if (!holder) return null;
     const baseline = String(targetState.baseCommit || "").trim();
     if (!baseline || baseline !== String(dispatchState(holder).baseCommit || "").trim()) return null;
@@ -2563,7 +2583,7 @@ function createDispatch(dependencies) {
       for (const id of [firstId, secondId]) {
         const ticket = getTicket(slug, id);
         const state = dispatchState(ticket);
-        const eligible = id === target.id ? attributableCreationReservation(ticket, state, sessionId) : crossedCreationHolder(ticket, state, sessionId);
+        const eligible = id === target.id ? attributableCreationReservation(ticket, state, sessionId) : crossedCreationHolder(state, sessionId);
         if (!eligible) return null;
         const facts = factsFor.get(id);
         if (facts && state.worktree && canonicalPath(state.worktree) === facts.worktree) return null;

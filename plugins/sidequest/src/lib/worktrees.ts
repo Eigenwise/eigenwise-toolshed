@@ -418,7 +418,7 @@ function agentWorktreeCandidates(repository: string, agentId: string): string[] 
 // The inverse of agentWorktreeCandidates: a linked checkout is named agent-<agentId> by whichever harness
 // provisioned it, so the name a WorktreeCreate reports IS a per-agent discriminator even before any agent has
 // bound its identity on the board. Returns '' for a checkout outside this repository's worktree roots or one
-// whose name carries no agent id, because a guess there would be worse than no discriminator (SQ-24).
+// whose name carries no agent id, because a guess there would be worse than no discriminator (GH-235).
 function agentIdFromWorktreePath(repository: string, worktree: string): string {
   const target = canonicalPath(worktree);
   const segment = path.basename(target);
