@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import crapCore from './crap-core.cjs';
-import { changedMetricsAgainstBase, collectFunctions, compareAgainstBase, emptyChangedFunctionWarning, isScoredSource, lizardMetric } from './crap.mjs';
+import { changedMetricsAgainstBase, collectFunctions, compareAgainstBase, emptyChangedFunctionWarning, isScoredSource, lizardMetric, sourceMetrics } from './crap.mjs';
 
 const { crapScore, parseLizardCsv } = crapCore;
 
@@ -98,6 +100,21 @@ test('reports an unmeasurable Lizard descriptor without throwing', () => {
   assert.equal(lizardMetric(descriptor, []), null);
   assert.equal(lizardMetric(descriptor, [{ start: 174, name: '(anonymous)', complexity: 3 }]), 3);
   assert.equal(parseLizardCsv('').length, 0);
+});
+
+test('keeps unmeasurable source functions in the metric list', async () => {
+  const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-source-metrics-'));
+  const sourcePath = path.join(temporaryDirectory, 'fixture.js');
+  const sourceText = 'function subject() { return 1; }';
+  await fs.writeFile(sourcePath, sourceText);
+  try {
+    const coverageScripts = new Map([[path.resolve(sourcePath).replaceAll('\\', '/').toLowerCase(), [{ functionName: 'subject', ranges: [{ startOffset: 0, endOffset: sourceText.length, count: 1 }] }]]]);
+    const [metricResult] = await sourceMetrics(sourcePath, coverageScripts, []);
+    assert.equal(metricResult.name, 'subject');
+    assert.equal(metricResult.unverified, 'lizard could not measure this function');
+  } finally {
+    await fs.rm(temporaryDirectory, { recursive: true, force: true });
+  }
 });
 
 test('warns when a clean tree has no changed functions', () => {

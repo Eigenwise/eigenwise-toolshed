@@ -187,7 +187,7 @@ export function lizardMetric(descriptor, lizardEntries) {
   return lizardEntries.find((entry) => entry.start === descriptor.line && entry.name === expectedName)?.complexity ?? null;
 }
 
-async function sourceMetrics(sourcePath, coverageScripts, lizardEntries) {
+export async function sourceMetrics(sourcePath, coverageScripts, lizardEntries) {
   const sourceText = await fs.readFile(sourcePath, 'utf8');
   const descriptors = await collectFunctions(sourceText, sourcePath);
   const sourceRecords = coverageScripts.get(normalizedPath(sourcePath)) ?? [];
