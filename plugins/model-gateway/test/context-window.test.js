@@ -1206,10 +1206,17 @@ function probeClaudeAliasWithEnvironment(t, alias, endpoint, environment) {
   });
 }
 
+// These tests assert proxy egress behaviour, not probe latency, so the probe
+// child gets a generous ceiling instead of the production 5s default
+// (CODEX_GATEWAY_PIN_PROBE_TIMEOUT_MS) — a cold node start under a loaded
+// release cut can exceed 5s and return a false null pin (SQ-3086).
+const GENEROUS_PROBE_TIMEOUT_MS = '60000';
+
 function probeRealClaudeFable(t, endpoint, environment) {
   return probeClaudeAliasWithEnvironment(t, 'fable', endpoint, {
     ...environment,
     CODEX_GATEWAY_CLAUDE_BIN: 'claude',
+    CODEX_GATEWAY_PIN_PROBE_TIMEOUT_MS: GENEROUS_PROBE_TIMEOUT_MS,
   });
 }
 
@@ -1220,6 +1227,7 @@ function fakeProbeEnvironment(home, claude, proxyUrl) {
     USERPROFILE: home,
     FAKE_CLAUDE_LOG: claude.logFile,
     CODEX_GATEWAY_CLAUDE_BIN: claude.command,
+    CODEX_GATEWAY_PIN_PROBE_TIMEOUT_MS: GENEROUS_PROBE_TIMEOUT_MS,
     HTTP_PROXY: proxyUrl,
     HTTPS_PROXY: proxyUrl,
     ALL_PROXY: proxyUrl,
