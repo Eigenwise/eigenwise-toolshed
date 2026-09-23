@@ -348,7 +348,7 @@ const tools = [
         ...dispatchState.fallbackReason ? { fallbackReason: dispatchState.fallbackReason } : {},
         warnings,
         spawn,
-        guidance: prepared.recovery?.kind === "live_claim_resume" ? `Live claim recovered for ${prepared.ticket.ref}. Pass spawn unchanged; it carries a fresh token for the rebound linked worktree.` : prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token.`,
+        guidance: prepared.recovery?.kind === "live_claim_resume" ? `Live claim recovered for ${prepared.ticket.ref}. Pass spawn unchanged; it carries a fresh token for the rebound linked worktree and no isolation field.` : prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token.`,
         // The agent list's own model label always reads claude-codex-auto for gateway
         // routes and cannot be changed (SQ-1350), so a paraphrased description is the
         // only thing standing between the reader and an unidentifiable running agent.

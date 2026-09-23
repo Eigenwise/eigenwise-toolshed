@@ -1638,6 +1638,13 @@ function createDispatch(dependencies) {
       const now = (/* @__PURE__ */ new Date()).toISOString();
       state.sessionId = sessionId;
       state.agentId = null;
+      state.continuation = {
+        mode: "live_claim_resume",
+        ticketRef: ticket.ref,
+        sourceWorktree: facts.worktree,
+        baseCommit: state.baseCommit,
+        commit: facts.revision
+      };
       state.worktree = facts.worktree;
       state.worktreeGitDirectory = facts.gitDirectory;
       state.worktreeCommonGitDirectory = facts.commonGitDirectory;
