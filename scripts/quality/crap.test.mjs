@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import test from 'node:test';
 import crapCore from './crap-core.cjs';
-import { collectFunctions, compareAgainstBase } from './crap.mjs';
+import { changedMetricsAgainstBase, collectFunctions, compareAgainstBase, emptyChangedFunctionWarning, isScoredSource, lizardMetric } from './crap.mjs';
 
-const { crapScore, functionTokenCount, parseLizardCsv } = crapCore;
+const { crapScore, parseLizardCsv } = crapCore;
 
 function metric({ complexity, coverage, name = 'subject', fingerprint = 'changed', relativePath = 'plugins/example/lib/subject.js' }) {
   return {
@@ -49,6 +50,18 @@ test('leaves an unchanged over-ceiling function out of the failure list', async 
   assert.deepEqual(failures, []);
 });
 
+test('keeps changed unverified functions in the result set', async () => {
+  const unverified = { ...metric({ complexity: 1, coverage: 1 }), unverified: 'lizard could not measure this function' };
+  const changedMetrics = await changedMetricsAgainstBase(
+    [unverified],
+    ['plugins/example/lib/subject.js'],
+    'base-sha',
+    baselineOf([]),
+  );
+  assert.deepEqual(changedMetrics, [unverified]);
+  assert.deepEqual(await compareAgainstBase([unverified], ['plugins/example/lib/subject.js'], 'base-sha', baselineOf([])), []);
+});
+
 test('accepts a changed function whose score falls below six', async () => {
   const lowered = metric({ complexity: 3, coverage: 1, fingerprint: 'lowered' });
   const failures = await compareAgainstBase(
@@ -72,7 +85,23 @@ test('fails a changed over-ceiling function without a delta ratchet', async () =
   assert.match(failures[0], /subject cc=7 coverage=50\.00%/);
 });
 
-test('flags lizard zero-function results when function tokens are present', () => {
+test('skips generated Sidequest build output', () => {
+  const sidequestRoot = path.join(process.cwd(), 'plugins', 'sidequest');
+  assert.equal(isScoredSource(path.join(sidequestRoot, 'src', 'lib', 'mcp-collaboration.ts')), true);
+  assert.equal(isScoredSource(path.join(sidequestRoot, 'lib', 'mcp-collaboration.js')), false);
+  assert.equal(isScoredSource(path.join(sidequestRoot, 'hooks', 'session-start.js')), false);
+  assert.equal(isScoredSource(path.join(sidequestRoot, 'bin', 'sidequest.js')), false);
+});
+
+test('reports an unmeasurable Lizard descriptor without throwing', () => {
+  const descriptor = { line: 174, name: '<anonymous>' };
+  assert.equal(lizardMetric(descriptor, []), null);
+  assert.equal(lizardMetric(descriptor, [{ start: 174, name: '(anonymous)', complexity: 3 }]), 3);
   assert.equal(parseLizardCsv('').length, 0);
-  assert.ok(functionTokenCount("const expression = /['a-z]+/; function permission() { return expression; }") > 0);
+});
+
+test('warns when a clean tree has no changed functions', () => {
+  assert.equal(emptyChangedFunctionWarning([], true), 'Warning: no changed functions were found in a clean working tree; this CRAP result is vacuous.');
+  assert.equal(emptyChangedFunctionWarning([metric({ complexity: 1, coverage: 1 })], true), null);
+  assert.equal(emptyChangedFunctionWarning([], false), null);
 });

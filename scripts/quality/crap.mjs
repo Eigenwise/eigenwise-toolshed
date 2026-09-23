@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath, fileURLToPath as fromFileUrl, pathToFileURL } from 'node:url';
 import crapCore from './crap-core.cjs';
 
-const { crapScore, functionTokenCount, parseLizardCsv } = crapCore;
+const { crapScore, parseLizardCsv } = crapCore;
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(scriptDirectory, '..', '..');
 const sidequestRoot = path.join(repositoryRoot, 'plugins', 'sidequest');
@@ -17,6 +17,7 @@ const { API } = await import(pathToFileURL(require.resolve('typescript/unstable/
 const { createVirtualFileSystem } = await import(pathToFileURL(require.resolve('typescript/unstable/fs')).href);
 const SOURCE_EXTENSIONS = new Set(['.js', '.ts']);
 const THRESHOLD = 6;
+const SIDEQUEST_BUILD_OUTPUT_DIRECTORIES = new Set(['bin', 'hooks', 'lib']);
 
 function parseArguments(argumentsList) {
   const options = { coverageDirectory: null, base: null, all: false };
@@ -45,6 +46,11 @@ async function filesBelow(directory) {
   }
 }
 
+export function isScoredSource(sourcePath) {
+  const [sidequestDirectory] = path.relative(sidequestRoot, sourcePath).replaceAll('\\', '/').split('/');
+  return !SIDEQUEST_BUILD_OUTPUT_DIRECTORIES.has(sidequestDirectory);
+}
+
 async function sourcePaths() {
   const pluginsDirectory = path.join(repositoryRoot, 'plugins');
   const plugins = await fs.readdir(pluginsDirectory, { withFileTypes: true });
@@ -52,7 +58,7 @@ async function sourcePaths() {
     filesBelow(path.join(pluginsDirectory, entry.name, 'lib')),
     filesBelow(path.join(pluginsDirectory, entry.name, 'src')),
   ]));
-  return sourceLists.flat();
+  return sourceLists.flat().filter(isScoredSource);
 }
 
 function functionName(node) {
@@ -176,17 +182,14 @@ function matchingCoverage(records, descriptor) {
   return records.filter((record) => record.functionName === descriptor.name && record.ranges[0]);
 }
 
-function lizardMetric(sourcePath, descriptor, lizardEntries) {
+export function lizardMetric(descriptor, lizardEntries) {
   const expectedName = descriptor.name === '<anonymous>' ? '(anonymous)' : descriptor.name;
-  const match = lizardEntries.find((entry) => entry.start === descriptor.line && entry.name === expectedName);
-  if (!match) throw new Error(`lizard could not measure ${path.relative(repositoryRoot, sourcePath)}:${descriptor.line} ${descriptor.name}; measurement is unverified.`);
-  return match.complexity;
+  return lizardEntries.find((entry) => entry.start === descriptor.line && entry.name === expectedName)?.complexity ?? null;
 }
 
 async function sourceMetrics(sourcePath, coverageScripts, lizardEntries) {
   const sourceText = await fs.readFile(sourcePath, 'utf8');
   const descriptors = await collectFunctions(sourceText, sourcePath);
-  if (functionTokenCount(sourceText) && !lizardEntries.length) throw new Error(`lizard reported zero functions for ${path.relative(repositoryRoot, sourcePath)}; measurement is unverified.`);
   const sourceRecords = coverageScripts.get(normalizedPath(sourcePath)) ?? [];
   const outputPaths = await outputPathsForSource(sourcePath);
   const outputRecords = (await Promise.all(outputPaths.map(async (outputPath) => {
@@ -199,11 +202,19 @@ async function sourceMetrics(sourcePath, coverageScripts, lizardEntries) {
   }))).flat();
   if (!sourceRecords.length && !outputPaths.length) throw new Error(`could not resolve coverage output for ${path.relative(repositoryRoot, sourcePath)}; measurement is unverified.`);
   return descriptors.map((descriptor) => {
+    const metric = {
+      identity: descriptor.identity,
+      fingerprint: descriptor.fingerprint,
+      line: descriptor.line,
+      name: descriptor.name,
+      relativePath: path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/'),
+    };
+    const complexity = lizardMetric(descriptor, lizardEntries);
+    if (complexity === null) return { ...metric, unverified: 'lizard could not measure this function' };
     const intervals = [...matchingCoverage(sourceRecords, descriptor), ...matchingCoverage(outputRecords, descriptor)].flatMap((record) => projectIntervals(record.ranges, descriptor));
     const coveredLength = mergeIntervals(intervals).reduce((total, [start, end]) => total + end - start, 0);
     const coverage = Math.min(1, coveredLength / (descriptor.end - descriptor.start));
-    const complexity = lizardMetric(sourcePath, descriptor, lizardEntries);
-    return { coverage, complexity, crap: crapScore(complexity, coverage), identity: descriptor.identity, fingerprint: descriptor.fingerprint, line: descriptor.line, name: descriptor.name, relativePath: path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/') };
+    return { ...metric, coverage, complexity, crap: crapScore(complexity, coverage) };
   });
 }
 
@@ -226,9 +237,9 @@ async function baselineFunctions(base, relativePath) {
   return new Map((await collectFunctions(text, relativePath)).map((descriptor) => [descriptor.identity, descriptor.fingerprint]));
 }
 
-export async function compareAgainstBase(metrics, changedPaths, base, readBaseline = baselineFunctions) {
+export async function changedMetricsAgainstBase(metrics, changedPaths, base, readBaseline = baselineFunctions) {
   const changed = new Set(changedPaths);
-  const failures = [];
+  const changedMetrics = [];
   const byPath = Map.groupBy(metrics, (metric) => metric.relativePath);
   for (const [relativePath, fileMetrics] of byPath) {
     if (!changed.has(relativePath)) continue;
@@ -238,16 +249,27 @@ export async function compareAgainstBase(metrics, changedPaths, base, readBaseli
     } catch (error) {
       if (!String(error.message).includes(`path '${relativePath}' does not exist`)) throw error;
     }
-    for (const metric of fileMetrics) {
-      if (baseline.get(metric.identity) === metric.fingerprint) continue;
-      if (metric.crap >= THRESHOLD) failures.push(formatMetric(metric));
-    }
+    changedMetrics.push(...fileMetrics.filter((metric) => baseline.get(metric.identity) !== metric.fingerprint));
   }
-  return failures;
+  return changedMetrics;
+}
+
+export async function compareAgainstBase(metrics, changedPaths, base, readBaseline = baselineFunctions) {
+  const changedMetrics = await changedMetricsAgainstBase(metrics, changedPaths, base, readBaseline);
+  return changedMetrics.filter((metric) => !metric.unverified && metric.crap >= THRESHOLD).map(formatMetric);
 }
 
 function formatMetric(metric) {
   return `${metric.relativePath}:${metric.line} ${metric.name} cc=${metric.complexity} coverage=${(metric.coverage * 100).toFixed(2)}% CRAP=${metric.crap.toFixed(4)}`;
+}
+
+function formatUnverifiedMetric(metric) {
+  return `${metric.relativePath}:${metric.line} ${metric.name} ${metric.unverified}; measurement is unverified.`;
+}
+
+export function emptyChangedFunctionWarning(changedMetrics, workingTreeIsClean) {
+  if (changedMetrics.length || !workingTreeIsClean) return null;
+  return 'Warning: no changed functions were found in a clean working tree; this CRAP result is vacuous.';
 }
 
 async function captureCoverage() {
@@ -272,13 +294,22 @@ export async function run(options = parseArguments(process.argv.slice(2))) {
     const lizardRecords = parseLizardCsv(lizardResult.stdout ?? '');
     const lizardByPath = Map.groupBy(lizardRecords, (entry) => normalizedPath(entry.file));
     const metrics = (await Promise.all(sources.map((sourcePath) => sourceMetrics(sourcePath, coverageScripts, lizardByPath.get(normalizedPath(sourcePath)) ?? [])))).flat();
-    const failures = await compareAgainstBase(metrics, changedPaths, base);
-    if (options.all) metrics.filter((metric) => metric.crap >= THRESHOLD).sort((left, right) => right.crap - left.crap).forEach((metric) => process.stdout.write(`${formatMetric(metric)}\n`));
-    if (failures.length) {
-      process.stderr.write(`CRAP gate failed against ${base}:\n${failures.map((failure) => `- ${failure}`).join('\n')}\n`);
+    const changedMetrics = await changedMetricsAgainstBase(metrics, changedPaths, base);
+    const unverified = changedMetrics.filter((metric) => metric.unverified);
+    const failures = changedMetrics.filter((metric) => !metric.unverified && metric.crap >= THRESHOLD).map(formatMetric);
+    const displayedMetrics = options.all ? metrics : changedMetrics;
+    displayedMetrics.sort((left, right) => left.relativePath.localeCompare(right.relativePath) || left.line - right.line).forEach((metric) => {
+      const status = metric.unverified ? 'UNVERIFIED' : metric.crap >= THRESHOLD ? 'FAIL' : 'PASS';
+      process.stdout.write(`${status} ${metric.unverified ? formatUnverifiedMetric(metric) : formatMetric(metric)}\n`);
+    });
+    const warning = emptyChangedFunctionWarning(changedMetrics, !runGit(['status', '--porcelain']));
+    if (warning) process.stderr.write(`${warning}\n`);
+    if (failures.length || unverified.length) {
+      const errors = [...failures, ...unverified.map(formatUnverifiedMetric)];
+      process.stderr.write(`CRAP gate failed against ${base}:\n${errors.map((failure) => `- ${failure}`).join('\n')}\n`);
       process.exitCode = 1;
-    } else process.stdout.write(`CRAP gate passed against ${base}: 0 changed or new functions at or above ${THRESHOLD}.\n`);
-    return { metrics, failures };
+    } else process.stdout.write(`CRAP gate passed against ${base}: ${changedMetrics.length} changed or new functions scored below ${THRESHOLD}.\n`);
+    return { metrics, changedMetrics, failures, unverified };
   } finally {
     if (!options.coverageDirectory) await fs.rm(coverageDirectory, { recursive: true, force: true });
   }
