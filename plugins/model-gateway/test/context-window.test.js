@@ -694,8 +694,11 @@ test('rewrites Codex authentication failures for streaming and non-streaming req
     assert.equal(response.status, expectedStatus);
     const error = JSON.parse(response.body).error;
     assert.equal(error.type, 'authentication_error');
-    assert.match(error.message, /node "[^"]*[\\/]model-gateway[\\/]model-gateway\.js" login/);
-    assert.doesNotMatch(error.message, /plugins[\\/]cache[\\/]/);
+    // This fixture's HOME never ran SessionStart, so the stable launcher does not exist; the message
+    // must fall back to the CLI's own real path instead of naming a launcher that would fail with
+    // MODULE_NOT_FOUND (issue #77), rather than the previous unconditional stable-launcher reference.
+    assert.match(error.message, new RegExp(`node "${CLI.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}" login`));
+    assert.ok(fs.existsSync(CLI), 'the advised fallback command must exist and run');
     assert.doesNotMatch(error.message, /claude-code-proxy\s+codex\s+auth\s+login/i);
     assert.match(error.message, /API Error: 401 Not authenticated\./);
   }
