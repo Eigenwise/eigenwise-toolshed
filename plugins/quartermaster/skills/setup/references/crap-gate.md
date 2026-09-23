@@ -31,8 +31,9 @@ pip install lizard
 
 Exit 2 also covers a missing LCOV file, a configured coverage command that fails, or an unverified
 measurement. A file where lizard finds zero functions despite function-like source tokens, or a changed
-function without coverage data, is unverified rather than a pass. Fix the printed problem, then run the
-gate again.
+function without coverage data, is unverified rather than a pass. A file covered by a configured
+`exclude` pattern is never treated as unverified, even with zero lizard rows and function-like tokens.
+Fix the printed problem, then run the gate again.
 
 ## Produce LCOV coverage
 

@@ -130,6 +130,46 @@ test('reports missing changed-function coverage as unverified', () => {
   );
 });
 
+test('honors a configured exclude for the only changed file, avoiding an unmeasured failure', () => {
+  const projectDir = fixtureProject({
+    '.claude/quartermaster/crap.json': JSON.stringify({ exclude: ['**/*.test.*'] }),
+    'app.test.js': 'function subject(value) { return value; }\n',
+    'coverage/lcov.info': lcov([]),
+  });
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'app.test.js'), 'function subject(value) { if (value) return value; return 0; }\n', 'utf8');
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => csv([]) });
+  assert.deepEqual(report.failures, []);
+  assert.equal(report.checked, 0);
+});
+
+test('a changed file that does not match the config exclude stays fail-closed when lizard finds nothing', () => {
+  const projectDir = fixtureProject({
+    '.claude/quartermaster/crap.json': JSON.stringify({ exclude: ['**/*.test.*'] }),
+    'src/app.js': 'function subject(value) { return value; }\n',
+    'coverage/lcov.info': lcov([[1, 1]]),
+  });
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/app.js'), 'function subject(value) { return value + 1; }\n', 'utf8');
+  assert.throws(
+    () => crapReport({ projectDir, ratchet: 'main', runLizard: () => '' }),
+    (error) => error instanceof PrerequisiteError && /lizard reported zero functions for src\/app\.js/.test(error.message),
+  );
+});
+
+test('honors a configured directory exclude pattern the same way as a file pattern', () => {
+  const projectDir = fixtureProject({
+    '.claude/quartermaster/crap.json': JSON.stringify({ exclude: ['dist/**'] }),
+    'dist/bundle.js': 'function subject(value) { return value; }\n',
+    'coverage/lcov.info': lcov([]),
+  });
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'dist/bundle.js'), 'function subject(value) { if (value) return value; return 0; }\n', 'utf8');
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => csv([]) });
+  assert.deepEqual(report.failures, []);
+  assert.equal(report.checked, 0);
+});
+
 test('a missing lcov file exits two with the fix, not a passing gate', () => {
   const projectDir = fixtureProject({ 'complexity.csv': '' });
   const result = runCli(['--complexity', 'complexity.csv'], projectDir);
