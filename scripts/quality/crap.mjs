@@ -267,9 +267,19 @@ function formatUnverifiedMetric(metric) {
   return `${metric.relativePath}:${metric.line} ${metric.name} ${metric.unverified}; measurement is unverified.`;
 }
 
-export function emptyChangedFunctionWarning(changedMetrics, workingTreeIsClean) {
-  if (changedMetrics.length || !workingTreeIsClean) return null;
-  return 'Warning: no changed functions were found in a clean working tree; this CRAP result is vacuous.';
+function emptyDiffCaveat(baseWasExplicit, base) {
+  return baseWasExplicit
+    ? `Warning: --base ${base} produced an empty diff; this CRAP result is vacuous.`
+    : `Warning: no --base was given, so it defaulted to the merge-base with HEAD (${base}) on a clean working tree, leaving nothing to diff; this CRAP result is vacuous. Pass --base to compare against a specific revision.`;
+}
+
+export function emptyChangedFunctionWarning({ changedMetrics, workingTreeIsClean, baseWasExplicit, base, allChangedPaths, changedPaths }) {
+  if (changedMetrics.length) return null;
+  if (!allChangedPaths.length) return emptyDiffCaveat(baseWasExplicit, base);
+  if (!changedPaths.length) {
+    return `CRAP gate result is out of scope, not vacuous: none of the ${allChangedPaths.length} changed path(s) fall under a scored root (plugins/*/lib, plugins/*/src): ${allChangedPaths.join(', ')}. Report CRAP as unverified or measure this change another way.`;
+  }
+  return workingTreeIsClean ? 'Warning: no changed functions were found in a clean working tree; this CRAP result is vacuous.' : null;
 }
 
 async function captureCoverage() {
@@ -287,6 +297,7 @@ export async function run(options = parseArguments(process.argv.slice(2))) {
   try {
     const coverageScripts = await readCoverage(coverageDirectory);
     const base = mergeBase(options.base);
+    const allChangedPaths = runGit(['diff', '--name-only', base]).split('\n').filter(Boolean);
     const changedPaths = runGit(['diff', '--name-only', base, '--', 'plugins']).split('\n').filter(Boolean);
     const sources = (await sourcePaths()).filter((sourcePath) => changedPaths.includes(path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/')));
     const lizardResult = spawnSync('lizard', ['--csv', ...sources], { cwd: repositoryRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
@@ -302,13 +313,20 @@ export async function run(options = parseArguments(process.argv.slice(2))) {
       const status = metric.unverified ? 'UNVERIFIED' : metric.crap >= THRESHOLD ? 'FAIL' : 'PASS';
       process.stdout.write(`${status} ${metric.unverified ? formatUnverifiedMetric(metric) : formatMetric(metric)}\n`);
     });
-    const warning = emptyChangedFunctionWarning(changedMetrics, !runGit(['status', '--porcelain']));
+    const warning = emptyChangedFunctionWarning({
+      changedMetrics,
+      workingTreeIsClean: !runGit(['status', '--porcelain']),
+      baseWasExplicit: Boolean(options.base),
+      base,
+      allChangedPaths,
+      changedPaths,
+    });
     if (warning) process.stderr.write(`${warning}\n`);
     if (failures.length || unverified.length) {
       const errors = [...failures, ...unverified.map(formatUnverifiedMetric)];
       process.stderr.write(`CRAP gate failed against ${base}:\n${errors.map((failure) => `- ${failure}`).join('\n')}\n`);
       process.exitCode = 1;
-    } else process.stdout.write(`CRAP gate passed against ${base}: ${changedMetrics.length} changed or new functions scored below ${THRESHOLD}.\n`);
+    } else process.stdout.write(`CRAP gate passed against ${base}: ${changedMetrics.length ? `${changedMetrics.length} changed or new functions scored below ${THRESHOLD}.` : 'no changed or new functions were scored.'}\n`);
     return { metrics, changedMetrics, failures, unverified };
   } finally {
     if (!options.coverageDirectory) await fs.rm(coverageDirectory, { recursive: true, force: true });

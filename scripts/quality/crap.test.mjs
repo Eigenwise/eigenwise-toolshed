@@ -117,8 +117,48 @@ test('keeps unmeasurable source functions in the metric list', async () => {
   }
 });
 
-test('warns when a clean tree has no changed functions', () => {
-  assert.equal(emptyChangedFunctionWarning([], true), 'Warning: no changed functions were found in a clean working tree; this CRAP result is vacuous.');
-  assert.equal(emptyChangedFunctionWarning([metric({ complexity: 1, coverage: 1 })], true), null);
-  assert.equal(emptyChangedFunctionWarning([], false), null);
+function caveatInput(overrides) {
+  return {
+    changedMetrics: [],
+    workingTreeIsClean: true,
+    baseWasExplicit: true,
+    base: 'base-sha',
+    allChangedPaths: ['plugins/example/lib/subject.js'],
+    changedPaths: ['plugins/example/lib/subject.js'],
+    ...overrides,
+  };
+}
+
+test('stays silent once a changed function was scored', () => {
+  assert.equal(emptyChangedFunctionWarning(caveatInput({ changedMetrics: [metric({ complexity: 1, coverage: 1 })] })), null);
+});
+
+test('warns on the HEAD-default trap: no --base, empty diff, clean tree', () => {
+  const warning = emptyChangedFunctionWarning(caveatInput({ baseWasExplicit: false, allChangedPaths: [], changedPaths: [] }));
+  assert.match(warning, /no --base was given/);
+  assert.match(warning, /vacuous/);
+});
+
+test('warns when an explicit --base produces an empty diff', () => {
+  const warning = emptyChangedFunctionWarning(caveatInput({ baseWasExplicit: true, allChangedPaths: [], changedPaths: [] }));
+  assert.equal(warning, 'Warning: --base base-sha produced an empty diff; this CRAP result is vacuous.');
+});
+
+test('reports out-of-scope changed paths instead of calling a non-empty diff vacuous', () => {
+  const warning = emptyChangedFunctionWarning(caveatInput({
+    allChangedPaths: ['scripts/quality/crap.mjs', 'scripts/quality/crap.test.mjs'],
+    changedPaths: [],
+  }));
+  assert.doesNotMatch(warning, /this CRAP result is vacuous/);
+  assert.match(warning, /out of scope/);
+  assert.match(warning, /scripts\/quality\/crap\.mjs/);
+  assert.match(warning, /scripts\/quality\/crap\.test\.mjs/);
+});
+
+test('warns when a clean tree has changed scored files but no changed functions', () => {
+  assert.equal(
+    emptyChangedFunctionWarning(caveatInput()),
+    'Warning: no changed functions were found in a clean working tree; this CRAP result is vacuous.',
+  );
+  assert.equal(emptyChangedFunctionWarning(caveatInput({ workingTreeIsClean: false })), null);
 });
