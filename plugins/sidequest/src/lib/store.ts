@@ -576,6 +576,7 @@ const {
   dispatchCanBindRuntimeIdentity,
   recordDispatchRuntimeIdentity,
   bindDispatchClaimToken,
+  exchangeGuessedClaimIdentity,
   bindDispatchAgent,
   dispatchMatchesStopIdentity,
   markDispatchStopped,
@@ -1941,6 +1942,11 @@ function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
       message: `${found.ref} reduced Agent-schema dispatch requires hook-reported agent_id before the first claim. Stop without claiming; use a host that reports agent_id and permission_mode ("auto" or "bypassPermissions") to PreToolUse. Do not add unsupported Agent fields or change permissions.`,
     } : {}),
   };
+  // Only a token admits the exchange: a direct claim proves nothing about which reservation this runtime is.
+  exchangeGuessedClaimIdentity(slug, found.id, opts?.sessionId, opts?.executor, agentId, () => {
+    const admission = claimAdmission(slug, found.id, opts);
+    return Boolean(admission.ok && admission.token);
+  });
   return withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     if (!ticket) return { ok: false, reason: 'not_found' };

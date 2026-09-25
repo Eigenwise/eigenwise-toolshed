@@ -662,8 +662,12 @@ function terminalExecutorTicket(input: HookInput): TerminalExecutorTicket | null
   try {
     const store = require(runtimeModule('store')) as Store;
     const matches: TerminalExecutorTicket[] = [];
+    let liveBinding = false;
     for (const project of store.listProjects({ all: true })) {
       for (const ticket of store.listTickets(project.slug)) {
+        // A terminal record keeps whatever agent id a SubagentStart guess once gave it. When this runtime is bound
+        // to a live dispatch, that stale guess names a sibling, not this executor (SQ-53, GitHub #298).
+        if (ticket.dispatch?.sessionId === sessionId && !ticket.dispatch?.terminalAt && ticket.dispatch?.agentId === agentId) liveBinding = true;
         if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId || !ticket.dispatch?.terminalAt || ticket.claim?.by || !dispatchIdentityMatches(ticket, agentId, executor)) continue;
         if (ticket.submission?.supersededBy?.ref || ticket.completion?.supersededBy?.ref) {
           const by = String(ticket.completion?.by || 'the control plane').trim();
@@ -675,7 +679,7 @@ function terminalExecutorTicket(input: HookInput): TerminalExecutorTicket | null
         }
       }
     }
-    return matches.length === 1 ? matches[0] || null : null;
+    return !liveBinding && matches.length === 1 ? matches[0] || null : null;
   } catch (_) {
     return null;
   }
