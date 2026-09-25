@@ -967,6 +967,95 @@ test('SQ-2190: a creation order that crossed two siblings is exchanged for the c
   }
 });
 
+// SQ-53 (GitHub #298). The same crossing as SQ-2190, but the real SubagentStart carries no agent name, so the
+// reported checkout follows the creation-order guess and binds each runtime to its sibling's reservation. The
+// dispatch token each executor claims with is the first fact that names its own ticket, and every later write
+// has to be judged against that ticket's lease, never the sibling's.
+test('SQ-53: each sibling write is judged against the lease of the ticket its own token claimed', () => {
+  const created: Array<{ ref: string; worktree: string }> = [];
+  const sequence = `${process.pid}-${Date.now()}`;
+  const sessionId = `sq53-session-${sequence}`;
+  const canonical = (worktree: string) => worktrees.canonicalPath(worktree);
+  const reserve = (label: string) => {
+    const ticket = store.createTicket(slug, {
+      title: `SQ-53 crossed sibling ${label}`,
+      category: 'codebase-exploration',
+      description: 'One of two same-executor dispatches launched from a single orchestrator session.',
+      files: ['README.md'],
+    });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+      agentName: `sq53-${label}-${sequence}`,
+    }).ok, true);
+    const harnessWorktree = path.join(SIDEQUEST_HOME, 'sq53-targets', `${label}-${sequence}`);
+    fs.mkdirSync(path.dirname(harnessWorktree), { recursive: true });
+    created.push({ ref: ticket.ref, worktree: harnessWorktree });
+    return {
+      ref: ticket.ref,
+      executor: prepared.ticket.dispatchExecutor,
+      tokenFile: prepared.ticket.dispatch.tokenFile,
+      harnessWorktree,
+      agentId: `a53${label}${sequence}`.replace(/[^a-z0-9]/g, ''),
+    };
+  };
+  const create = (worktree: string) => {
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '--detach', worktree], { cwd: PROJECT, windowsHide: true });
+    completeCheckoutCreation(sessionId, worktree);
+  };
+
+  try {
+    const first = reserve('first');
+    const second = reserve('second');
+    assert.equal(first.executor, second.executor, 'the crossing only happens between siblings sharing an executor');
+    create(first.harnessWorktree);
+    create(second.harnessWorktree);
+    const recorded = (ref: string) => store.getTicket(slug, ref).dispatch.worktree;
+    assert.equal(recorded(first.ref), canonical(second.harnessWorktree), 'the fixture reproduces the creation-order crossing');
+    assert.equal(recorded(second.ref), canonical(first.harnessWorktree));
+
+    // Nameless SubagentStart from each runtime's own harness checkout lands on the sibling reservation.
+    for (const runtime of [first, second]) {
+      store.bindDispatchAgent(sessionId, runtime.executor, runtime.agentId, null, runtime.harnessWorktree);
+    }
+    // Each executor then claims with its own token, as its briefing tells it to.
+    for (const runtime of [first, second]) {
+      assert.equal(runHook(BIND_RUNTIME_IDENTITY, {
+        session_id: sessionId,
+        agent_id: runtime.agentId,
+        agent_type: runtime.executor,
+        cwd: runtime.harnessWorktree,
+        tool_name: 'mcp__plugin_sidequest_board__claim',
+        tool_input: { ref: runtime.ref, project: PROJECT, by: `sq53-${runtime.agentId}`, executor: runtime.executor, tokenFile: runtime.tokenFile },
+      }), null);
+      const claimed = store.claimTicket(slug, runtime.ref, `sq53-${runtime.agentId}`, {
+        tokenFile: runtime.tokenFile, executor: runtime.executor, sessionId, requireBoundAgent: true,
+      });
+      assert.equal(claimed.ok, true, `${runtime.ref} claim: ${claimed.reason} ${claimed.message || ''}`);
+    }
+
+    for (const runtime of [first, second]) {
+      const other = runtime === first ? second : first;
+      const own = recorded(runtime.ref);
+      const ownWrite = runHook(GUARD_ISOLATION, writePayload(runtime.agentId, runtime.executor, sessionId, path.join(own, 'README.md'), runtime.harnessWorktree));
+      assert.equal(ownWrite, null, `${runtime.ref} was refused a write inside its own leased worktree: ${ownWrite?.hookSpecificOutput?.permissionDecisionReason}`);
+      const foreign = runHook(GUARD_ISOLATION, writePayload(runtime.agentId, runtime.executor, sessionId, path.join(recorded(other.ref), 'README.md'), runtime.harnessWorktree));
+      assert.equal(foreign.hookSpecificOutput.permissionDecision, 'deny');
+      const reason = foreign.hookSpecificOutput.permissionDecisionReason;
+      assert.match(reason, new RegExp(`${runtime.ref} has no write lease`), `the refusal named a foreign ticket: ${reason}`);
+      assert.ok(!reason.includes(other.ref), `the refusal named the sibling ${other.ref}: ${reason}`);
+    }
+  } finally {
+    for (const target of created) {
+      store.releaseTicket(slug, target.ref, 'sq53-cleanup', { status: 'todo', source: 'test', force: true });
+      if (fs.existsSync(target.worktree)) execFileSync('git', ['worktree', 'remove', '--force', target.worktree], { cwd: PROJECT, windowsHide: true });
+    }
+  }
+});
+
 test('a fresh re-dispatch binds its created checkout when the runtime reports the prior retained identity', () => {
   const sequence = `${process.pid}-${Date.now()}`;
   const ticket = store.createTicket(slug, {

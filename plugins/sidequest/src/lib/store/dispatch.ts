@@ -3068,6 +3068,66 @@ function exchangeCrossedCreationBinding(slug?: any, ticketId?: any, sessionId?: 
   }));
 }
 
+// A runtime identity no token has vouched for yet: SubagentStart attached it by session, executor, name or
+// reported checkout, all of which siblings launched together share or can cross.
+function guessedRuntimeIdentity(ticket?: any, state?: any, sessionId?: any, executor?: any) {
+  return Boolean(state && state.sessionId === sessionId && state.executor === executor && !state.terminalAt
+    && state.outcome === 'launched' && !ticket?.claim?.by && state.bindSource !== 'claim_runtime_identity');
+}
+
+// SubagentStart cannot tell same-executor siblings of one session apart (hook stdin carries agent_id, never the
+// agent name), so it can attach a runtime to its sibling's reservation. Every hook then resolves that runtime to the
+// sibling: its writes are judged against the sibling's lease, and it is told to stop when the sibling closes
+// (SQ-53, GitHub #298). The dispatch token presented at claim is the first fact that names the runtime's own ticket,
+// so it settles the guess. Only guessed identities move: a reservation some token already bound, a claimed one, or a
+// terminal one is never rewritten, and the admission is re-checked under both locks, taken in a fixed order so two
+// siblings claiming at once cannot deadlock and the loser finds nothing left to exchange.
+function exchangeGuessedClaimIdentity(slug?: any, ticketId?: any, sessionId?: any, executor?: any, agentId?: any, admitted?: () => boolean) {
+  const normalizedSessionId = String(sessionId || '').trim();
+  const normalizedExecutor = String(executor || '').trim();
+  const normalizedAgentId = String(agentId || '').trim();
+  if (!normalizedSessionId || !normalizedExecutor || !normalizedAgentId) return null;
+  const target = getTicket(slug, ticketId);
+  if (!guessedRuntimeIdentity(target, dispatchState(target), normalizedSessionId, normalizedExecutor)) return null;
+  const displaced = String(dispatchState(target).agentId || '').trim();
+  if (displaced === normalizedAgentId) return null;
+  const holders = ticketsMentioningSession(normalizedSessionId).filter(({ slug: holderSlug, ticket }) => {
+    const state = dispatchState(ticket);
+    return !(holderSlug === slug && ticket.id === target.id) && !state?.terminalAt
+      && String(state?.agentId || '').trim() === normalizedAgentId;
+  });
+  if (holders.length > 1) return null;
+  const holder = holders[0] || null;
+  if (holder && !guessedRuntimeIdentity(holder.ticket, dispatchState(holder.ticket), normalizedSessionId, normalizedExecutor)) return null;
+  if (!holder && !displaced) return null;
+  const [first, second] = [{ slug, id: target.id }, ...(holder ? [{ slug: holder.slug, id: holder.ticket.id }] : [])]
+    .sort((left, right) => `${left.slug}/${left.id}`.localeCompare(`${right.slug}/${right.id}`));
+  const locked = (fn: () => any) => withTicketLock(first!.slug, first!.id, () => second ? withTicketLock(second.slug, second.id, fn) : fn());
+  return locked(() => {
+    const current = getTicket(slug, target.id);
+    const currentState = dispatchState(current);
+    if (!guessedRuntimeIdentity(current, currentState, normalizedSessionId, normalizedExecutor)
+      || String(currentState.agentId || '').trim() !== displaced) return null;
+    const currentHolder = holder ? getTicket(holder.slug, holder.ticket.id) : null;
+    const holderState = currentHolder ? dispatchState(currentHolder) : null;
+    if (currentHolder && (!guessedRuntimeIdentity(currentHolder, holderState, normalizedSessionId, normalizedExecutor)
+      || String(holderState.agentId || '').trim() !== normalizedAgentId)) return null;
+    if (!admitted || !admitted()) return null;
+    const now = new Date().toISOString();
+    currentState.agentId = normalizedAgentId;
+    currentState.runtimeIdentityExchange = { at: now, from: displaced || null, with: currentHolder?.ref || null, reason: 'claim_token' };
+    stampDispatchEvent(current, 'claim-identity-exchange', now);
+    putTicket(slug, current);
+    if (currentHolder) {
+      holderState.agentId = displaced || null;
+      holderState.runtimeIdentityExchange = { at: now, from: normalizedAgentId, with: current.ref, reason: 'claim_token' };
+      stampDispatchEvent(currentHolder, 'claim-identity-exchange', now);
+      putTicket(holder!.slug, currentHolder);
+    }
+    return { ok: true, exchangedWith: currentHolder?.ref || null };
+  });
+}
+
 function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agentName?: any, worktree?: any) {
   const normalizedSessionId = String(sessionId || '').trim();
   const normalizedExecutor = String(executor || '').trim();
@@ -3366,6 +3426,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     dispatchCanBindRuntimeIdentity,
     recordDispatchRuntimeIdentity,
     bindDispatchClaimToken,
+    exchangeGuessedClaimIdentity,
     bindDispatchAgent,
     dispatchMatchesStopIdentity,
     markDispatchStopped,
