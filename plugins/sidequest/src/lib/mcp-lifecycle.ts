@@ -86,6 +86,18 @@ const VERIFICATION_WAIVER_PROP = {
   },
 };
 
+// The briefing is read before the claim, so an executor whose crossed checkout lease the claim settled (SQ-55) may
+// already be holding the sibling's path. The claim result is the first answer it reads afterwards.
+function claimWorktreeCorrection(ticket: any) {
+  const dispatch = ticket?.dispatch;
+  const exchange = dispatch?.worktreeBindingExchange;
+  if (exchange?.reason !== 'claim_token' || dispatch.sharedTree !== false || !dispatch.worktree) return null;
+  return {
+    worktree: dispatch.worktree,
+    worktreeCorrection: `${ticket.ref} is leased to ${dispatch.worktree}, the checkout this executor runs in. A briefing path of ${exchange.from || 'another checkout'} belongs to ${exchange.with || 'a sibling dispatch'}; ignore it and work only in ${dispatch.worktree}.`,
+  };
+}
+
 function compactIntegrationDelivery(integration: any) {
   const { verify: _verify, ...delivery } = integration;
   return delivery;
@@ -470,7 +482,7 @@ const tools: ToolDefinition[] = [
       if (!res.ok) res.message = res.reason === 'executor_mismatch'
         ? claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim, meta.path)
         : res.message || claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim, meta.path);
-      return mutationAck(slug, res);
+      return mutationAck(slug, res, res.ok ? claimWorktreeCorrection(res.ticket) : null);
     },
   },
   {

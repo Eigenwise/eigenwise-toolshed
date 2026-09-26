@@ -22,6 +22,7 @@ process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
 const agentsync = require('../lib/agentsync.js');
+const mcp = require('../lib/mcp.js');
 const worktrees = require('../lib/worktrees.js');
 const worktreeLease = require('../lib/kernel/worktree.js');
 
@@ -1053,6 +1054,156 @@ test('SQ-53: each sibling write is judged against the lease of the ticket its ow
       store.releaseTicket(slug, target.ref, 'sq53-cleanup', { status: 'todo', source: 'test', force: true });
       if (fs.existsSync(target.worktree)) execFileSync('git', ['worktree', 'remove', '--force', target.worktree], { cwd: PROJECT, windowsHide: true });
     }
+  }
+});
+
+// SQ-55 (GitHub #298). Under harness isolation an executor is confined to the checkout the harness created for it,
+// so a crossed creation-order guess that leaves its ticket leased to the sibling's checkout refuses every write it can
+// make. The crossing is not keyed on executor type: an xhigh and a high executor spawned together crossed too.
+const SQ55_OTHER_CATEGORY = 'sq55-crossed-other-executor';
+
+interface Sq55Runtime {
+  ref: string;
+  executor: string;
+  tokenFile: string;
+  harnessWorktree: string;
+  agentId: string;
+}
+
+function sq55CrossedPair(label: string, mixedExecutors: boolean) {
+  const sequence = `${label}-${process.pid}-${Date.now()}`;
+  const sessionId = `sq55-session-${sequence}`;
+  const created: Array<{ ref: string; worktree: string }> = [];
+  if (mixedExecutors) {
+    store.setCategory(Object.assign({}, exploration, {
+      id: SQ55_OTHER_CATEGORY,
+      name: 'SQ-55 sibling of another executor type',
+      route: { model: 'opus', effort: 'xhigh' },
+      fallback: null,
+    }));
+  }
+  const reserve = (role: string, category: string): Sq55Runtime => {
+    const ticket = store.createTicket(slug, {
+      title: `SQ-55 crossed sibling ${role} ${label}`,
+      category,
+      description: 'One of two dispatches launched in one Agent message from a single orchestrator session.',
+      files: ['README.md'],
+    });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+      agentName: `sq55-${role}-${sequence}`,
+    }).ok, true);
+    const harnessWorktree = path.join(SIDEQUEST_HOME, 'sq55-targets', `${role}-${sequence}`);
+    fs.mkdirSync(path.dirname(harnessWorktree), { recursive: true });
+    created.push({ ref: ticket.ref, worktree: harnessWorktree });
+    return {
+      ref: ticket.ref,
+      executor: prepared.ticket.dispatchExecutor,
+      tokenFile: prepared.ticket.dispatch.tokenFile,
+      harnessWorktree,
+      agentId: `a55${role}${sequence}`.replace(/[^a-z0-9]/g, ''),
+    };
+  };
+  const first = reserve('first', 'codebase-exploration');
+  const second = reserve('second', mixedExecutors ? SQ55_OTHER_CATEGORY : 'codebase-exploration');
+  if (mixedExecutors) assert.notEqual(first.executor, second.executor, 'the fixture needs siblings of different executor types');
+  else assert.equal(first.executor, second.executor, 'the fixture needs siblings of one executor type');
+  for (const runtime of [first, second]) {
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, runtime.harnessWorktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '--detach', runtime.harnessWorktree], { cwd: PROJECT, windowsHide: true });
+    completeCheckoutCreation(sessionId, runtime.harnessWorktree);
+  }
+  const recorded = (ref: string) => store.getTicket(slug, ref).dispatch.worktree;
+  assert.equal(recorded(first.ref), worktrees.canonicalPath(second.harnessWorktree), 'the fixture reproduces the creation-order crossing');
+  assert.equal(recorded(second.ref), worktrees.canonicalPath(first.harnessWorktree));
+  // The nameless SubagentStart each runtime's hook sends; whatever it binds is still a guess.
+  for (const runtime of [first, second]) {
+    store.bindDispatchAgent(sessionId, runtime.executor, runtime.agentId, null, runtime.harnessWorktree);
+  }
+  const claim = async (runtime: Sq55Runtime, cwd: string) => {
+    assert.equal(runHook(BIND_RUNTIME_IDENTITY, {
+      session_id: sessionId,
+      agent_id: runtime.agentId,
+      agent_type: runtime.executor,
+      cwd,
+      tool_name: 'mcp__plugin_sidequest_board__claim',
+      tool_input: { ref: runtime.ref, project: PROJECT, by: `sq55-${runtime.agentId}`, executor: runtime.executor, tokenFile: runtime.tokenFile },
+    }), null);
+    const response = await mcp.handleRequest({
+      jsonrpc: '2.0',
+      id: `sq55-claim-${runtime.ref}`,
+      method: 'tools/call',
+      params: {
+        name: 'claim',
+        arguments: { ref: runtime.ref, project: PROJECT, by: `sq55-${runtime.agentId}`, executor: runtime.executor, tokenFile: runtime.tokenFile, session: sessionId },
+      },
+    });
+    const ack = JSON.parse(response.result.content[0].text);
+    assert.equal(ack.ok, true, `${runtime.ref} claim: ${ack.reason} ${ack.message || ''}`);
+    return ack;
+  };
+  const write = (runtime: Sq55Runtime, worktree: string) => runHook(
+    GUARD_ISOLATION,
+    writePayload(runtime.agentId, runtime.executor, sessionId, path.join(worktree, 'README.md'), runtime.harnessWorktree),
+  );
+  const cleanup = () => {
+    for (const target of created) {
+      store.releaseTicket(slug, target.ref, 'sq55-cleanup', { status: 'todo', source: 'test', force: true });
+      if (fs.existsSync(target.worktree)) execFileSync('git', ['worktree', 'remove', '--force', target.worktree], { cwd: PROJECT, windowsHide: true });
+    }
+  };
+  return { sessionId, first, second, recorded, claim, write, cleanup };
+}
+
+for (const mixedExecutors of [false, true]) {
+  test(`SQ-55: crossed siblings of ${mixedExecutors ? 'different executor types' : 'one executor type'} each write only in the checkout the harness confined them to`, async () => {
+    const pair = sq55CrossedPair(mixedExecutors ? 'mixed' : 'same', mixedExecutors);
+    try {
+      for (const runtime of [pair.first, pair.second]) {
+        const ack = await pair.claim(runtime, runtime.harnessWorktree);
+        // Each pre-claim briefing named the sibling's checkout, so the claim result has to say which one is really leased.
+        assert.equal(ack.worktree, worktrees.canonicalPath(runtime.harnessWorktree), `${runtime.ref} claim result names another checkout`);
+        assert.match(ack.worktreeCorrection, new RegExp(`${runtime.ref} is leased to .*ignore it and work only in`));
+      }
+      for (const runtime of [pair.first, pair.second]) {
+        const other = runtime === pair.first ? pair.second : pair.first;
+        const ownWrite = pair.write(runtime, runtime.harnessWorktree);
+        assert.equal(ownWrite, null, `${runtime.ref} was refused a write inside its confined checkout: ${ownWrite?.hookSpecificOutput?.permissionDecisionReason}`);
+        assert.equal(pair.recorded(runtime.ref), worktrees.canonicalPath(runtime.harnessWorktree), `${runtime.ref} is not leased to its own checkout`);
+        const dispatch = store.getTicket(slug, runtime.ref).dispatch;
+        assert.equal(dispatch.agentId, runtime.agentId, `${runtime.ref} does not hold its own runtime`);
+        assert.equal(dispatch.worktreeBindingExchange?.reason, 'claim_token');
+        const briefing = agentsync.renderTicketBriefing(store.getTicket(slug, runtime.ref), 'sq55-briefing-token', slug, PROJECT);
+        assert.ok(briefing.includes(`Expected worktree root: ${worktrees.canonicalPath(runtime.harnessWorktree)}`), `${runtime.ref} post-claim briefing names another checkout`);
+        const foreign = pair.write(runtime, other.harnessWorktree);
+        assert.equal(foreign?.hookSpecificOutput?.permissionDecision, 'deny', `${runtime.ref} was allowed to write in ${other.ref}'s checkout`);
+        assert.match(foreign.hookSpecificOutput.permissionDecisionReason, new RegExp(`${runtime.ref} has no write lease`));
+      }
+    } finally {
+      pair.cleanup();
+    }
+  });
+}
+
+test('SQ-55: a crossed claim never moves the checkout binding of a sibling that already claimed', async () => {
+  const pair = sq55CrossedPair('claimed', false);
+  try {
+    // The sibling claims from the parent checkout, which proves nothing about which linked checkout it owns, so its
+    // crossed binding survives the claim and is now claim-owned.
+    assert.equal((await pair.claim(pair.second, PROJECT)).worktreeCorrection, undefined);
+    assert.equal(pair.recorded(pair.second.ref), worktrees.canonicalPath(pair.first.harnessWorktree));
+    assert.equal((await pair.claim(pair.first, pair.first.harnessWorktree)).worktreeCorrection, undefined);
+    assert.equal(pair.recorded(pair.second.ref), worktrees.canonicalPath(pair.first.harnessWorktree), 'a claimed sibling lost its checkout binding');
+    assert.equal(pair.recorded(pair.first.ref), worktrees.canonicalPath(pair.second.harnessWorktree));
+    assert.equal(store.getTicket(slug, pair.second.ref).dispatch.worktreeBindingExchange, undefined);
+    const refused = pair.write(pair.first, pair.first.harnessWorktree);
+    assert.equal(refused?.hookSpecificOutput?.permissionDecision, 'deny');
+    assert.match(refused.hookSpecificOutput.permissionDecisionReason, new RegExp(`${pair.first.ref} has no write lease`));
+  } finally {
+    pair.cleanup();
   }
 });
 

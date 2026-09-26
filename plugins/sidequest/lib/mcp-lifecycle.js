@@ -71,6 +71,15 @@ const VERIFICATION_WAIVER_PROP = {
     expiresAt: { type: "string", description: "Future ISO timestamp after which the waiver is invalid." }
   }
 };
+function claimWorktreeCorrection(ticket) {
+  const dispatch = ticket?.dispatch;
+  const exchange = dispatch?.worktreeBindingExchange;
+  if (exchange?.reason !== "claim_token" || dispatch.sharedTree !== false || !dispatch.worktree) return null;
+  return {
+    worktree: dispatch.worktree,
+    worktreeCorrection: `${ticket.ref} is leased to ${dispatch.worktree}, the checkout this executor runs in. A briefing path of ${exchange.from || "another checkout"} belongs to ${exchange.with || "a sibling dispatch"}; ignore it and work only in ${dispatch.worktree}.`
+  };
+}
 function compactIntegrationDelivery(integration) {
   const { verify: _verify, ...delivery } = integration;
   return delivery;
@@ -370,7 +379,7 @@ const tools = [
       const by = requireBy(args, "claim");
       const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, reason: args.reason, tokenFile: args.tokenFile, executor: args.executor, effort: args.effort, source: "mcp", sessionId: sessionOf(args), requireBoundAgent: true });
       if (!res.ok) res.message = res.reason === "executor_mismatch" ? claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim, meta.path) : res.message || claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim, meta.path);
-      return mutationAck(slug, res);
+      return mutationAck(slug, res, res.ok ? claimWorktreeCorrection(res.ticket) : null);
     }
   },
   {

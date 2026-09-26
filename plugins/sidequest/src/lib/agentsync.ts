@@ -744,6 +744,7 @@ function ticketIsolationContract(ticket?: any, projectPath?: any) {
     'Worktree isolation contract: this dispatch runs in its own linked worktree, never in the shared checkout.',
     'The harness refuses heredocs in isolated worktrees; Write scripts to your scratchpad and run them by path.',
     `Expected worktree root: ${expected}`,
+    'If the claim result carries `worktreeCorrection`, its `worktree` replaces this root: siblings launched together can be recorded against each other\'s checkouts until they claim.',
     'Confirm it before your first write, and again after any resume from a coordinator message: `git rev-parse --git-dir` must differ from `git rev-parse --git-common-dir`.',
     `If they match you are in the shared checkout ${root}. Stop. Write nothing, tell the orchestrator this ticket lost its worktree and needs re-dispatch, and name any work you already have staged there so it can be committed out of the shared tree rather than lost.`,
   ].join('\n')];

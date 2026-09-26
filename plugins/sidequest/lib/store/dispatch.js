@@ -2567,6 +2567,68 @@ function createDispatch(dependencies) {
       return { ok: true, exchangedWith: currentHolder?.ref || null };
     });
   }
+  const CHECKOUT_BINDING_FIELDS = [
+    "worktree",
+    "worktreeGitDirectory",
+    "worktreeCommonGitDirectory",
+    "worktreeCheckoutInstance",
+    "worktreeObservedRevision",
+    "worktreeBoundAt",
+    "worktreeCreationCompletedAt",
+    "worktreeProvisionedAt",
+    "ownedDependencyLinks",
+    "worktreeProvisioningFailure"
+  ];
+  function crossedClaimCheckoutReservation(ticket, state, sessionId) {
+    return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && state.outcome === "launched" && !state.terminalAt && !state.claimedAt && !ticket?.claim?.by && !state.continuation?.sourceWorktree && state.worktreeBindingSource === "worktree-create" && state.worktree);
+  }
+  function guessedSiblingCheckout(ticket, state, sessionId) {
+    return crossedClaimCheckoutReservation(ticket, state, sessionId) && !["claim_token", "claim_runtime_identity"].includes(state.bindSource);
+  }
+  function observedCheckoutMatchesRecord(state, facts) {
+    const recorded = completedWorktreeCreationFacts(state);
+    return Boolean(recorded && facts && recorded.worktree === facts.worktree && recorded.gitDirectory === facts.gitDirectory && recorded.commonGitDirectory === facts.commonGitDirectory && recorded.checkoutInstance === facts.checkoutInstance);
+  }
+  function exchangeCrossedClaimCheckout(slug, ticketId, sessionId, observedWorktree, admitted) {
+    const normalizedSessionId = String(sessionId || "").trim();
+    const supplied = String(observedWorktree || "").trim();
+    if (!normalizedSessionId || !supplied) return null;
+    const observed = canonicalPath(supplied);
+    const target = getTicket(slug, ticketId);
+    const targetState = dispatchState(target);
+    if (!crossedClaimCheckoutReservation(target, targetState, normalizedSessionId)) return null;
+    if (canonicalPath(targetState.worktree) === observed) return null;
+    const holders = listTickets(slug).filter((candidate) => candidate.id !== target.id && guessedSiblingCheckout(candidate, dispatchState(candidate), normalizedSessionId) && canonicalPath(dispatchState(candidate).worktree) === observed);
+    if (holders.length !== 1) return null;
+    const holder = holders[0];
+    const baseline = String(targetState.baseCommit || "").trim();
+    if (!baseline || baseline !== String(dispatchState(holder).baseCommit || "").trim()) return null;
+    const facts = immutableWorktreeFacts(slug, observed);
+    if (!observedCheckoutMatchesRecord(dispatchState(holder), facts)) return null;
+    const [firstId, secondId] = [target.id, holder.id].sort();
+    return withTicketLock(slug, firstId, () => withTicketLock(slug, secondId, () => {
+      const current = getTicket(slug, target.id);
+      const currentState = dispatchState(current);
+      const currentHolder = getTicket(slug, holder.id);
+      const holderState = dispatchState(currentHolder);
+      if (!crossedClaimCheckoutReservation(current, currentState, normalizedSessionId) || canonicalPath(currentState.worktree) !== canonicalPath(targetState.worktree) || !guessedSiblingCheckout(currentHolder, holderState, normalizedSessionId) || !observedCheckoutMatchesRecord(holderState, facts)) return null;
+      if (!admitted || !admitted()) return null;
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const from = canonicalPath(currentState.worktree);
+      for (const field of CHECKOUT_BINDING_FIELDS) {
+        const held = currentState[field];
+        currentState[field] = holderState[field] ?? null;
+        holderState[field] = held ?? null;
+      }
+      currentState.worktreeBindingExchange = { at: now, from, with: currentHolder.ref, reason: "claim_token" };
+      holderState.worktreeBindingExchange = { at: now, from: observed, with: current.ref, reason: "claim_token" };
+      stampDispatchEvent(current, "claim-worktree-exchange", now);
+      stampDispatchEvent(currentHolder, "claim-worktree-exchange", now);
+      putTicket(slug, current);
+      putTicket(slug, currentHolder);
+      return { ok: true, exchangedWith: currentHolder.ref, worktree: currentState.worktree, from };
+    }));
+  }
   function bindDispatchAgent(sessionId, executor, agentId, agentName, worktree) {
     const normalizedSessionId = String(sessionId || "").trim();
     const normalizedExecutor = String(executor || "").trim();
@@ -2833,6 +2895,7 @@ function createDispatch(dependencies) {
     recordDispatchRuntimeIdentity,
     bindDispatchClaimToken,
     exchangeGuessedClaimIdentity,
+    exchangeCrossedClaimCheckout,
     bindDispatchAgent,
     dispatchMatchesStopIdentity,
     markDispatchStopped,

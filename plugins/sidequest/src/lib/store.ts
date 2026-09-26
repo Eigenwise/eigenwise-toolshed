@@ -577,6 +577,7 @@ const {
   recordDispatchRuntimeIdentity,
   bindDispatchClaimToken,
   exchangeGuessedClaimIdentity,
+  exchangeCrossedClaimCheckout,
   bindDispatchAgent,
   dispatchMatchesStopIdentity,
   markDispatchStopped,
@@ -1943,10 +1944,12 @@ function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
     } : {}),
   };
   // Only a token admits the exchange: a direct claim proves nothing about which reservation this runtime is.
-  exchangeGuessedClaimIdentity(slug, found.id, opts?.sessionId, opts?.executor, agentId, () => {
+  const tokenAdmitted = () => {
     const admission = claimAdmission(slug, found.id, opts);
     return Boolean(admission.ok && admission.token);
-  });
+  };
+  exchangeGuessedClaimIdentity(slug, found.id, opts?.sessionId, opts?.executor, agentId, tokenAdmitted);
+  exchangeCrossedClaimCheckout(slug, found.id, opts?.sessionId, opts?.observedWorktree, tokenAdmitted);
   return withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     if (!ticket) return { ok: false, reason: 'not_found' };

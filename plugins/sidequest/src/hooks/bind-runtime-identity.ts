@@ -42,7 +42,12 @@ function bindClaimRuntimeIdentity(input: HookInput, agentId: string, executor: s
     const project = String(toolInput.project || '').trim() || store.sessionProjectRoot();
     const found = store.findProject(project);
     if (found.ok && found.slug) {
+      // The harness confines an isolated executor to the linked checkout it created, so the claim's cwd is the one
+      // fact that can settle a crossed creation-order lease (SQ-55). The parent checkout proves nothing and is not sent.
+      const cwd = stringField(input, 'cwd');
+      const checkout = cwd ? enclosingCheckout(cwd) : null;
       const binding = store.bindClaimRuntimeIdentity(found.slug, ref, {
+        observedWorktree: checkout?.linked ? checkout.root : null,
         token: toolInput.token,
         tokenFile: toolInput.tokenFile,
         executor,

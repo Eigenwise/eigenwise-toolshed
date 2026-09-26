@@ -158,7 +158,7 @@ These read-only reports work independently. If Sidequest is not installed in the
 
 **A read-only ticket cannot start in a new repository.** Claude reports the checkout choice and keeps the ticket read-only. You do not need to commit notes or change board settings.
 
-**A worktree-isolated executor cannot write.** Ask Claude to redispatch if the recorded checkout is missing or does not match the assigned checkout.
+**A worktree-isolated executor cannot write.** Ask Claude to redispatch if the recorded checkout is missing or does not match the assigned checkout. Executors launched together can each be recorded against the other's checkout, whatever their executor types. The claim corrects this: when an executor claims with its own dispatch token from inside its checkout, its ticket is leased to that checkout, and the claim result names the corrected path. The claim does not move a checkout that a sibling has already claimed.
 
 **A ticket's project is a different repository from the current session.** An isolated dispatch now cuts its own worktree from the ticket's project and verifies there, not from the session's checkout, so this works across repositories. It only refuses when the same session already has isolated dispatches open on two different projects at once; that case names the conflict and the remedy.
 

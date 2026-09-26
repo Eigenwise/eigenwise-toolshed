@@ -3128,6 +3128,87 @@ function exchangeGuessedClaimIdentity(slug?: any, ticketId?: any, sessionId?: an
   });
 }
 
+// Everything a reservation records about the checkout it holds. These describe the checkout, not the ticket, so when
+// a binding moves they move as one unit and the checkout-instance identity is never re-derived.
+const CHECKOUT_BINDING_FIELDS = [
+  'worktree', 'worktreeGitDirectory', 'worktreeCommonGitDirectory', 'worktreeCheckoutInstance', 'worktreeObservedRevision',
+  'worktreeBoundAt', 'worktreeCreationCompletedAt', 'worktreeProvisionedAt', 'ownedDependencyLinks', 'worktreeProvisioningFailure',
+];
+
+function crossedClaimCheckoutReservation(ticket?: any, state?: any, sessionId?: any) {
+  return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && state.outcome === 'launched'
+    && !state.terminalAt && !state.claimedAt && !ticket?.claim?.by && !state.continuation?.sourceWorktree
+    && state.worktreeBindingSource === 'worktree-create' && state.worktree);
+}
+
+// A sibling's checkout binding is still WorktreeCreate's guess only while no token has vouched for its runtime.
+function guessedSiblingCheckout(ticket?: any, state?: any, sessionId?: any) {
+  return crossedClaimCheckoutReservation(ticket, state, sessionId)
+    && !['claim_token', 'claim_runtime_identity'].includes(state.bindSource);
+}
+
+function observedCheckoutMatchesRecord(state?: any, facts?: any) {
+  const recorded = completedWorktreeCreationFacts(state);
+  return Boolean(recorded && facts && recorded.worktree === facts.worktree && recorded.gitDirectory === facts.gitDirectory
+    && recorded.commonGitDirectory === facts.commonGitDirectory && recorded.checkoutInstance === facts.checkoutInstance);
+}
+
+// WorktreeCreate attributes each new checkout to a reservation in creation order, and nothing in its payload names the
+// executor type, so siblings spawned in one Agent message can each be leased to the other's checkout (SQ-55, GitHub
+// #298). The harness confines each executor to the checkout it created for it, so a crossed lease refuses every write
+// the executor can make. exchangeGuessedClaimIdentity cannot settle this: siblings of different executor types never
+// cross agent ids, only checkouts. The claim is the first call that pairs the token naming the executor's own ticket
+// with the checkout the executor is actually running in, so it settles the checkout guess the same way the token
+// settles the agent id. The observed checkout must be the exact instance the sibling's creation recorded (Git
+// directories and checkout-instance marker), the sibling must still be an unclaimed, non-terminal reservation that no
+// token has vouched for, and both must share one baseline, because a checkout is cut at its reservation's baseline and
+// submission ranges are computed against it. The whole checkout record swaps under both locks, taken in a fixed order.
+function exchangeCrossedClaimCheckout(slug?: any, ticketId?: any, sessionId?: any, observedWorktree?: any, admitted?: () => boolean) {
+  const normalizedSessionId = String(sessionId || '').trim();
+  const supplied = String(observedWorktree || '').trim();
+  if (!normalizedSessionId || !supplied) return null;
+  const observed = canonicalPath(supplied);
+  const target = getTicket(slug, ticketId);
+  const targetState = dispatchState(target);
+  if (!crossedClaimCheckoutReservation(target, targetState, normalizedSessionId)) return null;
+  if (canonicalPath(targetState.worktree) === observed) return null;
+  const holders = listTickets(slug).filter((candidate?: any) => candidate.id !== target.id
+    && guessedSiblingCheckout(candidate, dispatchState(candidate), normalizedSessionId)
+    && canonicalPath(dispatchState(candidate).worktree) === observed);
+  if (holders.length !== 1) return null;
+  const holder = holders[0];
+  const baseline = String(targetState.baseCommit || '').trim();
+  if (!baseline || baseline !== String(dispatchState(holder).baseCommit || '').trim()) return null;
+  const facts = immutableWorktreeFacts(slug, observed);
+  if (!observedCheckoutMatchesRecord(dispatchState(holder), facts)) return null;
+  const [firstId, secondId] = [target.id, holder.id].sort();
+  return withTicketLock(slug, firstId, () => withTicketLock(slug, secondId, () => {
+    const current = getTicket(slug, target.id);
+    const currentState = dispatchState(current);
+    const currentHolder = getTicket(slug, holder.id);
+    const holderState = dispatchState(currentHolder);
+    if (!crossedClaimCheckoutReservation(current, currentState, normalizedSessionId)
+      || canonicalPath(currentState.worktree) !== canonicalPath(targetState.worktree)
+      || !guessedSiblingCheckout(currentHolder, holderState, normalizedSessionId)
+      || !observedCheckoutMatchesRecord(holderState, facts)) return null;
+    if (!admitted || !admitted()) return null;
+    const now = new Date().toISOString();
+    const from = canonicalPath(currentState.worktree);
+    for (const field of CHECKOUT_BINDING_FIELDS) {
+      const held = currentState[field];
+      currentState[field] = holderState[field] ?? null;
+      holderState[field] = held ?? null;
+    }
+    currentState.worktreeBindingExchange = { at: now, from, with: currentHolder.ref, reason: 'claim_token' };
+    holderState.worktreeBindingExchange = { at: now, from: observed, with: current.ref, reason: 'claim_token' };
+    stampDispatchEvent(current, 'claim-worktree-exchange', now);
+    stampDispatchEvent(currentHolder, 'claim-worktree-exchange', now);
+    putTicket(slug, current);
+    putTicket(slug, currentHolder);
+    return { ok: true, exchangedWith: currentHolder.ref, worktree: currentState.worktree, from };
+  }));
+}
+
 function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agentName?: any, worktree?: any) {
   const normalizedSessionId = String(sessionId || '').trim();
   const normalizedExecutor = String(executor || '').trim();
@@ -3427,6 +3508,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     recordDispatchRuntimeIdentity,
     bindDispatchClaimToken,
     exchangeGuessedClaimIdentity,
+    exchangeCrossedClaimCheckout,
     bindDispatchAgent,
     dispatchMatchesStopIdentity,
     markDispatchStopped,

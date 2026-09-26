@@ -216,7 +216,10 @@ function bindClaimRuntimeIdentity(input, agentId, executor) {
     const project = String(toolInput.project || "").trim() || store.sessionProjectRoot();
     const found = store.findProject(project);
     if (found.ok && found.slug) {
+      const cwd = stringField(input, "cwd");
+      const checkout = cwd ? enclosingCheckout(cwd) : null;
       const binding = store.bindClaimRuntimeIdentity(found.slug, ref, {
+        observedWorktree: checkout?.linked ? checkout.root : null,
         token: toolInput.token,
         tokenFile: toolInput.tokenFile,
         executor,
