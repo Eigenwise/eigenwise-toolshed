@@ -14,7 +14,7 @@ const tempCleanup = require("../lib/temp-cleanup");
 const execNames = require("../lib/exec-names");
 const { claimRefusalMessage } = require("../lib/refusal-guidance");
 const { assertSidequestInstall, assertDispatchTransport } = require("../lib/dispatch-preflight");
-const { bodyFromOpts, fail, resolveProject } = require("./sidequest-cmd-shared");
+const { bodyFromOpts, fail, resolveProject, publicJson } = require("./sidequest-cmd-shared");
 const PRIORITY_MARK = { urgent: "!!", high: "!", normal: "", low: "·" };
 function modelMark(t) {
   if (!t.model && !t.effort) return "";
@@ -164,11 +164,11 @@ async function cmdAdd(opts) {
   if (opts["dry-run"]) {
     const ticket2 = await addPreview(opts, input.category, input.complexity);
     if (opts.json) {
-      process.stdout.write(JSON.stringify({ ok: true, dryRun: true, ticket: ticket2 }, null, 2) + "\n");
+      process.stdout.write(publicJson({ ok: true, dryRun: true, ticket: ticket2 }, null, 2) + "\n");
       return;
     }
     console.log(`Dry run: would create "${ticket2.title}" [${ticket2.status}/${ticket2.priority}]`);
-    console.log(JSON.stringify(ticket2, null, 2));
+    console.log(publicJson(ticket2, null, 2));
     return;
   }
   const { slug, meta } = await resolveProject(opts);
@@ -208,7 +208,7 @@ async function cmdAdd(opts) {
   warnings.push(...store.ticketPlanningWarnings(ticket, meta.path));
   warnings.splice(0, warnings.length, ...store.presentWarnings(ticket, warnings));
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ ok: true, project: slug, projectName: meta.name, ticket, category: categoryEcho(ticket), warnings }, null, 2) + "\n");
+    process.stdout.write(publicJson({ ok: true, project: slug, projectName: meta.name, ticket, category: categoryEcho(ticket), warnings }, null, 2) + "\n");
     return;
   }
   const pr = PRIORITY_MARK[ticket.priority] ? ` ${PRIORITY_MARK[ticket.priority]}` : "";
@@ -233,7 +233,7 @@ async function cmdList(opts) {
       limit: opts.limit,
       all: opts.all
     });
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, payload), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug, projectName: meta.name }, payload), null, 2) + "\n");
     return;
   }
   let tickets = store.listTickets(slug);
@@ -275,12 +275,12 @@ async function cmdPulse(opts, positional) {
   const { slug, meta } = await resolveProject(opts);
   const pulse = store.pulsePayload(slug, idOrRef);
   if (!pulse) fail(`pulse: no ticket "${idOrRef}" in ${meta.name}`);
-  process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, pulse), null, 2) + "\n");
+  process.stdout.write(publicJson(Object.assign({ project: slug, projectName: meta.name }, pulse), null, 2) + "\n");
 }
 async function cmdChanges(opts) {
   const { slug, meta } = await resolveProject(opts);
   const changes = store.changesPayload(slug, opts.since);
-  process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, changes), null, 2) + "\n");
+  process.stdout.write(publicJson(Object.assign({ project: slug, projectName: meta.name }, changes), null, 2) + "\n");
 }
 async function cmdUpdate(opts, positional) {
   const idOrRef = positional[0];
@@ -331,7 +331,7 @@ async function cmdUpdate(opts, positional) {
   ];
   warnings.splice(0, warnings.length, ...store.presentWarnings(updated, warnings));
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ ok: true, ticket: updated, category: opts.category != null ? categoryEcho(updated) : void 0, warnings }, null, 2) + "\n");
+    process.stdout.write(publicJson({ ok: true, ticket: updated, category: opts.category != null ? categoryEcho(updated) : void 0, warnings }, null, 2) + "\n");
     return;
   }
   const story = updated.storyId ? store.getStory(slug, updated.storyId) : null;

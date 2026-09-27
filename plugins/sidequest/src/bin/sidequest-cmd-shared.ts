@@ -2,6 +2,11 @@ const path = require('path');
 const os = require('os');
 const fs = require('node:fs/promises');
 const store = require('../lib/store');
+const { redactDispatchCredentials } = require('../lib/credential-projection');
+
+function publicJson(value: any, replacer?: any, space?: any) {
+  return JSON.stringify(redactDispatchCredentials(value), replacer, space);
+}
 
 function fail(msg: any) {
   console.error(`sidequest: ${msg}`);
@@ -95,4 +100,4 @@ function addBodyComment(slug: any, idOrRef: any, by: any, body: any, source: any
 }
 
 
-module.exports = { fail, resolveProject, resolveWatchProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment };
+module.exports = { fail, resolveProject, resolveWatchProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment, publicJson };

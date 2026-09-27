@@ -4,6 +4,10 @@ const path = require("path");
 const os = require("os");
 const fs = require("node:fs/promises");
 const store = require("../lib/store");
+const { redactDispatchCredentials } = require("../lib/credential-projection");
+function publicJson(value, replacer, space) {
+  return JSON.stringify(redactDispatchCredentials(value), replacer, space);
+}
 function fail(msg) {
   console.error(`sidequest: ${msg}`);
   process.exit(1);
@@ -71,4 +75,4 @@ function addBodyComment(slug, idOrRef, by, body, source) {
   if (!body || !String(body).trim()) return null;
   return store.addComment(slug, idOrRef, { by, body, kind: "comment", source });
 }
-module.exports = { fail, resolveProject, resolveWatchProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment };
+module.exports = { fail, resolveProject, resolveWatchProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment, publicJson };

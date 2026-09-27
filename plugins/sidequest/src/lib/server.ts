@@ -19,6 +19,7 @@ const path = require('path');
 const url = require('url');
 const { spawn } = require('child_process');
 const store = require('./store');
+const { redactDispatchCredentials } = require('./credential-projection');
 
 const DASHBOARD_DIST = path.join(__dirname, '..', 'dashboard', 'dist');
 
@@ -92,7 +93,9 @@ const categoryDraftProbe = probeCategoryDraft().then((available?: any) => {
 });
 
 function sendJson(res?: any, code?: any, obj?: any) {
-  const body = JSON.stringify(obj);
+  // The dashboard has no credential-issuing dispatch endpoint. Apply this at
+  // the HTTP boundary so every ticket-shaped read and mutation response agrees.
+  const body = JSON.stringify(redactDispatchCredentials(obj));
   res.writeHead(code, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',

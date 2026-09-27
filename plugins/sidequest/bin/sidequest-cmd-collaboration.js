@@ -15,14 +15,14 @@ const tempCleanup = require("../lib/temp-cleanup");
 const execNames = require("../lib/exec-names");
 const { claimRefusalMessage } = require("../lib/refusal-guidance");
 const { assertSidequestInstall, assertDispatchTransport } = require("../lib/dispatch-preflight");
-const { fail, resolveProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts } = require("./sidequest-cmd-shared");
+const { fail, resolveProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, publicJson } = require("./sidequest-cmd-shared");
 const { modelMark, PRIORITY_MARK } = require("./sidequest-cmd-tickets");
 const { validateModelFilter } = require("./sidequest-cmd-execution");
 async function cmdSweepClaims(opts) {
   const { slug, meta } = await resolveProject(opts);
   const res = store.sweepStaleClaims({ project: slug, source: opts.source || "cli" });
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     return;
   }
   const kinds = res.released.map((entry) => entry.kind).filter(Boolean);
@@ -94,7 +94,7 @@ async function cmdWorktrees(opts, positional) {
   if (action === "status") {
     const storage = await worktrees.storageStatus();
     if (opts.json) {
-      process.stdout.write(JSON.stringify({ project: slug, storage }, null, 2) + "\n");
+      process.stdout.write(publicJson({ project: slug, storage }, null, 2) + "\n");
       return;
     }
     console.log(`worktree storage for ${meta.name}`);
@@ -142,7 +142,7 @@ async function cmdWorktrees(opts, positional) {
     results.push(Object.assign({ project: target.slug }, result));
   }
   if (opts.json) {
-    process.stdout.write(JSON.stringify(opts["all-projects"] ? { projects: results } : results[0], null, 2) + "\n");
+    process.stdout.write(publicJson(opts["all-projects"] ? { projects: results } : results[0], null, 2) + "\n");
     if (results.some((entry) => entry.failures?.length)) process.exitCode = 1;
     return;
   }
@@ -198,7 +198,7 @@ async function cmdNext(opts) {
   const res = store.claimNext(slug, by, { priority: opts.priority, model: opts.model, category: opts.category, direct: !!opts.direct, reason: opts.reason, source: opts.source || "cli", sessionId: sessionId(opts) });
   if (!res.ok && res.reason) res.message = claimRefusalMessage(res.reason, res.ticket && res.ticket.ref || "next ticket", res.ticket || res.claim);
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -224,7 +224,7 @@ async function cmdReconcile(opts) {
   const reason = opts.reason || "worker session ended";
   const res = store.reconcileSession(sid, { reason, source: opts.source || "cli" });
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ session: sid }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ session: sid }, res), null, 2) + "\n");
     return;
   }
   if (!sid) {
@@ -242,7 +242,7 @@ async function cmdAssign(opts, positional, clear) {
   const who = clear ? null : opts.to != null ? opts.to : opts.by != null ? opts.by : "you";
   const res = store.assignTicket(slug, idOrRef, who, { source: opts.source || "cli" });
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -276,7 +276,7 @@ async function cmdRemind(opts, positional) {
   }
   const res = store.setReminder(slug, idOrRef, when.toISOString());
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -292,7 +292,7 @@ async function cmdUnremind(opts, positional) {
   const { slug, meta } = await resolveProject(opts);
   const res = store.cancelReminder(slug, idOrRef);
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -309,7 +309,7 @@ async function cmdComment(opts, positional) {
   const by = controlPlaneIdentity(opts);
   const res = store.addComment(slug, idOrRef, { by, body, source: opts.source || "cli" });
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res, acceptedMessage ? { acceptedAliases: ["accepted message as body"] } : {}), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res, acceptedMessage ? { acceptedAliases: ["accepted message as body"] } : {}), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -340,7 +340,7 @@ async function cmdComments(opts, positional) {
   if (opts.json) {
     const payload = { project: slug, ticket: t.ref, comments };
     if (history.omittedBodies) Object.assign(payload, { omittedBodies: history.omittedBodies, notice: history.notice });
-    process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+    process.stdout.write(publicJson(payload, null, 2) + "\n");
     return;
   }
   if (!comments.length) {
@@ -367,7 +367,7 @@ async function cmdLink(opts, positional) {
   const { slug, meta } = await resolveProject(opts);
   const res = store.linkTickets(slug, a, verb, b);
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res, acceptedAliases.length ? { acceptedAliases } : {}), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res, acceptedAliases.length ? { acceptedAliases } : {}), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -392,7 +392,7 @@ async function cmdUnlink(opts, positional) {
   const { slug, meta } = await resolveProject(opts);
   const res = store.unlinkTickets(slug, a, b);
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -407,7 +407,7 @@ async function cmdReady(opts) {
   if (!validateModelFilter("ready", opts)) return;
   if (opts.json || opts.brief) {
     const payload = store.readyPayload(slug, { model: opts.model, category: opts.category, brief: opts.brief });
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, payload), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug, projectName: meta.name }, payload), null, 2) + "\n");
     return;
   }
   const tickets = store.readyTickets(slug, { model: opts.model, category: opts.category });
@@ -449,7 +449,7 @@ async function cmdArchive(opts, positional) {
   if (opts.done || opts.all || positional[0] === "done" || positional[0] === "all") {
     const res2 = store.archiveAllDone(slug, { source: opts.source || "cli" });
     if (opts.json) {
-      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res2), null, 2) + "\n");
+      process.stdout.write(publicJson(Object.assign({ project: slug }, res2), null, 2) + "\n");
       return;
     }
     const n = res2.archived.length;
@@ -460,7 +460,7 @@ async function cmdArchive(opts, positional) {
   if (!idOrRef) fail("archive: pass a ticket ref, or --done to archive all done. e.g. sidequest archive SQ-3  |  sidequest archive --done");
   const res = store.archiveTicket(slug, idOrRef, { source: opts.source || "cli" });
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -476,7 +476,7 @@ async function cmdUnarchive(opts, positional) {
   const { slug, meta } = await resolveProject(opts);
   const res = store.unarchiveTicket(slug, idOrRef, { source: opts.source || "cli" });
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }

@@ -16,7 +16,7 @@ const { claimRefusalMessage } = require("../lib/refusal-guidance");
 const { collectGitSubmissionFacts, rejectedRelatedReleaseFragments } = require("../lib/mcp-lifecycle");
 const { sourceRevisionBaseline } = require("../lib/source-revision-capability");
 const { assertSidequestInstall, assertDispatchTransport } = require("../lib/dispatch-preflight");
-const { fail, resolveProject, workerId, sessionId, bodyFromOpts, addBodyComment } = require("./sidequest-cmd-shared");
+const { fail, resolveProject, workerId, sessionId, bodyFromOpts, addBodyComment, publicJson } = require("./sidequest-cmd-shared");
 function reportClaimFailure(action, idOrRef, res, meta) {
   process.exitCode = 1;
   console.log(`✗ ${res.message || claimRefusalMessage(res.reason, idOrRef, res.ticket || res.claim, meta.path)}`);
@@ -28,7 +28,7 @@ function validateModelFilter(action, opts) {
   const message = `unknown model "${opts.model}" — known: ${store.getModelVocab().models.join(", ")}`;
   process.exitCode = 1;
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ ok: false, reason: "unknown_model", message }, null, 2) + "\n");
+    process.stdout.write(publicJson({ ok: false, reason: "unknown_model", message }, null, 2) + "\n");
   } else {
     console.log(`✗ ${action}: ${message}`);
   }
@@ -49,7 +49,7 @@ async function cmdClaim(opts, positional) {
   if (opts.json) {
     const payload = Object.assign({ project: slug }, res, { warnings });
     if (!res.ok) payload.message = res.reason === "executor_mismatch" ? claimRefusalMessage(res.reason, idOrRef, res.ticket || res.claim, meta.path) : res.message || claimRefusalMessage(res.reason, idOrRef, res.ticket || res.claim, meta.path);
-    process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+    process.stdout.write(publicJson(payload, null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -79,7 +79,7 @@ async function cmdCheckpoint(opts, positional) {
     fail(`checkpoint: ${e && e.message || e}`);
   }
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -114,7 +114,7 @@ async function cmdVerdict(opts, positional) {
     fail(`verdict: ${e && e.message || e}`);
   }
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -152,7 +152,7 @@ async function cmdRelease(opts, positional) {
   });
   if (res.ok) closeDispatchExecutor(ticket);
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -205,7 +205,7 @@ async function cmdDone(opts, positional) {
     closeDispatchExecutor(ticket);
   }
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -257,7 +257,7 @@ async function cmdGroomClose(opts, positional) {
   const recovery = store.groomCloseRecovery(slug, idOrRef, { by, reason, evidence: opts["recovery-evidence"] });
   if (!recovery.ok) {
     if (opts.json) {
-      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, recovery.recovered), null, 2) + "\n");
+      process.stdout.write(publicJson(Object.assign({ project: slug }, recovery.recovered), null, 2) + "\n");
       process.exitCode = 1;
       return;
     }
@@ -276,7 +276,7 @@ async function cmdGroomClose(opts, positional) {
   if (res.ok && !res.idempotent) closeDispatchExecutor(ticket);
   if (res.ok && opts.integration) Object.assign(res, await advanceAndSweepAfterIntegration(slug, meta.path, res.ticket));
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -311,7 +311,7 @@ async function cmdScopeRequest(opts, positional) {
   const by = workerId(opts);
   const res = store.requestScope(slug, idOrRef, by, files, { source: opts.source || "cli", force: !!opts.force });
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -372,7 +372,7 @@ async function cmdCommit(opts, positional) {
     if (!comment.ok) warnings.push(`out-of-scope paths weren't recorded: ${comment.reason}`);
   }
   if (opts.json) {
-    process.stdout.write(JSON.stringify({
+    process.stdout.write(publicJson({
       project: slug,
       ref: ticket.ref,
       commit: result.commit,
@@ -421,7 +421,7 @@ async function cmdRework(opts, positional) {
     source: opts.source || "cli"
   });
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -448,7 +448,7 @@ async function cmdSubmit(opts, positional) {
       source: opts.source || "cli"
     });
     if (opts.json) {
-      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res2), null, 2) + "\n");
+      process.stdout.write(publicJson(Object.assign({ project: slug }, res2), null, 2) + "\n");
       if (!res2.ok) process.exitCode = 1;
       return;
     }
@@ -496,7 +496,7 @@ async function cmdSubmit(opts, positional) {
       if (comment && !comment.ok) fail(`submit: recorded ${idOrRef}, but couldn't add evidence comment: ${comment.reason}`);
     }
     if (opts.json) {
-      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res2), null, 2) + "\n");
+      process.stdout.write(publicJson(Object.assign({ project: slug }, res2), null, 2) + "\n");
       if (!res2.ok) process.exitCode = 1;
       return;
     }
@@ -545,7 +545,7 @@ async function cmdSubmit(opts, positional) {
     if (comment && comment.advisory) res.advisory = comment.advisory;
   }
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
   }
@@ -604,7 +604,7 @@ async function cmdAssembleWave(opts, positional) {
   };
   const result = store.assembleSubmissionWave(slug, positional, { dependencies, verification, waveId: opts["wave-id"] });
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, result), null, 2) + "\n");
+    process.stdout.write(publicJson(Object.assign({ project: slug }, result), null, 2) + "\n");
     if (!result.ok) process.exitCode = 1;
     return;
   }
@@ -663,7 +663,7 @@ async function cmdIntegrate(opts, positional) {
     });
     if (closed.ok && !closed.idempotent) Object.assign(closed, await advanceAndSweepAfterIntegration(slug, meta.path, closed.ticket));
     if (opts.json) {
-      process.stdout.write(JSON.stringify(Object.assign({ project: slug, delivery: recorded.integration, verify: recorded.integration.verify }, closed), null, 2) + "\n");
+      process.stdout.write(publicJson(Object.assign({ project: slug, delivery: recorded.integration, verify: recorded.integration.verify }, closed), null, 2) + "\n");
       if (!closed.ok) process.exitCode = 1;
       return;
     }
@@ -687,7 +687,7 @@ async function cmdIntegrate(opts, positional) {
     if (delivery.verify && /^verification_[a-z_]+_post_merge(?:_rollback_failed)?$/.test(String(delivery.reason))) {
       const payload = { project: slug, delivery: null, verifyFailed: delivery.verify };
       if (opts.json) {
-        process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+        process.stdout.write(publicJson(payload, null, 2) + "\n");
         process.exitCode = 1;
         return;
       }
@@ -695,7 +695,7 @@ async function cmdIntegrate(opts, positional) {
     }
     if (delivery.outside?.length) fail(`integrate: refused ${idOrRef}; submitted range changes paths outside its admitted scope: ${delivery.outside.join(", ")}.`);
     if (opts.json) {
-      process.stdout.write(JSON.stringify({ project: slug, delivery: null, ...delivery }, null, 2) + "\n");
+      process.stdout.write(publicJson({ project: slug, delivery: null, ...delivery }, null, 2) + "\n");
       process.exitCode = 1;
       return;
     }
@@ -710,7 +710,7 @@ async function cmdIntegrate(opts, positional) {
   if (!verification.ok) {
     const payload = { project: slug, delivery: integration, verifyFailed: verification.verify };
     if (opts.json) {
-      process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+      process.stdout.write(publicJson(payload, null, 2) + "\n");
       process.exitCode = 1;
       return;
     }
@@ -730,7 +730,7 @@ async function cmdIntegrate(opts, positional) {
   }
   if (opts.json) {
     const payload = refs.length > 1 ? { project: slug, delivery: integration, verify: verification.verify, tickets: closures.map((closure) => closure.ticket || null), ok: !failedClosure } : Object.assign({ project: slug, delivery: integration, verify: verification.verify }, closures[0]);
-    process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+    process.stdout.write(publicJson(payload, null, 2) + "\n");
     if (failedClosure) process.exitCode = 1;
     return;
   }
@@ -747,7 +747,7 @@ async function cmdPublish(opts, positional) {
   const sub = positional[0];
   const emit = (payload, failed) => {
     if (opts.json) {
-      process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+      process.stdout.write(publicJson(payload, null, 2) + "\n");
       if (failed) process.exitCode = 1;
       return true;
     }

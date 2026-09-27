@@ -6,6 +6,7 @@ const path = require("path");
 const url = require("url");
 const { spawn } = require("child_process");
 const store = require("./store");
+const { redactDispatchCredentials } = require("./credential-projection");
 const DASHBOARD_DIST = path.join(__dirname, "..", "dashboard", "dist");
 let PLUGIN_VERSION = null;
 try {
@@ -64,7 +65,7 @@ const categoryDraftProbe = probeCategoryDraft().then((available) => {
   categoryDraftAvailable = available;
 });
 function sendJson(res, code, obj) {
-  const body = JSON.stringify(obj);
+  const body = JSON.stringify(redactDispatchCredentials(obj));
   res.writeHead(code, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",

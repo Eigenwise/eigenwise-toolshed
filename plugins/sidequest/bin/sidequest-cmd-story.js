@@ -14,7 +14,7 @@ const tempCleanup = require("../lib/temp-cleanup");
 const execNames = require("../lib/exec-names");
 const { claimRefusalMessage } = require("../lib/refusal-guidance");
 const { assertSidequestInstall, assertDispatchTransport } = require("../lib/dispatch-preflight");
-const { fail, resolveProject, workerId, bodyFromOpts } = require("./sidequest-cmd-shared");
+const { fail, resolveProject, workerId, bodyFromOpts, publicJson } = require("./sidequest-cmd-shared");
 const { PRIORITY_MARK } = require("./sidequest-cmd-tickets");
 function storyTicketCount(slug, storyId) {
   return store.listTickets(slug).filter((t) => !t.archived && t.storyId === storyId).length;
@@ -35,7 +35,7 @@ async function cmdStory(opts, positional) {
         color: opts.color
       });
       if (opts.json) {
-        process.stdout.write(JSON.stringify({ ok: true, project: slug, projectName: meta.name, story }, null, 2) + "\n");
+        process.stdout.write(publicJson({ ok: true, project: slug, projectName: meta.name, story }, null, 2) + "\n");
         return;
       }
       console.log(`✓ ${story.ref}  "${story.title}"  [${story.color}]  — ${meta.name}`);
@@ -46,7 +46,7 @@ async function cmdStory(opts, positional) {
       const stories = store.listStories(slug);
       if (opts.json) {
         const withCounts = stories.map((s) => Object.assign({}, s, { ticketCount: storyTicketCount(slug, s.id) }));
-        process.stdout.write(JSON.stringify({ project: slug, projectName: meta.name, stories: withCounts }, null, 2) + "\n");
+        process.stdout.write(publicJson({ project: slug, projectName: meta.name, stories: withCounts }, null, 2) + "\n");
         return;
       }
       if (!stories.length) {
@@ -67,7 +67,7 @@ async function cmdStory(opts, positional) {
       if (!story) fail(`story show: no story "${idOrRef}" in ${meta.name}`);
       const tickets = store.listTickets(slug).filter((t) => !t.archived && t.storyId === story.id);
       if (opts.json) {
-        process.stdout.write(JSON.stringify({ project: slug, projectName: meta.name, story: store.storyReadPayload(story, { full: opts.full }), tickets }, null, 2) + "\n");
+        process.stdout.write(publicJson({ project: slug, projectName: meta.name, story: store.storyReadPayload(story, { full: opts.full }), tickets }, null, 2) + "\n");
         return;
       }
       console.log(`${story.ref}  [${story.color}]  "${story.title}"  — ${meta.name}`);
@@ -89,7 +89,7 @@ async function cmdStory(opts, positional) {
       const story = body === void 0 ? store.getStory(slug, idOrRef) : store.updateStory(slug, idOrRef, { executionContract: body });
       if (!story) fail(`story contract: no story "${idOrRef}" in ${meta.name}`);
       if (opts.json) {
-        process.stdout.write(JSON.stringify({ ok: true, project: slug, projectName: meta.name, story }, null, 2) + "\n");
+        process.stdout.write(publicJson({ ok: true, project: slug, projectName: meta.name, story }, null, 2) + "\n");
         return;
       }
       if (body === void 0) {
@@ -137,7 +137,7 @@ async function cmdStory(opts, positional) {
         ...acceptedAppend ? { acceptedAliases: ["accepted append as entry"] } : {}
       };
       if (opts.json) {
-        process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+        process.stdout.write(publicJson(payload, null, 2) + "\n");
         return;
       }
       console.log(`${story.ref} decision log revision ${log.revision} (${log.entries.length} entries)`);
@@ -160,7 +160,7 @@ async function cmdStory(opts, positional) {
       const story = store.updateStory(slug, idOrRef, patch);
       if (!story) fail(`story update: no story "${idOrRef}" in ${meta.name}`);
       if (opts.json) {
-        process.stdout.write(JSON.stringify({ ok: true, project: slug, story }, null, 2) + "\n");
+        process.stdout.write(publicJson({ ok: true, project: slug, story }, null, 2) + "\n");
         return;
       }
       console.log(`✓ ${story.ref} updated  [${story.color}]  "${story.title}"  — ${meta.name}`);
@@ -173,7 +173,7 @@ async function cmdStory(opts, positional) {
       const existing = store.getStory(slug, idOrRef);
       const ok = store.deleteStory(slug, idOrRef);
       if (opts.json) {
-        process.stdout.write(JSON.stringify({ ok, project: slug, story: existing || null }, null, 2) + "\n");
+        process.stdout.write(publicJson({ ok, project: slug, story: existing || null }, null, 2) + "\n");
         if (!ok) process.exitCode = 1;
         return;
       }

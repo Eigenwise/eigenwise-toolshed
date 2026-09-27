@@ -219,3 +219,51 @@ test('separate Codex worker and reviewer satisfy bound provenance', async () => 
   assert.equal(delivered.ok, true, JSON.stringify(delivered));
   assert.equal(store.getTicket(slug, source.ref).status, 'done');
 });
+
+test('HTTP and CLI ticket reads hide a reviewer capability while dispatch returns it', async () => {
+  const story = store.createStory(slug, { title: 'Reviewer capability boundary' });
+  const review = store.createTicket(slug, {
+    title: 'review with sealed token', category: 'review-audit', storyId: story.ref, files: ['candidate.txt'],
+  });
+  const dispatch = runtime('native-root', repository, () => tool('codex_dispatch').handler({ ref: review.ref, project: repository }));
+  const token = store.getTicket(slug, review.ref).dispatchNonce;
+  assert.equal(fs.readFileSync(dispatch.tokenFile, 'utf8').trim(), token);
+  const server = await require('../lib/server.js').start(0);
+  try {
+    const listResponse = await fetch(`${server.url}/api/tickets?project=${encodeURIComponent(slug)}`);
+    const listBody = await listResponse.text();
+    assert.equal(listResponse.status, 200);
+    assert.equal(JSON.parse(listBody).tickets.some((ticket: any) => ticket.ref === review.ref), true);
+    assert.equal(listBody.includes(token), false);
+    assert.equal(listBody.includes(dispatch.tokenFile), false);
+    assert.equal(listBody.includes('"tokenFile"'), false);
+    const patchResponse = await fetch(`${server.url}/api/tickets/${review.ref}?project=${encodeURIComponent(slug)}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ labels: ['audited'] }),
+    });
+    const patchBody = await patchResponse.text();
+    assert.equal(patchResponse.status, 200, patchBody);
+    assert.equal(patchBody.includes(token), false);
+    assert.equal(patchBody.includes(dispatch.tokenFile), false);
+    assert.equal(patchBody.includes('"tokenFile"'), false);
+  } finally { await new Promise((resolve) => server.server.close(resolve)); }
+  const shown = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest.js'),
+    'story', 'show', story.ref, '--project', repository, '--json'], {
+    cwd: repository, env: { ...process.env, CODEX_SESSION_ID: 'native-root', CODEX_THREAD_ID: 'other-worker' },
+    encoding: 'utf8', windowsHide: true,
+  });
+  assert.equal(shown.status, 0, shown.stderr);
+  assert.equal(JSON.parse(shown.stdout).tickets.some((ticket: any) => ticket.ref === review.ref), true);
+  assert.equal(shown.stdout.includes(token), false);
+  assert.equal(shown.stdout.includes(dispatch.tokenFile), false);
+  assert.equal(shown.stdout.includes('"tokenFile"'), false);
+  const updated = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest.js'),
+    'update', review.ref, '--project', repository, '--label', 'audited', '--json'], {
+    cwd: repository, env: { ...process.env, CODEX_SESSION_ID: 'native-root', CODEX_THREAD_ID: 'other-worker' },
+    encoding: 'utf8', windowsHide: true,
+  });
+  assert.equal(updated.status, 0, updated.stderr);
+  assert.equal(JSON.parse(updated.stdout).ticket.ref, review.ref);
+  assert.equal(updated.stdout.includes(token), false);
+  assert.equal(updated.stdout.includes(dispatch.tokenFile), false);
+});
