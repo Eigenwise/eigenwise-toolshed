@@ -16,6 +16,7 @@ const {
   runtimeSessionId,
   codexRuntimeIdentity,
   requireCodexClaimRuntime,
+  requireCodexSubmissionRuntime,
   sessionOf,
   requireDispatchSession,
   workflowRecipe,
@@ -369,7 +370,7 @@ const tools = [
     },
     handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, "claim");
-      if (store.getTicket(slug, args.ref)?.dispatch?.runtimeHost === "codex") {
+      if (store.isNativeCodexTicket(store.getTicket(slug, args.ref))) {
         throw new Error("claim: Codex-native dispatches must use codex_start from the distinct executor runtime.");
       }
       const by = requireBy(args, "claim");
@@ -445,7 +446,7 @@ const tools = [
       const { slug, meta } = resolveLifecycleProject(args.project, args, "next");
       const by = requireBy(args, "next");
       requireKnownModelFilter("next", args.model);
-      const res = store.claimNext(slug, by, { priority: args.priority, model: args.model, category: args.category, direct: !!args.direct, reason: args.reason, source: "mcp", sessionId: sessionOf(args) });
+      const res = store.claimNext(slug, by, { priority: args.priority, model: args.model, category: args.category, direct: !!args.direct, reason: args.reason, source: "mcp", sessionId: sessionOf(args), excludeNativeCodex: true });
       if (!res.ok) res.message = claimRefusalMessage(res.reason, res.ticket && res.ticket.ref || "next ticket", res.ticket || res.claim);
       return mutationAck(slug, res, res.ok ? { claim: res.ticket.claim } : null);
     }
@@ -705,6 +706,7 @@ const tools = [
     },
     handler(args) {
       const { slug } = resolveLifecycleProject(args.project, args, "scopeRequest");
+      requireCodexClaimRuntime(store.getTicket(slug, args.ref), "scopeRequest");
       const by = requireBy(args, "scopeRequest");
       const res = store.requestScope(slug, args.ref, by, args.files, { source: "mcp" });
       const changed = res.ok ? {
@@ -816,6 +818,7 @@ const tools = [
     },
     handler(args) {
       const { slug } = resolveLifecycleProject(args.project, args, "rework");
+      requireCodexSubmissionRuntime(store.getTicket(slug, args.ref), "rework");
       const by = requireBy(args, "rework");
       return mutationAck(slug, store.reworkSubmission(slug, args.ref, {
         by,

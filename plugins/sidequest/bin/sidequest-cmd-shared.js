@@ -10,7 +10,7 @@ function publicJson(value, replacer, space) {
 }
 function requireNonNativeCliTicket(slug, ref, action) {
   const ticket = store.getTicket(slug, ref);
-  if (ticket?.dispatch?.runtimeHost === "codex") {
+  if (store.isNativeCodexTicket(ticket)) {
     fail(`${action}: Codex-native tickets use their per-agent Sidequest MCP process; a CLI --by or --session label cannot act for the bound subagent.`);
   }
   return ticket;

@@ -415,6 +415,7 @@ async function cmdRework(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('rework: pass a ticket ref, e.g. sidequest rework SQ-3 --by reviewer --review SQ-4 --reason "what needs repair"');
   const { slug, meta } = await resolveProject(opts);
+  requireNonNativeCliTicket(slug, idOrRef, "rework");
   const by = workerId(opts);
   const review = String(opts.review || "").trim();
   const reason = String(opts.reason || "").trim();

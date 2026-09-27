@@ -150,12 +150,24 @@ function requireDispatchSession() {
 }
 
 function requireCodexClaimRuntime(ticket: any, action: string) {
-  if (ticket?.dispatch?.runtimeHost !== 'codex') return;
+  if (!store.isNativeCodexTicket(ticket)) return;
   const identity = codexRuntimeIdentity();
-  if (!identity?.isExecutor || ticket.dispatch.sessionId !== identity.sessionId
+  if (!identity?.isExecutor || ticket.dispatch?.runtimeHost !== 'codex'
+    || ticket.dispatch.sessionId !== identity.sessionId
     || ticket.dispatch.agentId !== identity.agentId
     || ticket.claim?.runtime?.agentId !== identity.agentId) {
     throw new Error(`${action}: the claimed Codex subagent must call from its own per-agent MCP process; caller-supplied by or session cannot replace runtime identity.`);
+  }
+}
+
+function requireCodexSubmissionRuntime(ticket: any, action: string) {
+  if (!store.isNativeCodexTicket(ticket)) return;
+  const identity = codexRuntimeIdentity();
+  if (!identity?.isExecutor || ticket.dispatch?.runtimeHost !== 'codex'
+    || ticket.dispatch.sessionId !== identity.sessionId
+    || ticket.dispatch.agentId !== identity.agentId
+    || ticket.submission?.by !== identity.agentId) {
+    throw new Error(`${action}: the submitting Codex subagent must call from its own per-agent MCP process; caller-supplied by cannot replace runtime identity.`);
   }
 }
 
@@ -1101,6 +1113,7 @@ module.exports = {
   runtimeSessionId,
   codexRuntimeIdentity,
   requireCodexClaimRuntime,
+  requireCodexSubmissionRuntime,
   sessionOf,
   requireDispatchSession,
   workflowRecipe,

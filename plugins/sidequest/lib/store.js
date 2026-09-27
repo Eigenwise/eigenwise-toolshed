@@ -1703,6 +1703,10 @@ const DIRECT_REASON_MIN_LENGTH = 20;
 function isRoutedTicket(ticket) {
   return Boolean(ticket && ticket.model && ticket.effort && ticket.exec);
 }
+function isNativeCodexTicket(ticket) {
+  const model = ticket?.route?.model || ticket?.category?.route?.model || ticket?.model;
+  return ticket?.dispatch?.runtimeHost === "codex" || ticket?.exec?.source === "codex-native" || String(model || "").startsWith("native-codex-");
+}
 function expectedClaimExecutor(ticket) {
   const prepared = canonicalPreparedDispatchExecutor(ticket);
   if (ticket?.dispatch?.executor || ticket?.dispatchExecutor) return prepared;
@@ -1900,6 +1904,14 @@ function claimTicket(slug, idOrRef, by, opts) {
   const result = withTicketLock(slug, found.id, () => {
     const t2 = getTicket(slug, found.id);
     if (!t2) return { ok: false, reason: "not_found" };
+    if (isNativeCodexTicket(t2) && (t2.dispatch?.runtimeHost !== "codex" || opts.source !== "codex-mcp" || opts.direct || !opts.requireBoundAgent)) {
+      return {
+        ok: false,
+        reason: "codex_start_required",
+        ticket: t2,
+        message: `claim: ${t2.ref} requires a prepared Codex dispatch and codex_start from its bound subagent.`
+      };
+    }
     const candidateReview = submissionReviewRelation(slug, t2);
     if (candidateReview) {
       return {
@@ -3113,7 +3125,7 @@ function claimNext(slug, by, opts) {
   const want = opts.model ? classifyModelFilter(opts.model) : "any";
   if (want === "unknown") throw new Error(`Unknown model: ${opts.model}`);
   const category = opts.category == null ? null : String(opts.category).trim().toLowerCase();
-  const candidates = listTickets(slug).filter((t) => !t.archived).filter((t) => t.status !== "done").filter((t) => !opts.excludeNativeCodex || t.dispatch?.runtimeHost !== "codex" && !String(t.category?.route?.model || "").startsWith("native-codex-") && !String(t.model || "").startsWith("native-codex-")).filter((t) => !pendingSubmission(t)).filter((t) => !t.claim || claimReclaimable(t) || t.claim.by === by).filter((t) => !opts.priority || t.priority === String(opts.priority).toLowerCase()).filter((t) => modelMatches(t.model, want === "any" ? null : want)).filter((t) => !category || t.categoryId === category).filter((t) => opts.includeBlocked || !isBlocked(slug, t)).sort((a, b) => {
+  const candidates = listTickets(slug).filter((t) => !t.archived).filter((t) => t.status !== "done").filter((t) => !opts.excludeNativeCodex || !isNativeCodexTicket(t)).filter((t) => !pendingSubmission(t)).filter((t) => !t.claim || claimReclaimable(t) || t.claim.by === by).filter((t) => !opts.priority || t.priority === String(opts.priority).toLowerCase()).filter((t) => modelMatches(t.model, want === "any" ? null : want)).filter((t) => !category || t.categoryId === category).filter((t) => opts.includeBlocked || !isBlocked(slug, t)).sort((a, b) => {
     const pr = priorityRank(a.priority) - priorityRank(b.priority);
     if (pr !== 0) return pr;
     return String(a.createdAt).localeCompare(String(b.createdAt));
@@ -3445,6 +3457,7 @@ module.exports = {
   markDispatchStopped,
   reconcileLaunchedDispatches,
   claimAdmission,
+  isNativeCodexTicket,
   bindClaimRuntimeIdentity,
   claimTicket,
   releaseTicket,

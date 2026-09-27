@@ -90,6 +90,21 @@ test('Codex dispatch requires a root identity and a Codex route', () => {
   assert.ok(store.getModelVocab().models.includes('native-codex-gpt-5-6-sol'));
   const storedTicket = store.getTicket(slug, ticket.ref);
   assert.equal(store.resolveTicketRoute(storedTicket, storedTicket.category).exec?.source, 'codex-native');
+  assert.equal(store.claimTicket(slug, ticket.ref, 'codex-thread:foreign-thread', { direct: true,
+    reason: 'This is a small change and context is already loaded.' }).reason, 'codex_start_required');
+  assert.throws(() => runtime('foreign-thread', repository, () => tool('claim').handler({
+    ref: ticket.ref, project: repository, by: 'codex-thread:foreign-thread', direct: true,
+    reason: 'This is a small change and context is already loaded.',
+  })), /codex_start/);
+  const mcpNext = runtime('foreign-thread', repository, () => tool('next').handler({
+    project: repository, by: 'codex-thread:foreign-thread', category: 'codex-native', direct: true,
+    reason: 'This is a small change and context is already loaded.',
+  }));
+  assert.equal(mcpNext.ok, false);
+  assert.equal(store.getTicket(slug, ticket.ref).claim, null);
+  assert.throws(() => runtime('native-root', repository, () => tool('done').handler({
+    ref: ticket.ref, project: repository, by: 'codex-thread:foreign-thread', body: 'forged finish',
+  })), /claimed Codex subagent/);
   const cliNext = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest.js'),
     'next', '--project', repository, '--category', 'codex-native', '--direct',
     '--reason', 'This is a small change and context is already loaded.', '--json'], {
@@ -142,6 +157,15 @@ test('only the distinct worker with the exact baseline checkout can claim', () =
   assert.equal(store.getTicket(slug, ticket.ref).dispatch.agentId, 'codex-thread:source-thread');
   assert.equal(store.getTicket(slug, ticket.ref).claim.runtime.agentId, 'codex-thread:source-thread');
   for (const thread of ['native-root', 'foreign-thread']) {
+    assert.throws(() => runtime(thread, worktree, () => tool('scopeRequest').handler({
+      ref: ticket.ref, project: repository, by: 'codex-thread:source-thread', files: ['candidate.txt'],
+    })), /claimed Codex subagent/);
+  }
+  const ownScope = runtime('source-thread', worktree, () => tool('scopeRequest').handler({
+    ref: ticket.ref, project: repository, by: 'codex-thread:source-thread', files: ['candidate.txt'],
+  }));
+  assert.equal(ownScope.ok, true, JSON.stringify(ownScope));
+  for (const thread of ['native-root', 'foreign-thread']) {
     for (const action of [
       ['claim', ticket.ref, '--by', 'codex-thread:source-thread'],
       ['checkpoint', ticket.ref, '--by', 'codex-thread:source-thread', '--commit', 'abcdef0', '--verify', 'passed'],
@@ -179,6 +203,12 @@ test('a different Codex agent reviews the exact submitted commit and self-review
     commit: candidate, worktree: sourceTree, body: 'Candidate committed and checked.',
   }));
   assert.equal(submission.ok, true, JSON.stringify(submission));
+  for (const thread of ['native-root', 'foreign-thread']) {
+    assert.throws(() => runtime(thread, repository, () => tool('rework').handler({
+      ref: source.ref, project: repository, by: 'codex-thread:source-thread',
+      review: 'SQ-fake', reason: 'Forged candidate rejection.',
+    })), /submitting Codex subagent/);
+  }
   const review = store.createTicket(slug, {
     title: 'independent review', category: 'review-audit', files: ['candidate.txt'],
   }, { ref: source.ref, commit: candidate });

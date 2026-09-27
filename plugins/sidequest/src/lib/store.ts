@@ -1766,6 +1766,12 @@ function isRoutedTicket(ticket?: any) {
   return Boolean(ticket && ticket.model && ticket.effort && ticket.exec);
 }
 
+function isNativeCodexTicket(ticket?: any) {
+  const model = ticket?.route?.model || ticket?.category?.route?.model || ticket?.model;
+  return ticket?.dispatch?.runtimeHost === 'codex' || ticket?.exec?.source === 'codex-native'
+    || String(model || '').startsWith('native-codex-');
+}
+
 // The executor name a claim refusal should name. A recorded dispatch is authoritative; without one, the name
 // prepare WOULD record is, because `exec.agent` is the read-write dispatch name for every Codex route whether
 // the ticket is readonly or not, and naming it sent readonly executors to spawn their read-write twin
@@ -2003,6 +2009,11 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   const result = withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id); // fresh read, under the lock
     if (!t) return { ok: false, reason: 'not_found' };
+    if (isNativeCodexTicket(t) && (t.dispatch?.runtimeHost !== 'codex'
+      || opts.source !== 'codex-mcp' || opts.direct || !opts.requireBoundAgent)) {
+      return { ok: false, reason: 'codex_start_required', ticket: t,
+        message: `claim: ${t.ref} requires a prepared Codex dispatch and codex_start from its bound subagent.` };
+    }
     // A bound candidate is frozen for its review: reclaiming it would let the
     // implementer resume or amend the exact revision under audit.
     const candidateReview = submissionReviewRelation(slug, t);
@@ -3447,9 +3458,7 @@ function claimNext(slug?: any, by?: any, opts?: any) {
   const candidates = listTickets(slug)
     .filter((t?: any) => !t.archived)
     .filter((t?: any) => t.status !== 'done')
-    .filter((t?: any) => !opts.excludeNativeCodex || (t.dispatch?.runtimeHost !== 'codex'
-      && !String(t.category?.route?.model || '').startsWith('native-codex-')
-      && !String(t.model || '').startsWith('native-codex-')))
+    .filter((t?: any) => !opts.excludeNativeCodex || !isNativeCodexTicket(t))
     .filter((t?: any) => !pendingSubmission(t)) // parked for integration, not for another executor
     .filter((t?: any) => !t.claim || claimReclaimable(t) || t.claim.by === by)
     .filter((t?: any) => !opts.priority || t.priority === String(opts.priority).toLowerCase())
@@ -3819,6 +3828,7 @@ module.exports = {
   markDispatchStopped,
   reconcileLaunchedDispatches,
   claimAdmission,
+  isNativeCodexTicket,
   bindClaimRuntimeIdentity,
   claimTicket,
   releaseTicket,
