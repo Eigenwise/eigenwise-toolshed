@@ -235,7 +235,7 @@ async function cmdNext(opts: any) {
   const { slug, meta } = await resolveProject(opts);
   if (!validateModelFilter('next', opts)) return;
   const by = workerId(opts);
-  const res = store.claimNext(slug, by, { priority: opts.priority, model: opts.model, category: opts.category, direct: !!opts.direct, reason: opts.reason, source: opts.source || 'cli', sessionId: sessionId(opts) });
+  const res = store.claimNext(slug, by, { priority: opts.priority, model: opts.model, category: opts.category, direct: !!opts.direct, reason: opts.reason, source: opts.source || 'cli', sessionId: sessionId(opts), excludeNativeCodex: true });
   if (!res.ok && res.reason) res.message = claimRefusalMessage(res.reason, res.ticket && res.ticket.ref || 'next ticket', res.ticket || res.claim);
   if (opts.json) {
     process.stdout.write(publicJson(Object.assign({ project: slug }, res), null, 2) + '\n');
@@ -376,6 +376,10 @@ async function cmdComment(opts: any, positional: any) {
   if (!body || !String(body).trim()) fail('comment: -m/--body or --body-file is required, e.g. sidequest comment SQ-3 -m "note"');
   const { slug, meta } = await resolveProject(opts);
   const by = controlPlaneIdentity(opts);
+  const ticket = store.getTicket(slug, idOrRef);
+  if (ticket?.dispatch?.runtimeHost === 'codex' && ticket.claim?.by === by) {
+    fail(`comment: the claimed Codex subagent must write through its per-agent Sidequest MCP process; --by cannot impersonate it.`);
+  }
   const res = store.addComment(slug, idOrRef, { by, body, source: opts.source || 'cli' });
   if (opts.json) {
     process.stdout.write(publicJson(Object.assign({ project: slug }, res, acceptedMessage ? { acceptedAliases: ['accepted message as body'] } : {}), null, 2) + '\n');

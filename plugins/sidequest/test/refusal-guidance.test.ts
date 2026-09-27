@@ -35,6 +35,7 @@ test('ordinary claim and verification diagnostics never print dispatch credentia
     });
     assert.match(guidance, /dispatch briefing/);
     assert.doesNotMatch(guidance, /review-token-file/);
+    assert.equal(JSON.stringify({ message: guidance }).includes(secretPath), false);
   }
   const requirement = { kind: 'command', evidenceContract: 'passed capture', command: 'echo verified' };
   const candidate = { source: 'git', value: 'abcdef' };

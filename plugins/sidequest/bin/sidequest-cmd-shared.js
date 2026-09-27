@@ -8,6 +8,13 @@ const { redactDispatchCredentials } = require("../lib/credential-projection");
 function publicJson(value, replacer, space) {
   return JSON.stringify(redactDispatchCredentials(value), replacer, space);
 }
+function requireNonNativeCliTicket(slug, ref, action) {
+  const ticket = store.getTicket(slug, ref);
+  if (ticket?.dispatch?.runtimeHost === "codex") {
+    fail(`${action}: Codex-native tickets use their per-agent Sidequest MCP process; a CLI --by or --session label cannot act for the bound subagent.`);
+  }
+  return ticket;
+}
 function fail(msg) {
   console.error(`sidequest: ${msg}`);
   process.exit(1);
@@ -75,4 +82,4 @@ function addBodyComment(slug, idOrRef, by, body, source) {
   if (!body || !String(body).trim()) return null;
   return store.addComment(slug, idOrRef, { by, body, kind: "comment", source });
 }
-module.exports = { fail, resolveProject, resolveWatchProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment, publicJson };
+module.exports = { fail, resolveProject, resolveWatchProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment, publicJson, requireNonNativeCliTicket };

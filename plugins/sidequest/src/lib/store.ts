@@ -3447,6 +3447,9 @@ function claimNext(slug?: any, by?: any, opts?: any) {
   const candidates = listTickets(slug)
     .filter((t?: any) => !t.archived)
     .filter((t?: any) => t.status !== 'done')
+    .filter((t?: any) => !opts.excludeNativeCodex || (t.dispatch?.runtimeHost !== 'codex'
+      && !String(t.category?.route?.model || '').startsWith('native-codex-')
+      && !String(t.model || '').startsWith('native-codex-')))
     .filter((t?: any) => !pendingSubmission(t)) // parked for integration, not for another executor
     .filter((t?: any) => !t.claim || claimReclaimable(t) || t.claim.by === by)
     .filter((t?: any) => !opts.priority || t.priority === String(opts.priority).toLowerCase())

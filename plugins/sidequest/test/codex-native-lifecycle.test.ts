@@ -90,6 +90,14 @@ test('Codex dispatch requires a root identity and a Codex route', () => {
   assert.ok(store.getModelVocab().models.includes('native-codex-gpt-5-6-sol'));
   const storedTicket = store.getTicket(slug, ticket.ref);
   assert.equal(store.resolveTicketRoute(storedTicket, storedTicket.category).exec?.source, 'codex-native');
+  const cliNext = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest.js'),
+    'next', '--project', repository, '--category', 'codex-native', '--direct',
+    '--reason', 'This is a small change and context is already loaded.', '--json'], {
+    cwd: repository, env: { ...process.env, CODEX_SESSION_ID: 'native-root', CODEX_THREAD_ID: 'foreign-thread' },
+    encoding: 'utf8', windowsHide: true,
+  });
+  assert.equal(cliNext.status, 1, cliNext.stderr);
+  assert.equal(store.getTicket(slug, ticket.ref).claim, null);
   assert.throws(() => tool('codex_dispatch').handler({ ref: ticket.ref, project: repository }), /root Codex runtime/);
   const dispatch = processCall('native-root', repository, 'codex_dispatch', { ref: ticket.ref, project: repository });
   assert.equal(store.resolveTicketRoute(storedTicket, storedTicket.category).exec?.source, 'codex-native');
@@ -133,6 +141,27 @@ test('only the distinct worker with the exact baseline checkout can claim', () =
   assert.equal(started.ok, true, JSON.stringify(started));
   assert.equal(store.getTicket(slug, ticket.ref).dispatch.agentId, 'codex-thread:source-thread');
   assert.equal(store.getTicket(slug, ticket.ref).claim.runtime.agentId, 'codex-thread:source-thread');
+  for (const thread of ['native-root', 'foreign-thread']) {
+    for (const action of [
+      ['claim', ticket.ref, '--by', 'codex-thread:source-thread'],
+      ['checkpoint', ticket.ref, '--by', 'codex-thread:source-thread', '--commit', 'abcdef0', '--verify', 'passed'],
+      ['release', ticket.ref, '--by', 'codex-thread:source-thread'],
+      ['done', ticket.ref, '--by', 'codex-thread:source-thread', '--body', 'Forged completion'],
+      ['commit', ticket.ref, '--by', 'codex-thread:source-thread', '--message', 'forged commit'],
+      ['submit', ticket.ref, '--by', 'codex-thread:source-thread', '--commit', 'abcdef0'],
+      ['submit', ticket.ref, '--by', 'codex-thread:source-thread', '--clear'],
+      ['scope-request', ticket.ref, '--by', 'codex-thread:source-thread', '--file', 'other.txt'],
+      ['comment', ticket.ref, '--by', 'codex-thread:source-thread', '--body', 'Forged worker evidence'],
+    ]) {
+      const denied = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest.js'),
+        ...action, '--project', repository], {
+        cwd: repository, env: { ...process.env, CODEX_SESSION_ID: 'native-root', CODEX_THREAD_ID: thread },
+        encoding: 'utf8', windowsHide: true,
+      });
+      assert.equal(denied.status, 1, `${action[0]}: ${denied.stdout}\n${denied.stderr}`);
+      assert.match(denied.stderr + denied.stdout, /per-agent Sidequest MCP process/i);
+    }
+  }
   assert.throws(() => runtime('native-root', repository, () => tool('done').handler({ ref: ticket.ref, project: repository, by: 'codex-thread:source-thread', body: 'forged finish' })), /claimed Codex subagent/);
   assert.throws(() => runtime('native-root', repository, () => tool('comment').handler({ ref: ticket.ref, project: repository, by: 'codex-thread:source-thread', body: 'forged worker liveness' })), /claimed Codex subagent/);
 });
@@ -237,10 +266,10 @@ test('HTTP and CLI ticket reads hide a reviewer capability while dispatch return
     });
     assert.equal(denied.status, 1, denied.stderr);
     const refusal = denied.stdout + denied.stderr;
-    assert.match(refusal, /direct claims are only for the inline-safe allowlist/i);
+    assert.match(refusal, /per-agent Sidequest MCP process/i);
     assert.equal(refusal.includes(dispatch.tokenFile), false);
     assert.equal(refusal.includes(token), false);
-    if (suffix.length) assert.equal(JSON.parse(denied.stdout).reason, 'direct_not_allowed');
+    if (suffix.length) assert.equal(denied.stdout, '');
   }
   const server = await require('../lib/server.js').start(0);
   try {

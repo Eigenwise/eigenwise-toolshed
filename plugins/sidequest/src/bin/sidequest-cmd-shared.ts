@@ -8,6 +8,14 @@ function publicJson(value: any, replacer?: any, space?: any) {
   return JSON.stringify(redactDispatchCredentials(value), replacer, space);
 }
 
+function requireNonNativeCliTicket(slug: any, ref: any, action: string) {
+  const ticket = store.getTicket(slug, ref);
+  if (ticket?.dispatch?.runtimeHost === 'codex') {
+    fail(`${action}: Codex-native tickets use their per-agent Sidequest MCP process; a CLI --by or --session label cannot act for the bound subagent.`);
+  }
+  return ticket;
+}
+
 function fail(msg: any) {
   console.error(`sidequest: ${msg}`);
   process.exit(1);
@@ -100,4 +108,4 @@ function addBodyComment(slug: any, idOrRef: any, by: any, body: any, source: any
 }
 
 
-module.exports = { fail, resolveProject, resolveWatchProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment, publicJson };
+module.exports = { fail, resolveProject, resolveWatchProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment, publicJson, requireNonNativeCliTicket };

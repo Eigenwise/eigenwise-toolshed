@@ -396,7 +396,7 @@ test('instant dispatch targets the stable executor, gates the claim, and clears 
   assert.equal(JSON.parse(wrong.stdout).reason, 'executor_mismatch');
   assert.equal(cliJson(['claim', doneRef, '--by', 'right-token', '--token-file', preparedDone.ticket.dispatch.tokenFile, '--executor', preparedDone.ticket.dispatchExecutor]).ok, true);
   const done = cliJson(['done', doneRef, '--by', 'right-token']);
-  assert.equal(done.ticket.dispatchNonce, null);
+  assert.equal(Object.hasOwn(done.ticket, 'dispatchNonce'), false);
   assert.equal(done.ticket.dispatchExecutor, null);
   assert.ok(fs.existsSync(stableDef));
 
@@ -405,7 +405,7 @@ test('instant dispatch targets the stable executor, gates the claim, and clears 
   assert.equal(preparedRelease.ticket.dispatchExecutor, 'sidequest-exec-dispatch');
   assert.equal(cliJson(['claim', releaseRef, '--by', 'release-token', '--token-file', preparedRelease.ticket.dispatch.tokenFile, '--executor', preparedRelease.ticket.dispatchExecutor]).ok, true);
   const released = cliJson(['release', releaseRef, '--by', 'release-token', '--status', 'todo']);
-  assert.equal(released.ticket.dispatchNonce, null);
+  assert.equal(Object.hasOwn(released.ticket, 'dispatchNonce'), false);
   assert.equal(released.ticket.dispatchExecutor, null);
   assert.ok(fs.existsSync(stableDef));
 });

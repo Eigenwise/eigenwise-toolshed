@@ -16,7 +16,7 @@ const { claimRefusalMessage } = require("../lib/refusal-guidance");
 const { collectGitSubmissionFacts, rejectedRelatedReleaseFragments } = require("../lib/mcp-lifecycle");
 const { sourceRevisionBaseline } = require("../lib/source-revision-capability");
 const { assertSidequestInstall, assertDispatchTransport } = require("../lib/dispatch-preflight");
-const { fail, resolveProject, workerId, sessionId, bodyFromOpts, addBodyComment, publicJson } = require("./sidequest-cmd-shared");
+const { fail, resolveProject, workerId, sessionId, bodyFromOpts, addBodyComment, publicJson, requireNonNativeCliTicket } = require("./sidequest-cmd-shared");
 function reportClaimFailure(action, idOrRef, res, meta) {
   process.exitCode = 1;
   console.log(`✗ ${res.message || claimRefusalMessage(res.reason, idOrRef, res.ticket || res.claim, meta.path)}`);
@@ -43,6 +43,7 @@ async function cmdClaim(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("claim: pass a ticket id or ref, e.g. sidequest claim SQ-3 --by me");
   const { slug, meta } = await resolveProject(opts);
+  requireNonNativeCliTicket(slug, idOrRef, "claim");
   const by = workerId(opts);
   const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, direct: !!opts.direct, reason: opts.reason, tokenFile: opts["token-file"], executor: opts.executor, effort: opts.effort, source: opts.source || "cli", sessionId: sessionId(opts), requireBoundAgent: true });
   const warnings = res.ok ? store.presentWarnings(res.ticket, claimPlanningWarnings(res.ticket, meta.path), sessionId(opts)) : [];
@@ -65,6 +66,7 @@ async function cmdCheckpoint(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('checkpoint: pass a ticket ref, e.g. sidequest checkpoint SQ-3 --by me --commit <hash> --verify "command: passed"');
   const { slug, meta } = await resolveProject(opts);
+  requireNonNativeCliTicket(slug, idOrRef, "checkpoint");
   const by = workerId(opts);
   let res;
   try {
@@ -125,6 +127,7 @@ async function cmdRelease(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("release: pass a ticket id or ref, e.g. sidequest release SQ-3");
   const { slug, meta } = await resolveProject(opts);
+  requireNonNativeCliTicket(slug, idOrRef, "release");
   const by = workerId(opts);
   const reason = String(opts.reason || opts.oracle || "").trim();
   const evidence = store.technicalBlockerRelease({
@@ -165,7 +168,7 @@ async function cmdDone(opts, positional) {
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
   const body = await bodyFromOpts(opts, "done");
-  const ticket = store.getTicket(slug, idOrRef);
+  const ticket = requireNonNativeCliTicket(slug, idOrRef, "done");
   let res;
   try {
     const completionOptions = {
@@ -308,6 +311,7 @@ async function cmdScopeRequest(opts, positional) {
   const files = opts.file != null ? opts.file : opts.files;
   if (files == null) fail("scope-request: pass one or more requested paths with --file or --files.");
   const { slug, meta } = await resolveProject(opts);
+  requireNonNativeCliTicket(slug, idOrRef, "scope-request");
   const by = workerId(opts);
   const res = store.requestScope(slug, idOrRef, by, files, { source: opts.source || "cli", force: !!opts.force });
   if (opts.json) {
@@ -333,7 +337,7 @@ async function cmdCommit(opts, positional) {
   if (!idOrRef) fail('commit: pass a ticket ref, e.g. sidequest commit SQ-3 --by me --message "fix the thing".');
   if (!opts.message) fail("commit: pass --message for the scoped commit.");
   const { slug, meta } = await resolveProject(opts);
-  const ticket = store.getTicket(slug, idOrRef);
+  const ticket = requireNonNativeCliTicket(slug, idOrRef, "commit");
   const by = workerId(opts);
   if (!ticket) fail(`commit: no ticket "${idOrRef}" in ${meta.name}.`);
   if (!ticket.claim || ticket.claim.by !== by) {
@@ -440,6 +444,7 @@ async function cmdSubmit(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("submit: pass a ticket id or ref, e.g. sidequest submit SQ-3 --by me --commit <hash>");
   const { slug, meta } = await resolveProject(opts);
+  const ticket = requireNonNativeCliTicket(slug, idOrRef, "submit");
   const by = workerId(opts);
   if (opts.clear) {
     const res2 = store.clearSubmission(slug, idOrRef, {
@@ -457,7 +462,6 @@ async function cmdSubmit(opts, positional) {
     return;
   }
   const body = await bodyFromOpts(opts, "submit");
-  const ticket = store.getTicket(slug, idOrRef);
   if (!ticket) fail(`submit: no ticket "${idOrRef}" in ${meta.name}.`);
   const sourceRevisionValue = String(opts["source-revision-value"] || "").trim();
   if (sourceRevisionValue && opts.commit) {

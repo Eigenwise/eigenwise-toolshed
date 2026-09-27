@@ -3113,7 +3113,7 @@ function claimNext(slug, by, opts) {
   const want = opts.model ? classifyModelFilter(opts.model) : "any";
   if (want === "unknown") throw new Error(`Unknown model: ${opts.model}`);
   const category = opts.category == null ? null : String(opts.category).trim().toLowerCase();
-  const candidates = listTickets(slug).filter((t) => !t.archived).filter((t) => t.status !== "done").filter((t) => !pendingSubmission(t)).filter((t) => !t.claim || claimReclaimable(t) || t.claim.by === by).filter((t) => !opts.priority || t.priority === String(opts.priority).toLowerCase()).filter((t) => modelMatches(t.model, want === "any" ? null : want)).filter((t) => !category || t.categoryId === category).filter((t) => opts.includeBlocked || !isBlocked(slug, t)).sort((a, b) => {
+  const candidates = listTickets(slug).filter((t) => !t.archived).filter((t) => t.status !== "done").filter((t) => !opts.excludeNativeCodex || t.dispatch?.runtimeHost !== "codex" && !String(t.category?.route?.model || "").startsWith("native-codex-") && !String(t.model || "").startsWith("native-codex-")).filter((t) => !pendingSubmission(t)).filter((t) => !t.claim || claimReclaimable(t) || t.claim.by === by).filter((t) => !opts.priority || t.priority === String(opts.priority).toLowerCase()).filter((t) => modelMatches(t.model, want === "any" ? null : want)).filter((t) => !category || t.categoryId === category).filter((t) => opts.includeBlocked || !isBlocked(slug, t)).sort((a, b) => {
     const pr = priorityRank(a.priority) - priorityRank(b.priority);
     if (pr !== 0) return pr;
     return String(a.createdAt).localeCompare(String(b.createdAt));
