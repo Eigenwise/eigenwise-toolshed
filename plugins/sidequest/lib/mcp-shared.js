@@ -94,9 +94,15 @@ function resolveLifecycleProject(projectArg, args, action) {
   }
   return sessionProject;
 }
+function codexRuntimeIdentity() {
+  const session = String(process.env.CODEX_SESSION_ID || "").trim();
+  const thread = String(process.env.CODEX_THREAD_ID || "").trim();
+  if (!session || !thread || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID) return null;
+  return { sessionId: `codex-session:${session}`, agentId: `codex-thread:${thread}`, isExecutor: session !== thread };
+}
 function runtimeSessionId() {
   const v = process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
-  return String(v).trim() || null;
+  return String(v).trim() || codexRuntimeIdentity()?.sessionId || null;
 }
 function sessionOf(args) {
   return runtimeSessionId() || args && String(args.session || "").trim() || null;
@@ -104,9 +110,16 @@ function sessionOf(args) {
 function requireDispatchSession() {
   const sessionId = runtimeSessionId();
   if (!sessionId) {
-    throw new Error("dispatch: MCP runtime session identity is unavailable. Reload Sidequest in Claude Code and retry; do not pass a session label.");
+    throw new Error("dispatch: MCP runtime session identity is unavailable. Launch Sidequest in a Claude or per-agent Codex process; do not pass a session label.");
   }
   return sessionId;
+}
+function requireCodexClaimRuntime(ticket, action) {
+  if (ticket?.dispatch?.runtimeHost !== "codex") return;
+  const identity = codexRuntimeIdentity();
+  if (!identity?.isExecutor || ticket.dispatch.sessionId !== identity.sessionId || ticket.dispatch.agentId !== identity.agentId || ticket.claim?.runtime?.agentId !== identity.agentId) {
+    throw new Error(`${action}: the claimed Codex subagent must call from its own per-agent MCP process; caller-supplied by or session cannot replace runtime identity.`);
+  }
 }
 function workflowRecipe(slug, categoryId, ticketRef) {
   const requested = String(categoryId || "").trim();
@@ -964,6 +977,8 @@ module.exports = {
   resolveProject,
   resolveLifecycleProject,
   runtimeSessionId,
+  codexRuntimeIdentity,
+  requireCodexClaimRuntime,
   sessionOf,
   requireDispatchSession,
   workflowRecipe,

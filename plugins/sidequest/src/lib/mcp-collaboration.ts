@@ -15,6 +15,8 @@ const {
   assertDispatchTransport,
   resolveLifecycleProject,
   runtimeSessionId,
+  codexRuntimeIdentity,
+  requireCodexClaimRuntime,
   sessionOf,
   requireDispatchSession,
   workflowRecipe,
@@ -139,6 +141,9 @@ const tools: ToolDefinition[] = [
       const ticket = store.getTicket(slug, args.ref);
       const sessionId = sessionOf(args);
       const by = commentAuthor(args, ticket, sessionId);
+      if (ticket?.dispatch?.runtimeHost === 'codex' && by.startsWith('codex-thread:')) {
+        requireCodexClaimRuntime(ticket, 'comment');
+      }
       const res = store.addComment(slug, args.ref, {
         body: args.body,
         by,
@@ -277,6 +282,85 @@ const tools: ToolDefinition[] = [
     },
   },
   {
+    name: 'codex_dispatch',
+    description: 'Prepare a token-gated ticket for a distinct Codex desktop subagent. Invoke from the root Codex thread through its per-thread Sidequest MCP process. Spawn a separate agent in a clean linked worktree at baseCommit, then give only that agent the tokenFile and executor. Its first board action is codex_start.',
+    inputSchema: { type: 'object', properties: {
+      ref: { type: 'string' }, project: PROJECT_PROP,
+      sharedTree: { type: 'boolean' }, allowUnscoped: { type: 'boolean' },
+      integrationBranch: { type: 'string' },
+    }, required: ['ref'] },
+    handler(args) {
+      const identity = codexRuntimeIdentity();
+      if (!identity || identity.isExecutor) throw new Error('codex_dispatch: requires root Codex runtime identity from the per-thread process environment.');
+      const { slug, meta } = resolveLifecycleProject(args.project, args, 'codex_dispatch');
+      const ticket = store.getTicket(slug, args.ref);
+      if (!ticket) throw new Error(`codex_dispatch: no ticket ${args.ref}.`);
+      const route = store.resolveTicketRoute(ticket, ticket.category);
+      if (route?.exec?.backend !== 'codex') throw new Error(`codex_dispatch: ${ticket.ref} must have a Codex route before preparation.`);
+      const prepared = store.prepareDispatch(slug, args.ref, {
+        sessionId: identity.sessionId, runtimeCwd: process.cwd(),
+        sharedTree: args.sharedTree === true, allowUnscoped: args.allowUnscoped === true,
+        integrationBranch: args.integrationBranch, source: 'codex-mcp', transport: 'codex-mcp',
+      });
+      if (!prepared.ok) throw new Error(`codex_dispatch: ${prepared.message || prepared.reason}`);
+      const state = prepared.ticket.dispatch;
+      return {
+        project: slug, projectPath: meta.path, ref: prepared.ticket.ref,
+        model: prepared.ticket.model, effort: prepared.ticket.effort,
+        executor: state.executor, tokenFile: state.tokenFile,
+        baseCommit: state.baseCommit, sharedTree: state.sharedTree,
+        reviewTarget: state.reviewTarget || null,
+      };
+    },
+  },
+  {
+    name: 'codex_start',
+    description: 'Bind a distinct Codex subagent and its clean checkout to a prepared dispatch, then claim the ticket. Identity comes only from this per-agent MCP process environment. Root/self and missing identities are refused.',
+    inputSchema: { type: 'object', properties: {
+      ref: { type: 'string' }, project: PROJECT_PROP,
+      executor: { type: 'string' }, tokenFile: { type: 'string' },
+      worktree: { type: 'string' },
+    }, required: ['ref', 'executor', 'tokenFile'] },
+    handler(args) {
+      const identity = codexRuntimeIdentity();
+      if (!identity || !identity.isExecutor) throw new Error('codex_start: requires a distinct Codex subagent runtime from the per-agent process environment.');
+      const { slug, meta } = resolveLifecycleProject(args.project, args, 'codex_start');
+      const ticket = store.getTicket(slug, args.ref);
+      const state = ticket?.dispatch;
+      if (!state || state.sessionId !== identity.sessionId || state.executor !== args.executor || !state.tokenFile
+        || worktrees.canonicalPath(state.tokenFile) !== worktrees.canonicalPath(args.tokenFile)) {
+        throw new Error('codex_start: token file and executor do not match this session dispatch.');
+      }
+      const worktree = String(args.worktree || process.cwd()).trim();
+      if (worktrees.canonicalPath(worktree) !== worktrees.canonicalPath(process.cwd())) {
+        throw new Error('codex_start: worktree must be this agent process cwd.');
+      }
+      if (state.sharedTree === true && worktrees.canonicalPath(commitScope.repoRoot(worktree)) !== worktrees.canonicalPath(meta.path)) {
+        throw new Error('codex_start: shared-tree worker must run in the registered project checkout.');
+      }
+      const launch = store.recordDispatchLaunch(slug, args.ref, {
+        tokenFile: args.tokenFile, executor: args.executor,
+        sessionId: identity.sessionId, agentName: state.launchName, source: 'codex-mcp',
+      });
+      if (!launch.ok) return mutationAck(slug, launch);
+      if (state.sharedTree === false) {
+        const attached = store.bindCodexDispatchWorktree(slug, args.ref, {
+          tokenFile: args.tokenFile, executor: args.executor,
+          sessionId: identity.sessionId, worktree,
+        });
+        if (!attached.ok) return mutationAck(slug, attached);
+      }
+      const bound = store.bindDispatchAgent(identity.sessionId, args.executor, identity.agentId, state.launchName,
+        state.sharedTree === false ? worktree : null);
+      if (!bound.ok || bound.ticket?.id !== ticket.id) return mutationAck(slug, bound.ok ? { ok: false, reason: 'dispatch_identity_ambiguous' } : bound);
+      const claimed = store.claimTicket(slug, args.ref, identity.agentId, {
+        tokenFile: args.tokenFile, executor: args.executor,
+        sessionId: identity.sessionId, requireBoundAgent: true, source: 'codex-mcp',
+      });
+      return mutationAck(slug, claimed, claimed.ok ? { by: identity.agentId } : null);
+    },
+  },
+  {
     name: 'dispatch',
     description: 'Prepare a token-gated dispatch. Returns stable executor spawn spec and token. Bundled types load with Sidequest. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor. retireOnly retires an evidence-eligible attempt without a replacement.',
     inputSchema: {
@@ -298,6 +382,7 @@ const tools: ToolDefinition[] = [
       required: ['ref'],
     },
     handler(args) {
+      if (codexRuntimeIdentity()) throw new Error('dispatch: Codex desktop runtimes must use codex_dispatch and codex_start.');
       const { slug, meta } = resolveLifecycleProject(args.project, args, 'dispatch');
       const freshness = sidequestMutationFreshness(meta.path, { pluginRoot: path.join(__dirname, '..') });
       if (freshness.refusal) throw new Error(freshness.refusal);

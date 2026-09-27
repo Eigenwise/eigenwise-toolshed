@@ -1512,6 +1512,62 @@
     }
   },
   {
+    "name": "codex_dispatch",
+    "description": "Prepare a token-gated ticket for a distinct Codex desktop subagent.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "sharedTree": {
+          "type": "boolean"
+        },
+        "allowUnscoped": {
+          "type": "boolean"
+        },
+        "integrationBranch": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref"
+      ]
+    }
+  },
+  {
+    "name": "codex_start",
+    "description": "Bind a distinct Codex subagent and its clean checkout to a prepared dispatch, then claim the ticket.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "executor": {
+          "type": "string"
+        },
+        "tokenFile": {
+          "type": "string"
+        },
+        "worktree": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "executor",
+        "tokenFile"
+      ]
+    }
+  },
+  {
     "name": "dispatch",
     "description": "Tree. token and spawn spec; retireOnly.",
     "inputSchema": {

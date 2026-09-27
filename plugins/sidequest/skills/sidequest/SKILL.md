@@ -98,6 +98,24 @@ attachment and report missing or unreadable ones, while the spawn keeps that con
 transcript. Never trust a worker's self-report — the
 claim's token and exact executor name are the evidence.
 
+**Codex desktop subagents:** Use `codex_dispatch` only from the root Codex thread
+after setting a Codex route on the ticket. It returns `baseCommit`, `tokenFile`,
+and `executor` instead of a Claude Agent spawn. Create a clean linked worktree
+at `baseCommit`, then spawn a distinct Codex subagent there and give only that
+agent the ticket's token file and executor. Its first board action is
+`codex_start` from that worktree; this binds its inherited `CODEX_THREAD_ID`
+to the root `CODEX_SESSION_ID`, verifies the checkout, and claims. It then
+calls `list` with `ref` to read the full ticket and attachment paths. The root
+thread cannot claim or complete the worker's ticket. A review ticket's
+`baseCommit` is the exact submitted candidate; use a different Codex agent
+for its review. Each caller must launch Sidequest in its own process so the
+MCP sees that caller's inherited `CODEX_*` identity. When the desktop MCP
+server is shared, run `node plugins/sidequest/bin/sidequest-codex-call.js
+<tool>` with JSON arguments on stdin from the calling agent's checkout; it
+invokes the same MCP tool handler in a fresh process. Never pass a session or
+agent ID in tool arguments or set the identity variables by hand. Missing or
+equal root/worker identities fail closed.
+
 **Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent.model` and `recipe.agent.promptPrefix + prompt` in Agent. Never hand-translate route, gateway, virtual-model, marker, or effort fields. A user-named model for one ticket means set that ticket's `route` override, never edit the category route, which repoints later tickets too. See `references/routing-guide.md`.
 
 **Locations:** CLI: `plugins/sidequest/bin/sidequest.js`; DB: `~/.claude/sidequest/sidequest.db`

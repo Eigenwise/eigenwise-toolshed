@@ -3,7 +3,7 @@ title: Sidequest
 description: Plan, track, and deliver Claude Code work from a local board.
 ---
 
-Sidequest gives Claude Code a local board for planned work. It groups tickets into stories, keeps the backlog visible, and runs delegated work through a repeatable review and delivery flow. That flow works for Git codebases and filesystem snapshots of non-Git documentation trees, vaults, and research collections.
+Sidequest gives Claude Code a local board for planned work. It groups tickets into stories, keeps the backlog visible, and runs delegated work through a repeatable review and delivery flow. A Codex desktop root can also dispatch distinct Codex subagents through the local board MCP. That flow works for Git codebases and filesystem snapshots of non-Git documentation trees, vaults, and research collections.
 
 ## Install
 
@@ -131,6 +131,18 @@ CI watch alerts exclude completed runs marked `skipped` or `neutral`. Neither co
 If you run one session from a parent directory holding several independent repos, each registered as its own board, an executor working a sibling repo's ticket no longer has to name the board on the calls that carry its `worktree` (commit, submit, checkpoint, dispatch). Sidequest resolves the board from the executor's own binding: the ticket ref plus the worktree its dispatch reserved for it, or, for a shared-tree dispatch, the ref plus the claim owner. Calls without a `worktree` argument (comment, release, done, claim, plan, scope requests) still need `project` to reach the sibling board. Nothing else selects a board, so a caller without a claim stays on the session's own board and gets that board's usual refusal. Passing `project` explicitly still wins, and two boards that both fit the same binding are refused by name rather than picked for you.
 
 ## Read-only reports
+
+### Codex desktop agents
+
+For a ticket routed to a Codex model, the root Codex thread can call `codex_dispatch` through Sidequest's MCP handler. The response gives the exact executor, a token-file path, and the Git baseline. Create a clean linked worktree at that baseline and spawn a separate Codex subagent there. The worker calls `codex_start` from its worktree before changing anything; that call verifies the token, executor, checkout baseline, and inherited thread identity, then records the claim. It then calls `list` with `ref` for the full ticket, comments, and attachment paths. The root cannot call `codex_start` on the worker's behalf. Submission, bound review, and integration then use the existing Sidequest gates. A bound reviewer must be a different Codex subagent in a worktree at the exact submitted commit.
+
+An app-managed MCP server may belong to the root thread even when a child calls it. In that setup, each agent can invoke the same MCP tools through a fresh local process, launched from its own checkout:
+
+```powershell
+'{"ref":"SQ-3","project":"C:\\path\\to\\repo"}' | node C:\path\to\sidequest\plugins\sidequest\bin\sidequest-codex-call.js codex_dispatch
+```
+
+The worker uses the same command with `codex_start` and JSON containing `ref`, `project`, `executor`, and `tokenFile`. The process inherits `CODEX_SESSION_ID` and `CODEX_THREAD_ID`; callers do not provide identities as arguments. A missing identity, a root thread trying to claim its own dispatch, or a dirty or wrong-baseline checkout is refused at claim. A reviewer reusing the source agent identity cannot authorize integration. The `sidequest-codex-call.js` helper uses the MCP request handler directly and exits nonzero on a tool error. Do not launch a desktop-wide MCP server for worker claims unless it is known to start separately inside each worker runtime.
 
 Use Sidequest for independent candidate reviews, repository audits, and shortcut debt scans. They use the existing read-only review route and only report findings.
 

@@ -110,7 +110,7 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 24000 for VERIFICATION_WAIVER_PROP's type: 'object' (SQ-2 / GitHub #109): an MCP host that
 // enforces the declared schema type refused a top-level verificationWaiver because the property listed
 // `properties` without `type: 'object'`. +91 bytes compacted, while preserving the 2.5KB reserve.
-const MCP_TOOLS_LIST_MAX_BYTES = 24100;
+const MCP_TOOLS_LIST_MAX_BYTES = 24900;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -140,7 +140,7 @@ const TOOL_BY_NAME = new Map(TOOLS
 
 const MUTATING_TOOLS = new Set([
   'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next',
-  'done', 'groomClose', 'release', 'commit', 'submit', 'supersede_submission', 'comment', 'plan', 'link', 'unlink', 'assign', 'dispatch',
+  'done', 'groomClose', 'release', 'commit', 'submit', 'supersede_submission', 'comment', 'plan', 'link', 'unlink', 'assign', 'dispatch', 'codex_dispatch', 'codex_start',
   'category_add', 'category_edit', 'category_detach', 'category_relink', 'category_rm',
   'profile_create', 'profile_edit', 'profile_retire', 'profile_use', 'profile_repoint', 'profile_promote',
   'archive_board', 'unarchive_board',

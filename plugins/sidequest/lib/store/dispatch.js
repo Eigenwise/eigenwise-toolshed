@@ -37,7 +37,7 @@ function requirementsMatch(left, right) {
   return JSON.stringify(left || null) === JSON.stringify(right || null);
 }
 function createDispatch(dependencies) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimGraceMs, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimGraceMs, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createCheckoutInstanceMarker, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
   function syncLiveDispatchVerification(slug, ticket, amendment) {
     const state = dispatchState(ticket);
     if (!state || state.terminalAt) return null;
@@ -1024,7 +1024,7 @@ function createDispatch(dependencies) {
     const value = nativeGitPath(directory);
     return canonicalPath(path.isAbsolute(value) ? value : path.resolve(String(repository || ""), value));
   }
-  function immutableWorktreeFacts(slug, candidate) {
+  function immutableWorktreeFacts(slug, candidate, initializeInstance = false) {
     const projectPath = String(readMeta(slug)?.path || "").trim();
     const supplied = String(candidate || "").trim();
     if (!projectPath || !supplied) return null;
@@ -1034,7 +1034,7 @@ function createDispatch(dependencies) {
       const gitDirectoryPath = gitDirectory(worktree, gitOutput(worktree, ["rev-parse", "--git-dir"]));
       const commonGitDirectory = gitDirectory(worktree, gitOutput(worktree, ["rev-parse", "--git-common-dir"]));
       const repositoryGitDirectory = gitDirectory(repository, gitOutput(repository, ["rev-parse", "--git-common-dir"]));
-      const checkoutInstance = checkoutInstanceIdentity(gitDirectoryPath);
+      const checkoutInstance = checkoutInstanceIdentity(gitDirectoryPath) || (initializeInstance && commonGitDirectory === repositoryGitDirectory && gitDirectoryPath !== commonGitDirectory ? createCheckoutInstanceMarker(gitDirectoryPath) : null);
       if (commonGitDirectory !== repositoryGitDirectory || gitDirectoryPath === commonGitDirectory || !checkoutInstance) return null;
       const revision = gitOutput(worktree, ["rev-parse", "--verify", "HEAD^{commit}"]);
       return { repository, worktree, gitDirectory: gitDirectoryPath, commonGitDirectory, checkoutInstance, revision };
@@ -1245,7 +1245,7 @@ function createDispatch(dependencies) {
     }
     const verifyError = dispatchVerifyCommandError(found, projectPath);
     if (verifyError) throw new Error(verifyError);
-    const installCheck = projectPath ? assertSidequestInstall(projectPath) : null;
+    const installCheck = projectPath && opts.transport !== "codex-mcp" ? assertSidequestInstall(projectPath) : null;
     const preparedPluginInstall = installCheck?.installPath || null;
     const preparedPluginIdentity = installCheck?.identity || null;
     const preparedPluginVersion = installCheck?.version || null;
@@ -1270,7 +1270,7 @@ function createDispatch(dependencies) {
       if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${found.ref} has no unbound dispatch attempt to supersede (${superseded.reason}).`}`);
     }
     assertDispatchTransport(opts.transport, { allowUnverifiedTransport: !!opts.allowUnverifiedTransport });
-    const pythonIoEncoding = projectPath ? ensurePythonIoEncoding(projectPath) : { written: false };
+    const pythonIoEncoding = projectPath && opts.transport !== "codex-mcp" ? ensurePythonIoEncoding(projectPath) : { written: false };
     const captureFilesystemSnapshot = withTicketLock(slug, found.id, () => {
       const ticket = getTicket(slug, found.id);
       if (!ticket) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
@@ -1491,6 +1491,7 @@ function createDispatch(dependencies) {
           evidenceDirectory,
           sessionId: opts.sessionId ? String(opts.sessionId) : null,
           preparedBy: dispatchPreparationAttribution(opts),
+          ...opts.transport === "codex-mcp" ? { runtimeHost: "codex" } : {},
           ...preparedCompatibility ? { preparedCompatibility } : {},
           sharedTree,
           ...reducedAgentSchema ? { reducedAgentSchema: true } : {},
@@ -1701,6 +1702,37 @@ function createDispatch(dependencies) {
       stampDispatchEvent(t, opts.source || "dispatch", now);
       putTicket(slug, t);
       return { ok: true, ticket: t, ...compatibilityWarning ? { advisory: compatibilityWarning } : {} };
+    });
+  }
+  function bindCodexDispatchWorktree(slug, idOrRef, opts) {
+    const found = getTicket(slug, idOrRef);
+    if (!found) return { ok: false, reason: "not_found" };
+    return withTicketLock(slug, found.id, () => {
+      const ticket = getTicket(slug, found.id);
+      const state = dispatchState(ticket);
+      if (!state || state.sharedTree !== false || state.terminalAt || state.outcome !== "launched" || state.sessionId !== opts.sessionId || !dispatchTokenMatches(ticket.dispatchNonce, dispatchTokenForRequest(opts.token, opts.tokenFile)) || state.executor !== opts.executor) return { ok: false, reason: "dispatch_binding_unavailable" };
+      const facts = immutableWorktreeFacts(slug, opts.worktree, true);
+      if (!facts || facts.revision !== state.baseCommit) return { ok: false, reason: "worktree_revision_mismatch" };
+      if (canonicalPath(opts.worktree) !== canonicalPath(process.cwd())) return { ok: false, reason: "worktree_cwd_mismatch" };
+      const dirty = gitOutput(facts.worktree, ["status", "--porcelain"]);
+      if (dirty) return { ok: false, reason: "worktree_dirty" };
+      for (const other of listTickets(slug)) {
+        if (other.id !== ticket.id && other.dispatch?.terminalAt == null && other.dispatch?.worktree && canonicalPath(other.dispatch.worktree) === facts.worktree) {
+          return { ok: false, reason: "worktree_already_bound" };
+        }
+      }
+      if (state.worktree && canonicalPath(state.worktree) !== facts.worktree) return { ok: false, reason: "worktree_binding_mismatch" };
+      state.worktree = facts.worktree;
+      state.worktreeBindingSource = "worktree-create";
+      state.worktreeGitDirectory = facts.gitDirectory;
+      state.worktreeCommonGitDirectory = facts.commonGitDirectory;
+      state.worktreeCheckoutInstance = facts.checkoutInstance;
+      state.worktreeObservedRevision = facts.revision;
+      state.worktreeBoundAt = state.worktreeBoundAt || (/* @__PURE__ */ new Date()).toISOString();
+      state.worktreeCreationCompletedAt = state.worktreeCreationCompletedAt || state.worktreeBoundAt;
+      stampDispatchEvent(ticket, "codex-worktree-binding", state.worktreeBoundAt);
+      putTicket(slug, ticket);
+      return { ok: true, ticket };
     });
   }
   function terminalRuntimeMatches(state, claim, opts) {
@@ -2761,6 +2793,7 @@ function createDispatch(dependencies) {
     readDispatchBriefing,
     recoverLiveClaimDispatch,
     recordDispatchLaunch,
+    bindCodexDispatchWorktree,
     recordDispatchAgentFailure,
     recoverDispatchQuotaFailure,
     bindDispatchWorktreeCreation,

@@ -20,7 +20,7 @@ const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfile
 const commitScope = require("./commit-scope.js");
 const { commitPaths } = commitScope;
 const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, retainedWorktreeResumeDecision } = require("./worktrees.js");
-const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, isCanonicalRegisteredWorktree } = require("./kernel/worktree.js");
+const { canonicalPath, checkoutInstanceIdentity, createCheckoutInstanceMarker, createWorktreeLease, isCanonicalRegisteredWorktree } = require("./kernel/worktree.js");
 const { reviewLockMessage } = require("./kernel/review-binding.js");
 const { migrateIfNeeded } = require("./migrate.js");
 const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, providerReadiness } = require("./discovery.js");
@@ -646,6 +646,7 @@ const {
   readDispatchBriefing,
   recoverLiveClaimDispatch,
   recordDispatchLaunch,
+  bindCodexDispatchWorktree,
   recordDispatchAgentFailure,
   recoverDispatchQuotaFailure,
   bindDispatchWorktreeCreation,
@@ -682,6 +683,7 @@ const {
   claudeQuotaFailure: (...args) => claudeQuotaFailure(...args),
   canonicalPath,
   checkoutInstanceIdentity,
+  createCheckoutInstanceMarker,
   createWorktreeLease,
   worktreeResumeDecision: retainedWorktreeResumeDecision,
   isCanonicalRegisteredWorktree,
@@ -3421,6 +3423,7 @@ module.exports = {
   dispatchTokenForRequest,
   isSupersededDispatchToken,
   recordDispatchLaunch,
+  bindCodexDispatchWorktree,
   recordDispatchAgentFailure,
   recoverDispatchQuotaFailure,
   bindDispatchWorktreeCreation,

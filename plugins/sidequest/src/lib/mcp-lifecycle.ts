@@ -15,6 +15,8 @@ const {
   assertDispatchTransport,
   resolveLifecycleProject,
   runtimeSessionId,
+  codexRuntimeIdentity,
+  requireCodexClaimRuntime,
   sessionOf,
   requireDispatchSession,
   workflowRecipe,
@@ -465,6 +467,9 @@ const tools: ToolDefinition[] = [
     },
     handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, 'claim');
+      if (store.getTicket(slug, args.ref)?.dispatch?.runtimeHost === 'codex') {
+        throw new Error('claim: Codex-native dispatches must use codex_start from the distinct executor runtime.');
+      }
       const by = requireBy(args, 'claim');
       const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, reason: args.reason, tokenFile: args.tokenFile, executor: args.executor, effort: args.effort, source: 'mcp', sessionId: sessionOf(args), requireBoundAgent: true });
       if (!res.ok) res.message = res.reason === 'executor_mismatch'
@@ -495,6 +500,7 @@ const tools: ToolDefinition[] = [
     },
     handler(args) {
       const { slug } = resolveLifecycleProject(args.project, args, 'checkpoint');
+      requireCodexClaimRuntime(store.getTicket(slug, args.ref), 'checkpoint');
       const by = requireBy(args, 'checkpoint');
       const res = store.checkpointTicket(slug, args.ref, by, {
         commit: args.commit,
@@ -566,6 +572,7 @@ const tools: ToolDefinition[] = [
       const by = requireBy(args, 'done');
       const body = requiredFinalReport(args, 'done');
       const ticket = store.getTicket(slug, args.ref);
+      requireCodexClaimRuntime(ticket, 'done');
       const model = requireKnownModel('done', args.model, ticket);
       const opts = { source: 'mcp', model, effort: args.effort, body, verify: args.verify, sessionId: sessionOf(args) };
       let res = store.completeTicket(slug, args.ref, by, opts);
@@ -730,6 +737,7 @@ const tools: ToolDefinition[] = [
       if (!evidence.ok) return mutationAck(slug, { ok: false, reason: evidence.reason, message: evidence.message });
       const reason = requiredReleaseReason(args);
       const ticket = store.getTicket(slug, args.ref);
+      requireCodexClaimRuntime(ticket, 'release');
       const res = store.releaseTicket(slug, args.ref, by, {
         status: args.kind === 'oracle' ? 'awaiting-oracle' : args.status,
         oracle: args.oracle,
@@ -836,6 +844,7 @@ const tools: ToolDefinition[] = [
       const by = requireBy(args, 'commit');
       const message = requiredText(args, 'message', 'commit');
       const ticket = store.getTicket(slug, args.ref);
+      requireCodexClaimRuntime(ticket, 'commit');
       if (!ticket) throw new Error(`commit: no ticket "${args.ref}" in ${meta.name}.`);
       if (!ticket.claim || ticket.claim.by !== by) {
         const released = !ticket.claim && ticket.claimRelease
@@ -983,6 +992,7 @@ const tools: ToolDefinition[] = [
       }
       const body = requiredFinalReport(args, 'submit');
       const ticket = store.getTicket(slug, args.ref);
+      requireCodexClaimRuntime(ticket, 'submit');
       if (!ticket) throw new Error(`submit: no ticket "${args.ref}" in ${meta.name}.`);
       if (args.sourceRevision && args.commit) {
         throw new Error('submit: pass exactly one of commit or sourceRevision.');
