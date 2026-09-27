@@ -14,6 +14,7 @@ process.env.CLAUDE_PROJECT_DIR = projectPath;
 process.env.SIDEQUEST_DISCOVERY_DIRS = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-high-stakes-catalog-'));
 
 const store = require('../lib/store.js');
+const db = require('../lib/db.js');
 const agentsync = require('../lib/agentsync.js');
 const mcp = require('../lib/mcp.js');
 const cli = path.join(ROOT, 'bin', 'sidequest.js');
@@ -37,6 +38,14 @@ function runCli(args: string[]) {
 
 function git(args: string[], cwd: string) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+function persist(slug: string, ticket: any) {
+  db.putRow(db.openDb(home), 'tickets', {
+    id: ticket.id, project: slug, ref: ticket.ref, status: ticket.status,
+    archived: ticket.archived ? 1 : 0, ord: ticket.order,
+    claim_by: ticket.claim ? ticket.claim.by : null, data: ticket,
+  });
 }
 
 function submitIntegrationFixture(title: string, reviewed = false) {
@@ -163,4 +172,75 @@ test('high-stakes integration warns until a review is recorded', async () => {
   });
   assert.equal(closed.ok, true);
   assert.equal(closed.advisory, undefined);
+});
+
+test('high-stakes integration recognizes a completed bound review with a planned outcome', () => {
+  const { slug, ticket } = submitIntegrationFixture('Bound review');
+  const source = store.getTicket(slug, ticket.ref);
+  const terminalAt = new Date().toISOString();
+  source.dispatch = {
+    terminalAt, outcome: 'submitted',
+    attempts: [{ outcome: 'submitted', commit: source.submission.commit, agentId: 'submitter', terminalAt }],
+  };
+  persist(slug, source);
+  const review = store.createTicket(slug, { title: 'Bound audit', category: 'review-audit' }, {
+    ref: source.ref, commit: source.submission.commit,
+  });
+  review.status = 'done';
+  review.dispatch = { terminalAt, outcome: 'done', attempts: [{ outcome: 'done', agentId: 'reviewer', terminalAt }] };
+  persist(slug, review);
+  assert.equal(store.getTicket(slug, source.ref).submission.review.outcome, 'planned');
+  assert.equal(review.links?.length || 0, 0);
+  assert.equal(source.comments.some((comment: any) => /^\s*reviewed-by\s*:/i.test(comment.body)), false);
+  const closed = store.completeTicketAsControlPlane(slug, source.ref, {
+    purpose: 'integration', by: 'integrator', reason: 'Integrated bound-review fixture.',
+  });
+  assert.equal(closed.ok, true, closed.message || closed.reason);
+  assert.equal(closed.advisory, undefined);
+});
+
+test('bound review advisory evidence rejects incomplete, stale, conflicting, or unidentified reviews', () => {
+  const { createSubmissions } = require('../lib/store/submissions.js');
+  const candidate = { source: 'git', value: 'a'.repeat(40) };
+  const terminalAt = '2026-01-01T00:00:00.000Z';
+  function fixture() {
+    const source: any = {
+      id: 'source', ref: 'SQ-1', submission: { commit: candidate.value,
+        review: { ticketId: 'review', ref: 'SQ-2', candidate, outcome: 'planned' } },
+      dispatch: { attempts: [{ outcome: 'submitted', commit: candidate.value, agentId: 'submitter', terminalAt }] },
+    };
+    const review: any = {
+      id: 'review', ref: 'SQ-2', category: 'review-audit', status: 'done',
+      reviewTarget: { ticketId: source.id, ref: source.ref, candidate },
+      dispatch: { attempts: [{ outcome: 'done', agentId: 'reviewer', terminalAt }] },
+    };
+    return { source, review, tickets: [source, review] };
+  }
+  const mutations: Record<string, (f: ReturnType<typeof fixture>) => void> = {
+    unbound: ({ source, review }) => { delete source.submission.review; delete review.reviewTarget; },
+    'target only': ({ source }) => { delete source.submission.review; },
+    'mirror only': ({ review }) => { delete review.reviewTarget; },
+    'wrong mirror identity': ({ source }) => { source.submission.review.ticketId = 'other'; },
+    'wrong mirror ref': ({ source }) => { source.submission.review.ref = 'SQ-9'; },
+    'stale mirror': ({ source }) => { source.submission.review.candidate = { ...candidate, value: 'b'.repeat(40) }; },
+    'stale target': ({ review }) => { review.reviewTarget.candidate = { ...candidate, value: 'b'.repeat(40) }; },
+    conflict: ({ review, tickets }) => { tickets.push({ ...review, id: 'duplicate' }); },
+    unfinished: ({ review }) => { review.status = 'doing'; },
+    'wrong category': ({ review }) => { review.category = 'coding.normal'; },
+    'missing source attempt': ({ source }) => { source.dispatch.attempts = []; },
+    'missing review attempt': ({ review }) => { review.dispatch.attempts = []; },
+    unidentified: ({ review }) => { delete review.dispatch.attempts[0].agentId; },
+    'self review': ({ review }) => { review.dispatch.attempts[0].agentId = 'submitter'; },
+    rejected: ({ source }) => { source.submission.review.outcome = 'rejected'; },
+    inconclusive: ({ review }) => { review.reviewTarget.outcome = 'inconclusive'; },
+  };
+  for (const [label, mutate] of Object.entries({ valid: (_fixture: ReturnType<typeof fixture>) => {}, ...mutations })) {
+    const f = fixture();
+    mutate(f);
+    const { boundReviewPass } = createSubmissions({
+      listTickets: () => f.tickets,
+      getTicket: (_slug: string, ref: string) => f.tickets.find((ticket) => ticket.id === ref || ticket.ref === ref),
+    });
+    assert.equal(boundReviewPass('fixture', f.source), label === 'valid', label);
+  }
 });

@@ -1268,6 +1268,7 @@ const {
   workingTreeVerification,
   verifyIntegration,
   validateIntegrationSubmission,
+  boundReviewPass,
   recordDeliveredSubmission,
   recordAbandonedSubmission,
   integrateSubmission,
@@ -3366,7 +3367,7 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
     if (!admitted.ok) return admitted;
   }
   const recorded = delivery;
-  const advisory = purpose === 'integration' && ticket.highStakes && !recordedReviewPass(ticket) && !linkedReviewPass(slug, ticket)
+  const advisory = purpose === 'integration' && ticket.highStakes && !recordedReviewPass(ticket) && !linkedReviewPass(slug, ticket) && !boundReviewPass(slug, ticket)
     ? HIGH_STAKES_REVIEW_WARNING
     : null;
   const result = completeTicket(slug, idOrRef, by, Object.assign({}, opts, {

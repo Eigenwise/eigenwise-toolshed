@@ -5,7 +5,7 @@ const { isFullSuiteCommand, runFullSuiteVerification } = require("../verify-capt
 const { worktreeSetupDeadlineMs } = require("../hook-timeouts.js");
 const { decideSubmissionAdmission } = require("../kernel/submission");
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require("../source-revision-capability.js");
-const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require("../kernel/review-binding");
+const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require("../kernel/review-binding");
 const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require("../kernel/wave");
 const { isInScope, scopedPaths } = require("../scope-match");
 const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyDeliveryContentCommitGuidance } = require("../refusal-guidance.js");
@@ -111,6 +111,16 @@ function createSubmissions(dependencies) {
   }
   function candidateReviewRelation(slug, ticket, tickets = listTickets(slug)) {
     return reviewRelationFor(ticket, tickets, (idOrRef) => getTicket(slug, idOrRef));
+  }
+  function boundReviewPass(slug, ticket) {
+    const relation = candidateReviewRelation(slug, ticket);
+    if (!relation || relation.side !== "both" || relation.conflict) return false;
+    const review = relation.reviewTicket;
+    const category = review?.category?.id || review?.category || review?.categoryId;
+    if (category !== "review-audit" || terminalReviewFailure(ticket, relation)) return false;
+    const candidate = reviewCandidateFromSubmission(ticket.submission);
+    const mirror = relation.mirror;
+    return mirror?.ticketId === review.id && String(mirror.ref || "").toUpperCase() === String(review.ref).toUpperCase() && sameReviewCandidate(candidate, mirror.candidate) && [mirror.outcome, relation.reviewTarget?.outcome].every((outcome) => !outcome || ["planned", "accepted"].includes(outcome));
   }
   function pendingCandidateBlocksWave(slug, ticket, tickets) {
     return pendingSubmission(ticket) && reviewRelationOutcome(candidateReviewRelation(slug, ticket, tickets)) !== "rejected";
@@ -2999,6 +3009,6 @@ ${verify.outputTail}` : null
     }));
     return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || "merge" };
   }
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, boundReviewPass, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
 }
 module.exports = { createSubmissions };
