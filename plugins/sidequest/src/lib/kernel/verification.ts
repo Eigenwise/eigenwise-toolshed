@@ -190,9 +190,12 @@ export function commandVerificationResult(requirement: VerificationRequirement, 
   const completedCapture = captures.find((capture) => matchingCapture(capture) && provesCandidate(capture));
   if (!completedCapture) {
     const dirtyCapture = captures.find((capture) => matchingCapture(capture) && capture.cleanWorktree === false);
+    // The nonce is needed for matching, but is a bearer credential and must
+    // never appear in a diagnostic returned through CLI, MCP, or HTTP.
+    const attemptLabel = dispatchNonce ? 'the current dispatch attempt' : 'an unprepared dispatch attempt';
     const message = dirtyCapture
-      ? `Verification capture ${dirtyCapture.id} for ${ticket}, dispatch attempt ${dispatchNonce || '<none>'}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)} ran over a dirty worktree. Commit or discard the changes, then run the pinned verifier again before resubmitting.`
-      : `No completed passed verification capture exists for ${ticket}, dispatch attempt ${dispatchNonce || '<none>'}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)}. Run ${JSON.stringify(command)} through the dispatched verify-capture wrapper again after finalizing that candidate, then resubmit.`;
+      ? `Verification capture ${dirtyCapture.id} for ${ticket}, ${attemptLabel}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)} ran over a dirty worktree. Commit or discard the changes, then run the pinned verifier again before resubmitting.`
+      : `No completed passed verification capture exists for ${ticket}, ${attemptLabel}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)}. Run ${JSON.stringify(command)} through the dispatched verify-capture wrapper again after finalizing that candidate, then resubmit.`;
     return Object.freeze({
       result: Object.freeze({ kind: requirement.kind, status: 'failed_check' as const, evidence: message, command, failureIdentities: Object.freeze([dirtyCapture ? 'verification:dirty-worktree-capture' : 'verification:capture-required']) }),
       expectedEvidence: null,

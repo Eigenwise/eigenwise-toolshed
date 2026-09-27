@@ -56,7 +56,7 @@ function worktreeBindingComparison(failure) {
 function correctedMcpClaim(ref, ticket = {}, projectPath) {
   const executor = (0, import_prepared_dispatch.canonicalPreparedDispatchExecutor)(ticket) || "<prepared executor>";
   const effort = ticket.effort || "<prepared effort>";
-  const tokenFile = ticket.dispatch?.tokenFile || "<dispatch token file>";
+  const tokenFile = "<tokenFile from this executor's dispatch briefing>";
   const project = projectPath || "<current board project>";
   return `Corrected MCP claim, without \`direct\`: \`mcp__plugin_sidequest_board__claim({ ref: ${JSON.stringify(ref)}, by: "<choose a unique id>", executor: ${JSON.stringify(executor)}, effort: ${JSON.stringify(effort)}, project: ${JSON.stringify(project)}, tokenFile: ${JSON.stringify(tokenFile)} })\`.`;
 }

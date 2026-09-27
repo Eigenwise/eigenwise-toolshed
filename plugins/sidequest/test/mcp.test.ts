@@ -5877,7 +5877,8 @@ test('MCP claim rejects a generic executor for a Codex route', async () => {
     assert.strictEqual(rejected.expectedExecutor, prepared.ticket.dispatchExecutor);
     assert.ok(rejected.message.includes('Expected executor: `' + prepared.ticket.dispatchExecutor + '`'));
     assert.ok(rejected.message.includes(`executor: ${JSON.stringify(prepared.ticket.dispatchExecutor)}`));
-    assert.ok(rejected.message.includes(`tokenFile: ${JSON.stringify(prepared.ticket.dispatch.tokenFile)}`));
+    assert.ok(rejected.message.includes('tokenFile: "<tokenFile from this executor'));
+    assert.ok(!rejected.message.includes(prepared.ticket.dispatch.tokenFile));
     assert.ok(rejected.message.includes(`project: ${JSON.stringify(PROJ)}`));
   } finally {
     clearCatalog();

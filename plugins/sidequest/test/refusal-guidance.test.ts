@@ -10,6 +10,9 @@ interface ClaimIdentity {
 interface ClaimContext extends ClaimIdentity {
   claim?: ClaimIdentity;
   submission?: ClaimIdentity;
+  dispatch?: { executor?: string; tokenFile?: string };
+  model?: string;
+  effort?: string;
 }
 
 type RefusalMessage = (ref: string, claim: ClaimContext) => string;
@@ -20,6 +23,32 @@ const { CLAIM_REFUSAL_MESSAGES, claimRefusalMessage, manualCandidateDeliveryGuid
   manualCandidateDeliveryGuidance(): string;
   routingDisabledMessage(ref: string): string;
 };
+const { commandVerificationResult } = require('../lib/kernel/verification.js');
+
+test('ordinary claim and verification diagnostics never print dispatch credentials', () => {
+  const secretPath = 'C:\\private\\review-token-file';
+  const nonce = 'review-secret-dispatch-nonce';
+  for (const reason of ['direct_not_allowed', 'executor_mismatch']) {
+    const guidance = claimRefusalMessage(reason, 'SQ-42', {
+      model: 'native-codex-gpt-5-6-sol', effort: 'medium',
+      dispatch: { executor: 'sidequest-exec-medium', tokenFile: secretPath },
+    });
+    assert.match(guidance, /dispatch briefing/);
+    assert.doesNotMatch(guidance, /review-token-file/);
+  }
+  const requirement = { kind: 'command', evidenceContract: 'passed capture', command: 'echo verified' };
+  const candidate = { source: 'git', value: 'abcdef' };
+  const dirtyCapture = {
+    id: 'capture-one', ticket: 'SQ-42', command: requirement.command,
+    status: 'passed', candidate, completedAt: new Date().toISOString(),
+    cleanWorktree: false, dispatchNonce: nonce,
+  };
+  for (const captures of [[], [dirtyCapture]]) {
+    const failure = commandVerificationResult(requirement, requirement.command, captures, 'SQ-42', candidate, nonce);
+    assert.match(failure.diagnostic.message, /dispatch attempt/);
+    assert.equal(JSON.stringify(failure).includes(nonce), false);
+  }
+});
 
 test('claim refusal guidance always gives an actionable next step', () => {
   for (const [reason, message] of Object.entries(CLAIM_REFUSAL_MESSAGES)) {

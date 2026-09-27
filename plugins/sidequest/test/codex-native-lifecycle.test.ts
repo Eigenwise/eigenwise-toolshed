@@ -228,6 +228,20 @@ test('HTTP and CLI ticket reads hide a reviewer capability while dispatch return
   const dispatch = runtime('native-root', repository, () => tool('codex_dispatch').handler({ ref: review.ref, project: repository }));
   const token = store.getTicket(slug, review.ref).dispatchNonce;
   assert.equal(fs.readFileSync(dispatch.tokenFile, 'utf8').trim(), token);
+  for (const suffix of [[], ['--json']]) {
+    const denied = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest.js'),
+      'claim', review.ref, '--project', repository, '--by', 'unassigned-worker', '--direct',
+      '--reason', 'This is a small change and context is already loaded.', ...suffix], {
+      cwd: repository, env: { ...process.env, CODEX_SESSION_ID: 'native-root', CODEX_THREAD_ID: 'unassigned-worker' },
+      encoding: 'utf8', windowsHide: true,
+    });
+    assert.equal(denied.status, 1, denied.stderr);
+    const refusal = denied.stdout + denied.stderr;
+    assert.match(refusal, /direct claims are only for the inline-safe allowlist/i);
+    assert.equal(refusal.includes(dispatch.tokenFile), false);
+    assert.equal(refusal.includes(token), false);
+    if (suffix.length) assert.equal(JSON.parse(denied.stdout).reason, 'direct_not_allowed');
+  }
   const server = await require('../lib/server.js').start(0);
   try {
     const listResponse = await fetch(`${server.url}/api/tickets?project=${encodeURIComponent(slug)}`);

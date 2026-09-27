@@ -12,6 +12,7 @@ const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-compaction-policy-test-')
 process.env.SIDEQUEST_HOME = HOME;
 
 const store = require('../lib/store.js');
+const { ticketLine } = require('../src/hooks/shared/compaction-policy.ts');
 const boardPath = path.join(HOME, 'board');
 fs.mkdirSync(boardPath, { recursive: true });
 execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: boardPath, windowsHide: true });
@@ -42,6 +43,13 @@ function createDoing(title: string, sessionId?: string): { ticket: any; story: a
   assert.equal(store.claimTicket(slug, ticket.ref, 'policy-executor', sessionId ? { sessionId } : undefined).ok, true);
   return { ticket, story };
 }
+
+test('compaction instruction never preserves a legacy dispatch token', () => {
+  const line = ticketLine({ ref: 'SQ-42', title: 'Legacy token holder', claim: { by: 'worker' },
+    dispatch: { token: 'legacy-secret-token' }, dispatchToken: 'second-secret-token' }, () => 'sidequest-exec-medium');
+  assert.match(line, /SQ-42.*claim worker/);
+  assert.doesNotMatch(line, /legacy-secret-token|second-secret-token|dispatch token/);
+});
 
 test('PreCompact pinning preserves active board identifiers within its prompt budget', () => {
   const { ticket, story } = createDoing('Keep this active ticket intact');
