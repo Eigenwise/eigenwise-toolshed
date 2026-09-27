@@ -23,7 +23,7 @@ const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCand
 const { canonicalPath, checkoutInstanceIdentity, createCheckoutInstanceMarker, createWorktreeLease, isCanonicalRegisteredWorktree } = require("./kernel/worktree.js");
 const { reviewLockMessage } = require("./kernel/review-binding.js");
 const { migrateIfNeeded } = require("./migrate.js");
-const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, providerReadiness } = require("./discovery.js");
+const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, nativeCodexCatalog, providerReadiness } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
 const { negativeControlRecoveryGuidance, routingDisabledMessage, filesystemSnapshotLimitGuidance, filesystemSnapshotChildFailureGuidance } = require("./refusal-guidance.js");
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require("./prepared-dispatch.js");
@@ -577,6 +577,7 @@ const {
   db,
   dispatchReadOnly: (...args) => dispatchReadOnly(...args),
   discoverExternalModels,
+  nativeCodexCatalog,
   invalidateStoreCaches,
   listProjects,
   projectRoutingEnabled,

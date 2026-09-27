@@ -1,4 +1,5 @@
 'use strict';
+import { redactDispatchCredentials } from '../credential-projection';
 
 function createReads(dependencies: any) {
   const {
@@ -127,8 +128,9 @@ function pageTickets(tickets?: any, opts?: any) {
 const DEFAULT_LIST_PAGE_LIMIT = 40;
 
 function ticketReadShape(ticket?: any) {
-  if (!ticket || ticket.executorVerify === undefined) return ticket;
-  return Object.assign({}, ticket, { verify: ticket.executorVerify });
+  if (!ticket) return ticket;
+  return redactDispatchCredentials(ticket.executorVerify === undefined ? ticket
+    : Object.assign({}, ticket, { verify: ticket.executorVerify }));
 }
 
 function listPayload(slug?: any, opts?: any) {

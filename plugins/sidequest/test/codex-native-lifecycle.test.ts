@@ -13,10 +13,18 @@ const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-codex-native-repo-'
 const discovery = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-codex-native-catalog-'));
 fs.mkdirSync(path.join(discovery, 'model-gateway'), { recursive: true });
 fs.writeFileSync(path.join(discovery, 'model-gateway', 'catalog.json'), JSON.stringify({
-  schemaVersion: 3, updatedAt: new Date().toISOString(), source: 'model-gateway',
-  codexReadiness: { ready: true, state: 'ready', message: 'local Codex ready' },
-  models: [{ slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'Codex Sol' }],
+  schemaVersion: 3, updatedAt: new Date(Date.now() - 11 * 24 * 60 * 60 * 1000).toISOString(), source: 'model-gateway',
+  codexReadiness: { ready: false, state: 'unavailable', message: 'gateway shim unavailable' },
+  models: [{ slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'Codex Sol via gateway' }],
 }));
+const nativeCatalogFile = path.join(home, 'native-codex-models.json');
+function writeNativeCatalog(verifiedAt = new Date().toISOString()) {
+  fs.writeFileSync(nativeCatalogFile, JSON.stringify({
+    schemaVersion: 1, verifiedAt, attestedBy: 'native lifecycle test fixture',
+    models: [{ slug: 'native-codex-gpt-5-6-sol', id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', efforts: ['medium'] }],
+  }));
+}
+writeNativeCatalog();
 process.env.SIDEQUEST_HOME = home;
 process.env.SIDEQUEST_DISCOVERY_DIRS = discovery;
 delete process.env.CLAUDE_CODE_SESSION_ID;
@@ -37,8 +45,8 @@ const mcp = require('../lib/mcp.js');
 const reviewBinding = require('../lib/kernel/review-binding.js');
 const worktreeLease = require('../lib/kernel/worktree.js');
 const { slug } = store.ensureProject(repository);
-store.setCategory({ id: 'codex-native', name: 'Codex native', route: { model: 'codex-gpt-5-6-sol', effort: 'medium' }, enabled: true });
-store.setCategory({ id: 'review-audit', name: 'Review audit', route: { model: 'codex-gpt-5-6-sol', effort: 'medium' }, readonly: true, enabled: true });
+store.setCategory({ id: 'codex-native', name: 'Codex native', route: { model: 'native-codex-gpt-5-6-sol', effort: 'medium' }, enabled: true });
+store.setCategory({ id: 'review-audit', name: 'Review audit', route: { model: 'native-codex-gpt-5-6-sol', effort: 'medium' }, readonly: true, enabled: true });
 
 function tool(name: string) {
   const found = mcp.TOOLS.find((entry: any) => entry.name === name);
@@ -77,12 +85,39 @@ function checkout(base: string, label: string) {
 
 test('Codex dispatch requires a root identity and a Codex route', () => {
   const ticket = store.createTicket(slug, { title: 'source', category: 'codex-native', files: ['candidate.txt'] });
+  assert.equal(store.getTicket(slug, ticket.ref)?.category?.id, 'codex-native');
+  assert.equal(store.getTicket(slug, ticket.ref).category.route.model, 'native-codex-gpt-5-6-sol');
+  assert.ok(store.getModelVocab().models.includes('native-codex-gpt-5-6-sol'));
+  const storedTicket = store.getTicket(slug, ticket.ref);
+  assert.equal(store.resolveTicketRoute(storedTicket, storedTicket.category).exec?.source, 'codex-native');
   assert.throws(() => tool('codex_dispatch').handler({ ref: ticket.ref, project: repository }), /root Codex runtime/);
   const dispatch = processCall('native-root', repository, 'codex_dispatch', { ref: ticket.ref, project: repository });
+  assert.equal(store.resolveTicketRoute(storedTicket, storedTicket.category).exec?.source, 'codex-native');
+  assert.equal(store.resolveTicketRoute({ ref: 'SQ-gateway' }, {
+    id: 'gateway', route: { model: 'codex-gpt-5-6-sol', effort: 'medium' },
+  }).exec, null);
   assert.equal(dispatch.baseCommit, git(repository, 'rev-parse', 'HEAD'));
   assert.equal(dispatch.sharedTree, false);
   assert.equal(store.getTicket(slug, ticket.ref).dispatch.runtimeHost, 'codex');
+  const otherWorkerRead = processCall('unassigned-worker', repository, 'list', { ref: ticket.ref, project: repository });
+  const ordinaryRead = JSON.stringify(otherWorkerRead);
+  assert.equal(ordinaryRead.includes(store.getTicket(slug, ticket.ref).dispatchNonce), false);
+  assert.equal(ordinaryRead.includes(dispatch.tokenFile), false);
+  assert.equal(ordinaryRead.includes('"tokenFile"'), false);
+  assert.equal(ordinaryRead.includes('"dispatchNonce"'), false);
+  const cliList = JSON.stringify(store.listPayload(slug, { all: true }));
+  assert.equal(cliList.includes(dispatch.tokenFile), false);
+  assert.equal(cliList.includes(store.getTicket(slug, ticket.ref).dispatchNonce), false);
   assert.throws(() => runtime('native-root', repository, () => tool('codex_start').handler({ ref: ticket.ref, project: repository, executor: dispatch.executor, tokenFile: dispatch.tokenFile })), /distinct Codex subagent/);
+});
+
+test('native model admission expires independently of the gateway catalog', () => {
+  writeNativeCatalog(new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString());
+  try {
+    const ticket = store.createTicket(slug, { title: 'expired native route', category: 'codex-native', files: ['candidate.txt'] });
+    assert.throws(() => runtime('native-root', repository, () => tool('codex_dispatch').handler({ ref: ticket.ref, project: repository })), /available native Codex route/);
+    assert.equal(store.getTicket(slug, ticket.ref).dispatchNonce, null);
+  } finally { writeNativeCatalog(); }
 });
 
 test('only the distinct worker with the exact baseline checkout can claim', () => {
@@ -118,6 +153,13 @@ test('a different Codex agent reviews the exact submitted commit and self-review
   const review = store.createTicket(slug, {
     title: 'independent review', category: 'review-audit', files: ['candidate.txt'],
   }, { ref: source.ref, commit: candidate });
+  assert.throws(() => runtime('source-thread', sourceTree, () => tool('submit').handler({
+    ref: source.ref, project: repository, by: 'codex-thread:source-thread', clear: true,
+  })), /root orchestration thread/);
+  const lockedClear = runtime('native-root', repository, () => tool('submit').handler({
+    ref: source.ref, project: repository, by: 'codex-thread:source-thread', clear: true,
+  }));
+  assert.equal(lockedClear.ok, false);
   const dispatch = runtime('native-root', repository, () => tool('codex_dispatch').handler({ ref: review.ref, project: repository }));
   assert.equal(dispatch.baseCommit, candidate);
   const reviewTree = checkout(candidate, 'review');
@@ -127,7 +169,7 @@ test('a different Codex agent reviews the exact submitted commit and self-review
   assert.equal(self.ok, true, JSON.stringify(self));
   const selfReview = runtime('source-thread', reviewTree, () => tool('done').handler({
     ref: review.ref, project: repository, by: 'codex-thread:source-thread',
-    body: 'Self-review should fail.', model: 'codex-gpt-5-6-sol',
+    body: 'Self-review should fail.', model: 'native-codex-gpt-5-6-sol',
   }));
   assert.equal(selfReview.ok, true, JSON.stringify(selfReview));
   assert.equal(reviewBinding.reviewProvenance(store.getTicket(slug, source.ref), store.getTicket(slug, review.ref)).reason, 'shared_agent_identity');
@@ -162,9 +204,13 @@ test('separate Codex worker and reviewer satisfy bound provenance', async () => 
     ref: review.ref, project: repository, executor: reviewDispatch.executor, tokenFile: reviewDispatch.tokenFile,
   }));
   assert.equal(reviewStarted.ok, true, JSON.stringify(reviewStarted));
+  assert.throws(() => runtime('reviewer-two', reviewTree, () => tool('done').handler({
+    ref: review.ref, project: repository, by: 'codex-thread:reviewer-two',
+    body: 'Incorrect model stamp.', model: 'sonnet',
+  })), /pinned route model/);
   const reviewed = runtime('reviewer-two', reviewTree, () => tool('done').handler({
     ref: review.ref, project: repository, by: 'codex-thread:reviewer-two',
-    body: 'Inspected the exact submitted revision; no issues.', model: 'codex-gpt-5-6-sol',
+    body: 'Inspected the exact submitted revision; no issues.', model: 'native-codex-gpt-5-6-sol',
   }));
   assert.equal(reviewed.ok, true, JSON.stringify(reviewed));
   assert.equal(reviewBinding.reviewProvenance(store.getTicket(slug, source.ref), store.getTicket(slug, review.ref)).reason, 'ok');

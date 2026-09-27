@@ -1617,6 +1617,9 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     if (resolvedPolicy?.refusal) throw new Error(resolvedPolicy.refusal);
     const currentRoute = activeDispatchRoute(t);
     if (reusablePreparedRecovery(t, current)) {
+      if ((current.runtimeHost === 'codex') !== (opts.transport === 'codex-mcp')) {
+        throw new Error(`prepare dispatch: ${t.ref} prepared transport differs from this caller; native Codex and Claude Agent dispatches cannot exchange tokens.`);
+      }
       if (opts.sessionId) current.sessionId = String(opts.sessionId);
       // A record prepared before launch naming existed still has to hand back a
       // usable name, and reusing it must not renumber the sequence.
@@ -1656,6 +1659,9 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     if (refusal) throw new Error(refusal);
     const preparedExec = resolveExec(t.model, t.effort);
     if (!preparedExec) throw new Error(`prepare dispatch: ${t.ref} has no executable route.`);
+    if (opts.transport === 'codex-mcp' ? preparedExec.source !== 'codex-native' : preparedExec.source === 'codex-native') {
+      throw new Error(`prepare dispatch: ${t.ref} native Codex routes require codex_dispatch from a Codex runtime; Claude Agent dispatch cannot serve them.`);
+    }
     const noDeclaredFileScope = unscopedWriteCannotAutoApprove(t, {
       dispatchReadOnly,
       normalizeFiles,

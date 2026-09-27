@@ -10,6 +10,7 @@ function createRouting(dependencies: any) {
     db,
     dispatchReadOnly,
     discoverExternalModels,
+    nativeCodexCatalog,
     invalidateStoreCaches,
     listProjects,
     projectRoutingEnabled,
@@ -71,15 +72,19 @@ function backendKey(source?: any, slug?: any) {
   return `${source}:${slug}`;
 }
 
+function availableExternalModels() {
+  return nativeCodexCatalog().models.concat(discoverExternalModels());
+}
+
 function discoveredByKey() {
   const out: Record<string, any> = {};
-  for (const entry of discoverExternalModels()) out[backendKey(entry.source, entry.slug)] = entry;
+  for (const entry of availableExternalModels()) out[backendKey(entry.source, entry.slug)] = entry;
   return out;
 }
 
 function discoveredBySlug() {
   const out: Record<string, any> = {};
-  for (const entry of discoverExternalModels()) if (!(entry.slug in out)) out[entry.slug] = entry;
+  for (const entry of availableExternalModels()) if (!(entry.slug in out)) out[entry.slug] = entry;
   return out;
 }
 
@@ -87,7 +92,7 @@ function resolvedBackend(entry?: any, discovered?: any) {
   const agentSlug = discovered.filter((candidate?: any) => candidate.slug === entry.slug).length > 1
     ? `${entry.source}-${entry.slug}`
     : entry.slug;
-  return { backend: 'codex', provider: entry.provider, source: entry.source, slug: entry.slug, agentSlug, id: entry.id, label: entry.label };
+  return { backend: 'codex', provider: entry.provider, source: entry.source, slug: entry.slug, agentSlug, id: entry.id, label: entry.label, efforts: entry.efforts };
 }
 
 function normalizeRouteModel(model?: any) {
@@ -139,7 +144,7 @@ function normalizeReportedModel(model?: any) {
   const direct = normalized && availableRoute(normalized);
   if (direct) return direct.slug;
   const forms = new Set(reportingModelForms(model));
-  for (const entry of discoverExternalModels()) {
+  for (const entry of availableExternalModels()) {
     const identities = [entry.slug, entry.id, dispatchModelFor(entry.id)];
     if (identities.some((identity?: any) => reportingModelForms(identity).some((form?: any) => forms.has(form)))) {
       return entry.slug;
@@ -178,6 +183,7 @@ function dispatchRouteState(model?: any, effort?: any, exec?: any) {
 function execFromBackend(backend?: any, effort?: any) {
   if (backend.backend === 'codex') {
     const resolvedEffort = effort || HAIKU_BACKEND_EFFORT;
+    if (backend.source === 'codex-native' && !backend.efforts?.includes(resolvedEffort)) return null;
     return { agent: stableDispatchName(resolvedEffort), effort: resolvedEffort, model: null, spawnId: backend.id, dispatchModel: dispatchModelFor(backend.id), backend: 'codex', source: backend.source, slug: backend.slug, runsModel: backend.slug, apiModel: backend.id, runsLabel: backend.label || backend.slug, dispatch: 'native-agent' };
   }
   const runtime = backend.slug;
@@ -202,7 +208,7 @@ function resolveModelId(model?: any) {
 }
 
 function routingModels() {
-  const discovered = discoverExternalModels();
+  const discovered = availableExternalModels();
   return {
     models: CLAUDE_RUNTIMES.concat(discovered.map((entry?: any) => entry.slug)),
     efforts: VALID_EFFORTS.slice(),
@@ -1122,6 +1128,7 @@ function routeProvider(route?: any) {
 }
 
 function routeReadyForAutomaticFallback(route?: any) {
+  if (availableRoute(normalizeRoute(route)?.model)?.source === 'codex-native') return true;
   const provider = routeProvider(route);
   return !provider || provider === 'claude' || providerReadiness(provider)?.ready === true;
 }
@@ -1210,6 +1217,7 @@ function resolveCategoryFallback(category?: any, failedModel?: any) {
 }
 
 function providerDispatchRefusal(route?: any) {
+  if (availableRoute(normalizeRoute(route)?.model)?.source === 'codex-native') return null;
   const provider = routeProvider(route);
   if (!provider || provider === 'claude') return null;
   const readiness = providerReadiness(provider);

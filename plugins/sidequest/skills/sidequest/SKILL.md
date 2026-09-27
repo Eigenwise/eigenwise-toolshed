@@ -98,8 +98,12 @@ attachment and report missing or unreadable ones, while the spawn keeps that con
 transcript. Never trust a worker's self-report — the
 claim's token and exact executor name are the evidence.
 
-**Codex desktop subagents:** Use `codex_dispatch` only from the root Codex thread
-after setting a Codex route on the ticket. It returns `baseCommit`, `tokenFile`,
+**Codex desktop subagents:** First verify host picker availability and declare the
+model, allowed efforts, `verifiedAt`, and `attestedBy` in
+`SIDEQUEST_HOME/native-codex-models.json` (schema and example in the getting-started guide).
+Declarations expire after seven days; native routing is independent of model-gateway.
+Use `codex_dispatch` only from the root Codex thread after setting a native Codex
+route on the ticket. It returns `baseCommit`, `tokenFile`,
 and `executor` instead of a Claude Agent spawn. Create a clean linked worktree
 at `baseCommit`, then spawn a distinct Codex subagent there and give only that
 agent the ticket's token file and executor. Its first board action is
@@ -114,7 +118,12 @@ server is shared, run `node plugins/sidequest/bin/sidequest-codex-call.js
 <tool>` with JSON arguments on stdin from the calling agent's checkout; it
 invokes the same MCP tool handler in a fresh process. Never pass a session or
 agent ID in tool arguments or set the identity variables by hand. Missing or
-equal root/worker identities fail closed.
+equal root/worker identities fail closed. Ordinary reads redact dispatch tokens
+and token-file paths. `CODEX_*` identities are cooperative process metadata,
+not cryptographic host attestation; select the pinned model and effort in the
+desktop picker, because Sidequest cannot inspect the actual model. A `done`
+model stamp must match the pinned route. `submit clear:true` for an unbound
+Codex candidate is root-only; a bound review still locks it.
 
 **Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent.model` and `recipe.agent.promptPrefix + prompt` in Agent. Never hand-translate route, gateway, virtual-model, marker, or effort fields. A user-named model for one ticket means set that ticket's `route` override, never edit the category route, which repoints later tickets too. See `references/routing-guide.md`.
 

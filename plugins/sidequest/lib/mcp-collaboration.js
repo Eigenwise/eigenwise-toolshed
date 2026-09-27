@@ -281,8 +281,9 @@ const tools = [
       const { slug, meta } = resolveLifecycleProject(args.project, args, "codex_dispatch");
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`codex_dispatch: no ticket ${args.ref}.`);
-      const route = store.resolveTicketRoute(ticket, ticket.category);
-      if (route?.exec?.backend !== "codex") throw new Error(`codex_dispatch: ${ticket.ref} must have a Codex route before preparation.`);
+      const category = typeof ticket.category === "object" && ticket.category ? ticket.category : store.getCategory(ticket.category, { project: slug });
+      const route = store.resolveTicketRoute(ticket, category);
+      if (route?.exec?.source !== "codex-native") throw new Error(`codex_dispatch: ${ticket.ref} needs an available native Codex route from SIDEQUEST_HOME/native-codex-models.json. ${route?.refusal || route?.warnings?.join(" ") || ""}`);
       const prepared = store.prepareDispatch(slug, args.ref, {
         sessionId: identity.sessionId,
         runtimeCwd: process.cwd(),

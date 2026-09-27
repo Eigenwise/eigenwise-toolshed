@@ -33,6 +33,42 @@ export interface ExternalModel {
   label: string;
   provider: string;
   source: string;
+  efforts?: string[];
+}
+
+// Codex desktop execution does not use model-gateway. A local operator verifies
+// the picker/model availability and records it here; a missing, stale, or
+// malformed declaration never becomes an executable route.
+const NATIVE_CODEX_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+const NATIVE_CODEX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function nativeCodexCatalogPath(): string {
+  return path.join(process.env.SIDEQUEST_HOME || path.join(claudeHome(), 'sidequest'), 'native-codex-models.json');
+}
+
+export function nativeCodexCatalog(): { ok: boolean; reason: string; models: ExternalModel[] } {
+  const raw = readCatalogSafe(nativeCodexCatalogPath());
+  if (!isRecord(raw) || raw.schemaVersion !== 1 || !Array.isArray(raw.models)
+    || typeof raw.attestedBy !== 'string' || !raw.attestedBy.trim()
+    || typeof raw.verifiedAt !== 'string') return { ok: false, reason: 'missing or malformed operator attestation', models: [] };
+  const age = Date.now() - Date.parse(raw.verifiedAt);
+  if (!Number.isFinite(age) || age < -5 * 60 * 1000 || age > NATIVE_CODEX_MAX_AGE_MS) {
+    return { ok: false, reason: 'operator attestation is expired or future-dated', models: [] };
+  }
+  const models: ExternalModel[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw.models) {
+    if (!isRecord(entry) || typeof entry.slug !== 'string' || !/^native-codex-[a-z0-9-]{2,19}$/.test(entry.slug)
+      || typeof entry.id !== 'string' || !/^gpt-[a-z0-9.-]{2,31}$/.test(entry.id)
+      || typeof entry.label !== 'string' || !entry.label.trim()
+      || !Array.isArray(entry.efforts) || !entry.efforts.length
+      || entry.efforts.some((effort) => !NATIVE_CODEX_EFFORTS.has(effort))
+      || seen.has(entry.slug)) return { ok: false, reason: 'invalid or duplicate native model declaration', models: [] };
+    seen.add(entry.slug);
+    models.push({ slug: entry.slug, id: entry.id, label: entry.label.trim(), provider: 'codex', source: 'codex-native', efforts: entry.efforts.slice() });
+  }
+  return models.length ? { ok: true, reason: 'operator-attested', models }
+    : { ok: false, reason: 'no native models declared', models: [] };
 }
 
 export interface ProviderReadiness {
@@ -175,11 +211,13 @@ function catalogWithinFreshnessWindow(data: unknown): boolean {
 }
 
 export function catalogStateFingerprint(): string {
-  return discoveryRoots().flatMap((root) => CATALOG_SOURCES.map(({ relPath }) => {
+  const nativePath = nativeCodexCatalogPath();
+  const native = nativeCodexCatalog();
+  return [...discoveryRoots().flatMap((root) => CATALOG_SOURCES.map(({ relPath }) => {
     const catalogPath = path.resolve(root, relPath);
     const freshness = !installedGatewayCatalog(catalogPath) || catalogWithinFreshnessWindow(readCatalogSafe(catalogPath)) ? 'fresh' : 'stale';
     return `${catalogPath}:${catalogFileFingerprint(catalogPath) ?? 'missing'}:${freshness}`;
-  })).join('|');
+  })), `${nativePath}:${catalogFileFingerprint(nativePath) ?? 'missing'}:${native.ok ? 'fresh' : native.reason}`].join('|');
 }
 
 function usableCatalog(data: unknown, schemas: ReadonlySet<number>, catalogPath: string): CatalogData | null {

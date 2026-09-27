@@ -574,6 +574,9 @@ const tools: ToolDefinition[] = [
       const ticket = store.getTicket(slug, args.ref);
       requireCodexClaimRuntime(ticket, 'done');
       const model = requireKnownModel('done', args.model, ticket);
+      if (ticket?.dispatch?.runtimeHost === 'codex' && model !== ticket.dispatch.route?.model) {
+        throw new Error(`done: Codex review must report its pinned route model ${ticket.dispatch.route?.model}; actual host model remains operator-attested.`);
+      }
       const opts = { source: 'mcp', model, effort: args.effort, body, verify: args.verify, sessionId: sessionOf(args) };
       let res = store.completeTicket(slug, args.ref, by, opts);
       if (!res.ok && ['submission_required', 'empty_declared_scope'].includes(res.reason)) {
@@ -983,6 +986,13 @@ const tools: ToolDefinition[] = [
       const { slug, meta } = resolveLifecycleProject(args.project, args, 'submit');
       const by = requireBy(args, 'submit');
       if (args.clear) {
+        const ticket = store.getTicket(slug, args.ref);
+        if (ticket?.dispatch?.runtimeHost === 'codex') {
+          const identity = codexRuntimeIdentity();
+          if (!identity || identity.isExecutor || identity.sessionId !== ticket.dispatch.sessionId) {
+            throw new Error('submit: clear for a Codex candidate requires its dispatch root orchestration thread.');
+          }
+        }
         const res = store.clearSubmission(slug, args.ref, {
           by,
           status: args.status,

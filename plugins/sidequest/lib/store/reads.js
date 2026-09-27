@@ -1,4 +1,5 @@
 "use strict";
+var import_credential_projection = require("../credential-projection");
 function createReads(dependencies) {
   const {
     checkpointProjection,
@@ -85,8 +86,8 @@ function createReads(dependencies) {
   }
   const DEFAULT_LIST_PAGE_LIMIT = 40;
   function ticketReadShape(ticket) {
-    if (!ticket || ticket.executorVerify === void 0) return ticket;
-    return Object.assign({}, ticket, { verify: ticket.executorVerify });
+    if (!ticket) return ticket;
+    return (0, import_credential_projection.redactDispatchCredentials)(ticket.executorVerify === void 0 ? ticket : Object.assign({}, ticket, { verify: ticket.executorVerify }));
   }
   function listPayload(slug, opts) {
     opts = opts || {};

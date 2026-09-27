@@ -26,6 +26,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const store = require('./store');
+const { redactDispatchCredentials } = require('./credential-projection');
 const { compactSchema, conciseDescription, resolveProject, TOOL_DESCRIPTION_OVERRIDES, boundedReadPayload } = require('./mcp-shared');
 const { sidequestMutationFreshness } = require('./plugin-freshness');
 const { tools: readTools } = require('./mcp-read');
@@ -296,12 +297,15 @@ async function runTool(tool: ToolDefinition, rawArgs: any) {
   const args = groomCloseArgs(tool, validated.args);
   const { aliases } = validated;
   if (!toolMutates(tool.name, args)) {
-    const output = await tool.handler(args);
+    const output = redactDispatchCredentials(await tool.handler(args));
     return acknowledgeAliases(tool.name === 'context_page' ? output : boundedReadPayload(tool.name, output), aliases);
   }
   assertMutationFreshness(args.project);
   const board = mutationQueueKey(tool.name, args);
-  return enqueueMutation(board, async () => acknowledgeAliases(await tool.handler(args), aliases));
+  return enqueueMutation(board, async () => {
+    const output = await tool.handler(args);
+    return acknowledgeAliases(['dispatch', 'codex_dispatch'].includes(tool.name) ? output : redactDispatchCredentials(output), aliases);
+  });
 }
 
 
