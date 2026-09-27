@@ -29,6 +29,10 @@ process.env.SIDEQUEST_HOME = home;
 process.env.SIDEQUEST_DISCOVERY_DIRS = discovery;
 delete process.env.CLAUDE_CODE_SESSION_ID;
 delete process.env.CLAUDE_SESSION_ID;
+// The fixture supplies its own root/worker identities; a Codex-hosted test
+// runner must not become the implicit root for calls outside runtime().
+delete process.env.CODEX_SESSION_ID;
+delete process.env.CODEX_THREAD_ID;
 
 function git(cwd: string, ...args: string[]) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
