@@ -166,7 +166,7 @@ The board may be shared: claim a ticket before touching it, atomically. **Never 
 haven't successfully claimed**, even one you just filed.
 Lifecycle (executors use the matching MCP tools; CLI forms for inline/admin work):
 `next`/`claim SQ-3 --by <you> --direct --reason "why this is inline-safe"` (only for the
-INLINE-SAFE allowlist) → `commit` (declared ticket paths only) → run the briefing-supplied `verify-capture` wrapper after the final commit (it records the ticket, command, and checked candidate) → `submit --commit <hash> --verify
+INLINE-SAFE allowlist) → `commit` (declared ticket paths only) → pin the returned commit with `git update-ref refs/sidequest/<SQ-n> <commit>` → run the briefing-supplied `verify-capture` wrapper after the final commit (it records the ticket, command, and checked candidate) → `submit --commit <hash> --verify
 "<declared cmd>"` (parks the verified LOCAL commit). Retyped commands or prose cannot replace that capture. Manual and attestation verifiers keep their evidence flow.
 or `done --model <model> --effort <level>` (inline/non-repo only) or `release` (drop unfinished,
 optionally `--status todo`).
