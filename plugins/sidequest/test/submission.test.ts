@@ -6108,4 +6108,101 @@ test('SQ-2983: a failing verifier leaves the delivered apply record bindable, an
   });
 });
 
+// GH-220. integrate cannot resolve a conflict, so a hand-resolved merge has to be recordable, and the refusal has to
+// name how: groomClose with that merge as deliveryCommit, proved by the candidate being one of its parents.
+test('GH-220: a hand-resolved conflict merge records through groomClose manual with the merge commit', async () => {
+  cleanBranch();
+  const t = addTicket('hand-resolved conflict merge', { files: ['lib/gh220-conflict.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'gh220-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh220-conflict.js'), 'candidate\n');
+  git(['add', 'lib/gh220-conflict.js']);
+  git(['commit', '-m', 'gh220 candidate']);
+  const candidate = git(['rev-parse', 'HEAD']);
+  pin(t, candidate);
+  assert.strictEqual(runCli(['submit', t.ref, '--by', 'gh220-worker', '--commit', candidate]).status, 0);
+
+  const targetBranch = `gh220-target-${++branchSeq}`;
+  git(['checkout', '-f', '-B', targetBranch, 'origin/main']);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh220-conflict.js'), 'target\n');
+  git(['add', 'lib/gh220-conflict.js']);
+  git(['commit', '-m', 'gh220 conflicting target']);
+  const original = store.boardConfig(slug);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: targetBranch });
+  try {
+    const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge', target: store.integrationTarget(slug) });
+    assert.strictEqual(refused.reason, 'merge_failed');
+    assert.match(refused.message, /groomClose passing deliveryCommit <the resolved merge commit>/);
+    assert.match(refused.message, /deliveryMethod "manual"/);
+
+    assert.throws(() => execFileSync('git', ['merge', '--no-ff', '--no-edit', candidate], { cwd: PROJECT_DIR, stdio: 'ignore' }));
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh220-conflict.js'), 'target\ncandidate\n');
+    git(['add', 'lib/gh220-conflict.js']);
+    git(['commit', '--no-edit']);
+    const merge = git(['rev-parse', 'HEAD']);
+
+    const delivered = await callMcp('groomClose', {
+      project: PROJECT_DIR,
+      ref: t.ref,
+      by: 'gh220-integrator',
+      deliveryCommit: merge,
+      deliveryMethod: 'manual',
+      reason: 'Resolved the conflict by hand in a merge whose second parent is the candidate, then re-gated it.',
+    });
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    const recorded = store.getTicket(slug, t.ref);
+    assert.strictEqual(recorded.status, 'done');
+    assert.strictEqual(recorded.submission.integration.deliveryCommit, merge);
+    assert.strictEqual(recorded.submission.integration.contentEvidence, 'candidate_ancestor');
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: original.integrationMode, integrationBranch: original.integrationBranch });
+  }
+});
+
+// GH-277. Submit admits a related rejected source's release fragment, so the scope snapshot integrate re-checks the
+// range against has to carry it too, or the inherited commit that added it reads as outside scope.
+test('GH-277: a repair that renames its rejected source release fragment delivers', async () => {
+  const original = store.boardConfig(slug);
+  const branch = `gh277-${++branchSeq}`;
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: branch });
+  try {
+    git(['checkout', '-f', '-B', branch, 'origin/main']);
+    git(['clean', '-fd']);
+    sq2972Write(SQ2972_COMMON, 'base common\n');
+    git(['add', SQ2972_COMMON]);
+    git(['commit', '-m', 'gh277 integration base']);
+    const integrationHead = git(['rev-parse', 'HEAD']);
+    const source = addTicket('gh277 rejected source', { files: [SQ2972_COMMON] });
+    const repair = addTicket('gh277 repair', { files: [SQ2972_COMMON, SQ2972_REPAIR] });
+    for (const owned of [{ ticket: source, by: 'gh277-source' }, { ticket: repair, by: 'gh277-repair' }]) {
+      assert.strictEqual(store.claimTicket(slug, owned.ticket.ref, owned.by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+    }
+    const sourceFragment = `.release/unreleased/${source.ref}.md`;
+    const repairFragment = `.release/unreleased/${repair.ref}.md`;
+    git(['checkout', '-B', `${branch}-work`, integrationHead]);
+    sq2972Write(SQ2972_COMMON, 'original common\n');
+    sq2972Write(sourceFragment, `---\nref: ${source.ref}\ntitle: rejected source\nbump: patch\nplugins: [sidequest]\n---\n\nRejected.\n`);
+    git(['add', '-A', 'lib', '.release']);
+    git(['commit', '-m', 'gh277 rejected candidate']);
+    const sourceCommit = git(['rev-parse', 'HEAD']);
+    git(['mv', sourceFragment, repairFragment]);
+    sq2972Write(SQ2972_COMMON, 'repaired common\n');
+    sq2972Write(SQ2972_REPAIR, 'repair addition\n');
+    git(['add', '-A', 'lib', '.release']);
+    git(['commit', '-m', 'gh277 repair']);
+    const repairCommit = git(['rev-parse', 'HEAD']);
+    pin(source, sourceCommit);
+    pin(repair, repairCommit);
+
+    const { delivered } = await deliverInheritedRepair({ label: 'gh277', branch, integrationHead, sourceCommit, repairCommit, source, repair }, 'merge');
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.ok(store.getTicket(slug, repair.ref).submission.admittedScope.includes(sourceFragment));
+    assert.strictEqual(fs.existsSync(path.join(PROJECT_DIR, sourceFragment)), false);
+    assert.strictEqual(fs.existsSync(path.join(PROJECT_DIR, repairFragment)), true);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: original.integrationMode, integrationBranch: original.integrationBranch });
+  }
+});
+
 export {};

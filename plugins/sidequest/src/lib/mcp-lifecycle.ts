@@ -420,7 +420,9 @@ function collectGitSubmissionFacts(options: any) {
     range,
     scope,
     admissionFacts: {
-      admittedScope: store.executionScope(slug, ticket),
+      // The stored-range check at integrate reads only this snapshot, so the rejected source fragment the range
+      // inherits has to be admitted here too, or integrate refuses what submit accepted (GH-277).
+      admittedScope: [...new Set([...store.executionScope(slug, ticket), ...rejectedRelatedReleaseFragments(slug, ticket)])],
       scope,
       baseline: range?.ok
         ? { candidateExists: true, containsCandidate: true }
