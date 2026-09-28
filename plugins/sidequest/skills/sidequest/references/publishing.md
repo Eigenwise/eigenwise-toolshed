@@ -57,7 +57,10 @@ gate covers the newer target content. An assembly refusal leaves every submitted
 - `merge` is the default for release-pipeline repos such as Toolshed. It merges the submitted tip into
   the configured integration branch.
 - `replay` cherry-picks the submitted commits in order, keeping atomic history. A conflict aborts the
-  cherry-pick and restores the prior HEAD.
+  cherry-pick and restores the prior HEAD. To deliver it by hand, merge the pinned candidate itself
+  (`git merge --no-ff <candidate>`, never a cherry-pick), resolve the conflict in that merge commit,
+  re-gate, then record it with `integrate --delivery-commit <candidate>`. A hand-resolved cherry-pick
+  has a new patch identity and changed blobs, so its content check always refuses.
 - `apply` materializes the range without a commit so the user can review it in their changes view. It
   refuses overlapping uncommitted paths and names them. Its delivery record plus pinned ref is enough
   to close the ticket, no user-side commit is required.
@@ -135,6 +138,11 @@ recovery:
    `deliveryMethod: "manual"` (CLI `--delivery-commit <sha> --delivery-method manual`).
 3. Keep the candidate's content present in the integration working tree; the merged-tree verifier and
    content check still run against it.
+
+When the squash reached the target as its own commit, record that landed commit instead: `groomClose`
+with `deliveryCommit: <squash commit>` and no `deliveryMethod`. It passes when the squash commit's patch
+equals each candidate commit's patch or the patch of the whole submitted range. A squash that also
+carries another ticket's work matches neither and still refuses `delivery_content_missing`.
 
 If a repair ticket deliberately delivers an earlier parked submission, do not replay the obsolete range. Use MCP `supersede_submission` with the earlier ref, the later integrated repair ref, concise closure evidence, and `reviewedReplacements` for every original path whose delivered content intentionally differs. The control plane requires the repair's recorded delivery to include every original changed path, preserves the earlier submission and its lineage under `supersededBy`, marks it done, and removes its pending-submission warning. A missing path, an unintegrated repair, or unreviewed divergent content leaves the original submission parked.
 

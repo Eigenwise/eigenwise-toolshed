@@ -613,6 +613,13 @@ function integrationConflictMessage(error: any, conflictedPaths: string[]) {
   return conflictedPaths.length ? `${failure} Conflicted paths: ${conflictedPaths.join(', ')}.` : failure;
 }
 
+// A hand-resolved cherry-pick has a new patch identity and conflicted blobs, so its
+// content proof can never pass; a merge of the pinned candidate keeps the candidate an
+// ancestor, which is the proof recordDeliveredSubmission accepts (GH-178).
+function handResolvedConflictRoute(ticket: any, pinnedCommit: string, targetBranch: string) {
+  return `To deliver it by hand, merge the pinned candidate itself on ${targetBranch} (\`git merge --no-ff ${pinnedCommit}\`, not a cherry-pick), resolve the conflict in that merge commit, pass the merged-tree gate, then record it with integrate deliveryCommit ${pinnedCommit} and reason (CLI \`sidequest integrate ${ticket.ref} --delivery-commit ${pinnedCommit} --reason "<resolution>"\`). It still requires the bound review.`;
+}
+
 function integrationVerifyLogPath(slug: any, ticket: any) {
   const safeRef = String(ticket.ref || ticket.id || 'submission').replace(/[^a-zA-Z0-9._-]/g, '_');
   const dir = String(dispatchState(ticket)?.evidenceDirectory || '').trim() || path.join(projectDir(slug), 'verification', safeRef);
@@ -1221,13 +1228,22 @@ function integrateArtifactSubmission(slug: any, ticket: any, opts?: any) {
 }
 
 function patchIdForCommit(repo: string, commit: string) {
-  const parent = integrationGit(repo, ['rev-parse', `${commit}^`]);
-  const patch = execFileSync('git', ['diff', '--no-ext-diff', '--unified=0', parent, commit], {
+  return patchIdForRange(repo, integrationGit(repo, ['rev-parse', `${commit}^`]), commit);
+}
+
+function patchIdForRange(repo: string, from: string, to: string) {
+  const patch = execFileSync('git', ['diff', '--no-ext-diff', '--unified=0', from, to], {
     cwd: repo,
     encoding: 'utf8',
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  const patchId = gitPatchId(repo, patch);
+  if (!/^[0-9a-f]{40}$/i.test(patchId)) throw new Error(`could not calculate a content identity for ${to}`);
+  return patchId.toLowerCase();
+}
+
+function gitPatchId(repo: string, patch: string) {
   const result = spawnSync('git', ['patch-id', '--stable'], {
     cwd: repo,
     encoding: 'utf8',
@@ -1235,28 +1251,32 @@ function patchIdForCommit(repo: string, commit: string) {
     windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
-  if (result?.status !== 0) throw new Error(String(result?.stderr || result?.error?.message || 'could not calculate patch identity'));
-  const patchId = String(result.stdout || '').trim().split(/\s+/)[0] || '';
-  if (!/^[0-9a-f]{40}$/i.test(patchId)) throw new Error(`could not calculate a content identity for ${commit}`);
-  return patchId.toLowerCase();
+  if (result.status !== 0) throw result.error || new Error(`could not calculate patch identity: ${result.stderr}`);
+  return String(result.stdout).trim().split(' ')[0];
+}
+
+function submittedCommits(submission: any): string[] {
+  return Array.isArray(submission.commits) && submission.commits.length ? submission.commits.map(String) : [submission.commit];
+}
+
+// A squash merge folds a multi-commit candidate into one commit, so no single candidate
+// commit's patch survives it, but the patch of the whole submitted range does (GH-226).
+function squashedRangeDelivered(repo: string, submission: any, candidate: string, deliveredPatchIds: Set<string>) {
+  const base = String(submission.base || '').trim();
+  return Boolean(base) && deliveredPatchIds.has(patchIdForRange(repo, base, candidate));
 }
 
 function deliveryContainsSubmittedContent(repo: string, submission: any, deliveryCommit: string) {
-  const candidate = String(submission.commit || '').toLowerCase();
-  try {
-    integrationGit(repo, ['merge-base', '--is-ancestor', candidate, deliveryCommit]);
-    return { ok: true, evidence: 'candidate_ancestor' };
-  } catch (error: any) {
-    if (error?.status !== 1) throw error;
-  }
+  const candidate = String(submission.commit).toLowerCase();
+  if (integrationRefContains(repo, deliveryCommit, candidate)) return { ok: true, evidence: 'candidate_ancestor' };
   const commonBase = integrationGit(repo, ['merge-base', candidate, deliveryCommit]);
   const deliveredCommits = integrationGit(repo, ['rev-list', '--reverse', `${commonBase}..${deliveryCommit}`]).split(/\r?\n/).filter(Boolean);
   const deliveredPatchIds = new Set(deliveredCommits.map((commit: string) => patchIdForCommit(repo, commit)));
-  const candidateCommits = Array.isArray(submission.commits) && submission.commits.length ? submission.commits : [candidate];
-  const missing = candidateCommits.filter((commit: any) => !deliveredPatchIds.has(patchIdForCommit(repo, String(commit))));
-  return missing.length
-    ? { ok: false, missing }
-    : { ok: true, evidence: 'equivalent_patches' };
+  const missing = submittedCommits(submission).filter((commit: string) => !deliveredPatchIds.has(patchIdForCommit(repo, commit)));
+  if (!missing.length) return { ok: true, evidence: 'equivalent_patches' };
+  return squashedRangeDelivered(repo, submission, candidate, deliveredPatchIds)
+    ? { ok: true, evidence: 'equivalent_squashed_range' }
+    : { ok: false, missing };
 }
 
 function applyDeliveryTreeMatchesCandidate(repo: string, submission: any, deliveryCommit: string) {
@@ -1275,6 +1295,11 @@ function reviewedMergedTreeInteraction(repo: string, ticket: any, sourceCommit: 
     };
   }
   const interactionCommit = integrationGit(repo, ['rev-parse', '--verify', `${interaction}^{commit}`]).toLowerCase();
+  return interactionLineageRefusal(repo, ticket, sourceCommit, interactionCommit, resultingHead)
+    || reviewedInteractionScope(repo, ticket, sourceCommit, interactionCommit);
+}
+
+function interactionLineageRefusal(repo: string, ticket: any, sourceCommit: string, interactionCommit: string, resultingHead: string) {
   if (interactionCommit === sourceCommit) {
     return {
       ok: false,
@@ -1282,33 +1307,29 @@ function reviewedMergedTreeInteraction(repo: string, ticket: any, sourceCommit: 
       message: `${ticket.ref} reviewed interaction delivery requires a commit after source ${sourceCommit}.`,
     };
   }
-  for (const [commit, label] of [[sourceCommit, 'source'], [interactionCommit, 'interaction']]) {
-    try {
-      integrationGit(repo, ['merge-base', '--is-ancestor', commit, resultingHead]);
-    } catch (error: any) {
-      if (error?.status === 1) {
-        return {
-          ok: false,
-          reason: 'delivery_interaction_not_reachable',
-          message: `${ticket.ref} reviewed interaction delivery requires its ${label} commit ${commit} to be reachable from ${resultingHead}.`,
-        };
-      }
-      throw error;
-    }
+  const unreachable = [[sourceCommit, 'source'], [interactionCommit, 'interaction']]
+    .find(([commit]) => !integrationRefContains(repo, resultingHead, commit));
+  if (unreachable) {
+    return {
+      ok: false,
+      reason: 'delivery_interaction_not_reachable',
+      message: `${ticket.ref} reviewed interaction delivery requires its ${unreachable[1]} commit ${unreachable[0]} to be reachable from ${resultingHead}.`,
+    };
   }
-  try {
-    integrationGit(repo, ['merge-base', '--is-ancestor', sourceCommit, interactionCommit]);
-  } catch (error: any) {
-    if (error?.status === 1) {
-      return {
-        ok: false,
-        reason: 'delivery_interaction_not_descendant',
-        message: `${ticket.ref} reviewed interaction ${interactionCommit} must descend from delivered source ${sourceCommit}.`,
-      };
-    }
-    throw error;
+  if (!integrationRefContains(repo, interactionCommit, sourceCommit)) {
+    return {
+      ok: false,
+      reason: 'delivery_interaction_not_descendant',
+      message: `${ticket.ref} reviewed interaction ${interactionCommit} must descend from delivered source ${sourceCommit}.`,
+    };
   }
-  const interactionPaths = integrationGit(repo, ['diff', '--name-only', sourceCommit, interactionCommit]).split(/\r?\n/).filter(Boolean);
+  return null;
+}
+
+function reviewedInteractionScope(repo: string, ticket: any, sourceCommit: string, interactionCommit: string) {
+  const changes = integrationGit(repo, ['diff', '--name-status', '-M', sourceCommit, interactionCommit])
+    .split(/\r?\n/).filter(Boolean).map((line: string) => line.split('\t').slice(1));
+  const interactionPaths = Array.from(new Set(changes.flat()));
   if (!interactionPaths.length) {
     return {
       ok: false,
@@ -1317,7 +1338,9 @@ function reviewedMergedTreeInteraction(repo: string, ticket: any, sourceCommit: 
     };
   }
   const submittedPaths = changedIntegrationPaths(repo, ticket.submission);
-  const unrelatedPaths = interactionPaths.filter((file: string) => !isInScope(file, submittedPaths));
+  // A rename's destination can never be a submitted path, so a renamed submitted path
+  // vouches for its new name (GH-159).
+  const unrelatedPaths = changes.filter((paths: string[]) => !paths.some((file: string) => isInScope(file, submittedPaths))).flat();
   if (unrelatedPaths.length) {
     return {
       ok: false,
@@ -2050,7 +2073,7 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
             message: `${message} Rollback failed: ${integrationGitError(rollbackError)}`,
           });
         }
-        return integrationFailure(slug, ticket, { reason: 'merge_failed', conflictedPaths, message: `${message} If the conflict is resolved and delivered outside this integration attempt, record that exact delivery with integrate deliveryCommit and reason; it still requires the bound review and a passing merged-tree gate.`, before });
+        return integrationFailure(slug, ticket, { reason: 'merge_failed', conflictedPaths, message: `${message} ${handResolvedConflictRoute(ticket, pinnedCommit, target.branch)}`, before });
       }
     } else if (!submission.noOp) {
       for (const commit of commits) {
@@ -2075,7 +2098,7 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
             failedCommit: commit,
             before,
             conflictedPaths,
-            message: `${message} If the conflict is resolved and delivered outside this integration attempt, record that exact delivery with integrate deliveryCommit and reason; it still requires the bound review and a passing merged-tree gate.`,
+            message: `${message} ${handResolvedConflictRoute(ticket, pinnedCommit, target.branch)}`,
           });
         }
       }
