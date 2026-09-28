@@ -9,7 +9,7 @@ const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require('../sou
 const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require('../kernel/review-binding');
 const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require('../kernel/wave');
 const { isInScope, scopedPaths } = require('../scope-match');
-const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyDeliveryContentCommitGuidance } = require('../refusal-guidance.js');
+const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyDeliveryContentCommitGuidance, landedWithoutSubmissionGuidance } = require('../refusal-guidance.js');
 import type { VerificationResult } from '../kernel/verification.js';
 import type { CandidateInvalidation } from '../kernel/wave.js';
 
@@ -867,7 +867,7 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
         ticket,
         message: awaitingContentCommit
           ? `${ticket.ref} has no submission to integrate. ${applyDeliveryContentCommitGuidance(ticket.ref)}`
-          : `${ticket.ref} has no submission to integrate.`,
+          : `${ticket.ref} has no submission to integrate. ${landedWithoutSubmissionGuidance(ticket.ref)}`,
       };
     }
   }

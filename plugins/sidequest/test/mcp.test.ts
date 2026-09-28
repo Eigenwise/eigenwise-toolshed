@@ -413,7 +413,7 @@ test('tools/list advertises the board tools with input schemas', async () => {
   const dispatch = resp.result.tools.find((tool: any) => tool.name === 'dispatch');
   assert.match(dispatch.inputSchema.properties.recoveryEvidence.description, /latest signal grace/);
   // The one fact a caller cannot recover from the schema shape: its own comments do not hold an attempt open.
-  assert.match(dispatch.inputSchema.properties.recoveryEvidence.description, /only the bound runtime name counts/);
+  assert.match(dispatch.inputSchema.properties.recoveryEvidence.description, /bound name only/);
   assert.match(dispatch.inputSchema.properties.recoveryEvidence.description, /Unverified/);
   const groomCloseTool = resp.result.tools.find((tool: any) => tool.name === 'groomClose');
   assert.match(groomCloseTool.inputSchema.properties.recoveryEvidence.description, /CLI too/);

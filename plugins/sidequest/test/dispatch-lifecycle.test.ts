@@ -3649,7 +3649,7 @@ test('unclaimed pre-runtime delivery names and preserves its manual recovery pat
     deliveryMethod: 'manual',
   });
   assert.equal(boundGroomClose.reason, 'active_dispatch');
-  assert.doesNotMatch(boundGroomClose.message, /deliveryMethod manual/);
+  assert.match(boundGroomClose.message, /no claim to release/, 'a bound attempt that never claimed gets the one recovery, not a release');
   // Grooming reaches a bound-unclaimed attempt through the same authority as dispatch now, so a live one is
   // refused by its countdown rather than by a blanket "bound" rule (SQ-2951).
   const boundClear = store.clearUnclaimedDispatch(slug, bound.ref, {
@@ -4542,5 +4542,137 @@ test('dispatch briefing includes each pinned decision once and reports later del
   assert.match(warnings, /decision log gained 1 entry \(#3\) since .* was prepared/);
   assert.doesNotMatch(warnings, /was claimed/);
 });
+
+// SQ-3110: one case per report of a dispatch that died before its first claim with no working exit. The
+// session that prepared the attempt spawned it, so it is the one holding the host's failure report.
+function retireFromSession(ref: string, sessionId: string | undefined, recoveryEvidence: string) {
+  try {
+    return store.prepareDispatch(slug, ref, { sessionId, recoveryEvidence, retireOnly: true });
+  } catch (error: any) {
+    return { refusal: String(error.message) };
+  }
+}
+
+test('SQ-3110 SQ-3071: the preparing session retires a bound attempt that died at launch at once', () => {
+  const { ticket, sessionId } = bindUnclaimedFixture('sq3110-bound');
+  const recoveryEvidence = 'Agent terminated early due to an API error: 400 this build does not support the model.';
+  try {
+    const foreign = retireFromSession(ticket.ref, `${sessionId}-other`, recoveryEvidence);
+    assert.ok(foreign.refusal, `another session still waits for the deadline, got ${retirementOutcome(foreign)}`);
+    assert.match(foreign.refusal, /becomes retirable on evidence at/);
+    assert.match(foreign.refusal, new RegExp(`session that prepared it \\(${sessionId}\\) can retire it now`));
+
+    const retired = retireFromSession(ticket.ref, sessionId, recoveryEvidence);
+    assert.equal(retired.retired, true, `the preparing session holds the host report, got ${retirementOutcome(retired)}`);
+    assert.equal(retired.ticket.dispatch.failureShape, 'stranded_bound_launch_superseded');
+    assert.equal(retired.ticket.dispatch.attempts.at(-1).recoveryEvidence, recoveryEvidence);
+    assert.equal(retired.ticket.dispatchNonce, null);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'sq3110-bound-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('SQ-3110 GH-285: a launched attempt whose spawn failed at WorktreeCreate retires at once from its session', () => {
+  const ticket = createFixture('sq3110 launched unbound fixture');
+  const sessionId = `sq3110-launched-${Date.now()}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: false });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  const recoveryEvidence = 'WorktreeCreate hook failed: worktree lease refused creation: dispatch_binding_unavailable.';
+  try {
+    const retired = retireFromSession(ticket.ref, sessionId, recoveryEvidence);
+    assert.equal(retired.retired, true, `a launch that never started is dead the moment the host says so, got ${retirementOutcome(retired)}`);
+    assert.equal(retired.ticket.dispatch.failureShape, 'unclaimed_launch_superseded');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'sq3110-launched-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('SQ-3110 GH-289: a cancelled WorktreeCreate retires at once from its session instead of the idle hour', () => {
+  const { ticket, sessionId } = worktreeCreationFixture('sq3110-cancelled');
+  const recoveryEvidence = 'WorktreeCreate hook failed: node hooks/worktree-create.js: Hook cancelled';
+  try {
+    const foreign = retireFromSession(ticket.ref, `${sessionId}-other`, recoveryEvidence);
+    assert.ok(foreign.refusal, `another session still waits for the backstop, got ${retirementOutcome(foreign)}`);
+    assert.match(foreign.refusal, /only the idle backstop applies/);
+    const retired = retireFromSession(ticket.ref, sessionId, recoveryEvidence);
+    assert.equal(retired.retired, true, `the preparing session saw the hook cancelled, got ${retirementOutcome(retired)}`);
+    assert.equal(retired.ticket.dispatch.failureShape, 'stranded_bound_launch_superseded');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'sq3110-cancelled-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('SQ-3110 GH-285: groomClose from the preparing session retires and closes; the grooming refusal names no absent claim holder', () => {
+  const { ticket, sessionId } = bindUnclaimedFixture('sq3110-groom');
+  const recoveryEvidence = 'Both executors were refused at their first claim and exited.';
+  try {
+    const refused = store.completeTicketAsControlPlane(slug, ticket.ref, { purpose: 'grooming', by: 'groomer', reason: 'stale dispatch' });
+    assert.equal(refused.reason, 'active_dispatch');
+    assert.doesNotMatch(refused.message, /<claim holder>/, 'nobody holds a claim, so release is not a move');
+    assert.match(refused.message, /recoveryEvidence/);
+
+    const recovery = store.groomCloseRecovery(slug, ticket.ref, { by: 'groomer', reason: 'stale dispatch', evidence: recoveryEvidence, sessionId });
+    assert.equal(recovery.ok, true, `the preparing session retires inside the grace, got ${JSON.stringify(recovery.recovered?.message)}`);
+    assert.equal(store.completeTicketAsControlPlane(slug, ticket.ref, { purpose: 'grooming', by: 'groomer', reason: 'stale dispatch' }).ok, true);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'sq3110-groom-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('SQ-3110 GH-69 GH-191: after a reduced-schema attempt stops before its claim, evidence retirement and a direct claim both work', () => {
+  const ticket = createFixture('sq3110 reduced stopped fixture');
+  const sessionId = `sq3110-reduced-${Date.now()}`;
+  const agentName = `sq3110-reduced-agent-${ticket.id}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true, reducedAgentSchema: true });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor, agentName,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).ok, true);
+  assert.equal(store.markDispatchStopped(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).stopped, true);
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.failureShape, 'stopped_before_claim');
+  const recoveryEvidence = 'claim refused: reduced Agent-schema dispatch observed permission_mode "default"; the executor exited.';
+  try {
+    const retired = retireFromSession(ticket.ref, sessionId, recoveryEvidence);
+    assert.equal(retired.retired, true, `a terminal attempt has nothing left to retire, got ${retirementOutcome(retired)}`);
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.failureShape, 'stopped_before_claim', 'the stop hook outcome stays recorded');
+
+    const direct = store.claimTicket(slug, ticket.ref, 'orchestrator', { direct: true, reason: 'The reduced-schema executor cannot claim on this host.' });
+    assert.notEqual(direct.reason, 'reduced_runtime_unverified', 'a terminal reduced-schema attempt must not gate a direct claim');
+    assert.equal(direct.ok, true, `direct claim: ${direct.reason}`);
+    store.releaseTicket(slug, ticket.ref, 'orchestrator', { status: 'todo', source: 'test' });
+
+    const replacement = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true, recoveryEvidence });
+    assert.notEqual(replacement.token, prepared.token, 'redundant evidence on a terminal attempt still prepares the replacement');
+    assert.equal(replacement.ticket.dispatch.terminalAt, null);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'sq3110-reduced-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('SQ-3110 GH-295: work landed after a technical_blocker release names groomClose from integrate', () => {
+  const ticket = createFixture('sq3110 released blocker fixture');
+  const sessionId = `sq3110-blocker-${Date.now()}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+  assert.equal(store.claimTicket(slug, ticket.ref, 'sq3110-blocked-executor', {
+    sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'sq3110-blocked-executor', { status: 'todo', source: 'test' }).ok, true);
+  commitFixtureChange();
+  const landed = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  try {
+    const refused = store.integrateSubmission(slug, ticket.ref, { deliveryMethod: 'manual', deliveryCommit: landed });
+    assert.equal(refused.reason, 'submission_required');
+    assert.match(refused.message, /groomClose/, 'integrate must name the closure that works without a submission');
+    const closed = store.completeTicketAsControlPlane(slug, ticket.ref, {
+      purpose: 'delivery', by: 'orchestrator', reason: 'landed by hand after the executor released', deliveryCommit: landed, deliveryMethod: 'manual',
+    });
+    assert.equal(closed.ok, true, `groomClose delivery: ${closed.reason} ${closed.message || ''}`);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'sq3110-blocker-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
 
 export {};

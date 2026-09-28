@@ -25,6 +25,7 @@ __export(refusal_guidance_exports, {
   filesystemSnapshotChildFailureGuidance: () => filesystemSnapshotChildFailureGuidance,
   filesystemSnapshotLimitGuidance: () => filesystemSnapshotLimitGuidance,
   inheritedRejectedDuplicateGuidance: () => inheritedRejectedDuplicateGuidance,
+  landedWithoutSubmissionGuidance: () => landedWithoutSubmissionGuidance,
   manualCandidateDeliveryGuidance: () => manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance: () => negativeControlRecoveryGuidance,
   routingDisabledMessage: () => routingDisabledMessage,
@@ -85,7 +86,7 @@ const CLAIM_REFUSAL_MESSAGES = Object.freeze({
   empty: () => "No tickets are available on this board. Run `sidequest ready` to inspect the queue.",
   submitted: (ref) => `${ref} is READY_FOR_INTEGRATION with a submitted commit. Run the orchestrator publish flow. While it is UNBOUND, a review rejection is \`sidequest rework ${ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the same ticket for a normal repair claim; the old candidate remains recorded until replacement submission. Once a \`review-audit\` ticket is bound to the candidate, rework, clear, reclaim, and amendment all refuse without writing: record the failed review's evidence on the review ticket, release that review with kind \`oracle\`, and repair through a fresh ticket, dispatch, commit, review, and candidate. \`submit --clear\` intentionally drops an unbound candidate and is only for an integration bounce. \`release\`/\`update\` alone refuse rather than silently leaving it wedged (SQ-1010).`,
   dispatch_required: (ref) => `${ref} is category-routed and has no prepared dispatch. File a spike for investigation when needed, then run \`sidequest dispatch ${ref}\` and spawn its returned executor. Inline is limited to the inline-safe allowlist: \`sidequest claim ${ref} --direct --reason "why this is inline-safe"\` (MCP \`direct:true\` with \`reason\`).`,
-  token: (ref) => `${ref} has a prepared dispatch whose token file was missing, unreadable, or invalid. Re-run the exact claim from this executor's briefing with its dispatched \`tokenFile\` path; do not transcribe the token, retry dispatch from this executor, or release a dispatch you did not claim. The orchestrator should run \`sidequest pulse ${ref}\`: if it reports stalled because an unclaimed runtime has no readable signal or is past its deadline, retire it in one call with \`sidequest dispatch ${ref} --recovery-evidence "<observed failed-claim evidence>"\` (MCP \`recoveryEvidence\`), which records the evidence on the failed attempt and prepares a fresh one; otherwise wait for the active attempt to become terminal before dispatching again.`,
+  token: (ref) => `${ref} has a prepared dispatch whose token file was missing, unreadable, or invalid. Re-run the exact claim from this executor's briefing with its dispatched \`tokenFile\` path; do not transcribe the token, retry dispatch from this executor, or release a dispatch you did not claim. The orchestrator should run \`sidequest pulse ${ref}\`: from the session that prepared the dispatch with the host's failure report in hand, or once pulse reports stalled because an unclaimed runtime has no readable signal or is past its deadline, retire it in one call with \`sidequest dispatch ${ref} --recovery-evidence "<observed failed-claim evidence>"\` (MCP \`recoveryEvidence\`), which records the evidence on the failed attempt and prepares a fresh one; otherwise wait for the active attempt to become terminal before dispatching again.`,
   prepared_compatibility_stale: (ref) => `${ref}'s prepared Sidequest runtime/version snapshot no longer matches the installed MCP and hooks configuration, so the token-file refusal already retired that dispatch attempt. Stop without claiming. The orchestrator can dispatch ${ref} again for a fresh token file.`,
   unbound_dispatch: (ref) => `${ref} could not bind this executor runtime to its isolated dispatch. Claim it with the dispatched token file and exact executor from its briefing; the token file binds the claiming runtime. If that claim still fails, comment the refusal evidence and release ${ref} with kind \`technical_blocker\` so the orchestrator can redispatch it. Do not hand a command to the user.`,
   executor_mismatch: (ref, ticket, projectPath) => `${ref} has a prepared dispatch for a different executor. A token-file-valid claim from the currently-derived executor self-heals version skew, so re-run the claim from its briefing with that token file. ${dispatchedClaimGuidance(ref, ticket, projectPath)}`,
@@ -124,6 +125,9 @@ function candidateReviewRequiredGuidance() {
 }
 function applyDeliveryContentCommitGuidance(ref) {
   return `${ref} was delivered with mode apply, which leaves the materialized tree uncommitted, so its recorded head contains none of the delivered content. Commit that exact tree on its recorded integration branch without changing it, then bind it with \`groomClose ${ref}\` passing deliveryCommit (CLI \`--delivery-commit\`) and the same delivery evidence. That re-runs the merged-tree verifier, checks the committed tree still matches the reviewed candidate on every submitted path, and records it as the delivered content that supersession lineage reads. A refused binding, a failing verifier included, leaves the recorded delivery exactly as delivered, so bind the same commit again once the cause is fixed. Do not claim unchanged paths as reviewedReplacements, hand-edit the recorded delivery, or offer an unrelated later head as proof: a commit whose tree differs from the candidate on any submitted path is refused.`;
+}
+function landedWithoutSubmissionGuidance(ref) {
+  return `When the work already landed outside the executor's submit (it released, for example as technical_blocker, and you committed it), close it with \`groomClose ${ref} --deliveryCommit <sha> --deliveryMethod manual --reason "<evidence>"\` once that commit is reachable from the recorded integration branch.`;
 }
 const INHERITED_REJECTED_REFUSALS = Object.freeze({
   not_related: "that ticket is not linked `related` to this one, so nothing declares this range a repair of it. An unrelated submitted range is never inherited: `sidequest link <this-ref> related <source-ref>` only when this work really repairs that candidate.",
@@ -172,6 +176,7 @@ function filesystemSnapshotChildFailureGuidance(failure) {
   filesystemSnapshotChildFailureGuidance,
   filesystemSnapshotLimitGuidance,
   inheritedRejectedDuplicateGuidance,
+  landedWithoutSubmissionGuidance,
   manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance,
   routingDisabledMessage,

@@ -920,7 +920,7 @@
         },
         "recoveryEvidence": {
           "type": "string",
-          "description": "Unverified; retires unclaimed attempts past deadline; CLI too."
+          "description": "Unclaimed: preparing session retires now; others past deadline; CLI too."
         }
       },
       "required": [
@@ -1541,7 +1541,7 @@
         },
         "recoveryEvidence": {
           "type": "string",
-          "description": "Unverified; latest signal grace; only the bound runtime name counts."
+          "description": "Unverified; preparer retires now, else latest signal grace; bound name only."
         },
         "retireOnly": {
           "type": "boolean"

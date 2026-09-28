@@ -2348,10 +2348,11 @@ test('a checkout the attempt reserved itself still blocks the retry, and repeati
     assert.equal(retired.failureShape, 'stranded_bound_launch_superseded');
     assert.equal(fs.existsSync(path.join(worktree, 'uncommitted.txt')), true);
 
-    // The attempt is gone, so repeating the command has to say that rather than deny it ever existed.
+    // The attempt is already retired, so repeating the command skips retirement and names the blocker that
+    // actually remains rather than refusing the evidence (SQ-3110).
     assert.throws(
       () => store.prepareDispatch(slug, ticket.ref, { sessionId: `${sequence}-retry`, recoveryEvidence: evidence }),
-      /already retired on recovery evidence[\s\S]*without recoveryEvidence/,
+      /cannot retry because immutable recovery fact: .* holds uncommitted, untracked or ignored content/,
     );
   } finally {
     store.releaseTicket(slug, ticket.ref, 'reserved-checkout-cleanup', { status: 'todo', source: 'test', force: true });

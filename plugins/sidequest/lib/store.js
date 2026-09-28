@@ -25,7 +25,7 @@ const { reviewLockMessage } = require("./kernel/review-binding.js");
 const { migrateIfNeeded } = require("./migrate.js");
 const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, providerReadiness } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
-const { negativeControlRecoveryGuidance, routingDisabledMessage, filesystemSnapshotLimitGuidance, filesystemSnapshotChildFailureGuidance } = require("./refusal-guidance.js");
+const { negativeControlRecoveryGuidance, routingDisabledMessage, filesystemSnapshotLimitGuidance, filesystemSnapshotChildFailureGuidance, landedWithoutSubmissionGuidance } = require("./refusal-guidance.js");
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require("./prepared-dispatch.js");
 const { assertSidequestInstall, checkSidequestInstall, servingSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require("./dispatch-preflight.js");
 const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic, VERIFICATION_KINDS } = require("./kernel/index.js");
@@ -622,6 +622,8 @@ const {
   unclaimedRetirement,
   unclaimedEvidenceAttempt,
   unclaimedRetirementRefusal,
+  preparingSessionAttests,
+  unclaimedAttemptRecoveryGuidance,
   isolatedDispatchWorktreeMissing,
   isolatedDispatchWithMissingWorktree,
   terminalDispatchTarget,
@@ -1214,6 +1216,7 @@ const {
   ticketLockPath,
   ticketStoryId,
   touchClaimActivity,
+  unclaimedAttemptRecoveryGuidance: (...args) => unclaimedAttemptRecoveryGuidance(...args),
   upperRef,
   stripLinksTo,
   withTicketLock
@@ -1916,7 +1919,7 @@ function claimTicket(slug, idOrRef, by, opts) {
     const admission = claimAdmission(slug, found.id, opts);
     if (!admission.ok) return admission;
     const currentDispatch = dispatchState(t2);
-    if (currentDispatch?.reducedAgentSchema === true && (!String(currentDispatch.agentId || "").trim() || !reducedPermissionModeSupported(currentDispatch.observedPermissionMode))) {
+    if (currentDispatch?.reducedAgentSchema === true && !currentDispatch.terminalAt && (!String(currentDispatch.agentId || "").trim() || !reducedPermissionModeSupported(currentDispatch.observedPermissionMode))) {
       return {
         ok: false,
         reason: "reduced_runtime_unverified",
@@ -2163,7 +2166,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
       return {
         ok: false,
         reason: "unclaimed_active_dispatch",
-        message: `${t.ref} has an active ${foundState} dispatch but no claim owned by ${by}. ${unclaimedPreRuntimeDeliveryGuidance(t, dispatch2) || `Do not release another runtime's attempt. A claimant whose current token and executor were accepted but whose runtime could not bind receives an unbound_dispatch refusal that authorizes the same claimant to release with kind technical_blocker. Otherwise wait for the current attempt's terminal hook, then have the orchestrator dispatch once from todo. recoveryEvidence applies only when a prepared, launched, or bound dispatch never claimed and terminal-agent evidence confirms that runtime ended. After a terminal dispatch, deliver verified landed work through \`sidequest groomClose ${t.ref} --by <integrator> --deliveryCommit <sha>\`.`}`,
+        message: `${t.ref} has an active ${foundState} dispatch but no claim owned by ${by}. ${unclaimedAttemptRecoveryGuidance(t, dispatch2).trim() || `Do not release another runtime's attempt. A claimant whose current token and executor were accepted but whose runtime could not bind receives an unbound_dispatch refusal that authorizes the same claimant to release with kind technical_blocker. Otherwise wait for the current attempt's terminal hook, then have the orchestrator dispatch once from todo. recoveryEvidence applies only when a prepared, launched, or bound dispatch never claimed and terminal-agent evidence confirms that runtime ended. After a terminal dispatch, deliver verified landed work through \`sidequest groomClose ${t.ref} --by <integrator> --deliveryCommit <sha>\`.`}`,
         ticket: t
       };
     }
@@ -2635,7 +2638,7 @@ function externalDeliverableCloseout(slug, ticket, verify) {
       pending.working.length ? `uncommitted ${pending.working.join(", ")}` : null,
       pending.committed.length ? `committed but not submitted ${pending.committed.join(", ")}` : null
     ].filter(Boolean).join("; ");
-    return { ok: false, reason: "external_deliverable_scope_dirty", message: `${ticket.ref} has declared repository changes (${changes}); commit and submit them instead of closing as an external-deliverable completion.` };
+    return { ok: false, reason: "external_deliverable_scope_dirty", message: `${ticket.ref} has declared repository changes (${changes}); commit and submit them instead of closing as an external-deliverable completion. ${landedWithoutSubmissionGuidance(ticket.ref)}` };
   }
   let revision;
   try {
@@ -2821,18 +2824,6 @@ function pendingSubmissionDeliveryRefusal(ticket, result) {
 function unclaimedPreRuntimeDispatch(ticket, state) {
   return unclaimedEvidenceAttempt(ticket, state);
 }
-function boundUnclaimedDispatch(ticket, state) {
-  return Boolean(
-    ticket?.dispatchNonce && state && ["prepared", "launched"].includes(state.outcome) && !state.terminalAt && state.boundAt && !state.claimedAt && !ticket.claim?.by && !ticket.checkpoint
-  );
-}
-function unclaimedPreRuntimeDeliveryGuidance(ticket, state) {
-  if (boundUnclaimedDispatch(ticket, state)) {
-    return ` This attempt bound a runtime that never claimed. Once the claim grace has passed with no further board signal from that runtime, close it with \`groomClose ${ticket.ref} --recoveryEvidence "<the host notification that the runtime terminated>"\`, which retires the attempt in the same call, or retire it on its own with \`sidequest dispatch ${ticket.ref} --recovery-evidence "<that same evidence>" --retire-only\` (MCP \`recoveryEvidence\` with \`retireOnly: true\`). Inside the grace both refuse with the same countdown, naming the exact instant it becomes retirable and the signal it measured from.`;
-  }
-  if (!unclaimedPreRuntimeDispatch(ticket, state)) return "";
-  return ` This attempt is unclaimed and unbound. Once the delivery commit is reachable from the recorded integration branch, close it with \`groomClose ${ticket.ref} --deliveryCommit <sha> --deliveryMethod manual --recoveryEvidence "<why the attempt is dead>"\` (include by and reason). If the commit is not reachable from that branch, grooming still refuses until delivery reaches it. To retire without preparing a replacement first, dispatch with recoveryEvidence and retireOnly:true.`;
-}
 function clearUnclaimedDispatch(slug, idOrRef, opts) {
   const by = String(opts?.by || "").trim();
   const agentId = String(opts?.agentId || "").trim();
@@ -2864,8 +2855,7 @@ function clearUnclaimedDispatch(slug, idOrRef, opts) {
       };
     }
     const nowMs = Date.now();
-    const retirement = unclaimedRetirement(ticket, state, nowMs);
-    if (nowMs < retirement.retirableAt) {
+    if (!preparingSessionAttests(state, opts?.sessionId) && nowMs < unclaimedRetirement(ticket, state, nowMs).retirableAt) {
       return {
         ok: false,
         reason: "unclaimed_launch_not_supersedable",
@@ -2896,7 +2886,7 @@ function groomCloseRecovery(slug, idOrRef, opts) {
   const reason = String(opts?.reason || "");
   if (!evidence) return { ok: true, reason };
   const ticket = getTicket(slug, idOrRef);
-  const recovered = clearUnclaimedDispatch(slug, idOrRef, { by: opts?.by, evidence });
+  const recovered = clearUnclaimedDispatch(slug, idOrRef, { by: opts?.by, evidence, sessionId: opts?.sessionId });
   if (recovered.ok) return { ok: true, reason };
   const terminalDispatch = Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
   if (!terminalDispatch) return { ok: false, recovered };
@@ -2945,7 +2935,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
       return {
         ok: false,
         reason: "active_dispatch",
-        message: `${ticket.ref} still has a live claim or an open dispatch, so grooming cannot close it. Do not force-take it. After trusted host terminal evidence, release it with \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : "<claim holder>"}\`, then close it as plain grooming with the shipped commit as evidence, without --integration. Releasing does not discard work already committed.`,
+        message: `${ticket.ref} still has a live claim or an open dispatch, so grooming cannot close it. Do not force-take it.${unclaimedAttemptRecoveryGuidance(ticket, state) || ` After trusted host terminal evidence, release it with \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : "<claim holder>"}\`, then close it as plain grooming with the shipped commit as evidence, without --integration. Releasing does not discard work already committed.`}`,
         ticket
       };
     }
@@ -2955,7 +2945,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
       return {
         ok: false,
         reason: "active_dispatch",
-        message: `${ticket.ref} still has a live claim or an open dispatch, so hand delivery cannot close it.${unclaimedPreRuntimeDeliveryGuidance(ticket, state) || ` Release it first: \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : "<claim holder>"}\`, then re-run this closure with the same evidence. Releasing does not discard work already committed.`}`,
+        message: `${ticket.ref} still has a live claim or an open dispatch, so hand delivery cannot close it.${unclaimedAttemptRecoveryGuidance(ticket, state) || ` Release it first: \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : "<claim holder>"}\`, then re-run this closure with the same evidence. Releasing does not discard work already committed.`}`,
         ticket
       };
     }
@@ -2964,7 +2954,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
     return {
       ok: false,
       reason: "submission_required",
-      message: `${ticket.ref} has no submission to consume, so an integration closure has nothing to integrate. A submission only exists after its executor ran commit and then submit. When the work shipped outside that flow — the usual case is the orchestrator committing an executor's changes out of the shared tree after it lost its worktree — release the claim (\`sidequest release ${ticket.ref} --by <claim holder>\`) and close it as plain grooming with the shipped commit as evidence, without --integration.`,
+      message: `${ticket.ref} has no submission to consume, so an integration closure has nothing to integrate. A submission only exists after its executor ran commit and then submit. When the work shipped outside that flow — the usual case is the orchestrator committing an executor's changes out of the shared tree after it lost its worktree — ${ticket.claim?.by ? `release the claim first (\`sidequest release ${ticket.ref} --by ${String(ticket.claim.by)}\`), then ` : ""}close it without --integration. ${landedWithoutSubmissionGuidance(ticket.ref)}`,
       ticket
     };
   }

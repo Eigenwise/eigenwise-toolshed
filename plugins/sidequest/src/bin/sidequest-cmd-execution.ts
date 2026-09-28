@@ -288,7 +288,7 @@ async function cmdGroomClose(opts: any, positional: any) {
   const by = workerId(opts);
   const ticket = store.getTicket(slug, idOrRef);
   const purpose = opts.integration ? 'integration' : opts['delivery-commit'] ? 'delivery' : 'grooming';
-  const recovery = store.groomCloseRecovery(slug, idOrRef, { by, reason, evidence: opts['recovery-evidence'] });
+  const recovery = store.groomCloseRecovery(slug, idOrRef, { by, reason, evidence: opts['recovery-evidence'], sessionId: sessionId(opts) });
   if (!recovery.ok) {
     if (opts.json) {
       process.stdout.write(JSON.stringify(Object.assign({ project: slug }, recovery.recovered), null, 2) + '\n');
