@@ -139,6 +139,17 @@ test('normalizes declared directory patterns before checking scope existence', (
   assert.deepStrictEqual(added.warnings, []);
 });
 
+test('add stays quiet for a filename glob whose matching file does not exist yet', () => {
+  fs.mkdirSync(path.join(PROJ, 'glob-fixtures'), { recursive: true });
+  const added = cliJson([
+    'add', '-t', 'filename glob scope', '--complexity', '3',
+    '--why', 'declare a glob for a test file the executor will create, not one already there',
+    '--file', 'glob-fixtures/search-card-printings*.integration.test.ts',
+  ]);
+
+  assert.deepStrictEqual(added.warnings, []);
+});
+
 test('explicit readonly overrides suppress category write-intent warnings', () => {
   fs.mkdirSync(path.join(PROJ, 'readonly-fixtures'), { recursive: true });
   fs.writeFileSync(path.join(PROJ, 'readonly-fixtures', 'evidence.md'), 'evidence\n');

@@ -332,8 +332,13 @@
           "maxLength": 1000
         },
         "storyId": {
-          "type": "string",
-          "pattern": "^US-\\d+$"
+          "type": "string"
+        },
+        "dependsOn": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "complexity": {
           "type": "integer",
@@ -517,8 +522,7 @@
         "storyId": {
           "anyOf": [
             {
-              "type": "string",
-              "pattern": "^US-\\d+$"
+              "type": "string"
             },
             {
               "const": "none"

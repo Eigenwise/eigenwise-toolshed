@@ -738,7 +738,27 @@ test('add and update preserve descriptions and expose storyId explicitly', async
     assert.ok(properties.storyId, `${name} exposes storyId`);
     assert.equal(properties.story, undefined, `${name} does not overload story`);
   }
-  assert.equal(tools.find((tool: any) => tool.name === 'add').inputSchema.properties.storyId.pattern, '^US-\\d+$');
+  // No pattern is pinned any more: validateStoryId (not the JSON schema) is the enforced
+  // contract, and it now accepts both the US-n ref and the story id `story` returns.
+  assert.equal(tools.find((tool: any) => tool.name === 'add').inputSchema.properties.storyId.pattern, undefined);
+});
+
+test('add accepts the story id story returns, not just its US-n ref', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-story-id-'))).slug;
+  const story = store.createStory(project, { title: 'Story id acceptance' });
+  const added = await callTool('add', { project, title: 'filed by story id', storyId: story.id, unclassified: true });
+  assert.equal(store.getTicket(project, added.ref).storyId, story.id);
+});
+
+test('add records depends-on links to existing tickets in the same call', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-depends-on-'))).slug;
+  const blocker = await callTool('add', { project, title: 'blocker ticket', unclassified: true });
+  const dependent = await callTool('add', { project, title: 'dependent ticket', unclassified: true, dependsOn: [blocker.ref, 'SQ-9999'] });
+  assert.deepEqual(dependent.dependsOn.linked, [blocker.ref]);
+  assert.equal(dependent.dependsOn.failed.length, 1);
+  assert.equal(dependent.dependsOn.failed[0].ref, 'SQ-9999');
+  const dependentTicket = store.getTicket(project, dependent.ref);
+  assert.ok(dependentTicket.links.some((link: any) => link.type === 'blocked-by' && link.ref === blocker.ref));
 });
 
 test('update amends a claimed dispatch verifier and its next capture uses the amended command', async () => {

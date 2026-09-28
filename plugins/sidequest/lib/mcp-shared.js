@@ -235,7 +235,9 @@ function conciseDescription(description) {
 }
 function validateStoryId(value, allowClear = false) {
   if (allowClear && String(value).toLowerCase() === "none") return;
-  if (!/^US-\d+$/.test(String(value))) throw new Error("storyId must be a US-n story ref.");
+  if (/^US-\d+$/.test(String(value))) return;
+  if (/^st_[0-9a-z]+_[0-9a-f]+$/i.test(String(value))) return;
+  throw new Error("storyId must be a US-n story ref or the story id (st_...) that story returns.");
 }
 function compactSchema(schema, propertyMap = false) {
   if (Array.isArray(schema)) return schema.map((entry) => compactSchema(entry));
