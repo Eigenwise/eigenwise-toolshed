@@ -56,33 +56,50 @@ function atRiskStatusEntries(stdout: string, worktree: string, recordedLinks: re
     .filter((entry) => !installedDependencyCacheFile(worktree, entry));
 }
 
+// A path component that is itself a link is resolved once here, so the segment loop below only
+// ever judges a real file or directory. `null` means the component could not be trusted: it escaped
+// the worktree, or `linkTargetPath` left a link behind (a chain the platform could not resolve, such
+// as a cycle).
+function resolvedInTreePathComponent(canonicalWorktree: string, current: string): { stats: import('node:fs').Stats; current: string; followedLink: boolean } | null {
+  const stats = nativeFs.lstatSync(current);
+  if (!stats.isSymbolicLink()) return { stats, current, followedLink: false };
+  const resolved = linkTargetPath(current, nativeFs.readlinkSync(current));
+  if (!pathIsInside(canonicalWorktree, resolved)) return null;
+  const resolvedStats = nativeFs.lstatSync(resolved);
+  if (resolvedStats.isSymbolicLink()) return null;
+  return { stats: resolvedStats, current: resolved, followedLink: true };
+}
+
+// A leaf reached directly, never through a link, still has to be a plain file; one reached through an
+// in-tree link can be a directory too, since git never walks a POSIX directory symlink to list what
+// is behind it (#224 review item 1).
+function acceptedDependencyCacheLeaf(resolved: { stats: import('node:fs').Stats; followedLink: boolean }): boolean {
+  return resolved.stats.isFile() || (resolved.followedLink && resolved.stats.isDirectory());
+}
+
 // Worktree setup runs `npm ci`, so every real worktree carries an ignored node_modules that setup
 // regenerates; counting it as data would park every finished worktree for the retention period.
-// Only plain files are dropped, reached through path components that stay inside the worktree: a
-// link out of the tree or a nested repository under node_modules is content the sweep did not put
-// there (SQ-2952 CRITICAL 1), so it still travels into quarantine. A link resolving inside the tree
-// is a plain component instead, because it can reach nothing the tree does not already own, and
-// `npm ci` writes one per `node_modules/.bin` entry (SQ-22). git status follows a junction and lists
-// the files behind it, which is why every ancestor is resolved and not just the leaf.
+// Only plain files (or, through a link, directories) are dropped, reached through path components
+// that stay inside the worktree: a link out of the tree or a nested repository under node_modules is
+// content the sweep did not put there (SQ-2952 CRITICAL 1), so it still travels into quarantine. A
+// link resolving inside the tree is a plain component instead, because it can reach nothing the tree
+// does not already own, and `npm ci` writes one per `node_modules/.bin` entry (SQ-22). git status
+// follows a Windows junction and lists the files behind it, which is why every ancestor is resolved
+// and not just the leaf, but a plain POSIX directory symlink is never walked -- git reports it as the
+// leaf itself, so pnpm's `node_modules/<dep> -> .pnpm/...` and a workspace's
+// `node_modules/<pkg> -> ../packages/<pkg>` need `acceptedDependencyCacheLeaf` above (#224 review item 1).
 function installedDependencyCacheFile(worktree: string, entry: WorktreeStatusEntry): boolean {
-  if (entry.code !== '!!' || !dependencyCachePath(entry.path) || entry.path.endsWith('/')) return false;
+  if (entry.code !== '!!' || !dependencyCachePath(entry.path)) return false;
   const segments = entry.path.split(/[\\/]+/).filter(Boolean);
   const canonicalWorktree = canonicalPath(worktree);
   let current = worktree;
   try {
     for (let depth = 0; depth < segments.length; depth += 1) {
       current = path.join(current, segments[depth]!);
-      let stats = nativeFs.lstatSync(current);
-      if (stats.isSymbolicLink()) {
-        const resolved = linkTargetPath(current, nativeFs.readlinkSync(current));
-        if (!pathIsInside(canonicalWorktree, resolved)) return false;
-        current = resolved;
-        stats = nativeFs.lstatSync(current);
-        // linkTargetPath resolves the whole chain, so a link left here is one the platform could
-        // not resolve at all, such as a cycle.
-        if (stats.isSymbolicLink()) return false;
-      }
-      if (depth === segments.length - 1) return stats.isFile();
+      const resolved = resolvedInTreePathComponent(canonicalWorktree, current);
+      if (!resolved) return false;
+      current = resolved.current;
+      if (depth === segments.length - 1) return acceptedDependencyCacheLeaf(resolved);
     }
   } catch (_) {
     return false;
@@ -1567,32 +1584,26 @@ function recordedDependencyLinkPaths(worktree: string, ticketOrDispatch: any): s
   return paths;
 }
 
+// A caller that gets `safe: false` back never trusts the recorded list either way: it falls back to
+// unlinking every symlink the tree holds and re-checks what is left (`releaseWorktreeDependencyLinks`),
+// so none of these early exits is a refusal a caller ever shows -- only the untrusted-link check at
+// the end names anything, because that is the one result a caller still passes through (#224 review
+// item 3).
 function dependencyLinkSafety(worktree: string, ticketOrDispatch: any, lease: any): DependencyLinkSafety {
   const records = ownedDependencyLinks(ticketOrDispatch, worktree, lease);
-  if (!records) {
-    return {
-      safe: false,
-      links: [],
-      detail: lease ? 'recorded links do not match this checkout' : 'no lease for recorded links',
-    };
-  }
+  if (!records) return { safe: false, links: [], detail: '' };
   const recordsByPath = new Map(records.map((record) => [record.relativePath, record]));
-  if (recordsByPath.size !== records.length) {
-    const duplicate = records.find((record, index) => records.findIndex((other) => other.relativePath === record.relativePath) !== index);
-    return { safe: false, links: [], detail: `duplicate recorded link ${duplicate!.relativePath}` };
-  }
+  if (recordsByPath.size !== records.length) return { safe: false, links: [], detail: '' };
   const links: string[] = [];
   for (const record of records) {
     const linkPath = path.resolve(worktree, record.relativePath);
     try {
       nativeFs.lstatSync(linkPath);
     } catch (error: any) {
-      if (error?.code === 'ENOENT') continue;
-      return { safe: false, links: [], detail: `unreadable ${record.relativePath}` };
+      if (error?.code !== 'ENOENT') return { safe: false, links: [], detail: '' };
+      continue;
     }
-    if (!ownedDependencyLinkMatches(linkPath, record)) {
-      return { safe: false, links: [], detail: `owned link target moved ${record.relativePath}` };
-    }
+    if (!ownedDependencyLinkMatches(linkPath, record)) return { safe: false, links: [], detail: '' };
     links.push(linkPath);
   }
   const refusal = firstUntrustedDependencyLink(worktree, (linkPath) => {

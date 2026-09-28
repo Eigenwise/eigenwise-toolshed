@@ -951,6 +951,35 @@ test('sweep removes a finished tree whose only ignored links resolve inside it',
   }
 });
 
+// #224 review item 1: unlike a Windows junction, git never walks a POSIX directory symlink when
+// listing ignored content -- it reports the link itself as the one leaf, not the files behind it.
+// pnpm's `node_modules/<dep> -> .pnpm/...` and a workspace's `node_modules/<pkg> -> ../packages/<pkg>`
+// take this shape, so the leaf has to be accepted as a directory too, as long as it was reached
+// through an in-tree link, or both still park for the 14-day retention like develop does.
+test('sweep removes a finished tree whose only ignored link is a directory symlink leaf', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'in-tree-dir-symlink-leaf');
+  const ticket = integratedTicket('SQ-IN-TREE-DIR-SYMLINK-LEAF', 'in-tree-dir-symlink-leaf', worktree, baseCommit);
+  createInTreeDependencyLink(worktree, 'node_modules/tsx-alias', 'node_modules/tsx');
+  try {
+    assert.match(
+      git(worktree, ['status', '--porcelain', '--ignored', '--untracked-files=all']),
+      /^!! node_modules\/tsx-alias$/m,
+      'git reports the directory symlink as one leaf, not the files behind it',
+    );
+
+    const result = await worktrees.sweep(repository, [ticket], { execute: false, minAgeMs: 0, notIntegratedSalvageAgeMs: 0, integrationTarget });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.clean, true);
+    assert.equal(entry.reason, 'ticket_done');
+    assert.equal(entry.action, 'remove');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 // The hazard the exemption guards: a link under node_modules pointing at a shared store the tree
 // never owned is data, and removal following it would delete what nothing else holds (SQ-2952).
 test('sweep quarantines a finished tree whose ignored link under node_modules leaves it', async () => {
@@ -1835,14 +1864,13 @@ test('a recorded dependency link still refuses without a lease and when its targ
   createDependencyLink(worktree, 'node_modules/recorded', recorded);
   recordedDependencyLink(ticket, worktree, 'node_modules/recorded', recorded);
   try {
-    assert.equal(worktrees.dependencyLinkSafety(worktree, ticket, null).detail, 'no lease for recorded links');
+    assert.equal(worktrees.dependencyLinkSafety(worktree, ticket, null).safe, false);
     assert.equal(worktrees.dependencyLinkSafety(worktree, ticket, matchingWorktreeLease(worktree, ticket)).safe, true);
 
     recordedDependencyLink(ticket, worktree, 'node_modules/recorded', dependencyTarget(repository, 'relocated'));
     const moved = worktrees.dependencyLinkSafety(worktree, ticket, matchingWorktreeLease(worktree, ticket));
 
     assert.equal(moved.safe, false);
-    assert.equal(moved.detail, 'owned link target moved node_modules/recorded');
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
     fs.rmSync(repository, { recursive: true, force: true });

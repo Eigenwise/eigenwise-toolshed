@@ -34,23 +34,30 @@ function parseWorktreeStatus(stdout) {
 function atRiskStatusEntries(stdout, worktree, recordedLinks) {
   return parseWorktreeStatus(stdout).filter((entry) => !recordedLinks.some((link) => entry.path === link || entry.path.startsWith(`${link}/`))).filter((entry) => !installedDependencyCacheFile(worktree, entry));
 }
+function resolvedInTreePathComponent(canonicalWorktree, current) {
+  const stats = nativeFs.lstatSync(current);
+  if (!stats.isSymbolicLink()) return { stats, current, followedLink: false };
+  const resolved = linkTargetPath(current, nativeFs.readlinkSync(current));
+  if (!pathIsInside(canonicalWorktree, resolved)) return null;
+  const resolvedStats = nativeFs.lstatSync(resolved);
+  if (resolvedStats.isSymbolicLink()) return null;
+  return { stats: resolvedStats, current: resolved, followedLink: true };
+}
+function acceptedDependencyCacheLeaf(resolved) {
+  return resolved.stats.isFile() || resolved.followedLink && resolved.stats.isDirectory();
+}
 function installedDependencyCacheFile(worktree, entry) {
-  if (entry.code !== "!!" || !dependencyCachePath(entry.path) || entry.path.endsWith("/")) return false;
+  if (entry.code !== "!!" || !dependencyCachePath(entry.path)) return false;
   const segments = entry.path.split(/[\\/]+/).filter(Boolean);
   const canonicalWorktree = canonicalPath(worktree);
   let current = worktree;
   try {
     for (let depth = 0; depth < segments.length; depth += 1) {
       current = path.join(current, segments[depth]);
-      let stats = nativeFs.lstatSync(current);
-      if (stats.isSymbolicLink()) {
-        const resolved = linkTargetPath(current, nativeFs.readlinkSync(current));
-        if (!pathIsInside(canonicalWorktree, resolved)) return false;
-        current = resolved;
-        stats = nativeFs.lstatSync(current);
-        if (stats.isSymbolicLink()) return false;
-      }
-      if (depth === segments.length - 1) return stats.isFile();
+      const resolved = resolvedInTreePathComponent(canonicalWorktree, current);
+      if (!resolved) return false;
+      current = resolved.current;
+      if (depth === segments.length - 1) return acceptedDependencyCacheLeaf(resolved);
     }
   } catch (_) {
     return false;
@@ -1224,30 +1231,19 @@ function recordedDependencyLinkPaths(worktree, ticketOrDispatch) {
 }
 function dependencyLinkSafety(worktree, ticketOrDispatch, lease) {
   const records = ownedDependencyLinks(ticketOrDispatch, worktree, lease);
-  if (!records) {
-    return {
-      safe: false,
-      links: [],
-      detail: lease ? "recorded links do not match this checkout" : "no lease for recorded links"
-    };
-  }
+  if (!records) return { safe: false, links: [], detail: "" };
   const recordsByPath = new Map(records.map((record) => [record.relativePath, record]));
-  if (recordsByPath.size !== records.length) {
-    const duplicate = records.find((record, index) => records.findIndex((other) => other.relativePath === record.relativePath) !== index);
-    return { safe: false, links: [], detail: `duplicate recorded link ${duplicate.relativePath}` };
-  }
+  if (recordsByPath.size !== records.length) return { safe: false, links: [], detail: "" };
   const links = [];
   for (const record of records) {
     const linkPath = path.resolve(worktree, record.relativePath);
     try {
       nativeFs.lstatSync(linkPath);
     } catch (error) {
-      if (error?.code === "ENOENT") continue;
-      return { safe: false, links: [], detail: `unreadable ${record.relativePath}` };
+      if (error?.code !== "ENOENT") return { safe: false, links: [], detail: "" };
+      continue;
     }
-    if (!ownedDependencyLinkMatches(linkPath, record)) {
-      return { safe: false, links: [], detail: `owned link target moved ${record.relativePath}` };
-    }
+    if (!ownedDependencyLinkMatches(linkPath, record)) return { safe: false, links: [], detail: "" };
     links.push(linkPath);
   }
   const refusal = firstUntrustedDependencyLink(worktree, (linkPath) => {
