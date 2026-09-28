@@ -69,8 +69,8 @@ Create `.claude/quartermaster/crap.json`. Every key is optional and command-line
 The defaults are `coverage/lcov.info`, sources `.`, no exclusions, threshold 6, the repository's
 `develop`, `main`, or `master` branch as the base, and no coverage command. Use `--lcov`,
 `--complexity`, or `--coverage-command` for a one-off override. `base` in the config selects the
-revision used to identify changed functions. The shared parser and score implementation lives under
-`scripts/quality`; Quartermaster only supplies project-specific LCOV and command wiring.
+revision used to identify changed functions. The parser and score implementation ships inside the plugin at `lib/crap.js`; the repository's own
+gate under `scripts/quality` re-exports it.
 
 ```text
 node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"
