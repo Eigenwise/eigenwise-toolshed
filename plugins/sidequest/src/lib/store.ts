@@ -568,6 +568,8 @@ const {
   dispatchIdentityDiagnosis,
   dispatchIsolationExpectation,
   dispatchUnboundClaim,
+  boardVerificationEvidencePath,
+  dispatchEvidenceDirectory,
   recordSanctionedCommit,
   dispatchWorkspace,
   dispatchDelta,
@@ -3348,7 +3350,11 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
     ticket,
   };
   if (purpose === 'integration') {
-    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireDeliveredWave: true });
+    // recordDeliveredSubmission already ran (and, for a diverged expected upstream,
+    // already re-validated under its own deliveryMethod waiver) before this control-plane
+    // closure re-checks admission. Dropping deliveryMethod here re-ran that same check
+    // unwaived and refused the closure MCP `integrate` had just recorded.
+    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireDeliveredWave: true, deliveryMethod: opts.deliveryMethod });
     if (!admitted.ok) return admitted;
   }
   const recorded = delivery;
@@ -3804,6 +3810,8 @@ module.exports = {
   dispatchIdentityDiagnosis,
   dispatchIsolationExpectation,
   dispatchUnboundClaim,
+  boardVerificationEvidencePath,
+  dispatchEvidenceDirectory,
   recordSanctionedCommit,
   activeSharedTreeClaim,
   isolatedDispatchWithMissingWorktree,

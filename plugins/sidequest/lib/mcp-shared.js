@@ -808,7 +808,8 @@ function compactPulse(pulse) {
       state: pulse.dispatch.state,
       executor: pulse.dispatch.executor,
       agentName: pulse.dispatch.agentName,
-      outcome: pulse.dispatch.outcome
+      outcome: pulse.dispatch.outcome,
+      ...pulse.dispatch.submittedBy ? { submittedBy: pulse.dispatch.submittedBy } : {}
     },
     ...pulse.scope ? { scope: compactScope(pulse.scope) } : {}
   };
