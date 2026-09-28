@@ -250,6 +250,14 @@ function pathAndBaselinePath(entry) {
   return typeof entry === 'string' ? [entry, entry] : [entry.path, entry.baselinePath ?? entry.path];
 }
 
+// git show phrases a missing path two ways: "does not exist in 'rev'" when it is
+// absent everywhere, "exists on disk, but not in 'rev'" when the file is new.
+function pathAbsentAtBase(error, baselinePath) {
+  const message = String(error.message);
+  return message.includes(`path '${baselinePath}' does not exist`)
+    || message.includes(`path '${baselinePath}' exists on disk, but not in`);
+}
+
 export async function changedMetricsAgainstBase(metrics, changedPaths, base, readBaseline = baselineFunctions) {
   const baselinePathByPath = new Map(changedPaths.map(pathAndBaselinePath));
   const changedMetrics = [];
@@ -261,7 +269,7 @@ export async function changedMetricsAgainstBase(metrics, changedPaths, base, rea
     try {
       baseline = await readBaseline(base, baselinePath);
     } catch (error) {
-      if (!String(error.message).includes(`path '${baselinePath}' does not exist`)) throw error;
+      if (!pathAbsentAtBase(error, baselinePath)) throw error;
     }
     changedMetrics.push(...fileMetrics.filter((metric) => baseline.get(metric.identity) !== metric.fingerprint));
   }
