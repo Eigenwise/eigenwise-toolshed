@@ -1426,7 +1426,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
           ok: false,
           reason: 'branch_not_checked_out',
           ticket,
-          message: `${target.branch} must be checked out, or a worktree whose HEAD matches the branch's own current tip must be given, before recording an external delivery; currently on ${currentBranch || 'detached HEAD'}${requestedWorktree ? ` in ${repo}` : ''}.`,
+          message: `${target.branch} must be checked out, or a detached worktree at the target tip must be given via worktree:"<path>" (CLI: --worktree <path>), before recording an external delivery; currently on ${currentBranch || 'detached HEAD'}${requestedWorktree ? ` in ${repo}` : ''}.`,
         };
       }
       deliveryRevisionSource = `git:${commitScope.integrationRefLabel(matchedRef)}`;

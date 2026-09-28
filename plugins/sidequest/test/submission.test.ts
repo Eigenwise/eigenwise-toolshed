@@ -3957,6 +3957,8 @@ test('SQ-58: recordDeliveredSubmission still refuses branch_not_checked_out when
     assert.strictEqual(refused.ok, false);
     assert.strictEqual(refused.reason, 'branch_not_checked_out');
     assert.match(refused.message, new RegExp(`${targetBranch} must be checked out`));
+    assert.ok(refused.message.includes('worktree:"<path>"'), 'refusal names the worktree argument spelling');
+    assert.ok(refused.message.includes('--worktree <path>'), 'refusal names the CLI --worktree spelling');
   } finally {
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
   }
