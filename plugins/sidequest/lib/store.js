@@ -3041,7 +3041,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
     ticket
   };
   if (purpose === "integration") {
-    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireDeliveredWave: true });
+    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireDeliveredWave: true, deliveryMethod: opts.deliveryMethod });
     if (!admitted.ok) return admitted;
   }
   const recorded = delivery;

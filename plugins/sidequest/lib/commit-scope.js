@@ -664,15 +664,17 @@ function submissionRange(cwd, options) {
     return { ok: false, reason: "git_error", message: errorMessage(error) };
   }
 }
-function validateStoredSubmissionRange(cwd, submissionValue, ticketRef, integrationBranchOverride) {
+function validateStoredSubmissionRange(cwd, submissionValue, ticketRef, integrationBranchOverride, options) {
   const submission = isRecord(submissionValue) ? submissionValue : {};
+  const opts = isRecord(options) ? options : {};
+  const allowDivergedExpectedUpstream = opts.allowDivergedExpectedUpstream === true;
   const integrationRefs = integrationRefNames(integrationBranchOverride, submission);
   const landed = submissionLandedIntegrationRef(cwd, submission, integrationRefs);
   const range = submissionRange(cwd, {
     commit: submission.commit,
     gitRef: submission.gitRef,
     upstream: submission.upstream,
-    upstreamCommit: submission.upstreamCommit,
+    ...allowDivergedExpectedUpstream ? {} : { upstreamCommit: submission.upstreamCommit },
     integrationTarget: submission,
     integrationBranch: integrationRefs,
     base: submission.base
