@@ -207,10 +207,11 @@ function readPluginVersion() {
 function mkdirs() { for (const d of [STATE, LOGS, BIN_DIR]) fs.mkdirSync(d, { recursive: true }); }
 
 const {
-  createProbeChildRegistry, createProxyRecovery, fetchUrl, killPidAsync, portListening, postJson, processOwningPortAsync, recordedGatewayPids, reapGatewayOrphans, resolvePortOwner, unknownPortOwnerReason,
+  createProbeChildRegistry, createProxyRecovery, fetchUrl, killPidAsync, listeningPidsFromNetstat, portListening, postJson, processOwningPortAsync, recordedGatewayPids, reapGatewayOrphans, resolvePortOwner, unknownPortOwnerReason,
   removePid, restartWorkerWithDrain, shimHealthy, spawnDetached, stopAll, stopProcessAsync, stopRunningSupervisor,
   stopShimWithDrain, waitForShimExit, writePidRecordAsync,
 } = require('./process-supervision.js');
+const { describeShimState, fetchShimHealth, probeShimState, servingShimVersion } = require('./shim-state.js');
 
 const {
   cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isWired, migrateLegacyProjectSettings,
@@ -224,15 +225,13 @@ const {
   addManagedHostsBlock, configureRemoteControl, detectHostsCompat, findConflictingHostsMappings, hostsFilePath,
   managedHostsBlock, parseHostsCompatBlock, parseHostsCompatEntry, removeManagedHostsBlock, remoteControlCommand,
 } = require('./remote-control.js');
-function compatibilityPortOwnerIdentifiers() {
+function compatibilityPortOwnerIdentifiers(lookup = spawnSync) {
   const portLookup = WIN
-    ? spawnSync('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8', windowsHide: true })
-    : spawnSync('lsof', ['-nP', `-iTCP:${COMPAT_PORT}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', windowsHide: true });
+    ? lookup('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8', windowsHide: true })
+    : lookup('lsof', ['-nP', `-iTCP:${COMPAT_PORT}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', windowsHide: true });
   if (portLookup.status !== 0) return [];
-  const output = String(portLookup.stdout || '');
-  if (!WIN) return [...new Set(output.split(/\s+/).map(Number).filter(Boolean))];
-  const listeningPort = new RegExp(`^\\s*TCP\\s+\\S+:${COMPAT_PORT}\\s+\\S+\\s+LISTENING\\s+(\\d+)\\s*$`, 'gim');
-  return [...new Set(Array.from(output.matchAll(listeningPort), (match) => Number(match[1])).filter(Boolean))];
+  const output = String(portLookup.stdout);
+  return WIN ? listeningPidsFromNetstat(output, COMPAT_PORT) : [...new Set(output.split(/\s+/).map(Number).filter(Boolean))];
 }
 
 function processNameForIdentifier(processIdentifier) {
@@ -637,6 +636,120 @@ function reportSiblingSupervisorReplacement(stopped, quiet) {
   if (!quiet && stopped.siblingInstallRoot) log(`model-gateway: replaced older sibling shim version at ${stopped.siblingInstallRoot}.`);
 }
 
+function lifecycleRecovery(lifecycleOperation, recordLifecycle) {
+  let attempted = false;
+  return {
+    begin() {
+      if (attempted || !lifecycleOperation) return;
+      attempted = true;
+      recordLifecycle(`${lifecycleOperation}-recovery-started`, {
+        component: lifecycleOperation,
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+      });
+    },
+    finish(result) {
+      if (attempted && lifecycleOperation) {
+        recordLifecycle(`${lifecycleOperation}-recovery-finished`, {
+          component: lifecycleOperation,
+          pid: process.pid,
+          outcome: result.ok ? 'ready' : 'failed',
+        });
+      }
+      return { ...result, recoveryAttempted: attempted };
+    },
+  };
+}
+
+// A supervisor that is still starting gets the startup window to answer before anything binds against it (#230,
+// #251). Its old failure file is not evidence about this start, so the wait ignores it.
+async function readSettledShimState(probe, { quiet, report, awaitReadiness, timeout }) {
+  const shim = await probe();
+  if (!quiet) report(describeShimState(shim));
+  if (shim.state !== 'starting') return shim;
+  await awaitReadiness({ timeout, proxyAnswers: async () => true, shimFailureExists: () => false });
+  return probe();
+}
+
+function servingCurrentVersion(shim) {
+  return shim.state === 'running-ours' && !shimNeedsRestart(PLUGIN_VERSION, shim.health);
+}
+
+function shimStartPlan(shim, preserveRunningSupervisor) {
+  if (shim.state === 'running-foreign') return refuseForeignShim;
+  if (servingCurrentVersion(shim)) return keepRunningShim;
+  return preserveRunningSupervisor && shim.state === 'starting' ? waitForRunningShim : replaceShim;
+}
+
+function refuseForeignShim(shim, { lifecycleOperation, recordLifecycle }) {
+  if (shim.owner.state === 'foreign-install') {
+    return { ok: false, reason: `PID ${shim.pid} owns :${PUBLIC_SHIM_PORT} from a different install root (${shim.image})` };
+  }
+  const operation = lifecycleOperation || 'start';
+  recordLifecycle(`${operation}-owner-unknown`, { component: operation, pid: process.pid, outcome: 'owner-unknown' });
+  return { ok: false, reason: unknownPortOwnerReason(shim.owner, PUBLIC_SHIM_PORT) };
+}
+
+async function keepRunningShim(shim, context) {
+  if (shim.owner.state === 'same-install') context.reapOrphans(shim.pid);
+  noticeStaleSession(shim.health);
+  // setup handed a replaced proxy to this supervisor, so it waits for that proxy to answer.
+  if (context.preserveRunningSupervisor) return finishStartingShim([], context);
+  return reportShimReady([], context);
+}
+
+function waitForRunningShim(shim, context) {
+  return finishStartingShim([], context);
+}
+
+async function replaceShim(shim, context) {
+  const refused = await clearShimForStart(shim, context);
+  if (refused) return context.recovery.finish(refused);
+  return finishStartingShim(launchSupervisor(context), context);
+}
+
+async function clearShimForStart(shim, { quiet, lifecycleOperation, reapOrphans, stopSupervisor, recovery }) {
+  if (shim.state === 'stopped') {
+    reapOrphans(null);
+    return null;
+  }
+  recovery.begin();
+  const stopped = await stopSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
+  if (!stopped.ok) return stopped;
+  reportSiblingSupervisorReplacement(stopped, quiet);
+  return null;
+}
+
+function launchSupervisor({ recovery, spawnSupervisor }) {
+  recovery.begin();
+  try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
+  spawnSupervisor('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], {});
+  return ['shim'];
+}
+
+async function finishStartingShim(started, context) {
+  const readiness = await context.awaitReadiness({ timeout: context.timeout });
+  if (readiness.ok) return reportShimReady(started, context);
+  if (!readiness.timedOut) return context.recovery.finish({ ok: false, reason: readiness.reason });
+  return context.recovery.finish({
+    ok: false,
+    reason: `not healthy after ${Math.ceil(context.timeout / 1000)}s (check logs in ${LOGS})`,
+    started,
+    waitCutShort: context.quiet,
+  });
+}
+
+async function reportShimReady(started, { quiet, report, refreshCatalog, recovery }) {
+  if (!quiet && started.length) report(`started: ${started.join(', ')}`);
+  await refreshCatalog().catch(() => { /* advisory only; sidequest just won't see fresh models */ });
+  return recovery.finish({ ok: true, started });
+}
+
+function noticeStaleSession(health) {
+  const staleSessionNotice = staleSessionReloadNotice(PLUGIN_VERSION, health);
+  if (staleSessionNotice) noticeForUser(staleSessionNotice, { toStderr: true });
+}
+
 async function startAll({
   quiet = false,
   lifecycleOperation = null,
@@ -644,100 +757,24 @@ async function startAll({
   ensureState = mkdirs,
   recordLifecycle = recordGatewayLifecycle,
   resolveOwner = resolvePortOwner,
+  fetchHealth = fetchShimHealth,
+  probeShim = probeShimState,
   reapOrphans = reapGatewayOrphans,
-  shimReady = shimHealthy,
   stopSupervisor = stopRunningSupervisor,
   spawnSupervisor = spawnDetached,
+  awaitReadiness = waitForStartupReadiness,
+  refreshCatalog = writeCatalog,
+  report = log,
   preserveRunningSupervisor = false,
 } = {}) {
   if (!proxyExists()) return { ok: false, reason: 'proxy binary missing (run setup)' };
-  let recoveryAttempted = false;
-  const finishRecovery = (result) => {
-    if (recoveryAttempted && lifecycleOperation) {
-      recordLifecycle(`${lifecycleOperation}-recovery-finished`, {
-        component: lifecycleOperation,
-        pid: process.pid,
-        outcome: result.ok ? 'ready' : 'failed',
-      });
-    }
-    return { ...result, recoveryAttempted };
-  };
-  const beginRecovery = () => {
-    if (recoveryAttempted || !lifecycleOperation) return;
-    recoveryAttempted = true;
-    recordLifecycle(`${lifecycleOperation}-recovery-started`, {
-      component: lifecycleOperation,
-      pid: process.pid,
-      startedAt: new Date().toISOString(),
-    });
-  };
   ensureState();
-  const owner = await resolveOwner(PUBLIC_SHIM_PORT);
-  if (owner.state === 'foreign-install') {
-    return { ok: false, reason: `PID ${owner.pid} owns :${PUBLIC_SHIM_PORT} from a different install root (${owner.installRoot})` };
-  }
-  if (owner.state === 'unknown') {
-    if (await shimReady()) return finishRecovery({ ok: true, started: [] });
-    const operation = lifecycleOperation || 'start';
-    recordLifecycle(`${operation}-owner-unknown`, {
-      component: operation,
-      pid: process.pid,
-      outcome: 'owner-unknown',
-    });
-    return { ok: false, reason: unknownPortOwnerReason(owner, PUBLIC_SHIM_PORT) };
-  }
-  const portOwner = owner.pid;
-  const started = [];
-  let waitingForRunningSupervisor = false;
-  const health = await fetchShimHealth();
-  const staleSessionNotice = staleSessionReloadNotice(PLUGIN_VERSION, health);
-  if (staleSessionNotice) noticeForUser(staleSessionNotice, { toStderr: true });
-  if (health && shimNeedsRestart(PLUGIN_VERSION, health)) {
-    beginRecovery();
-    const stopped = await stopSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
-    if (!stopped.ok) return finishRecovery(stopped);
-    reportSiblingSupervisorReplacement(stopped, quiet);
-  } else if (health) {
-    reapOrphans(portOwner);
-  } else if (await portListening(PUBLIC_SHIM_PORT)) {
-    if (preserveRunningSupervisor) {
-      waitingForRunningSupervisor = true;
-    } else {
-      beginRecovery();
-      const stopped = await stopSupervisor({ quiet, operation: lifecycleOperation || 'restart' });
-      if (!stopped.ok) return finishRecovery(stopped);
-      reportSiblingSupervisorReplacement(stopped, quiet);
-    }
-  } else {
-    reapOrphans(null);
-  }
-  if (!(await shimReady()) && !waitingForRunningSupervisor) {
-    beginRecovery();
-    try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
-    spawnSupervisor('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], {});
-    started.push('shim');
-  }
-  const startupWaitMs = startupWaitMsFor(quiet);
-  const readiness = await waitForStartupReadiness({ timeout: startupWaitMs });
-  if (readiness.ok) {
-    if (!quiet && started.length) log(`started: ${started.join(', ')}`);
-    await writeCatalog().catch(() => { /* advisory only; sidequest just won't see fresh models */ });
-    return finishRecovery({ ok: true, started });
-  }
-  if (!readiness.timedOut) return finishRecovery({ ok: false, reason: readiness.reason });
-  return finishRecovery({
-    ok: false,
-    reason: `not healthy after ${Math.ceil(startupWaitMs / 1000)}s (check logs in ${LOGS})`,
-    started,
-    waitCutShort: quiet,
-  });
-}
-
-async function fetchShimHealth() {
-  try {
-    const r = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/healthz`, { timeout: 2000 });
-    return JSON.parse(r.body.toString());
-  } catch { return null; }
+  const context = {
+    quiet, lifecycleOperation, recordLifecycle, reapOrphans, stopSupervisor, spawnSupervisor, awaitReadiness, refreshCatalog, report,
+    preserveRunningSupervisor, timeout: startupWaitMsFor(quiet), recovery: lifecycleRecovery(lifecycleOperation, recordLifecycle),
+  };
+  const shim = await readSettledShimState(() => probeShim({ resolveOwner, fetchHealth }), context);
+  return shimStartPlan(shim, preserveRunningSupervisor)(shim, context);
 }
 
 function unknownServingCompatibility(reason) {
@@ -787,10 +824,6 @@ async function requestServingCompatibility({ action = 'probe', expectedSuperviso
   }
 }
 
-function servingShimVersion(health) {
-  return health?.supervisorVersion || health?.version || null;
-}
-
 function shimNeedsRestart(installedVersion, health) {
   if (health?.proxyRecovery !== true) return true;
   const running = parseSemver(servingShimVersion(health));
@@ -831,7 +864,26 @@ async function resolveIntendedMode() {
   return { mode: compat.hostsDetected && compat.port80Bound ? 'compat' : 'default', compat };
 }
 
-async function statusReport({ readiness = null } = {}) {
+function reportShimState(shim) {
+  const { owner } = shim;
+  log(describeShimState(shim));
+  if (owner.state === 'foreign-install') log(`shim supervisor conflict: PID ${owner.pid} owns :${PUBLIC_SHIM_PORT} from a different install root (${owner.installRoot || 'unknown'}).`);
+  if (owner.identity === 'pid-record') log(`shim supervisor ownership: PID ${owner.pid} matches its recorded start time, but its command line is unavailable. It may be elevated; stop or setup must run from a session with the same privileges.`);
+  if (owner.reason === 'unreadable-command') log(`shim supervisor ownership: ${unknownPortOwnerReason(owner, PUBLIC_SHIM_PORT)}.`);
+}
+
+function reportCompatibilityListener(compat) {
+  if (!compat) return;
+  if (!compat.hostsDetected) {
+    log('RC-compatibility hosts entry: not present (default gateway mode)');
+    return;
+  }
+  log(`RC-compatibility hosts entry: detected (${compat.hostsLine})`);
+  log(`  127.0.0.1:${COMPAT_PORT} bound: ${compat.port80Bound ? 'yes' : `no${compat.reason ? ` (${compat.reason})` : ''}`}`);
+  log('  Remote Control transport: this reports local HTTP listener status only, not end-to-end Remote Control.');
+}
+
+async function statusReport({ readiness = null, probeShim = probeShimState } = {}) {
   const codex = readiness || await getCodexReadiness();
   const { checks, health } = codex;
   log(`proxy (claude-code-proxy) on :${PROXY_PORT}: ${checks.proxyModels ? 'answering /v1/models' : 'DOWN'}`);
@@ -841,19 +893,8 @@ async function statusReport({ readiness = null } = {}) {
       ? 'proxy recovery: shim supervisor probes /v1/models and restarts an unavailable proxy with bounded backoff'
       : 'proxy recovery: unavailable until the shim supervisor is refreshed');
   }
-  log(`shim (model router) on :${SHIM_PORT}: ${checks.shimRunning ? `running${checks.servingVersion ? ` (serving ${checks.servingVersion})` : ' (serving version unavailable)'}` : 'DOWN'}`);
-  const owner = await resolvePortOwner(PUBLIC_SHIM_PORT).catch(() => ({ state: 'unknown', pid: null }));
-  if (owner.state === 'foreign-install') log(`shim supervisor conflict: PID ${owner.pid} owns :${PUBLIC_SHIM_PORT} from a different install root (${owner.installRoot || 'unknown'}).`);
-  if (owner.identity === 'pid-record') log(`shim supervisor ownership: PID ${owner.pid} matches its recorded start time, but its command line is unavailable. It may be elevated; stop or setup must run from a session with the same privileges.`);
-  if (owner.reason === 'unreadable-command') log(`shim supervisor ownership: ${unknownPortOwnerReason(owner, PUBLIC_SHIM_PORT)}.`);
-  const compat = health?.compat;
-  if (compat?.hostsDetected) {
-    log(`RC-compatibility hosts entry: detected (${compat.hostsLine})`);
-    log(`  127.0.0.1:${COMPAT_PORT} bound: ${compat.port80Bound ? 'yes' : `no${compat.reason ? ` (${compat.reason})` : ''}`}`);
-    log('  Remote Control transport: this reports local HTTP listener status only, not end-to-end Remote Control.');
-  } else if (compat) {
-    log('RC-compatibility hosts entry: not present (default gateway mode)');
-  }
+  reportShimState(await probeShim({ fetchHealth: async () => health }));
+  reportCompatibilityListener(health?.compat);
   log(`Codex readiness: ${codex.state}`);
   if (!codex.ready) log(codex.message);
   return { ok: codex.ready, health, readiness: codex };
@@ -2651,6 +2692,8 @@ module.exports = {
   loginSuccessMessage,
   startupWaitMsFor,
   startAll,
+  statusReport,
+  compatibilityPortOwnerIdentifiers,
   requestServingCompatibility,
   syncCompatMode,
   waitForStartupReadiness,

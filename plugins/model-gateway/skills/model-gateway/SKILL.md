@@ -224,6 +224,12 @@ or User-scope edits cannot be promised to win. Disabling stays available.
 ... env --remove   # unwire Claude Code (do this BEFORE uninstalling the plugin)
 ```
 
+`status`, `doctor` and `ensure` read the shim through one shared probe and print the same line,
+`shim (model router) on :<port>: <state>`, where the state is `running-ours (serving <version>)`,
+`running-foreign (PID <pid>, <install root or owner unidentified>)`, `starting (PID <pid> since <time>)` or
+`stopped`. `ensure` leaves `running-ours` at the installed version alone and succeeds, waits up to its startup
+window for `starting` before replacing anything, and refuses `running-foreign`.
+
 `doctor` prints the full model-window table: backend and picker ids, backend and advertised windows,
 Claude Code's resolved client window and compaction point, sentry mode and trigger, and the measurement
 date. It includes Codex, Grok, and native Claude pin rows. Its model-id check is useful for stale shim ids,
