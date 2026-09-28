@@ -2718,6 +2718,9 @@ function missingReleaseFragment(repoPath, ref, changedPaths) {
 function missingDeliveredReleaseFragment(repoPath, ref, changedPaths) {
   return shippedPluginsWithoutReleaseFragment(repoPath, ref, changedPaths, () => true);
 }
+function deliveredReleasePaths(repo, delivery) {
+  return [...commitPaths(repo, delivery.commit), ...delivery.integration?.changedPaths || []];
+}
 function missingReleaseFragmentMessage(ref, fragmentPath, plugins) {
   return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(", ")}) but does not include ${fragmentPath}. Write the fragment, then commit it, then submit again. Next time write it BEFORE your first commit so it rides along:
 ---
@@ -2998,7 +3001,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
         const integrationRefs = commitScope.integrationTargetRefs(target);
         const landed = commitScope.submissionCommitReachedIntegrationBranch(readMeta(slug)?.path || "", ticket.submission || {}, integrationRefs);
         return landed ? deliveredSubmission : Object.assign({}, deliveredSubmission, {
-          message: `${String(deliveredSubmission.message || `${ticket.ref} submission could not be recorded as delivered.`)} Its candidate is not reachable from ${integrationRefs.join(" or ") || target?.branch || "the integration branch"}, so if it never landed and no longer merges, close it as an abandoned submission instead: \`sidequest groom-close ${ticket.ref} --abandon-submission --reason "<evidence it never landed>"\` (MCP \`abandonSubmission: true\`).`
+          message: `${String(deliveredSubmission.message || `${ticket.ref} submission could not be recorded as delivered.`)} Its candidate is not reachable from ${integrationRefs.join(" or ") || target?.branch || "the integration branch"}. If a squash or rebase merge carried it there, record the commit that landed it: \`sidequest groom-close ${ticket.ref} --delivery-commit <landed commit> --reason "<where it landed>"\` (MCP \`deliveryCommit\`). If it never landed and no longer merges, close it as an abandoned submission instead: \`sidequest groom-close ${ticket.ref} --abandon-submission --reason "<evidence it never landed>"\` (MCP \`abandonSubmission: true\`).`
         });
       }
     }
@@ -3041,7 +3044,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
   }
   const delivery = purpose === "delivery" ? reconciledDelivery || recordedDelivery(slug, ticket, opts.deliveryCommit, reason) : null;
   if (delivery && !delivery.ok) return Object.assign({ ticket }, delivery);
-  const missingFragment = delivery ? missingDeliveredReleaseFragment(readMeta(slug)?.path, ticket.ref, commitPaths(readMeta(slug)?.path || "", delivery.commit)) : null;
+  const missingFragment = delivery ? missingDeliveredReleaseFragment(readMeta(slug)?.path, ticket.ref, deliveredReleasePaths(readMeta(slug)?.path || "", delivery)) : null;
   if (missingFragment) return {
     ok: false,
     reason: "missing_release_fragment",

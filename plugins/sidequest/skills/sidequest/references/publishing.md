@@ -57,7 +57,10 @@ gate covers the newer target content. An assembly refusal leaves every submitted
 - `merge` is the default for release-pipeline repos such as Toolshed. It merges the submitted tip into
   the configured integration branch.
 - `replay` cherry-picks the submitted commits in order, keeping atomic history. A conflict aborts the
-  cherry-pick and restores the prior HEAD.
+  cherry-pick and restores the prior HEAD. To deliver it by hand, merge the pinned candidate itself
+  (`git merge --no-ff <candidate>`, never a cherry-pick), resolve the conflict in that merge commit,
+  re-gate, then record it with `integrate --delivery-commit <candidate>`. A hand-resolved cherry-pick
+  has a new patch identity and changed blobs, so its content check always refuses.
 - `apply` materializes the range without a commit so the user can review it in their changes view. It
   refuses overlapping uncommitted paths and names them. Its delivery record plus pinned ref is enough
   to close the ticket, no user-side commit is required.
@@ -139,6 +142,11 @@ recovery:
 3. Keep the candidate's content present in the integration working tree; the merged-tree verifier and
    content check still run against it.
 
+When the squash reached the target as its own commit, record that landed commit instead: `groomClose`
+with `deliveryCommit: <squash commit>` and no `deliveryMethod`. It passes when the squash commit's patch
+equals each candidate commit's patch or the patch of the whole submitted range. A squash that also
+carries another ticket's work matches neither and still refuses `delivery_content_missing`.
+
 ### A conflict integrate cannot merge
 
 `integrate` never resolves a conflict. It aborts, restores the target, records `merge_failed` (or
@@ -148,8 +156,9 @@ recovery:
    merge. Keep the candidate as a parent of that merge: that ancestry is the content proof.
 2. Re-gate the merged tree.
 3. Record it with `groomClose`, passing `deliveryCommit: <the merge commit>`, `deliveryMethod: "manual"`,
-   and a reason (CLI `--delivery-commit <sha> --delivery-method manual --reason "…"`). Omit
-   `integration: true`, which selects the assembled-wave route instead.
+   and a reason (CLI `--delivery-commit <sha> --delivery-method manual --reason "…"`), or with `integrate`
+   passing `deliveryCommit: <the pinned candidate>` and a reason. Omit `integration: true`, which selects
+   the assembled-wave route instead.
 
 Don't submit the merge from a second ticket: its range contains the candidate's commits, so it is
 refused as `duplicate_submission`. A squash or cherry-pick of the resolution loses the ancestry and is
