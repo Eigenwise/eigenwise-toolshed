@@ -32,6 +32,7 @@ const BIND_RUNTIME_IDENTITY = path.join(HOOKS, 'bind-runtime-identity.js');
 const GUARD_SHARED_CHECKOUT_GIT = path.join(HOOKS, 'guard-shared-checkout-git.js');
 const GUARD_DESTRUCTIVE = path.join(HOOKS, 'guard-destructive-git.js');
 const FORCE_EXEC_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
+const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
 
 function initRepo(prefix: string) {
   // native realpath expands 8.3 short names (CI's RUNNERA~1 temp dir) the way git's
@@ -1328,6 +1329,155 @@ test('SQ-75: a release observed outside any registered checkout of the project d
     assert.equal(retry.continuationFallback?.reason, 'released_worktree_binding_dropped');
   } finally {
     cleanup();
+  }
+});
+
+// PROBE-1 (PR #299 review). The sibling's runtime dies before it claims, and its SubagentStop carries the agent id that
+// the crossed SubagentStart put on the LIVE executor's reservation. Ending that record failed the live dispatch and
+// cleared its token, so the live executor's own claim was refused. The stop is held until the live sibling's claim
+// settles the guess, and then it ends the dead sibling's own reservation.
+for (const mixedExecutors of [false, true]) {
+  test(`SQ-84: a crossed sibling of ${mixedExecutors ? 'another executor type' : 'the same executor type'} that dies before claiming ends its own ticket, never the live executor's`, async () => {
+    const pair = sq55CrossedPair(mixedExecutors ? 'probe1-mixed' : 'probe1-same', mixedExecutors);
+    const { first: live, second: dead } = pair;
+    const canonical = (worktree: string) => worktrees.canonicalPath(worktree);
+    try {
+      // SubagentStop carries agent_id only; the host writes the launch name beside the transcript.
+      const launchName = store.getTicket(slug, dead.ref).dispatch.agentName;
+      const transcript = path.join(SIDEQUEST_HOME, 'sq84-transcripts', `agent-${dead.agentId}.jsonl`);
+      fs.mkdirSync(path.dirname(transcript), { recursive: true });
+      fs.writeFileSync(transcript.replace(/\.jsonl$/, '.meta.json'), JSON.stringify({ name: launchName }));
+      const stop = runHook(SUBAGENT_STOP, {
+        hook_event_name: 'SubagentStop', session_id: pair.sessionId, agent_id: dead.agentId, agent_type: dead.executor, agent_transcript_path: transcript,
+      });
+      const verdict = stop?.hookSpecificOutput?.additionalContext || '';
+      assert.match(verdict, /exec DIED before claiming; .*once pulse shows its ticket failed/);
+      assert.ok(verdict.includes(`TaskStop({ task_id: ${JSON.stringify(launchName)} })`), `the stop named another teammate to retire: ${verdict}`);
+      assert.ok(!verdict.includes('content omitted'), `the verdict overran its context budget: ${verdict}`);
+      const held = store.getTicket(slug, live.ref);
+      assert.equal(held.dispatch.terminalAt || null, null, `the sibling's stop ended ${live.ref}: ${held.dispatch.failureShape}`);
+      assert.ok(held.dispatchNonce, `the sibling's stop cleared ${live.ref}'s dispatch token`);
+
+      const ack = await pair.claim(live, live.harnessWorktree);
+      assert.equal(ack.worktree, canonical(live.harnessWorktree), `${live.ref} claim result names another checkout`);
+      const own = store.getTicket(slug, live.ref);
+      assert.equal(own.claim?.by, `sq55-${live.agentId}`);
+      assert.equal(own.dispatch.agentId, live.agentId, `${live.ref} does not hold its own runtime`);
+      assert.equal(pair.recorded(live.ref), canonical(live.harnessWorktree), `${live.ref} is not leased to its own checkout`);
+
+      const ended = store.getTicket(slug, dead.ref);
+      assert.equal(ended.dispatch.outcome, 'failed', `${dead.ref} did not end with its dead runtime`);
+      assert.equal(ended.dispatch.failureShape, 'stopped_before_claim');
+      assert.equal(ended.dispatchNonce, null);
+      assert.equal(ended.dispatch.agentId, dead.agentId, `${dead.ref} ended holding another runtime`);
+      assert.equal(pair.recorded(dead.ref), canonical(dead.harnessWorktree), `${dead.ref} ended leased to the live executor's checkout`);
+
+      assert.equal(pair.write(live, live.harnessWorktree), null, `${live.ref} was refused a write in its own checkout`);
+      const foreign = pair.write(live, dead.harnessWorktree);
+      assert.equal(foreign?.hookSpecificOutput?.permissionDecision, 'deny', `${live.ref} was allowed to write in ${dead.ref}'s checkout`);
+      assert.match(foreign.hookSpecificOutput.permissionDecisionReason, new RegExp(`${live.ref} has no write lease`));
+    } finally {
+      pair.cleanup();
+    }
+  });
+}
+
+// When both runtimes die before either claims, nothing is left to settle the guess, so both reservations end.
+test('SQ-84: crossed siblings that both die before claiming both end stopped_before_claim', () => {
+  const pair = sq55CrossedPair('probe1-both', false);
+  try {
+    const first = store.markDispatchStopped(pair.sessionId, pair.second.executor, pair.second.agentId, null);
+    assert.deepEqual({ ok: first.ok, deferred: first.deferred, tickets: first.tickets }, { ok: true, deferred: true, tickets: [] });
+    const second = store.markDispatchStopped(pair.sessionId, pair.first.executor, pair.first.agentId, null);
+    assert.equal(second.ok, true, `second stop: ${second.reason}`);
+    for (const runtime of [pair.first, pair.second]) {
+      const ticket = store.getTicket(slug, runtime.ref);
+      assert.equal(ticket.dispatch.failureShape, 'stopped_before_claim', `${runtime.ref} did not end`);
+      assert.equal(ticket.dispatchNonce, null);
+    }
+  } finally {
+    pair.cleanup();
+  }
+});
+
+// A launch that never bound a runtime cannot own the stopped runtime's record, so a stop beside it ends at once instead
+// of waiting on a claim that may never come.
+test('SQ-84: a stop beside a sibling launch that never bound a runtime ends its own reservation at once', () => {
+  const sequence = `${process.pid}-${Date.now()}`;
+  const sessionId = `sq84-unbound-${sequence}`;
+  const reserve = (role: string) => {
+    const ticket = store.createTicket(slug, {
+      title: `SQ-84 ${role} sibling ${sequence}`,
+      category: 'codebase-exploration',
+      description: 'One of two shared-tree dispatches launched from a single orchestrator session.',
+      files: ['README.md'],
+    });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId, agentName: `sq84-${role}-${sequence}`,
+    }).ok, true);
+    return { ref: ticket.ref, executor: prepared.ticket.dispatchExecutor, agentName: `sq84-${role}-${sequence}` };
+  };
+  const stopped = reserve('stopped');
+  const unbound = reserve('unbound');
+  const agentId = `a84stopped${sequence}`.replace(/[^a-z0-9]/g, '');
+  try {
+    assert.equal(stopped.executor, unbound.executor, 'the sibling must share the stopped runtime\'s executor type');
+    assert.equal(store.bindDispatchAgent(sessionId, stopped.executor, agentId, stopped.agentName).ok, true);
+    const result = store.markDispatchStopped(sessionId, stopped.executor, agentId, null);
+    assert.equal(result.deferred, undefined, 'the stop was held for a launch that never bound a runtime');
+    assert.equal(store.getTicket(slug, stopped.ref).dispatch.failureShape, 'stopped_before_claim');
+    assert.equal(store.getTicket(slug, unbound.ref).dispatch.terminalAt || null, null);
+  } finally {
+    for (const ref of [stopped.ref, unbound.ref]) store.releaseTicket(slug, ref, 'sq84-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+// PROBE-2 (PR #299 review). Both siblings claimed from the parent checkout, so each claim records the other's checkout,
+// and neither has committed. Each is refused a write where it runs, so neither can ever make the own commit the
+// live-claim rebind requires. The recovery trades the two records instead, and a refusal that is still reachable
+// names the way out.
+test('SQ-84: live-claim recovery swaps an exactly crossed claimed pair with no commits onto their own checkouts', async () => {
+  const pair = sq55CrossedPair('probe2', false);
+  const { first, second } = pair;
+  const canonical = (worktree: string) => worktrees.canonicalPath(worktree);
+  const recover = (runtime: Sq55Runtime, worktree: string) => store.recoverLiveClaimDispatch(slug, runtime.ref, {
+    by: `sq55-${runtime.agentId}`,
+    executor: runtime.executor,
+    worktree,
+    recoveryEvidence: 'verify-capture refused: the bound worktree is the sibling\'s checkout',
+    sessionId: `${pair.sessionId}-orchestrator`,
+  });
+  try {
+    await pair.claim(second, PROJECT);
+    await pair.claim(first, PROJECT);
+    assert.equal(pair.recorded(first.ref), canonical(second.harnessWorktree), 'the fixture reproduces the claimed crossing');
+    assert.equal(pair.recorded(second.ref), canonical(first.harnessWorktree));
+    assert.equal(pair.write(second, second.harnessWorktree)?.hookSpecificOutput?.permissionDecision, 'deny', 'the deadlock needs own-checkout writes refused');
+
+    const swapped = recover(first, first.harnessWorktree);
+    assert.equal(swapped.ok, true, `${first.ref} recovery: ${swapped.reason} ${swapped.message || ''}`);
+    assert.equal(swapped.recovery.worktreeCorrection?.basis, 'mutual_swap');
+    assert.equal(swapped.recovery.worktreeCorrection?.swappedWith, second.ref);
+    assert.equal(pair.recorded(first.ref), canonical(first.harnessWorktree));
+    assert.equal(pair.recorded(second.ref), canonical(second.harnessWorktree), `${second.ref} kept the recovering claim's checkout`);
+    const traded = store.getTicket(slug, second.ref).dispatch;
+    assert.equal(traded.worktreeCorrection?.reason, 'live_claim_mutual_swap');
+    assert.equal(traded.worktreeBindingSource, 'worktree-create');
+    const sibling = pair.write(second, second.harnessWorktree);
+    assert.equal(sibling, null, `${second.ref} is still refused its own checkout: ${sibling?.hookSpecificOutput?.permissionDecisionReason}`);
+
+    // The recovered claim no longer holds a WorktreeCreate record, so taking the sibling's checkout back is not a swap.
+    const refused = recover(first, second.harnessWorktree);
+    assert.equal(refused.ok, false);
+    assert.equal(refused.reason, 'worktree_mismatch');
+    assert.match(refused.message, new RegExp(`leased to ${second.ref}, a live ticket`));
+    assert.ok(refused.message.includes(`release ${first.ref} with kind \`handback\` and status \`todo\``), refused.message);
+    assert.match(refused.message, /otherwise gets a fresh checkout of its own/);
+    assert.equal(pair.recorded(first.ref), canonical(first.harnessWorktree), 'a refused rebind moved the binding');
+    assert.equal(pair.recorded(second.ref), canonical(second.harnessWorktree), 'a refused rebind moved the sibling');
+  } finally {
+    pair.cleanup();
   }
 });
 

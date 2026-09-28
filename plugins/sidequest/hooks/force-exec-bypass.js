@@ -666,6 +666,10 @@ function denyReason(result, type) {
       return `${base}. ${retry}`;
   }
 }
+function liveDispatchBinding(ticket, sessionId, agentId) {
+  const dispatch = ticket.dispatch;
+  return dispatch?.sessionId === sessionId && !dispatch.terminalAt && dispatch.agentId === agentId;
+}
 function dispatchIdentityMatches(ticket, agentId, type) {
   const dispatch = ticket.dispatch;
   if (dispatch?.agentId === agentId) return true;
@@ -714,7 +718,7 @@ function terminalExecutorTicket(input) {
     let liveBinding = false;
     for (const project of store.listProjects({ all: true })) {
       for (const ticket of store.listTickets(project.slug)) {
-        if (ticket.dispatch?.sessionId === sessionId && !ticket.dispatch?.terminalAt && ticket.dispatch?.agentId === agentId) liveBinding = true;
+        liveBinding = liveBinding || liveDispatchBinding(ticket, sessionId, agentId);
         if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId || !ticket.dispatch?.terminalAt || ticket.claim?.by || !dispatchIdentityMatches(ticket, agentId, executor)) continue;
         if (ticket.submission?.supersededBy?.ref || ticket.completion?.supersededBy?.ref) {
           const by = String(ticket.completion?.by || "the control plane").trim();
