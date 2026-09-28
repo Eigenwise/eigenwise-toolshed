@@ -159,7 +159,10 @@ function toolMutates(name?: any, args?: any) {
 function mutationQueueKey(name?: any, args?: any) {
   if (name === 'new_board_profile') return '<global>';
   if (GLOBAL_MUTATION_TOOLS.has(String(name)) && args.project == null) return '<global>';
-  return resolveProject(args.project).slug;
+  const board = resolveProject(args.project).slug;
+  // A commit runs the repository's hooks, which can take minutes; in the board-wide queue it held
+  // every other write on the board that long (GH-314). Its own board writes take the ticket lock.
+  return name === 'commit' ? `${board}\0commit\0${args.ref}` : board;
 }
 
 async function enqueueMutation<T>(board: string, operation: () => T | Promise<T>): Promise<T> {

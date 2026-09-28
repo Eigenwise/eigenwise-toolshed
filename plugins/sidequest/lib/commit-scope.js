@@ -60,7 +60,7 @@ __export(commit_scope_exports, {
   workingPaths: () => workingPaths
 });
 module.exports = __toCommonJS(commit_scope_exports);
-var import_node_child_process = require("node:child_process");
+var import_git_process = require("./git-process.js");
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_path = __toESM(require("node:path"));
 var import_scope_match = require("./scope-match.js");
@@ -72,7 +72,7 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function git(cwd, args) {
-  return (0, import_node_child_process.execFileSync)("git", args, { cwd, encoding: "utf8", windowsHide: true });
+  return (0, import_git_process.execFileSync)("git", args, { cwd, encoding: "utf8", windowsHide: true });
 }
 function gitResult(cwd, args) {
   try {
@@ -87,7 +87,7 @@ function patchIds(cwd, args) {
     if (!patches.trim()) return { ok: true, value: "" };
     return {
       ok: true,
-      value: (0, import_node_child_process.execFileSync)("git", ["patch-id", "--stable"], {
+      value: (0, import_git_process.execFileSync)("git", ["patch-id", "--stable"], {
         cwd,
         encoding: "utf8",
         input: patches,
@@ -728,7 +728,14 @@ function validateStoredSubmissionRange(cwd, submissionValue, ticketRef, integrat
     } : {}
   });
 }
-function commitScoped(cwd, message, files) {
+async function addAndCommitScopes(root, message, stageableScopes, committableScopes) {
+  if (stageableScopes.length) await (0, import_git_process.execFileText)("git", ["add", "--all", "--", ...stageableScopes], { cwd: root });
+  const commitArgs = ["commit", "--only"];
+  if (repoRequestsSignoff(root)) commitArgs.push("--signoff");
+  await (0, import_git_process.execFileText)("git", [...commitArgs, "-m", String(message || ""), "--", ...committableScopes], { cwd: root });
+  return git(root, ["rev-parse", "HEAD"]).trim();
+}
+async function commitScoped(cwd, message, files) {
   const scopes = (0, import_scope_match.scopedPaths)(files);
   if (!scopes.length) return { ok: false, reason: "missing_scope" };
   try {
@@ -749,11 +756,7 @@ function commitScoped(cwd, message, files) {
       ...directScopes.filter((scope) => !ignoredUntrackedScope(root, scope)),
       ...concreteGlobPaths.filter((scope) => !ignoredUntrackedScope(root, scope))
     ])];
-    if (stageableScopes.length) git(root, ["add", "--all", "--", ...stageableScopes]);
-    const commitArgs = ["commit", "--only"];
-    if (repoRequestsSignoff(root)) commitArgs.push("--signoff");
-    git(root, [...commitArgs, "-m", String(message || ""), "--", ...committableScopes]);
-    const commit = git(root, ["rev-parse", "HEAD"]).trim();
+    const commit = await addAndCommitScopes(root, message, stageableScopes, committableScopes);
     const validation = validateCommitScope(root, commit, scopes);
     return Object.assign({ commit, missingScopes, unscopedPaths }, validation);
   } catch (error) {

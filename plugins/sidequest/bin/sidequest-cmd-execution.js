@@ -354,7 +354,7 @@ async function cmdCommit(opts, positional) {
   if (foreignFragments.length) {
     fail(commitScope.foreignReleaseFragmentRefusalMessage("commit", ticket.ref, foreignFragments));
   }
-  const result = commitScope.commitScoped(process.cwd(), opts.message, scope);
+  const result = await commitScope.commitScoped(process.cwd(), opts.message, scope);
   if (!result.ok) {
     if (result.reason === "missing_scope") fail(`commit: ${ticket.ref} has no declared file scope; use the explicit shared-tree escape hatch only for uncommitted-state work, not commits.`);
     if (result.reason === "outside_scope") {
