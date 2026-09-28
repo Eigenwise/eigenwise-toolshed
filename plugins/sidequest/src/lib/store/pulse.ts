@@ -1,6 +1,6 @@
 'use strict';
 
-const { execFileSync } = require('node:child_process');
+const { execFileSync } = require('../git-process.js');
 const { canonicalPreparedDispatchExecutor } = require('../prepared-dispatch.js');
 const { stopOutlivesClaim } = require('./claims.js');
 

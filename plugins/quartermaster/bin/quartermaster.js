@@ -13,7 +13,9 @@ const {
   declineResupply,
   markResupply,
   readDecisions,
+  removeDecision,
   statusFor,
+  updateDecision,
   verifyDecisions,
 } = require('../lib/state.js');
 
@@ -27,6 +29,8 @@ Usage:
   quartermaster decisions add --title <t> --fingerprint <f> --status applied|rejected|deferred
                           [--kind <k>] [--signal denials|interrupts|corrections|toolErrors|any]
                           [--project <path>] [--detail <text>]
+  quartermaster decisions update <id> --status applied|rejected|deferred
+  quartermaster decisions remove <id>
   quartermaster verify [--project <path>]
   quartermaster mark-resupply [--project <path>]
   quartermaster decline-resupply [--project <path>]
@@ -38,6 +42,8 @@ Usage:
 Everything prints JSON except crap, which prints one line per offender plus a summary unless --json.
 Defaults: --days ${DEFAULT_DAYS}, --sessions ${DEFAULT_SESSIONS}, project = cwd.
 Blocked allowlist candidates are summarized by default; --blocked includes up to 25 detailed entries.
+allowlist counts a fingerprint a PreToolUse hook blocked separately (hookBlocked) and keeps it off
+the candidate list, since a hook denial is not the same signal as a real approval or rejection.
 crap reads .claude/quartermaster/crap.json (coverageCommand, lcov, sources, exclude, base), needs
 lizard (lizard on PATH, else uvx lizard, else pipx run lizard), and checks only changed or new functions
 at the fixed CRAP threshold ${DEFAULT_MAX}. It exits 0 pass, 1 functions at or above ${DEFAULT_MAX},
@@ -113,6 +119,7 @@ function permissionReport(result, includeBlockedDetails) {
     projectDir: result.projectDir,
     additions: result.additions,
     blocked: blockedReport(result.blocked, includeBlockedDetails).report,
+    hookBlocked: result.hookBlocked,
     applied: result.applied,
     scanned: result.scanned,
   };
@@ -131,12 +138,14 @@ function parseArgs(argv) {
     installed: false,
     title: null,
     fingerprint: null,
+    id: null,
     status: null,
     kind: null,
     signal: 'any',
     detail: null,
     includeBlocked: false,
     max: null,
+    base: null,
     ratchet: null,
     lcov: null,
     complexity: null,
@@ -148,6 +157,8 @@ function parseArgs(argv) {
   if (rest.length && !rest[0].startsWith('-')) options.command = rest.shift();
   if (options.command === 'decisions' && rest.length && !rest[0].startsWith('-')) {
     options.command = `decisions-${rest.shift()}`;
+    const needsId = options.command === 'decisions-update' || options.command === 'decisions-remove';
+    if (needsId && rest.length && !rest[0].startsWith('-')) options.id = rest.shift();
   }
 
   for (let index = 0; index < rest.length; index += 1) {
@@ -174,6 +185,7 @@ function parseArgs(argv) {
       case '--detail': options.detail = take(); break;
       case '--blocked': options.includeBlocked = true; break;
       case '--max': options.max = Number(take()); break;
+      case '--base': options.base = take(); break;
       case '--ratchet': options.ratchet = take(); break;
       case '--lcov': options.lcov = take(); break;
       case '--complexity': options.complexity = take(); break;
@@ -212,6 +224,19 @@ function runDecisionsAdd(options) {
   printJson(entry);
 }
 
+function runDecisionsUpdate(options) {
+  if (!options.id) throw new Error('decisions update needs an id: decisions update <id> --status applied|rejected|deferred');
+  if (!['applied', 'rejected', 'deferred'].includes(options.status ?? '')) {
+    throw new Error('decisions update needs --status applied|rejected|deferred');
+  }
+  printJson(updateDecision(options.id, { status: options.status }));
+}
+
+function runDecisionsRemove(options) {
+  if (!options.id) throw new Error('decisions remove needs an id: decisions remove <id>');
+  printJson(removeDecision(options.id));
+}
+
 function runCrap(options) {
   let report;
   try {
@@ -220,6 +245,7 @@ function runCrap(options) {
       cwd: process.cwd(),
       projectPathGiven: options.projectPathGiven,
       max: options.max,
+      base: options.base,
       ratchet: options.ratchet,
       lcov: options.lcov,
       complexity: options.complexity,
@@ -233,6 +259,9 @@ function runCrap(options) {
     return;
   }
   process.stderr.write(`quartermaster crap: measured ${report.root}\n`);
+  if (report.usedDeprecatedRatchet) {
+    process.stderr.write('quartermaster crap: --ratchet and the config key "ratchet" are deprecated, use --base or "base" instead\n');
+  }
   if (options.json) printJson(report);
   else process.stdout.write(formatReport(report));
   process.exitCode = report.failures.length ? 1 : 0;
@@ -260,6 +289,12 @@ async function main(argv = process.argv.slice(2)) {
       return;
     case 'decisions-add':
       runDecisionsAdd(options);
+      return;
+    case 'decisions-update':
+      runDecisionsUpdate(options);
+      return;
+    case 'decisions-remove':
+      runDecisionsRemove(options);
       return;
     case 'verify':
       printJson(verifyDecisions(options.projectPath));

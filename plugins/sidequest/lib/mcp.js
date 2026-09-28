@@ -124,7 +124,8 @@ function toolMutates(name, args) {
 function mutationQueueKey(name, args) {
   if (name === "new_board_profile") return "<global>";
   if (GLOBAL_MUTATION_TOOLS.has(String(name)) && args.project == null) return "<global>";
-  return resolveProject(args.project).slug;
+  const board = resolveProject(args.project).slug;
+  return name === "commit" ? `${board}\0commit\0${args.ref}` : board;
 }
 async function enqueueMutation(board, operation) {
   const previous = mutationTails.get(board) || Promise.resolve();
@@ -278,13 +279,13 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   category_edit: { fallbackModel: "null clears." },
   dispatch: {
     reducedAgentSchema: "Only when name/mode missing; hook needs agent_id+auto|bypass mode.",
-    recoveryEvidence: "Unverified; latest signal grace; only the bound runtime name counts."
+    recoveryEvidence: "Unverified; preparer retires now, else latest signal grace; bound name only."
   },
   integrate: { deliveryInteractionCommit: "Reviewed descendant, submitted paths only." },
   groomClose: {
     deliveryCommit: "Prepared integration target.",
     deliveryInteractionCommit: "Reviewed descendant, submitted paths only.",
-    recoveryEvidence: "Unverified; retires unclaimed attempts past deadline; CLI too."
+    recoveryEvidence: "Unclaimed: preparing session retires now; others past deadline; CLI too."
   },
   verdict: {
     outcome: "Candidate, not reviewer prose."
