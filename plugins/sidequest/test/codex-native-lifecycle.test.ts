@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_sidequest-install-fixture.js';
 'use strict';
 
 const test = require('node:test');
@@ -67,6 +68,24 @@ function runtime(thread: string, cwd: string, action: () => any) {
     process.chdir(before.cwd);
     if (before.session === undefined) delete process.env.CODEX_SESSION_ID; else process.env.CODEX_SESSION_ID = before.session;
     if (before.thread === undefined) delete process.env.CODEX_THREAD_ID; else process.env.CODEX_THREAD_ID = before.thread;
+  }
+}
+
+function claudeRuntime(session: string, cwd: string, action: () => any) {
+  const names = ['CODEX_SESSION_ID', 'CODEX_THREAD_ID', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_SESSION_ID'];
+  const before = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  const beforeCwd = process.cwd();
+  process.env.CLAUDE_CODE_SESSION_ID = session;
+  delete process.env.CLAUDE_SESSION_ID;
+  delete process.env.CODEX_SESSION_ID;
+  delete process.env.CODEX_THREAD_ID;
+  process.chdir(cwd);
+  try { return action(); } finally {
+    process.chdir(beforeCwd);
+    for (const name of names) {
+      if (before[name] === undefined) delete process.env[name];
+      else process.env[name] = before[name];
+    }
   }
 }
 
@@ -145,6 +164,88 @@ test('native model admission expires independently of the gateway catalog', () =
     assert.throws(() => runtime('native-root', repository, () => tool('codex_dispatch').handler({ ref: ticket.ref, project: repository })), /available native Codex route/);
     assert.equal(store.getTicket(slug, ticket.ref).dispatchNonce, null);
   } finally { writeNativeCatalog(); }
+});
+
+test('native redispatch retires a reduced Claude attempt and claims on the pinned native route', async () => {
+  const categoryId = 'reduced-claude-native-retry';
+  store.setCategory({
+    id: categoryId, name: 'Reduced Claude to native Codex',
+    route: { model: 'sonnet', effort: 'medium' }, readonly: true, enabled: true,
+  });
+  const ticket = store.createTicket(slug, {
+    title: 'reduced Claude to native Codex retry',
+    description: 'Where: inspect the temporary repository in an isolated checkout.\n\n'
+      + 'Contract: exercise a reduced-schema Claude dispatch that bound but did not claim, then move the category to its native Codex route. '
+      + 'The retry must preserve the native route and clear Claude-only runtime requirements.\n\n'
+      + 'Verify: the former attempt remains protected during claim grace, then the host-evidenced retry claims and closes on its pinned route.',
+    executorVerify: 'git diff --check',
+    category: categoryId, files: ['candidate.txt'],
+  });
+  claudeRuntime('claude-reduced-root', repository, () => tool('dispatch').handler({
+    ref: ticket.ref, project: repository, reducedAgentSchema: true,
+  }));
+  const first = store.getTicket(slug, ticket.ref);
+  assert.equal(first.dispatch.route.model, 'sonnet');
+  assert.equal(first.dispatch.reducedAgentSchema, true);
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: first.dispatchNonce, executor: first.dispatch.executor,
+    sessionId: first.dispatch.sessionId, agentName: first.dispatch.launchName,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(
+    first.dispatch.sessionId, first.dispatch.executor, 'claude-reduced-agent', first.dispatch.launchName,
+  ).ok, true);
+  assert.ok(store.getTicket(slug, ticket.ref).dispatch.boundAt);
+
+  store.setCategory({
+    id: categoryId, name: 'Reduced Claude to native Codex',
+    route: { model: 'native-codex-gpt-5-6-sol', effort: 'medium' }, readonly: true, enabled: true,
+  });
+  const recoveryEvidence = 'Host confirmed the prior Claude agent terminated without claiming the ticket.';
+  const graceNames = ['SIDEQUEST_CLAIM_GRACE_MIN', 'SIDEQUEST_CLAIM_IDLE_MIN'];
+  const priorGrace = Object.fromEntries(graceNames.map((name) => [name, process.env[name]]));
+  process.env.SIDEQUEST_CLAIM_GRACE_MIN = '0.001';
+  process.env.SIDEQUEST_CLAIM_IDLE_MIN = '0.002';
+  let dispatch: any;
+  try {
+    assert.throws(() => runtime('native-root', repository, () => tool('codex_dispatch').handler({
+      ref: ticket.ref, project: repository, recoveryEvidence,
+    })), /cannot be superseded on recovery evidence/);
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.terminalAt, null, 'evidence cannot bypass claim grace');
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    dispatch = runtime('native-root', repository, () => tool('codex_dispatch').handler({
+      ref: ticket.ref, project: repository, recoveryEvidence,
+    }));
+  } finally {
+    for (const name of graceNames) {
+      if (priorGrace[name] === undefined) delete process.env[name];
+      else process.env[name] = priorGrace[name];
+    }
+  }
+
+  assert.equal(tool('codex_dispatch').inputSchema.properties.recoveryEvidence.type, 'string');
+  assert.equal(dispatch.model, 'native-codex-gpt-5-6-sol');
+  assert.equal(dispatch.effort, 'medium');
+  const prepared = store.getTicket(slug, ticket.ref);
+  assert.equal(prepared.dispatch.route.model, 'native-codex-gpt-5-6-sol');
+  assert.equal(prepared.dispatch.reducedAgentSchema, undefined);
+  assert.equal(prepared.dispatch.runtimeHost, 'codex');
+  assert.equal(prepared.dispatch.attempts.at(-1).failureShape, 'stranded_bound_launch_superseded');
+  assert.equal(prepared.dispatch.attempts.at(-1).recoveryEvidence, recoveryEvidence);
+
+  const worktree = checkout(dispatch.baseCommit, 'reduced-claude-native-retry');
+  const started = processCall('native-retry-worker', worktree, 'codex_start', {
+    ref: ticket.ref, project: repository, executor: dispatch.executor, tokenFile: dispatch.tokenFile,
+  });
+  assert.equal(started.ok, true, JSON.stringify(started));
+  const finished = runtime('native-retry-worker', worktree, () => tool('done').handler({
+    ref: ticket.ref, project: repository, by: 'codex-thread:native-retry-worker',
+    body: 'Completed the native retry on its pinned route.', model: 'native-codex-gpt-5-6-sol', effort: 'medium',
+  }));
+  assert.equal(finished.ok, true, JSON.stringify(finished));
+  const terminal = store.getTicket(slug, ticket.ref);
+  assert.equal(terminal.status, 'done');
+  assert.equal(terminal.dispatch.outcome, 'done');
+  assert.ok(terminal.dispatch.terminalAt);
 });
 
 test('only the distinct worker with the exact baseline checkout can claim', () => {

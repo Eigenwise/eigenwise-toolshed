@@ -273,7 +273,9 @@ const tools = [
       project: PROJECT_PROP,
       sharedTree: { type: "boolean" },
       allowUnscoped: { type: "boolean" },
-      integrationBranch: { type: "string" }
+      integrationBranch: { type: "string" },
+      allowRepeatFailure: { type: "boolean", description: "Intentional retry after two terminal no-commit dispatches; the existing attempt history and override are retained." },
+      recoveryEvidence: { type: "string", description: "Observed host failure evidence for an earlier unclaimed attempt. This is an attestation, not independently verified; the existing runtime-signal grace and retirement checks still apply." }
     }, required: ["ref"] },
     handler(args) {
       const identity = codexRuntimeIdentity();
@@ -289,7 +291,10 @@ const tools = [
         runtimeCwd: process.cwd(),
         sharedTree: args.sharedTree === true,
         allowUnscoped: args.allowUnscoped === true,
+        reducedAgentSchema: false,
         integrationBranch: args.integrationBranch,
+        allowRepeatFailure: args.allowRepeatFailure === true,
+        recoveryEvidence: args.recoveryEvidence,
         source: "codex-mcp",
         transport: "codex-mcp"
       });
