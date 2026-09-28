@@ -138,6 +138,21 @@ Sidequest derives `accepted` from PASS or `rejected` from FAIL/FIX. Rejection
 keeps integration blocked. The root cannot supply reviewer evidence or finish
 the reviewer's attempt. Do not release a native Codex review as `kind=oracle`;
 external/Claude oracle reviews keep their separate release-and-verdict flow.
+Native closeout is keyed to the **reviewer's** dispatch, not the submitter's: a
+Claude-submitted candidate reviewed by a distinct native Codex reviewer still
+goes through this same `PASS`/`FAIL` comment, `done`, `review_outcome` path.
+Integration stays refused until `review_outcome` records the authenticated
+outcome on **both** binding halves — the review ticket's own `reviewTarget`
+and the source ticket's submission mirror — never one alone; a hand-edited or
+half-applied record that only carries one side still blocks. A native review
+that reaches its own terminal `done` with no structured `PASS`/`FAIL`/`FIX`
+evidence comment cannot be recovered by re-dispatching that same review
+ticket: it already finished, and its binding to the candidate still holds.
+Recover by abandoning the pending submission (`sidequest groom-close <ref>
+--abandon-submission --reason "<why this candidate is being superseded>"`),
+opening a fresh ticket for the same work, submitting a fresh candidate,
+dispatching a fresh native review that records structured evidence, then
+recording it with `review_outcome`.
 
 **Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent.model` and `recipe.agent.promptPrefix + prompt` in Agent. Never hand-translate route, gateway, virtual-model, marker, or effort fields. A user-named model for one ticket means set that ticket's `route` override, never edit the category route, which repoints later tickets too. See `references/routing-guide.md`.
 
