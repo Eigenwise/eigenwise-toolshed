@@ -1171,11 +1171,29 @@ ${verify.outputTail}` : null
   function sameBlob(left, right) {
     return left !== null && right !== null && left.equals(right);
   }
+  function bothAbsent(candidateContents, revisionContents) {
+    return candidateContents === null && revisionContents === null;
+  }
+  function treeEntryMode(repo, revision, file) {
+    const entry = execFileSync("git", ["ls-tree", revision, "--", file], {
+      cwd: repo,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    }).trim();
+    return entry ? entry.split(/\s+/, 1)[0] : null;
+  }
+  function divergentTreeModes(repo, candidate, revision, file) {
+    const candidateMode = treeEntryMode(repo, candidate, file);
+    const revisionMode = treeEntryMode(repo, revision, file);
+    return candidateMode !== null && revisionMode !== null && candidateMode !== revisionMode;
+  }
   function pathProofKind(repo, base, candidate, revision, file) {
+    if (divergentTreeModes(repo, candidate, revision, file)) return "diverging";
     const candidateContents = committedBlob(repo, candidate, file);
     const revisionContents = committedBlob(repo, revision, file);
     if (sameBlob(candidateContents, revisionContents)) return "identical";
-    if (candidateContents === null && revisionContents === null) return "deleted";
+    if (bothAbsent(candidateContents, revisionContents)) return "deleted";
     return candidatePatchReverseApplies(repo, base, candidate, revision, file) ? "reverse-applied" : "diverging";
   }
   function revisionPathProofs(repo, base, candidate, revision, submittedPaths) {

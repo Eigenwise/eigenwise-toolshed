@@ -205,6 +205,87 @@ test('a hand-resolved landing refuses until resolvedPaths attests exactly the di
   assert.match(attested.integration.contentProof.resolved[0].at, /^\d{4}-\d{2}-\d{2}T/);
 });
 
+const MODE_FILE = 'src/run.sh';
+
+/**
+ * The candidate only flips run.sh's executable bit; the landing never carried the
+ * chmod through. Byte content stays identical end to end, so a content-only compare
+ * would call this delivered when the mode divergence is exactly what the review caught.
+ */
+function modeOnlyFixture() {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-delivery-revision-mode-'));
+  git(['init', '-b', 'main'], repo);
+  git(['config', 'user.name', 'Sidequest Test'], repo);
+  git(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
+  fs.writeFileSync(path.join(repo, '.gitignore'), '.claude/*\n');
+  writeLines(repo, MODE_FILE, ['#!/bin/sh', 'echo hi']);
+  const base = commitAll(repo, 'base');
+
+  const worktree = path.join(repo, '.claude', 'worktrees', 'agent-mode-candidate');
+  git(['worktree', 'add', '-b', 'worktree-agent-mode-candidate', worktree, 'main'], repo);
+  fs.chmodSync(path.join(worktree, MODE_FILE), 0o755);
+  const candidate = commitAll(worktree, 'make run.sh executable');
+
+  const { slug } = store.ensureProject(repo);
+  const ticket = store.createTicket(slug, {
+    title: 'mode-only candidate change',
+    category: 'codebase-exploration',
+    description: 'A candidate that only flips the executable bit on a tracked file.',
+    files: ['src'],
+  });
+  const gitRef = `refs/sidequest/${ticket.ref}`;
+  git(['update-ref', gitRef, candidate], worktree);
+  const target = store.integrationTarget(slug);
+  const range = commitScope.submissionRange(worktree, {
+    commit: candidate,
+    gitRef,
+    upstream: target.upstream,
+    integrationBranch: target.branch,
+  });
+  assert.equal(range.ok, true, JSON.stringify(range));
+  assert.deepEqual(range.changedPaths, [MODE_FILE]);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'mode-worker', {
+    direct: true,
+    reason: 'The mode-only delivery fixture requires a local direct claim.',
+  }).ok, true);
+  assert.equal(store.submitTicket(slug, ticket.ref, 'mode-worker', {
+    commit: candidate,
+    gitRef,
+    range,
+    worktree,
+    verify: nodeVerify('process.exit(0)'),
+  }).ok, true);
+
+  // The landing keeps run.sh at mode 100644: the chmod never made it through review.
+  writeLines(repo, 'README.md', ['land unrelated work']);
+  const landed = commitAll(repo, 'land unrelated work, mode change dropped');
+
+  writeLines(repo, 'README.md', ['a later merge moves main on']);
+  commitAll(repo, 'a later merge moves main past the landing');
+
+  assert.notEqual(git(['merge-base', candidate, 'HEAD'], repo), candidate, 'the candidate never became reachable');
+  return { repo, worktree, slug, ticket, base, candidate, landed };
+}
+
+test('a mode-only candidate change records as diverging when the landing dropped the mode', () => {
+  const fixture = modeOnlyFixture();
+  assert.equal(git(['ls-tree', fixture.candidate, '--', MODE_FILE], fixture.repo).split(/\s+/)[0], '100755');
+  assert.equal(git(['ls-tree', fixture.landed, '--', MODE_FILE], fixture.repo).split(/\s+/)[0], '100644');
+
+  const diverged = record(fixture, { deliveryRevision: fixture.landed });
+  assert.equal(diverged.ok, false, 'a mode divergence must refuse instead of recording as delivered');
+  assert.equal(diverged.reason, 'delivery_content_diverged');
+  assert.deepEqual(diverged.divergingPaths, [MODE_FILE]);
+  assert.match(diverged.message, /resolvedPaths/);
+
+  const attested = record(fixture, { deliveryRevision: fixture.landed, resolvedPaths: [MODE_FILE] });
+  assert.equal(attested.ok, true, attested.message);
+  assert.deepEqual(attested.integration.contentProof.identical, []);
+  assert.deepEqual(attested.integration.contentProof.reverseApplied, []);
+  assert.equal(attested.integration.contentProof.resolved.length, 1);
+  assert.equal(attested.integration.contentProof.resolved[0].path, MODE_FILE);
+});
+
 test('deliveryRevision must resolve in the integration checkout and be reachable from the target', () => {
   const fixture = deliveryFixture('unreachable');
 

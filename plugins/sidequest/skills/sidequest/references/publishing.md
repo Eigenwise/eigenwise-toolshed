@@ -73,11 +73,16 @@ gate covers the newer target content. An assembly refusal leaves every submitted
   reachable from the recorded target, or delivery refuses `delivery_revision_not_reachable`. A revision
   that is an ancestor of the candidate's own base predates every line of the candidate and refuses
   `delivery_revision_predates_candidate`, attested or not. Each submitted path is then proven at that
-  revision's tree instead of the working tree: identical blob, candidate deletion absent there, or the
-  candidate's base-relative patch reverse-applying onto that tree. Anything left over refuses
+  revision's tree instead of the working tree: identical blob and mode, candidate deletion absent there,
+  or the candidate's base-relative patch reverse-applying onto that tree. A path both trees carry with
+  the same content but a different mode (for example the candidate's chmod never landed) refuses
+  `delivery_content_diverged` on its own, ahead of the reverse-apply check. Anything left over refuses
   `delivery_content_diverged` and names it. Reverse-apply proves the candidate's own hunks are present
   in that tree, not that the landed blob equals the reviewed one, so a landing that also carries
-  unrelated drift still records as `reverseApplied`.
+  unrelated drift still records as `reverseApplied`. `git apply` allows offsets, so a hunk whose context
+  also matches a different copy of a repeated block still reverse-applies and records `reverseApplied`
+  against that copy. Two hunks landing within 3 lines of each other lose that context distinction and
+  refuse instead, so a candidate shaped like that needs `resolvedPaths` to close.
 - Name a genuinely hand-resolved path with `--resolved-path <path>` (MCP `resolvedPaths`), repeated per
   path, and let the closure reason carry the resolution evidence. Only submitted paths the proof itself
   found diverging may be attested — anything else, including `resolvedPaths` without

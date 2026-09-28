@@ -1376,13 +1376,41 @@ function sameBlob(left: Buffer | null, right: Buffer | null) {
   return left !== null && right !== null && left.equals(right);
 }
 
+function bothAbsent(candidateContents: Buffer | null, revisionContents: Buffer | null) {
+  return candidateContents === null && revisionContents === null;
+}
+
+// A byte-identical blob can still be a divergence: `git show <rev>:<file>` answers
+// content only, so a candidate that flips a file's mode (e.g. chmod +x) against a
+// landing that kept the old mode would otherwise read as identical. `ls-tree` carries
+// the mode alongside the blob, so this reads both tree entries directly.
+function treeEntryMode(repo: string, revision: string, file: string) {
+  const entry = execFileSync('git', ['ls-tree', revision, '--', file], {
+    cwd: repo,
+    encoding: 'utf8',
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+  return entry ? entry.split(/\s+/, 1)[0] : null;
+}
+
+function divergentTreeModes(repo: string, candidate: string, revision: string, file: string) {
+  const candidateMode = treeEntryMode(repo, candidate, file);
+  const revisionMode = treeEntryMode(repo, revision, file);
+  return candidateMode !== null && revisionMode !== null && candidateMode !== revisionMode;
+}
+
 function pathProofKind(repo: string, base: string, candidate: string, revision: string, file: string): PathProofKind {
+  // A mode divergence between two present entries is decided before content: a
+  // reverse-apply or a same-content compare would otherwise call a chmod-only
+  // change identical or resolvable, neither of which is true.
+  if (divergentTreeModes(repo, candidate, revision, file)) return 'diverging';
   const candidateContents = committedBlob(repo, candidate, file);
   const revisionContents = committedBlob(repo, revision, file);
   if (sameBlob(candidateContents, revisionContents)) return 'identical';
   // No patch can prove an absence, so a deletion both trees carry answers before
   // reverse-apply rather than through it.
-  if (candidateContents === null && revisionContents === null) return 'deleted';
+  if (bothAbsent(candidateContents, revisionContents)) return 'deleted';
   return candidatePatchReverseApplies(repo, base, candidate, revision, file) ? 'reverse-applied' : 'diverging';
 }
 
