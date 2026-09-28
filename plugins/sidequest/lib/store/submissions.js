@@ -227,12 +227,12 @@ function createSubmissions(dependencies) {
       return { recognized: false, ok: false, reason: "not_native_review" };
     }
     if (reviewTicket?.status !== "done" || reviewTicket?.completion?.state !== "done") {
-      return { recognized: false, ok: false, reason: "review_not_terminal", message: `${reviewTicket?.ref || "review"} must finish its own native dispatch before its outcome can be recorded.` };
+      return { recognized: true, ok: false, reason: "review_not_terminal", message: `${reviewTicket?.ref || "review"} must finish its own native dispatch before its outcome can be recorded.` };
     }
     const attempt = completedReviewAttempt(reviewTicket);
     const agentId = String(attempt?.agentId || "").trim();
     if (!attempt || attempt.outcome !== "done" || !agentId.startsWith("codex-thread:") || !attempt.claimedAt || !attempt.sessionId || reviewTicket.completion.by !== agentId || reviewTicket.completion.at !== attempt.terminalAt) {
-      return { recognized: false, ok: false, reason: "terminal_reviewer_identity_missing", message: `${reviewTicket.ref} has no terminal done attempt tied to its authenticated Codex reviewer runtime.` };
+      return { recognized: true, ok: false, reason: "terminal_reviewer_identity_missing", message: `${reviewTicket.ref} has no terminal done attempt tied to its authenticated Codex reviewer runtime.` };
     }
     if (candidate?.source === "git" && String(reviewTicket.dispatch?.baseCommit || "").trim().toLowerCase() !== String(candidate.value || "").trim().toLowerCase()) {
       return { recognized: true, ok: false, reason: "review_candidate_mismatch", message: `${reviewTicket.ref} did not dispatch its terminal reviewer on the exact submitted candidate.` };
@@ -381,10 +381,16 @@ function createSubmissions(dependencies) {
     const candidate = reviewCandidateFromSubmission(ticket.submission);
     const terminalEvidence = nativeTerminalReviewEvidence(ticket, reviewTicket, candidate);
     if (terminalEvidence.recognized && !terminalEvidence.ok) {
-      return terminalEvidence.message || `${reviewRelationRef(relation)} has invalid terminal review evidence`;
+      const message = String(terminalEvidence.message || `${reviewRelationRef(relation)} has invalid terminal review evidence`);
+      return message.replace(/\.+$/, "");
     }
-    if (terminalEvidence.ok && reviewRelationOutcome(relation) !== terminalEvidence.outcome) {
-      return terminalEvidence.outcome === "rejected" ? `${reviewRelationRef(relation)} has an authenticated FIX/FAIL outcome for ${ticket.ref}; record it with review_outcome before any integration attempt` : `${reviewRelationRef(relation)} has authenticated PASS evidence for ${ticket.ref} that is not yet recorded; record it with review_outcome before any integration attempt`;
+    if (terminalEvidence.ok) {
+      const mirrorOutcome = String(relation.mirror?.outcome || "planned");
+      const targetOutcome = String(relation.reviewTarget?.outcome || "planned");
+      const bothHalvesRecorded = mirrorOutcome === terminalEvidence.outcome && targetOutcome === terminalEvidence.outcome;
+      if (!bothHalvesRecorded) {
+        return terminalEvidence.outcome === "rejected" ? `${reviewRelationRef(relation)} has an authenticated FIX/FAIL outcome for ${ticket.ref}; record it with review_outcome before any integration attempt` : `${reviewRelationRef(relation)} has authenticated PASS evidence for ${ticket.ref} that is not yet recorded on both binding halves; record it with review_outcome before any integration attempt`;
+      }
     }
     return null;
   }
