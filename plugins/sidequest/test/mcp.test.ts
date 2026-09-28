@@ -761,6 +761,22 @@ test('add records depends-on links to existing tickets in the same call', async 
   assert.ok(dependentTicket.links.some((link: any) => link.type === 'blocked-by' && link.ref === blocker.ref));
 });
 
+test('add dedupes a repeated dependsOn ref instead of listing it twice', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-depends-on-dup-'))).slug;
+  const blocker = await callTool('add', { project, title: 'blocker ticket', unclassified: true });
+  const dependent = await callTool('add', { project, title: 'dependent ticket', unclassified: true, dependsOn: [blocker.ref, blocker.ref] });
+  assert.deepEqual(dependent.dependsOn.linked, [blocker.ref]);
+  assert.deepEqual(dependent.dependsOn.failed, []);
+});
+
+test('add coerces a bare dependsOn string to a single-element array and flags the coercion', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-depends-on-string-'))).slug;
+  const blocker = await callTool('add', { project, title: 'blocker ticket', unclassified: true });
+  const dependent = await callTool('add', { project, title: 'dependent ticket', unclassified: true, dependsOn: blocker.ref });
+  assert.deepEqual(dependent.dependsOn.linked, [blocker.ref]);
+  assert.equal(dependent.dependsOn.coercedFromString, true);
+});
+
 test('update amends a claimed dispatch verifier and its next capture uses the amended command', async () => {
   const repository = committedRepo('sq-mcp-verify-amendment-');
   const project = store.ensureProject(repository).slug;

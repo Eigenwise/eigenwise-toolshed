@@ -1106,7 +1106,12 @@ ${String(ticket?.description || "")}`;
     warnings.push(...scopeConsumerWarnings(ticket, projectPath));
     const absent = commitScope.scopedPaths(ticket.files).filter((file) => {
       const scope = String(file || "");
-      if (scope.includes("*")) return false;
+      if (scope.includes("*")) {
+        const slashIndex = scope.lastIndexOf("/", scope.indexOf("*"));
+        if (slashIndex === -1) return false;
+        const declaredDir = path.resolve(projectPath, scope.slice(0, slashIndex));
+        return !fs.existsSync(declaredDir) && fs.existsSync(path.dirname(declaredDir));
+      }
       const declared = path.resolve(projectPath, scope);
       return !fs.existsSync(declared) && fs.existsSync(path.dirname(declared));
     });

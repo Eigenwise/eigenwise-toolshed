@@ -150,6 +150,19 @@ test('add stays quiet for a filename glob whose matching file does not exist yet
   assert.deepStrictEqual(added.warnings, []);
 });
 
+test('add warns when a declared glob directory is typo\'d', () => {
+  fs.mkdirSync(path.join(PROJ, 'glob-typo-fixtures'), { recursive: true });
+  const added = cliJson([
+    'add', '-t', 'glob directory typo scope', '--complexity', '3',
+    '--why', 'declare every file under a misspelled directory the glob will never match',
+    '--file', 'glob-typo-fixtures/typo/**',
+  ]);
+
+  assert.deepStrictEqual(added.warnings, [
+    'Planning-depth warning: declared file scope does not exist in the repo: glob-typo-fixtures/typo/**.',
+  ]);
+});
+
 test('explicit readonly overrides suppress category write-intent warnings', () => {
   fs.mkdirSync(path.join(PROJ, 'readonly-fixtures'), { recursive: true });
   fs.writeFileSync(path.join(PROJ, 'readonly-fixtures', 'evidence.md'), 'evidence\n');

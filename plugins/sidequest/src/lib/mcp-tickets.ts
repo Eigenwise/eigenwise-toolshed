@@ -92,6 +92,32 @@ const VERIFY_ORACLE_PROP = {
   description: 'Pin the required verifier in the prepared attempt. command and suite use one validated command, and suite names resolve during preparation. document, link, schema, manual, review, attestation, and custom preserve their own evidence contract. Attestation evidence uses `attestation: <artifact> | <evidence produced> | <what it showed>`. Executors can provide evidence but cannot replace or skip the pinned verifier. A waiver needs explicit authority, reason, affected gate, and bounded scope or expiry.',
 };
 
+// Normalizes a dependsOn argument to a deduplicated ref list. A bare string is coerced to a
+// single-element array, flagged via coercedFromString so the caller can tell the requester
+// which form was sent.
+function normalizedDependsOnRefs(dependsOn: any) {
+  const coercedFromString = !Array.isArray(dependsOn);
+  const raw: any[] = coercedFromString ? [dependsOn] : dependsOn;
+  const refs = [...new Set(raw.map((dep) => String(dep || '').trim()).filter(Boolean))];
+  return { refs, coercedFromString };
+}
+
+// Links `dependsOn` refs onto a freshly created ticket, recorded as depends-on links in the
+// same call so a dependent ticket needs no follow-up link call. Returns fields ready to spread
+// into the add ack — {} when dependsOn was not passed, so the caller needs no branch of its own.
+function dependsOnAckFields(slug: string, ticket: any, dependsOn: any) {
+  if (dependsOn === undefined) return {};
+  const { refs, coercedFromString } = normalizedDependsOnRefs(dependsOn);
+  const linked: string[] = [];
+  const failed: any[] = [];
+  for (const depRef of refs) {
+    const res = store.linkTickets(slug, ticket.ref, 'depends-on', depRef);
+    if (res.ok) linked.push(res.to.ref);
+    else failed.push({ ref: depRef, reason: res.reason });
+  }
+  return { dependsOn: Object.assign({ linked, failed }, coercedFromString ? { coercedFromString: true } : {}) };
+}
+
 function liveVerificationAmendment(ticket: any) {
   const amendment = Array.isArray(ticket.verificationAmendments) ? ticket.verificationAmendments.at(-1) : null;
   if (!amendment || !ticket.dispatch || ticket.dispatch.terminalAt) return null;
@@ -215,27 +241,13 @@ const tools: ToolDefinition[] = [
         source: 'mcp',
       }, args.reviewTarget);
       const ticket = store.getTicket(slug, created.ref) || created;
-      let dependsOnResult = null;
-      if (args.dependsOn !== undefined) {
-        const refs = Array.isArray(args.dependsOn) ? args.dependsOn : [args.dependsOn];
-        const linked: string[] = [];
-        const failed: any[] = [];
-        for (const dep of refs) {
-          const depRef = String(dep || '').trim();
-          if (!depRef) continue;
-          const res = store.linkTickets(slug, ticket.ref, 'depends-on', depRef);
-          if (res.ok) linked.push(res.to.ref);
-          else failed.push({ ref: depRef, reason: res.reason });
-        }
-        dependsOnResult = { linked, failed };
-      }
       const warnings = store.ticketReferenceWarnings(slug, ticket.title, ticket.description);
       warnings.push(...store.ticketCategoryWarnings(ticket));
       warnings.push(...store.ticketPlanningWarnings(ticket, meta.path));
       const presentedWarnings = store.presentWarnings(ticket, warnings, sessionOf(args));
       return mutationAck(slug, { ok: true, ticket }, Object.assign(
         presentedWarnings.length ? { warnings: presentedWarnings } : {},
-        dependsOnResult ? { dependsOn: dependsOnResult } : {},
+        dependsOnAckFields(slug, ticket, args.dependsOn),
         sameBasenameSiblingDetails(slug, ticket, meta.path, 'add'),
       ));
     },
