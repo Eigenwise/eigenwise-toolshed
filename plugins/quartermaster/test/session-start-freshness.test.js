@@ -629,6 +629,27 @@ test('preserves gateway checker failure causes with bounded diagnostics', () => 
   assert.doesNotMatch(findingText(problems).join('\n'), /local health check is unavailable/);
 });
 
+test('GH-141: a real doctor failure is named by its own stderr cause, not by an unrelated stdout auth line', () => {
+  const gateway = { installPath: 'C:/gateway' };
+  // model-gateway's doctor writes an optional auth status line to stdout (see commands.js's `log()`
+  // calls) and its actual wiring-failure lines to stderr (`console.error()`). Before this fix,
+  // doctorOutput() concatenated stdout before stderr, so compactDiagnostic's keyword scan always
+  // reached "grok auth: ... missing" first and reported every gateway failure as a Grok auth problem.
+  const result = localGatewayCheck(gateway, {
+    existsSync: () => true,
+    runDoctor: () => ({
+      status: 1,
+      stdout: 'grok auth: gpt-6-astra missing\n',
+      stderr: 'ERROR: proxy (claude-code-proxy) is not wired: connection refused\n',
+    }),
+  });
+
+  assert.equal(result.available, false);
+  assert.equal(result.state, 'doctor-exit');
+  assert.match(result.diagnostic, /^exited with status 1: ERROR: proxy \(claude-code-proxy\) is not wired/);
+  assert.doesNotMatch(result.diagnostic, /grok auth/);
+});
+
 test('the doctor phrasings the audit parses still exist in model-gateway', () => {
   const commandsSource = fs.readFileSync(
     path.join(__dirname, '..', '..', 'model-gateway', 'lib', 'commands.js'),
