@@ -3467,7 +3467,12 @@ test('session-start reclaims a clean old worktree without lease identity', async
     assert.equal(fs.existsSync(old), false, 'SessionStart must reclaim a clean old worktree without lease identity');
   } finally {
     if (fs.existsSync(old)) gitFixture(['worktree', 'remove', '--force', old], repo);
-    fs.rmSync(repo, { recursive: true, force: true });
+    // Ending the session, like the sibling live-worktree test above, runs the sweep
+    // one more time in the foreground and only returns once that child process has
+    // exited — giving Windows a chance to release any handle the detached sweep
+    // worker still held on `repo` before cleanup deletes it (SQ-2907).
+    runHook(SESSION_END, { session_id: 'session-sweep', cwd: repo }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
+    fs.rmSync(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 

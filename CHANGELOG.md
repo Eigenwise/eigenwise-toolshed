@@ -8,6 +8,23 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.579.0 (2026-09-23)
+
+### sidequest 5.3.2 → 5.3.3
+
+#### Fixes
+
+- Fix a Windows-only EBUSY flake in the sidequest sweep test cleanup (SQ-2907)
+  Fixed a Windows-only flake in `hooks.test.ts` where cleanup after the
+  "session-start reclaims a clean old worktree without lease identity" test
+  could throw `EBUSY: resource busy or locked, rmdir` under load. The test
+  polled the detached sweep worker's report file and then immediately
+  removed the fixture repo, but the report appearing doesn't mean the
+  worker's process (and any git subprocess handles under the repo) had
+  released on Windows yet. The cleanup now ends the session first, like the
+  sibling live-worktree test, and retries the removal with a bounded
+  backoff. Test-only change; no runtime behavior change.
+
 ## v3.578.0 (2026-09-23)
 
 ### model-gateway 0.51.5 → 0.51.6
