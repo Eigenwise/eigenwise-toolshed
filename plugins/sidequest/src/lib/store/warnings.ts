@@ -788,7 +788,9 @@ function verifyPathWarning(ticket?: any, projectPath?: any) {
 // inside it is stripped later, in globCharacterPathToken, instead of here.
 function unquotedTokens(segment: string): string[] {
   const tokens: string[] = [];
-  for (const match of segment.matchAll(/[^\s;&|()]+/g)) {
+  // A quoted span is matched whole first so an internal space (e.g. `"src/app/[id] x/a.ts"`)
+  // doesn't split it into two bare-looking fragments that then dodge the quoted-token check below.
+  for (const match of segment.matchAll(/"[^"]*"|'[^']*'|[^\s;&|()]+/g)) {
     const word = match[0];
     if (!/^(["']).*\1$/.test(word)) tokens.push(word);
   }
@@ -813,7 +815,7 @@ function globCharacterPathToken(token: string): boolean {
 
 // zsh treats an unquoted path segment like `[id]` as a glob and (with `nomatch` set, the
 // default) aborts the whole verify command with "no matches found" before the pinned command
-// ever runs (SQ-10). The wrapper now disarms that abort for every recorded command, but an
+// ever runs (GH-171). The wrapper now disarms that abort for every recorded command, but an
 // author can still hit surprises with other tools that glob-expand bracketed paths, so this
 // stays a warning naming the exact token rather than a silent no-op. Quoting is the fix only
 // when the tool does its own glob matching (a test runner such as `node --test`); a tool that

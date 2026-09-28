@@ -837,7 +837,7 @@ test('accepts repository-root and subdirectory verify commands', () => {
   assert.deepStrictEqual(subdirectory.warnings, []);
 });
 
-// SQ-10: an unquoted `[fulfillmentId]`-shaped dynamic-route path in a recorded verify string
+// GH-171: an unquoted `[fulfillmentId]`-shaped dynamic-route path in a recorded verify string
 // aborts under zsh with "no matches found" before the pinned command runs. add/update now warn
 // (not refuse) so existing tickets keep working while the wrapper fix removes the false red.
 test('warns about an unquoted [param]-shaped path in a recorded verify command, not a quoted one', () => {

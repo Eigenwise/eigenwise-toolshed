@@ -16,7 +16,7 @@ const worktrees = require('../lib/worktrees.js');
 const worktreeLease = require('../lib/kernel/worktree.js');
 const SIDEQUEST_DIR = path.resolve(__dirname, '..');
 
-// SQ-10: zsh (unlike sh/bash) glob-expands an unquoted path, and with `nomatch` set (its
+// GH-171: zsh (unlike sh/bash) glob-expands an unquoted path, and with `nomatch` set (its
 // default) aborts the whole verify command with "no matches found" when nothing matches a
 // pattern like `[fulfillmentId]`. Force SHELL=zsh when it's actually on the box so this test
 // exercises the real regression; on a host without zsh (Windows CI) there is no `SHELL`-based

@@ -275,7 +275,7 @@ test('dispatch uncertainty warns when a greenfield verify path does not exist', 
   assert.match(agentsync.renderTicketBriefing(ticket, 'greenfield-token', slug, root), /greenfield work/);
 });
 
-// SQ-10: an unquoted `[fulfillmentId]`-shaped dynamic-route path in a pinned verify string
+// GH-171: an unquoted `[fulfillmentId]`-shaped dynamic-route path in a pinned verify string
 // used to abort under zsh with "no matches found" before the pinned command ever ran, and the
 // executor could not tell that apart from a real test failure. The wrapper fix restores
 // literal-passthrough glob semantics under zsh; this is the warning half, surfaced in the same

@@ -754,7 +754,7 @@ ${String(ticket?.description || "")}`;
   }
   function unquotedTokens(segment) {
     const tokens = [];
-    for (const match of segment.matchAll(/[^\s;&|()]+/g)) {
+    for (const match of segment.matchAll(/"[^"]*"|'[^']*'|[^\s;&|()]+/g)) {
       const word = match[0];
       if (!/^(["']).*\1$/.test(word)) tokens.push(word);
     }

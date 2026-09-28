@@ -56,6 +56,13 @@ function isZshExecutable(executable: string): boolean {
   return /(?:^|[\\/])zsh(?:\.exe)?$/i.test(executable);
 }
 
+function posixShellDefinition(): ShellDefinition {
+  const posixShell = process.env.SHELL || '/bin/sh';
+  const isZsh = isZshExecutable(posixShell);
+  const label = isZsh ? `POSIX shell (${posixShell}, nonomatch nobadpattern)` : `POSIX shell (${posixShell})`;
+  return Object.freeze({ executable: posixShell, label, scriptExtension: '.sh', isZsh });
+}
+
 function shellDefinition(platform = process.platform): ShellDefinition {
   if (platform === 'win32') {
     const posixShell = windowsPosixShell();
@@ -63,10 +70,7 @@ function shellDefinition(platform = process.platform): ShellDefinition {
     const commandPrompt = process.env.ComSpec || 'cmd.exe';
     return Object.freeze({ executable: commandPrompt, label: `Command Prompt (${commandPrompt})`, scriptExtension: '.cmd', isZsh: false });
   }
-  const posixShell = process.env.SHELL || '/bin/sh';
-  const isZsh = isZshExecutable(posixShell);
-  const label = isZsh ? `POSIX shell (${posixShell}, nonomatch nobadpattern)` : `POSIX shell (${posixShell})`;
-  return Object.freeze({ executable: posixShell, label, scriptExtension: '.sh', isZsh });
+  return posixShellDefinition();
 }
 
 function commandForShell(scriptPath: string, shell: ShellDefinition): ShellCommand {
