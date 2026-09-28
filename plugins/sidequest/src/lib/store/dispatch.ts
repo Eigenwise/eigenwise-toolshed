@@ -1522,6 +1522,39 @@ function checkoutBelongsToAnotherDispatchAgent(slug?: any, projectPath?: any, ti
   });
 }
 
+// What makes a checkout somebody's live working tree: another ticket's claim whose record names the checkout, or
+// whose bound runtime is the agent the checkout is named for. The record being retired can carry the crossed guess
+// of both, so it is never asked (GitHub #305).
+function otherClaimReferencesCheckout(candidate?: any, ticket?: any, target?: string, checkoutAgentId?: string) {
+  if (!candidate?.claim?.by || candidate.id === ticket?.id) return false;
+  const state = dispatchState(candidate);
+  return recordedAtCheckout(state, target) || Boolean(checkoutAgentId && state?.agentId === checkoutAgentId);
+}
+
+function liveClaimOnCheckout(slug?: any, projectPath?: any, ticket?: any, worktree?: any) {
+  const target = canonicalCheckout(worktree);
+  if (!target) return null;
+  const checkoutAgentId = agentIdFromWorktreePath(projectPath, target);
+  const holder = listTickets(slug).find((candidate?: any) => otherClaimReferencesCheckout(candidate, ticket, target, checkoutAgentId));
+  return holder ? { ref: String(holder.ref), claimHolder: String(holder.claim.by) } : null;
+}
+
+// Every cleanup that retires or recovers an attempt goes through here. Two recovery-evidence supersessions in one
+// wave each handed a sibling's live checkout to `git worktree remove` and emptied it mid-run (GitHub #305): the
+// retired record named that checkout, and even its runtime, by the crossed creation-order guess. The checkout stays
+// with the live claim, and the retry is not blocked on it, because the replacement attempt gets a checkout of its own.
+function reclaimRetiredDispatchCheckout(slug?: any, projectPath?: any, ticket?: any, state?: any, facts?: any) {
+  const holder = liveClaimOnCheckout(slug, projectPath, ticket, state?.worktree);
+  if (!holder) return reclaimUnclaimedDispatchWorktree(projectPath, state, facts);
+  return {
+    worktree: state.worktree,
+    reclaimed: false,
+    retainedCheckout: true,
+    reason: 'checkout_held_by_live_claim',
+    message: `${holder.ref} references ${state.worktree} under a live claim by "${holder.claimHolder}", so the checkout stays with that claim.`,
+  };
+}
+
 function unclaimedWorktreeRecoveryFacts(projectPath?: any, ticket?: any, state?: any) {
   const checkpointCommit = String(ticket?.checkpoint?.commit || ticket?.submission?.commit || '').trim();
   if (!checkpointCommit || !releaseFragmentOnlyCheckpoint(projectPath, ticket, checkpointCommit, state?.baseCommit)) {
@@ -1641,7 +1674,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by)
       && !checkoutBelongsToAnotherDispatchAgent(slug, projectPath, t, current)) {
       const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
-      const recovery = reclaimUnclaimedDispatchWorktree(projectPath, recoveryFacts.state, {
+      const recovery = reclaimRetiredDispatchCheckout(slug, projectPath, t, recoveryFacts.state, {
         checkpointCommit: recoveryFacts.checkpointCommit,
       });
       if (recovery && recovery.reclaimed === false && recovery.discardable !== true && recovery.retainedCheckout !== true) {
@@ -1738,7 +1771,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const supersededTokens = current && Array.isArray(current.supersededTokens) ? current.supersededTokens.slice() : [];
     if (current && !current.terminalAt && t.dispatchNonce) {
       if (current.outcome === 'prepared' && current.sharedTree === false) {
-        reclaimUnclaimedDispatchWorktree(projectPath, current);
+        reclaimRetiredDispatchCheckout(slug, projectPath, t, current);
       }
       supersededTokens.push({
         digest: dispatchTokenDigest(t.dispatchNonce),
@@ -2868,7 +2901,7 @@ function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?:
     return { ok: true, ticket };
   });
   if (!terminal?.ok) return terminal;
-  const cleanup = reclaimUnclaimedDispatchWorktree(meta.path, dispatchState(terminal.ticket));
+  const cleanup = reclaimRetiredDispatchCheckout(slug, meta.path, terminal.ticket, dispatchState(terminal.ticket));
   return { ok: true, ticket: terminal.ticket, cleanup };
 }
 
@@ -2975,7 +3008,13 @@ function crossedWorktreeBinding(slug?: any, ticket?: any, actualWorktree?: any) 
   if (!checkouts) return null;
   const owner = otherLiveClaimOnCheckout(slug, ticket.ref, checkouts.actualWorktree)
     || otherLiveClaimOnCheckout(slug, ticket.ref, checkouts.boundWorktree);
-  return owner ? { ref: ticket.ref, ...checkouts, owner } : null;
+  return owner ? { ref: ticket.ref, claimHolder: gatedClaimHolder(ticket), ...checkouts, owner } : null;
+}
+
+// The printed remedy names the claim it acts on: the CLI's own identity falls back to the environment or the host
+// name, so a release without `--by` is answered as somebody else's claim and the crossed claim stays live.
+function gatedClaimHolder(ticket?: any) {
+  return ticket?.claim?.by ? String(ticket.claim.by) : '<your claim id>';
 }
 
 function dispatchIsolationExpectation(identity?: any) {

@@ -1250,6 +1250,29 @@ function createDispatch(dependencies) {
       return Boolean(other) && [other.agentId, ...attempts.map((attempt) => attempt?.agentId)].some(namesCheckout);
     });
   }
+  function otherClaimReferencesCheckout(candidate, ticket, target, checkoutAgentId) {
+    if (!candidate?.claim?.by || candidate.id === ticket?.id) return false;
+    const state = dispatchState(candidate);
+    return recordedAtCheckout(state, target) || Boolean(checkoutAgentId && state?.agentId === checkoutAgentId);
+  }
+  function liveClaimOnCheckout(slug, projectPath, ticket, worktree) {
+    const target = canonicalCheckout(worktree);
+    if (!target) return null;
+    const checkoutAgentId = agentIdFromWorktreePath(projectPath, target);
+    const holder = listTickets(slug).find((candidate) => otherClaimReferencesCheckout(candidate, ticket, target, checkoutAgentId));
+    return holder ? { ref: String(holder.ref), claimHolder: String(holder.claim.by) } : null;
+  }
+  function reclaimRetiredDispatchCheckout(slug, projectPath, ticket, state, facts) {
+    const holder = liveClaimOnCheckout(slug, projectPath, ticket, state?.worktree);
+    if (!holder) return reclaimUnclaimedDispatchWorktree(projectPath, state, facts);
+    return {
+      worktree: state.worktree,
+      reclaimed: false,
+      retainedCheckout: true,
+      reason: "checkout_held_by_live_claim",
+      message: `${holder.ref} references ${state.worktree} under a live claim by "${holder.claimHolder}", so the checkout stays with that claim.`
+    };
+  }
   function unclaimedWorktreeRecoveryFacts(projectPath, ticket, state) {
     const checkpointCommit = String(ticket?.checkpoint?.commit || ticket?.submission?.commit || "").trim();
     if (!checkpointCommit || !releaseFragmentOnlyCheckpoint(projectPath, ticket, checkpointCommit, state?.baseCommit)) {
@@ -1347,7 +1370,7 @@ function createDispatch(dependencies) {
         }
         if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by) && !checkoutBelongsToAnotherDispatchAgent(slug, projectPath, t, current)) {
           const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
-          const recovery2 = reclaimUnclaimedDispatchWorktree(projectPath, recoveryFacts.state, {
+          const recovery2 = reclaimRetiredDispatchCheckout(slug, projectPath, t, recoveryFacts.state, {
             checkpointCommit: recoveryFacts.checkpointCommit
           });
           if (recovery2 && recovery2.reclaimed === false && recovery2.discardable !== true && recovery2.retainedCheckout !== true) {
@@ -1437,7 +1460,7 @@ function createDispatch(dependencies) {
         const supersededTokens = current && Array.isArray(current.supersededTokens) ? current.supersededTokens.slice() : [];
         if (current && !current.terminalAt && t.dispatchNonce) {
           if (current.outcome === "prepared" && current.sharedTree === false) {
-            reclaimUnclaimedDispatchWorktree(projectPath, current);
+            reclaimRetiredDispatchCheckout(slug, projectPath, t, current);
           }
           supersededTokens.push({
             digest: dispatchTokenDigest(t.dispatchNonce),
@@ -2343,7 +2366,7 @@ function createDispatch(dependencies) {
       return { ok: true, ticket };
     });
     if (!terminal?.ok) return terminal;
-    const cleanup = reclaimUnclaimedDispatchWorktree(meta.path, dispatchState(terminal.ticket));
+    const cleanup = reclaimRetiredDispatchCheckout(slug, meta.path, terminal.ticket, dispatchState(terminal.ticket));
     return { ok: true, ticket: terminal.ticket, cleanup };
   }
   function recordSanctionedCommit(slug, idOrRef, opts) {
@@ -2404,7 +2427,10 @@ function createDispatch(dependencies) {
     const checkouts = mismatchedGateCheckouts(dispatchState(ticket), actualWorktree);
     if (!checkouts) return null;
     const owner = otherLiveClaimOnCheckout(slug, ticket.ref, checkouts.actualWorktree) || otherLiveClaimOnCheckout(slug, ticket.ref, checkouts.boundWorktree);
-    return owner ? { ref: ticket.ref, ...checkouts, owner } : null;
+    return owner ? { ref: ticket.ref, claimHolder: gatedClaimHolder(ticket), ...checkouts, owner } : null;
+  }
+  function gatedClaimHolder(ticket) {
+    return ticket?.claim?.by ? String(ticket.claim.by) : "<your claim id>";
   }
   function dispatchIsolationExpectation(identity) {
     const sessionId = String(identity?.sessionId || "").trim();

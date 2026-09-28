@@ -7,7 +7,8 @@ import './_sidequest-install-fixture.js';
 // first claim froze the crossing: every completion gate then diffed the other ticket's tree and answered with
 // its test names. These cover the facts that changed - a crossing is still exchangeable after the sibling
 // claims, a start callback never re-attributes a checkout a live claim occupies and never accuses a caller of
-// intruding on its own, and commit, submit and the message builder all name a remedy that exists.
+// intruding on its own, commit, submit and the message builder all name a remedy that exists and runs as
+// printed, and retiring a crossed attempt never removes a checkout another live claim references (GH-305).
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -21,6 +22,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-crossing-home-'
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
+const db = require('../lib/db.js');
 const mcp = require('../lib/mcp.js');
 const worktrees = require('../lib/worktrees.js');
 const worktreeLease = require('../lib/kernel/worktree.js');
@@ -84,6 +86,77 @@ function create(sessionId: string, worktree: string) {
   worktreeLease.createCheckoutInstanceMarker(path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue));
   assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
   return bound;
+}
+
+// The claim hook's own sequence: bind the runtime the harness reported to the dispatch its token names, then claim.
+// That binding is what makes a claimed dispatch's agent id name the checkout its executor runs in.
+function claimAsRuntime(reservation: ReturnType<typeof reserve>, sessionId: string, holder: string) {
+  const bound = store.bindClaimRuntimeIdentity(slug, reservation.ref, {
+    agentId: reservation.agentId,
+    sessionId,
+    executor: reservation.executor,
+    token: reservation.token,
+    observedWorktree: reservation.worktree,
+  });
+  assert.equal(bound.ok, true, `claim runtime binding refused: ${bound.reason}`);
+  assert.equal(store.claimTicket(slug, reservation.ref, holder, {
+    token: reservation.token,
+    executor: reservation.executor,
+  }).ok, true);
+}
+
+// Creation attributes a checkout to the reservation the board reads first, so fixtures that need a particular
+// reservation to receive a sibling's checkout name them in that order.
+function inBoardOrder<T extends { ref: string }>(reservations: T[]): T[] {
+  const order = store.listTickets(slug).map((ticket: any) => ticket.ref);
+  return reservations.sort((left, right) => order.indexOf(left.ref) - order.indexOf(right.ref));
+}
+
+// A record bound before the claim-time identity exchange (SQ-53) kept the crossed runtime guess, and nothing the
+// fixed claim path does can reproduce it, so the fixture writes that one fact into the stored record.
+function rewriteDispatch(ref: string, fields: Record<string, unknown>) {
+  const ticket = store.getTicket(slug, ref);
+  const database = db.openDb(SIDEQUEST_HOME);
+  try {
+    const data = JSON.parse(database.prepare('SELECT data FROM tickets WHERE id = ?').get(ticket.id).data);
+    Object.assign(data.dispatch, fields);
+    database.prepare('UPDATE tickets SET data = ? WHERE id = ?').run(JSON.stringify(data), ticket.id);
+  } finally {
+    database.close();
+  }
+}
+
+function withoutRetirementGrace<T>(run: () => T): T {
+  const original = process.env.SIDEQUEST_CLAIM_IDLE_MIN;
+  process.env.SIDEQUEST_CLAIM_IDLE_MIN = '0.000001';
+  try {
+    return run();
+  } finally {
+    if (original === undefined) delete process.env.SIDEQUEST_CLAIM_IDLE_MIN;
+    else process.env.SIDEQUEST_CLAIM_IDLE_MIN = original;
+  }
+}
+
+function assertCheckoutIntact(worktree: string, label: string) {
+  assert.equal(fs.existsSync(path.join(worktree, '.git')), true, `${label}: the checkout was emptied`);
+  const registered = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: PROJECT, encoding: 'utf8', windowsHide: true })
+    .split(/\r?\n/)
+    .filter((line: string) => line.startsWith('worktree '))
+    .map((line: string) => canonical(line.slice('worktree '.length)));
+  assert.ok(registered.includes(canonical(worktree)), `${label}: the checkout is no longer a registered worktree`);
+}
+
+// The remedy an agent reads, lifted out of the printed refusal rather than retyped.
+function printedRemedy(message: string) {
+  const release = /`(sidequest release [^`]+)`/.exec(message);
+  const pin = /`git update-ref (refs\/sidequest\/\S+) <hash>`/.exec(message);
+  const rebind = /MCP `dispatch` with `ref:"([^"]+)"`, `claimHolder:"([^"]+)"`, `worktree:"([^"]+)"`/.exec(message);
+  assert.ok(release && pin && rebind, `the refusal prints no complete remedy: ${message}`);
+  return {
+    release: release![1]!,
+    pinRef: pin![1]!,
+    rebind: { ref: rebind![1]!, claimHolder: rebind![2]!, worktree: rebind![3]! },
+  };
 }
 
 let requestId = 0;
@@ -297,42 +370,50 @@ test('a gate whose caller stands in another live claim\'s checkout refuses by na
   assert.equal(store.crossedWorktreeBinding(slug, ticket, elsewhere), null);
 });
 
-// The remedy an agent reads is the part that has to be real. The previous wording printed
-// `sidequest dispatch <ref> --worktree <path>`, which `assertCommandFlags` rejects outright, so this runs the
-// exact command the refusal prints and requires it to release the crossed claim for real.
-test('the remedy a crossing refusal prints is a command the CLI runs', async () => {
-  const sessionId = 'crossing-printed-remedy';
-  const mine = reserve(sessionId, 'remedy');
-  const sibling = reserve(sessionId, 'remedysibling');
+// Both sides claimed, and the executor of `mine` calls a gate from the checkout the sibling's live claim records:
+// the crossed pair whose refusal carries the remedy.
+async function crossedClaimedPair(sessionId: string, label: string, holder: string) {
+  const mine = reserve(sessionId, label);
+  const sibling = reserve(sessionId, `${label}sibling`);
   create(sessionId, mine.worktree);
   create(sessionId, sibling.worktree);
   assert.equal(store.bindDispatchAgent(sessionId, sibling.executor, sibling.agentId, sibling.agentName, sibling.worktree).ok, true);
-  assert.equal(store.claimTicket(slug, sibling.ref, 'crossing-remedy-sibling', {
+  assert.equal(store.claimTicket(slug, sibling.ref, `${holder}-sibling`, {
     token: sibling.token,
     executor: sibling.executor,
   }).ok, true);
   assert.equal(store.bindDispatchAgent(sessionId, mine.executor, mine.agentId, mine.agentName, mine.worktree).ok, true);
-  assert.equal(store.claimTicket(slug, mine.ref, 'crossing-remedy-holder', {
+  assert.equal(store.claimTicket(slug, mine.ref, holder, {
     token: mine.token,
     executor: mine.executor,
   }).ok, true);
-
-  // The gate wiring itself, not just the builder: commit checks unconditionally, submit only when the caller
-  // supplied the worktree it ran from.
   const committed = await callTool('commit', {
     project: PROJECT,
     ref: mine.ref,
-    by: 'crossing-remedy-holder',
+    by: holder,
     message: 'work done in the sibling\'s checkout',
     worktree: sibling.worktree,
   });
   assert.equal(committed.ok, false);
   assert.equal(committed.reason, 'crossed_worktree_binding');
+  return { mine, sibling, committed };
+}
+
+// The remedy an agent reads is the part that has to be real. The previous wording printed
+// `sidequest dispatch <ref> --worktree <path>`, which `assertCommandFlags` rejects outright, and then a release
+// with no `--by`, which the CLI answers as somebody else's claim. This runs the argv exactly as printed, with only
+// the two evidence placeholders filled, and requires it to release the crossed claim for real.
+test('the fallback a crossing refusal prints runs as printed', async () => {
+  const holder = 'crossing-remedy-holder';
+  const { mine, sibling, committed } = await crossedClaimedPair('crossing-printed-remedy', 'remedy', holder);
+
+  // The gate wiring itself, not just the builder: commit checks unconditionally, submit only when the caller
+  // supplied the worktree it ran from.
   assert.match(committed.message, new RegExp(`^commit: refused ${mine.ref};`));
   const submitted = await callTool('submit', {
     project: PROJECT,
     ref: mine.ref,
-    by: 'crossing-remedy-holder',
+    by: holder,
     commit: 'a'.repeat(40),
     worktree: sibling.worktree,
     verify: 'npm test',
@@ -342,15 +423,13 @@ test('the remedy a crossing refusal prints is a command the CLI runs', async () 
   assert.equal(submitted.reason, 'crossed_worktree_binding');
   assert.match(submitted.message, new RegExp(`^submit: refused ${mine.ref};`));
 
-  // `sidequest release <ref> --release-kind technical_blocker --reason "..."`, taken out of the printed message
-  // rather than retyped, and run against this fixture's board.
-  const printed = /`(sidequest release [^`]+)`/.exec(committed.message);
-  assert.ok(printed, `the refusal prints no runnable remedy: ${committed.message}`);
+  const { release } = printedRemedy(committed.message);
+  assert.match(release, new RegExp(`^sidequest release ${mine.ref} --by "${holder}" -s todo --release-kind technical_blocker `));
   const evidence = `commit ${mine.ref} --worktree ${sibling.worktree}`;
-  const argv = printed![1]!.match(/"[^"]*"|\S+/g)!.slice(1)
+  const argv = release.match(/"[^"]*"|\S+/g)!.slice(1)
     .map((token) => token.replace(/^"|"$/g, ''))
     .map((token) => (/^<.+>$/.test(token) ? evidence : token));
-  const released = spawnSync(process.execPath, [CLI, ...argv, '--by', 'crossing-remedy-holder', '--project', PROJECT], {
+  const released = spawnSync(process.execPath, [CLI, ...argv], {
     encoding: 'utf8',
     windowsHide: true,
     env: {
@@ -362,6 +441,114 @@ test('the remedy a crossing refusal prints is a command the CLI runs', async () 
   });
   assert.ok(!/unknown or unsupported flag/.test(released.stderr), `the printed remedy names a flag the CLI rejects: ${released.stderr}`);
   assert.equal(released.status, 0, released.stderr);
-  assert.equal(store.getTicket(slug, mine.ref).claim, undefined, 'the printed remedy releases the crossed claim');
-  assert.equal(store.getTicket(slug, sibling.ref).claim.by, 'crossing-remedy-sibling', 'the other live claim is untouched');
+  const after = store.getTicket(slug, mine.ref);
+  assert.equal(after.claim, undefined, 'the printed remedy releases the crossed claim');
+  assert.equal(after.status, 'todo', 'the printed remedy returns the ticket to the queue');
+  assert.equal(store.getTicket(slug, sibling.ref).claim.by, `${holder}-sibling`, 'the other live claim is untouched');
+  assert.equal(boundWorktree(sibling.ref), canonical(sibling.worktree), 'the other live claim keeps its checkout');
+});
+
+// SQ-75 made live-claim recovery move a crossed binding (GitHub #298), so the refusal prescribes that rebind first.
+// Its safety condition is the checkout's HEAD: with no commit of this claim's own there, the sibling's lease wins and
+// the printed fallback is the only way out; once the executor's own commit is HEAD, the printed rebind succeeds.
+test('the rebind a crossing refusal prescribes waits for its own commit and then moves the live claim', async () => {
+  const holder = 'crossing-rebind-holder';
+  const { mine, sibling, committed } = await crossedClaimedPair('crossing-printed-rebind', 'rebind', holder);
+  assert.ok(!/nothing rebinds/i.test(committed.message), 'the rebind exists, so the refusal must not deny it');
+  const remedy = printedRemedy(committed.message);
+  assert.deepEqual(remedy.rebind, { ref: mine.ref, claimHolder: holder, worktree: canonical(sibling.worktree) });
+  assert.equal(remedy.pinRef, `refs/sidequest/${mine.ref}`);
+  const rebind = () => store.recoverLiveClaimDispatch(slug, remedy.rebind.ref, {
+    by: remedy.rebind.claimHolder,
+    executor: mine.executor,
+    worktree: remedy.rebind.worktree,
+    recoveryEvidence: committed.message,
+    sessionId: 'crossing-printed-rebind-orchestrator',
+  });
+
+  try {
+    const early = rebind();
+    assert.equal(early.ok, false, 'a checkout another live claim leases is not taken on an empty HEAD');
+    assert.equal(early.reason, 'worktree_mismatch');
+    assert.match(early.message, new RegExp(`leased to ${sibling.ref}, a live ticket, and its HEAD is not a commit this claim made`));
+    assert.equal(boundWorktree(mine.ref), canonical(mine.worktree), 'a refused rebind moved the binding');
+
+    fs.appendFileSync(path.join(sibling.worktree, 'README.md'), `${mine.ref} work\n`);
+    execFileSync('git', ['commit', '--quiet', '-am', `${mine.ref}: own work`], { cwd: sibling.worktree, windowsHide: true });
+    const hash = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sibling.worktree, encoding: 'utf8', windowsHide: true }).trim();
+    execFileSync('git', ['update-ref', remedy.pinRef, hash], { cwd: sibling.worktree, windowsHide: true });
+
+    const rebound = rebind();
+    assert.equal(rebound.ok, true, `the printed rebind was refused: ${rebound.reason} ${rebound.message || ''}`);
+    assert.equal(rebound.recovery.worktreeCorrection.basis, 'own_commits');
+    assert.equal(boundWorktree(mine.ref), canonical(sibling.worktree), 'the claim now leases the checkout it runs in');
+    assert.equal(store.getTicket(slug, mine.ref).claim.by, holder, 'the rebind keeps the claim');
+  } finally {
+    execFileSync('git', ['update-ref', '-d', remedy.pinRef], { cwd: PROJECT, windowsHide: true });
+  }
+});
+
+// GitHub #305. In a wave of dispatches from one session, a reservation whose own WorktreeCreate failed was still
+// recorded against the checkout a sibling had launched in and claimed. Superseding it on recovery evidence handed
+// that checkout to `git worktree remove`, which emptied the sibling's tree mid-run. The retired record can carry the
+// crossed guess of both the checkout and the runtime in it, so the live claim's own record has to win.
+test('a recovery-evidence supersession never removes a checkout another live claim runs in', () => {
+  const sessionId = 'crossing-supersede-live-claim';
+  const [stalled, sibling] = inBoardOrder([reserve(sessionId, 'supersedestalled'), reserve(sessionId, 'supersedesibling')]);
+  create(sessionId, sibling!.worktree);
+  assert.equal(boundWorktree(stalled!.ref), canonical(sibling!.worktree), 'the fixture reproduces the crossed creation');
+  claimAsRuntime(sibling!, sessionId, 'crossing-supersede-sibling');
+  assert.equal(store.getTicket(slug, sibling!.ref).dispatch.agentId, sibling!.agentId);
+  rewriteDispatch(stalled!.ref, { agentId: sibling!.agentId, boundAt: new Date().toISOString() });
+
+  const retried = withoutRetirementGrace(() => store.prepareDispatch(slug, stalled!.ref, {
+    sessionId: `${sessionId}-retry`,
+    recoveryEvidence: 'WorktreeCreate failed: database is locked, and no executor ran for this reservation',
+  }));
+  assert.equal(retried.ok, true);
+  assert.equal(retried.ticket.dispatch.attempts.at(-1).failureShape, 'stranded_bound_launch_superseded');
+  assert.equal(retried.ticket.dispatch.worktree || null, null, 'the replacement gets a checkout of its own');
+  assertCheckoutIntact(sibling!.worktree, 'supersession');
+  assert.equal(store.getTicket(slug, sibling!.ref).claim.by, 'crossing-supersede-sibling', 'the live claim is untouched');
+  assert.equal(boundWorktree(sibling!.ref) || null, null, 'the live claim\'s record is untouched');
+});
+
+// The same shape reached through the hook's own failure path first: the attempt fails with the sibling's checkout
+// still recorded against it and the sibling claimed there, and then the failed attempt is dispatched again.
+test('a failed WorktreeCreate still bound to a claimed sibling checkout never removes it', () => {
+  const sessionId = 'crossing-failed-create-live-claim';
+  const [stalled, sibling] = inBoardOrder([reserve(sessionId, 'failedstalled'), reserve(sessionId, 'failedsibling')]);
+  create(sessionId, sibling!.worktree);
+  assert.equal(boundWorktree(stalled!.ref), canonical(sibling!.worktree), 'the fixture reproduces the crossed creation');
+  claimAsRuntime(sibling!, sessionId, 'crossing-failed-create-sibling');
+
+  const recovered = store.recoverDispatchWorktreeCreation(slug, sessionId, sibling!.worktree, new Error('database is locked'), creationGeneration(slug, sessionId, sibling!.worktree));
+  assert.equal(recovered.ok, true, `recovery refused: ${recovered.reason}`);
+  assert.equal(recovered.cleanup.reclaimed, false);
+  assert.equal(recovered.cleanup.reason, 'checkout_held_by_live_claim');
+  assert.match(recovered.cleanup.message, new RegExp(`${sibling!.ref} references .* under a live claim by "crossing-failed-create-sibling"`));
+  assertCheckoutIntact(sibling!.worktree, 'failed-creation recovery');
+  const failed = store.getTicket(slug, stalled!.ref).dispatch;
+  assert.equal(failed.outcome, 'failed');
+  assert.equal(canonical(failed.worktree), canonical(sibling!.worktree), 'the failed attempt still records the checkout');
+
+  // The orchestrator corrects the sibling with a live-claim recovery (SQ-75). That clears the runtime binding, so
+  // from here only the sibling's record says whose tree this is.
+  const corrected = store.recoverLiveClaimDispatch(slug, sibling!.ref, {
+    by: 'crossing-failed-create-sibling',
+    executor: sibling!.executor,
+    worktree: sibling!.worktree,
+    recoveryEvidence: 'the claimed executor runs in this checkout, which its record never named',
+    sessionId: `${sessionId}-orchestrator`,
+  });
+  assert.equal(corrected.ok, true, `live-claim recovery refused: ${corrected.reason} ${corrected.message || ''}`);
+  assert.equal(store.getTicket(slug, sibling!.ref).dispatch.agentId, null);
+  assert.equal(boundWorktree(sibling!.ref), canonical(sibling!.worktree));
+
+  rewriteDispatch(stalled!.ref, { agentId: sibling!.agentId });
+  const retried = store.prepareDispatch(slug, stalled!.ref, { sessionId: `${sessionId}-retry` });
+  assert.equal(retried.ok, true);
+  assert.equal(retried.ticket.dispatch.worktree || null, null, 'the replacement gets a checkout of its own');
+  assertCheckoutIntact(sibling!.worktree, 'redispatch');
+  assert.equal(store.getTicket(slug, sibling!.ref).claim.by, 'crossing-failed-create-sibling', 'the live claim is untouched');
 });
