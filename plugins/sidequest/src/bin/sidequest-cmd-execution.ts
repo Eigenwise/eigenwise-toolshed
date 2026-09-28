@@ -400,7 +400,7 @@ async function cmdCommit(opts: any, positional: any) {
   if (!result.ok) {
     if (result.reason === 'missing_scope') fail(`commit: ${ticket.ref} has no declared file scope; use the explicit shared-tree escape hatch only for uncommitted-state work, not commits.`);
     if (result.reason === 'outside_scope') {
-      fail(`commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${result.outside.join(', ')}. Expand scope with: ${scopeRemedy(ticket, result.outside)}`);
+      fail(`commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${result.outside.join(', ')}. ${commitScope.outsideScopeCommitState(result)} Expand scope with: ${scopeRemedy(ticket, result.outside)}`);
     }
     if (result.reason === 'no_existing_scope') fail(`commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(', ')}.`);
     fail(`commit: git failed: ${result.message || result.reason}`);

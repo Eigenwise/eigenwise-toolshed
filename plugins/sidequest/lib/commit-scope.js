@@ -28,6 +28,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var commit_scope_exports = {};
 __export(commit_scope_exports, {
+  candidatePaths: () => candidatePaths,
   commitPaths: () => commitPaths,
   commitScoped: () => commitScoped,
   foreignReleaseFragmentPaths: () => foreignReleaseFragmentPaths,
@@ -40,6 +41,7 @@ __export(commit_scope_exports, {
   isInScope: () => import_scope_match2.isInScope,
   isRemoteIntegrationRef: () => isRemoteIntegrationRef,
   linkedWorktree: () => linkedWorktree,
+  outsideScopeCommitState: () => outsideScopeCommitState,
   preserveCommitRef: () => preserveCommitRef,
   rangePaths: () => rangePaths,
   repoRoot: () => repoRoot,
@@ -54,6 +56,7 @@ __export(commit_scope_exports, {
   unscopedWorkingPaths: () => unscopedWorkingPaths,
   validateCommitRangeScope: () => validateCommitRangeScope,
   validateCommitScope: () => validateCommitScope,
+  validatePaths: () => validatePaths,
   validateRelativeScopes: () => validateRelativeScopes,
   validateScopeResolution: () => validateScopeResolution,
   validateStoredSubmissionRange: () => validateStoredSubmissionRange,
@@ -452,6 +455,20 @@ function isAncestor(cwd, ancestor, descendant) {
     return false;
   }
 }
+function recordedBaselineBoundsRange(cwd, baseline, mergeBase, tip) {
+  if (!isAncestor(cwd, baseline, tip)) return false;
+  return mergeBase === tip || isAncestor(cwd, mergeBase, baseline);
+}
+function candidatePaths(cwd, changedPaths, commit, upstreamCommit) {
+  if (isAncestor(cwd, commit, upstreamCommit)) return [...changedPaths];
+  const differing = gitResult(cwd, ["diff", "--name-only", "--no-renames", "-z", upstreamCommit, commit]);
+  if (!differing.ok) return [...changedPaths];
+  const differingKeys = new Set(differing.value.split("\0").filter(Boolean).map(import_scope_match.scopeKey));
+  return changedPaths.filter((file) => differingKeys.has((0, import_scope_match.scopeKey)(file)));
+}
+function rangeCandidatePaths(cwd, range, changedPaths) {
+  return range.ok && typeof range.commit === "string" && typeof range.upstreamCommit === "string" ? candidatePaths(cwd, changedPaths, range.commit, range.upstreamCommit) : changedPaths;
+}
 function submissionLandedIntegrationRef(cwd, submission, integrationBranchOverride) {
   if (submission.noOp === true) return null;
   const commit = String(submission.commit || "").trim();
@@ -598,15 +615,9 @@ function submissionRange(cwd, options) {
       };
     }
   }
-  let effectiveBase = requestedBase ? requestedBase.value : mergeBase.value;
-  if (!requestedBase && dispatchBase) {
-    const dispatchBaseIsOnTip = dispatchBase.ok && isAncestor(cwd, dispatchBase.value, tip.value);
-    const dispatchBaseIsAfterMergeBase = dispatchBase.ok && isAncestor(cwd, mergeBase.value, dispatchBase.value);
-    const dispatchBaseIsIntegrated = dispatchBase.ok && integratedFrom(dispatchBase.value) !== null;
-    if (dispatchBaseIsOnTip && (dispatchBaseIsAfterMergeBase || dispatchBaseIsIntegrated)) {
-      effectiveBase = dispatchBase.value;
-    }
-  }
+  const recordedBase = !requestedBase && dispatchBase?.ok && recordedBaselineBoundsRange(cwd, dispatchBase.value, mergeBase.value, tip.value) ? dispatchBase.value : null;
+  const pinnedBase = requestedBase ? requestedBase.value : recordedBase;
+  let effectiveBase = pinnedBase ?? mergeBase.value;
   if (!requestedBase && !rootBase && Array.isArray(opts.baseCandidates) && opts.baseCandidates.length) {
     const candidates = /* @__PURE__ */ new Set();
     for (const name of opts.baseCandidates) {
@@ -637,7 +648,7 @@ function submissionRange(cwd, options) {
     const commitList = gitResult(cwd, ["rev-list", "--reverse", `${effectiveBase}..${tip.value}`]);
     if (!commitList.ok) return { ok: false, reason: "git_error", message: commitList.message };
     commits = commitList.value ? commitList.value.split(/\r?\n/).filter(Boolean) : [];
-    if (!commits.length && requestedBase && requestedBase.value === tip.value) {
+    if (!commits.length && pinnedBase === tip.value) {
       noOp = true;
     }
     if (!commits.length && !noOp && !requestedBase && effectiveBase === tip.value) {
@@ -714,7 +725,7 @@ function validateStoredSubmissionRange(cwd, submissionValue, ticketRef, integrat
     });
   }
   const submissionScope = ticketCommitScope(admittedScope, admittedScope, ticketRef);
-  const scopeValidation = validatePaths(submissionScope, rangeChangedPaths);
+  const scopeValidation = validatePaths(submissionScope, rangeCandidatePaths(cwd, range, rangeChangedPaths));
   if (!scopeValidation.ok) return Object.assign({}, range, scopeValidation, { admittedScope });
   return Object.assign({}, range, {
     ok: true,
@@ -727,6 +738,24 @@ function validateStoredSubmissionRange(cwd, submissionValue, ticketRef, integrat
       reconciledCommit: reconciliation.commit ?? null
     } : {}
   });
+}
+function validateCommitOrUndo(root, commit, scopes, previousHead) {
+  const validation = validateCommitScope(root, commit, scopes);
+  if (validation.reason !== "outside_scope") return validation;
+  const undone = previousHead.ok ? gitResult(root, ["reset", "--soft", previousHead.value]) : gitResult(root, ["update-ref", "-d", "HEAD"]);
+  return { ...validation, rolledBack: undone.ok, message: undone.ok ? void 0 : undone.message };
+}
+function commitWithinScope(root, message, scopes, stageableScopes, committableScopes) {
+  if (stageableScopes.length) git(root, ["add", "--all", "--", ...stageableScopes]);
+  const previousHead = gitResult(root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  const commitArgs = ["commit", "--only"];
+  if (repoRequestsSignoff(root)) commitArgs.push("--signoff");
+  git(root, [...commitArgs, "-m", String(message || ""), "--", ...committableScopes]);
+  const commit = git(root, ["rev-parse", "HEAD"]).trim();
+  return Object.assign({ commit }, validateCommitOrUndo(root, commit, scopes, previousHead));
+}
+function outsideScopeCommitState(result) {
+  return result.rolledBack ? "Nothing was committed: the commit was undone, HEAD is back where it was and the declared paths stay staged. A commit hook usually stages the extra paths." : `Commit ${result.commit} is still on HEAD because undoing it failed: ${result.message}.`;
 }
 function commitScoped(cwd, message, files) {
   const scopes = (0, import_scope_match.scopedPaths)(files);
@@ -749,19 +778,14 @@ function commitScoped(cwd, message, files) {
       ...directScopes.filter((scope) => !ignoredUntrackedScope(root, scope)),
       ...concreteGlobPaths.filter((scope) => !ignoredUntrackedScope(root, scope))
     ])];
-    if (stageableScopes.length) git(root, ["add", "--all", "--", ...stageableScopes]);
-    const commitArgs = ["commit", "--only"];
-    if (repoRequestsSignoff(root)) commitArgs.push("--signoff");
-    git(root, [...commitArgs, "-m", String(message || ""), "--", ...committableScopes]);
-    const commit = git(root, ["rev-parse", "HEAD"]).trim();
-    const validation = validateCommitScope(root, commit, scopes);
-    return Object.assign({ commit, missingScopes, unscopedPaths }, validation);
+    return Object.assign({ missingScopes, unscopedPaths }, commitWithinScope(root, message, scopes, stageableScopes, committableScopes));
   } catch (error) {
     return { ok: false, reason: "git_error", message: errorMessage(error) };
   }
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  candidatePaths,
   commitPaths,
   commitScoped,
   foreignReleaseFragmentPaths,
@@ -774,6 +798,7 @@ function commitScoped(cwd, message, files) {
   isInScope,
   isRemoteIntegrationRef,
   linkedWorktree,
+  outsideScopeCommitState,
   preserveCommitRef,
   rangePaths,
   repoRoot,
@@ -788,6 +813,7 @@ function commitScoped(cwd, message, files) {
   unscopedWorkingPaths,
   validateCommitRangeScope,
   validateCommitScope,
+  validatePaths,
   validateRelativeScopes,
   validateScopeResolution,
   validateStoredSubmissionRange,

@@ -295,12 +295,13 @@ function collectGitSubmissionFacts(options) {
       ...dispatchBase ? { dispatchBase } : {},
       allowedBases: [...dispatchBase ? [dispatchBase] : [], ...boundaryCommits],
       baseCandidates: boundaryCommits
-    } : ticket.dispatch?.sharedTree !== false && dispatchBase ? { dispatchBase, allowedBases: [dispatchBase] } : { allowedBases: [] }
+    } : dispatchBase ? { dispatchBase, allowedBases: [dispatchBase] } : { allowedBases: [] }
   }) : null;
   const range = calculatedRange && !calculatedRange.ok ? Object.assign({}, calculatedRange, { approvedBoundaries }) : calculatedRange;
   const scope = ticketCommitScope(slug, ticket);
   const requirements = targetFailure ? [targetFailure] : [];
-  const surfaces = { declared: scope, admitted: scope, changed: range?.ok ? range.changedPaths : [], pending: [] };
+  const changed = range?.ok ? commitScope.candidatePaths(root, range.changedPaths, range.commit, range.upstreamCommit) : [];
+  const surfaces = { declared: scope, admitted: scope, changed, pending: [] };
   if (!range?.ok) {
     surfaces.diagnostic = { code: range?.reason || "integration_target_unavailable", message: range ? submissionRangeFailureMessage(ticket, range, gitRef) : targetFailure.message, retryable: true };
   } else {
@@ -310,11 +311,11 @@ function collectGitSubmissionFacts(options) {
     } else {
       surfaces.pending = pending.working;
     }
-    const scopedRange = commitScope.validateCommitRangeScope(root, range.commits, scope);
+    const scopedRange = commitScope.validatePaths(scope, changed);
     if (!scopedRange.ok) {
       surfaces.diagnostic = {
         code: scopedRange.reason,
-        message: scopedRange.reason === "missing_scope" ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.` : scopedRange.reason === "outside_scope" ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(", ")}. Request scope only for work this ticket owns with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.` : `submit: could not inspect ${commit} from ${root}: ${scopedRange.message || scopedRange.reason}.`,
+        message: scopedRange.reason === "missing_scope" ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.` : `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(", ")}. Request scope only for work this ticket owns with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.`,
         retryable: true
       };
     }
@@ -773,7 +774,7 @@ const tools = [
       }
       const result = commitScope.commitScoped(root, message, scope);
       if (!result.ok) {
-        const message2 = result.reason === "missing_scope" ? `commit: ${ticket.ref} has no declared file scope.` : result.reason === "outside_scope" ? `commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${(result.outside || []).join(", ")}. Expand scope with: ${store.scopeExpansionCommand(ticket, result.outside)}` : result.reason === "no_existing_scope" ? `commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(", ")}.` : `commit: git failed: ${result.message || result.reason}`;
+        const message2 = result.reason === "missing_scope" ? `commit: ${ticket.ref} has no declared file scope.` : result.reason === "outside_scope" ? `commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${(result.outside || []).join(", ")}. ${commitScope.outsideScopeCommitState(result)} Expand scope with: ${store.scopeExpansionCommand(ticket, result.outside)}` : result.reason === "no_existing_scope" ? `commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(", ")}.` : `commit: git failed: ${result.message || result.reason}`;
         return mutationAck(slug, { ok: false, ticket, reason: result.reason, message: message2 });
       }
       store.touchClaim(slug, ticket.ref, by);

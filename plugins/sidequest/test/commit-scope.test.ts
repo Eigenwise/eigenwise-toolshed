@@ -16,6 +16,7 @@ interface ScopeResult {
   outside: string[];
   missingScopes: string[];
   unscopedPaths: string[];
+  rolledBack?: boolean;
 }
 
 process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-commit-scope-home-'));
@@ -51,6 +52,8 @@ const commitScope = require('../lib/commit-scope.js') as {
   ticketCommitScope(effectiveFiles: unknown, declaredFiles: unknown, ticketRef: unknown): string[];
   foreignReleaseFragmentRefusalMessage(operation: string, ticketRef: unknown, fragments: readonly string[]): string;
   headCommit(cwd: string): string | null;
+  candidatePaths(cwd: string, changedPaths: string[], commit: string, upstreamCommit: string): string[];
+  outsideScopeCommitState(result: { commit?: string; rolledBack?: boolean; message?: string }): string;
   preserveCommitRef(cwd: string, commit: string, gitRef: string): { ok: boolean; reason?: string; commit?: string; gitRef?: string };
 };
 
@@ -765,10 +768,12 @@ test('SQ-1875: an integrated merge below ticket work is not a submitted merge', 
     dispatchBase,
   });
 
+  // The worktree was built on the integrated merge after dispatch, so the merge-base above the
+  // older dispatch baseline bounds the range and the integrated work stays out of it (GH-195).
   assert.equal(range.ok, true, `integrated merge was treated as ticket work: ${range.reason}`);
-  assert.equal(range.commits?.at(-1), tip);
-  assert.equal(range.commits?.includes(integratedMerge), true);
-  assert.equal(range.changedPaths?.includes('plugins/sidequest/later.js'), true);
+  assert.equal(range.base, integratedMerge);
+  assert.deepEqual(range.commits, [tip]);
+  assert.deepEqual(range.changedPaths, ['plugins/sidequest/later.js']);
 });
 
 test('SQ-1875: a merge introduced by submitted work is retained as an immutable candidate', () => {
@@ -1203,4 +1208,155 @@ test('SQ-2720: submissionRange resolves a remote target through its qualified re
   });
   assert.equal(unrelatedTarget.ok, false, 'an unrelated target must still refuse the candidate');
   assert.equal(unrelatedTarget.reason, 'unrelated_history');
+});
+
+function commitFile(root: string, file: string, content: string, message: string): string {
+  fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+  fs.writeFileSync(path.join(root, file), content);
+  git(root, ['add', '--', file]);
+  git(root, ['commit', '-q', '-m', message]);
+  return git(root, ['rev-parse', 'HEAD']);
+}
+
+function installStagingHook(root: string): void {
+  const hook = path.join(root, '.git', 'hooks', 'pre-commit');
+  fs.writeFileSync(hook, '#!/bin/sh\necho generated > generated.md\ngit add generated.md\n');
+  fs.chmodSync(hook, 0o755);
+}
+
+test('GH-139: the recorded dispatch baseline bounds the range when upstream carries a cherry-picked copy of its history', () => {
+  const root = repo();
+  const main = branchOf(root);
+  git(root, ['checkout', '-q', '-b', 'local-integration']);
+  const sibling = commitFile(root, 'plugins/other-plugin/sibling.js', 'sibling\n', 'sibling ticket');
+  git(root, ['checkout', '-q', main]);
+  git(root, ['cherry-pick', '-x', sibling]);
+  assert.notEqual(git(root, ['rev-parse', 'HEAD']), sibling, 'upstream carries the sibling under a new hash');
+  git(root, ['checkout', '-q', '-b', 'ticket', sibling]);
+  const tip = commitFile(root, 'plugins/sidequest/ticket.js', 'ticket\n', 'ticket work');
+  pin(root, 'refs/sidequest/GH-139', tip);
+  const options = { commit: tip, gitRef: 'refs/sidequest/GH-139', upstream: main, integrationBranch: main };
+
+  const mergeBaseOnly = commitScope.submissionRange(root, options);
+  assert.deepEqual(mergeBaseOnly.changedPaths, ['plugins/other-plugin/sibling.js', 'plugins/sidequest/ticket.js'], 'without the recorded baseline the merge-base drags the sibling in');
+
+  const range = commitScope.submissionRange(root, { ...options, dispatchBase: sibling, allowedBases: [sibling] });
+  assert.equal(range.ok, true, `range refused: ${range.reason}`);
+  assert.equal(range.base, sibling);
+  assert.deepEqual(range.commits, [tip]);
+  assert.deepEqual(range.changedPaths, ['plugins/sidequest/ticket.js']);
+});
+
+test('GH-139: paths whose bytes already equal upstream are not the candidate\'s, at submit and at stored revalidation', () => {
+  const root = repo();
+  const main = branchOf(root);
+  const dispatchBase = git(root, ['rev-parse', 'HEAD']);
+  git(root, ['checkout', '-q', '-b', 'local-integration']);
+  const sibling = commitFile(root, 'plugins/other-plugin/sibling.js', 'sibling\n', 'sibling ticket');
+  git(root, ['checkout', '-q', main]);
+  git(root, ['cherry-pick', '-x', sibling]);
+  git(root, ['checkout', '-q', '-b', 'ticket', dispatchBase]);
+  commitFile(root, 'plugins/sidequest/ticket.js', 'ticket\n', 'ticket work');
+  git(root, ['merge', '-q', '--no-ff', '-m', 'take the sibling locally', 'local-integration']);
+  const tip = git(root, ['rev-parse', 'HEAD']);
+  pin(root, 'refs/sidequest/GH-139-fold', tip);
+
+  const range = commitScope.submissionRange(root, { commit: tip, gitRef: 'refs/sidequest/GH-139-fold', upstream: main, integrationBranch: main, dispatchBase });
+  assert.equal(range.ok, true, `range refused: ${range.reason}`);
+  assert.deepEqual(range.changedPaths, ['plugins/other-plugin/sibling.js', 'plugins/sidequest/ticket.js'], 'the range itself still records every path it carries');
+  assert.deepEqual(commitScope.candidatePaths(root, range.changedPaths!, tip, range.upstreamCommit!), ['plugins/sidequest/ticket.js']);
+
+  const stored = commitScope.validateStoredSubmissionRange(root, {
+    commit: tip,
+    gitRef: 'refs/sidequest/GH-139-fold',
+    upstream: range.upstream,
+    upstreamCommit: range.upstreamCommit,
+    base: range.base,
+    commits: range.commits,
+    changedPaths: range.changedPaths,
+    admittedScope: ['plugins/sidequest/ticket.js'],
+  });
+  assert.equal(stored.ok, true, `stored revalidation refused the folded path: ${stored.reason}`);
+
+  fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'sibling.js'), 'candidate edit\n');
+  git(root, ['commit', '-q', '-am', 'candidate edits the sibling path']);
+  const edited = git(root, ['rev-parse', 'HEAD']);
+  assert.deepEqual(commitScope.candidatePaths(root, ['plugins/other-plugin/sibling.js', 'plugins/sidequest/ticket.js'], edited, range.upstreamCommit!), ['plugins/other-plugin/sibling.js', 'plugins/sidequest/ticket.js'], 'bytes that differ from upstream stay the candidate\'s');
+  assert.deepEqual(commitScope.candidatePaths(root, ['README.md'], dispatchBase, range.upstreamCommit!), ['README.md'], 'a candidate already on upstream folds nothing');
+});
+
+test('GH-195: a tip still at the recorded dispatch baseline is a no-op, never its own parent\'s commit', () => {
+  const root = repo();
+  git(root, ['branch', 'stale-remote']);
+  const dispatchBase = commitFile(root, 'plugins/other-plugin/data.json', '{}\n', 'another session before dispatch');
+  pin(root, 'refs/sidequest/GH-195', dispatchBase);
+
+  const range = commitScope.submissionRange(root, {
+    commit: dispatchBase,
+    gitRef: 'refs/sidequest/GH-195',
+    upstream: 'stale-remote',
+    integrationBranch: ['stale-remote', branchOf(root)],
+    dispatchBase,
+    allowedBases: [dispatchBase],
+    baseCandidates: [],
+  });
+  assert.equal(range.ok, true, `range refused: ${range.reason}`);
+  assert.equal((range as { noOp?: boolean }).noOp, true);
+  assert.deepEqual(range.commits, []);
+  assert.deepEqual(range.changedPaths, []);
+});
+
+test('GH-195: work pushed upstream after dispatch drops out of a shared-tree range; unpushed foreign work stays', () => {
+  const root = repo();
+  const main = branchOf(root);
+  const dispatchBase = git(root, ['rev-parse', 'HEAD']);
+  const pushed = commitFile(root, 'plugins/other-plugin/pushed.js', 'pushed\n', 'another session, pushed');
+  git(root, ['branch', 'remote-main', pushed]);
+  const tip = commitFile(root, 'plugins/sidequest/ticket.js', 'ticket\n', 'ticket work');
+  pin(root, 'refs/sidequest/GH-195-pushed', tip);
+  const options = { gitRef: 'refs/sidequest/GH-195-pushed', upstream: 'remote-main', integrationBranch: ['remote-main', main], dispatchBase, allowedBases: [dispatchBase], baseCandidates: [] };
+
+  const range = commitScope.submissionRange(root, { ...options, commit: tip });
+  assert.equal(range.ok, true, `range refused: ${range.reason}`);
+  assert.equal(range.base, pushed);
+  assert.deepEqual(range.changedPaths, ['plugins/sidequest/ticket.js']);
+
+  const unpushed = commitFile(root, 'plugins/other-plugin/unpushed.js', 'unpushed\n', 'another session, not pushed');
+  const later = commitFile(root, 'plugins/sidequest/later.js', 'later\n', 'more ticket work');
+  pin(root, 'refs/sidequest/GH-195-pushed', later);
+  const interleaved = commitScope.submissionRange(root, { ...options, commit: later });
+  assert.equal(interleaved.ok, true, `range refused: ${interleaved.reason}`);
+  assert.deepEqual(interleaved.commits, [tip, unpushed, later], 'a foreign commit inside the candidate\'s own history is still in its range');
+});
+
+test('GH-229: a commit a hook widened past scope is undone in the same call and reported as undone', () => {
+  const root = repo();
+  const before = git(root, ['rev-parse', 'HEAD']);
+  installStagingHook(root);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'engine.js'), 'engine\n');
+
+  const result = commitScope.commitScoped(root, 'scoped work', ['plugins/sidequest']);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'outside_scope');
+  assert.deepEqual(result.outside, ['generated.md']);
+  assert.equal(result.rolledBack, true);
+  assert.equal(git(root, ['rev-parse', 'HEAD']), before, 'HEAD is back where it was');
+  assert.deepEqual(git(root, ['diff', '--cached', '--name-only']).split(/\r?\n/), ['plugins/sidequest/engine.js'], 'the declared path stays staged');
+  assert.match(commitScope.outsideScopeCommitState(result), /^Nothing was committed: the commit was undone/);
+  assert.match(commitScope.outsideScopeCommitState({ commit: 'abc123', rolledBack: false, message: 'index.lock exists' }), /^Commit abc123 is still on HEAD because undoing it failed: index\.lock exists\./);
+});
+
+test('GH-229: undoing a widened root commit leaves the repository without a HEAD commit', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-commit-scope-root-'));
+  git(root, ['init', '-q', '-b', 'main']);
+  git(root, ['config', 'user.name', 'Sidequest Test']);
+  git(root, ['config', 'user.email', 'sidequest-test@example.invalid']);
+  installStagingHook(root);
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'first.js'), 'first\n');
+
+  const result = commitScope.commitScoped(root, 'first scoped work', ['src']);
+  assert.equal(result.reason, 'outside_scope');
+  assert.equal(result.rolledBack, true);
+  assert.equal(commitScope.headCommit(root), null, 'the widened root commit is gone');
 });

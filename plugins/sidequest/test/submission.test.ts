@@ -3185,6 +3185,59 @@ test('SQ-2399: shared-tree siblings select submitted boundaries while isolated c
   assert.deepStrictEqual(storedIsolatedSubmission.commits, [isolatedCommit]);
 });
 
+test('GH-139: an isolated submit is bounded by its recorded dispatch baseline when upstream replayed that history under new hashes', async (t?: any) => {
+  cleanBranch();
+  const start = git(['rev-parse', 'HEAD']);
+  const upstreamBranch = `gh139-upstream-${++branchSeq}`;
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh139-sibling.js'), 'sibling\n');
+  git(['add', 'lib/gh139-sibling.js']);
+  git(['commit', '-m', 'sibling delivered locally']);
+  const sibling = git(['rev-parse', 'HEAD']);
+  git(['branch', upstreamBranch, sibling]);
+  const priorBoardConfig = store.boardConfig(slug);
+  assert.strictEqual(store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: upstreamBranch }).ok, true);
+  t.after(() => {
+    store.setBoardConfig(slug, {
+      integrationMode: priorBoardConfig.integrationMode,
+      integrationBranch: priorBoardConfig.integrationBranch,
+    });
+  });
+
+  const ticket = addTicket('isolated candidate over a replayed upstream', { files: ['lib/gh139-ticket.js'], category: 'submission.fixture' });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'gh139-isolated', sharedTree: false });
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, 'gh139-worker', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId: 'gh139-isolated',
+  }).ok, true);
+  assert.strictEqual(store.getTicket(slug, ticket.ref).dispatch.baseCommit, sibling);
+
+  git(['checkout', '-f', '-B', upstreamBranch, start]);
+  git(['cherry-pick', '-x', sibling]);
+  assert.notStrictEqual(git(['rev-parse', 'HEAD']), sibling);
+  git(['checkout', '-f', '-B', `submission-${++branchSeq}`, sibling]);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh139-ticket.js'), 'ticket\n');
+  git(['add', 'lib/gh139-ticket.js']);
+  git(['commit', '-m', 'isolated ticket work']);
+  const tip = git(['rev-parse', 'HEAD']);
+  pin(ticket, tip);
+
+  const submitted = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: ticket.ref,
+    by: 'gh139-worker',
+    commit: tip,
+    worktree: PROJECT_DIR,
+    body: 'Isolated replayed-upstream fixture.',
+  });
+  assert.strictEqual(submitted.ok, true, submitted.message);
+  const stored = store.getTicket(slug, ticket.ref).submission;
+  assert.strictEqual(stored.base, sibling);
+  assert.deepStrictEqual(stored.commits, [tip]);
+  assert.deepStrictEqual(stored.changedPaths, ['lib/gh139-ticket.js']);
+});
+
 test('a submit after a terminal dispatch is gated on current ticket scope, not the dead binding', () => {
   const ticket = addTicket('terminal dispatch binding must not gate the submit', { files: ['lib/original.js'], category: 'submission.fixture' });
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'terminal-binding', sharedTree: true });
