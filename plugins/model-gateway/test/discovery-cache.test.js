@@ -221,6 +221,57 @@ test('refreshModels writes the configured gateway discovery cache', async (testC
   ]);
 });
 
+function getJson(url) {
+  return new Promise((resolve, reject) => {
+    http.get(url, (response) => {
+      let body = '';
+      response.on('data', (chunk) => { body += chunk; });
+      response.on('end', () => resolve(JSON.parse(body)));
+    }).on('error', reject);
+  });
+}
+
+// GH-297: the supervisor spawns the proxy and the shim together, so the shim's first model
+// refresh can find the proxy not answering yet. The built-in fallback list used to land in the
+// discovery cache, and under OAuth Claude Code never refetched, so /model showed only those rows.
+test('a shim that starts before its proxy serves the fallback catalog without persisting it', async (testContext) => {
+  const proxyPort = await freePort();
+  const shimPort = await freePort();
+  const workerPort = await freePort();
+  const baseUrl = `http://127.0.0.1:${shimPort}`;
+  const environment = discoveryEnvironment(testContext, baseUrl, shimPort, workerPort, proxyPort);
+  const overrides = discoveryProcessOverrides(shimPort, workerPort, proxyPort);
+  const cache = path.join(environment.CLAUDE_CONFIG_DIR, 'cache', 'gateway-models.json');
+
+  await startGateway(testContext, 'serve-shim', environment, { isolatedOverrides: overrides });
+  await waitUntil(async () => (await getJson(`${baseUrl}/healthz`)).ok, 'shim did not answer /healthz');
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  assert.equal((await getJson(`${baseUrl}/healthz`)).catalog, 'fallback');
+  assert.equal(fs.existsSync(cache), false, 'the built-in fallback list must not become the discovery cache');
+  const status = await runGatewayCommand(testContext, 'status', environment, overrides);
+  assert.match(status.stdout, /models advertised to Claude Code: \d+; fallback catalog \(proxy unreachable\)/);
+  const refresh = await runGatewayCommand(testContext, 'catalog', environment, overrides);
+  assert.match(refresh.stdout, /discovery cache: kept; the shim is serving its fallback catalog \(proxy unreachable\)/);
+  assert.equal(fs.existsSync(cache), false, 'a catalog refresh must not persist the fallback list either');
+
+  const proxy = http.createServer((request, response) => {
+    if (request.url !== '/v1/models') return response.end();
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ data: [{ id: 'gpt-6-astra' }] }));
+  });
+  await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
+  testContext.after(() => new Promise((resolve) => proxy.close(resolve)));
+
+  await getJson(`${baseUrl}/v1/models`);
+  await waitUntil(() => fs.existsSync(cache), 'the first model request after the proxy answered did not refresh the discovery cache');
+  assert.deepEqual(JSON.parse(fs.readFileSync(cache, 'utf8')).models, [
+    { id: 'claude-gpt-6-astra[1m]', display_name: 'GPT-6-astra (Codex)' },
+    { id: 'claude-grok-4.5[1m]', display_name: 'Grok 4.5' },
+  ]);
+  assert.equal((await getJson(`${baseUrl}/healthz`)).catalog, 'proxy');
+});
+
 test('ensure writes the discovery cache before reporting missing ChatGPT auth', async (testContext) => {
   const proxy = http.createServer((request, response) => {
     if (request.url !== '/v1/models') return response.end();

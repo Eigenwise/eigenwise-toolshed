@@ -163,6 +163,44 @@ const DEFAULT_MODELS = [
 ];
 const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 
+// Advertising an id the router can't claim back would hand it to
+// api.anthropic.com, so a local models.json is held to the same family rule.
+function isRoutableCodexId(id) {
+  return typeof id === 'string' && (id === 'auto' || CODEX_FAMILY_RE.test(id));
+}
+
+function routableCodexIds(ids) {
+  const routable = Array.isArray(ids) ? ids.filter(isRoutableCodexId) : [];
+  return routable.length ? routable : null;
+}
+
+async function proxyCodexIds() {
+  try {
+    const response = await fetchUrl(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { timeout: 2500 });
+    if (response.status !== 200) return null;
+    return (JSON.parse(response.body.toString()).data || []).map((model) => model.id).filter((id) => /^gpt-/.test(id));
+  } catch { return null; }
+}
+
+function isGrokBackendModel(model) {
+  return resolveGatewayModelPolicy(model.id)?.backend === 'grok';
+}
+
+function localModelsFileIds() {
+  try { return JSON.parse(fs.readFileSync(path.join(STATE, 'models.json'), 'utf8')); } catch { return null; }
+}
+
+// Only a list the proxy answered is a real catalog. models.json and the
+// built-in list stand in while the proxy is unreachable, which is routine for a
+// shim the supervisor starts alongside its proxy (GH-297).
+async function advertisedCodexCatalog() {
+  const proxyIds = routableCodexIds(await proxyCodexIds());
+  if (proxyIds) return { ids: proxyIds, source: 'proxy' };
+  const localIds = routableCodexIds(localModelsFileIds());
+  if (localIds) return { ids: localIds, source: 'models.json' };
+  return { ids: DEFAULT_MODELS, source: 'fallback' };
+}
+
 function statelessBackendThreadRefusal(payload) {
   if (!Object.prototype.hasOwnProperty.call(payload, 'thread')) return null;
   const thread = payload.thread;
@@ -852,6 +890,7 @@ function runWorker() {
   process.once('disconnect', () => process.exit(0));
   let modelCache = {
     at: 0,
+    source: 'fallback',
     data: [...DEFAULT_MODELS, ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map(gatewayModel),
   };
   const counters = { models: 0, codex: 0, grok: 0, anthropic: 0 };
@@ -1045,35 +1084,24 @@ function runWorker() {
   }
 
   async function refreshModels({ logSentryPolicies = false } = {}) {
-    let ids = null;
-    try {
-      const r = await fetchUrl(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { timeout: 2500 });
-      if (r.status === 200) {
-        ids = (JSON.parse(r.body.toString()).data || []).map((m) => m.id).filter((id) => /^gpt-/.test(id));
-        if (!ids.length) ids = null;
-      }
-    } catch { /* proxy down or no such route */ }
-    if (!ids) {
-      try { ids = JSON.parse(fs.readFileSync(path.join(STATE, 'models.json'), 'utf8')); } catch { /* absent */ }
-    }
-    // Advertising an id the router can't claim back would hand it to
-    // api.anthropic.com, so a local models.json is held to the same family rule.
-    if (Array.isArray(ids)) ids = ids.filter((id) => typeof id === 'string' && (id === 'auto' || CODEX_FAMILY_RE.test(id)));
-    if (!Array.isArray(ids) || !ids.length) ids = DEFAULT_MODELS;
+    const { ids, source } = await advertisedCodexCatalog();
     const grokModels = grokBackend.grokModelsFromCache();
     const advertisedGrokModels = grokModels.length ? grokModels : DEFAULT_GROK_MODELS;
     modelCache = {
-      at: Date.now(),
+      // A stand-in list stays stale, so the next /v1/models request retries the proxy.
+      at: source === 'proxy' ? Date.now() : 0,
+      source,
       data: [
         ...[...ids.filter((id) => id !== 'auto'), ...(LIST_DISPATCH_MODEL ? ['auto'] : [])]
           .map((id) => gatewayModel(id))
           .filter(Boolean),
         ...advertisedGrokModels
-          .filter((model) => resolveGatewayModelPolicy(model.id)?.backend === 'grok')
+          .filter(isGrokBackendModel)
           .map((model) => gatewayModel(model.id, 'grok')),
       ],
     };
     if (logSentryPolicies) logAdvertisedSentryPolicies();
+    if (source !== 'proxy') return;
     try {
       syncGatewayDiscoveryCache({ models: modelCache.data, baseUrl: effectiveBaseUrl().value || null });
     } catch (error) {
@@ -1871,6 +1899,7 @@ function runWorker() {
         ok: true,
         version: PLUGIN_VERSION,
         models: modelCache.data.length,
+        catalog: modelCache.source,
         served: counters,
         draining,
         activeRequests,

@@ -937,3 +937,23 @@ test('SQ-1901: only states someone must act on become the user line', (t) => {
   assert.equal(output.systemMessage, output.hookSpecificOutput.additionalContext.split('\n').pop());
   assert.equal(output.systemMessage.includes('\n'), false);
 });
+
+// GH-292: /update-toolshed runs the stable updater from whatever directory it was started in,
+// and setup used to wire that directory on an update that changed no version.
+test('the updater finishes without wiring the directory it runs from or touching recorded projects', (t) => {
+  const { home, project } = fixture(t);
+  const recorded = path.join(path.dirname(project), 'recorded-project');
+  const recordedFile = path.join(recorded, '.claude', 'settings.local.json');
+  writeJson(recordedFile, gatewaySettings());
+  writeJson(projectRegistry(home), { projects: [recorded] });
+  const recordedBefore = fs.readFileSync(recordedFile, 'utf8');
+  const registryBefore = fs.readFileSync(projectRegistry(home), 'utf8');
+
+  const result = runNode(home, project, `require(${JSON.stringify(COMMANDS)}).finishUpdateWithoutWiring()`);
+
+  assert.match(result.output, /update leaves wiring as recorded and never wires the directory it runs from/);
+  assert.equal(fs.existsSync(path.join(project, '.claude')), false, 'the invoking directory gained a settings file');
+  assert.equal(fs.readFileSync(recordedFile, 'utf8'), recordedBefore);
+  assert.equal(fs.readFileSync(projectRegistry(home), 'utf8'), registryBefore);
+  assert.equal(fs.existsSync(path.join(home, '.claude', 'settings.json')), false, 'user settings were written');
+});
