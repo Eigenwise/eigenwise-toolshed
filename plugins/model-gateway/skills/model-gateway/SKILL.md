@@ -255,11 +255,16 @@ agree).
   It records completed request outcomes, not `/v1/models` or a health check, and clears only after
   a completed successful Codex response. The 60-second expiry means there is no recent failure
   evidence, not that Codex is live. An attributed OpenAI 401, 403, or 429 rejection enters
-  `upstream-blocked`. An attributed 429 has no TTL: `setup` or a completed successful Codex
-  response clears it, and a later rejected request can latch it again. That persistent 429
-  blocking is a known limitation ([issue #190](https://github.com/Eigenwise/eigenwise-toolshed/issues/190));
-  do not promise a retry or expiry as a cure. Sidequest consumes a cached catalog and can lag this
-  state by up to five minutes.
+  `upstream-blocked`. A 401 or 403 stays until `setup` or a completed successful Codex response
+  clears it. A 429 block expires: `upstreamBlocked.expiresAt` comes from the 429's Retry-After,
+  else claude-code-proxy's usage-limit reset header, else 60 seconds, and the `doctor` message
+  names that time. It lifts by itself then, or sooner on a completed successful Codex response,
+  and a later rejected request can latch it again. Sidequest consumes a cached catalog and can lag
+  this state by up to five minutes.
+- **Codex turn with no output**: claude-code-proxy answers a Codex turn that completed with no
+  text, tool call, or thinking as a 503 "Codex completed without producing output". The shim
+  answers it as an empty `end_turn` instead, so the session ends the turn rather than retrying
+  into the same empty answer; the shim log records each one.
 - **Gateway models vanish from a Sidequest board a few minutes after the shim starts**: Sidequest
   discards a catalog older than five minutes and refreshes it by running `catalog --refresh --json`.
   Run that command by hand and read stderr plus the exit code. It exits non-zero and names the reason
