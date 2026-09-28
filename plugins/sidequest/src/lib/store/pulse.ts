@@ -336,6 +336,10 @@ function createPulse(dependencies: any) {
         terminalAt: dispatch.terminalAt || null,
         terminalSource: dispatch.terminalSource || null,
         outcome: dispatch.outcome || null,
+        // The identity `rework` needs after CI rejects a submitted candidate. Once submitted, the claim is
+        // cleared (see submitTicket), so this is the only place left on a live dispatch that names who owns
+        // the pending candidate; before this, recovering it meant reading the executor's own comments (SQ-59).
+        submittedBy: ticket.submission?.by || null,
         failureShape: dispatch.failureShape || null,
         localAheadWarning: dispatch.localAheadWarning || null,
       } : null,
