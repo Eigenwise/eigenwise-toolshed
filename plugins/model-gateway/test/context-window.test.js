@@ -1602,7 +1602,7 @@ test('SessionStart nudges hand off gateway actions to the runnable skill', () =>
   const commandsSource = fs.readFileSync(COMMANDS, 'utf8');
   const runtimeSource = fs.readFileSync(RUNTIME, 'utf8');
   assert.match(commandsSource, /Run \/model-gateway:model-gateway, then use its env --write-project command/);
-  assert.match(commandsSource, /codexReadinessMessage\(state\)/);
+  assert.match(fs.readFileSync(path.join(path.dirname(COMMANDS), 'request-worker.js'), 'utf8'), /codexReadinessMessage\(state, undefined, upstreamBlocked\)/);
   assert.match(runtimeSource, /claude-code-proxy is missing[\s\S]*No Anthropic fallback was used\./);
   assert.doesNotMatch(commandsSource, /(?:Run|run):? env --/);
 });
