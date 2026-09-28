@@ -1167,3 +1167,44 @@ test('integration does not derive an unlocked greenfield suite after submission'
   assert.equal(payload.verify.kind, 'custom');
   assert.equal(fs.existsSync(path.join(fixture.repo, 'plugins', 'greenfield', 'node_modules')), false);
 });
+
+// GH-308. A sibling that submits while the post-merge suite runs records the delivery merge as its expected
+// upstream. Rolling the target back without rewriting that record left the sibling refused as diverged forever.
+test('a post-merge rollback restores a sibling expected upstream that recorded the rolled-back merge', () => {
+  const fixture = makeRepo('post-merge-sibling-upstream');
+  const { slug } = store.ensureProject(fixture.repo);
+  const first = store.createTicket(slug, { title: 'rolled back delivery', category: 'codebase-exploration', files: ['feature.txt'] });
+  submitFixture(slug, first, fixture);
+  const siblingWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-sibling');
+  git(['worktree', 'add', '-b', 'worktree-agent-sibling', siblingWorktree, 'main'], fixture.repo);
+  const siblingCommit = commitFile(siblingWorktree, 'sibling.txt', 'sibling work\n');
+  const sibling = store.createTicket(slug, { title: 'sibling submitted mid-suite', category: 'codebase-exploration', files: ['sibling.txt'] });
+  const siblingRef = `refs/sidequest/${sibling.ref}`;
+  git(['update-ref', siblingRef, siblingCommit], siblingWorktree);
+  assert.equal(store.claimTicket(slug, sibling.ref, 'sibling-worker', { direct: true, reason: 'The integration fixture requires a local direct claim.' }).ok, true);
+  const libDirectory = path.join(__dirname, '..', 'lib');
+  const verifier = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-advance-sibling-verify-')), 'verify.js');
+  fs.writeFileSync(verifier, `
+process.env.SIDEQUEST_HOME = ${JSON.stringify(SIDEQUEST_HOME)};
+const { execFileSync } = require('node:child_process');
+if (execFileSync('git', ['branch', '--show-current'], { encoding: 'utf8' }).trim() !== 'main') process.exit(0);
+const store = require(${JSON.stringify(path.join(libDirectory, 'store.js'))});
+const commitScope = require(${JSON.stringify(path.join(libDirectory, 'commit-scope.js'))});
+const worktree = ${JSON.stringify(siblingWorktree)};
+const range = commitScope.submissionRange(worktree, { commit: ${JSON.stringify(siblingCommit)}, gitRef: ${JSON.stringify(siblingRef)}, upstream: 'main', integrationBranch: 'main' });
+const submitted = store.submitTicket(${JSON.stringify(slug)}, ${JSON.stringify(sibling.ref)}, 'sibling-worker', { commit: ${JSON.stringify(siblingCommit)}, gitRef: ${JSON.stringify(siblingRef)}, range, worktree });
+if (!submitted.ok) { console.error(JSON.stringify(submitted)); process.exit(3); }
+process.exit(7);
+`);
+  store.updateTicket(slug, first.ref, { executorVerifyKind: 'suite', executorVerify: `"${process.execPath}" "${verifier}"` });
+  const before = head(fixture.repo);
+
+  const rolledBack = store.integrateSubmission(slug, first.ref, { mode: 'merge', target: fixture.target });
+
+  assert.equal(rolledBack.reason, 'verification_failed_suite_post_merge', rolledBack.message);
+  assert.equal(rolledBack.verify.exitCode, 7, 'the sibling submitted from inside the post-merge suite');
+  assert.equal(head(fixture.repo), before);
+  assert.equal(store.getTicket(slug, sibling.ref).submission.upstreamCommit, before);
+  const delivered = store.integrateSubmission(slug, sibling.ref, { mode: 'merge', target: fixture.target });
+  assert.equal(delivered.ok, true, delivered.message);
+});

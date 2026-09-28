@@ -2239,6 +2239,13 @@ function failedClaimCanSurrender(ticket?: any, dispatch?: any, by?: any, opts?: 
   return !authorizedSessionId || authorizedSessionId === String(opts?.sessionId || '').trim();
 }
 
+// A bound review has to END on its candidate, so write scope it never touched leaves no commit it could submit, and
+// demanding one sent done and submit pointing at each other (GH-215). Scope it did use still takes the submit path.
+function boundReviewLeftScopeUnused(dispatch: any, completionDelta: any, declaredFiles: string[]) {
+  if (dispatch?.reviewTarget?.candidate?.source !== 'git' || !completionDelta?.ok) return false;
+  return ![...completionDelta.working, ...completionDelta.committed].some((file: string) => commitScope.isInScope(file, declaredFiles));
+}
+
 // Release a claim. Only the owner or a reclaimable claim may release it.
 // force can reopen the owner's pending submission, never bypass ownership.
 function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
@@ -2290,7 +2297,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
             reason: 'pending_submission',
             ticket: t,
             submission: t.submission,
-            message: `${heldOwner ? '' : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. When a reviewed candidate already landed through an external conflict resolution, use the integrate route with deliveryCommit and reason. It verifies the named reachable delivery against the submitted content and merged tree before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`,
+            message: `${heldOwner ? '' : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. When a reviewed candidate already landed through a hand-resolved conflict merge, record that merge with groomClose passing deliveryCommit <the merge commit>, deliveryMethod "manual", and reason. It checks the candidate is an ancestor of that merge and re-runs the merged-tree gate before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`,
           };
         }
         reopenedSubmission = t.submission;
@@ -2391,7 +2398,8 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     // A dispatch executor can be read-only even when the ticket's category is
     // normally writable. Its recorded identity controls an active closeout and
     // the terminal oracle closeout that follows an already-released review.
-    const provenNoOp = opts.cleanDeclaredScope === true || Boolean(dispatch?.noOpRelease);
+    const unusedReviewScope = boundReviewLeftScopeUnused(dispatch, completionDelta, declaredFiles);
+    const provenNoOp = opts.cleanDeclaredScope === true || Boolean(dispatch?.noOpRelease) || unusedReviewScope;
     if (executorDone && dispatch && declaredFiles.length && !provenNoOp && !sharedTreeCommittedScope && !activeReadOnlyDispatch && !terminalReadOnlyOracle && !activeArtifactDispatch && !activeWorkingTreeDelivery && !activeNonRepoOutput) {
       return {
         ok: false,
@@ -2401,7 +2409,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       };
     }
     if (executorDone && liveClaim && activeDispatch) {
-      const completion = completionTreeCheck(slug, t, { explicitNoOp: opts.cleanDeclaredScope === true });
+      const completion = completionTreeCheck(slug, t, { explicitNoOp: opts.cleanDeclaredScope === true || unusedReviewScope });
       if (!completion.ok) return Object.assign({ ticket: t }, completion);
       if (!completionDelta?.ok && dispatch?.sharedTree === true && dispatch?.baseCommit) {
         return {

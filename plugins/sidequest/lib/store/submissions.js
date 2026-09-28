@@ -941,10 +941,26 @@ ${verify.outputTail}` : null
       message: `Integration is already delivering another submission into this checkout. Retry ${ticket.ref} after that delivery finishes.`
     };
   }
+  function restoreRolledBackExpectedUpstreams(slug, repo, before, rolledBackHead) {
+    const rolledBack = new Set(integrationGit(repo, ["rev-list", `${before}..${rolledBackHead}`]).split(/\r?\n/).filter(Boolean));
+    const recordsRolledBackUpstream = (ticket) => pendingSubmission(ticket) && rolledBack.has(ticket.submission.upstreamCommit);
+    const pointRecordsAtPreMergeHead = () => {
+      for (const ticket of listTickets(slug).filter(recordsRolledBackUpstream)) {
+        ticket.submission.upstreamCommit = before;
+        ticket.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+        putTicket(slug, ticket);
+      }
+    };
+    transaction(pointRecordsAtPreMergeHead);
+  }
+  function handResolvedConflictRecovery(candidate, targetBranch) {
+    return `Resolve it by hand: on ${targetBranch} merge ${candidate}, resolve the conflict, commit the merge and re-gate it, then record it with groomClose passing deliveryCommit <the resolved merge commit> and deliveryMethod "manual" (CLI --delivery-commit / --delivery-method) and reason. Keeping ${candidate} as a parent of that merge is what proves the candidate content; the record still requires the bound review and a passing merged-tree gate.`;
+  }
   function postMergeVerificationFailure(slug, ticket, verify, repo, mode, before, deliveryHead, targetBranch) {
     const verificationMessage = `${ticket.ref} verification returned ${verify.status} after ${mode} delivery: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || "not created"}.`;
     try {
       const rollback = restorePostMergeVerificationCheckout(repo, before, deliveryHead, targetBranch, mode);
+      restoreRolledBackExpectedUpstreams(slug, repo, before, deliveryHead);
       return integrationFailure(slug, ticket, {
         reason: `${verificationOutcome(verify)}_post_merge`,
         before,
@@ -1614,6 +1630,7 @@ ${verify.outputTail}` : null
         } catch (rollbackError) {
           return { ok: false, reason: `${verificationOutcome(verification)}_wave_delivery_rollback_failed`, tickets: assembled.tickets, before, verify: verification, message: `Wave ${assembled.wave.id} verification failed and rollback failed: ${integrationGitError(rollbackError)}` };
         }
+        restoreRolledBackExpectedUpstreams(slug, repo, before, resultingHead);
         return { ok: false, reason: `${verificationOutcome(verification)}_wave_delivery`, tickets: assembled.tickets, before, verify: verification, message: `Wave ${assembled.wave.id} delivery verification returned ${verification.status}.` };
       }
       const delivered = recordSubmissionWaveDelivery(slug, assembled.participantRefs, { source: "git", value: resultingHead, observedAt: (/* @__PURE__ */ new Date()).toISOString() }, verification);
@@ -1765,7 +1782,7 @@ ${verify.outputTail}` : null
               message: `${message} Rollback failed: ${integrationGitError(rollbackError)}`
             });
           }
-          return integrationFailure(slug, ticket, { reason: "merge_failed", conflictedPaths, message: `${message} If the conflict is resolved and delivered outside this integration attempt, record that exact delivery with integrate deliveryCommit and reason; it still requires the bound review and a passing merged-tree gate.`, before });
+          return integrationFailure(slug, ticket, { reason: "merge_failed", conflictedPaths, message: `${message} ${handResolvedConflictRecovery(pinnedCommit, target.branch)}`, before });
         }
       } else if (!submission.noOp) {
         for (const commit of commits) {
@@ -1790,7 +1807,7 @@ ${verify.outputTail}` : null
               failedCommit: commit,
               before,
               conflictedPaths,
-              message: `${message} If the conflict is resolved and delivered outside this integration attempt, record that exact delivery with integrate deliveryCommit and reason; it still requires the bound review and a passing merged-tree gate.`
+              message: `${message} ${handResolvedConflictRecovery(pinnedCommit, target.branch)}`
             });
           }
         }

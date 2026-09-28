@@ -1368,3 +1368,29 @@ test('SQ-2207: a review whose checkout cannot be read is refused instead of clos
   assert.ok(refused.message.includes('technical_blocker'), refused.message);
   assert.equal(store.getTicket(slug, review.ref).status, 'doing');
 });
+
+// GH-215. A bound review has to END on its candidate, so a write-scoped one that never touched its scope has no
+// commit it could submit. Demanding a submission there left done and submit pointing at each other.
+test('GH-215: a write-scoped bound review closes with done when it never used its write scope', () => {
+  const { repository, slug, commit } = board('close-write-scope');
+  const source = submittedSource(slug, commit, 'close-write-scope');
+  const review = store.createTicket(slug, {
+    title: 'write-scoped review',
+    category: 'review-audit',
+    files: ['candidate.txt'],
+    readonly: false,
+    executorVerify: 'manual: read the candidate',
+  }, { ref: source.ref, commit });
+  const { worktree, agentId } = claimedReviewInWorktree(slug, repository, review.ref, 'write-scope');
+  assert.equal(store.getTicket(slug, review.ref).dispatch.readonly, false);
+
+  fs.writeFileSync(path.join(worktree, 'candidate.txt'), 'review edit\n');
+  const dirty = store.releaseTicket(slug, review.ref, agentId, { status: 'done', source: 'test' });
+  assert.equal(dirty.ok, false);
+  assert.equal(dirty.reason, 'submission_required', 'write scope the review did use still needs commit and submit');
+
+  git(worktree, ['checkout', '--', 'candidate.txt']);
+  const closed = store.releaseTicket(slug, review.ref, agentId, { status: 'done', source: 'test' });
+  assert.equal(closed.ok, true, closed.message);
+  assert.equal(store.getTicket(slug, review.ref).status, 'done');
+});

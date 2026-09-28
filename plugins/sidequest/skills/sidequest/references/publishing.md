@@ -94,6 +94,9 @@ File the repair so all of this holds before dispatching it:
 - Declare the union of the inherited paths and the repair's own, including paths the rejected candidate
   deleted or added and the repair never touches. Scope admission covers every path in the range.
 - The rejected range is inherited whole. A range carrying only part of it is refused.
+- The rejected source's release fragment doesn't need declaring. Submit admits it and records it in the
+  repair's scope snapshot, so a repair that renames `.release/unreleased/<source>.md` to its own fragment
+  passes the same range check again at integrate.
 
 An active, unrelated, unreviewed, or not-yet-rejected overlapping submission still refuses
 `duplicate_submission`, and the refusal names which half is missing. Do not answer that refusal with
@@ -135,6 +138,30 @@ recovery:
    `deliveryMethod: "manual"` (CLI `--delivery-commit <sha> --delivery-method manual`).
 3. Keep the candidate's content present in the integration working tree; the merged-tree verifier and
    content check still run against it.
+
+### A conflict integrate cannot merge
+
+`integrate` never resolves a conflict. It aborts, restores the target, records `merge_failed` (or
+`replay_failed`) with the conflicted paths, and the refusal names this recovery:
+
+1. On the target branch, `git merge --no-ff <the pinned candidate>`, resolve the conflict, and commit the
+   merge. Keep the candidate as a parent of that merge: that ancestry is the content proof.
+2. Re-gate the merged tree.
+3. Record it with `groomClose`, passing `deliveryCommit: <the merge commit>`, `deliveryMethod: "manual"`,
+   and a reason (CLI `--delivery-commit <sha> --delivery-method manual --reason "…"`). Omit
+   `integration: true`, which selects the assembled-wave route instead.
+
+Don't submit the merge from a second ticket: its range contains the candidate's commits, so it is
+refused as `duplicate_submission`. A squash or cherry-pick of the resolution loses the ancestry and is
+refused as `delivery_content_missing`.
+
+### A post-merge suite failure
+
+When the merged tree fails its verifier, `integrate` hard-resets the target to the recorded pre-merge
+head. A sibling candidate submitted while that suite ran recorded the rolled-back merge as its expected
+upstream, so the same rollback rewrites that record back to the pre-merge head. The next `integrate` of
+the sibling, or a retry of the failed candidate, then runs normally. When the rollback itself is refused
+because the target moved past the delivery, nothing is rewritten; follow the refusal's manual recovery.
 
 If a repair ticket deliberately delivers an earlier parked submission, do not replay the obsolete range. Use MCP `supersede_submission` with the earlier ref, the later integrated repair ref, concise closure evidence, and `reviewedReplacements` for every original path whose delivered content intentionally differs. The control plane requires the repair's recorded delivery to include every original changed path, preserves the earlier submission and its lineage under `supersededBy`, marks it done, and removes its pending-submission warning. A missing path, an unintegrated repair, or unreviewed divergent content leaves the original submission parked.
 
