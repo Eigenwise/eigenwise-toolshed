@@ -1056,7 +1056,8 @@ const tools = [
         }
       }
       const admitted = store.validateIntegrationSubmission(slug, args.ref, {
-        deliveryInteractionCommit: args.deliveryInteractionCommit
+        deliveryInteractionCommit: args.deliveryInteractionCommit,
+        deliveryMethod: args.deliveryMethod
       });
       if (!admitted.ok) failures.push({
         reason: admitted.reason,
@@ -1078,7 +1079,8 @@ const tools = [
         const closed2 = store.completeTicketAsControlPlane(slug, args.ref, {
           by,
           reason: args.reason,
-          purpose: "integration"
+          purpose: "integration",
+          deliveryMethod: args.deliveryMethod
         });
         if (closed2.ok) {
           closeDispatchExecutor(recorded.ticket);

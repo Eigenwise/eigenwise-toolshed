@@ -514,8 +514,9 @@ test('a failed WorktreeCreate still bound to a claimed sibling checkout never re
   const recovered = store.recoverDispatchWorktreeCreation(slug, sessionId, sibling!.worktree, new Error('database is locked'), creationGeneration(slug, sessionId, sibling!.worktree));
   assert.equal(recovered.ok, true, `recovery refused: ${recovered.reason}`);
   assert.equal(recovered.cleanup.reclaimed, false);
-  assert.equal(recovered.cleanup.reason, 'checkout_held_by_live_claim');
-  assert.match(recovered.cleanup.message, new RegExp(`${sibling!.ref} references .* under a live claim by "crossing-failed-create-sibling"`));
+  assert.equal(recovered.cleanup.reason, 'cross_bound_worktree');
+  assert.equal(recovered.cleanup.sibling, sibling!.ref);
+  assert.match(recovered.cleanup.message, new RegExp(`${stalled!.ref} did not remove .* onto ${sibling!.ref}'s live checkout`));
   assertCheckoutIntact(sibling!.worktree, 'failed-creation recovery');
   const failed = store.getTicket(slug, stalled!.ref).dispatch;
   assert.equal(failed.outcome, 'failed');

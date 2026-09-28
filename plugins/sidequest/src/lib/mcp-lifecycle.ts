@@ -1188,6 +1188,7 @@ const tools: ToolDefinition[] = [
       }
       const admitted = store.validateIntegrationSubmission(slug, args.ref, {
         deliveryInteractionCommit: args.deliveryInteractionCommit,
+        deliveryMethod: args.deliveryMethod,
       });
       if (!admitted.ok) failures.push({
         reason: admitted.reason,
@@ -1210,6 +1211,7 @@ const tools: ToolDefinition[] = [
           by,
           reason: args.reason,
           purpose: 'integration',
+          deliveryMethod: args.deliveryMethod,
         });
         if (closed.ok) {
           closeDispatchExecutor(recorded.ticket);

@@ -381,6 +381,23 @@ function recoverCreatedWorktree(repository, sessionId, target, error, attempt) {
   if (recovery.cleanup?.reclaimed) return null;
   return `worktree recovery preserved the checkout because ${recovery.cleanup?.message || recovery.cleanup?.reason || "cleanup authority is incomplete"}`;
 }
+function recordUncreatedWorktreeFailure(repository, sessionId, target, error, attempt) {
+  const store = require(runtimeModule("store"));
+  const project = registeredProject(store, repository);
+  const recovery = project.slug ? store.recoverDispatchWorktreeCreation(project.slug, sessionId, target, error, attempt, { created: false }) : { ok: false, reason: "its project binding is unavailable" };
+  return recovery.ok ? "the board recorded the attempt failed and kept no binding to that path, so a plain dispatch prepares its replacement" : `the attempt still names that path because ${recovery.reason}`;
+}
+function createBoundCheckout(binding, name, sessionId, attempt) {
+  try {
+    const decision = leaseKernel.worktreeCreateDecision(preparedWorktreeLease(binding, name));
+    if (!decision.allowed) throw new Error(`worktree lease refused creation: ${decision.reason}`);
+    return createWorktree(binding, name);
+  } catch (error) {
+    if (binding.creationCompleted) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message}; ${recordUncreatedWorktreeFailure(binding.repository, sessionId, binding.worktree, error, attempt)}`);
+  }
+}
 function main() {
   return createWorktreeMain();
 }
@@ -417,9 +434,7 @@ async function createWorktreeMain() {
     repository: binding.repository,
     worktree: binding.worktree
   };
-  const decision = leaseKernel.worktreeCreateDecision(preparedWorktreeLease(boundCreation, name));
-  if (!decision.allowed) throw new Error(`worktree lease refused creation: ${decision.reason}`);
-  const created = createWorktree(boundCreation, name);
+  const created = createBoundCheckout(boundCreation, name, sessionId, attempt);
   if (created) {
     try {
       const identity2 = linkedCheckoutIdentity(boundCreation.worktree);
