@@ -1024,7 +1024,7 @@ function reviewCandidateTreeRefusal(slug?: any, ticket?: any) {
 function setDispatchTerminal(ticket?: any, outcome?: any, source?: any, opts?: any) {
   const state = dispatchState(ticket);
   if (!state) return;
-  const at = new Date().toISOString();
+  const at = opts?.at || new Date().toISOString();
   captureTerminalWorktreeRevision(opts?.slug, state, at);
   const release = opts?.releaseKind ? {
     kind: opts.releaseKind,
