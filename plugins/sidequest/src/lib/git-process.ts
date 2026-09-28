@@ -13,7 +13,7 @@ export function execFileSync(file: string, args: readonly string[], options: Exe
 export function execFileSync(file: string, args: readonly string[], options: ExecFileSyncOptionsWithBufferEncoding): Buffer;
 export function execFileSync(file: string, args: readonly string[], options?: ExecFileSyncOptions): string | Buffer;
 export function execFileSync(file: string, args: readonly string[], options: ExecFileSyncOptions = {}): string | Buffer {
-  return childProcess.execFileSync(file, args, { maxBuffer: GIT_OUTPUT_MAX_BUFFER, ...options });
+  return childProcess.execFileSync(file, args, { maxBuffer: GIT_OUTPUT_MAX_BUFFER, windowsHide: true, ...options });
 }
 
 // A git command that can run for minutes (a commit runs the repository's hooks) must not hold the

@@ -28,7 +28,7 @@ var import_node_util = require("node:util");
 var GIT_OUTPUT_MAX_BUFFER = 256 * 1024 * 1024;
 var execFileCallback = (0, import_node_util.promisify)(import_node_child_process.default.execFile);
 function execFileSync(file, args, options = {}) {
-  return import_node_child_process.default.execFileSync(file, args, { maxBuffer: GIT_OUTPUT_MAX_BUFFER, ...options });
+  return import_node_child_process.default.execFileSync(file, args, { maxBuffer: GIT_OUTPUT_MAX_BUFFER, windowsHide: true, ...options });
 }
 
 // src/hooks/force-exec-bypass.ts

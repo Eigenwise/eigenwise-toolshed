@@ -38,7 +38,7 @@ var import_node_util = require("node:util");
 const GIT_OUTPUT_MAX_BUFFER = 256 * 1024 * 1024;
 const execFileCallback = (0, import_node_util.promisify)(import_node_child_process.default.execFile);
 function execFileSync(file, args, options = {}) {
-  return import_node_child_process.default.execFileSync(file, args, { maxBuffer: GIT_OUTPUT_MAX_BUFFER, ...options });
+  return import_node_child_process.default.execFileSync(file, args, { maxBuffer: GIT_OUTPUT_MAX_BUFFER, windowsHide: true, ...options });
 }
 async function execFileText(file, args, options = {}) {
   const { stdout } = await execFileCallback(file, args, { maxBuffer: GIT_OUTPUT_MAX_BUFFER, windowsHide: true, ...options, encoding: "utf8" });

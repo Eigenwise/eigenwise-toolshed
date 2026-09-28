@@ -55,8 +55,6 @@ dependencies before fixing the shared root. Prefer measured deletion; avoid hypo
 compulsory extractions and unrelated cleanup. Preserve trust-boundary validation, data-loss prevention,
 accessibility, permissions and immutable candidate/review authority.
 
-Complexity 4+ needs scope, anchors, and a scoped verify; the merged tree runs the full suite once.
-
 Do stated one-line mechanical edits to 1–2 named files inline before solo-fit or ticketing. Bounded recon (`Read`, `Glob`, `Grep` on named anchors, one narrow sweep) stays inline; unfamiliar paths or deep investigation go through the live taxonomy.
 
 ### INLINE-SAFE direct work
@@ -74,7 +72,6 @@ investigation or other-file reading to be confident, adds behavior or an API, or
 that does not pinpoint the exact location. "Context already loaded", "small change", and "faster
 myself" are invalid reasons. File a ticket and dispatch its executor instead. The blocked-step and
 never-inline invariants still apply to substantive work.
-Coexisting with an external tracker: `references/external-trackers.md`.
 
 ## MCP is the executor board interface
 
@@ -89,9 +86,9 @@ schema-bumping release, reload plugins before MCP writes. Commands default to th
 `--project "<path-or-slug>"` (MCP: `project`) targets another board.
 
 `dispatch <ref>` is **instant**: it returns the ticket's stable executor, a short `spawn` fetch
-stub, and a token. Its `subagent_type` ships in the plugin, before SessionStart. Pass every supplied `spawn` field (`name` and `description` too) to Agent
-unchanged. Set `Agent.description` to `spawn.description` byte-for-byte, never deriving it from
-`spawn.prompt`, its route marker, the ticket title, model, or effort. The executor fetches its
+stub, and a token. Pass every supplied `spawn` field (`name` and `description` too) to Agent
+unchanged. Set `Agent.description` to `spawn.description` byte-for-byte, never derived from the
+prompt, route marker, title, model, or effort. The executor fetches its
 token-gated durable packet as the first action: full description, category route and contract, scope,
 state, comment metadata, and absolute attachment paths. It must inspect every readable
 attachment and report missing or unreadable ones, while the spawn keeps that content out of this
@@ -101,7 +98,7 @@ claim's token and exact executor name are the evidence.
 **Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent.model` and `recipe.agent.promptPrefix + prompt` in Agent. Never hand-translate route, gateway, virtual-model, marker, or effort fields. A user-named model for one ticket means set that ticket's `route` override, never edit the category route, which repoints later tickets too. See `references/routing-guide.md`.
 
 **Locations:** CLI: `plugins/sidequest/bin/sidequest.js`; DB: `~/.claude/sidequest/sidequest.db`
-(`SIDEQUEST_HOME`); attachments: `~/.claude/sidequest/projects/<slug>/assets/`. Never scan from root.
+(`SIDEQUEST_HOME`). Never scan from root.
 
 ## Routing profiles
 
@@ -151,8 +148,8 @@ optionally `--status todo`).
   resume a prior executor and spawn a fresh one for the same ticket.
 - **Read the thread before working a ticket** (`sidequest comments <ref>`). Default reads retain all
   metadata; pass `--full` only for needed elided bodies.
-- **Claims release on observed death, not age**: use `pulse`, never a clock. For work needing a decision, `SendMessage` the same agent; a resume keeps claim, token-file path, and worktree binding. On `matches no dispatch record`, the holder calls MCP `dispatch` with `recoveryEvidence`, `claimHolder`, and `worktree` to re-mint and re-bind. On confirmed death, salvage, release, replace. **Died before its first claim** (API error, refused claim, failed or cancelled WorktreeCreate, the Agent call returned with no claim): there is no claim to release. From the session that prepared it, MCP `dispatch` with `recoveryEvidence` (the host's failure text) retires it at once and prepares the replacement; add `retireOnly:true` to stop there, or `groomClose` with `recoveryEvidence` to retire and close. Other sessions wait for the printed deadline. An attempt already terminal takes the same call and just prepares.
-- Agents report automatically. **Never use `TaskOutput`** for a Sidequest task ID or launch name. Liveness comes only from `pulse <ref>` and `changes --since`, read on a notification or user prompt, never right after spawning; a process list is never dispatch evidence. **No TaskStop after terminal evidence** (the one TaskStop rule): an executor ends its own run at submit, done, or release, so the host has already retired it. `TaskStop({ task_id: "<agent name>" })` once is host cleanup only for an executor `pulse` still shows alive after its ticket went terminal (host action, not Sidequest). Never stop a live claim, retained continuation, or candidate awaiting integration; never wake a completed executor or build a cleanup loop. **Never proxy-wait** with a shell/`Monitor`/cron task for an executor or artifact (a one-shot local readiness watch is fine).
+- **Claims release on observed death, not age**: use `pulse`, never a clock. For work needing a decision, `SendMessage` the same agent; a resume keeps claim, token-file path, and worktree binding. On `matches no dispatch record`, the holder calls MCP `dispatch` with `recoveryEvidence`, `claimHolder`, and `worktree` to re-mint and re-bind. On confirmed death, salvage, release, replace. **Died before its first claim** (no claim to release): from the session that prepared it, MCP `dispatch` with `recoveryEvidence` retires it and prepares the replacement; `retireOnly:true` stops there. Other sessions wait for the printed deadline (references/orchestration.md).
+- Agents report automatically. **Never use `TaskOutput`** for a Sidequest task ID or launch name. Liveness comes only from `pulse <ref>` and `changes --since`, read on a notification or user prompt, never right after spawning; a process list is never dispatch evidence. **No TaskStop after terminal evidence**: an executor ends its own run at submit, done, or release. `TaskStop({ task_id: "<agent name>" })` once is host cleanup only for one `pulse` still shows alive after its ticket went terminal (host action, not Sidequest). Never stop a live claim, retained continuation, or candidate awaiting integration; never wake a completed executor or build a cleanup loop. **Never proxy-wait** with a shell/`Monitor`/cron task for an executor or artifact (a one-shot local readiness watch is fine).
 
 **Repository publishing is the orchestrator's, alone.** Executors stop at verified local commits and
 `submit` (claim released, parked in `doing`); `submit.body` is the canonical report, so no separate pre-submit
