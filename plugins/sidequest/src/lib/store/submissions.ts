@@ -302,9 +302,18 @@ function normalizedReviewEvidence(comment: any, candidate: any) {
   };
 }
 
+// Native closeout is keyed to the REVIEWER's dispatch, not the submitter's: a
+// distinct authenticated Codex reviewer owes the same authenticated
+// review_outcome record no matter which runtime submitted the candidate
+// (Claude submitter + Codex reviewer is the live SQ-90/SQ-92 case).
+function nativeCodexReviewer(reviewTicket: any) {
+  return reviewTicket?.dispatch?.runtimeHost === 'codex'
+    && reviewTicket?.completion?.purpose !== 'oracle-review-verdict'
+    && reviewTicket?.release?.kind !== 'oracle';
+}
+
 function nativeTerminalReviewEvidence(sourceTicket: any, reviewTicket: any, candidate: any) {
-  if (sourceTicket?.dispatch?.runtimeHost !== 'codex' || reviewTicket?.dispatch?.runtimeHost !== 'codex'
-    || reviewTicket?.completion?.purpose === 'oracle-review-verdict' || reviewTicket?.release?.kind === 'oracle') {
+  if (!nativeCodexReviewer(reviewTicket)) {
     return { recognized: false, ok: false, reason: 'not_native_review' };
   }
   if (reviewTicket?.status !== 'done' || reviewTicket?.completion?.state !== 'done') {
@@ -336,7 +345,11 @@ function nativeTerminalReviewEvidence(sourceTicket: any, reviewTicket: any, cand
   });
   const decisions = authenticated.map((comment: any) => ({ comment, parsed: normalizedReviewEvidence(comment, candidate) }))
     .filter((entry: any) => entry.parsed.recognized);
-  if (!decisions.length) return { recognized: false, ok: false, reason: 'review_evidence_missing', message: `${reviewTicket.ref} has no explicit PASS, FIX, or FAIL evidence comment authored by its terminal reviewer runtime.` };
+  // Recognized (not just ok) even when no decision comment exists at all: this
+  // is a terminal native Codex reviewer attempt in scope for review_outcome, so
+  // a bare `done` with no PASS/FIX/FAIL comment must block integration below
+  // rather than silently falling through as "not a native review".
+  if (!decisions.length) return { recognized: true, ok: false, reason: 'review_evidence_missing', message: `${reviewTicket.ref} has no explicit PASS, FIX, or FAIL evidence comment authored by its terminal reviewer runtime.` };
   if (decisions.length !== 1) return { recognized: true, ok: false, reason: 'review_evidence_ambiguous', message: `${reviewTicket.ref} has multiple terminal reviewer outcome comments; a fresh, single-outcome review is required.` };
   const { comment, parsed } = decisions[0];
   if (!parsed.ok) return { recognized: true, ok: false, reason: 'review_evidence_invalid', message: `${reviewTicket.ref} outcome evidence is invalid: ${parsed.message}.` };
@@ -497,9 +510,15 @@ function terminalReviewFailure(ticket: any, relation: any) {
   if (terminalEvidence.recognized && !terminalEvidence.ok) {
     return terminalEvidence.message || `${reviewRelationRef(relation)} has invalid terminal review evidence`;
   }
-  if (terminalEvidence.ok && terminalEvidence.outcome === 'rejected'
-    && reviewRelationOutcome(relation) !== 'rejected') {
-    return `${reviewRelationRef(relation)} has an authenticated FIX/FAIL outcome for ${ticket.ref}; record it with review_outcome before any integration attempt`;
+  // Valid PASS or FIX/FAIL evidence on its own is not the terminal fact: native
+  // integration requires `accepted` (or the FIX/FAIL `rejected`) recorded on
+  // both binding halves via review_outcome. A `done` that only carries a PASS
+  // comment still leaves the mirror `planned` until that recording happens, so
+  // it blocks here exactly like a bare `done` with no comment at all.
+  if (terminalEvidence.ok && reviewRelationOutcome(relation) !== terminalEvidence.outcome) {
+    return terminalEvidence.outcome === 'rejected'
+      ? `${reviewRelationRef(relation)} has an authenticated FIX/FAIL outcome for ${ticket.ref}; record it with review_outcome before any integration attempt`
+      : `${reviewRelationRef(relation)} has authenticated PASS evidence for ${ticket.ref} that is not yet recorded; record it with review_outcome before any integration attempt`;
   }
   return null;
 }

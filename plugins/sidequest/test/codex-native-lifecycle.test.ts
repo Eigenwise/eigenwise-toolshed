@@ -47,11 +47,30 @@ git(repository, 'commit', '-qm', 'initial');
 
 const store = require('../lib/store.js');
 const mcp = require('../lib/mcp.js');
+const db = require('../lib/db.js');
 const reviewBinding = require('../lib/kernel/review-binding.js');
 const worktreeLease = require('../lib/kernel/worktree.js');
+
+// store.js exposes no public putTicket; fixtures that need to write a ticket
+// state directly (a claim-free terminal submission that never ran through the
+// dispatch/claim/submit tools) persist through the same db row shape store.js
+// itself writes (see store.ts ticketStorageRow), matching review-binding.test.ts.
+function persist(projectSlug: string, ticket: any) {
+  db.putRow(db.openDb(home), 'tickets', {
+    id: ticket.id,
+    project: projectSlug,
+    ref: ticket.ref,
+    status: ticket.status,
+    archived: ticket.archived ? 1 : 0,
+    ord: ticket.order,
+    claim_by: ticket.claim ? ticket.claim.by : null,
+    data: ticket,
+  });
+}
 const { slug } = store.ensureProject(repository);
 store.setCategory({ id: 'codex-native', name: 'Codex native', route: { model: 'native-codex-gpt-5-6-sol', effort: 'medium' }, enabled: true });
 store.setCategory({ id: 'review-audit', name: 'Review audit', route: { model: 'native-codex-gpt-5-6-sol', effort: 'medium' }, readonly: true, enabled: true });
+store.setCategory({ id: 'claude-mixed-source', name: 'Claude mixed source', route: { model: 'sonnet', effort: 'medium' }, readonly: true, enabled: true });
 
 function tool(name: string) {
   const found = mcp.TOOLS.find((entry: any) => entry.name === name);
@@ -141,6 +160,52 @@ function prepareBoundNativeReview(label: string, sameRuntime = false) {
   }));
   assert.equal(reviewStart.ok, true, JSON.stringify(reviewStart));
   return { source, candidate, review, reviewTree, reviewerThread };
+}
+
+// A Claude submitter (dispatch.runtimeHost never set to 'codex') bound to a
+// native Codex reviewer: the live SQ-90/SQ-92 case. The source half is built
+// directly as a claim-free terminal submission (the same pattern review-binding
+// tests use) since only the reviewer's runtime is meant to gate native closeout.
+function prepareMixedReview(label: string) {
+  const sourceThread = `claude-source-${label}`;
+  const reviewerThread = `reviewer-${label}`;
+  const base = git(repository, 'rev-parse', 'HEAD');
+  const sourceTree = checkout(base, `${label}-mixed-source`);
+  fs.writeFileSync(path.join(sourceTree, 'candidate.txt'), `mixed candidate ${label}\n`);
+  git(sourceTree, 'add', 'candidate.txt');
+  git(sourceTree, 'commit', '-qm', `mixed candidate ${label}`);
+  const candidate = git(sourceTree, 'rev-parse', 'HEAD');
+  const created = store.createTicket(slug, { title: `mixed source ${label}`, category: 'claude-mixed-source', files: ['candidate.txt'] });
+  const terminalAt = new Date().toISOString();
+  const source = store.getTicket(slug, created.id);
+  source.status = 'doing';
+  source.claim = null;
+  source.dispatch = {
+    terminalAt,
+    outcome: 'submitted',
+    agentId: `claude-agent-${sourceThread}`,
+    attempts: [{ outcome: 'submitted', commit: candidate, agentId: `claude-agent-${sourceThread}`, terminalAt }],
+  };
+  source.submission = {
+    by: `claude-thread:${sourceThread}`,
+    at: terminalAt,
+    commit: candidate,
+    verify: 'manual: mixed fixture candidate verified',
+    changedPaths: ['candidate.txt'],
+    integratedAt: null,
+  };
+  persist(slug, source);
+  const review = store.createTicket(slug, {
+    title: `mixed review ${label}`, category: 'review-audit', files: ['candidate.txt'],
+  }, { ref: created.ref, commit: candidate });
+  const reviewDispatch = runtime('native-root', repository, () => tool('codex_dispatch').handler({ ref: review.ref, project: repository }));
+  assert.equal(reviewDispatch.baseCommit, candidate);
+  const reviewTree = checkout(candidate, `${label}-mixed-review`);
+  const reviewStart = runtime(reviewerThread, reviewTree, () => tool('codex_start').handler({
+    ref: review.ref, project: repository, executor: reviewDispatch.executor, tokenFile: reviewDispatch.tokenFile,
+  }));
+  assert.equal(reviewStart.ok, true, JSON.stringify(reviewStart));
+  return { source: store.getTicket(slug, created.ref), candidate, review, reviewTree, reviewerThread };
 }
 
 function nativeReviewComment(fixture: any, body: string) {
@@ -433,6 +498,14 @@ test('separate Codex worker and reviewer satisfy bound provenance', async () => 
     ref: review.ref, project: repository, executor: reviewDispatch.executor, tokenFile: reviewDispatch.tokenFile,
   }));
   assert.equal(reviewStarted.ok, true, JSON.stringify(reviewStarted));
+  const passComment = runtime('reviewer-two', reviewTree, () => tool('comment').handler({
+    ref: review.ref, project: repository, by: 'codex-thread:reviewer-two',
+    body: [
+      'PASS: The exact submitted candidate satisfies the review contract.',
+      `CHECK: pinned candidate verification | PASS | The declared checks passed at ${candidate}.`,
+    ].join('\n'),
+  }));
+  assert.equal(passComment.ok, true, JSON.stringify(passComment));
   assert.throws(() => runtime('reviewer-two', reviewTree, () => tool('done').handler({
     ref: review.ref, project: repository, by: 'codex-thread:reviewer-two',
     body: 'Incorrect model stamp.', model: 'sonnet',
@@ -443,6 +516,12 @@ test('separate Codex worker and reviewer satisfy bound provenance', async () => 
   }));
   assert.equal(reviewed.ok, true, JSON.stringify(reviewed));
   assert.equal(reviewBinding.reviewProvenance(store.getTicket(slug, source.ref), store.getTicket(slug, review.ref)).reason, 'ok');
+  // A PASS comment plus done alone leaves the outcome planned; review_outcome
+  // must record the authenticated acceptance before integration is admitted.
+  assert.equal(store.validateIntegrationSubmission(slug, source.ref, {}).reason, 'candidate_review_required');
+  const recorded = runtime('native-root', repository, () => tool('review_outcome').handler({ ref: review.ref, project: repository }));
+  assert.equal(recorded.ok, true, JSON.stringify(recorded));
+  assert.equal(recorded.reviewOutcome, 'accepted');
   assert.notEqual(store.validateIntegrationSubmission(slug, source.ref, {}).reason, 'candidate_review_required');
   const delivered = await tool('integrate').handler({ project: repository, ref: source.ref, by: 'native-root' });
   assert.equal(delivered.ok, true, JSON.stringify(delivered));
@@ -533,6 +612,11 @@ test('review_outcome records structured PASS evidence on both binding halves', (
   assert.equal(comment.ok, true, JSON.stringify(comment));
   assert.equal(finishNativeReview(fixture, 'Reviewed the exact submitted candidate.').ok, true);
 
+  const beforeRecord = store.validateIntegrationSubmission(slug, fixture.source.ref, {});
+  assert.equal(beforeRecord.reason, 'candidate_review_required', 'a PASS comment plus done alone leaves outcome planned; it must not integrate before review_outcome records acceptance');
+  assert.equal(store.getTicket(slug, fixture.review.ref).reviewTarget.outcome, undefined);
+  assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'planned');
+
   const recorded = recordNativeReviewOutcome(fixture);
   assert.equal(recorded.ok, true, JSON.stringify(recorded));
   assert.equal(recorded.reviewOutcome, 'accepted');
@@ -560,6 +644,44 @@ test('review_outcome refuses a nonterminal FAIL comment and a forged reviewer au
   assert.equal(refused.reason, 'review_not_terminal');
   assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'planned');
   assert.equal(store.validateIntegrationSubmission(slug, fixture.source.ref, {}).reason, 'candidate_review_required');
+});
+
+test('validateIntegrationSubmission blocks a native review after a bare done with no PASS or FAIL evidence', () => {
+  const fixture = prepareBoundNativeReview('bare-native-done');
+  assert.equal(finishNativeReview(fixture, 'Reviewed the exact submitted candidate.').ok, true);
+
+  const blocked = store.validateIntegrationSubmission(slug, fixture.source.ref, {});
+  assert.equal(blocked.reason, 'candidate_review_required', 'a native reviewer\'s bare done with no PASS/FIX/FAIL evidence must not integrate');
+  assert.equal(store.getTicket(slug, fixture.review.ref).reviewTarget.outcome, undefined);
+  assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'planned');
+
+  const result = recordNativeReviewOutcome(fixture);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'review_evidence_missing');
+  assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'planned');
+});
+
+test('a Claude submitter bound to a native Codex reviewer still requires review_outcome to record acceptance', () => {
+  const fixture = prepareMixedReview('mixed-accept');
+  assert.notEqual(store.getTicket(slug, fixture.source.ref).dispatch?.runtimeHost, 'codex', 'fixture sanity: the submitter runtime is not native Codex');
+  assert.equal(store.getTicket(slug, fixture.review.ref).dispatch?.runtimeHost, 'codex', 'fixture sanity: the reviewer runtime is native Codex');
+
+  const comment = nativeReviewComment(fixture, [
+    'PASS: The exact submitted candidate satisfies the review contract.',
+    `CHECK: pinned candidate verification | PASS | The declared checks passed at ${fixture.candidate}.`,
+  ].join('\n'));
+  assert.equal(comment.ok, true, JSON.stringify(comment));
+  assert.equal(finishNativeReview(fixture, 'Reviewed the exact submitted candidate.').ok, true);
+
+  const beforeRecord = store.validateIntegrationSubmission(slug, fixture.source.ref, {});
+  assert.equal(beforeRecord.reason, 'candidate_review_required', 'closeout is keyed to the reviewer being native Codex, regardless of the submitter runtime');
+
+  const recorded = recordNativeReviewOutcome(fixture);
+  assert.equal(recorded.ok, true, JSON.stringify(recorded));
+  assert.equal(recorded.reviewOutcome, 'accepted');
+  assert.equal(store.getTicket(slug, fixture.review.ref).reviewTarget.outcome, 'accepted');
+  assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'accepted');
+  assert.notEqual(store.validateIntegrationSubmission(slug, fixture.source.ref, {}).reason, 'candidate_review_required');
 });
 
 test('review_outcome rejects untrusted, malformed, and self-review evidence', () => {
