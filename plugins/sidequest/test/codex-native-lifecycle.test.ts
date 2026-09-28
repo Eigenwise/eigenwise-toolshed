@@ -454,7 +454,8 @@ test('review_outcome derives a terminal FIX result and keeps rejection and super
   assert.equal(tool('review_outcome').inputSchema.properties.outcome, undefined, 'the caller cannot choose the review outcome');
   const comment = nativeReviewComment(fixture, [
     'FIX: The submitted completion path omits the durable bound-review outcome.',
-    'EVIDENCE: The source mirror remains planned after the reviewer closed the exact candidate.',
+    'FINDING: The source mirror remains planned after the reviewer closed the exact candidate.',
+    'EVIDENCE: The terminal review left the source binding planned for this exact candidate.',
     'REQUIRED: Record the authenticated terminal review result on both binding halves.',
   ].join('\n'));
   assert.equal(comment.ok, true, JSON.stringify(comment));
@@ -470,6 +471,11 @@ test('review_outcome derives a terminal FIX result and keeps rejection and super
   assert.equal(recorded.evidence.candidate.value, fixture.candidate);
   assert.equal(recorded.evidence.decisionCommentId, comment.commentId);
   assert.equal(recorded.evidence.reviewer.agentId, `codex-thread:${fixture.reviewerThread}`);
+  assert.deepEqual(recorded.evidence.findings, [{
+    description: 'The source mirror remains planned after the reviewer closed the exact candidate.',
+    evidence: 'The terminal review left the source binding planned for this exact candidate.',
+    requiredChange: 'Record the authenticated terminal review result on both binding halves.',
+  }]);
   assert.equal(store.getTicket(slug, fixture.review.ref).reviewTarget.outcome, 'rejected');
   assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'rejected');
 
@@ -489,6 +495,33 @@ test('review_outcome derives a terminal FIX result and keeps rejection and super
   });
   assert.equal(superseded.ok, false, 'recording rejection alone does not satisfy guarded supersession');
   assert.equal(store.getTicket(slug, fixture.source.ref).submission.commit, fixture.candidate);
+});
+
+test('review_outcome rejects a bare FIX marker without structured rejection evidence', () => {
+  const fixture = prepareBoundNativeReview('bare-fix-evidence');
+  assert.equal(nativeReviewComment(fixture, 'FIX: Looks bad').ok, true);
+  assert.equal(finishNativeReview(fixture, 'Reviewed the exact submitted candidate.').ok, true);
+
+  const result = recordNativeReviewOutcome(fixture);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'review_evidence_invalid');
+  assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'planned');
+});
+
+test('review_outcome requires a named failing CHECK to use its evidence', () => {
+  const fixture = prepareBoundNativeReview('unnamed-failing-check');
+  assert.equal(nativeReviewComment(fixture, [
+    'FIX: The submitted candidate needs a repair.',
+    'FINDING: The source binding lacks a recorded terminal outcome.',
+    'CHECK: | FAIL | The review record remains planned for this candidate.',
+    'REQUIRED: Record the authenticated terminal review result.',
+  ].join('\n')).ok, true);
+  assert.equal(finishNativeReview(fixture, 'Reviewed the exact submitted candidate.').ok, true);
+
+  const result = recordNativeReviewOutcome(fixture);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'review_evidence_invalid');
+  assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'planned');
 });
 
 test('review_outcome records structured PASS evidence on both binding halves', () => {
@@ -555,6 +588,7 @@ test('review_outcome rejects untrusted, malformed, and self-review evidence', ()
   const self = prepareBoundNativeReview('self-review-outcome', true);
   assert.equal(nativeReviewComment(self, [
     'FIX: The source and reviewer are the same runtime.',
+    'FINDING: The immutable terminal attempts share one Codex agent id.',
     'EVIDENCE: The immutable terminal attempts share one Codex agent id.',
     'REQUIRED: Use an independent reviewer runtime.',
   ].join('\n')).ok, true);

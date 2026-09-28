@@ -270,15 +270,15 @@ function normalizedReviewEvidence(comment: any, candidate: any) {
   });
   const evidenceLines = values.evidence || [];
   const findingLines = (values.finding || []).filter(Boolean);
-  if (markerDetail && outcome === 'rejected') findingLines.unshift(markerDetail);
-  const requiredChange = (values['required change'] || values.required || [])[0] || (marker === 'fix' ? markerDetail : '');
+  const evidence = evidenceLines.find(Boolean)
+    || checks.find((check: any) => check.name && check.result === 'fail' && check.evidence)?.evidence
+    || '';
+  const requiredChange = [...(values['required change'] || []), ...(values.required || [])].find(Boolean) || '';
   const summary = (values.summary || [])[0] || markerDetail;
   const acceptedEvidenceValid = outcome !== 'accepted'
     || (checks.length > 0 && checks.every((check: any) => check.name && check.result === 'pass' && check.evidence));
   const rejectedEvidenceValid = outcome !== 'rejected'
-    || (findingLines.length > 0 && Boolean(requiredChange)
-      && (evidenceLines.some(Boolean) || checks.some((check: any) => check.result === 'fail' && check.evidence)
-        || (marker === 'fix' && markerDetail.length >= 8)));
+    || (findingLines.length > 0 && Boolean(evidence) && Boolean(requiredChange));
   if (!summary || !acceptedEvidenceValid || !rejectedEvidenceValid) {
     return { recognized: true, ok: false, message: 'the review comment lacks the structured checks or evidenced finding and required change for its outcome' };
   }
@@ -294,7 +294,7 @@ function normalizedReviewEvidence(comment: any, candidate: any) {
       checks,
       findings: outcome === 'rejected' ? [{
         description: findingLines[0],
-        evidence: evidenceLines[0] || checks.find((check: any) => check.result === 'fail')?.evidence || markerDetail,
+        evidence,
         requiredChange,
       }] : [],
       format: 'comment-markers',
