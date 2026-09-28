@@ -218,8 +218,8 @@ export async function sourceMetrics(sourcePath, coverageScripts, lizardEntries) 
   });
 }
 
-function runGit(argumentsList) {
-  const result = spawnSync('git', argumentsList, { cwd: repositoryRoot, encoding: 'utf8' });
+function runGit(argumentsList, cwd = repositoryRoot) {
+  const result = spawnSync('git', argumentsList, { cwd, encoding: 'utf8' });
   if (result.status !== 0) throw new Error(result.stderr.trim() || `git ${argumentsList.join(' ')} failed`);
   return result.stdout.trim();
 }
@@ -232,22 +232,36 @@ function mergeBase(base) {
   return base || runGit(['merge-base', 'HEAD', integrationBranch()]);
 }
 
-async function baselineFunctions(base, relativePath) {
-  const text = runGit(['show', `${base}:${relativePath}`]);
+export function diffEntries(base, pathspec, cwd = repositoryRoot) {
+  const args = ['diff', '--name-status', '-M', base];
+  if (pathspec) args.push('--', pathspec);
+  return runGit(args, cwd).split('\n').filter(Boolean).map((line) => {
+    const [status, ...fields] = line.split('\t');
+    return status.startsWith('R') ? { path: fields[1], baselinePath: fields[0] } : { path: fields[0], baselinePath: fields[0] };
+  });
+}
+
+export async function baselineFunctions(base, relativePath, cwd = repositoryRoot) {
+  const text = runGit(['show', `${base}:${relativePath}`], cwd);
   return new Map((await collectFunctions(text, relativePath)).map((descriptor) => [descriptor.identity, descriptor.fingerprint]));
 }
 
+function pathAndBaselinePath(entry) {
+  return typeof entry === 'string' ? [entry, entry] : [entry.path, entry.baselinePath ?? entry.path];
+}
+
 export async function changedMetricsAgainstBase(metrics, changedPaths, base, readBaseline = baselineFunctions) {
-  const changed = new Set(changedPaths);
+  const baselinePathByPath = new Map(changedPaths.map(pathAndBaselinePath));
   const changedMetrics = [];
   const byPath = Map.groupBy(metrics, (metric) => metric.relativePath);
   for (const [relativePath, fileMetrics] of byPath) {
-    if (!changed.has(relativePath)) continue;
+    if (!baselinePathByPath.has(relativePath)) continue;
+    const baselinePath = baselinePathByPath.get(relativePath);
     let baseline = new Map();
     try {
-      baseline = await readBaseline(base, relativePath);
+      baseline = await readBaseline(base, baselinePath);
     } catch (error) {
-      if (!String(error.message).includes(`path '${relativePath}' does not exist`)) throw error;
+      if (!String(error.message).includes(`path '${baselinePath}' does not exist`)) throw error;
     }
     changedMetrics.push(...fileMetrics.filter((metric) => baseline.get(metric.identity) !== metric.fingerprint));
   }
@@ -297,15 +311,17 @@ export async function run(options = parseArguments(process.argv.slice(2))) {
   try {
     const coverageScripts = await readCoverage(coverageDirectory);
     const base = mergeBase(options.base);
-    const allChangedPaths = runGit(['diff', '--name-only', base]).split('\n').filter(Boolean);
-    const changedPaths = runGit(['diff', '--name-only', base, '--', 'plugins']).split('\n').filter(Boolean);
+    const allChangedEntries = diffEntries(base);
+    const changedEntries = diffEntries(base, 'plugins');
+    const allChangedPaths = allChangedEntries.map((entry) => entry.path);
+    const changedPaths = changedEntries.map((entry) => entry.path);
     const sources = (await sourcePaths()).filter((sourcePath) => changedPaths.includes(path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/')));
     const lizardResult = spawnSync('lizard', ['--csv', ...sources], { cwd: repositoryRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
     if (lizardResult.status !== 0) throw new Error(`lizard failed with exit ${lizardResult.status ?? 'signal'}`);
     const lizardRecords = parseLizardCsv(lizardResult.stdout ?? '');
     const lizardByPath = Map.groupBy(lizardRecords, (entry) => normalizedPath(entry.file));
     const metrics = (await Promise.all(sources.map((sourcePath) => sourceMetrics(sourcePath, coverageScripts, lizardByPath.get(normalizedPath(sourcePath)) ?? [])))).flat();
-    const changedMetrics = await changedMetricsAgainstBase(metrics, changedPaths, base);
+    const changedMetrics = await changedMetricsAgainstBase(metrics, changedEntries, base);
     const unverified = changedMetrics.filter((metric) => metric.unverified);
     const failures = changedMetrics.filter((metric) => !metric.unverified && metric.crap >= THRESHOLD).map(formatMetric);
     const displayedMetrics = options.all ? metrics : changedMetrics;
