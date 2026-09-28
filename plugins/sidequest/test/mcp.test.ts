@@ -2970,22 +2970,9 @@ test('GH-159: a reviewed interaction that renames a submitted path stays inside 
     store.getTicket(project, ticket.ref).submission.integration.deliveryIdentity.interaction.paths.sort(),
     ['docs/adr/0094-landed.md', 'docs/adr/0095-landed.md'],
   );
-
-  const unrelated = landedDeliveryFixture('renamed unrelated file', ['docs']);
-  const unrelatedCandidate = commitFiles(unrelated.worktree, { 'docs/adr/0094-landed.md': '# 94. Landed decision\n' }, 'add ADR 0094');
-  submitLandedDeliveryFixture(unrelated, [unrelatedCandidate]);
-  gitAt(unrelated.worktree, ['mv', 'README.md', 'docs/README.md']);
-  gitAt(unrelated.worktree, ['commit', '-m', 'move an unrelated file']);
-  const refused = await callTool('groomClose', {
-    project: unrelated.worktree, ref: unrelated.ticket.ref, by: 'delivery-integrator', deliveryCommit: unrelatedCandidate,
-    deliveryInteractionCommit: gitAt(unrelated.worktree, ['rev-parse', 'HEAD']), reason: 'Renaming a path the candidate never submitted stays outside it.',
-  });
-  assert.equal(refused.ok, false);
-  assert.equal(refused.reason, 'delivery_interaction_outside_candidate');
-  assert.match(refused.message, /outside the submitted candidate: README\.md, docs\/README\.md\./);
 });
 
-test('a reviewed interaction still refuses a malformed, repeated, unreachable, or unrelated lineage', () => {
+test('a reviewed interaction still refuses a malformed, repeated, unreachable, or unrelated lineage, and an unsubmitted rename', () => {
   const fixture = landedDeliveryFixture('interaction lineage', ['docs']);
   const { worktree, project, ticket, base } = fixture;
   const candidate = commitFiles(worktree, { 'docs/landed.md': 'landed\n' }, 'landed candidate');
@@ -3007,6 +2994,12 @@ test('a reviewed interaction still refuses a malformed, repeated, unreachable, o
     assert.equal(refused.reason, reason, interaction);
     assert.match(refused.message, message);
   }
+
+  gitAt(worktree, ['mv', 'README.md', 'docs/README.md']);
+  gitAt(worktree, ['commit', '-m', 'move a file the candidate never submitted']);
+  const unsubmittedRename = record(gitAt(worktree, ['rev-parse', 'HEAD']));
+  assert.equal(unsubmittedRename.reason, 'delivery_interaction_outside_candidate');
+  assert.deepEqual(unsubmittedRename.unrelatedPaths, ['README.md', 'docs/README.md']);
   assert.equal(store.getTicket(project, ticket.ref).status, 'doing');
 });
 
