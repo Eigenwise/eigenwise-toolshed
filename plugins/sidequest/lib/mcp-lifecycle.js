@@ -71,6 +71,15 @@ const VERIFICATION_WAIVER_PROP = {
     expiresAt: { type: "string", description: "Future ISO timestamp after which the waiver is invalid." }
   }
 };
+function claimWorktreeCorrection(ticket) {
+  const dispatch = ticket?.dispatch;
+  const exchange = dispatch?.worktreeBindingExchange;
+  if (exchange?.reason !== "claim_token" || dispatch.sharedTree !== false || !dispatch.worktree) return null;
+  return {
+    worktree: dispatch.worktree,
+    worktreeCorrection: `${ticket.ref} is leased to ${dispatch.worktree}, the checkout this executor runs in. A briefing path of ${exchange.from || "another checkout"} belongs to ${exchange.with || "a sibling dispatch"}; ignore it and work only in ${dispatch.worktree}.`
+  };
+}
 function compactIntegrationDelivery(integration) {
   const { verify: _verify, ...delivery } = integration;
   return delivery;
@@ -392,7 +401,7 @@ const tools = [
       const by = requireBy(args, "claim");
       const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, reason: args.reason, tokenFile: args.tokenFile, executor: args.executor, effort: args.effort, source: "mcp", sessionId: sessionOf(args), requireBoundAgent: true });
       if (!res.ok) res.message = res.reason === "executor_mismatch" ? claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim, meta.path) : res.message || claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim, meta.path);
-      return mutationAck(slug, res);
+      return mutationAck(slug, res, res.ok ? claimWorktreeCorrection(res.ticket) : null);
     }
   },
   {
@@ -541,7 +550,7 @@ const tools = [
         abandonSubmission: { type: "boolean", description: "Retire a candidate that never landed; refused while it is reachable from this ticket's prepared integration target." },
         recoveryEvidence: { type: "string", description: 'Terminal-agent evidence that retires an unclaimed prepared or launched dispatch, whether or not a runtime ever bound to it, and closes the ticket in the same call - but only once it is past the retirement deadline one authority sets for every route. Inside that deadline this refuses with the same countdown `dispatch` prints, naming the instant it becomes retirable and the runtime signal it measured from. `sidequest groom-close --recovery-evidence` runs this exact authority, so both surfaces print the same refusal and retire-and-close together. With deliveryMethod:"manual", deliveryCommit must already be reachable from the recorded integration branch.' }
       },
-      required: ["ref", "by", "reason"]
+      required: ["ref", "reason"]
     },
     async handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, "groomClose");
@@ -643,10 +652,10 @@ const tools = [
     handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, "release");
       const by = requireBy(args, "release");
+      const evidence = store.technicalBlockerRelease(Object.assign({}, args, { releaseKind: args.kind }), { requireClassification: true });
+      if (!evidence.ok) return mutationAck(slug, { ok: false, reason: evidence.reason, message: evidence.message });
       const reason = requiredReleaseReason(args);
       const ticket = store.getTicket(slug, args.ref);
-      const evidence = store.technicalBlockerRelease(Object.assign({}, args, { releaseKind: args.kind }));
-      if (!evidence.ok) return mutationAck(slug, { ok: false, ticket, reason: evidence.reason, message: evidence.message });
       const res = store.releaseTicket(slug, args.ref, by, {
         status: args.kind === "oracle" ? "awaiting-oracle" : args.status,
         oracle: args.oracle,
@@ -987,10 +996,10 @@ const tools = [
         const groupUsesGit = store.submissionUsesGit(ticket);
         if (groupUsesGit) {
           const lock = await publish.publishLockStatus(meta.path);
-          if (lock.locked && !publish.publishLockOwnedBySession(meta.path, sessionOf(args))) {
+          if (lock.locked && !publish.publishLockOwnedBySession(meta.path, { by, sessionId: sessionOf(args) })) {
             return mutationAck(slug, combinedRefusal(ticket, [{
               reason: "publish_lock_required",
-              message: `integrate: publish lock is held by ${lock.holder?.by || lock.holder?.sessionId || "another session"}; acquire or re-acquire it before delivery.`
+              message: `integrate: publish lock is held by ${lock.holder?.by || lock.holder?.sessionId || "another session"} (lock session ${lock.holder?.sessionId || "unavailable"}; MCP runtime session ${sessionOf(args) || "unavailable"}); acquire or re-acquire it before delivery.`
             }]));
           }
         }
@@ -1028,10 +1037,10 @@ const tools = [
       const usesGit = store.submissionUsesGit(ticket);
       if (usesGit) {
         const lock = await publish.publishLockStatus(meta.path);
-        if (lock.locked && !publish.publishLockOwnedBySession(meta.path, sessionOf(args))) {
+        if (lock.locked && !publish.publishLockOwnedBySession(meta.path, { by, sessionId: sessionOf(args) })) {
           failures.push({
             reason: "publish_lock_required",
-            message: `integrate: publish lock is held by ${lock.holder?.by || lock.holder?.sessionId || "another session"}; acquire or re-acquire it before delivery.`
+            message: `integrate: publish lock is held by ${lock.holder?.by || lock.holder?.sessionId || "another session"} (lock session ${lock.holder?.sessionId || "unavailable"}; MCP runtime session ${sessionOf(args) || "unavailable"}); acquire or re-acquire it before delivery.`
           });
         }
       }

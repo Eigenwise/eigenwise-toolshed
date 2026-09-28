@@ -237,8 +237,15 @@ function assertMutationFreshness(projectArg) {
   });
   if (freshness.refusal) throw new Error(freshness.refusal);
 }
+function groomCloseArgs(tool, args) {
+  if (tool.name !== "groomClose" || String(args.by || "").trim()) return args;
+  const sessionId = String(process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "").trim();
+  return sessionId ? Object.assign({}, args, { by: sessionId }) : args;
+}
 async function runTool(tool, rawArgs) {
-  const { args, aliases } = validateToolArguments(tool, rawArgs);
+  const validated = validateToolArguments(tool, rawArgs);
+  const args = groomCloseArgs(tool, validated.args);
+  const { aliases } = validated;
   if (!toolMutates(tool.name, args)) {
     const output = await tool.handler(args);
     return acknowledgeAliases(tool.name === "context_page" ? output : boundedReadPayload(tool.name, output), aliases);

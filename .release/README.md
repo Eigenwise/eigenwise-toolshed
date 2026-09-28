@@ -1,6 +1,6 @@
 # Release fragments
 
-`.release/unreleased/` is the queue of changes that have landed but are not published yet. The orchestrator keeps one fragment per integrated ticket and cuts the release from `main` at `HEAD`. The fragment is the repository-owned record of what the board integrated.
+`.release/unreleased/` is the queue of changes that have landed but are not published yet. The orchestrator normally prepares the release from `develop` at its selected revision (`HEAD` by default, or `--sha <rev>` to pin a descendant), with `--base-branch` available when another base is intentional. A reviewed promotion PR moves the prepared release to `main`. The fragment is the repository-owned record of what the board integrated.
 
 `cut.mjs` owns marketplace and plugin version bumps, changelogs, release tags, and fragment consumption. Ticket work records the fragment and does not hand-edit plugin or marketplace versions. See [`scripts/release/README.md`](../scripts/release/README.md) for the release lifecycle and recovery steps.
 

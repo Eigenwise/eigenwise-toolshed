@@ -78,10 +78,13 @@ function runStateControl(t, environment) {
     const expired = state.readUpstreamUnavailable(state.UPSTREAM_UNAVAILABLE_TTL_MS + 1);
     state.setUpstreamUnavailable({ statusCode: 503, now: state.UPSTREAM_UNAVAILABLE_TTL_MS + 1 });
     const retained = JSON.parse(fs.readFileSync(state.CODEX_UPSTREAM_UNAVAILABLE_PATH, 'utf8'));
-    state.clearUpstreamUnavailable();
     state.setUpstreamBlocked({ statusCode: 429, evidence: 'headers:x-openai-request-id' });
     const suppressed = state.setUpstreamUnavailable({ statusCode: 502, now: state.UPSTREAM_UNAVAILABLE_TTL_MS + 2 });
-    process.stdout.write(JSON.stringify({ expired, retained, suppressed, unavailable: state.readUpstreamUnavailable(), blocked: state.readUpstreamBlocked() }));
+    const beforeSetup = { unavailable: state.readUpstreamUnavailable(state.UPSTREAM_UNAVAILABLE_TTL_MS + 1), blocked: state.readUpstreamBlocked() };
+    state.clearUpstreamBlocked();
+    state.clearUpstreamUnavailable();
+    const afterSetup = { unavailable: state.readUpstreamUnavailable(), blocked: state.readUpstreamBlocked() };
+    process.stdout.write(JSON.stringify({ expired, retained, suppressed, beforeSetup, afterSetup }));
   `;
   return new Promise((resolve, reject) => {
     const child = spawnGatewayProcess(t, process.execPath, ['-e', script], { env: environment, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -172,16 +175,20 @@ test('readiness reports each local failure state from an isolated home', async (
   ));
 });
 
-test('transient evidence expires without reader mutation and cannot replace an auth block', async (t) => {
+test('setup clears both isolated upstream records without reader mutation', async (t) => {
   const result = await runStateControl(t, gatewayTestEnvironment(t));
+  const setupSource = fs.readFileSync(path.join(__dirname, '..', 'lib', 'commands.js'), 'utf8');
 
   assert.equal(result.expired, null);
   assert.equal(result.retained.state, 'upstream-unavailable');
   assert.equal(result.retained.statusCode, 503,
     'the new atomic write remains after an expired reader observed the old record');
   assert.equal(result.suppressed, null);
-  assert.equal(result.unavailable, null);
-  assert.equal(result.blocked.state, 'upstream-blocked');
+  assert.equal(result.beforeSetup.unavailable.state, 'upstream-unavailable');
+  assert.equal(result.beforeSetup.blocked.state, 'upstream-blocked');
+  assert.equal(result.afterSetup.unavailable, null);
+  assert.equal(result.afterSetup.blocked, null);
+  assert.match(setupSource, /const r = await startAll\([\s\S]*?\);\s+if \(!r\.ok\) die\(r\.reason\);\s+clearUpstreamBlocked\(\);\s+clearUpstreamUnavailable\(\);/);
 });
 
 test('upstream-blocked survives a health check and clears on a successful Codex request', async (t) => {
@@ -207,6 +214,15 @@ test('upstream-blocked survives a health check and clears on a successful Codex 
   assert.equal(result.before.state, 'upstream-blocked');
   assert.equal(result.afterHealthCheck.state, 'upstream-blocked');
   assert.equal(result.afterSuccess.state, 'ready');
+
+  const gatewaySkill = fs.readFileSync(path.join(__dirname, '..', 'skills', 'model-gateway', 'SKILL.md'), 'utf8');
+  const guide = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'docs', 'src', 'content', 'docs', 'getting-started', 'model-gateway.md'), 'utf8');
+  for (const prose of [gatewaySkill, guide]) {
+    assert.match(prose, /An attributed OpenAI 401, 403, or 429 rejection enters\s+`upstream-blocked`/);
+    assert.match(prose, /An attributed 429 has no TTL: `setup` or a completed successful Codex\s+response clears it, and a later rejected request can latch it again/);
+    assert.match(prose, /persistent 429\s+blocking is a known limitation\s+\(\[issue #190\]/);
+    assert.match(prose, /do not promise a retry or expiry as a cure|a retry or expiry does not cure it/);
+  }
 });
 
 test('shim health retains an OpenAI rejection until a successful proxied request', async (t) => {

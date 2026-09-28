@@ -72,8 +72,8 @@ function sameOwner(holder: any, opts: any): boolean {
   if (!holder) return false;
   const sessionId = opts.sessionId != null ? String(opts.sessionId).trim() : '';
   const by = opts.by != null ? String(opts.by).trim() : '';
-  if (sessionId && holder.sessionId) return String(holder.sessionId) === sessionId;
   if (by && holder.by) return String(holder.by) === by;
+  if (sessionId && holder.sessionId) return String(holder.sessionId) === sessionId;
   if (sessionId || by || holder.sessionId || holder.by) return false;
   return holder.host === os.hostname() && Number(holder.pid) === process.pid;
 }
@@ -151,9 +151,11 @@ async function publishLockStatus(repoPath: string): Promise<any> {
   };
 }
 
-function publishLockOwnedBySession(repoPath: string, sessionId: unknown): boolean {
-  const owner = String(sessionId || '').trim();
-  if (!owner) return false;
+function publishLockOwnedBySession(repoPath: string, owner: string | { by?: unknown; sessionId?: unknown } | null | undefined): boolean {
+  const details = owner && typeof owner === 'object' ? owner : { sessionId: owner };
+  const sessionId = String(details.sessionId || '').trim();
+  const by = String(details.by || '').trim();
+  if (!sessionId && !by) return false;
   try {
     const commonDir = require('node:child_process').execFileSync('git', ['rev-parse', '--git-common-dir'], {
       cwd: repoPath,
@@ -163,7 +165,7 @@ function publishLockOwnedBySession(repoPath: string, sessionId: unknown): boolea
     }).trim();
     const file = path.join(path.resolve(repoPath, commonDir), LOCK_BASENAME);
     const holder = JSON.parse(require('node:fs').readFileSync(file, 'utf8'));
-    return sameOwner(holder, { sessionId: owner }) && lockTargetsRepository(holder, repoPath);
+    return sameOwner(holder, { by, sessionId }) && lockTargetsRepository(holder, repoPath);
   } catch {
     return false;
   }

@@ -354,6 +354,15 @@ function retainedWorktreeAccess(worktree) {
 }
 function ticketContinuationPacket(ticket) {
   const continuation = ticket?.dispatch?.continuation;
+  if (continuation?.mode === "live_claim_resume" && continuation.sourceWorktree && continuation.commit) {
+    return [
+      "Live-claim recovery:",
+      `The prior executor died after claiming this ticket. Continue in its rebound linked worktree ${continuation.sourceWorktree}.`,
+      ...retainedWorktreeAccess(continuation.sourceWorktree),
+      `Before any other work, verify \`git -C ${continuation.sourceWorktree} rev-parse HEAD\` equals \`${continuation.commit}\`.`,
+      "Preserve any retained uncommitted work. The board kept the live claim and binds this ticket to that worktree."
+    ].join("\n");
+  }
   const resume = continuationResumeDecision(continuation);
   if (continuation?.mode === "retained_worktree_resume" && continuation.sourceWorktree && continuation.commit && resume.allowed) {
     const branch = continuation.sourceBranch || "(detached HEAD)";
@@ -408,6 +417,12 @@ function ticketWorktreeSync(ticket, projectPath) {
   if (!branch) return null;
   const continuation = dispatch?.continuation;
   const checkpointBase = String(continuation?.baseCommit || "").trim();
+  if (continuation?.mode === "live_claim_resume" && continuation.sourceWorktree && continuation.commit) {
+    return [
+      `Worktree synchronization (run before work): check \`git -C ${continuation.sourceWorktree} rev-parse HEAD\` equals \`${continuation.commit}\` and \`git -C ${continuation.sourceWorktree} merge-base --is-ancestor ${commit} HEAD\`.`,
+      "If either check fails, stop and report it. Do not reset, rebase, or discard retained work."
+    ].join(" ");
+  }
   const checkpoint = continuation?.mode === "retained_worktree_resume" && checkpointBase && continuation.commit;
   if (checkpoint) {
     return [
@@ -506,10 +521,18 @@ function ticketIsolationContract(ticket, projectPath) {
   const dispatch = ticket.dispatch;
   const continuationWorktree = String(dispatch.continuation?.sourceWorktree || "").trim();
   const expected = continuationWorktree || String(dispatch.worktree || "").trim() || "(immutable worktree binding unavailable; writes will be refused)";
+  if (dispatch.continuation?.mode === "live_claim_resume") {
+    return [[
+      "Live-claim worktree contract: continue in the rebound linked worktree. The prepared spawn intentionally carries no isolation field, so the harness does not create another worktree.",
+      `Expected worktree root: ${expected}`,
+      "Use absolute paths under that worktree. If its Git directory is unavailable, stop and report the lost binding without writing in the shared checkout."
+    ].join("\n")];
+  }
   return [[
     "Worktree isolation contract: this dispatch runs in its own linked worktree, never in the shared checkout.",
     "The harness refuses heredocs in isolated worktrees; Write scripts to your scratchpad and run them by path.",
     `Expected worktree root: ${expected}`,
+    "If the claim result carries `worktreeCorrection`, its `worktree` replaces this root: siblings launched together can be recorded against each other's checkouts until they claim.",
     "Confirm it before your first write, and again after any resume from a coordinator message: `git rev-parse --git-dir` must differ from `git rev-parse --git-common-dir`.",
     `If they match you are in the shared checkout ${root}. Stop. Write nothing, tell the orchestrator this ticket lost its worktree and needs re-dispatch, and name any work you already have staged there so it can be committed out of the shared tree rather than lost.`,
     `If it is a DIFFERENT linked worktree, the binding is crossed: commit, submit and verify-capture refuse and name the other live claim, because anything the board diffs in ${expected} would be that executor's work, test names included. Do not enter the bound tree or work around the refusal. Keep your commit and branch where they are, comment that hash as the crossing evidence, then release this ticket with kind \`technical_blocker\`, quoting the refusal as its command and output evidence; nothing rebinds a bound worktree, so the orchestrator redispatches it onto a checkout of its own and salvages your commit by hash.`
@@ -633,7 +656,7 @@ function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeou
     verify,
     verifierCommand ? "Run it through " + capturedVerifyCommand(verifierCommand, ticket?.ref, project, dispatchBoundWorktree(ticket)) + " in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. Run it only over a clean worktree: a successful wrapper run records its completed capture identity against this ticket and the checked Git revision, and submit refuses prose or a retyped command without that matching record. A backgrounded verify's completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. When the pinned verifier needs paths outside declared scope, call scopeRequest with those paths and wait; do not release a verified candidate instead. Executors may report evidence only; they cannot replace, skip, or weaken this verifier." : "Record evidence for the pinned verifier. Executors may not replace, skip, or weaken it; skipping requires an authorized bounded waiver recorded as a Diagnostic.",
     evidenceGuidance || "",
-    "Execution survival: Budget tool calls and run the declared verify command early, rather than only at the end. If the budget nears exhaustion after partly completing the contract, commit and submit the verified portion with evidence and plainly name what remains: a partial submission with proof beats a dead run. Never leave verified work uncommitted. Board MCP is the executor lifecycle authority. If the Board MCP server is unavailable, stop and report it to the user instead of retrying. The user must run /mcp and reconnect plugin:sidequest:board, or restart Claude Code. Do not use the Sidequest CLI or raw Agent as a fallback.",
+    "Execution survival: Budget tool calls and preserve progress early. If the budget nears exhaustion before completing the ticket contract, use the existing Continuation checkpoint path: make a scoped checkpoint commit, write a `Continuation checkpoint` comment with the exact remaining work and verification status, release the ticket to `todo`, and end for a fresh continuation dispatch. Do not submit incomplete ticket work as ready. Never leave verified work uncommitted. Board MCP is the executor lifecycle authority. If the Board MCP server is unavailable, stop and report it to the user instead of retrying. The user must run /mcp and reconnect plugin:sidequest:board, or restart Claude Code. Do not use the Sidequest CLI or raw Agent as a fallback.",
     "If Sidequest itself misbehaves, such as a refusal that contradicts observed state, a dead retrieval handle, a guard loop, or a reproducible tool error, report it to the user with the reproducing evidence and treat it as an upstream defect. Executors also put that evidence in a ticket comment so the orchestrator sees it. Do not encode a workaround in project rules, hooks, or memory; any unavoidable stopgap must be marked temporary and name the defect it awaits.",
     ...highStakes.length ? [highStakes.join("\n")] : [],
     boundReview || "",
@@ -813,7 +836,7 @@ function renderTicketBriefing(ticket, nonce, slug, projectPath) {
 }
 function ticketIsolation(ticket, sharedTree) {
   const continuationMode = ticket?.dispatch?.continuation?.mode;
-  return sharedTree === true || continuationMode === "retained_worktree_resume" || continuationMode === "dirty_worktree_resume" ? null : "worktree";
+  return sharedTree === true || ["retained_worktree_resume", "dirty_worktree_resume", "live_claim_resume"].includes(continuationMode) ? null : "worktree";
 }
 function withProjectIdentity(prompt, projectPath) {
   const text = String(prompt || "").trim();

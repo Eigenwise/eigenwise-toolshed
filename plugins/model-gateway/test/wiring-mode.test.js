@@ -22,7 +22,7 @@ function fixture(t) {
   return { home, project };
 }
 
-function run(home, project, args) {
+function run(home, project, args, extraEnv = {}) {
   const { ANTHROPIC_BASE_URL, ...environment } = process.env;
   const result = spawnGatewayProcessSync(process.execPath, [CLI, ...args], {
     cwd: project,
@@ -39,6 +39,7 @@ function run(home, project, args) {
       USERPROFILE: home,
       CODEX_GATEWAY_PORT: '9',
       CODEX_GATEWAY_PROXY_PORT: '9',
+      ...extraEnv,
     },
   });
   assert.ifError(result.error);
@@ -48,6 +49,22 @@ function run(home, project, args) {
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(value, null, 2));
+}
+
+function fakeClaude(home) {
+  const bin = path.join(home, 'bin');
+  const script = path.join(bin, 'fake-claude.js');
+  const command = path.join(bin, process.platform === 'win32' ? 'claude.cmd' : 'claude');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(script, [
+    "'use strict';",
+    "const args = process.argv.slice(2);",
+    "if (args.includes('--version')) process.stdout.write('fake-claude 2.0.0\\n');",
+    "else { const alias = args[args.indexOf('--model') + 1]; console.log(JSON.stringify({ type: 'system', subtype: 'init', model: alias === 'opus' ? 'claude-opus-5-5' : `claude-${alias}-5` })); }",
+  ].join('\n'));
+  if (process.platform === 'win32') fs.writeFileSync(command, `@\"${process.execPath}\" \"${script}\" %*\r\n`);
+  else fs.writeFileSync(command, `#!/bin/sh\nexec \"${process.execPath}\" \"${script}\" \"$@\"\n`, { mode: 0o755 });
+  return command;
 }
 
 function wireProject(project, baseUrl = DEFAULT_BASE_URL) {
@@ -147,6 +164,76 @@ test('project wiring registry records writes and prunes missing or unowned setti
   writeJson(path.join(otherProject, '.claude', 'settings.local.json'), { env: { ANTHROPIC_BASE_URL: 'http://user-owned.example' } });
   assert.equal(run(home, project, ['env', '--write-user']).code, 0);
   assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, []);
+});
+
+test('pin updates registered projects, skips user pins, and prunes missing entries', (t) => {
+  const { home, project } = fixture(t);
+  const otherProject = path.join(path.dirname(project), 'other-project');
+  const customPinProject = path.join(path.dirname(project), 'custom-pin-project');
+  const missingProject = path.join(path.dirname(project), 'missing-project');
+  for (const projectDirectory of [otherProject, customPinProject]) fs.mkdirSync(projectDirectory);
+  const stalePin = 'claude-opus-5[1m]';
+  for (const projectDirectory of [project, otherProject]) {
+    writeJson(path.join(projectDirectory, '.claude', 'settings.local.json'), gatewaySettings({
+      ANTHROPIC_DEFAULT_OPUS_MODEL: stalePin,
+      PROJECT_VALUE: projectDirectory,
+    }));
+  }
+  writeJson(path.join(customPinProject, '.claude', 'settings.local.json'), gatewaySettings({
+    ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-my-own-choice',
+  }));
+  writeJson(projectRegistry(home), { projects: [project, otherProject, customPinProject, missingProject] });
+
+  const result = run(home, project, ['pin', '--opus', 'claude-opus-5-5[1m]']);
+
+  assert.equal(result.code, 0, result.output);
+  for (const projectDirectory of [project, otherProject]) {
+    const settings = JSON.parse(fs.readFileSync(path.join(projectDirectory, '.claude', 'settings.local.json'), 'utf8'));
+    assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5-5[1m]');
+    assert.equal(settings.env.PROJECT_VALUE, projectDirectory);
+    assert.match(result.output, new RegExp(`updated gateway pins in ${path.join(projectDirectory, '.claude', 'settings.local.json').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  }
+  assert.equal(JSON.parse(fs.readFileSync(path.join(customPinProject, '.claude', 'settings.local.json'), 'utf8')).env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-my-own-choice');
+  assert.match(result.output, /skipped .*ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-my-own-choice/);
+  assert.match(result.output, new RegExp(`pruned registered project ${missingProject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: directory is missing`));
+  assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, [project, otherProject, customPinProject]);
+});
+
+test('doctor names registered project pins that disagree with effective pins', (t) => {
+  const { home, project } = fixture(t);
+  const settingsFile = path.join(project, '.claude', 'settings.local.json');
+  writeJson(settingsFile, gatewaySettings({ ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-stale' }));
+  writeJson(projectRegistry(home), { projects: [project] });
+
+  const result = runDoctor(home, project);
+
+  assert.notEqual(result.code, 0);
+  assert.match(result.output, new RegExp(settingsFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(result.output, /ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-stale/);
+});
+
+test('pin refresh updates registered un-overridden pins', (t) => {
+  const { home, project } = fixture(t);
+  const otherProject = path.join(path.dirname(project), 'other-project');
+  fs.mkdirSync(otherProject);
+  for (const projectDirectory of [project, otherProject]) {
+    writeJson(path.join(projectDirectory, '.claude', 'settings.local.json'), gatewaySettings({
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]',
+    }));
+  }
+  writeJson(projectRegistry(home), { projects: [project, otherProject] });
+  writeJson(path.join(home, '.claude', 'model-gateway', 'detected-pins.json'), {
+    cliVersion: 'fake-claude 1.0.0',
+    updatedAt: Date.now(),
+    pins: { opus: 'claude-opus-5[1m]' },
+    detectedFor: { opus: 'fake-claude 1.0.0' },
+  });
+
+  const result = run(home, project, ['env', '--write-project'], { CODEX_GATEWAY_CLAUDE_BIN: fakeClaude(home) });
+
+  assert.equal(result.code, 0, result.output);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(otherProject, '.claude', 'settings.local.json'), 'utf8')).env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5-5[1m]');
+  assert.match(result.output, new RegExp(`updated gateway pins in ${path.join(otherProject, '.claude', 'settings.local.json').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
 });
 
 test('project wiring registry deduplicates an existing project alias', (t) => {

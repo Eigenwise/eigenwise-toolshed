@@ -15,7 +15,6 @@ const {
   resolveLifecycleProject,
   runtimeSessionId,
   sessionOf,
-  controlPlaneIdentity,
   requireDispatchSession,
   workflowRecipe,
   requireBy,
@@ -62,6 +61,14 @@ const {
   state
 } = require("./mcp-shared");
 const { sidequestMutationFreshness } = require("./plugin-freshness");
+function unattributedIdentity(sessionId) {
+  const id = String(sessionId || "").trim();
+  return id ? `session-${id.slice(0, 12)}` : "unattributed";
+}
+function commentAuthor(args, ticket, sessionId) {
+  const claimedOnThisSession = sessionId && ticket?.claim?.runtime?.sessionId === sessionId;
+  return args?.by || (claimedOnThisSession ? ticket.claim.by : unattributedIdentity(sessionId));
+}
 const tools = [
   {
     name: "supersede_submission",
@@ -115,8 +122,7 @@ const tools = [
       const { slug } = resolveLifecycleProject(args.project, args, "comment");
       const ticket = store.getTicket(slug, args.ref);
       const sessionId = sessionOf(args);
-      const claimSessionId = ticket?.claim?.runtime?.sessionId;
-      const by = args.by || (sessionId && claimSessionId === sessionId ? ticket.claim.by : controlPlaneIdentity(null, sessionId));
+      const by = commentAuthor(args, ticket, sessionId);
       const res = store.addComment(slug, args.ref, {
         body: args.body,
         by,
@@ -256,7 +262,7 @@ const tools = [
   },
   {
     name: "dispatch",
-    description: "Prepare a token-gated dispatch. Returns stable executor spawn spec and token. Bundled types load with Sidequest. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor. retireOnly retires an evidence-eligible attempt without a replacement.",
+    description: "Prepare a token-gated dispatch. Returns stable executor spawn spec and token. Bundled types load with Sidequest. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets, but the live claim holder can recover a missing or crossed isolated-worktree binding by supplying recoveryEvidence, claimHolder, and worktree; the board verifies the stored executor. retireOnly retires an evidence-eligible attempt without a replacement.",
     inputSchema: {
       type: "object",
       properties: {
@@ -321,6 +327,7 @@ const tools = [
         effort: prepared.ticket.effort,
         runsLabel: prepared.ticket.exec && prepared.ticket.exec.runsLabel,
         ...prepared.ticket.dispatch?.fallbackReason ? { fallbackReason: prepared.ticket.dispatch.fallbackReason } : {},
+        ...prepared.recovery?.worktreeCorrection ? { worktreeCorrection: prepared.recovery.worktreeCorrection } : {},
         spawn
       };
       const warnings = store.presentWarnings(prepared.ticket, store.dispatchWarnings(prepared.ticket, slug), sessionId);
@@ -342,7 +349,7 @@ const tools = [
         ...dispatchState.fallbackReason ? { fallbackReason: dispatchState.fallbackReason } : {},
         warnings,
         spawn,
-        guidance: prepared.recovery?.kind === "live_claim_resume" ? `Live claim recovered for ${prepared.ticket.ref}. Pass spawn unchanged; it carries a fresh token for the rebound linked worktree.` : prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token.`,
+        guidance: prepared.recovery?.kind === "live_claim_resume" ? `Live claim recovered for ${prepared.ticket.ref}. Pass spawn unchanged; it carries a fresh token for the rebound linked worktree and no isolation field.` : prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token.`,
         // The agent list's own model label always reads claude-codex-auto for gateway
         // routes and cannot be changed (SQ-1350), so a paraphrased description is the
         // only thing standing between the reader and an unidentifiable running agent.

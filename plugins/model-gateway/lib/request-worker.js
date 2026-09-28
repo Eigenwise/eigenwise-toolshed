@@ -26,9 +26,9 @@ const {
 const {
   ANTHROPIC_UPSTREAM, AUTH_HEADERS, CODEX_FAMILY_RE, COMPAT_HOST,
   COMPAT_PORT, DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GROK_ENDPOINT, GROK_PREFIX, LIST_DISPATCH_MODEL,
-  PLUGIN_VERSION, PREFIX, PROXY_BIN, PROXY_PORT, REQUEST_ROUTE_LOG,
+  PLUGIN_VERSION, PROXY_BIN, PROXY_PORT, REQUEST_ROUTE_LOG,
   REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT, SOCKET_PATH,
-  MODEL_WINDOW_POLICY, STATE, syncGatewayDiscoveryCache, TRACE_HEADERS, codexClientModelId,
+  MODEL_WINDOW_POLICY, STATE, syncGatewayDiscoveryCache, TRACE_HEADERS,
   codexContextWindow, codexContextWindowModelId, codexReadinessMessage, gatewayAdvertisedWindow, gatewayClientModelId, mkdirs,
   resolveGatewayModelPolicy,
 } = require('./runtime.js');
@@ -108,14 +108,6 @@ function catalogReadiness(readiness) {
   };
 }
 
-function providerReadiness(readiness) {
-  return {
-    ready: Boolean(readiness?.ready),
-    state: typeof readiness?.state === 'string' ? readiness.state : 'unavailable',
-    message: typeof readiness?.message === 'string' ? readiness.message : 'Readiness is unavailable.',
-  };
-}
-
 function hasOpenAiRejectionEvidence(statusCode, headers, body) {
   if (![401, 403, 429].includes(statusCode)) return false;
   const headerNames = Object.keys(headers || {});
@@ -185,35 +177,36 @@ function statelessBackendThreadRefusal(payload) {
   };
 }
 
-const CODEX_SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
+const SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
 const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
 const CODEX_COMPACT_HEADROOM = 40000;
 
-function effectiveCodexSentryPolicy(policy, compactTrigger = configuredCompactTrigger) {
-  if (policy?.sentry !== 'codex-synthetic-413') return null;
-  if (!Number.isFinite(policy.backendWindow) || policy.backendWindow <= CODEX_COMPACT_HEADROOM) {
-    throw new Error(`model-gateway: invalid Codex sentry backend window for ${policy.backendId}`);
+function sentryBackendWindow(policy) {
+  const backendWindow = policy.backendWindow;
+  if (!Number.isFinite(backendWindow) || backendWindow <= CODEX_COMPACT_HEADROOM) {
+    throw new Error(`model-gateway: invalid sentry backend window for ${policy.backendId}`);
   }
-  const derivedTrigger = policy.backendWindow - CODEX_COMPACT_HEADROOM;
-  if (Number.isFinite(compactTrigger) && compactTrigger > 0 && compactTrigger <= derivedTrigger) {
-    return { backendWindow: policy.backendWindow, compactTrigger, source: 'env' };
-  }
-  return { backendWindow: policy.backendWindow, compactTrigger: derivedTrigger, source: 'derived' };
+  return backendWindow;
+}
+
+function effectiveSentryPolicy(policy, compactTrigger = configuredCompactTrigger) {
+  if (policy?.sentry !== 'synthetic-413') return null;
+  const backendWindow = sentryBackendWindow(policy);
+  const derivedTrigger = backendWindow - CODEX_COMPACT_HEADROOM;
+  const useConfiguredTrigger = Number.isFinite(compactTrigger) && compactTrigger > 0 && compactTrigger <= derivedTrigger;
+  return useConfiguredTrigger
+    ? { backendWindow, compactTrigger, source: 'env' }
+    : { backendWindow, compactTrigger: derivedTrigger, source: 'derived' };
 }
 
 function sentryPolicyFor(model) {
-  const policy = resolveGatewayModelPolicy(model);
-  const sentryPolicy = effectiveCodexSentryPolicy(policy);
-  if (sentryPolicy && policy.backend !== 'codex') {
-    throw new Error(`model-gateway: non-Codex model ${policy.backendId} cannot use the Codex sentry`);
-  }
-  return sentryPolicy;
+  return effectiveSentryPolicy(resolveGatewayModelPolicy(model));
 }
 
 function assertAnthropicPassthroughSentryIsDisabled(model) {
   const policy = resolveGatewayModelPolicy(model);
   if (policy?.backend === 'anthropic' && policy.sentry !== 'none') {
-    throw new Error(`model-gateway: Anthropic passthrough model ${policy.backendId} must not use the Codex sentry`);
+    throw new Error(`model-gateway: Anthropic passthrough model ${policy.backendId} must not use the synthetic sentry`);
   }
 }
 const configuredSseHeartbeatSeconds = Number(process.env.CODEX_GATEWAY_SSE_HEARTBEAT_S);
@@ -590,218 +583,6 @@ function dispatchRouteFromMessages(messages) {
   return onlyRoute(dispatchRouteMarkersFromMessages(messages));
 }
 
-// ------------------------------------------------------------ model catalog
-//
-// sidequest (same marketplace) auto-discovers Codex models by reading this
-// file: ~/.claude/model-gateway/catalog.json. Shape is a frozen contract
-// (see plugins/sidequest/lib/discovery.js) — don't change it casually.
-
-const CATALOG_PATH = path.join(STATE, 'catalog.json');
-const CATALOG_STALE_MS = 5 * 60 * 1000;
-const CATALOG_SCHEMA_VERSION = 4;
-
-// Slugs keep the `codex-` backend name and so survive the id rename byte for
-// byte: the board's route table pins slugs, and re-slugging would break every
-// persisted route at once.
-//
-// Provider + base, dots→dashes, kept inside ^[a-z0-9][a-z0-9-]{1,31}$; on
-// collision (or an over-length base) fall back to a short deterministic hash
-// so the slug stays unique without depending on iteration order.
-function slugFor(provider, base, used) {
-  const providerPrefix = `${provider}-`;
-  const providerBase = base.startsWith(providerPrefix) ? base.slice(providerPrefix.length) : base;
-  let s = (providerPrefix + providerBase).toLowerCase()
-    .replace(/\[1m\]$/, '')
-    .replace(/\./g, '-')
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  if (!/^[a-z0-9]/.test(s)) s = 'x' + s;
-  if (s.length > 32) {
-    const hash = crypto.createHash('sha1').update(s).digest('hex').slice(0, 6);
-    s = s.slice(0, 32 - 1 - hash.length) + '-' + hash;
-  }
-  let unique = s;
-  let n = 2;
-  while (used.has(unique)) {
-    const suffix = '-' + n;
-    unique = s.slice(0, Math.max(1, 32 - suffix.length)) + suffix;
-    n++;
-  }
-  used.add(unique);
-  return unique;
-}
-
-// "gpt-5.6-sol" -> "GPT-5.6 Sol", "gpt-5.3-codex-spark" -> "GPT-5.3 Codex Spark"
-function labelFor(base) {
-  const rest = base.replace(/^gpt-/, '');
-  const m = rest.match(/^(\d+(?:\.\d+)?)(?:-(.+))?$/);
-  if (!m) return 'GPT-' + rest.replace(/-/g, ' ');
-  const [, ver, suffix] = m;
-  const suffixLabel = suffix
-    ? ' ' + suffix.split('-').map((w) => w[0].toUpperCase() + w.slice(1)).join(' ')
-    : '';
-  return `GPT-${ver}${suffixLabel}`;
-}
-
-function modelCatalogDetails(id) {
-  const codexBase = codexBaseFromId(id);
-  if (codexBase && codexBase !== 'auto') {
-    return { provider: 'codex', base: codexBase, label: labelFor(codexBase) };
-  }
-  if (typeof id === 'string' && id.startsWith(GROK_PREFIX)) {
-    const base = id.slice(PREFIX.length).replace(/\[1m\]$/, '');
-    return { provider: 'grok', base, label: displayName(base, 'grok') };
-  }
-  return null;
-}
-
-function unavailableProviderReadiness(provider) {
-  return {
-    ready: false,
-    state: 'unavailable',
-    message: `${provider} readiness is unavailable.`,
-  };
-}
-
-function getGrokReadiness({ readAuth = grokBackend.readGrokAuth } = {}) {
-  try {
-    readAuth();
-    return {
-      ready: true,
-      state: 'ready',
-      message: 'Grok CLI auth is present.',
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Grok CLI auth is unavailable. Run `grok` and log in again.';
-    return {
-      ready: false,
-      state: /invalid/i.test(message) ? 'auth-invalid' : 'auth-missing',
-      message,
-    };
-  }
-}
-
-function providerCatalogReadiness(provider, readiness) {
-  const source = readiness?.[provider] ?? (provider === 'codex' ? readiness : null);
-  if (source) return providerReadiness(source);
-  if (provider === 'grok') return getGrokReadiness();
-  return unavailableProviderReadiness(provider);
-}
-
-function buildCatalog(ids, readiness = null) {
-  const used = new Set();
-  const models = ids
-    .map((id) => ({ id, details: modelCatalogDetails(id) }))
-    .filter(({ details }) => details)
-    .map(({ id, details }) => ({
-      slug: slugFor(details.provider, details.base, used),
-      id: details.provider === 'codex' ? codexClientModelId(id) : id,
-      label: details.label,
-      provider: details.provider,
-    }));
-  const providers = Object.fromEntries(
-    [...new Set(models.map((model) => model.provider))].map((provider) => [provider, providerCatalogReadiness(provider, readiness)]),
-  );
-  return {
-    schemaVersion: CATALOG_SCHEMA_VERSION,
-    source: 'model-gateway',
-    updatedAt: new Date().toISOString(),
-    writtenBy: PLUGIN_VERSION,
-    providers,
-    codexReadiness: providers.codex ?? null,
-    models,
-  };
-}
-
-function readJsonFile(file) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
-}
-
-function catalogSchemaVersion(catalog) {
-  if (!catalog || typeof catalog !== 'object') return null;
-  const version = catalog.schemaVersion ?? catalog.schema;
-  return Number.isInteger(version) && version > 0 ? version : null;
-}
-
-function catalogModelIds(catalog) {
-  return new Set(
-    Array.isArray(catalog?.models)
-      ? catalog.models.filter((model) => typeof model?.id === 'string').map((model) => model.id)
-      : [],
-  );
-}
-
-function mergeSubsetCatalog(existing, catalog) {
-  if (catalogSchemaVersion(existing) !== CATALOG_SCHEMA_VERSION || !Array.isArray(existing.models)) return catalog;
-
-  const existingIds = catalogModelIds(existing);
-  const fetchedIds = catalogModelIds(catalog);
-  const isStrictSubset = fetchedIds.size < existingIds.size && [...fetchedIds].every((id) => existingIds.has(id));
-  if (!isStrictSubset) return catalog;
-
-  // A removal-only response is indistinguishable from a stale writer. Adding a model makes the response authoritative, so intentional replacement can still remove entries.
-  const preserved = existing.models.filter((model) => typeof model?.id === 'string' && !fetchedIds.has(model.id));
-  const models = [...catalog.models, ...preserved];
-  const providers = { ...catalog.providers };
-  for (const model of preserved) {
-    if (typeof model.provider === 'string' && !providers[model.provider] && existing.providers?.[model.provider]) {
-      providers[model.provider] = existing.providers[model.provider];
-    }
-  }
-  log(`catalog: preserved ${preserved.map((model) => model.id).join(', ')} from a subset write`);
-  return { ...catalog, models, providers, codexReadiness: providers.codex ?? null };
-}
-
-function writeCatalogFile(catalogPath, catalog) {
-  const existing = readJsonFile(catalogPath);
-  const storedVersion = catalogSchemaVersion(existing);
-  if (storedVersion != null && storedVersion > CATALOG_SCHEMA_VERSION) {
-    throw new Error(`refusing to overwrite catalog schema ${storedVersion} at ${catalogPath}; this gateway supports schema ${CATALOG_SCHEMA_VERSION}, upgrade required`);
-  }
-  const nextCatalog = mergeSubsetCatalog(existing, catalog);
-  writeFileAtomically(catalogPath, JSON.stringify(nextCatalog, null, 2) + '\n');
-  return nextCatalog;
-}
-
-async function fetchShimModelIds() {
-  // the shim's own refreshModels() can still be mid-flight right after
-  // /healthz starts answering; retry once, short, before giving up
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const r = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/v1/models`, { timeout: 3000 });
-    if (r.status !== 200) throw new Error(`shim /v1/models returned ${r.status}`);
-    const ids = (JSON.parse(r.body.toString()).data || []).map((m) => m.id).filter((id) => modelCatalogDetails(id) != null);
-    if (ids.length || attempt === 1) return ids;
-    await new Promise((res) => setTimeout(res, 300));
-  }
-  return [];
-}
-
-async function writeCatalog() {
-  const ids = await fetchShimModelIds();
-  if (!ids.length) return null;
-  const readiness = await getCodexReadiness();
-  const catalog = buildCatalog(ids, readiness);
-  mkdirs();
-  return writeCatalogFile(CATALOG_PATH, catalog);
-}
-
-function readCatalog() {
-  return readJsonFile(CATALOG_PATH);
-}
-
-async function catalogCommand() {
-  const jsonOut = flag('--json');
-  let catalog = readCatalog();
-  const stale = !catalog || (Date.now() - Date.parse(catalog.updatedAt || 0) > CATALOG_STALE_MS);
-  if (stale && (await shimHealthy())) {
-    catalog = (await writeCatalog().catch(() => null)) || catalog;
-  }
-  if (!catalog) die('no catalog available yet (run setup or start first)');
-  if (jsonOut) process.stdout.write(JSON.stringify(catalog) + '\n');
-  else log(JSON.stringify(catalog, null, 2));
-}
-
 // dns.resolve4()/resolve6() query DNS directly and, unlike dns.lookup() (what
 // http/https use by default), never consult the OS hosts file. That's exactly
 // why this exists: RC-compatibility mode only works because the user's hosts
@@ -1153,8 +934,8 @@ function runWorker() {
     }
   }
 
-  function codexSessionId(req) {
-    return CODEX_SENTRY_ENABLED ? requestSessionId(req) : null;
+  function sentrySessionId(req) {
+    return SENTRY_ENABLED ? requestSessionId(req) : null;
   }
 
   function sentryModel(model) {
@@ -1162,7 +943,7 @@ function runWorker() {
     let state = sentryModels.get(modelId);
     if (!state) {
       const sentryPolicy = sentryPolicyFor(model);
-      if (!sentryPolicy) throw new Error(`model-gateway: no Codex sentry policy for ${modelId}`);
+      if (!sentryPolicy) throw new Error(`model-gateway: no sentry policy for ${modelId}`);
       state = { ...sentryPolicy, observedCeiling: null };
       sentryModels.set(modelId, state);
     }
@@ -1187,6 +968,7 @@ function runWorker() {
 
   function recordSentryUsage(sessionId, event, model) {
     if (!sessionId || event.type !== 'message_delta' || !event.usage) return;
+    if (!sentryPolicyFor(model)) return;
     const usage = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']
       .reduce((total, field) => total + (Number.isFinite(event.usage[field]) ? event.usage[field] : 0), 0);
     if (usage <= 0) return;
@@ -1213,8 +995,9 @@ function runWorker() {
     const compactTrigger = sentryModel(model).compactTrigger;
     if (!state || state.fired || state.usage <= compactTrigger) return false;
     state.fired = true;
+    const backendName = resolveGatewayModelPolicy(model)?.backend === 'grok' ? 'Grok' : 'Codex';
     const body = contextOverflowBody(state.usage, compactTrigger,
-      'Prompt is too long for the Codex context window; compact and retry.');
+      `Prompt is too long for the ${backendName} context window; compact and retry.`);
     res.writeHead(413, {
       'content-type': 'application/json',
       'content-length': Buffer.byteLength(body),
@@ -1252,7 +1035,7 @@ function runWorker() {
 
   function logAdvertisedSentryPolicies() {
     for (const policy of Object.values(MODEL_WINDOW_POLICY)) {
-      const sentryPolicy = effectiveCodexSentryPolicy(policy);
+      const sentryPolicy = effectiveSentryPolicy(policy);
       if (!sentryPolicy) {
         console.log(`model-gateway: sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=none`);
         continue;
@@ -1591,7 +1374,7 @@ function runWorker() {
           });
           routeTelemetry?.finish(upRes.statusCode, statusOverride);
           // The status line is gone but the sentry's learned ceiling is not.
-          if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) noteGenuineOverflow(sessionId, contextModel);
+          if (normalizeContextErrors && SENTRY_ENABLED && upRes.statusCode === 413) noteGenuineOverflow(sessionId, contextModel);
           if (normalizeContextErrors) noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, Buffer.concat(chunks));
           const authenticationFailure = codexAuthenticationFailure(Buffer.concat(chunks), upRes.statusCode);
           const error = authenticationFailure ? JSON.parse(authenticationFailure).error : {
@@ -1669,7 +1452,7 @@ function runWorker() {
         upRes.once('aborted', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_aborted'));
         upRes.once('error', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_error'));
       }
-      if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) {
+      if (normalizeContextErrors && SENTRY_ENABLED && upRes.statusCode === 413) {
         const chunks = [];
         let settled = false;
         const failBufferedResponse = (statusOverride) => {
@@ -1727,7 +1510,7 @@ function runWorker() {
           noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, upstreamBody);
           const text = upstreamBody.toString();
           if (/context window|context length|input exceeds|prompt token count|too many tokens/i.test(text)) {
-            const normalized = CODEX_SENTRY_ENABLED
+            const normalized = SENTRY_ENABLED
               ? contextOverflowBody(noteGenuineOverflow(sessionId, contextModel) || codexContextWindow(contextModel) + 1,
                 codexContextWindow(contextModel), 'Input exceeds the model context window; compact and retry.')
               : JSON.stringify({
@@ -1778,7 +1561,7 @@ function runWorker() {
           const inference = attempt || newCompactAttempt();
           const observeEvent = (event) => {
             noteCompactEvent(inference, event);
-            if (filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId)) recordSentryUsage(sessionId, event, contextModel);
+            if (filterPlanTools || (SENTRY_ENABLED && sessionId)) recordSentryUsage(sessionId, event, contextModel);
             usageCapture?.observeEvent(event);
           };
           const emit = attempt
@@ -1892,7 +1675,7 @@ function runWorker() {
       clientRes.writeHead(upRes.statusCode, resHeaders);
       if (successful && contentType.includes('text/event-stream')) {
         if (normalizeContextErrors) keepSseAlive(upRes, clientRes);
-        const observeSentry = normalizeContextErrors && CODEX_SENTRY_ENABLED && sessionId;
+        const observeSentry = normalizeContextErrors && SENTRY_ENABLED && sessionId;
         if (observeSentry || usageCapture) {
           const observer = createSseEventObserver(
             (event) => {
@@ -1951,7 +1734,7 @@ function runWorker() {
     else clientReq.pipe(upReq);
   }
 
-  async function forwardGrok(clientReq, clientRes, payload, model, advertisedModel, routeTelemetry, usageCapture) {
+  async function forwardGrok(clientReq, clientRes, payload, model, advertisedModel, sessionId, routeTelemetry, usageCapture) {
     let token;
     try {
       token = await grokBackend.grokAccessToken();
@@ -2022,7 +1805,11 @@ function runWorker() {
             try {
               const event = JSON.parse(data);
               transformer.event(event);
-              if (event?.response?.usage) usageCapture?.observeEvent({ type: 'message_delta', usage: grokBackend.anthropicUsage(event.response.usage) });
+              if (event?.response?.usage) {
+                const usage = grokBackend.anthropicUsage(event.response.usage);
+                usageCapture?.observeEvent({ type: 'message_delta', usage });
+                recordSentryUsage(sessionId, { type: 'message_delta', usage }, model);
+              }
             } catch {}
           }
         };
@@ -2036,6 +1823,8 @@ function runWorker() {
       upstream.on('end', () => {
         let response;
         try { response = JSON.parse(Buffer.concat(chunks).toString()); } catch { response = null; }
+        const usage = response?.usage && grokBackend.anthropicUsage(response.usage);
+        if (usage) recordSentryUsage(sessionId, { type: 'message_delta', usage }, model);
         const translated = grokBackend.translateResponse(response, advertisedModel);
         const translatedBody = Buffer.from(JSON.stringify(translated));
         usageCapture?.observeJson(translatedBody);
@@ -2261,7 +2050,7 @@ function runWorker() {
               via: dispatchVia || 'direct',
             });
             const requestBodySessionId = requestSessionId(req);
-            const sessionId = codexSessionId(req);
+            const sessionId = sentrySessionId(req);
             if (pathOnly === '/v1/messages' && fireContextSentry(res, sessionId, parsed.model)) {
               routeTelemetry.finish(413);
               return;
@@ -2327,6 +2116,11 @@ function runWorker() {
               fallback: false,
               via: 'direct',
             });
+            const sessionId = sentrySessionId(req);
+            if (fireContextSentry(res, sessionId, model)) {
+              routeTelemetry.finish(413);
+              return;
+            }
             recordRequestBodyHighWater(requestSessionId(req), raw.length);
             const usageCapture = usageEmitter.enabled
               ? usageEmitter.start({
@@ -2336,7 +2130,7 @@ function runWorker() {
                 route: { requestedModel: advertisedModel, effectiveModel: model, backend: 'grok', effort, via: 'direct' },
               })
               : null;
-            return forwardGrok(req, res, parsed, model, advertisedModel, routeTelemetry, usageCapture);
+            return forwardGrok(req, res, parsed, model, advertisedModel, sessionId, routeTelemetry, usageCapture);
           }
         } catch { /* not JSON; fall through to passthrough */ }
       }
@@ -2423,4 +2217,4 @@ function runWorker() {
   }
 }
 
-module.exports = { createHostsBypassResolver, effectiveCodexSentryPolicy, gatewayModel, runWorker };
+module.exports = { createHostsBypassResolver, effectiveSentryPolicy, gatewayModel, runWorker };

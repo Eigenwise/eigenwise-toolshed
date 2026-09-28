@@ -42,7 +42,12 @@ function bindClaimRuntimeIdentity(input: HookInput, agentId: string, executor: s
     const project = String(toolInput.project || '').trim() || store.sessionProjectRoot();
     const found = store.findProject(project);
     if (found.ok && found.slug) {
+      // The harness confines an isolated executor to the linked checkout it created, so the claim's cwd is the one
+      // fact that can settle a crossed creation-order lease (SQ-55). The parent checkout proves nothing and is not sent.
+      const cwd = stringField(input, 'cwd');
+      const checkout = cwd ? enclosingCheckout(cwd) : null;
       const binding = store.bindClaimRuntimeIdentity(found.slug, ref, {
+        observedWorktree: checkout?.linked ? checkout.root : null,
         token: toolInput.token,
         tokenFile: toolInput.tokenFile,
         executor,
@@ -63,6 +68,27 @@ function bindClaimRuntimeIdentity(input: HookInput, agentId: string, executor: s
   return true;
 }
 
+// A crossed executor's release is made from the checkout the harness confined it to, which can differ from the one its
+// ticket records (SQ-75, GitHub #298). Reporting it lets the release key the retained continuation to where the work
+// really is. The parent checkout proves nothing, so only a linked checkout is reported.
+function recordReleaseCheckout(input: HookInput, agentId: string, checkoutRoot: string): void {
+  if (stringField(input, 'tool_name') !== 'mcp__plugin_sidequest_board__release' || !isRecord(input.tool_input)) return;
+  const toolInput = input.tool_input;
+  const ref = String(toolInput.ref || '').trim();
+  const by = String(toolInput.by || '').trim();
+  if (!ref || !by) return;
+  try {
+    const store = require(runtimeModule('store')) as {
+      findProject: (project: string) => { ok?: boolean; slug?: string };
+      sessionProjectRoot: () => string;
+      recordReleaseObservedCheckout: (slug: string, ref: string, options: unknown) => unknown;
+    };
+    const found = store.findProject(String(toolInput.project || '').trim() || store.sessionProjectRoot());
+    if (found.ok && found.slug) store.recordReleaseObservedCheckout(found.slug, ref, { by, agentId, observedWorktree: checkoutRoot });
+  } catch (_) {
+  }
+}
+
 function main(): void {
   const input = readStdin();
   if (!input) return;
@@ -75,6 +101,7 @@ function main(): void {
   if (!cwd) return;
   const checkout = enclosingCheckout(cwd);
   if (!checkout?.linked) return;
+  recordReleaseCheckout(input, agentId, checkout.root);
 
   const found = isolationExpectation(input, agentId, executor, true, checkout.root);
   if (found?.terminal || found?.identityBound) return;

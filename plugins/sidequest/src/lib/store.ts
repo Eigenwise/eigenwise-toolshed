@@ -378,7 +378,6 @@ function refreshPreparedDispatches(...args: any[]) { return dispatch.refreshPrep
 
 const {
   CLAUDE_RUNTIMES,
-  CLAUDE_RUNTIME_LABELS,
   VALID_EFFORTS,
   BACKEND_SLUG_RE,
   BACKEND_KEY_RE,
@@ -557,6 +556,8 @@ const {
   supersedeUnboundAttempt,
   readDispatchBriefing,
   recoverLiveClaimDispatch,
+  recordReleaseObservedCheckout,
+  rekeyReleasedCheckout,
   recordDispatchLaunch,
   recordDispatchAgentFailure,
   recoverDispatchQuotaFailure,
@@ -578,6 +579,8 @@ const {
   dispatchCanBindRuntimeIdentity,
   recordDispatchRuntimeIdentity,
   bindDispatchClaimToken,
+  exchangeGuessedClaimIdentity,
+  exchangeCrossedClaimCheckout,
   bindDispatchAgent,
   dispatchMatchesStopIdentity,
   markDispatchStopped,
@@ -1944,6 +1947,13 @@ function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
       message: `${found.ref} reduced Agent-schema dispatch requires hook-reported agent_id before the first claim. Stop without claiming; use a host that reports agent_id and permission_mode ("auto" or "bypassPermissions") to PreToolUse. Do not add unsupported Agent fields or change permissions.`,
     } : {}),
   };
+  // Only a token admits the exchange: a direct claim proves nothing about which reservation this runtime is.
+  const tokenAdmitted = () => {
+    const admission = claimAdmission(slug, found.id, opts);
+    return Boolean(admission.ok && admission.token);
+  };
+  exchangeGuessedClaimIdentity(slug, found.id, opts?.sessionId, opts?.executor, agentId, tokenAdmitted);
+  exchangeCrossedClaimCheckout(slug, found.id, opts?.sessionId, opts?.observedWorktree, tokenAdmitted);
   return withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     if (!ticket) return { ok: false, reason: 'not_found' };
@@ -2517,6 +2527,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     } : null;
     if (release) t.release = release;
     if (dispatch) delete dispatch.failedClaimSurrender;
+    if (liveClaim) rekeyReleasedCheckout(slug, t, heldOwner);
     if (!dispatch?.terminalAt || dispatch.outcome !== terminalOutcome) {
       setDispatchTerminal(t, terminalOutcome, opts.source || 'cli', {
         slug,
@@ -3588,6 +3599,7 @@ const {
   STORY_LOG_ENTRY_ADVISORY_BYTES,
   STORY_LOG_ENTRY_TEXT_MAX_BYTES,
   appendStoryLogEntry,
+  appendStoryLogEntryResult,
   coerceStoryId,
   createStory,
   deleteStory,
@@ -3595,6 +3607,7 @@ const {
   listStories,
   normalizeStoryLogEntry,
   rotateStoryLog,
+  rotateStoryLogResult,
   storyLogEntryAdvisory,
   storyDecisionLog,
   storyDecisionLogWarnings,
@@ -3790,6 +3803,7 @@ module.exports = {
   syncLiveDispatchVerification,
   readDispatchBriefing,
   recoverLiveClaimDispatch,
+  recordReleaseObservedCheckout,
   dispatchTokenForRequest,
   isSupersededDispatchToken,
   recordDispatchLaunch,
@@ -3872,10 +3886,12 @@ module.exports = {
   storyExecutionContractPage,
   normalizeStoryLogEntry,
   rotateStoryLog,
+  rotateStoryLogResult,
   storyLogEntryAdvisory,
   storyDecisionLog,
   storyReadPayload,
   appendStoryLogEntry,
+  appendStoryLogEntryResult,
   storyDecisionLogWarnings,
   listStories,
   getStory,

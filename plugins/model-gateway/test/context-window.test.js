@@ -201,6 +201,7 @@ test('window policy marks measured rows and advertises unmeasured Codex defaults
   for (const policy of Object.values(MODEL_WINDOW_POLICY)) {
     if (policy.backendId === 'default') continue;
     assert.equal(policy.pickerAlias.endsWith('[1m]'), policy.backendWindow > 200000);
+    assert.equal(policy.sentry, policy.backendWindow > 200000 ? 'synthetic-413' : 'none');
   }
   assert.equal(MODEL_WINDOW_POLICY['grok-4.5'].pickerAlias, 'claude-grok-4.5[1m]');
   assert.match(MODEL_WINDOW_POLICY.default.measurement, /^unmeasured/);
@@ -215,30 +216,35 @@ test('window policy marks measured rows and advertises unmeasured Codex defaults
 });
 
 test('Codex sentry derives a headroom-preserving trigger for each policy row', () => {
-  const { effectiveCodexSentryPolicy } = require(WORKER);
+  const { effectiveSentryPolicy } = require(WORKER);
   const { resolveGatewayModelPolicy } = require(RUNTIME);
   const policy = resolveGatewayModelPolicy('gpt-5.2');
 
-  assert.deepEqual(effectiveCodexSentryPolicy(policy, 320000), {
+  assert.deepEqual(effectiveSentryPolicy(policy, 320000), {
     backendWindow: 920000,
     compactTrigger: 320000,
     source: 'env',
   });
-  assert.deepEqual(effectiveCodexSentryPolicy(policy, Number.NaN), {
+  assert.deepEqual(effectiveSentryPolicy(policy, Number.NaN), {
     backendWindow: 920000,
     compactTrigger: 880000,
     source: 'derived',
   });
-  assert.deepEqual(effectiveCodexSentryPolicy({
+  assert.deepEqual(effectiveSentryPolicy({
     backend: 'codex',
     backendId: 'gpt-test-300k',
     backendWindow: 300000,
-    sentry: 'codex-synthetic-413',
+    sentry: 'synthetic-413',
   }, 320000), {
     backendWindow: 300000,
     compactTrigger: 260000,
     source: 'derived',
   });
+  assert.throws(() => effectiveSentryPolicy({
+    backendId: 'gpt-test-40k',
+    backendWindow: 40000,
+    sentry: 'synthetic-413',
+  }), /invalid sentry backend window/);
 });
 
 test('Codex sentry logs a startup policy line for every advertised model row', async (t) => {
@@ -472,6 +478,39 @@ test('Codex sentry returns one client-distinguishable context-overflow 413', asy
   assert.equal(forwarded, 1);
 });
 
+test('Grok sentry returns a client-distinguishable context-overflow 413', async (t) => {
+  const authDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-grok-sentry-'));
+  fs.writeFileSync(path.join(authDirectory, 'auth.json'), JSON.stringify({
+    'https://auth.x.ai::fixture-client': { key: 'fixture-token', refresh_token: 'fixture-refresh', expires_at: Date.now() + 3600000, oidc_client_id: 'fixture-client' },
+  }));
+  let forwarded = 0;
+  const upstream = http.createServer((req, res) => {
+    req.resume();
+    req.once('end', () => {
+      forwarded++;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id: 'resp_fixture', output: [], usage: { input_tokens: 101 } }));
+    });
+  });
+  const upstreamPort = await listen(upstream);
+  t.after(() => { upstream.close(); fs.rmSync(authDirectory, { recursive: true, force: true }); });
+  const shimPort = await spawnShim(t, 0, {
+    CODEX_GATEWAY_COMPACT_TRIGGER: '100',
+    CODEX_GATEWAY_GROK_ENDPOINT: `http://127.0.0.1:${upstreamPort}/v1/responses`,
+    CODEX_GATEWAY_GROK_HOME: authDirectory,
+  });
+  const grokBody = JSON.stringify({ model: 'claude-grok-4.5[1m]', max_tokens: 1, messages: [{ role: 'user', content: 'test' }] });
+
+  assert.equal((await request(shimPort, 'POST', '/v1/messages', grokBody, sentrySessionHeaders)).status, 200);
+  const overflow = await request(shimPort, 'POST', '/v1/messages', grokBody, sentrySessionHeaders);
+  assert.equal(overflow.status, 413);
+  assert.deepEqual(JSON.parse(overflow.body).error, {
+    type: 'request_too_large',
+    message: 'Prompt is too long for the Grok context window; compact and retry. (101 tokens > 100 tokens)',
+  });
+  assert.equal(forwarded, 1);
+});
+
 test('Codex sentry latch lets compaction through and rearms below its low watermark', async (t) => {
   const usages = [101, 20, 101];
   let forwarded = 0;
@@ -655,8 +694,11 @@ test('rewrites Codex authentication failures for streaming and non-streaming req
     assert.equal(response.status, expectedStatus);
     const error = JSON.parse(response.body).error;
     assert.equal(error.type, 'authentication_error');
-    assert.match(error.message, /node "[^"]*[\\/]model-gateway[\\/]model-gateway\.js" login/);
-    assert.doesNotMatch(error.message, /plugins[\\/]cache[\\/]/);
+    // This fixture's HOME never ran SessionStart, so the stable launcher does not exist; the message
+    // must fall back to the CLI's own real path instead of naming a launcher that would fail with
+    // MODULE_NOT_FOUND (issue #77), rather than the previous unconditional stable-launcher reference.
+    assert.match(error.message, new RegExp(`node "${CLI.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}" login`));
+    assert.ok(fs.existsSync(CLI), 'the advised fallback command must exist and run');
     assert.doesNotMatch(error.message, /claude-code-proxy\s+codex\s+auth\s+login/i);
     assert.match(error.message, /API Error: 401 Not authenticated\./);
   }
@@ -967,7 +1009,7 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
 
   const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
   const legacy = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.json'), 'utf8'));
-  assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]');
+  assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5-5[1m]');
   assert.equal(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
   // Fable is a 1M Claude model too; pin it so a gateway session gets its full
   // window instead of Claude Code's 200k gateway default.
@@ -1064,6 +1106,52 @@ function runPinRefreshes(env) {
   return result.stdout.trim().split('\n').map(JSON.parse);
 }
 
+test('pin version comparison handles older, equal, newer, and missing minor versions', () => {
+  const { comparePinVersions } = require(PINS);
+  assert.equal(comparePinVersions('claude-opus-5-4[1m]', 'claude-opus-5-5[1m]'), -1);
+  assert.equal(comparePinVersions('claude-opus-5-5[1m]', 'claude-opus-5-5[1m]'), 0);
+  assert.equal(comparePinVersions('claude-opus-6-0[1m]', 'claude-opus-5-5[1m]'), 1);
+  assert.equal(comparePinVersions('claude-opus-5[1m]', 'claude-opus-5-5[1m]'), -1);
+  assert.equal(comparePinVersions('claude-sonnet-5[1m]', 'claude-opus-5-5[1m]'), null);
+  assert.equal(comparePinVersions('claude-opus', 'claude-opus-5-5[1m]'), null);
+  assert.equal(comparePinVersions('claude-opus-5-alpha', 'claude-opus-5-5[1m]'), null);
+  assert.equal(comparePinVersions('other-opus-5', 'claude-opus-5-5[1m]'), null);
+});
+
+test('pins and doctor report when the CLI alias lags the shipped fallback', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-lagging-pin-home-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-lagging-pin-project-'));
+  const cliVersion = 'Claude Code 2.1.280';
+  const cachePath = path.join(home, '.claude', 'model-gateway', 'detected-pins.json');
+  const lagNotice = 'Claude CLI opus alias lags: claude-opus-5[1m] is older than claude-opus-5-5[1m]. Run pin --opus claude-opus-5-5[1m] to update it.';
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  fs.writeFileSync(cachePath, JSON.stringify({
+    cliVersion,
+    updatedAt: Date.now(),
+    pins: { opus: 'claude-opus-5[1m]' },
+    detectedFor: { opus: cliVersion },
+  }));
+  const { ANTHROPIC_BASE_URL, CLAUDE_CODE_MAX_CONTEXT_TOKENS, ...environment } = process.env;
+  const env = { ...environment, HOME: home, USERPROFILE: home };
+  try {
+    const pins = spawnGatewayProcessSync(process.execPath, [CLI, 'pin'], { cwd, env, encoding: 'utf8' });
+    assert.equal(pins.status, 0, pins.stderr);
+    assert.match(pins.stdout, new RegExp(lagNotice.replace(/[.[\]\\]/g, '\\$&')));
+
+    const set = spawnGatewayProcessSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { cwd, env, encoding: 'utf8' });
+    assert.equal(set.status, 0, set.stderr);
+    const overridden = spawnGatewayProcessSync(process.execPath, [CLI, 'pin'], { cwd, env, encoding: 'utf8' });
+    assert.equal(overridden.status, 0, overridden.stderr);
+    assert.match(overridden.stdout, /Your override claude-opus-4-8\[1m\] overrides detected claude-opus-5\[1m\]\./);
+
+    const doctor = spawnGatewayProcessSync(process.execPath, [CLI, 'doctor'], { cwd, env, encoding: 'utf8' });
+    assert.match(doctor.stdout, new RegExp(lagNotice.replace(/[.[\]\\]/g, '\\$&')));
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test('a failed alias does not carry a stale pin into a new Claude CLI version', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-stale-pin-home-'));
   const claude = installFakeClaude(home);
@@ -1118,10 +1206,17 @@ function probeClaudeAliasWithEnvironment(t, alias, endpoint, environment) {
   });
 }
 
+// These tests assert proxy egress behaviour, not probe latency, so the probe
+// child gets a generous ceiling instead of the production 5s default
+// (CODEX_GATEWAY_PIN_PROBE_TIMEOUT_MS) — a cold node start under a loaded
+// release cut can exceed 5s and return a false null pin (SQ-3086).
+const GENEROUS_PROBE_TIMEOUT_MS = '60000';
+
 function probeRealClaudeFable(t, endpoint, environment) {
   return probeClaudeAliasWithEnvironment(t, 'fable', endpoint, {
     ...environment,
     CODEX_GATEWAY_CLAUDE_BIN: 'claude',
+    CODEX_GATEWAY_PIN_PROBE_TIMEOUT_MS: GENEROUS_PROBE_TIMEOUT_MS,
   });
 }
 
@@ -1132,6 +1227,7 @@ function fakeProbeEnvironment(home, claude, proxyUrl) {
     USERPROFILE: home,
     FAKE_CLAUDE_LOG: claude.logFile,
     CODEX_GATEWAY_CLAUDE_BIN: claude.command,
+    CODEX_GATEWAY_PIN_PROBE_TIMEOUT_MS: GENEROUS_PROBE_TIMEOUT_MS,
     HTTP_PROXY: proxyUrl,
     HTTPS_PROXY: proxyUrl,
     ALL_PROXY: proxyUrl,
@@ -1275,7 +1371,7 @@ test('rewiring without a Claude CLI wires the shipped pins and caches no detecti
     const wired = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
     assert.equal(wired.status, 0, wired.stderr);
     const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).env;
-    assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]');
+    assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5-5[1m]');
     assert.equal(settings.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
     assert.equal(settings.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5-1[1m]');
     assert.equal(fs.existsSync(path.join(home, '.claude', 'model-gateway', 'detected-pins.json')), false);
@@ -1355,13 +1451,13 @@ test('doctor describes project-local wiring as the default', () => {
       encoding: 'utf8',
     });
     assert.match(result.stdout, /wiring: effective none/);
-    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 920000 \| 1000000 \| 967000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 920000 \| 1000000 \| 967000 \| synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
     assert.match(result.stdout, /default wiring target: this project's \.claude\/settings\.local\.json/);
     // Fresh HOME means an empty detected-pin cache, so this value is the shipped constant rather than
     // anything measured against the user's CLI. Doctor used to print it as a bare "(default)", which is
     // what made a stale guess look identical to a probed pin.
-    assert.match(result.stdout, /Claude opus pin: claude-opus-5\[1m\] \(shipped fallback, not detected for this CLI\)/);
+    assert.match(result.stdout, /Claude opus pin: claude-opus-5-5\[1m\] \(shipped fallback, not detected for this CLI\)/);
     assert.match(result.stdout, /project settings\.local\.json: not wired .*\[default write target\]/);
     assert.doesNotMatch(result.stdout, /wiring mode: local/);
   } finally {
@@ -1403,8 +1499,8 @@ test('doctor reports the 1M Codex resolver aliases and a lower explicit cap', ()
       encoding: 'utf8',
     });
     assert.match(result.stdout, /model window policy: auto-compact cap 325000 \(settings project-local\)/);
-    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol\[1m\] \| 920012 \| 920000 \| 1000000 \| 292000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
-    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 920000 \| 1000000 \| 292000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol\[1m\] \| 920012 \| 920000 \| 1000000 \| 292000 \| synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 920000 \| 1000000 \| 292000 \| synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
@@ -1431,7 +1527,7 @@ test('doctor warns when the configured Codex window resolves to the unknown-mode
       isolatedOverrides,
       encoding: 'utf8',
     });
-    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol \| 920012 \| 200000 \| 200000 \| 167000 \| codex-synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol \| 920012 \| 200000 \| 200000 \| 167000 \| synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
@@ -1485,6 +1581,8 @@ test('env with no scope flag explains project wiring and writes nothing', () => 
     assert.equal(shown.status, 0, shown.stderr);
     assert.match(shown.stdout, /Project wiring is the default/);
     assert.match(shown.stdout, /env --write-project/);
+    assert.match(shown.stdout, /remote-control enable.*--confirm.*back up and write the hosts entry for you/);
+    assert.doesNotMatch(shown.stdout, /once you add the hosts entry yourself/);
     assert.equal(fs.existsSync(path.join(cwd, '.claude', 'settings.local.json')), false);
 
     const retired = spawnGatewayProcessSync(process.execPath, [CLI, 'env', '--mode', 'global'], {

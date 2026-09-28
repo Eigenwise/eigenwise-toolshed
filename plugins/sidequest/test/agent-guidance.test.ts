@@ -34,7 +34,7 @@ test('published guidance excludes retired instructions', () => {
   assert.match(executorTemplate, /useful edits, a scoped commit, or meaningful verification expose an interpretive or correctness concern, keep the claim and worktree alive/);
   assert.match(executorTemplate, /newly supplied token-gated briefing and live board state as authoritative over an inherited transcript that says the ticket is terminal/);
   assert.match(executorTemplate, /wait for corrected evidence or a decision through `SendMessage` so the same executor can continue/);
-  assert.match(skill, /For useful work\s+needing a decision, `SendMessage` the same agent and keep its claim and worktree/);
+  assert.match(skill, /For work needing a decision, `SendMessage` the same agent; a resume keeps claim, token-file path, and worktree binding/);
   assert.match(orchestration, /Correct the live worker before replacing it/);
   assert.match(skill, /Don't accept a green suite as proof of coverage; review execution evidence/);
   assert.match(executorTemplate, /Trace the actual call flow before implementing/);
@@ -52,11 +52,16 @@ test('published guidance excludes retired instructions', () => {
   assert.match(ticketAuthoring, /do not invent a test count/);
   assert.match(orchestration, /read each submit report, then run one combined full gate for the wave/);
   assert.match(orchestration, /Retire terminal teammates/);
-  assert.match(orchestration, /TaskStop\(\{ task_id: "<agent name>" \}\)`\s+once/);
-  assert.match(orchestration, /Claude Code host action, not a Sidequest tool/);
-  assert.match(orchestration, /Never stop a live claim, retained continuation,\s+or candidate awaiting\s+integration/);
-  assert.match(orchestration, /Do not wake a completed executor, poll FleetView, or create a cleanup loop/);
+  assert.match(orchestration, /TaskStop mandate is authoritative in\s+`SKILL\.md`/);
+  assert.match(skill, /TaskStop\(\{ task_id: "<agent name>" \}\)`\s+once/);
+  assert.match(skill, /host action, not Sidequest/);
+  assert.match(skill, /Never stop a live claim, retained continuation, or candidate awaiting integration/);
+  assert.match(skill, /never wake a completed executor or build a cleanup loop/);
   assert.match(skill, /TaskStop\(\{ task_id: "<agent name>" \}\)/);
+  assert.match(skill, /a process list is never dispatch evidence/);
+  assert.match(orchestration, /A process list \(`tasklist`\/`ps`\) is never evidence about a dispatch/);
+  assert.match(orchestration, /never a "waiting" paragraph/);
+  assert.match(orchestration, /A host\s+check-in or idle-nudge prompt is not an evidence request/);
   assert.match(executorTemplate, /After terminal closeout, the board terminal state is authoritative/);
 
   for (const source of [skill, orchestration]) {
@@ -233,6 +238,37 @@ test('every implementation executor leaves candidate reviews to the orchestrator
     assert.match(source, /Implement the selected outcome, benefit, approach, and boundaries with ordinary local coding judgment\./, filename);
     assert.match(source, /Do not choose a new improvement agenda, expand scope, or replace the architecture\./, filename);
   }
+});
+
+test('normal Git delivery commits before captured verification and submission', () => {
+  const focusedChecks = executorTemplate.indexOf('**Use focused checks while editing, then commit the final scoped candidate.**');
+  const captureVerification = executorTemplate.indexOf('**Capture verification and submit, never publish.**');
+  const cleanCandidateVerification = executorTemplate.indexOf("Run the ticket's exact verifier on that clean committed candidate");
+  const submit = executorTemplate.indexOf('mcp__plugin_sidequest_board__submit', cleanCandidateVerification);
+  assert.ok(focusedChecks >= 0);
+  assert.ok(captureVerification > focusedChecks);
+  assert.ok(cleanCandidateVerification > captureVerification);
+  assert.ok(submit > cleanCandidateVerification);
+
+  for (const [filename, source] of agentsync.implementationExecutorSources()) {
+    assert.ok(source.includes("Run the ticket's exact verifier on that clean committed candidate"), filename);
+  }
+});
+
+test('dynamic survival guidance checkpoints incomplete work instead of submitting it', () => {
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-3011',
+    model: 'opus',
+    effort: 'high',
+    category: {},
+    executorVerifyKind: 'command',
+    executorVerify: 'npm run typecheck',
+  }, 'ticket-token', undefined, ROOT);
+  assert.match(briefing, /use the existing Continuation checkpoint path/);
+  assert.match(briefing, /exact remaining work and verification status/);
+  assert.match(briefing, /release the ticket to `todo`/);
+  assert.match(briefing, /Do not submit incomplete ticket work as ready/);
+  assert.doesNotMatch(briefing, /commit and submit the verified portion/);
 });
 
 export {};

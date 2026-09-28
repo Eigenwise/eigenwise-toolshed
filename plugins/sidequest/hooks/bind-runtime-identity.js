@@ -216,7 +216,10 @@ function bindClaimRuntimeIdentity(input, agentId, executor) {
     const project = String(toolInput.project || "").trim() || store.sessionProjectRoot();
     const found = store.findProject(project);
     if (found.ok && found.slug) {
+      const cwd = stringField(input, "cwd");
+      const checkout = cwd ? enclosingCheckout(cwd) : null;
       const binding = store.bindClaimRuntimeIdentity(found.slug, ref, {
+        observedWorktree: checkout?.linked ? checkout.root : null,
         token: toolInput.token,
         tokenFile: toolInput.tokenFile,
         executor,
@@ -236,6 +239,19 @@ function bindClaimRuntimeIdentity(input, agentId, executor) {
   }
   return true;
 }
+function recordReleaseCheckout(input, agentId, checkoutRoot) {
+  if (stringField(input, "tool_name") !== "mcp__plugin_sidequest_board__release" || !isRecord(input.tool_input)) return;
+  const toolInput = input.tool_input;
+  const ref = String(toolInput.ref || "").trim();
+  const by = String(toolInput.by || "").trim();
+  if (!ref || !by) return;
+  try {
+    const store = require(runtimeModule("store"));
+    const found = store.findProject(String(toolInput.project || "").trim() || store.sessionProjectRoot());
+    if (found.ok && found.slug) store.recordReleaseObservedCheckout(found.slug, ref, { by, agentId, observedWorktree: checkoutRoot });
+  } catch (_) {
+  }
+}
 function main() {
   const input = readStdin();
   if (!input) return;
@@ -247,6 +263,7 @@ function main() {
   if (!cwd) return;
   const checkout = enclosingCheckout(cwd);
   if (!checkout?.linked) return;
+  recordReleaseCheckout(input, agentId, checkout.root);
   const found = isolationExpectation(input, agentId, executor, true, checkout.root);
   if (found?.terminal || found?.identityBound) return;
   bindObservedRuntimeIdentity(input, agentId, executor, checkout.root);
