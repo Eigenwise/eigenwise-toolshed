@@ -490,6 +490,8 @@ function toolInputOf(input) {
 }
 var CLOSEOUT_UPDATE_FIELDS = /* @__PURE__ */ new Set([
   "files",
+  "addFiles",
+  "removeFiles",
   "status",
   "readonly",
   "readonlyOverride",
@@ -508,6 +510,10 @@ function executorLiveClaimMutationRefusal(input) {
   const toolInput = toolInputOf(input);
   if (toolName === "mcp__plugin_sidequest_board__update" && toolInput && Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(toolInput, field))) {
     writeDeny("PreToolUse", "sidequest: subagents cannot update closeout fields through MCP. Use scopeRequest for files, or ask the orchestrator to set other closeout flags from the main thread.");
+    return true;
+  }
+  if (toolName === "mcp__plugin_sidequest_board__scopeRequest" && toolInput && toolInput.grant === true) {
+    writeDeny("PreToolUse", "sidequest: subagents cannot grant a refused scope request through MCP. Ask the orchestrator to grant it from the main thread.");
     return true;
   }
   if (toolName === "mcp__plugin_sidequest_board__remove" && toolInput && toolInput.force === true) {

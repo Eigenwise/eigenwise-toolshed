@@ -406,7 +406,7 @@ function toolInputOf(input: HookInput): Record<string, unknown> | null {
 }
 
 const CLOSEOUT_UPDATE_FIELDS = new Set([
-  'files', 'status', 'readonly', 'readonlyOverride', 'workingTreeDelivery',
+  'files', 'addFiles', 'removeFiles', 'status', 'readonly', 'readonlyOverride', 'workingTreeDelivery',
   'externalDeliverable', 'verify', 'verifyKind', 'attestationArtifact',
   'executorVerify', 'executorVerifyKind', 'executorAttestationArtifact',
 ]);
@@ -419,6 +419,17 @@ function executorLiveClaimMutationRefusal(input: HookInput): boolean {
     && toolInput
     && Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(toolInput, field))) {
     writeDeny('PreToolUse', 'sidequest: subagents cannot update closeout fields through MCP. Use scopeRequest for files, or ask the orchestrator to set other closeout flags from the main thread.');
+    return true;
+  }
+  // scopeRequest with grant:true widens declaredFiles for a refusal the ticket
+  // already recorded, which is a live-claim mutation just like the update fields
+  // above. Without this, a subagent could pass by:'orchestrator' to mint the
+  // grant itself; the store's by-mismatch check only catches the claim holder's
+  // own by, not an impersonated one.
+  if (toolName === 'mcp__plugin_sidequest_board__scopeRequest'
+    && toolInput
+    && toolInput.grant === true) {
+    writeDeny('PreToolUse', 'sidequest: subagents cannot grant a refused scope request through MCP. Ask the orchestrator to grant it from the main thread.');
     return true;
   }
   // force:true is the only path that deletes a live-claimed ticket, so it is the

@@ -307,27 +307,14 @@ function reportScopeJson(slug, res) {
   if (!res.ok) process.exitCode = 1;
 }
 function scopeRefusalNextStep(res) {
-  if (res.noBounce) return "the orchestrator can widen this live claim in place — MCP update addFiles, or sidequest scope-grant from its own identity. Commit in-scope work and hand back only if no one can.";
+  if (res.noBounce) return "the orchestrator can widen this live claim in place — MCP update addFiles, or MCP scopeRequest grant:true, from its own main-thread identity. Commit in-scope work and hand back only if no one can.";
   return "commit in-scope work, then release with --release-kind handback and name the refused paths.";
-}
-async function cmdScopeGrant(opts, positional) {
-  const idOrRef = positional[0];
-  if (!idOrRef) fail("scope-grant: pass a ticket ref, e.g. sidequest scope-grant SQ-3.");
-  const { slug, meta } = await resolveProject(opts);
-  const res = store.grantScope(slug, idOrRef, workerId(opts), { source: opts.source });
-  if (opts.json) return reportScopeJson(slug, res);
-  if (res.ok) console.log(`✓ ${res.ticket.ref} scope granted: ${res.granted.join(", ")} — ${meta.name}`);
-  else reportClaimFailure("scope-grant", idOrRef, res, meta);
 }
 async function cmdScopeRequest(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("scope-request: pass a ticket ref, e.g. sidequest scope-request SQ-3 --file path/to/new-file.");
   const files = opts.file != null ? opts.file : opts.files;
-  if (opts.grant) {
-    if (files != null) fail("scope-request --grant cannot be combined with --file/--files — it grants the refusal the ticket already recorded.");
-    return cmdScopeGrant(opts, positional);
-  }
-  if (files == null) fail("scope-request: pass one or more requested paths with --file or --files, or --grant to grant the outstanding refused request.");
+  if (files == null) fail("scope-request: pass one or more requested paths with --file or --files. Granting an outstanding refused request is MCP-only: scopeRequest grant:true from the orchestrator.");
   const { slug, meta } = await resolveProject(opts);
   const res = store.requestScope(slug, idOrRef, workerId(opts), files, { source: opts.source, force: !!opts.force });
   if (opts.json) return reportScopeJson(slug, res);
@@ -859,4 +846,4 @@ async function cmdPublish(opts, positional) {
   }
   fail("publish: expected `sidequest publish lock|unlock|status|queue`");
 }
-module.exports = { validateModelFilter, cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdScopeGrant, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish };
+module.exports = { validateModelFilter, cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish };

@@ -14,13 +14,13 @@ const { fail, resolveProject, resolveWatchProject } = require("./sidequest-cmd-s
 const { PLUGIN_VERSION, cmdDashboard, cmdServe, cmdStop } = require("./sidequest-cmd-server");
 const { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm } = require("./sidequest-cmd-tickets");
 const { cmdProfile, cmdCategory, cmdGlobalFallback } = require("./sidequest-cmd-configuration");
-const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdScopeGrant, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish } = require("./sidequest-cmd-execution");
+const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish } = require("./sidequest-cmd-execution");
 const { cmdSweepClaims, cmdWorktrees, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive } = require("./sidequest-cmd-collaboration");
 const { cmdDispatch, cmdBriefing, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge } = require("./sidequest-cmd-dispatch");
 const { cmdStory } = require("./sidequest-cmd-story");
 const ARRAY_FLAGS = /* @__PURE__ */ new Set(["image", "label", "file", "add-file", "remove-file", "always-in-scope", "read-only-denied-tool", "auto-approve-scope", "produces", "changes", "consumes", "changed-surface", "dependency"]);
 const ARRAY_FLAG_ALIASES = { files: "file", labels: "label", "add-files": "add-file", "remove-files": "remove-file" };
-const BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "skip-verify", "contract-waiver", "full", "rotate", "worktree-isolation", "auto-approve-test-scope", "high-stakes", "working-tree-delivery", "external-deliverable", "unverified-transport", "reduced-agent-schema", "allow-repeat-failure", "allow-unscoped", "all-projects", "no-process", "no-worktree", "review", "abandon-submission", "grant"]);
+const BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "skip-verify", "contract-waiver", "full", "rotate", "worktree-isolation", "auto-approve-test-scope", "high-stakes", "working-tree-delivery", "external-deliverable", "unverified-transport", "reduced-agent-schema", "allow-repeat-failure", "allow-unscoped", "all-projects", "no-process", "no-worktree", "review", "abandon-submission"]);
 const COMMON_FLAGS = /* @__PURE__ */ new Set(["help", "json", "project", "source"]);
 const COMMAND_FLAGS = {
   add: ["title", "desc", "description", "body", "body-file", "priority", "status", "category", "unclassified", "complexity", "why", "high-stakes", "label", "image", "file", "produces", "changes", "consumes", "contract-waiver", "readonly", "working-tree-delivery", "external-deliverable", "anchors", "verify-kind", "attestation-artifact", "verify", "story", "route-model", "route-effort", "route", "model", "effort", "review-ref", "review-commit", "review-source", "review-revision", "dry-run", "name"],
@@ -45,8 +45,7 @@ const COMMAND_FLAGS = {
   "groom-close": ["by", "reason", "integration", "abandon-submission", "delivery-commit", "delivery-interaction-commit", "delivery-method", "recovery-evidence"],
   verdict: ["text", "outcome", "why", "constraint"],
   release: ["by", "reason", "oracle", "release-kind", "command", "exit-code", "output-tail", "candidate", "deliverable", "force", "status"],
-  "scope-request": ["by", "file", "force", "grant"],
-  "scope-grant": ["by", "force"],
+  "scope-request": ["by", "file", "force"],
   commit: ["by", "message"],
   rework: ["by", "review", "review-ref", "reason"],
   "assemble-wave": ["wave-id", "dependency", "verify-kind", "verify"],
@@ -111,7 +110,6 @@ const MUTATING_COMMANDS = /* @__PURE__ */ new Set([
   "finish",
   "scope-request",
   "scope_request",
-  "scope-grant",
   "commit",
   "rework",
   "submit",
@@ -279,8 +277,7 @@ const HELP_COMMANDS = {
   publish: "sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]",
   release: 'sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind handback | --release-kind oracle --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>]',
   verdict: `sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"]  outcome is candidate-addressed: accepted approves the candidate (not the reviewer's prose), rejected confirms it must not ship, and a finalized accepted cannot be reversed by another verdict (an accepted readonly review released with kind oracle also closes as done)`,
-  "scope-request": "sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] | sidequest scope-request <id|SQ-n> --grant [--by who]  (grants every path the claim still has refused; same as sidequest scope-grant <id|SQ-n>)",
-  "scope-grant": "sidequest scope-grant <id|SQ-n> [--by who]  grants every path this claim still has refused, widening declared files without a redispatch. Refused for the claim holder's own --by, for an unclaimed ticket, and for a refusal recorded by an earlier claim",
+  "scope-request": "sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who]  request scope and receive an immediate ruling. Granting an outstanding refused request is main-thread-only: use MCP scopeRequest grant:true from the orchestrator.",
   assign: "sidequest assign <id|SQ-n> [--to who=you]",
   unassign: "sidequest unassign <id|SQ-n>",
   remind: 'sidequest remind <id|SQ-n> (--in 1h|3h|tomorrow | --at "date/time")',
@@ -389,7 +386,9 @@ Working the board safely (multi-agent):
   sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind handback | --release-kind oracle --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>] parks the ticket awaiting the human verdict, then exits
   sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"] records an oracle verdict addressed to the CANDIDATE, not the reviewer's prose: for a bound review, rejected confirms the candidate must not ship, accepted approves the candidate, and a finalized accepted cannot be reversed by another verdict; accepting a readonly review released with kind oracle also closes it as done
   sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] request scope and receive an immediate ruling
-  sidequest scope-request <id|SQ-n> --grant [--by who]  (or sidequest scope-grant <id|SQ-n>)   grants every path this claim still has refused, widening declared files without a redispatch; refused for the claim holder's own --by, an unclaimed ticket, or a refusal an earlier claim recorded
+    Granting an outstanding refused request widens declared files without a redispatch, but it is main-thread-only:
+    it is not a CLI surface, so an executor subagent can never widen its own live scope from Bash. Use MCP
+    scopeRequest grant:true from the orchestrator's main thread instead.
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
   sidequest rework <id|SQ-n> --by reviewer --review <review-ticket-or-evidence> --reason "what needs repair"  reject an UNBOUND ready submission for repair, retain its candidate and review evidence, then dispatch the same ticket for a normal replacement claim
     a candidate bound to a review-audit ticket is locked: this refuses without writing, and --review-ref is accepted only for compatibility. Record the failed review's evidence on the review ticket, release that review with --kind oracle, and repair through a fresh ticket, dispatch, commit, review, and candidate
@@ -417,7 +416,7 @@ Working the board safely (multi-agent):
     orchestrator's main thread; from the CLI they work once the claim is released. A removal reaches an isolated live
     dispatch at once — it loses a path it may already have written — while a shared-tree dispatch keeps it until
     redispatch. This is how the orchestrator answers a scope refusal without dropping the ticket's existing files —
-    or grant the outstanding request outright with scope-grant/scope-request --grant instead.
+    or grant the outstanding request outright with MCP scopeRequest grant:true instead.
   sidequest add/update ... --produces name --changes name --consumes name   declare free-form contract edges;
     'ready --brief' reports a produce/consume or change/change collision in waveDependencies. --contract-waiver
     is a reviewed override and can be cleared with --contract-waiver=false.
@@ -617,9 +616,6 @@ async function main() {
     case "scope-request":
     case "scope_request":
       await cmdScopeRequest(opts, positional);
-      break;
-    case "scope-grant":
-      await cmdScopeGrant(opts, positional);
       break;
     case "commit":
       await cmdCommit(opts, positional);

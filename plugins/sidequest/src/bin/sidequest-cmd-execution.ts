@@ -351,31 +351,18 @@ function reportScopeJson(slug: any, res: any) {
 // noBounce means a teammate can widen this claim's scope in place, so the executor is
 // not sent home for a refusal the orchestrator can answer where it stands.
 function scopeRefusalNextStep(res: any) {
-  if (res.noBounce) return 'the orchestrator can widen this live claim in place — MCP update addFiles, or sidequest scope-grant from its own identity. Commit in-scope work and hand back only if no one can.';
+  if (res.noBounce) return 'the orchestrator can widen this live claim in place — MCP update addFiles, or MCP scopeRequest grant:true, from its own main-thread identity. Commit in-scope work and hand back only if no one can.';
   return 'commit in-scope work, then release with --release-kind handback and name the refused paths.';
 }
 
-// The orchestrator's side of a refusal: it grants what the ticket already recorded, so
-// it names no paths. grantScope refuses the claim holder's own --by.
-async function cmdScopeGrant(opts: any, positional: any) {
-  const idOrRef = positional[0];
-  if (!idOrRef) fail('scope-grant: pass a ticket ref, e.g. sidequest scope-grant SQ-3.');
-  const { slug, meta } = await resolveProject(opts);
-  const res = store.grantScope(slug, idOrRef, workerId(opts), { source: opts.source });
-  if (opts.json) return reportScopeJson(slug, res);
-  if (res.ok) console.log(`✓ ${res.ticket.ref} scope granted: ${res.granted.join(', ')} — ${meta.name}`);
-  else reportClaimFailure('scope-grant', idOrRef, res, meta);
-}
-
+// Granting an outstanding refused request is main-thread-only (MCP scopeRequest
+// grant:true from the orchestrator): the CLI has no scope-grant/--grant surface,
+// so an executor subagent can never widen its own live scope from Bash.
 async function cmdScopeRequest(opts: any, positional: any) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('scope-request: pass a ticket ref, e.g. sidequest scope-request SQ-3 --file path/to/new-file.');
   const files = opts.file != null ? opts.file : opts.files;
-  if (opts.grant) {
-    if (files != null) fail('scope-request --grant cannot be combined with --file/--files — it grants the refusal the ticket already recorded.');
-    return cmdScopeGrant(opts, positional);
-  }
-  if (files == null) fail('scope-request: pass one or more requested paths with --file or --files, or --grant to grant the outstanding refused request.');
+  if (files == null) fail('scope-request: pass one or more requested paths with --file or --files. Granting an outstanding refused request is MCP-only: scopeRequest grant:true from the orchestrator.');
   const { slug, meta } = await resolveProject(opts);
   const res = store.requestScope(slug, idOrRef, workerId(opts), files, { source: opts.source, force: !!opts.force });
   if (opts.json) return reportScopeJson(slug, res);
@@ -978,4 +965,4 @@ async function cmdPublish(opts: any, positional: any) {
 }
 
 
-module.exports = { validateModelFilter, cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdScopeGrant, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish };
+module.exports = { validateModelFilter, cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish };

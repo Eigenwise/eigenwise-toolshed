@@ -349,7 +349,7 @@ function verificationEvidenceGuidance(evidenceDirectory: any, evidencePaths: any
 function declaredScopeGuidance(ticket: any, refusedPaths: any[]) {
   if (!refusedPaths.length || !normalizeFiles(ticket.files).length) return '';
   const subject = refusedPaths.length === 1 ? 'The refused path is' : 'The refused paths are';
-  return ` ${subject} outside this ticket's declared files: ${refusedPaths.join(', ')}. The orchestrator can widen this live claim in place: MCP \`update\` with addFiles appends without dropping the rest of the declared list, and MCP \`scopeRequest\` with grant:true — \`sidequest scope-grant ${ticket.ref}\` from a shell — grants exactly this refusal. Both refuse the claim holder's own \`by\`, so the orchestrator runs them under its own identity; the CLI's \`sidequest update ${ticket.ref} --add-file <path>\` only applies once the claim is released. Either remedy is in force for this dispatch's next scopeRequest, so there is nothing to redispatch.`;
+  return ` ${subject} outside this ticket's declared files: ${refusedPaths.join(', ')}. The orchestrator can widen this live claim in place from its own main-thread identity: MCP \`update\` with addFiles appends without dropping the rest of the declared list, and MCP \`scopeRequest\` with grant:true grants exactly this refusal. Both refuse the claim holder's own \`by\`, and neither has a CLI surface a subagent can reach from Bash; the CLI's \`sidequest update ${ticket.ref} --add-file <path>\` only applies once the claim is released. Either remedy is in force for this dispatch's next scopeRequest, so there is nothing to redispatch.`;
 }
 
 // The bounce this grant path exists to remove. It only belongs on a refusal no
@@ -905,8 +905,9 @@ function grantScope(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         operation: 'scopeGrant',
       });
     } catch (error: any) {
-      // Every other failure here is a structured reason, and scope-grant --json has
-      // to stay JSON, so a rejected declared list reports rather than throws.
+      // Every other failure here is a structured reason, and grantScope's callers
+      // (MCP scopeRequest) need it to stay structured, so a rejected declared list
+      // reports rather than throws.
       return { ok: false, reason: 'invalid_scope', ticket: t, message: error.message };
     }
     syncLiveDispatchScope(slug, t);

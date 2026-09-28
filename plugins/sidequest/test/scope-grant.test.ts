@@ -178,7 +178,9 @@ test('the refusal comment names remedies that work under a live claim and never 
   const body = refusalBody(refusal);
   assert.ok(body.includes('MCP `update` with addFiles'), body);
   assert.ok(body.includes('grant:true'), body);
-  assert.ok(body.includes(`sidequest scope-grant ${fixture.ticket.ref}`), body);
+  assert.ok(body.includes('main-thread identity'), body);
+  // Neither remedy has a CLI surface a subagent can reach from Bash (GitHub #174).
+  assert.doesNotMatch(body, /sidequest scope-grant/);
   assert.ok(body.includes('only applies once the claim is released'), body);
   // The two promises this refusal used to make and could not keep.
   assert.doesNotMatch(body, /then redispatch/);
@@ -263,27 +265,24 @@ function cli(env: NodeJS.ProcessEnv, args: string[]) {
   return spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', windowsHide: true, env });
 }
 
-test('the scope-grant CLI command grants the outstanding request', () => {
+// GitHub #174: an executor subagent could widen its own live scope from Bash
+// through the CLI grant surfaces — `scope-grant` and `scope-request --grant` —
+// because no hook guarded them. Dropping both surfaces entirely (rather than
+// gating them) leaves the MCP `scopeRequest` grant:true path, callable only
+// from the orchestrator's main thread, as the sole way to grant a refused
+// request on a live claim.
+test('the scope-grant CLI command no longer exists', () => {
   const fixture = createClaimedDispatch();
   assert.equal(fixture.store.requestScope(fixture.project, fixture.ticket.ref, fixture.worker, [REFUSED_PATH]).state, 'refused');
   const env = cliEnv(fixture);
 
-  const held = cli(env, ['scope-grant', fixture.ticket.ref, '--by', fixture.worker, '--json']);
-  assert.equal(held.status, 1, held.stderr);
-  assert.equal(JSON.parse(held.stdout).reason, 'claim_holder_cannot_grant');
+  const result = cli(env, ['scope-grant', fixture.ticket.ref, '--by', 'cli-orchestrator']);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr + result.stdout, /unknown command "scope-grant"/);
 
-  const granted = cli(env, ['scope-grant', fixture.ticket.ref, '--by', 'cli-orchestrator']);
-  assert.equal(granted.status, 0, granted.stderr);
-  assert.ok(granted.stdout.includes(`scope granted: ${REFUSED_PATH}`), granted.stdout);
-
-  const nothingLeft = cli(env, ['scope-grant', fixture.ticket.ref, '--by', 'cli-orchestrator', '--json']);
-  assert.equal(nothingLeft.status, 1, nothingLeft.stderr);
-  assert.equal(JSON.parse(nothingLeft.stdout).reason, 'no_pending_scope_request');
-
-  // scope-grant names no paths; --file belongs to scope-request.
-  const withFile = cli(env, ['scope-grant', fixture.ticket.ref, '--file', REFUSED_PATH]);
-  assert.equal(withFile.status, 1);
-  assert.match(withFile.stderr + withFile.stdout, /unknown or unsupported flag --file/);
+  // The refusal is untouched: no CLI path took it.
+  const ticket = fixture.store.getTicket(fixture.project, fixture.ticket.ref);
+  assert.equal(ticket.dispatch.declaredFiles.some((f: string) => f.toLowerCase() === REFUSED_PATH.toLowerCase()), false);
 });
 
 test('the scope-request CLI prints the next step that actually applies', () => {
@@ -300,21 +299,16 @@ test('the scope-request CLI prints the next step that actually applies', () => {
   assert.match(bounced.stdout, /release with --release-kind handback/);
 });
 
-test('scope-request --grant refuses paths and routes to the same grant', () => {
+test('scope-request --grant no longer exists', () => {
   const fixture = createClaimedDispatch();
   assert.equal(fixture.store.requestScope(fixture.project, fixture.ticket.ref, fixture.worker, [REFUSED_PATH]).state, 'refused');
-  const env = {
-    ...process.env,
-    CLAUDE_PLUGIN_ROOT: ROOT,
-    SIDEQUEST_HOME: fixture.home,
-    CLAUDE_PROJECT_DIR: fixture.repository,
-  };
+  const env = cliEnv(fixture);
 
-  const mixed = spawnSync(process.execPath, [CLI, 'scope-request', fixture.ticket.ref, '--grant', '--file', REFUSED_PATH], { encoding: 'utf8', windowsHide: true, env });
-  assert.equal(mixed.status, 1);
-  assert.match(mixed.stderr + mixed.stdout, /cannot be combined with --file/);
+  const result = cli(env, ['scope-request', fixture.ticket.ref, '--grant', '--by', 'cli-orchestrator']);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr + result.stdout, /unknown or unsupported flag --grant/);
 
-  const granted = spawnSync(process.execPath, [CLI, 'scope-request', fixture.ticket.ref, '--grant', '--by', 'cli-orchestrator', '--json'], { encoding: 'utf8', windowsHide: true, env });
-  assert.equal(granted.status, 0, granted.stderr);
-  assert.deepEqual(JSON.parse(granted.stdout).granted, [REFUSED_PATH]);
+  // The refusal is untouched: no CLI path took it.
+  const ticket = fixture.store.getTicket(fixture.project, fixture.ticket.ref);
+  assert.equal(ticket.dispatch.declaredFiles.some((f: string) => f.toLowerCase() === REFUSED_PATH.toLowerCase()), false);
 });

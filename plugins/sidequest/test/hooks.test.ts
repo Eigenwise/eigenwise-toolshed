@@ -1929,6 +1929,8 @@ test('pre-tool hook gates MCP closeout updates by subagent caller, not executor 
   const generalPurposeSubagent = { agent_id: 'closeout-update-child', agent_type: 'general-purpose' };
   const closeoutUpdates: Array<[string, unknown]> = [
     ['files', ['src/other.ts']],
+    ['addFiles', ['src/other.ts']],
+    ['removeFiles', ['src/other.ts']],
     ['status', 'todo'],
     ['readonly', true],
     ['readonlyOverride', true],
@@ -1973,6 +1975,35 @@ test('pre-tool hook gates MCP closeout updates by subagent caller, not executor 
     tool_input: { command: 'node sidequest.js update SQ-1 --readonly' },
   });
   assert.equal(cli, null, 'the CLI store guard, not the hook regex, refuses this update');
+});
+
+test('pre-tool hook denies a subagent MCP scopeRequest carrying grant:true (GitHub #174)', () => {
+  const subagent = { agent_id: 'scope-grant-child', agent_type: 'general-purpose' };
+
+  const denied = runHookOutput(FORCE_BYPASS, {
+    ...subagent,
+    tool_name: 'mcp__plugin_sidequest_board__scopeRequest',
+    tool_input: { ref: 'SQ-2397', by: 'orchestrator', grant: true },
+  });
+  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /subagents cannot grant a refused scope request/i);
+  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /orchestrator.*main thread/i);
+
+  // A subagent scopeRequest WITHOUT grant is not the escape (files or nothing);
+  // the hook lets it reach the handler.
+  const noGrant = runHookOutput(FORCE_BYPASS, {
+    ...subagent,
+    tool_name: 'mcp__plugin_sidequest_board__scopeRequest',
+    tool_input: { ref: 'SQ-2397', by: 'scope-grant-child', files: ['src/other.ts'] },
+  });
+  assert.equal(noGrant, null, 'a non-grant scopeRequest reaches the handler');
+
+  // The main thread reaches the handler even with grant:true.
+  const mainThread = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'mcp__plugin_sidequest_board__scopeRequest',
+    tool_input: { ref: 'SQ-2397', by: 'orchestrator', grant: true },
+  });
+  assert.equal(mainThread, null, 'the orchestrator main thread may grant');
 });
 
 test('pre-tool hook denies a subagent MCP remove carrying force (the delete-to-shed-claim escape)', () => {
