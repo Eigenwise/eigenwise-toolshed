@@ -3828,6 +3828,68 @@ test('worktree-create binds a linked checkout to its registered main board', () 
   }
 });
 
+// GH-274, GH-269, GH-84. The orchestrating session may be rooted in a plain folder that holds the
+// registered repositories, or in a different registered repository. Either way the checkout is cut
+// from the dispatched ticket's own project. Each spawning shape runs as its own dispatch and catch.
+test('worktree-create cuts the ticket project whatever repository the session cwd is in', () => {
+  const hub = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-non-git-hub-'));
+  assert.throws(() => gitFixture(['rev-parse', '--show-toplevel'], hub), 'the hub fixture must not sit inside a repository');
+  const child = path.join(hub, 'child');
+  const spawning = path.join(hub, 'spawning');
+  for (const repository of [child, spawning]) {
+    fs.mkdirSync(repository);
+    gitFixture(['init', '--quiet', '-b', 'main'], repository);
+    gitFixture(['config', 'user.email', 'test@example.invalid'], repository);
+    gitFixture(['config', 'user.name', 'Hub Worktree Hook Test'], repository);
+    fs.writeFileSync(path.join(repository, 'tracked.txt'), `${path.basename(repository)}\n`);
+    gitFixture(['add', 'tracked.txt'], repository);
+    gitFixture(['commit', '--quiet', '-m', 'seed'], repository);
+  }
+  const project = store.ensureProject(child, 'hub child').slug;
+  store.ensureProject(spawning, 'hub spawning');
+  const category = `hub-worktree-hook-${++sqSeq}`;
+  store.setCategory({ id: category, name: category, route: { model: 'sonnet', effort: 'medium' }, fallback: null, enabled: true });
+  const outcomes = [{ shape: 'non-git hub folder', cwd: hub }, { shape: 'another registered repository', cwd: spawning }].map(({ shape, cwd }) => {
+    const ticket = store.createTicket(project, { title: `hub creation from ${shape}`, category, files: ['tracked.txt'] });
+    const sessionId = `hub-worktree-hook-${++sqSeq}`;
+    const prepared = store.prepareDispatch(project, ticket.ref, { sessionId, runtimeCwd: cwd });
+    assert.equal(store.recordDispatchLaunch(project, ticket.ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId }).ok, true);
+    try {
+      const output = execFileSync(process.execPath, [WORKTREE_CREATE], {
+        input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: sessionId, cwd, name: `agent-hub-${sqSeq}` }),
+        encoding: 'utf8',
+        env: process.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+      const common = gitFixture(['rev-parse', '--path-format=absolute', '--git-common-dir'], output);
+      const cutFromChild = worktrees.canonicalPath(common) === worktrees.canonicalPath(path.join(child, '.git'));
+      const bound = worktrees.canonicalPath(store.getTicket(project, ticket.ref).dispatch.worktree) === worktrees.canonicalPath(output);
+      return `${shape}: ${cutFromChild && bound ? 'cut from the ticket project' : `wrong checkout ${output}`}`;
+    } catch (error: any) {
+      return `${shape}: failed ${String(error?.stderr || error?.message || error).trim()}`;
+    }
+  });
+  assert.deepEqual(outcomes, [
+    'non-git hub folder: cut from the ticket project',
+    'another registered repository: cut from the ticket project',
+  ]);
+});
+
+test('worktree-create names the missing reservation when a non-git cwd has nothing to follow', () => {
+  const hub = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-non-git-unreserved-'));
+  let stderr = '';
+  assert.throws(() => execFileSync(process.execPath, [WORKTREE_CREATE], {
+    input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: `unreserved-${++sqSeq}`, cwd: hub, name: `agent-unreserved-${sqSeq}` }),
+    encoding: 'utf8',
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  }), (error: any) => {
+    stderr = String(error.stderr || '');
+    return true;
+  });
+  assert.match(stderr, /is not inside a git repository, and this session holds no launched isolated dispatch on exactly one board/);
+});
+
 test('worktree-create refuses a pre-existing same-repository checkout without creation proof', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-existing-worktree-repo-'));
   gitFixture(['init', '--quiet', '-b', 'main'], repo);

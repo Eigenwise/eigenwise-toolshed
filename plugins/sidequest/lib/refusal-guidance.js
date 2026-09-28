@@ -151,7 +151,7 @@ function filesystemSnapshotLimitGuidance(projectPath, limit) {
   const unit = limit.bound === "path cap" ? "paths" : limit.bound === "byte cap" ? "bytes" : "ms";
   const blockingFile = limit.path ? ` The snapshot was reading ${limit.path} when the clock ran out; a cloud-sync placeholder read cannot be interrupted, so the snapshot process was killed.` : "";
   const recourse = limit.bound === "deadline" ? "point the board at a local directory no sync client mirrors" : "point the board at a smaller directory";
-  return `filesystem snapshot refused for ${projectPath}: ${limit.bound} reached ${limit.observed} ${unit}; cap ${limit.cap} ${unit}.${blockingFile} Initialize a git repository at the project root so dispatch uses the cheaper git adapter, or ${recourse}.`;
+  return `filesystem snapshot refused for ${projectPath}: ${limit.bound} reached ${limit.observed} ${unit}; cap ${limit.cap} ${unit}. The cap is fixed and no board setting raises it.${blockingFile} Initialize a git repository at the project root so dispatch uses the cheaper git adapter, or ${recourse}. When the directory only holds git repositories one level down, do not initialize it: register each repository as its own board and file the ticket there.`;
 }
 function filesystemSnapshotChildFailureGuidance(failure) {
   if (failure.kind === "spawn-error") {

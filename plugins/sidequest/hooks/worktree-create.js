@@ -244,6 +244,17 @@ function reservedDispatchRepository(sessionId) {
     return null;
   }
 }
+function spawningRepository(hookCwd, sessionId) {
+  const cwd = hookCwd || process.cwd();
+  try {
+    return repositoryFor(cwd);
+  } catch (error) {
+    const reserved = reservedDispatchRepository(sessionId);
+    if (reserved) return reserved;
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`the session cwd ${cwd} is not inside a git repository, and this session holds no launched isolated dispatch on exactly one board to name the ticket's project (${reason.trim()})`);
+  }
+}
 function samePath(left, right) {
   return leaseKernel.canonicalPath(left) === leaseKernel.canonicalPath(right);
 }
@@ -308,6 +319,14 @@ function bindCreation(repository, sessionId, worktree) {
   const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
   return store.bindDispatchWorktreeCreation(project.slug, sessionId, worktree);
+}
+function bindSessionCreation(repository, sessionId, name, namedWorktreePath) {
+  const binding = bindCreation(repository, sessionId, namedWorktreePath(repository, name));
+  if (binding.ok) return { repository, binding };
+  const reserved = reservedDispatchRepository(sessionId);
+  if (!reserved || samePath(reserved, repository)) return { repository, binding };
+  const reservedBinding = bindCreation(reserved, sessionId, namedWorktreePath(reserved, name));
+  return reservedBinding.ok ? { repository: reserved, binding: reservedBinding } : { repository, binding };
 }
 function completeCreation(repository, sessionId, worktree, attempt) {
   const store = require(runtimeModule("store"));
@@ -400,22 +419,10 @@ async function createWorktreeMain() {
   if (!input || stringField(input, "hook_event_name") !== "WorktreeCreate") return;
   const name = stringField(input, "name");
   const sessionId = stringField(input, "session_id", "sessionId");
-  const cwd = stringField(input, "cwd") || process.cwd();
   if (!name) throw new Error("WorktreeCreate requires a worktree name.");
   if (!sessionId) throw new Error("WorktreeCreate requires a dispatch session binding.");
-  let repository = repositoryFor(cwd);
   const worktrees = require(runtimeModule("worktrees"));
-  let binding = bindCreation(repository, sessionId, worktrees.namedWorktreePath(repository, name));
-  if (!binding.ok) {
-    const reserved = reservedDispatchRepository(sessionId);
-    if (reserved && !samePath(reserved, repository)) {
-      const reservedBinding = bindCreation(reserved, sessionId, worktrees.namedWorktreePath(reserved, name));
-      if (reservedBinding.ok) {
-        repository = reserved;
-        binding = reservedBinding;
-      }
-    }
-  }
+  const { repository, binding } = bindSessionCreation(spawningRepository(stringField(input, "cwd"), sessionId), sessionId, name, worktrees.namedWorktreePath);
   if (!binding.ok || !binding.ref || !binding.baseline || !binding.repository || !binding.worktree) {
     throw new Error(worktreeCreationRefusalMessage(String(binding.reason || ""), repository, binding.binding));
   }

@@ -238,11 +238,13 @@ function createDispatch(dependencies) {
       return null;
     }
   }
-  function isolatedTreeRuntimeRefusal(ticket, projectPath, runtimeCwd, slug, sessionId) {
-    if (!runtimeCwd || !projectPath) return null;
+  function runtimeOutsideProjectRepository(projectPath, runtimeCwd) {
+    if (!runtimeCwd || !projectPath) return false;
     const project = repositoryIdentity(projectPath);
-    const runtime = repositoryIdentity(runtimeCwd);
-    if (!project || !runtime || project === runtime) return null;
+    return Boolean(project) && project !== repositoryIdentity(runtimeCwd);
+  }
+  function isolatedTreeRuntimeRefusal(ticket, projectPath, runtimeCwd, slug, sessionId) {
+    if (!runtimeOutsideProjectRepository(projectPath, runtimeCwd)) return null;
     const competing = launchedIsolatedSessionProjects(String(sessionId || "").trim(), slug);
     if (!competing.length) return null;
     return `prepare dispatch: refused ${ticket.ref}; its project ${projectPath} is a different repository from this session's checkout ${runtimeCwd}, and this session already owns launched isolated dispatches on another board (${competing.map((entry) => entry.path).join(", ")}). WorktreeCreate follows the session id to one board, so with several live it cannot tell which ticket it is creating for and would cut this worktree from the wrong repository. Dispatch ${ticket.ref} once those are terminal, leaving ${projectPath} as this session's only isolated board. sharedTree:true stays available but runs the executor and its commit in ${runtimeCwd}; only its verification is redirected to ${projectPath}.`;

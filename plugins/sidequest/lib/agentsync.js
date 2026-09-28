@@ -843,7 +843,7 @@ function withProjectIdentity(prompt, projectPath) {
   if (!project) return text;
   return `${text}
 
-Dispatch board identity: --project "${project.replace(/"/g, '\\"')}"`;
+Dispatch board identity: --project "${project.replace(/"/g, '\\"')}". Pass it as project on every board call: an unqualified ref resolves on the orchestrating session's board, and only calls naming your claim or worktree follow you to this one.`;
 }
 function quotedShellArgument(value) {
   return `"${String(value || "").replace(/"/g, '\\"')}"`;

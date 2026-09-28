@@ -2823,6 +2823,36 @@ test('isolated dispatch admits a spawning runtime outside the board repository',
   }
 });
 
+// GH-269. A session rooted in a plain folder has no checkout for WorktreeCreate to fall
+// back to, so while it owns isolated dispatches on another board the hook could not tell
+// which board to follow and crashed after the launch was recorded. Prepare refuses that
+// case up front; with one board in play the dispatch stays isolated.
+test('isolated dispatch from a non-git runtime is refused only while another board holds the session', () => {
+  const hub = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-non-git-runtime-'));
+  const sessionId = `non-git-runtime-${Date.now()}`;
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-non-git-other-'));
+  execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: other });
+  fs.writeFileSync(path.join(other, 'tracked.js'), 'module.exports = 3;\n');
+  execFileSync('git', ['add', 'tracked.js'], { cwd: other });
+  execFileSync('git', ['-c', 'user.email=test@example.invalid', '-c', 'user.name=Other Board', 'commit', '--quiet', '-m', 'seed other board'], { cwd: other });
+  const otherSlug = store.ensureProject(other).slug;
+  const alone = createFixture('non-git runtime with one board');
+  const prepared = store.prepareDispatch(slug, alone.ref, { sessionId, runtimeCwd: hub });
+  assert.equal(prepared.ticket.dispatch.sharedTree, false, 'one board in play stays isolated');
+  assert.equal(store.recordDispatchLaunch(slug, alone.ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId }).ok, true);
+  const competing = store.createTicket(otherSlug, { title: 'non-git runtime competing board', category: 'dispatch.lifecycle', files: ['tracked.js'], source: 'test' });
+  assert.throws(() => store.prepareDispatch(otherSlug, competing.ref, { sessionId, runtimeCwd: hub }), (error: Error) => {
+    assert.ok(error.message.includes(PROJECT), 'the refusal names the board already holding the session');
+    assert.match(error.message, /Dispatch SQ-\d+ once those are terminal/);
+    return true;
+  });
+  // The refusal's remedy has to work: once the other board's dispatch is terminal, the same call goes through.
+  assert.equal(store.releaseTicket(slug, alone.ref, 'non-git-runtime-remedy', { status: 'todo', source: 'test', force: true }).ok, true);
+  const remedied = store.prepareDispatch(otherSlug, competing.ref, { sessionId, runtimeCwd: hub });
+  assert.equal(remedied.ticket.dispatch.sharedTree, false);
+  assert.equal(store.releaseTicket(otherSlug, competing.ref, 'non-git-runtime-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+});
+
 // SQ-2570/SQ-2739. A creation that finds only a prepared dispatch for its session
 // is still refused, but it has to say so: "dispatch_binding_unavailable" sent the
 // orchestrator hunting for a missing dispatch that was sitting right there.
