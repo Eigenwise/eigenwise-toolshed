@@ -219,8 +219,11 @@ function createSubmissions(dependencies) {
       }
     };
   }
+  function nativeCodexReviewer(reviewTicket) {
+    return reviewTicket?.dispatch?.runtimeHost === "codex" && reviewTicket?.completion?.purpose !== "oracle-review-verdict" && reviewTicket?.release?.kind !== "oracle";
+  }
   function nativeTerminalReviewEvidence(sourceTicket, reviewTicket, candidate) {
-    if (sourceTicket?.dispatch?.runtimeHost !== "codex" || reviewTicket?.dispatch?.runtimeHost !== "codex" || reviewTicket?.completion?.purpose === "oracle-review-verdict" || reviewTicket?.release?.kind === "oracle") {
+    if (!nativeCodexReviewer(reviewTicket)) {
       return { recognized: false, ok: false, reason: "not_native_review" };
     }
     if (reviewTicket?.status !== "done" || reviewTicket?.completion?.state !== "done") {
@@ -246,7 +249,7 @@ function createSubmissions(dependencies) {
       return comment2.sourceSession === attempt.sessionId && comment2.actor === agentId && comment2.operation === "comment";
     });
     const decisions = authenticated.map((comment2) => ({ comment: comment2, parsed: normalizedReviewEvidence(comment2, candidate) })).filter((entry) => entry.parsed.recognized);
-    if (!decisions.length) return { recognized: false, ok: false, reason: "review_evidence_missing", message: `${reviewTicket.ref} has no explicit PASS, FIX, or FAIL evidence comment authored by its terminal reviewer runtime.` };
+    if (!decisions.length) return { recognized: true, ok: false, reason: "review_evidence_missing", message: `${reviewTicket.ref} has no explicit PASS, FIX, or FAIL evidence comment authored by its terminal reviewer runtime.` };
     if (decisions.length !== 1) return { recognized: true, ok: false, reason: "review_evidence_ambiguous", message: `${reviewTicket.ref} has multiple terminal reviewer outcome comments; a fresh, single-outcome review is required.` };
     const { comment, parsed } = decisions[0];
     if (!parsed.ok) return { recognized: true, ok: false, reason: "review_evidence_invalid", message: `${reviewTicket.ref} outcome evidence is invalid: ${parsed.message}.` };
@@ -380,8 +383,8 @@ function createSubmissions(dependencies) {
     if (terminalEvidence.recognized && !terminalEvidence.ok) {
       return terminalEvidence.message || `${reviewRelationRef(relation)} has invalid terminal review evidence`;
     }
-    if (terminalEvidence.ok && terminalEvidence.outcome === "rejected" && reviewRelationOutcome(relation) !== "rejected") {
-      return `${reviewRelationRef(relation)} has an authenticated FIX/FAIL outcome for ${ticket.ref}; record it with review_outcome before any integration attempt`;
+    if (terminalEvidence.ok && reviewRelationOutcome(relation) !== terminalEvidence.outcome) {
+      return terminalEvidence.outcome === "rejected" ? `${reviewRelationRef(relation)} has an authenticated FIX/FAIL outcome for ${ticket.ref}; record it with review_outcome before any integration attempt` : `${reviewRelationRef(relation)} has authenticated PASS evidence for ${ticket.ref} that is not yet recorded; record it with review_outcome before any integration attempt`;
     }
     return null;
   }
