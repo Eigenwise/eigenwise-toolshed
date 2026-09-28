@@ -955,18 +955,21 @@ test('sweep removes a finished tree whose only ignored links resolve inside it',
 // listing ignored content -- it reports the link itself as the one leaf, not the files behind it.
 // pnpm's `node_modules/<dep> -> .pnpm/...` and a workspace's `node_modules/<pkg> -> ../packages/<pkg>`
 // take this shape, so the leaf has to be accepted as a directory too, as long as it was reached
-// through an in-tree link, or both still park for the 14-day retention like develop does.
+// through an in-tree link, or both still park for the 14-day retention like develop does. On Windows
+// the fixture link is a junction, which git does walk, so there the same tree reaches the sweep as
+// files behind an in-tree ancestor link and still has to be removed.
 test('sweep removes a finished tree whose only ignored link is a directory symlink leaf', async () => {
   const { repository, baseCommit, worktreeRoot } = repositoryFixture();
   const worktree = createAgentWorktree(repository, worktreeRoot, 'in-tree-dir-symlink-leaf');
   const ticket = integratedTicket('SQ-IN-TREE-DIR-SYMLINK-LEAF', 'in-tree-dir-symlink-leaf', worktree, baseCommit);
   createInTreeDependencyLink(worktree, 'node_modules/tsx-alias', 'node_modules/tsx');
   try {
-    assert.match(
-      git(worktree, ['status', '--porcelain', '--ignored', '--untracked-files=all']),
-      /^!! node_modules\/tsx-alias$/m,
-      'git reports the directory symlink as one leaf, not the files behind it',
-    );
+    const status = git(worktree, ['status', '--porcelain', '--ignored', '--untracked-files=all']);
+    if (process.platform === 'win32') {
+      assert.match(status, /^!! node_modules\/tsx-alias\/sentinel\.txt$/m, 'git for Windows walks the junction and lists the files behind it');
+    } else {
+      assert.match(status, /^!! node_modules\/tsx-alias$/m, 'git reports the directory symlink as one leaf, not the files behind it');
+    }
 
     const result = await worktrees.sweep(repository, [ticket], { execute: false, minAgeMs: 0, notIntegratedSalvageAgeMs: 0, integrationTarget });
     const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
