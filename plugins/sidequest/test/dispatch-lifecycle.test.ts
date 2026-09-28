@@ -3701,6 +3701,14 @@ test('SQ-2117: a pending submission refuses preparation instead of minting an un
   assert.equal(store.submitTicket(slug, ticket.ref, owner, { commit: candidateCommit, source: 'test' }).ok, true);
   const submitted = store.getTicket(slug, ticket.ref);
 
+  // SQ-59: submit clears the claim, so `owner` — the identity `rework --by` requires — is
+  // recoverable only from the submission record. Pulse has to carry it without needing
+  // full:true or a round trip through the comment thread.
+  const submittedPulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(submittedPulse.claim, null);
+  assert.equal(submittedPulse.dispatch.state, 'submitted');
+  assert.equal(submittedPulse.dispatch.submittedBy, owner);
+
   assert.throws(
     () => store.prepareDispatch(slug, ticket.ref, { sessionId: `pending-submission-retry-${Date.now()}` }),
     new RegExp(`has a pending submission \\(${candidateCommit}\\)[\\s\\S]*sidequest integrate[\\s\\S]*sidequest rework[\\s\\S]*--abandon-submission`),
