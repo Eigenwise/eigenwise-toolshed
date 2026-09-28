@@ -40,7 +40,11 @@ push — instead of one transaction per ticket. Don't wait on work that isn't in
 The orchestrator is the integrator. A submitted range stays pinned at `refs/sidequest/<SQ-n>` until
 its exact assembled wave has delivered. A singleton can be assembled and gated during `integrate`; for
 a group, first run `sidequest assemble-wave <SQ-n> [SQ-n...] --verify "<gate evidence>"`, then pass
-that exact same participant set to `sidequest integrate`. The engine refuses delivery when the group
+that exact same participant set to `sidequest integrate`. When the participants pin a command, the gate
+runs it itself (`--verify` is only read for other verifier kinds): in a temporary detached checkout of
+the wave baseline with every candidate merged, cwd at its root, `CLAUDE_PLUGIN_*` stripped from the
+environment, and `verification.verifiedTree` naming the tree it checked. Candidates that do not merge
+cleanly refuse with `assembled_wave_compose_failed` and reject nobody. The engine refuses delivery when the group
 has no passing assembled-wave gate, includes a participant from another wave, omits a participant, or
 tries to deliver one participant from a multi-ticket wave. It records delivery only after one passing
 wave delivers its exact Git participant set and the resulting revision passes its delivery verification.

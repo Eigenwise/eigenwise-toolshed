@@ -2694,48 +2694,90 @@ ${verify.outputTail}` : null
       reusedCapture: { id: capture.id, candidate: { source, value }, completedAt: capture.completedAt }
     };
   }
-  function authoritativeWaveVerification(slug, tickets, waveId, supplied, opts) {
+  function authoritativeWaveVerification(slug, tickets, wave, supplied, opts) {
     const requirement = waveVerificationRequirement(tickets);
     if (!requirement.ok) return requirement;
     if (opts?.skipVerify === true) return { ok: true, verification: skippedVerification(requirement.requirement, opts.verificationWaiver) };
-    if (requirement.requirement.command) {
-      const reused = tickets.length === 1 ? reusedSingletonGateVerification(tickets[0], requirement.requirement) : null;
-      if (reused) {
-        return {
-          ok: true,
-          provisioning: "The gate reused the candidate's authoritative verification capture, so nothing ran and worktree provisioning was skipped.",
-          verification: reused
-        };
-      }
-      const timeoutMilliseconds = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
-      const candidateWorktree = tickets.length === 1 ? String(tickets[0]?.submission?.worktree || "").trim() : "";
-      const provisioning = provisionWaveGateWorktree(slug, candidateWorktree);
-      if (!provisioning.ok) {
-        return {
-          ok: false,
-          reason: "assembled_wave_environment_problem",
-          message: `Wave ${waveId} gate could not prepare its verification environment. ${provisioning.message} No candidate was rejected.`
-        };
-      }
+    if (requirement.requirement.command) return commandWaveVerification(slug, tickets, wave, requirement.requirement);
+    return suppliedWaveVerification(wave.id, requirement.requirement, supplied);
+  }
+  function suppliedWaveVerification(waveId, requirement, supplied) {
+    if (supplied?.kind === requirement.kind) return { ok: true, verification: supplied };
+    return {
+      ok: false,
+      reason: "wave_verification_required",
+      message: `Wave ${waveId} requires recorded ${requirement.kind} gate evidence from the project-defined verifier before delivery.`
+    };
+  }
+  function commandWaveVerification(slug, tickets, wave, requirement) {
+    const reused = tickets.length === 1 ? reusedSingletonGateVerification(tickets[0], requirement) : null;
+    if (reused) {
       return {
         ok: true,
-        provisioning: provisioning.evidence,
-        verification: runProcessVerification(requirement.requirement, {
-          cwd: candidateWorktree || readMeta(slug)?.path,
-          timeoutMilliseconds,
-          logPath: integrationVerifyLogPath(slug, { ref: waveId }),
-          outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES
-        })
+        provisioning: "The gate reused the candidate's authoritative verification capture, so nothing ran and worktree provisioning was skipped.",
+        verification: reused
       };
     }
-    if (!supplied || typeof supplied !== "object" || String(supplied.kind || "") !== requirement.requirement.kind) {
+    const checkout = waveGateCheckout(slug, tickets, wave);
+    if (!checkout.ok) return checkout;
+    try {
+      return verifyWaveGateCheckout(slug, wave.id, requirement, checkout);
+    } finally {
+      checkout.remove();
+    }
+  }
+  function waveGateCheckout(slug, tickets, wave) {
+    if (tickets.length === 1) return existingGateCheckout(slug, String(tickets[0].submission.worktree || "").trim());
+    if (wave.baseline.revision.source === "git") return composedWaveCheckout(slug, tickets, wave);
+    return existingGateCheckout(slug, "");
+  }
+  function existingGateCheckout(slug, isolatedWorktree) {
+    return { ok: true, cwd: isolatedWorktree || readMeta(slug).path, isolatedWorktree, tree: null, remove: () => {
+    } };
+  }
+  const COMPOSED_WAVE_MERGE_CONFIG = ["-c", "user.name=Sidequest wave gate", "-c", "user.email=sidequest-wave-gate@localhost", "-c", "commit.gpgsign=false"];
+  function composedWaveCheckout(slug, tickets, wave) {
+    const repository = String(readMeta(slug)?.path || "").trim();
+    const checkout = path.join(projectDir(slug), "wave-gates", wave.id);
+    const remove = () => removeComposedWaveCheckout(slug, repository, checkout);
+    try {
+      integrationGit(repository, ["worktree", "add", "--detach", checkout, wave.baseline.revision.value]);
+      for (const ticket of tickets) integrationGit(checkout, [...COMPOSED_WAVE_MERGE_CONFIG, "merge", "--no-ff", "--no-edit", ticket.submission.commit]);
+      return { ok: true, cwd: checkout, isolatedWorktree: checkout, tree: integrationGit(checkout, ["rev-parse", "HEAD^{tree}"]), remove };
+    } catch (error) {
+      const failure = integrationConflictMessage(error, unmergedIntegrationPaths(checkout));
+      remove();
       return {
         ok: false,
-        reason: "wave_verification_required",
-        message: `Wave ${waveId} requires recorded ${requirement.requirement.kind} gate evidence from the project-defined verifier before delivery.`
+        reason: "assembled_wave_compose_failed",
+        message: `Wave ${wave.id} gate could not compose its candidates onto ${wave.baseline.revision.value}: ${failure} No candidate was rejected; assemble a set whose candidates merge cleanly.`
       };
     }
-    return { ok: true, verification: supplied };
+  }
+  function removeComposedWaveCheckout(slug, repository, checkout) {
+    for (const dependency of boardConfig(slug).worktreeDependencyPaths) {
+      const link = path.resolve(checkout, dependency.path);
+      if (fs.lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) fs.unlinkSync(link);
+    }
+    fs.rmSync(checkout, { recursive: true, force: true });
+    integrationGit(repository, ["worktree", "prune"]);
+  }
+  function verifyWaveGateCheckout(slug, waveId, requirement, checkout) {
+    const provisioning = provisionWaveGateWorktree(slug, checkout.isolatedWorktree);
+    if (!provisioning.ok) {
+      return {
+        ok: false,
+        reason: "assembled_wave_environment_problem",
+        message: `Wave ${waveId} gate could not prepare its verification environment. ${provisioning.message} No candidate was rejected.`
+      };
+    }
+    const verification = runProcessVerification(requirement, {
+      cwd: checkout.cwd,
+      timeoutMilliseconds: normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs),
+      logPath: integrationVerifyLogPath(slug, { ref: waveId }),
+      outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES
+    });
+    return { ok: true, provisioning: provisioning.evidence, verification: checkout.tree ? { ...verification, verifiedTree: checkout.tree } : verification };
   }
   function assembledWaveForDelivery(slug, ticket) {
     const wave = ticket?.submission?.wave;
@@ -2920,7 +2962,7 @@ ${verify.outputTail}` : null
         wave: { id: waveId, baseline: opened.baseline }
       };
     }
-    const verification = authoritativeWaveVerification(slug, tickets, waveId, opts?.verification, opts);
+    const verification = authoritativeWaveVerification(slug, tickets, { id: waveId, baseline: opened.baseline }, opts?.verification, opts);
     if (!verification.ok || !("verification" in verification)) return verification;
     const gate = recordAssembledWaveGate(decision.assembly, verification.verification);
     transaction(() => {
