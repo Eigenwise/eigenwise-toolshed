@@ -179,6 +179,22 @@ test('an interpreter never earns a rule, because its wildcard runs arbitrary cod
   assert.match(result.blocked[0].fingerprint, /^permission:Bash:node\b/);
 });
 
+test('a glob argument earns a valid bare-executable rule, not a dead literal-* prefix', async () => {
+  const projectDir = temporaryProject();
+  enablePermissionAutomation(projectDir);
+  const environment = writeWindow(projectDir, Array.from({ length: 3 }, () => permissionTranscript('ls packages/trading-connector/src/*.test.ts')));
+
+  const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
+  const after = fs.readFileSync(path.join(projectDir, '.claude', 'settings.local.json'), 'utf8');
+
+  // Without the glob guard the argument is kept verbatim and ruleFor produces
+  // "Bash(ls packages/trading-connector/src/*.test.ts:*)", a rule Claude Code
+  // reads as a literal-* prefix that can never match.
+  assert.equal(result.additions[0].fingerprint, 'permission:Bash:ls');
+  assert.match(after, /"Bash\(ls:\*\)"/);
+  assert.doesNotMatch(after, /\*\.test\.ts:\*/);
+});
+
 test('enabling automation writes only the project-local opt-in marker', () => {
   const projectDir = temporaryProject();
 
