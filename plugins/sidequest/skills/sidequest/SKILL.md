@@ -125,6 +125,20 @@ desktop picker, because Sidequest cannot inspect the actual model. A `done`
 model stamp must match the pinned route. `submit clear:true` for an unbound
 Codex candidate is root-only; a bound review still locks it.
 
+**Native Codex bound-review closeout:** On its own review ticket, the distinct
+reviewer posts exactly one structured outcome comment tied to the bound
+candidate. Use `PASS: <summary>` with at least one `CHECK: <name> | PASS |
+<evidence>`, or `FAIL: <summary>` with `FINDING: <finding>`, `EVIDENCE:
+<evidence>`, and `REQUIRED: <change>`. Include `CANDIDATE: <source>:<value>`
+for the exact submitted candidate (for Git, `git:<commit>`). The reviewer then
+calls `done` on that same ticket with a concise report and pinned model stamp,
+even for FAIL: this finishes the audit, not candidate acceptance. After that
+terminal closeout, the root calls `review_outcome` with the review ticket ref;
+Sidequest derives `accepted` from PASS or `rejected` from FAIL/FIX. Rejection
+keeps integration blocked. The root cannot supply reviewer evidence or finish
+the reviewer's attempt. Do not release a native Codex review as `kind=oracle`;
+external/Claude oracle reviews keep their separate release-and-verdict flow.
+
 **Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent.model` and `recipe.agent.promptPrefix + prompt` in Agent. Never hand-translate route, gateway, virtual-model, marker, or effort fields. A user-named model for one ticket means set that ticket's `route` override, never edit the category route, which repoints later tickets too. See `references/routing-guide.md`.
 
 **Locations:** CLI: `plugins/sidequest/bin/sidequest.js`; DB: `~/.claude/sidequest/sidequest.db`
