@@ -607,6 +607,13 @@ function denyReason(result: ResolveResult, type: string): string {
   }
 }
 
+// A terminal record keeps whatever agent id a SubagentStart guess once gave it. When this runtime is bound to a live
+// dispatch, that stale guess names a sibling, not this executor (SQ-53, GitHub #298).
+function liveDispatchBinding(ticket: Ticket, sessionId: string, agentId: string): boolean {
+  const dispatch = ticket.dispatch;
+  return dispatch?.sessionId === sessionId && !dispatch.terminalAt && dispatch.agentId === agentId;
+}
+
 function dispatchIdentityMatches(ticket: Ticket, agentId: string, type: string): boolean {
   const dispatch = ticket.dispatch;
   if (dispatch?.agentId === agentId) return true;
@@ -665,9 +672,7 @@ function terminalExecutorTicket(input: HookInput): TerminalExecutorTicket | null
     let liveBinding = false;
     for (const project of store.listProjects({ all: true })) {
       for (const ticket of store.listTickets(project.slug)) {
-        // A terminal record keeps whatever agent id a SubagentStart guess once gave it. When this runtime is bound
-        // to a live dispatch, that stale guess names a sibling, not this executor (SQ-53, GitHub #298).
-        if (ticket.dispatch?.sessionId === sessionId && !ticket.dispatch?.terminalAt && ticket.dispatch?.agentId === agentId) liveBinding = true;
+        liveBinding = liveBinding || liveDispatchBinding(ticket, sessionId, agentId);
         if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId || !ticket.dispatch?.terminalAt || ticket.claim?.by || !dispatchIdentityMatches(ticket, agentId, executor)) continue;
         if (ticket.submission?.supersededBy?.ref || ticket.completion?.supersededBy?.ref) {
           const by = String(ticket.completion?.by || 'the control plane').trim();

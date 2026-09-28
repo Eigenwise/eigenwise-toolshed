@@ -216,10 +216,8 @@ function bindClaimRuntimeIdentity(input, agentId, executor) {
     const project = String(toolInput.project || "").trim() || store.sessionProjectRoot();
     const found = store.findProject(project);
     if (found.ok && found.slug) {
-      const cwd = stringField(input, "cwd");
-      const checkout = cwd ? enclosingCheckout(cwd) : null;
       const binding = store.bindClaimRuntimeIdentity(found.slug, ref, {
-        observedWorktree: checkout?.linked ? checkout.root : null,
+        observedWorktree: observedLinkedCheckout(input),
         token: toolInput.token,
         tokenFile: toolInput.tokenFile,
         executor,
@@ -239,18 +237,42 @@ function bindClaimRuntimeIdentity(input, agentId, executor) {
   }
   return true;
 }
+function observedLinkedCheckout(input) {
+  const cwd = stringField(input, "cwd");
+  const checkout = cwd ? enclosingCheckout(cwd) : null;
+  return checkout?.linked ? checkout.root : null;
+}
+function releaseToolInput(input) {
+  return stringField(input, "tool_name") === "mcp__plugin_sidequest_board__release" && isRecord(input.tool_input) ? input.tool_input : null;
+}
+function releaseCall(input) {
+  const toolInput = releaseToolInput(input);
+  if (!toolInput) return null;
+  const ref = stringField(toolInput, "ref").trim();
+  const by = stringField(toolInput, "by").trim();
+  return ref && by ? { ref, by, project: stringField(toolInput, "project").trim() } : null;
+}
+function releaseProjectSlug(store, project) {
+  const found = store.findProject(project || store.sessionProjectRoot());
+  return found.ok && found.slug ? found.slug : null;
+}
 function recordReleaseCheckout(input, agentId, checkoutRoot) {
-  if (stringField(input, "tool_name") !== "mcp__plugin_sidequest_board__release" || !isRecord(input.tool_input)) return;
-  const toolInput = input.tool_input;
-  const ref = String(toolInput.ref || "").trim();
-  const by = String(toolInput.by || "").trim();
-  if (!ref || !by) return;
+  const release = releaseCall(input);
+  if (!release) return;
   try {
     const store = require(runtimeModule("store"));
-    const found = store.findProject(String(toolInput.project || "").trim() || store.sessionProjectRoot());
-    if (found.ok && found.slug) store.recordReleaseObservedCheckout(found.slug, ref, { by, agentId, observedWorktree: checkoutRoot });
+    const slug = releaseProjectSlug(store, release.project);
+    if (slug) store.recordReleaseObservedCheckout(slug, release.ref, { by: release.by, agentId, observedWorktree: checkoutRoot });
   } catch (_) {
   }
+}
+function executorCheckoutRoot(input, agentId, executor) {
+  return agentId && executorAgent(executor) ? observedLinkedCheckout(input) : null;
+}
+function rebindObservedCheckout(input, agentId, executor, checkoutRoot) {
+  const found = isolationExpectation(input, agentId, executor, true, checkoutRoot);
+  if (found?.terminal || found?.identityBound) return;
+  bindObservedRuntimeIdentity(input, agentId, executor, checkoutRoot);
 }
 function main() {
   const input = readStdin();
@@ -258,15 +280,10 @@ function main() {
   const agentId = stringField(input, "agent_id", "agentId");
   const executor = stringField(input, "agent_type", "agentType", "subagent_type");
   if (bindClaimRuntimeIdentity(input, agentId, executor)) return;
-  if (!agentId || !executorAgent(executor)) return;
-  const cwd = stringField(input, "cwd");
-  if (!cwd) return;
-  const checkout = enclosingCheckout(cwd);
-  if (!checkout?.linked) return;
-  recordReleaseCheckout(input, agentId, checkout.root);
-  const found = isolationExpectation(input, agentId, executor, true, checkout.root);
-  if (found?.terminal || found?.identityBound) return;
-  bindObservedRuntimeIdentity(input, agentId, executor, checkout.root);
+  const checkoutRoot = executorCheckoutRoot(input, agentId, executor);
+  if (!checkoutRoot) return;
+  recordReleaseCheckout(input, agentId, checkoutRoot);
+  rebindObservedCheckout(input, agentId, executor, checkoutRoot);
 }
 try {
   main();
