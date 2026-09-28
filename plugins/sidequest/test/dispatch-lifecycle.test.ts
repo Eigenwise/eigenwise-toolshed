@@ -612,6 +612,48 @@ function dispatchBindingCounts(refs: any[]) {
   };
 }
 
+test('dispatch lists what it adds beyond the ticket files and never adds a declared file\'s bare parent (GH-194)', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-board-added-scope-'));
+  execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: project });
+  execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: project });
+  execFileSync('git', ['config', 'user.name', 'Board Added Scope Test'], { cwd: project });
+  fs.mkdirSync(path.join(project, 'docs'));
+  fs.writeFileSync(path.join(project, 'docs', 'tools.md'), '# Tools\n');
+  execFileSync('git', ['add', '.'], { cwd: project });
+  execFileSync('git', ['commit', '--quiet', '-m', 'seed fixture'], { cwd: project });
+  const projectSlug = store.ensureProject(project).slug;
+  assert.deepEqual(store.boardConfig(projectSlug).alwaysInScope, ['docs/']);
+  const golden = store.createTicket(projectSlug, {
+    title: 'golden fixture scope',
+    category: 'dispatch.lifecycle',
+    files: ['tests/golden/fixture.dat'],
+    source: 'test',
+  });
+  const docsFile = store.createTicket(projectSlug, {
+    title: 'single doc scope',
+    category: 'dispatch.lifecycle',
+    files: ['docs/tools.md'],
+    source: 'test',
+  });
+  try {
+    const goldenFragment = `.release/unreleased/${golden.ref}.md`;
+    const preparedGolden = store.prepareDispatch(projectSlug, golden.ref, { sessionId: `board-added-golden-${Date.now()}` });
+    assert.deepEqual(preparedGolden.ticket.dispatch.declaredFiles, ['tests/golden/fixture.dat', 'docs/', goldenFragment]);
+    assert.deepEqual(preparedGolden.ticket.dispatch.boardAddedFiles, ['docs/', goldenFragment]);
+    const briefing = agentsync.renderTicketBriefing(store.getTicket(projectSlug, golden.ref), 'board-added-token', projectSlug, project);
+    assert.match(briefing, /Board-added scope \(board config alwaysInScope[^\n]*\n- docs\//);
+
+    const docsFragment = `.release/unreleased/${docsFile.ref}.md`;
+    const preparedDocs = store.prepareDispatch(projectSlug, docsFile.ref, { sessionId: `board-added-docs-${Date.now()}` });
+    assert.deepEqual(preparedDocs.ticket.dispatch.declaredFiles, ['docs/tools.md', docsFragment]);
+    assert.deepEqual(preparedDocs.ticket.dispatch.boardAddedFiles, [docsFragment]);
+    assert.doesNotMatch(agentsync.renderTicketBriefing(store.getTicket(projectSlug, docsFile.ref), 'docs-token', projectSlug, project), /Board-added scope/);
+  } finally {
+    store.deleteTicket(projectSlug, golden.ref);
+    store.deleteTicket(projectSlug, docsFile.ref);
+  }
+});
+
 test('scope drift ignores always-in-scope paths and preserves declared casing for real drift', () => {
   const scopeDriftProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-scope-drift-project-'));
   execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: scopeDriftProject });

@@ -1484,6 +1484,7 @@ function createDispatch(dependencies) {
         const artifactRoot = sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t) ? categoryArtifactRoot(category, effectiveFiles[0]) : null;
         const artifactMode = Boolean(artifactRoot);
         const declaredFiles = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(effectiveFiles, t.files, t.ref);
+        const boardAddedFiles = declaredFiles.filter((file) => !commitScope.isInScope(file, t.files));
         const artifactScope = artifactMode ? effectiveFiles[0] : null;
         const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
         const dirtyBaselineCapture = sharedTree && !artifactMode ? captureDirtyBaseline(slug) : null;
@@ -1562,6 +1563,7 @@ function createDispatch(dependencies) {
           ...pythonIoEncoding.written ? { pythonIoEncoding } : {},
           ...opts.dispatchSkew ? { dispatchSkew: opts.dispatchSkew } : {},
           declaredFiles,
+          boardAddedFiles,
           ...!sharedTree && releasedContinuation?.continuation ? {
             continuation: releasedContinuation.continuation,
             worktree: releasedContinuation.continuation.sourceWorktree,

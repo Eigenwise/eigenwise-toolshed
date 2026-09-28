@@ -322,11 +322,13 @@ const tools = [
       const spawn = agentsync.agentSpawn(dispatchState.launchName, isolation, resolved && resolved.model, agent, prompt, description, {
         reducedAgentSchema: dispatchState.reducedAgentSchema === true
       });
+      const boardAddedScope = dispatchState.boardAddedFiles?.length ? { boardAddedFiles: dispatchState.boardAddedFiles } : {};
       const compact = {
         ref: prepared.ticket.ref,
         effort: prepared.ticket.effort,
         runsLabel: prepared.ticket.exec && prepared.ticket.exec.runsLabel,
         ...prepared.ticket.dispatch?.fallbackReason ? { fallbackReason: prepared.ticket.dispatch.fallbackReason } : {},
+        ...boardAddedScope,
         spawn
       };
       const warnings = store.presentWarnings(prepared.ticket, store.dispatchWarnings(prepared.ticket, slug), sessionId);
@@ -346,6 +348,7 @@ const tools = [
         token: prepared.token,
         recovery: prepared.recovery || null,
         ...dispatchState.fallbackReason ? { fallbackReason: dispatchState.fallbackReason } : {},
+        ...boardAddedScope,
         warnings,
         spawn,
         guidance: prepared.recovery?.kind === "live_claim_resume" ? `Live claim recovered for ${prepared.ticket.ref}. Pass spawn unchanged; it carries a fresh token for the rebound linked worktree and no isolation field.` : prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token.`,
