@@ -568,6 +568,8 @@ const {
   dispatchIdentityDiagnosis,
   dispatchIsolationExpectation,
   dispatchUnboundClaim,
+  boardVerificationEvidencePath,
+  dispatchEvidenceDirectory,
   recordSanctionedCommit,
   dispatchWorkspace,
   dispatchDelta,
@@ -3351,7 +3353,11 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
     ticket,
   };
   if (purpose === 'integration') {
-    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireDeliveredWave: true });
+    // recordDeliveredSubmission already ran (and, for a diverged expected upstream,
+    // already re-validated under its own deliveryMethod waiver) before this control-plane
+    // closure re-checks admission. Dropping deliveryMethod here re-ran that same check
+    // unwaived and refused the closure MCP `integrate` had just recorded.
+    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireDeliveredWave: true, deliveryMethod: opts.deliveryMethod });
     if (!admitted.ok) return admitted;
   }
   const recorded = delivery;
@@ -3588,6 +3594,7 @@ const {
   STORY_LOG_ENTRY_ADVISORY_BYTES,
   STORY_LOG_ENTRY_TEXT_MAX_BYTES,
   appendStoryLogEntry,
+  appendStoryLogEntryResult,
   coerceStoryId,
   createStory,
   deleteStory,
@@ -3595,6 +3602,7 @@ const {
   listStories,
   normalizeStoryLogEntry,
   rotateStoryLog,
+  rotateStoryLogResult,
   storyLogEntryAdvisory,
   storyDecisionLog,
   storyDecisionLogWarnings,
@@ -3805,6 +3813,8 @@ module.exports = {
   dispatchIdentityDiagnosis,
   dispatchIsolationExpectation,
   dispatchUnboundClaim,
+  boardVerificationEvidencePath,
+  dispatchEvidenceDirectory,
   recordSanctionedCommit,
   activeSharedTreeClaim,
   isolatedDispatchWithMissingWorktree,
@@ -3871,10 +3881,12 @@ module.exports = {
   storyExecutionContractPage,
   normalizeStoryLogEntry,
   rotateStoryLog,
+  rotateStoryLogResult,
   storyLogEntryAdvisory,
   storyDecisionLog,
   storyReadPayload,
   appendStoryLogEntry,
+  appendStoryLogEntryResult,
   storyDecisionLogWarnings,
   listStories,
   getStory,

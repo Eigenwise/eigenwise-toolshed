@@ -56,7 +56,7 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     measurement: 'unmeasured default for Codex proxy rows absent from this table',
     pickerAliasTemplate: 'claude-{backendId}[1m]',
     advertisedWindow: 920000,
-    sentry: 'codex-synthetic-413',
+    sentry: 'synthetic-413',
   }),
   'gpt-5.6-sol': Object.freeze({
     backend: 'codex',
@@ -65,7 +65,7 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     measurement: 'measured 2026-09-05: 920012 accepted; 935012 refused',
     pickerAlias: 'claude-gpt-5.6-sol[1m]',
     advertisedWindow: 920000,
-    sentry: 'codex-synthetic-413',
+    sentry: 'synthetic-413',
   }),
   'gpt-5.6-terra': Object.freeze({
     backend: 'codex',
@@ -74,7 +74,7 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     measurement: 'measured 2026-09-05: 920012 accepted; 935012 refused',
     pickerAlias: 'claude-gpt-5.6-terra[1m]',
     advertisedWindow: 920000,
-    sentry: 'codex-synthetic-413',
+    sentry: 'synthetic-413',
   }),
   'gpt-5.6-luna': Object.freeze({
     backend: 'codex',
@@ -83,7 +83,7 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     measurement: 'measured 2026-09-05: 920012 accepted; 935012 refused',
     pickerAlias: 'claude-gpt-5.6-luna[1m]',
     advertisedWindow: 920000,
-    sentry: 'codex-synthetic-413',
+    sentry: 'synthetic-413',
   }),
   'gpt-6-astra': Object.freeze({
     backend: 'codex',
@@ -92,7 +92,7 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     measurement: 'measured 2026-09-05: 920012 accepted; 935012 refused',
     pickerAlias: 'claude-gpt-6-astra[1m]',
     advertisedWindow: 920000,
-    sentry: 'codex-synthetic-413',
+    sentry: 'synthetic-413',
   }),
   'grok-4.5': Object.freeze({
     backend: 'grok',
@@ -101,7 +101,7 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     measurement: 'measured 2026-09-05 from grok-backend.js GROK_MODELS',
     pickerAlias: 'claude-grok-4.5[1m]',
     advertisedWindow: 500000,
-    sentry: 'none',
+    sentry: 'synthetic-413',
   }),
   anthropic: Object.freeze({
     backend: 'anthropic',
@@ -199,18 +199,26 @@ const LEGACY_ENV_BLOCK = { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '950000' };
 const GATEWAY_MODELS_CACHE = path.join(CLAUDE_CONFIG_DIR, 'cache', 'gateway-models.json');
 const CLI_PATH = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const STABLE_COMMAND_PATH = path.join(STATE, 'model-gateway.js');
+
+// The stable launcher only exists once SessionStart's writeCommandLauncher has run (hooks/registry-writer.js).
+// An in-session plugin upgrade can leave a process whose STABLE_COMMAND_PATH points at a file the still-loaded
+// old hook never wrote (issue #77), so every message that names it falls back to the CLI's own real path.
+function resolveStableCommandPath({ pathExists = fs.existsSync } = {}) {
+  return pathExists(STABLE_COMMAND_PATH) ? STABLE_COMMAND_PATH : CLI_PATH;
+}
+
 const CODEX_READINESS_MESSAGES = {
-  'binary-missing': () => `Codex dispatch refused: claude-code-proxy is missing. Run \`node "${STABLE_COMMAND_PATH}" setup\`, then retry. No Anthropic fallback was used.`,
-  'auth-missing': () => `Codex dispatch refused: ChatGPT sign-in is required. Run \`node "${STABLE_COMMAND_PATH}" login\`, finish browser OAuth, then run \`node "${STABLE_COMMAND_PATH}" setup\` and retry. Credentials live in \`~/.config/claude-code-proxy/\`.`,
+  'binary-missing': (commandPath = resolveStableCommandPath()) => `Codex dispatch refused: claude-code-proxy is missing. Run \`node "${commandPath}" setup\`, then retry. No Anthropic fallback was used.`,
+  'auth-missing': (commandPath = resolveStableCommandPath()) => `Codex dispatch refused: ChatGPT sign-in is required. Run \`node "${commandPath}" login\`, finish browser OAuth, then run \`node "${commandPath}" setup\` and retry. Credentials live in \`~/.config/claude-code-proxy/\`.`,
   'proxy-down': () => `Codex dispatch refused: claude-code-proxy is not answering on /v1/models. The running shim supervisor retries recovery with bounded backoff; check ${path.join(LOGS, 'guardian.log')} if it does not recover. No Anthropic fallback was used.`,
-  'shim-down': () => `Codex dispatch refused: the model-gateway shim is down. Run \`node "${STABLE_COMMAND_PATH}" ensure\`, then retry. No Anthropic fallback was used.`,
-  'serving-version-mismatch': () => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${STABLE_COMMAND_PATH}" ensure\`, then retry. No Anthropic fallback was used.`,
-  'upstream-blocked': () => `Codex is blocked by an OpenAI rejection. Run \`node "${STABLE_COMMAND_PATH}" setup\`; if it persists, wait for a claude-code-proxy update or explicitly re-route this ticket. Codex tickets remain blocked.`,
+  'shim-down': (commandPath = resolveStableCommandPath()) => `Codex dispatch refused: the model-gateway shim is down. Run \`node "${commandPath}" ensure\`, then retry. No Anthropic fallback was used.`,
+  'serving-version-mismatch': (commandPath = resolveStableCommandPath()) => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${commandPath}" ensure\`, then retry. No Anthropic fallback was used.`,
+  'upstream-blocked': (commandPath = resolveStableCommandPath()) => `Codex is blocked by an OpenAI rejection. Run \`node "${commandPath}" setup\`; if it persists, wait for a claude-code-proxy update or explicitly re-route this ticket. Codex tickets remain blocked.`,
   'upstream-unavailable': () => 'Codex had a terminal upstream failure in the last 60 seconds. Wait briefly, then retry; /v1/models only proves the local proxy is answering.',
 };
 
-function codexReadinessMessage(state) {
-  return CODEX_READINESS_MESSAGES[state]();
+function codexReadinessMessage(state, commandPath) {
+  return CODEX_READINESS_MESSAGES[state](commandPath);
 }
 
 function gatewayDiscoveryModels(models) {
@@ -337,6 +345,6 @@ module.exports = {
   canReplaceInstalledCliPath, codexClientModelId, codexContextWindow, codexContextWindowModelId,
   codexReadinessMessage,
   gatewayAdvertisedWindow, gatewayBackendModelId, gatewayClientModelId, gatewayDiscoveryModels,
-  readGatewayDiscoveryCache, resolveGatewayModelPolicy, resolveNewestInstalledCliPath,
+  readGatewayDiscoveryCache, resolveGatewayModelPolicy, resolveNewestInstalledCliPath, resolveStableCommandPath,
   sameGatewayDiscoveryModels, syncGatewayDiscoveryCache,
 };

@@ -43,7 +43,7 @@ const { downloadVerifiedArchive } = require('./release-verification.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
 const {
-  canReplaceInstalledCliPath, CLI_PATH, GATEWAY_MODELS_CACHE, MODEL_WINDOW_POLICY, STABLE_COMMAND_PATH,
+  canReplaceInstalledCliPath, CLI_PATH, GATEWAY_MODELS_CACHE, MODEL_WINDOW_POLICY, resolveStableCommandPath,
   gatewayAdvertisedWindow, gatewayClientModelId, gatewayDiscoveryModels, readGatewayDiscoveryCache,
   resolveGatewayModelPolicy, sameGatewayDiscoveryModels, SOCKET_PATH, resolveNewestInstalledCliPath,
   syncGatewayDiscoveryCache,
@@ -192,7 +192,7 @@ function flushHookOutput() {
   const [worst, ...rest] = userActionNotices;
   // One line, every session start, so noise discipline is part of the contract: the first actionable state names
   // its own fix, and the rest are counted with the one command that lists them all.
-  if (worst) output.systemMessage = rest.length ? `${worst} (+${rest.length} more: run \`node "${STABLE_COMMAND_PATH}" doctor\`)` : worst;
+  if (worst) output.systemMessage = rest.length ? `${worst} (+${rest.length} more: run \`node "${resolveStableCommandPath()}" doctor\`)` : worst;
   if (Object.keys(output).length) process.stdout.write(JSON.stringify(output));
 }
 // Flushes first so a die() from anywhere inside the hook path still emits what was buffered; otherwise the
@@ -529,7 +529,7 @@ async function setup() {
   clearUpstreamBlocked();
   clearUpstreamUnavailable();
   if (!isAuthed()) {
-    log(`next: node "${STABLE_COMMAND_PATH}" login   (ChatGPT browser sign-in), then setup again to wire Claude Code`);
+    log(`next: node "${resolveStableCommandPath()}" login   (ChatGPT browser sign-in), then setup again to wire Claude Code`);
     return;
   }
   log('ChatGPT auth: valid');
@@ -541,7 +541,7 @@ async function setup() {
       // Refusing to copy an environment value into settings is deliberate (it may point at someone's dev
       // instance), but saying only that left no route forward, so setup skipped the write on every run and the
       // machine stayed permanently wired by one terminal (SQ-1901). Name the command that does converge it.
-      log(`already wired through ${current ? current.source : 'ANTHROPIC_BASE_URL'}, which has no settings file this command can write, so nothing here is permanent: any session started outside that environment is unwired. Run \`node "${STABLE_COMMAND_PATH}" env --write-project\` to write this project's .claude/settings.local.json. Claude alias pins were left alone; they belong wherever that base URL is defined.`);
+      log(`already wired through ${current ? current.source : 'ANTHROPIC_BASE_URL'}, which has no settings file this command can write, so nothing here is permanent: any session started outside that environment is unwired. Run \`node "${resolveStableCommandPath()}" env --write-project\` to write this project's .claude/settings.local.json. Claude alias pins were left alone; they belong wherever that base URL is defined.`);
     } else if (current.mode !== mode) {
       writeEnv(current.scope, false, { mode, quiet: true });
       log(`model-gateway: hosts compatibility state changed since last wired; switched ${current.scope} settings to ${mode} mode. Restart Claude Code.`);
@@ -1089,7 +1089,7 @@ function modelWindowPolicyRow(id, pickerId = gatewayClientModelId(id)) {
   if (!policy) return null;
   const clientWindow = pickerId.endsWith('[1m]') ? 1000000 : CODEX_UNKNOWN_MODEL_WINDOW;
   const autoCompact = configuredAutoCompactWindow();
-  const sentryPolicy = effectiveCodexSentryPolicy(policy);
+  const sentryPolicy = effectiveSentryPolicy(policy);
   return {
     backend: policy.backend,
     backendId: policy.backend === 'anthropic' ? id.replace(/\[1m\]$/, '') : policy.backendId,
@@ -1221,7 +1221,7 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
   }
   log('model fallback diagnostic: if dispatch and served models appear different, reproduce in a throwaway session with CLAUDE_CODE_NO_MODEL_FALLBACK=true; unset it afterwards. It turns silent fallback into a thrown error identifying the call site, while normal operation should keep graceful fallback for transient 5xx errors.');
   if (readiness.checks.shimRunning && !readiness.checks.servingVersionMatches) {
-    log(`model-gateway: VERSION MISMATCH: CLI ${PLUGIN_VERSION}, serving shim ${servingVersion}. Run node "${STABLE_COMMAND_PATH}" ensure to replace the stale supervisor.`);
+    log(`model-gateway: VERSION MISMATCH: CLI ${PLUGIN_VERSION}, serving shim ${servingVersion}. Run node "${resolveStableCommandPath()}" ensure to replace the stale supervisor.`);
   }
   const catalog = readCatalog();
   log(catalog && Array.isArray(catalog.models)
@@ -1940,7 +1940,7 @@ function requestHeader(req, name) {
   return typeof value === 'string' ? value : null;
 }
 
-const { effectiveCodexSentryPolicy, runWorker } = require('./request-worker.js');
+const { effectiveSentryPolicy, runWorker } = require('./request-worker.js');
 function createShimRelay({
   httpClient = http,
   getWorker = () => null,
@@ -2481,8 +2481,8 @@ function runShim() {
     void (async () => {
       const owner = error.code === 'EADDRINUSE' ? await processOwningPortAsync(PUBLIC_SHIM_PORT, { probeChildren }) : null;
       const remedy = owner
-        ? `PID ${owner} owns 127.0.0.1:${PUBLIC_SHIM_PORT}; run node "${STABLE_COMMAND_PATH}" stop, then node "${STABLE_COMMAND_PATH}" ensure.`
-        : `run node "${STABLE_COMMAND_PATH}" stop, then node "${STABLE_COMMAND_PATH}" ensure.`;
+        ? `PID ${owner} owns 127.0.0.1:${PUBLIC_SHIM_PORT}; run node "${resolveStableCommandPath()}" stop, then node "${resolveStableCommandPath()}" ensure.`
+        : `run node "${resolveStableCommandPath()}" stop, then node "${resolveStableCommandPath()}" ensure.`;
       const message = `model-gateway: shim supervisor cannot bind 127.0.0.1:${PUBLIC_SHIM_PORT}: ${error.code || error.message}; ${remedy}`;
       try { fs.writeFileSync(SHIM_FAILURE_PATH, message); } catch {}
       console.error(message);
@@ -2514,9 +2514,9 @@ function sessionStartWiringNotice({ readiness, effectiveWiring, projectWirings }
   const currentProjectFile = path.resolve(settingsPath('project'));
   const siblingWiring = projectWirings.find(({ file }) => path.resolve(file) !== currentProjectFile);
   if (siblingWiring) {
-    return `Claude Code is not wired to model-gateway, so your ChatGPT/Codex models are missing from /model. A recorded project-local wiring exists at ${siblingWiring.file}; run \`node "${STABLE_COMMAND_PATH}" env --write-project\` to wire this project's .claude/settings.local.json, then restart Claude Code.`;
+    return `Claude Code is not wired to model-gateway, so your ChatGPT/Codex models are missing from /model. A recorded project-local wiring exists at ${siblingWiring.file}; run \`node "${resolveStableCommandPath()}" env --write-project\` to wire this project's .claude/settings.local.json, then restart Claude Code.`;
   }
-  return `Claude Code is not wired to model-gateway, so your ChatGPT/Codex models are missing from /model. Run \`node "${STABLE_COMMAND_PATH}" env --write-project\` to wire this project's .claude/settings.local.json, then restart Claude Code.`;
+  return `Claude Code is not wired to model-gateway, so your ChatGPT/Codex models are missing from /model. Run \`node "${resolveStableCommandPath()}" env --write-project\` to wire this project's .claude/settings.local.json, then restart Claude Code.`;
 }
 
 function loginSuccessMessage({ wired = isWired(), health = null } = {}) {
@@ -2584,7 +2584,7 @@ const commands = {
         noticeForUser('model-gateway is still starting; retry the Codex model in a few seconds', { toStderr: true });
         finish(0);
       }
-      noticeForUser(`model-gateway could not start: ${result.reason}. Run \`node "${STABLE_COMMAND_PATH}" doctor\` to see which part is down.`, { toStderr: true });
+      noticeForUser(`model-gateway could not start: ${result.reason}. Run \`node "${resolveStableCommandPath()}" doctor\` to see which part is down.`, { toStderr: true });
       finish(1);
     }
     const readiness = await getCodexReadiness();
@@ -2606,7 +2606,7 @@ const commands = {
       // that said so was a per-request stderr line in the worker.
       const wiring = effectiveWiring;
       if (wiring.source === 'env' && !wiring.shadowed.some((definition) => definition.file)) {
-        noticeForUser(`model-gateway wiring is shell-only: ANTHROPIC_BASE_URL comes from this terminal's environment and no settings file sets it, so sessions started anywhere else are not routed through the gateway. Run \`node "${STABLE_COMMAND_PATH}" env --write-project\` to persist it in this project's .claude/settings.local.json.`);
+        noticeForUser(`model-gateway wiring is shell-only: ANTHROPIC_BASE_URL comes from this terminal's environment and no settings file sets it, so sessions started anywhere else are not routed through the gateway. Run \`node "${resolveStableCommandPath()}" env --write-project\` to persist it in this project's .claude/settings.local.json.`);
       }
       await syncCompatMode();
       await syncGatewayWiring();
