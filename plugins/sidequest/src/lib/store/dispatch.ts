@@ -305,12 +305,17 @@ function repositoryIdentity(cwd?: any) {
 // spawning checkout, the lease never binds, and the executor dies before it
 // starts (SQ-2570, SQ-2884). Refuse that case while the caller can still wait or
 // choose sharedTree. Linked worktrees of the project share its common git dir, so
-// they are NOT a mismatch; that case is the existing stale-cwd warning's.
-function isolatedTreeRuntimeRefusal(ticket?: any, projectPath?: any, runtimeCwd?: any, slug?: any, sessionId?: any) {
-  if (!runtimeCwd || !projectPath) return null;
+// they are NOT a mismatch; that case is the existing stale-cwd warning's. A runtime
+// outside any repository is a mismatch too: the hook has no checkout to fall back
+// to there, so it would crash after the launch was recorded (GH-269).
+function runtimeOutsideProjectRepository(projectPath?: any, runtimeCwd?: any) {
+  if (!runtimeCwd || !projectPath) return false;
   const project = repositoryIdentity(projectPath);
-  const runtime = repositoryIdentity(runtimeCwd);
-  if (!project || !runtime || project === runtime) return null;
+  return Boolean(project) && project !== repositoryIdentity(runtimeCwd);
+}
+
+function isolatedTreeRuntimeRefusal(ticket?: any, projectPath?: any, runtimeCwd?: any, slug?: any, sessionId?: any) {
+  if (!runtimeOutsideProjectRepository(projectPath, runtimeCwd)) return null;
   const competing = launchedIsolatedSessionProjects(String(sessionId || '').trim(), slug);
   if (!competing.length) return null;
   return `prepare dispatch: refused ${ticket.ref}; its project ${projectPath} is a different repository from this session's checkout ${runtimeCwd}, and this session already owns launched isolated dispatches on another board (${competing.map((entry: any) => entry.path).join(', ')}). WorktreeCreate follows the session id to one board, so with several live it cannot tell which ticket it is creating for and would cut this worktree from the wrong repository. Dispatch ${ticket.ref} once those are terminal, leaving ${projectPath} as this session's only isolated board. sharedTree:true stays available but runs the executor and its commit in ${runtimeCwd}; only its verification is redirected to ${projectPath}.`;

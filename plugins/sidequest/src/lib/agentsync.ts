@@ -1094,7 +1094,7 @@ function withProjectIdentity(prompt?: any, projectPath?: any) {
   if (!text) throw new Error('Agent spawn prompt is required.');
   const project = String(projectPath || '').trim();
   if (!project) return text;
-  return `${text}\n\nDispatch board identity: --project "${project.replace(/"/g, '\\"')}"`;
+  return `${text}\n\nDispatch board identity: --project "${project.replace(/"/g, '\\"')}". Pass it as project on every board call: an unqualified ref resolves on the orchestrating session's board, and only calls naming your claim or worktree follow you to this one.`;
 }
 
 function quotedShellArgument(value?: any) {
