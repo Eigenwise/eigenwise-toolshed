@@ -14,12 +14,18 @@ function parseGatewayDoctorOutput(output) {
     proxyVersion: output.match(/^version:.*?(\d+\.\d+\.\d+\S*)\s*$/m)?.[1],
     auth: /authenticated/i.test(auth || '') && !/not authenticated/i.test(auth || ''),
     proxy: /^proxy \(claude-code-proxy\).*(answering \/v1\/models|running)/im.test(output),
-    shim: /^shim \(model router\).*running/im.test(output),
+    shim: /^shim \(model router\).*running(?!-foreign)/im.test(output),
   };
 }
 
+/**
+ * model-gateway's doctor writes its own failure lines to stderr and everything else, including the
+ * optional Grok auth line, to stdout. Putting stderr first means compactDiagnostic's keyword scan
+ * below reaches a real "ERROR: ..." line before it reaches "grok auth: ... missing", so a doctor
+ * failure gets named by its own cause instead of by whichever optional line happens to match first.
+ */
 function doctorOutput(result) {
-  return `${result?.stdout || ''}${result?.stderr || ''}`.trim();
+  return `${result?.stderr || ''}${result?.stdout || ''}`.trim();
 }
 
 function compactDiagnostic(output) {

@@ -26,7 +26,17 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 // src/hooks/guard-destructive-git.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_path = __toESM(require("node:path"));
-var import_node_child_process = require("node:child_process");
+
+// src/lib/git-process.ts
+var import_node_child_process = __toESM(require("node:child_process"));
+var import_node_util = require("node:util");
+var GIT_OUTPUT_MAX_BUFFER = 256 * 1024 * 1024;
+var execFileCallback = (0, import_node_util.promisify)(import_node_child_process.default.execFile);
+function execFileSync(file, args, options = {}) {
+  return import_node_child_process.default.execFileSync(file, args, { maxBuffer: GIT_OUTPUT_MAX_BUFFER, windowsHide: true, ...options });
+}
+
+// src/hooks/guard-destructive-git.ts
 var import_node_module = require("node:module");
 
 // src/hooks/shared/input.ts
@@ -281,7 +291,7 @@ function actionRepo(command, cwd, index, options) {
 }
 function repoRoot(repo) {
   try {
-    return worktrees.canonicalPath((0, import_node_child_process.execFileSync)("git", ["rev-parse", "--show-toplevel"], {
+    return worktrees.canonicalPath(execFileSync("git", ["rev-parse", "--show-toplevel"], {
       cwd: repo,
       encoding: "utf8",
       windowsHide: true,
@@ -300,7 +310,7 @@ function sharedCheckout(repo) {
 }
 function dirtyPaths(repo) {
   try {
-    return (0, import_node_child_process.execFileSync)("git", ["status", "--porcelain"], {
+    return execFileSync("git", ["status", "--porcelain"], {
       cwd: repo,
       encoding: "utf8",
       windowsHide: true,
@@ -315,7 +325,7 @@ function shellTokens(value) {
 }
 function gitOutput(repo, args) {
   try {
-    return (0, import_node_child_process.execFileSync)("git", args, {
+    return execFileSync("git", args, {
       cwd: repo,
       encoding: "utf8",
       windowsHide: true,

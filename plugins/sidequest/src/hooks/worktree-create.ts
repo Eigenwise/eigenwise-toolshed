@@ -40,9 +40,9 @@ function repositoryFor(cwd: string): string {
 // This hook only learns the spawning checkout's cwd, so a dispatch prepared for a
 // sibling project reserved a creation no WorktreeCreate could bind and its executor
 // died before it started (SQ-2884). The session's own reservation names the board it
-// belongs to. Consulted only after the spawning checkout fails to bind, so the
-// common case pays nothing for a scan across every board; an ambiguous session
-// resolves to nothing and prepareDispatch refuses it.
+// belongs to. Consulted only after the spawning checkout fails to bind or is no
+// repository at all, so the common case pays nothing for a scan across every board;
+// an ambiguous session resolves to nothing and prepareDispatch refuses it.
 function reservedDispatchRepository(sessionId: string): string | null {
   try {
     const store = require(runtimeModule('store')) as { isolatedDispatchRepositoryForSession: (session: string) => string | null };
@@ -50,6 +50,21 @@ function reservedDispatchRepository(sessionId: string): string | null {
     return reserved ? path.resolve(reserved) : null;
   } catch (_) {
     return null;
+  }
+}
+
+// A session rooted in a plain folder that holds the registered repositories has no
+// repository of its own, and `rev-parse` there used to crash the hook before the
+// reservation could name the ticket's project (GH-274, GH-269).
+function spawningRepository(hookCwd: string, sessionId: string): string {
+  const cwd = hookCwd || process.cwd();
+  try {
+    return repositoryFor(cwd);
+  } catch (error) {
+    const reserved = reservedDispatchRepository(sessionId);
+    if (reserved) return reserved;
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`the session cwd ${cwd} is not inside a git repository, and this session holds no launched isolated dispatch on exactly one board to name the ticket's project (${reason.trim()})`);
   }
 }
 
@@ -171,6 +186,15 @@ function bindCreation(repository: string, sessionId: string, worktree: string): 
   return store.bindDispatchWorktreeCreation(project.slug, sessionId, worktree);
 }
 
+function bindSessionCreation(repository: string, sessionId: string, name: string, namedWorktreePath: (repo: string, worktreeName: string) => string) {
+  const binding = bindCreation(repository, sessionId, namedWorktreePath(repository, name));
+  if (binding.ok) return { repository, binding };
+  const reserved = reservedDispatchRepository(sessionId);
+  if (!reserved || samePath(reserved, repository)) return { repository, binding };
+  const reservedBinding = bindCreation(reserved, sessionId, namedWorktreePath(reserved, name));
+  return reservedBinding.ok ? { repository: reserved, binding: reservedBinding } : { repository, binding };
+}
+
 function completeCreation(repository: string, sessionId: string, worktree: string, attempt: string): CreationBinding {
   const store = require(runtimeModule('store')) as WorktreeStore & {
     completeDispatchWorktreeCreation: (slug: string, sessionId: string, worktree: string, attempt: string) => CreationBinding;
@@ -266,6 +290,33 @@ function recoverCreatedWorktree(repository: string, sessionId: string, target: s
   return `worktree recovery preserved the checkout because ${recovery.cleanup?.message || recovery.cleanup?.reason || 'cleanup authority is incomplete'}`;
 }
 
+type UncreatedWorktreeRecovery = (slug: string, sessionId: string, worktree: string, error: unknown, attempt: string, options: { created: boolean }) => CreationBinding;
+
+function recordUncreatedWorktreeFailure(repository: string, sessionId: string, target: string, error: unknown, attempt: string): string {
+  const store = require(runtimeModule('store')) as WorktreeStore & { recoverDispatchWorktreeCreation: UncreatedWorktreeRecovery };
+  const project = registeredProject(store, repository);
+  const recovery = project.slug
+    ? store.recoverDispatchWorktreeCreation(project.slug, sessionId, target, error, attempt, { created: false })
+    : { ok: false, reason: 'its project binding is unavailable' };
+  return recovery.ok
+    ? 'the board recorded the attempt failed and kept no binding to that path, so a plain dispatch prepares its replacement'
+    : `the attempt still names that path because ${recovery.reason}`;
+}
+
+// Binding already pointed the reservation at this path, so a failure before the checkout exists has to retire
+// the attempt; otherwise it stays bound to a tree it never created and plain re-dispatch refuses (SQ-3132).
+function createBoundCheckout(binding: CreationBinding & Required<Pick<CreationBinding, 'ref' | 'baseline' | 'repository' | 'worktree'>>, name: string, sessionId: string, attempt: string): boolean {
+  try {
+    const decision = leaseKernel.worktreeCreateDecision(preparedWorktreeLease(binding, name));
+    if (!decision.allowed) throw new Error(`worktree lease refused creation: ${decision.reason}`);
+    return createWorktree(binding, name);
+  } catch (error) {
+    if (binding.creationCompleted) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message}; ${recordUncreatedWorktreeFailure(binding.repository, sessionId, binding.worktree, error, attempt)}`);
+  }
+}
+
 function main(): Promise<void> {
   return createWorktreeMain();
 }
@@ -275,10 +326,8 @@ async function createWorktreeMain(): Promise<void> {
   if (!input || stringField(input, 'hook_event_name') !== 'WorktreeCreate') return;
   const name = stringField(input, 'name');
   const sessionId = stringField(input, 'session_id', 'sessionId');
-  const cwd = stringField(input, 'cwd') || process.cwd();
   if (!name) throw new Error('WorktreeCreate requires a worktree name.');
   if (!sessionId) throw new Error('WorktreeCreate requires a dispatch session binding.');
-  let repository = repositoryFor(cwd);
   const worktrees = require(runtimeModule('worktrees')) as {
     namedWorktreePath: (repo: string, worktreeName: string) => string;
     provisionWorktree: (
@@ -288,17 +337,7 @@ async function createWorktreeMain(): Promise<void> {
       options: { setupTimeoutMs?: number; onDependencyLink?: (link: { relativePath: string; target: string }) => void },
     ) => Promise<{ command: string; reason: string; stderrTail: string } | null>;
   };
-  let binding = bindCreation(repository, sessionId, worktrees.namedWorktreePath(repository, name));
-  if (!binding.ok) {
-    const reserved = reservedDispatchRepository(sessionId);
-    if (reserved && !samePath(reserved, repository)) {
-      const reservedBinding = bindCreation(reserved, sessionId, worktrees.namedWorktreePath(reserved, name));
-      if (reservedBinding.ok) {
-        repository = reserved;
-        binding = reservedBinding;
-      }
-    }
-  }
+  const { repository, binding } = bindSessionCreation(spawningRepository(stringField(input, 'cwd'), sessionId), sessionId, name, worktrees.namedWorktreePath);
   if (!binding.ok || !binding.ref || !binding.baseline || !binding.repository || !binding.worktree) {
     throw new Error(worktreeCreationRefusalMessage(String(binding.reason || ''), repository, binding.binding));
   }
@@ -312,9 +351,7 @@ async function createWorktreeMain(): Promise<void> {
     repository: binding.repository,
     worktree: binding.worktree,
   };
-  const decision = leaseKernel.worktreeCreateDecision(preparedWorktreeLease(boundCreation, name));
-  if (!decision.allowed) throw new Error(`worktree lease refused creation: ${decision.reason}`);
-  const created = createWorktree(boundCreation, name);
+  const created = createBoundCheckout(boundCreation, name, sessionId, attempt);
   if (created) {
     try {
       const identity = linkedCheckoutIdentity(boundCreation.worktree);

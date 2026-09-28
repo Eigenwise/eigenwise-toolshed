@@ -898,16 +898,16 @@ test('update status done cannot bypass claimed, dispatched, or submitted lifecyc
   store.prepareDispatch(slug, dispatched.ref, { sharedTree: false });
   assert.throws(
     () => store.updateTicket(slug, dispatched.ref, { status: 'done' }),
-    /unclaimed pre-runtime dispatch.*cannot bypass that lifecycle/
+    /has an unclaimed dispatch.*cannot bypass that lifecycle/
   );
   assert.throws(
     () => store.updateTicket(slug, dispatched.ref, { status: 'done' }),
-    /groomClose .*--deliveryMethod manual --recoveryEvidence/,
+    /groomClose SQ-\d+ --recoveryEvidence/,
     'the refusal names the grooming route that actually closes it'
   );
   assert.throws(
     () => store.updateTicket(slug, dispatched.ref, { status: 'done' }),
-    /retireOnly:true/,
+    /retireOnly: true/,
     'the refusal names the retire-without-replacement route'
   );
 
@@ -936,7 +936,7 @@ test('released routed work refuses executor completion and allows explicit contr
   assert.strictEqual(released.ticket.dispatchNonce, null);
   assert.throws(
     () => store.updateTicket(slug, created.ref, { status: 'done' }),
-    /routed dispatch history.*control-plane grooming closure/
+    /routed dispatch history.*groomClose SQ-\d+ --deliveryCommit/
   );
 
   for (const attempt of [
@@ -968,7 +968,7 @@ test('released routed work refuses CLI update status done', () => {
 
   const updated = runCli(['update', created.ref, '--status', 'done']);
   assert.notStrictEqual(updated.status, 0);
-  assert.match(updated.output, /routed dispatch history.*control-plane grooming closure/);
+  assert.match(updated.output, /routed dispatch history.*groomClose SQ-\d+ --deliveryCommit/);
   assert.strictEqual(store.getTicket(slug, created.ref).status, 'todo');
 
   const spoofed = runCli(['done', created.ref, '--groom', 'true', '--body', 'Worker tried the old generic completion flag.']);

@@ -1,5 +1,11 @@
 'use strict';
 
+const { ANTHROPIC_MODEL_PRICES_PER_MILLION } = require('../../observability/sinks/grafana/model-prices.js');
+
+const CACHE_ECONOMICS_INPUT_PRICE_CASE = `CASE model${Object.entries(ANTHROPIC_MODEL_PRICES_PER_MILLION)
+  .map(([model, prices]) => ` WHEN '${model}' THEN ${prices.input}`)
+  .join('')} END`;
+
 const VIEW_SQL = `
   DROP VIEW IF EXISTS request_usage_resolved;
   CREATE VIEW request_usage_resolved AS
@@ -260,30 +266,8 @@ const VIEW_SQL = `
       THEN cache_creation_5m_tokens * 0.25 + cache_creation_1h_tokens END AS write_surcharge_base_input_tokens,
     CASE WHEN cache_read_tokens IS NOT NULL AND cache_creation_5m_tokens IS NOT NULL AND cache_creation_1h_tokens IS NOT NULL
       THEN cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens END AS net_savings_base_input_tokens,
-    CASE model
-      WHEN 'claude-fable-5' THEN 10.0
-      WHEN 'claude-fable-5-1' THEN 10.0
-      WHEN 'claude-fable-5-1[1m]' THEN 10.0
-      WHEN 'claude-mythos-5' THEN 10.0
-      WHEN 'claude-opus-4-8' THEN 5.0
-      WHEN 'claude-opus-4-7' THEN 5.0
-      WHEN 'claude-opus-4-6' THEN 5.0
-      WHEN 'claude-sonnet-5' THEN 3.0
-      WHEN 'claude-sonnet-4-6' THEN 3.0
-      WHEN 'claude-haiku-4-5' THEN 1.0
-    END AS input_price_usd_per_million,
-    CASE model
-      WHEN 'claude-fable-5' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * 10.0 / 1000000.0
-      WHEN 'claude-fable-5-1' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * 10.0 / 1000000.0
-      WHEN 'claude-fable-5-1[1m]' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * 10.0 / 1000000.0
-      WHEN 'claude-mythos-5' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * 10.0 / 1000000.0
-      WHEN 'claude-opus-4-8' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * 5.0 / 1000000.0
-      WHEN 'claude-opus-4-7' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * 5.0 / 1000000.0
-      WHEN 'claude-opus-4-6' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * 5.0 / 1000000.0
-      WHEN 'claude-sonnet-5' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * 3.0 / 1000000.0
-      WHEN 'claude-sonnet-4-6' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * 3.0 / 1000000.0
-      WHEN 'claude-haiku-4-5' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) / 1000000.0
-    END AS net_savings_usd
+    ${CACHE_ECONOMICS_INPUT_PRICE_CASE} AS input_price_usd_per_million,
+    (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * (${CACHE_ECONOMICS_INPUT_PRICE_CASE}) / 1000000.0 AS net_savings_usd
   FROM request_usage_resolved
   WHERE evidence_event = 'gateway.token.usage';
 

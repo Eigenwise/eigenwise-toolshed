@@ -24,17 +24,26 @@ function createRouting(dependencies) {
     dispatchState
   } = dependencies;
   const CLAUDE_RUNTIMES = ["haiku", "sonnet", "opus", "fable"];
-  const CLAUDE_RUNTIME_LABELS = {
-    haiku: "Claude Haiku",
-    sonnet: "Claude Sonnet",
-    opus: "Claude Opus 5",
-    fable: "Claude Fable"
-  };
   const VALID_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
   const BACKEND_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
   const BACKEND_KEY_RE = /^([a-z0-9][a-z0-9-]{0,31}):([a-z0-9][a-z0-9-]{1,31})$/;
   const HAIKU_BACKEND_EFFORT = "medium";
   const ROUTING_FALLBACK_DEFAULT = Object.freeze({ model: "sonnet", effort: "high" });
+  function resolvedClaudeRuntimeId(runtime) {
+    return process.env[`ANTHROPIC_DEFAULT_${runtime.toUpperCase()}_MODEL`]?.trim() || runtime;
+  }
+  function formatClaudeRuntimeLabel(model) {
+    const parts = model.replace(/\[1m\]$/, "").replace(/^claude-/, "").split("-");
+    const versionStart = parts.findIndex((part) => /^\d/.test(part));
+    const nameParts = versionStart < 0 ? parts : parts.slice(0, versionStart);
+    const versionParts = versionStart < 0 ? [] : parts.slice(versionStart);
+    const name = nameParts.map((part) => part.replace(/^./, (initial) => initial.toUpperCase())).join(" ");
+    return `Claude ${name}${versionParts.length ? ` ${versionParts.join(".")}` : ""}`;
+  }
+  function claudeRuntimeCatalogEntry(slug) {
+    const id = resolvedClaudeRuntimeId(slug);
+    return { backend: "claude", source: null, slug, id, label: formatClaudeRuntimeLabel(id) };
+  }
   const CLAUDE_QUOTA_FAILURES = Object.freeze([
     Object.freeze({ matcher: /You've reached your (Fable|Opus|Sonnet|Haiku)(?: \d+(?:\.\d+)*)? limit\b/ })
   ]);
@@ -76,7 +85,7 @@ function createRouting(dependencies) {
     const normalized = normalizeRouteModel(model);
     if (!normalized) return null;
     if (CLAUDE_RUNTIMES.includes(normalized)) {
-      return { backend: "claude", source: null, slug: normalized, id: normalized, label: CLAUDE_RUNTIME_LABELS[normalized] };
+      return claudeRuntimeCatalogEntry(normalized);
     }
     const catalog = discoveredByKey();
     const discovered = Object.values(catalog);
@@ -135,7 +144,7 @@ function createRouting(dependencies) {
     }
     const runtime = backend.slug;
     const agent = effort ? stableClaudeName(effort) : null;
-    return { agent, model: runtime, spawnId: runtime, backend: "claude", slug: runtime, runsModel: runtime, apiModel: runtime, runsLabel: backend.label || CLAUDE_RUNTIME_LABELS[runtime], dispatch: "native-agent" };
+    return { agent, model: runtime, spawnId: runtime, backend: "claude", slug: runtime, runsModel: runtime, apiModel: backend.id, runsLabel: backend.label, dispatch: "native-agent" };
   }
   function resolveExec(model, effort) {
     const backend = availableRoute(model);
@@ -155,7 +164,7 @@ function createRouting(dependencies) {
     return {
       models: CLAUDE_RUNTIMES.concat(discovered.map((entry) => entry.slug)),
       efforts: VALID_EFFORTS.slice(),
-      discovered
+      discovered: CLAUDE_RUNTIMES.map(claudeRuntimeCatalogEntry).concat(discovered)
     };
   }
   function getModelVocab() {
@@ -1158,7 +1167,6 @@ function createRouting(dependencies) {
   }
   return {
     CLAUDE_RUNTIMES,
-    CLAUDE_RUNTIME_LABELS,
     VALID_EFFORTS,
     BACKEND_SLUG_RE,
     BACKEND_KEY_RE,

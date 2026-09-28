@@ -4,7 +4,8 @@ const os = require("node:os");
 const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
 const nativeFs = require("node:fs");
-const { execFileSync, spawn, spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
+const { execFileSync } = require("./git-process.js");
 const commitScope = require("./commit-scope.js");
 const worktreeLease = require("./kernel/worktree.js");
 const UNMERGED_STATUS_CODES = /* @__PURE__ */ new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
@@ -18,7 +19,6 @@ const IN_PROGRESS_GIT_OPERATION_STATE = [
   ["BISECT_LOG", "bisect"]
 ];
 const AT_RISK_STATUS_ARGUMENTS = ["status", "--porcelain", "--ignored", "--untracked-files=all", "-z"];
-const AT_RISK_STATUS_MAX_BUFFER = 64 * 1024 * 1024;
 function parseWorktreeStatus(stdout) {
   const fields = stdout.split("\0");
   const entries = [];
@@ -68,8 +68,7 @@ function atRiskStatusEntriesSync(worktree, ticketOrDispatch = null) {
   const stdout = execFileSync("git", [...AT_RISK_STATUS_ARGUMENTS], {
     cwd: worktree,
     encoding: "utf8",
-    windowsHide: true,
-    maxBuffer: AT_RISK_STATUS_MAX_BUFFER
+    windowsHide: true
   });
   return atRiskStatusEntries(stdout, worktree, recordedDependencyLinkPaths(worktree, ticketOrDispatch));
 }

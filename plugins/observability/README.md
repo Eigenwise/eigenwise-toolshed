@@ -4,7 +4,7 @@ Local, metadata-only usage telemetry for Claude Code. Choose the repositories yo
 
 [Observability guide](https://eigenwise.github.io/eigenwise-toolshed/observability/) · [Generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/observability/) · [Toolshed marketplace](../../README.md)
 
-The intended policy is per-repository opt-in. A separate machine-level setup consent starts the shared local observer and Collector, and can add a dashboard or remote sink. The project command then opts the current repository into that shared service. Telemetry records are designed to contain metadata such as session IDs, prompt IDs, agent IDs, task IDs, tool-use IDs, and SendMessage recipient IDs, with no prompt or response text, code or file contents, tool inputs or results, credentials, or environment values. Sink configuration you provide stays in the private observability config file so the exporter can authenticate.
+The intended policy is per-repository opt-in. A separate machine-level setup consent starts the shared local observer and Collector, and can add a dashboard or remote sink. The project command then opts the current repository into that shared service. Telemetry records are designed to contain metadata such as session IDs, prompt IDs, agent IDs, task IDs, tool-use IDs, and SendMessage recipient IDs, with no prompt or response text, code or file contents, tool inputs or results, credentials, or environment values. Exporter settings you provide, including OTLP headers or tokens, are stored locally in `%LOCALAPPDATA%\Eigenwise\Workbench\observability.json` on Windows, or `~/.local/share/Eigenwise/Workbench/observability.json` when `LOCALAPPDATA` is not set, so the exporter can authenticate.
 
 Repository opt-in is enforced on the local capture path and on the single export path. Hook capture is gated before the spool write, ingest is gated before persistence, and the observer's outbox is the only route by which a log record reaches a configured sink. Disabling a repository stops future capture and withholds still-queued rows from export while local history is preserved. Traces and metrics still reach a configured sink through the Collector without this gate.
 
@@ -17,7 +17,7 @@ Run these in Claude Code:
 /plugin install observability@eigenwise-toolshed --scope project
 ```
 
-Any scope works (user, project, or local). Pick user scope to cover every project at once, or project/local scope to keep the plugin out of repositories that did not opt in.
+User scope makes the plugin available in every project; project and local scope limit its installation. No install scope opts a repository into telemetry.
 
 Reload plugins or start a new Claude Code session. Then, from the repository you want to track, run:
 

@@ -36,7 +36,7 @@ The point of this folder is to show **both halves** of what codebase-mapper does
 
 ```
 .claude/.codebase-info/
-├── INDEX.md                # compact hub, re-injected into context every prompt
+├── INDEX.md                # compact hub, loaded at session startup
 ├── architecture.md         # the CLI → Jar → storage picture
 ├── tech-landscape.md       # Python, the stdlib modules used, build + dev tooling
 ├── directory-structure.md  # the annotated tree
@@ -64,32 +64,33 @@ that apply.
 
 Then `/reload-plugins` (or restart Claude Code).
 
-> This folder ships a `.claude/settings.json` that enables `codebase-mapper`. If you
-> cloned the toolshed and want it to use your **local** checkout instead of the
-> published marketplace, edit the `path` in that file to point at your clone's root.
+> This folder's `.claude/settings.json` enables `codebase-mapper` after you install it from the
+> marketplace above. It contains no checkout-specific marketplace path. If you are developing a
+> local Toolshed checkout, keep that marketplace source in your own untracked settings.
 
-#### Prefer not to install a second plugin? Load the same map with live-rules
+#### Prefer not to install a second plugin? Load the same map with Live Rules
 
-The auto-loading half of codebase-mapper (re-inject the map every prompt) is just "inject a live
-file," which the [live-rules](../../plugins/live-rules) plugin does with its `include:` field. If you
-already run live-rules, you can surface this exact map without installing codebase-mapper at all. Drop
-this one rule into `.claude/live-rules.md`:
+The [live-rules](../../plugins/live-rules) plugin can load this exact map too. New projects use
+one atomic rule per file, so create `.claude/live-rules/rules/codebase-map.md` with:
 
 ```markdown
 ---
 description: Codebase map protocol
 include: .claude/.codebase-info/INDEX.md
 ---
-This repo has a maintained codebase map. Before starting any task, say which doc(s)
-from .claude/.codebase-info/ you will read, and read them before exploring. After
-changing code, review whether the map needs updating.
+This repo has a maintained codebase map. Before starting a task, read the relevant map document
+before exploring. After changing code, review whether the map needs updating.
 ```
 
-That re-injects `INDEX.md` on every prompt, the same as the plugin's hook. The trade is division of
-labor: the live-rules rule gives you the **loading**; the codebase-mapper plugin additionally ships the
-`map-codebase` and `update-codebase-map` skills that **generate and maintain** the docs in the first
-place. Same map file on disk, two ways to keep it in front of Claude. (This is a documented
-alternative; the folder's committed `settings.json` uses the plugin so the example runs out of the box.)
+Use Live Rules' `add-rule` flow to create or update the rule so it syncs
+`.claude/live-rules/manifest.json`; rule files are the source of truth. SessionStart supplies
+applicable rules to the main session, and SubagentStart does the same for native subagents.
+Later injections happen only when a rule newly matches or its hash changes, so an unchanged rule
+does not repeat on every prompt or edit.
+
+Live Rules handles the loading. Codebase Mapper adds the skills that generate and maintain the
+map. Its `UserPromptSubmit` hook is a reminder only: map context arrives at SessionStart and
+SubagentStart, while its Skill and Stop hooks enforce the map-update flow.
 
 ### 2. cd into this project, then start Claude Code here
 
@@ -105,10 +106,9 @@ This matters: from the toolshed root you'd map the marketplace, not haiku-jar.
 
 ### 3. Watch the map already work
 
-Because the map is committed, the plugin's `UserPromptSubmit` hook injects
-`INDEX.md` on your very first prompt. Ask anything about the project ("how does
-`draw` stay testable?") and Claude will answer from the map instead of grepping
-around blind.
+The committed map is loaded into the main session at SessionStart, and supported worker subagents
+get the same startup context at SubagentStart. Ask anything about the project ("how does `draw`
+stay testable?") and Claude can answer from the map instead of grepping around blind.
 
 ### 4. Regenerate it, or update it
 
