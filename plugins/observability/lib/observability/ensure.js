@@ -26,17 +26,18 @@ const LOOPBACK = '127.0.0.1';
 const MAX_MANAGED_LOG_BYTES = 16 * 1024 * 1024;
 const MANAGED_LOG_ARCHIVES = 3;
 const PROCESS_RECORD_STALE_AFTER_MS = 120_000;
+// A file written this instant can read a whole millisecond AHEAD of Date.now() on Windows (1152 of
+// 3000 writes measured 2026-09-28, even after flooring mtimeMs), so a strict `<= now` guard called a
+// live observer dead and replaced it. Anything within this skew is a heartbeat from right now.
+const HEARTBEAT_CLOCK_SKEW_MS = 1000;
 
 // The worker records a five-second main-thread pulse. The longest measured spool drain is 17 seconds, so this permits seven such drains before takeover.
 const processRecordHeartbeatIsFresh = (record, recordFile, now = Date.now()) => {
-  // mtimeMs carries sub-millisecond precision while Date.now() is whole milliseconds, so a file
-  // written this instant reads as ~0.3ms in the FUTURE and fails the `<= now` guard below. Measured
-  // at 989/2000 writes. Floor it back to the clock's resolution before comparing.
   const heartbeatAt = typeof record?.heartbeatAt === 'string'
     ? Date.parse(record.heartbeatAt)
     : Math.floor(fs.statSync(recordFile).mtimeMs);
   return Number.isFinite(heartbeatAt)
-    && heartbeatAt <= now
+    && heartbeatAt - now <= HEARTBEAT_CLOCK_SKEW_MS
     && now - heartbeatAt <= PROCESS_RECORD_STALE_AFTER_MS;
 };
 
