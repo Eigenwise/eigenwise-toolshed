@@ -21,9 +21,10 @@ is installed, it runs its stable updater, `node ~/.claude/model-gateway/update.j
 command's output. The updater downloads and verifies the proxy, swaps it by rename without asking you to
 close sessions, restarts it when it can, and reports the resulting state. Claude Code's registry has
 versions but not release notes or commit history, so the updater says that plainly instead of guessing at
-a changelog. Gateway wiring stays at its recorded scope: the stable updater delegates to setup, which
-preserves per-project `.claude/settings.local.json` or user-level `~/.claude/settings.json` wiring and
-never escalates scope. Remote Control compatibility points the base URL at `api.anthropic.com`, so the
+a changelog. Gateway wiring stays as recorded: the stable updater runs `setup --preserve-wiring`, which
+never wires a project, including the directory the updater runs from. It refreshes Claude alias pins only
+in projects already recorded as wired, and only when a pin changed, so an update that changes nothing
+touches no settings file. To wire a project, run Model Gateway's `env --write-project` inside it. Remote Control compatibility points the base URL at `api.anthropic.com`, so the
 Codex/Grok rows disappear from `/model`; Claude Code can persist an explicit id such as
 `/model claude-gpt-5.6-terra`, but that does not prove a later request reaches Model Gateway. Normal
 gateway mode is the verified inference path.

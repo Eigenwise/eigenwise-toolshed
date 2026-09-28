@@ -10,7 +10,7 @@ function createTickets(dependencies: any) {
     getCategory, getStory, getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, normalizeRoute, path, pendingSubmission, putTicket,
     queryTickets, queueEventNotification, readMeta, readyTickets, releaseLock,
     requestedReadonlyOverride, requireStatus, requireVerifyOracle, normalizeVerifyOracleKind, saveAssetData, stripLinksTo,
-    ticketLockPath, ticketStoryId, touchClaimActivity, transaction, upperRef, withTicketLock,
+    ticketLockPath, ticketStoryId, touchClaimActivity, transaction, unclaimedAttemptRecoveryGuidance, upperRef, withTicketLock,
   } = dependencies;
   const coerceStoryId = ticketStoryId;
 
@@ -629,33 +629,59 @@ function packageSurfaceName(file?: any, packageRoot?: any) {
   return packageRelativeSegments(file, packageRoot)[0]?.toLowerCase() || null;
 }
 
-function declaredPackageSurfaces(ticket?: any, slug?: any) {
-  const surfaces = new Map<string, Set<string>>();
-  for (const file of normalizeFiles(ticket?.files)) {
-    if (containsScopePattern(file) || protectedAutoApprovalPath(file)) continue;
-    const root = packageSurfaceRoot(file, slug);
-    const surface = root == null ? null : packageSurfaceName(file, root);
-    if (!root || !surface) continue;
-    const rootKey = root.toLowerCase();
-    const rootSurfaces = surfaces.get(rootKey) || new Set<string>();
-    rootSurfaces.add(surface);
-    surfaces.set(rootKey, rootSurfaces);
-  }
-  return surfaces;
+function neverAutoApproved(file: string) {
+  return containsScopePattern(file) || protectedAutoApprovalPath(file);
 }
 
-function autoApprovedPackageScope(ticket?: any, additions?: any, slug?: any) {
-  if (dispatchReadOnly(ticket) || dispatchState(ticket)?.readonly === true) return [];
-  const testScopeDisabled = boardConfig(slug)?.autoApproveTestScope === false;
-  const testRoots = testScopeDisabled ? reachableTestRoots(ticket, slug) : [];
-  const declaredSurfaces = declaredPackageSurfaces(ticket, slug);
-  if (!declaredSurfaces.size) return [];
-  return normalizeFiles(additions).filter((file?: any) => {
-    if (containsScopePattern(file) || protectedAutoApprovalPath(file) || enclosingTestRoot(file, testRoots)) return false;
-    const root = packageSurfaceRoot(file, slug);
-    const surface = root == null ? null : packageSurfaceName(file, root);
-    return root != null && surface != null && declaredSurfaces.get(root.toLowerCase())?.has(surface) === true;
-  });
+function packageSurfaceKey(file: string, slug: string) {
+  const root = packageSurfaceRoot(file, slug);
+  const surface = root == null ? null : packageSurfaceName(file, root);
+  return root == null || surface == null ? null : `${root.toLowerCase()}/${surface}`;
+}
+
+function declaredPackageSurfaces(files: string[], slug: string) {
+  return new Set(files.filter((file) => !neverAutoApproved(file)).map((file) => packageSurfaceKey(file, slug)).filter(Boolean));
+}
+
+// Package-surface approval reads every story member's declared files, so two
+// members asking for the same path get the same answer (GH-286).
+function storyDeclaredFiles(slug: string, ticket: any) {
+  const members = ticket.storyId ? listTickets(slug).filter((member: any) => member.storyId === ticket.storyId) : [];
+  return normalizeFiles([...normalizeFiles(ticket.files), ...members.flatMap((member: any) => normalizeFiles(member.files))]);
+}
+
+type PackageScopeContext = { slug: string; owner: string; surfaces: Set<unknown>; testRoots: string[] };
+
+function packageScopeContext(ticket: any, slug: string): PackageScopeContext {
+  const surfaceFiles = storyDeclaredFiles(slug, ticket);
+  return {
+    slug,
+    owner: ticket.storyId ? 'this ticket\'s story' : 'this ticket',
+    surfaces: declaredPackageSurfaces(surfaceFiles, slug),
+    testRoots: boardConfig(slug)?.autoApproveTestScope === false ? reachableTestRoots({ files: surfaceFiles }, slug) : [],
+  };
+}
+
+function packageScopeRefusalReason(file: string, context: PackageScopeContext) {
+  if (neverAutoApproved(file)) return 'a protected or pattern path is never auto-approved';
+  if (enclosingTestRoot(file, context.testRoots)) return 'test-directory auto-approval is off on this board';
+  const surface = packageSurfaceKey(file, context.slug);
+  if (!surface) return 'no package root contains it';
+  return context.surfaces.has(surface) ? null : `package surface ${surface} matches no declared file in ${context.owner}`;
+}
+
+function packageScopeRulings(ticket: any, additions: string[], slug: string) {
+  const readOnly = dispatchReadOnly(ticket) || dispatchState(ticket)?.readonly === true;
+  const context = packageScopeContext(ticket, slug);
+  return normalizeFiles(additions).map((file: string) => ({
+    file,
+    reason: readOnly ? 'a read-only dispatch never widens its write scope' : packageScopeRefusalReason(file, context),
+  }));
+}
+
+function packageScopeRefusalNote(rulings: Array<{ file: string; reason: string | null }>) {
+  const refusals = rulings.filter((ruling) => ruling.reason);
+  return refusals.length ? ` Not auto-approved: ${refusals.map((ruling) => `${ruling.file}: ${ruling.reason}`).join('; ')}.` : '';
 }
 
 function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: any) {
@@ -711,7 +737,8 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     const configuredScope = testScopeApproved || buildRegistrationApproved ? [] : autoApprovedScopePaths(t, additions, slug);
     const derivedScope = testScopeApproved ? testDirectories : buildRegistrationApproved ? buildRegistrations : configuredScope;
     const remainingAfterDerivedScope = additions.filter((file?: any) => !commitScope.isInScope(file, derivedScope));
-    const packageScope = autoApprovedPackageScope(t, remainingAfterDerivedScope, slug);
+    const packageRulings = packageScopeRulings(t, remainingAfterDerivedScope, slug);
+    const packageScope = packageRulings.filter((ruling) => !ruling.reason).map((ruling) => ruling.file);
     const approved = normalizeFiles([...derivedScope, ...packageScope]);
     if (approved.length) {
       t.files = boundedFiles(scopeExpansionFiles(t, approved), {
@@ -756,7 +783,7 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
       : '';
     const refusalMessage = [foreignReleaseFragmentMessage, scopeExpansionRefusalMessage].filter(Boolean).join(' ');
     const body = refused.length
-      ? `${refusalMessage}${approved.length ? ` Auto-approved ${policy}: ${approved.join(', ')}.` : ''}${undeclared}${declaredScopeGuidance(t, refusedOutsideDeclaredFiles)}${verificationEvidenceGuidance(evidenceDirectory, refusedEvidencePaths)} Commit in-scope work, then release with kind \"handback\" and name the refused paths.`
+      ? `${refusalMessage}${packageScopeRefusalNote(packageRulings)}${approved.length ? ` Auto-approved ${policy}: ${approved.join(', ')}.` : ''}${undeclared}${declaredScopeGuidance(t, refusedOutsideDeclaredFiles)}${verificationEvidenceGuidance(evidenceDirectory, refusedEvidencePaths)} Commit in-scope work, then release with kind \"handback\" and name the refused paths.`
       : `Auto-approved ${policy}: ${approved.join(', ')}.`;
     const comment = createComment({ by: refused.length ? 'board' : 'board', body, kind: 'comment', source: refused.length ? (opts.source || 'cli') : 'policy' }, now);
     t.comments.push(comment);
@@ -989,21 +1016,12 @@ function updateDoneRefusal(ticket?: any) {
   }
   const state = dispatchState(ticket);
   if (ticket.dispatchNonce || (state && !state.terminalAt)) {
-    const unclaimedPreRuntime = Boolean(
-      ticket.dispatchNonce
-      && state
-      && ['prepared', 'launched'].includes(state.outcome)
-      && !state.boundAt
-      && !state.claimedAt
-      && !ticket.claim?.by,
-    );
-    if (unclaimedPreRuntime) {
-      return `${ticket.ref} has an unclaimed pre-runtime dispatch. update --status done cannot bypass that lifecycle. Once the delivery commit is reachable from the recorded integration branch, use \`groomClose ${ticket.ref} --deliveryCommit <sha> --deliveryMethod manual --recoveryEvidence "<why the attempt is dead>"\` (include by and reason). If the commit is not reachable from that branch, grooming still refuses until delivery reaches it. To retire without preparing a replacement first, dispatch with recoveryEvidence and retireOnly:true.`;
-    }
+    const unclaimedRecovery = unclaimedAttemptRecoveryGuidance(ticket, state);
+    if (unclaimedRecovery) return `${ticket.ref} has an unclaimed dispatch. update --status done cannot bypass that lifecycle.${unclaimedRecovery}`;
     return `${ticket.ref} has an active dispatch. Its executor must use done/completeTicket or commit and submit; update --status done cannot bypass that lifecycle.`;
   }
   if (state) {
-    return `${ticket.ref} has routed dispatch history. Executors cannot close released repository work unless their verified no-op release recorded clean scope. Otherwise commit and submit verified scoped changes, or release to todo with findings; the orchestrator can re-dispatch it or use the control-plane grooming closure with evidence.`;
+    return `${ticket.ref} has routed dispatch history. Executors cannot close released repository work unless their verified no-op release recorded clean scope. Otherwise commit and submit verified scoped changes, or release to todo with findings; the orchestrator can re-dispatch it, or close work that already landed with \`groomClose ${ticket.ref} --deliveryCommit <sha> --deliveryMethod manual --reason "<evidence>"\`.`;
   }
   return null;
 }

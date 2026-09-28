@@ -379,7 +379,7 @@ function collectGitSubmissionFacts(options: any) {
           allowedBases: [...(dispatchBase ? [dispatchBase] : []), ...boundaryCommits],
           baseCandidates: boundaryCommits,
         }
-        : ticket.dispatch?.sharedTree !== false && dispatchBase
+        : dispatchBase
           ? { dispatchBase, allowedBases: [dispatchBase] }
           : { allowedBases: [] }),
     })
@@ -389,7 +389,8 @@ function collectGitSubmissionFacts(options: any) {
     : calculatedRange;
   const scope = ticketCommitScope(slug, ticket);
   const requirements: any[] = targetFailure ? [targetFailure] : [];
-  const surfaces: any = { declared: scope, admitted: scope, changed: range?.ok ? range.changedPaths : [], pending: [] };
+  const changed = range?.ok ? commitScope.candidatePaths(root, range.changedPaths, range.commit, range.upstreamCommit) : [];
+  const surfaces: any = { declared: scope, admitted: scope, changed, pending: [] };
   if (!range?.ok) {
     surfaces.diagnostic = { code: range?.reason || 'integration_target_unavailable', message: range ? submissionRangeFailureMessage(ticket, range, gitRef) : targetFailure.message, retryable: true };
   } else {
@@ -399,15 +400,13 @@ function collectGitSubmissionFacts(options: any) {
     } else {
       surfaces.pending = pending.working;
     }
-    const scopedRange = commitScope.validateCommitRangeScope(root, range.commits, scope);
+    const scopedRange = commitScope.validatePaths(scope, changed);
     if (!scopedRange.ok) {
       surfaces.diagnostic = {
         code: scopedRange.reason,
         message: scopedRange.reason === 'missing_scope'
           ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.`
-          : scopedRange.reason === 'outside_scope'
-            ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(', ')}. Request scope only for work this ticket owns with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.`
-            : `submit: could not inspect ${commit} from ${root}: ${scopedRange.message || scopedRange.reason}.`,
+          : `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(', ')}. Request scope only for work this ticket owns with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.`,
         retryable: true,
       };
     }
@@ -432,7 +431,9 @@ function collectGitSubmissionFacts(options: any) {
     range,
     scope,
     admissionFacts: {
-      admittedScope: store.executionScope(slug, ticket),
+      // The stored-range check at integrate reads only this snapshot, so the rejected source fragment the range
+      // inherits has to be admitted here too, or integrate refuses what submit accepted (GH-277).
+      admittedScope: [...new Set([...store.executionScope(slug, ticket), ...rejectedRelatedReleaseFragments(slug, ticket)])],
       scope,
       baseline: range?.ok
         ? { candidateExists: true, containsCandidate: true }
@@ -629,7 +630,7 @@ const tools: ToolDefinition[] = [
           required: ['verifyKind', 'verify'],
         },
         abandonSubmission: { type: 'boolean', description: 'Retire a candidate that never landed; refused while it is reachable from this ticket\'s prepared integration target.' },
-        recoveryEvidence: { type: 'string', description: 'Terminal-agent evidence that retires an unclaimed prepared or launched dispatch, whether or not a runtime ever bound to it, and closes the ticket in the same call - but only once it is past the retirement deadline one authority sets for every route. Inside that deadline this refuses with the same countdown `dispatch` prints, naming the instant it becomes retirable and the runtime signal it measured from. `sidequest groom-close --recovery-evidence` runs this exact authority, so both surfaces print the same refusal and retire-and-close together. With deliveryMethod:"manual", deliveryCommit must already be reachable from the recorded integration branch.' },
+        recoveryEvidence: { type: 'string', description: 'Terminal-agent evidence that retires an unclaimed prepared or launched dispatch, whether or not a runtime ever bound to it, and closes the ticket in the same call: at once from the session that prepared the dispatch, and from any other session only once it is past the retirement deadline one authority sets for every route. Inside that deadline a call from another session refuses with the same countdown `dispatch` prints, naming the instant it becomes retirable and the runtime signal it measured from. `sidequest groom-close --recovery-evidence` runs this exact authority, so both surfaces print the same refusal and retire-and-close together. With deliveryMethod:"manual", deliveryCommit must already be reachable from the recorded integration branch.' },
       },
       required: ['ref', 'reason'],
     },
@@ -668,7 +669,7 @@ const tools: ToolDefinition[] = [
           message: `${args.ref} has no terminal recorded submission whose verifier can be superseded.`,
         });
       }
-      const recovery = store.groomCloseRecovery(slug, args.ref, { by, reason, evidence: args.recoveryEvidence });
+      const recovery = store.groomCloseRecovery(slug, args.ref, { by, reason, evidence: args.recoveryEvidence, sessionId: runtimeSessionId() });
       if (!recovery.ok) return mutationAck(slug, recovery.recovered);
       const completionReason = recovery.reason;
       const purpose = args.integration ? 'integration' : args.abandonSubmission ? 'grooming' : args.deliveryCommit ? 'delivery' : 'grooming';
@@ -843,7 +844,7 @@ const tools: ToolDefinition[] = [
       },
       required: ['ref', 'by', 'message', 'worktree'],
     },
-    handler(args) {
+    async handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, 'commit');
       const by = requireBy(args, 'commit');
       const message = requiredText(args, 'message', 'commit');
@@ -890,12 +891,12 @@ const tools: ToolDefinition[] = [
           message: commitScope.foreignReleaseFragmentRefusalMessage('commit', ticket.ref, foreignFragments),
         });
       }
-      const result = commitScope.commitScoped(root, message, scope);
+      const result = await commitScope.commitScoped(root, message, scope);
       if (!result.ok) {
         const message = result.reason === 'missing_scope'
           ? `commit: ${ticket.ref} has no declared file scope.`
           : result.reason === 'outside_scope'
-            ? `commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${(result.outside || []).join(', ')}. Expand scope with: ${store.scopeExpansionCommand(ticket, result.outside)}`
+            ? `commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${(result.outside || []).join(', ')}. ${commitScope.outsideScopeCommitState(result)} Expand scope with: ${store.scopeExpansionCommand(ticket, result.outside)}`
             : result.reason === 'no_existing_scope'
               ? `commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(', ')}.`
               : `commit: git failed: ${result.message || result.reason}`;

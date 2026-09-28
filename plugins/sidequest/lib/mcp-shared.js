@@ -65,17 +65,22 @@ function callerWorktreePath(args) {
     return null;
   }
 }
+function worktreeBindsCaller(dispatch, callerWorktree) {
+  const recorded = String(dispatch.worktree || "").trim();
+  if (!recorded) return false;
+  const caller = callerWorktree();
+  return Boolean(caller) && worktrees.canonicalPath(recorded) === caller;
+}
+function claimNamesCaller(ticket, args) {
+  const by = String(args?.by || "").trim();
+  return Boolean(by) && ticket.claim?.by === by;
+}
 function boardBindsCaller(ticket, args, callerWorktree) {
   const dispatch = ticket?.dispatch;
   if (!dispatch) return false;
-  if (dispatch.sharedTree === false) {
-    const recorded = String(dispatch.worktree || "").trim();
-    if (!recorded) return false;
-    const caller = callerWorktree();
-    return Boolean(caller) && worktrees.canonicalPath(recorded) === caller;
-  }
-  const by = String(args?.by || "").trim();
-  return Boolean(by) && ticket.claim?.by === by;
+  if (dispatch.sharedTree !== false) return claimNamesCaller(ticket, args);
+  if (args?.worktree) return worktreeBindsCaller(dispatch, callerWorktree);
+  return claimNamesCaller(ticket, args) || worktreeBindsCaller(dispatch, callerWorktree);
 }
 function resolveLifecycleProject(projectArg, args, action) {
   const explicit = projectArg == null ? "" : String(projectArg).trim();

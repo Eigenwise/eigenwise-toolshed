@@ -121,31 +121,25 @@ function diedVerdict(store: Store, claim: Claim, ticket: Ticket | null): string 
   return `exec DIED: ${label} at ${diedAt}; board quiet since ${quietSince}; checkpoint ${checkpointLabel}; commit ${commit}; comment ${commentLabel}${worktree}. Next: recover the worktree diff, or release + fresh dispatch.`;
 }
 
-function retirementInstruction(ticket: Ticket | null, eventAgentName: string): string {
-  const teammateName = String(ticket?.dispatch?.agentName || eventAgentName || '').trim();
-  if (!teammateName) return '';
-  return ` After preserving this terminal handoff, retire the exact native teammate once with TaskStop({ task_id: ${JSON.stringify(teammateName)} }). TaskStop is a Claude Code host action, not a Sidequest tool.`;
-}
-
-function submissionVerdict(store: Store, ticket: Ticket, eventAgentName: string): string | null {
+function submissionVerdict(store: Store, ticket: Ticket): string | null {
   const submission = ticket?.submission;
   if (!submission?.commit || submission.integratedAt) return null;
   const readiness = store.submissionReadiness(submission);
   if (!readiness.ok) {
-    return `exec FINISHED with PARTIAL_SUBMISSION: ${ticket.ref} has scope-gated paths (${(readiness.unscopedPaths || []).join(', ')}); do not integrate it${retirementInstruction(ticket, eventAgentName)}`;
+    return `exec FINISHED with PARTIAL_SUBMISSION: ${ticket.ref} has scope-gated paths (${(readiness.unscopedPaths || []).join(', ')}); do not integrate it`;
   }
-  return `exec FINISHED: ${ticket.ref} READY_FOR_INTEGRATION (${submission.commit.slice(0, 12)}); run the publish transaction (references/publishing.md). The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification.${retirementInstruction(ticket, eventAgentName)}`;
+  return `exec FINISHED: ${ticket.ref} READY_FOR_INTEGRATION (${submission.commit.slice(0, 12)}); run the publish transaction (references/publishing.md). The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification.`;
 }
 
-function terminalDispatchVerdict(store: Store, tickets: Ticket[], eventAgentName: string): string | null {
+function terminalDispatchVerdict(store: Store, tickets: Ticket[]): string | null {
   for (const ticket of tickets) {
-    const submissionVerdictText = submissionVerdict(store, ticket, eventAgentName);
+    const submissionVerdictText = submissionVerdict(store, ticket);
     if (submissionVerdictText) return submissionVerdictText;
     if (ticket?.dispatch?.terminalAt && ticket.dispatch.outcome === 'released') {
-      return `exec FINISHED after terminal release: ${ticket.ref}. The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification.${retirementInstruction(ticket, eventAgentName)}`;
+      return `exec FINISHED after terminal release: ${ticket.ref}. The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification.`;
     }
     if (ticket?.dispatch?.terminalAt && !ticket?.claim?.by) {
-      return `exec FINISHED after terminal ${ticket.dispatch.outcome || 'attempt'}: ${ticket.ref}. Preserve recovery evidence before a replacement.${retirementInstruction(ticket, eventAgentName)}`;
+      return `exec FINISHED after terminal ${ticket.dispatch.outcome || 'attempt'}: ${ticket.ref}. Preserve recovery evidence before a replacement.`;
     }
     if (!ticket || ticket.status !== 'done') continue;
     const comment = doneComment(ticket);
@@ -154,7 +148,7 @@ function terminalDispatchVerdict(store: Store, tickets: Ticket[], eventAgentName
     const suffix = Array.isArray(ticket.files) && ticket.files.length && !hash
       ? ' done WITHOUT commit hash'
       : ` done${hash ? ` (${hash})` : ''}`;
-    return `exec FINISHED: ${ticket.ref}${suffix}; review the recorded board result. The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification.${retirementInstruction(ticket, eventAgentName)}`;
+    return `exec FINISHED: ${ticket.ref}${suffix}; review the recorded board result. The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification.`;
   }
   return null;
 }
@@ -165,7 +159,6 @@ function stopVerdict(
   classification: ExecutorClassification,
   dispatchStopped: boolean,
   terminalTickets: Ticket[],
-  eventAgentName: string,
 ): string | null {
   for (const claim of claims) {
     if (!claim || claim.status !== 'done') continue;
@@ -176,7 +169,7 @@ function stopVerdict(
     const suffix = Array.isArray(ticket.files) && ticket.files.length && !hash
       ? ' done WITHOUT commit hash'
       : ` done${hash ? ` (${hash})` : ''}`;
-    return `exec FINISHED: ${ticket.ref}${suffix}; review the recorded board result. The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification.${retirementInstruction(ticket, eventAgentName)}`;
+    return `exec FINISHED: ${ticket.ref}${suffix}; review the recorded board result. The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification.`;
   }
 
   for (const claim of claims) {
@@ -187,12 +180,12 @@ function stopVerdict(
     } catch (_) {
       continue;
     }
-    const submissionVerdictText = ticket && submissionVerdict(store, ticket, eventAgentName);
+    const submissionVerdictText = ticket && submissionVerdict(store, ticket);
     if (!submissionVerdictText) continue;
     return submissionVerdictText;
   }
 
-  const terminal = terminalDispatchVerdict(store, terminalTickets, eventAgentName);
+  const terminal = terminalDispatchVerdict(store, terminalTickets);
   if (terminal) return terminal;
 
   const held = claims.find((claim) => claim && claim.held && claim.status === 'doing');
@@ -208,7 +201,7 @@ function stopVerdict(
   }
 
   if (dispatchStopped && classification.kind !== 'unknown') {
-    return `exec DIED before claiming; fresh-dispatch only after diagnosis, once pulse shows its ticket failed. A stop is held while a sibling launched with it is unclaimed, until that sibling's claim settles whose ticket it was.${retirementInstruction(terminalTickets[0] || null, eventAgentName)}`;
+    return `exec DIED before claiming; fresh-dispatch only after diagnosis, once pulse shows its ticket failed. A stop is held while a sibling launched with it is unclaimed, until that sibling's claim settles whose ticket it was.`;
   }
   return null;
 }
@@ -286,8 +279,8 @@ function main(): void {
   try {
     const terminalAttempt = terminalAttempts[0];
     verdict = terminalAttempt
-      ? `exec FINISHED after superseded terminal ${terminalAttempt.outcome || 'attempt'}: ${terminalAttempt.ref}. Preserve recovery evidence before a replacement.${retirementInstruction(null, terminalAttempt.agentName || launchName)}`
-      : stopVerdict(store, claims, classification, dispatchStopped, terminalTickets, launchName);
+      ? `exec FINISHED after superseded terminal ${terminalAttempt.outcome || 'attempt'}: ${terminalAttempt.ref}. Preserve recovery evidence before a replacement.`
+      : stopVerdict(store, claims, classification, dispatchStopped, terminalTickets);
   } catch (_) {
     return;
   }
