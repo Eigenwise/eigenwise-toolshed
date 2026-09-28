@@ -50,7 +50,7 @@ const {
 } = require('./runtime.js');
 const { latestHookWaitCutShort, latestObservedLifecycleExit, lifecycleLogPath, recordGatewayLifecycle } = require('./lifecycle-diagnostics.js');
 const {
-  CODEX_UPSTREAM_BLOCK_PATH, clearUpstreamBlocked, clearUpstreamUnavailable, readUpstreamBlocked, readUpstreamUnavailable,
+  CODEX_UPSTREAM_BLOCK_PATH, clearUpstreamBlocked, clearUpstreamUnavailable, readUpstreamUnavailable,
   setUpstreamBlocked, setUpstreamUnavailable,
 } = require('./codex-upstream-state.js');
 
@@ -113,7 +113,7 @@ const AUTH_HEADERS = ['authorization', 'proxy-authorization', 'x-api-key', 'cook
 const {
   COMPAT_BASE_URL, COMPAT_HOST, COMPAT_PORT, DEFAULT_BASE_URL, HOSTS_BLOCK_END, HOSTS_BLOCK_LINE,
   HOSTS_BLOCK_START, PIN_ALIASES, PIN_OVERRIDE_PATH, STATIC_ENV_BLOCK, CODEX_UNKNOWN_MODEL_WINDOW,
-  codexContextWindow, codexReadinessMessage,
+  codexContextWindow,
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
@@ -301,92 +301,12 @@ async function proxyModelsAnswering() {
   } catch { return false; }
 }
 
-function readinessState(checks, upstreamBlocked, upstreamUnavailable) {
-  if (!checks.proxyBinary) return 'binary-missing';
-  if (!checks.proxyModels) return 'proxy-down';
-  if (!checks.codexAuth) return 'auth-missing';
-  if (!checks.shimRunning) return 'shim-down';
-  if (!checks.servingVersionMatches) return 'serving-version-mismatch';
-  if (upstreamBlocked) return 'upstream-blocked';
-  if (upstreamUnavailable) return 'upstream-unavailable';
-  return 'ready';
-}
-
-async function getCodexReadiness({
-  binaryPresent = fs.existsSync(PROXY_BIN),
-  probeProxyModels = proxyModelsAnswering,
-  authStatus = isAuthed,
-  shimHealth = undefined,
-  fetchHealth = fetchShimHealth,
-  now = Date.now(),
-} = {}) {
-  const proxyBinary = Boolean(binaryPresent);
-  const [proxyModels, health] = await Promise.all([
-    proxyBinary ? probeProxyModels() : false,
-    shimHealth === undefined ? fetchHealth() : shimHealth,
-  ]);
-  const codexAuth = proxyBinary ? Boolean(authStatus()) : false;
-  const shimRunning = Boolean(health?.ok);
-  const servingVersion = servingShimVersion(health);
-  const checks = {
-    proxyBinary,
-    proxyModels: Boolean(proxyModels),
-    codexAuth,
-    shimRunning,
-    servingVersion,
-    installedVersion: PLUGIN_VERSION,
-    servingVersionMatches: shimRunning && servingVersionIsCurrentOrNewer(servingVersion, PLUGIN_VERSION),
-  };
-  const upstreamBlocked = readUpstreamBlocked();
-  const upstreamUnavailable = readUpstreamUnavailable(now);
-  const state = readinessState(checks, upstreamBlocked, upstreamUnavailable);
-  return {
-    ready: state === 'ready',
-    state,
-    message: state === 'ready'
-      ? 'Codex readiness confirms local binary, /v1/models, authentication, shim, and serving-version checks. It does not prove a streaming request will succeed.'
-      : codexReadinessMessage(state),
-    checks,
-    upstreamBlocked,
-    upstreamUnavailable,
-    health,
-  };
-}
-
-function catalogReadiness(readiness) {
-  return {
-    ready: readiness.ready,
-    state: readiness.state,
-    message: readiness.message,
-    checks: readiness.checks,
-    upstreamBlocked: readiness.upstreamBlocked,
-    upstreamUnavailable: readiness.upstreamUnavailable,
-  };
-}
-
 function providerReadiness(readiness) {
   return {
     ready: Boolean(readiness?.ready),
     state: typeof readiness?.state === 'string' ? readiness.state : 'unavailable',
     message: typeof readiness?.message === 'string' ? readiness.message : 'Readiness is unavailable.',
   };
-}
-
-function hasOpenAiRejectionEvidence(statusCode, headers, body) {
-  if (![401, 403, 429].includes(statusCode)) return false;
-  const headerNames = Object.keys(headers || {});
-  if (headerNames.some((name) => name.toLowerCase().startsWith('x-openai-') || name.toLowerCase() === 'openai-processing-ms')) return true;
-  return /\bopenai\b/i.test(Buffer.from(body || '').toString());
-}
-
-function noteCodexUpstreamRejection(statusCode, headers, body) {
-  if (!hasOpenAiRejectionEvidence(statusCode, headers, body)) return false;
-  const headerNames = Object.keys(headers || {}).map((name) => name.toLowerCase())
-    .filter((name) => name.startsWith('x-openai-') || name === 'openai-processing-ms' || name === 'content-type');
-  const evidence = headerNames.length ? `headers:${headerNames.join(',')}` : 'body:openai';
-  setUpstreamBlocked({ statusCode, evidence });
-  console.error(`model-gateway: Codex request had an unambiguous OpenAI rejection (status ${statusCode}; ${evidence}); readiness is upstream-blocked.`);
-  return true;
 }
 
 // ------------------------------------------------------------------- setup
@@ -1940,7 +1860,9 @@ function requestHeader(req, name) {
   return typeof value === 'string' ? value : null;
 }
 
-const { effectiveSentryPolicy, runWorker } = require('./request-worker.js');
+const {
+  catalogReadiness, effectiveSentryPolicy, getCodexReadiness, hasOpenAiRejectionEvidence, noteCodexUpstreamRejection, runWorker,
+} = require('./request-worker.js');
 function createShimRelay({
   httpClient = http,
   getWorker = () => null,
