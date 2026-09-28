@@ -3010,6 +3010,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
       deliveryInteractionCommit: opts.deliveryInteractionCommit,
       deliveryMethod: opts.deliveryMethod,
       verificationSupersession: opts.verificationSupersession,
+      worktree: opts.worktree,
       completingApplyDelivery,
       by,
       reason

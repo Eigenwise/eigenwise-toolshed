@@ -306,6 +306,7 @@ async function cmdGroomClose(opts: any, positional: any) {
     deliveryCommit: opts['delivery-commit'],
     deliveryInteractionCommit: opts['delivery-interaction-commit'],
     deliveryMethod: opts['delivery-method'],
+    worktree: opts.worktree,
   });
   if (res.ok && !res.idempotent) closeDispatchExecutor(ticket);
   if (res.ok && opts.integration) Object.assign(res, await advanceAndSweepAfterIntegration(slug, meta.path, res.ticket));
