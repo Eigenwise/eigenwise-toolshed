@@ -1108,6 +1108,34 @@ test('pre-tool hook: an unbound helper inherits the sole active ticket', () => {
   assert.match(outside.hookSpecificOutput.permissionDecisionReason, /effective scope/);
 });
 
+test('pre-tool hook: a declared path outside the repo is writable because it is declared (GH-300)', () => {
+  // add accepts an out-of-repo path for non-repo output, so the guard refusing that same
+  // declared path left the executor no way to deliver.
+  const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-outside-declared-'));
+  const declared = path.join(outsideRoot, 'handoffs', 'stories.md');
+  const ticket = addStopTicket('outside declared output', { files: [declared], readonlyOverride: true });
+  const acting = {
+    ...claimStopTicket(ticket, `outside-declared-${++sqSeq}`, 'outside-declared-claim'),
+    agent_type: 'general-purpose',
+    agent_id: `outside-declared-helper-${++sqSeq}`,
+    cwd: BOARD_PATH,
+  };
+
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    ...acting,
+    tool_name: 'Write',
+    tool_input: { file_path: declared },
+  }), null);
+
+  const undeclared = runHookOutput(FORCE_BYPASS, {
+    ...acting,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(outsideRoot, 'handoffs', 'other.md') },
+  });
+  assert.equal(undeclared.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(undeclared.hookSpecificOutput.permissionDecisionReason, /effective scope/);
+});
+
 test('pre-tool hook: a steer between turns is delivered, but a terminal failure is recorded', () => {
   const ticket = addStopTicket('late steer capture', { files: ['lib/allowed.js'] });
   const sessionId = `late-steer-${++sqSeq}`;

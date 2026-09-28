@@ -898,8 +898,10 @@ function projectRelative(target, projectPath) {
   return linkedWorktreeRelative(target, projectPath);
 }
 function inScope(target, scope) {
-  const relative = projectRelative(canonicalPath(target), canonicalPath(scope.projectPath));
-  return relative != null && scopeMatch(relative, scope.files);
+  const canonicalTarget = canonicalPath(target);
+  const relative = projectRelative(canonicalTarget, canonicalPath(scope.projectPath));
+  if (relative != null) return scopeMatch(relative, scope.files);
+  return scopeMatch(canonicalTarget, scope.files.filter((file) => import_node_path3.default.isAbsolute(file)).map(canonicalPath));
 }
 function evidencePathRelation(target, scope) {
   const evidenceDirectory = canonicalPath(scope.evidenceDirectory);

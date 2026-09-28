@@ -3,7 +3,7 @@
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 const DEFAULT_WORKTREE_RECOVERY_RETENTION_AGE_HOURS = 14 * 24;
 
-function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, integrationTargetRef, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }: any) {
+function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, integrationTargetRef, isInScope, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }: any) {
 function defaultProjectName(absPath?: any) {
   return path.basename(path.resolve(absPath)) || 'project';
 }
@@ -411,17 +411,25 @@ function setBoardConfig(slug?: any, patch?: any) {
   });
 }
 
-function effectiveScope(slug?: any, filesOrTicket?: any) {
-  const ticket = Array.isArray(filesOrTicket) ? null : filesOrTicket;
-  const files = Array.isArray(filesOrTicket) ? filesOrTicket : ticket?.files;
-  const granted = ticket?.scopeResolution?.granted;
-  const config = boardConfig(slug);
-  const generatedConfig = Object.assign({ path: readMeta(slug)?.path }, config);
-  const generatedPairs = [...((config && config.generatedPairs) || []), ...derivedGeneratedPairs(generatedConfig, files)];
-  const paired = trackedGeneratedPaths(Object.assign({}, generatedConfig, { generatedPairs }), files);
-  return Array.from(new Set([...(Array.isArray(files) ? files : []), ...(Array.isArray(granted) ? granted : []), ...((config && config.alwaysInScope) || []), ...paired]));
+function arrayOrEmpty(value?: any) {
+  return Array.isArray(value) ? value : [];
 }
 
+// A board-wide path that already holds one of the ticket's declared files would
+// only widen that ticket to the file's bare parent directory (GH-194).
+function alwaysInScopeBeside(config: any, files: any[]) {
+  return arrayOrEmpty(config.alwaysInScope).filter((entry: string) => !files.some((file: string) => isInScope(file, [entry])));
+}
+
+function effectiveScope(slug?: any, filesOrTicket?: any) {
+  const ticket = Array.isArray(filesOrTicket) ? null : filesOrTicket;
+  const files = arrayOrEmpty(ticket ? ticket.files : filesOrTicket);
+  const config: any = boardConfig(slug) || {};
+  const generatedConfig = Object.assign({ path: readMeta(slug)?.path }, config);
+  const generatedPairs = [...arrayOrEmpty(config.generatedPairs), ...derivedGeneratedPairs(generatedConfig, files)];
+  const paired = trackedGeneratedPaths(Object.assign({}, generatedConfig, { generatedPairs }), files);
+  return Array.from(new Set([...files, ...arrayOrEmpty(ticket?.scopeResolution?.granted), ...alwaysInScopeBeside(config, files), ...paired]));
+}
 
   return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeWorktreeBase, normalizeNotIntegratedSalvageAgeHours, normalizeWorktreeRecoveryRetentionAgeHours, normalizeAutoApproveTestScope, normalizeAutoApproveScope, normalizeWorktreeSetup, normalizeWorktreeDependencyPaths, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
 }

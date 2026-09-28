@@ -342,11 +342,14 @@ const tools: ToolDefinition[] = [
       const spawn = agentsync.agentSpawn(dispatchState.launchName, isolation, resolved && resolved.model, agent, prompt, description, {
         reducedAgentSchema: dispatchState.reducedAgentSchema === true,
       });
+      // Paths the dispatch enforces beyond ticket.files; a dirty one blocks submit, so the orchestrator must see them (GH-194).
+      const boardAddedScope = dispatchState.boardAddedFiles?.length ? { boardAddedFiles: dispatchState.boardAddedFiles } : {};
       const compact: any = {
         ref: prepared.ticket.ref,
         effort: prepared.ticket.effort,
         runsLabel: prepared.ticket.exec && prepared.ticket.exec.runsLabel,
         ...(prepared.ticket.dispatch?.fallbackReason ? { fallbackReason: prepared.ticket.dispatch.fallbackReason } : {}),
+        ...boardAddedScope,
         spawn,
       };
       const warnings = store.presentWarnings(prepared.ticket, store.dispatchWarnings(prepared.ticket, slug), sessionId);
@@ -367,6 +370,7 @@ const tools: ToolDefinition[] = [
         token: prepared.token,
         recovery: prepared.recovery || null,
         ...(dispatchState.fallbackReason ? { fallbackReason: dispatchState.fallbackReason } : {}),
+        ...boardAddedScope,
         warnings,
         spawn,
         guidance: prepared.recovery?.kind === 'live_claim_resume'

@@ -863,9 +863,13 @@ function projectRelative(target: string, projectPath: string): string | null {
   return linkedWorktreeRelative(target, projectPath);
 }
 
+// add accepts a declared path outside the repo as non-repo output, so that path
+// is matched as declared instead of refused for having no repo-relative form (GH-300).
 function inScope(target: string, scope: HelperScope): boolean {
-  const relative = projectRelative(canonicalPath(target), canonicalPath(scope.projectPath));
-  return relative != null && scopeMatch(relative, scope.files);
+  const canonicalTarget = canonicalPath(target);
+  const relative = projectRelative(canonicalTarget, canonicalPath(scope.projectPath));
+  if (relative != null) return scopeMatch(relative, scope.files);
+  return scopeMatch(canonicalTarget, scope.files.filter((file) => path.isAbsolute(file)).map(canonicalPath));
 }
 
 function evidencePathRelation(target: string, scope: EvidenceScope): 'inside' | 'related' | null {

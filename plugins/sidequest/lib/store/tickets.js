@@ -582,32 +582,48 @@ function createTickets(dependencies) {
   function packageSurfaceName(file, packageRoot) {
     return packageRelativeSegments(file, packageRoot)[0]?.toLowerCase() || null;
   }
-  function declaredPackageSurfaces(ticket, slug) {
-    const surfaces = /* @__PURE__ */ new Map();
-    for (const file of normalizeFiles(ticket?.files)) {
-      if (containsScopePattern(file) || protectedAutoApprovalPath(file)) continue;
-      const root = packageSurfaceRoot(file, slug);
-      const surface = root == null ? null : packageSurfaceName(file, root);
-      if (!root || !surface) continue;
-      const rootKey = root.toLowerCase();
-      const rootSurfaces = surfaces.get(rootKey) || /* @__PURE__ */ new Set();
-      rootSurfaces.add(surface);
-      surfaces.set(rootKey, rootSurfaces);
-    }
-    return surfaces;
+  function neverAutoApproved(file) {
+    return containsScopePattern(file) || protectedAutoApprovalPath(file);
   }
-  function autoApprovedPackageScope(ticket, additions, slug) {
-    if (dispatchReadOnly(ticket) || dispatchState(ticket)?.readonly === true) return [];
-    const testScopeDisabled = boardConfig(slug)?.autoApproveTestScope === false;
-    const testRoots = testScopeDisabled ? reachableTestRoots(ticket, slug) : [];
-    const declaredSurfaces = declaredPackageSurfaces(ticket, slug);
-    if (!declaredSurfaces.size) return [];
-    return normalizeFiles(additions).filter((file) => {
-      if (containsScopePattern(file) || protectedAutoApprovalPath(file) || enclosingTestRoot(file, testRoots)) return false;
-      const root = packageSurfaceRoot(file, slug);
-      const surface = root == null ? null : packageSurfaceName(file, root);
-      return root != null && surface != null && declaredSurfaces.get(root.toLowerCase())?.has(surface) === true;
-    });
+  function packageSurfaceKey(file, slug) {
+    const root = packageSurfaceRoot(file, slug);
+    const surface = root == null ? null : packageSurfaceName(file, root);
+    return root == null || surface == null ? null : `${root.toLowerCase()}/${surface}`;
+  }
+  function declaredPackageSurfaces(files, slug) {
+    return new Set(files.filter((file) => !neverAutoApproved(file)).map((file) => packageSurfaceKey(file, slug)).filter(Boolean));
+  }
+  function storyDeclaredFiles(slug, ticket) {
+    const members = ticket.storyId ? listTickets(slug).filter((member) => member.storyId === ticket.storyId) : [];
+    return normalizeFiles([...normalizeFiles(ticket.files), ...members.flatMap((member) => normalizeFiles(member.files))]);
+  }
+  function packageScopeContext(ticket, slug) {
+    const surfaceFiles = storyDeclaredFiles(slug, ticket);
+    return {
+      slug,
+      owner: ticket.storyId ? "this ticket's story" : "this ticket",
+      surfaces: declaredPackageSurfaces(surfaceFiles, slug),
+      testRoots: boardConfig(slug)?.autoApproveTestScope === false ? reachableTestRoots({ files: surfaceFiles }, slug) : []
+    };
+  }
+  function packageScopeRefusalReason(file, context) {
+    if (neverAutoApproved(file)) return "a protected or pattern path is never auto-approved";
+    if (enclosingTestRoot(file, context.testRoots)) return "test-directory auto-approval is off on this board";
+    const surface = packageSurfaceKey(file, context.slug);
+    if (!surface) return "no package root contains it";
+    return context.surfaces.has(surface) ? null : `package surface ${surface} matches no declared file in ${context.owner}`;
+  }
+  function packageScopeRulings(ticket, additions, slug) {
+    const readOnly = dispatchReadOnly(ticket) || dispatchState(ticket)?.readonly === true;
+    const context = packageScopeContext(ticket, slug);
+    return normalizeFiles(additions).map((file) => ({
+      file,
+      reason: readOnly ? "a read-only dispatch never widens its write scope" : packageScopeRefusalReason(file, context)
+    }));
+  }
+  function packageScopeRefusalNote(rulings) {
+    const refusals = rulings.filter((ruling) => ruling.reason);
+    return refusals.length ? ` Not auto-approved: ${refusals.map((ruling) => `${ruling.file}: ${ruling.reason}`).join("; ")}.` : "";
   }
   function requestScope(slug, idOrRef, by, files, opts) {
     opts = opts || {};
@@ -658,7 +674,8 @@ function createTickets(dependencies) {
       const configuredScope = testScopeApproved || buildRegistrationApproved ? [] : autoApprovedScopePaths(t, additions, slug);
       const derivedScope = testScopeApproved ? testDirectories : buildRegistrationApproved ? buildRegistrations : configuredScope;
       const remainingAfterDerivedScope = additions.filter((file) => !commitScope.isInScope(file, derivedScope));
-      const packageScope = autoApprovedPackageScope(t, remainingAfterDerivedScope, slug);
+      const packageRulings = packageScopeRulings(t, remainingAfterDerivedScope, slug);
+      const packageScope = packageRulings.filter((ruling) => !ruling.reason).map((ruling) => ruling.file);
       const approved = normalizeFiles([...derivedScope, ...packageScope]);
       if (approved.length) {
         t.files = boundedFiles(scopeExpansionFiles(t, approved), {
@@ -684,7 +701,7 @@ function createTickets(dependencies) {
       const foreignReleaseFragmentMessage = foreignReleaseFragments.length ? commitScope.foreignReleaseFragmentRefusalMessage("scopeRequest", t.ref, foreignReleaseFragments) : "";
       const scopeExpansionRefusalMessage = additions.length ? `Scope expansion refused: ${refused.join(", ")}.` : "";
       const refusalMessage = [foreignReleaseFragmentMessage, scopeExpansionRefusalMessage].filter(Boolean).join(" ");
-      const body = refused.length ? `${refusalMessage}${approved.length ? ` Auto-approved ${policy}: ${approved.join(", ")}.` : ""}${undeclared}${declaredScopeGuidance(t, refusedOutsideDeclaredFiles)}${verificationEvidenceGuidance(evidenceDirectory, refusedEvidencePaths)} Commit in-scope work, then release with kind "handback" and name the refused paths.` : `Auto-approved ${policy}: ${approved.join(", ")}.`;
+      const body = refused.length ? `${refusalMessage}${packageScopeRefusalNote(packageRulings)}${approved.length ? ` Auto-approved ${policy}: ${approved.join(", ")}.` : ""}${undeclared}${declaredScopeGuidance(t, refusedOutsideDeclaredFiles)}${verificationEvidenceGuidance(evidenceDirectory, refusedEvidencePaths)} Commit in-scope work, then release with kind "handback" and name the refused paths.` : `Auto-approved ${policy}: ${approved.join(", ")}.`;
       const comment = createComment({ by: refused.length ? "board" : "board", body, kind: "comment", source: refused.length ? opts.source || "cli" : "policy" }, now);
       t.comments.push(comment);
       t.lastEventType = refused.length ? "scope_refused" : "scope_auto_approved";
