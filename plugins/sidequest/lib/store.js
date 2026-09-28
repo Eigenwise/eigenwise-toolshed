@@ -933,21 +933,25 @@ function changedTestNames(delta, changedPaths) {
 function normalizedNegativeControlTestName(name) {
   return String(name || "").replace(/\s+/g, " ").trim().toLowerCase();
 }
-function negativeControlTestNamePattern(normalizedExpectedName) {
-  if (!/%s|%d|\$\w+/.test(normalizedExpectedName)) return null;
-  const pattern = normalizedExpectedName.split(/%s|%d|\$\w+/).map((segment) => segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".+");
-  return new RegExp(`^${pattern}$`);
+function negativeControlTestNameMatches(normalizedExpectedName, reportedName) {
+  const segments = normalizedExpectedName.split(/%s|%d|\$\w+/);
+  if (segments.length === 1) {
+    return reportedName.includes(normalizedExpectedName) || normalizedExpectedName.includes(reportedName);
+  }
+  let searchFrom = 0;
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    const foundAt = reportedName.indexOf(segments[i], searchFrom);
+    if (foundAt < 0) return false;
+    searchFrom = foundAt + segments[i].length + 1;
+  }
+  return reportedName.indexOf(segments[segments.length - 1], searchFrom) >= 0;
 }
 function negativeControlTestReport(comments, expectedTestNames = []) {
   const markerLines = comments.flatMap((comment) => String(comment?.body || "").split(/\r?\n/).map((line) => line.trim()).filter((line) => /^\[sidequest:negative-control-test\]\s+/i.test(line)));
   const reportedNames = markerLines.map((line) => line.match(/^\[sidequest:negative-control-test\]\s+(?:failed|unaffected)\s+(.+)$/i)?.[1] || "").map(normalizedNegativeControlTestName).filter(Boolean);
   const unreported = expectedTestNames.filter((expectedName) => {
     const normalizedExpectedName = normalizedNegativeControlTestName(expectedName);
-    const wildcardPattern = negativeControlTestNamePattern(normalizedExpectedName);
-    return !reportedNames.some((reportedName) => {
-      if (wildcardPattern) return wildcardPattern.test(reportedName);
-      return reportedName.includes(normalizedExpectedName) || normalizedExpectedName.includes(reportedName);
-    });
+    return !reportedNames.some((reportedName) => negativeControlTestNameMatches(normalizedExpectedName, reportedName));
   });
   return { markerLines, unreported };
 }
@@ -959,14 +963,17 @@ function parseNegativeControlMarker(markerLine) {
   const assertionAt = targetText.search(/;\s*assertion=/);
   if (assertionAt < 0) return { ok: false, detail: 'no "; assertion=" follows its target= value' };
   const assertionText = targetText.slice(assertionAt).replace(/^;\s*assertion=/, "");
-  const tail = assertionText.match(/^(.*);\s*(.+?)\s+failed=(\d+)/);
-  if (!tail) return { ok: false, detail: 'no "<command> failed=<n>" follows its assertion= value' };
+  const failedMatch = assertionText.match(/\s+failed=(\d+)/);
+  if (!failedMatch) return { ok: false, detail: 'no "<command> failed=<n>" follows its assertion= value' };
+  const beforeFailed = assertionText.slice(0, failedMatch.index);
+  const semiIndex = beforeFailed.lastIndexOf(";");
+  if (semiIndex < 0) return { ok: false, detail: 'no "<command> failed=<n>" follows its assertion= value' };
   return {
     ok: true,
     target: targetText.slice(0, assertionAt).trim(),
-    assertion: tail[1].trim(),
-    command: String(tail[2]),
-    failed: Number(tail[3])
+    assertion: beforeFailed.slice(0, semiIndex).trim(),
+    command: beforeFailed.slice(semiIndex + 1).trim(),
+    failed: Number(failedMatch[1])
   };
 }
 function negativeControlResult(ticket, expectedTestNames = []) {
@@ -974,6 +981,7 @@ function negativeControlResult(ticket, expectedTestNames = []) {
   if (!claimHolder) return { kind: "missing" };
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
   let otherControlAuthor = "";
+  let skippedMalformed = null;
   for (const comment of comments.slice().reverse()) {
     const body = String(comment.body || "").trim();
     const markerLine = body.split(/\r?\n/).map((line) => line.trim()).find((line) => line.startsWith("[sidequest:negative-control]"));
@@ -998,8 +1006,12 @@ function negativeControlResult(ticket, expectedTestNames = []) {
       const testReport = negativeControlTestReport(comments.filter((comment2) => comment2.by === claimHolder), expectedTestNames);
       return testReport.unreported.length ? { kind: "unreported_tests", tests: testReport.unreported, markerLines: testReport.markerLines } : { kind: "failed" };
     }
-    return { kind: "missing_target_or_assertion", markerLine, detail: parsed.detail };
+    if (/^\[sidequest:negative-control\]\s+.+?\s+failed=\d+/.test(markerLine)) {
+      return { kind: "missing_target_or_assertion", markerLine, detail: parsed.detail };
+    }
+    if (!skippedMalformed) skippedMalformed = { markerLine, detail: parsed.detail };
   }
+  if (skippedMalformed) return { kind: "missing_target_or_assertion", markerLine: skippedMalformed.markerLine, detail: skippedMalformed.detail };
   return otherControlAuthor ? { kind: "wrong_author", by: otherControlAuthor } : { kind: "missing" };
 }
 function boundedMarkerLineQuote(markerLine, maxChars = 200) {

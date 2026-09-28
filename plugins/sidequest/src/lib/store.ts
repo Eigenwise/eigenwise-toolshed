@@ -908,14 +908,28 @@ function normalizedNegativeControlTestName(name: unknown) {
 // An each-table name carries its placeholders verbatim (`adds %s to the row`), but the
 // runner substitutes them (`adds a to the row`), so a literal substring comparison never
 // matches a parameterised name back to what an agent actually reports; treat %s, %d, and
-// $name as wildcards instead.
-function negativeControlTestNamePattern(normalizedExpectedName: string): RegExp | null {
-  if (!/%s|%d|\$\w+/.test(normalizedExpectedName)) return null;
-  const pattern = normalizedExpectedName
-    .split(/%s|%d|\$\w+/)
-    .map((segment) => segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    .join('.+');
-  return new RegExp(`^${pattern}$`);
+// $name (the placeholders node:test actually expands — not %p, %i, or %#) as wildcards
+// instead. A joined `.+` regex backtracks polynomially across a long repetitive line, so
+// this walks the literal segments with indexOf instead of a compiled pattern: each
+// segment is a single linear scan, so the whole match stays O(segments * length). It is
+// deliberately unanchored, the same substring tolerance the no-placeholder path below
+// gives, so a reported name with extra context around it (e.g. a trailing "(3 cases)"
+// suffix) still matches.
+function negativeControlTestNameMatches(normalizedExpectedName: string, reportedName: string): boolean {
+  const segments = normalizedExpectedName.split(/%s|%d|\$\w+/);
+  if (segments.length === 1) {
+    return reportedName.includes(normalizedExpectedName) || normalizedExpectedName.includes(reportedName);
+  }
+  let searchFrom = 0;
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    const foundAt = reportedName.indexOf(segments[i]!, searchFrom);
+    if (foundAt < 0) return false;
+    // A placeholder follows every segment but the last, and the regex it replaces
+    // required it to consume at least one character (`.+`), so the next segment must
+    // start at least one character past this one's end.
+    searchFrom = foundAt + segments[i]!.length + 1;
+  }
+  return reportedName.indexOf(segments[segments.length - 1]!, searchFrom) >= 0;
 }
 
 function negativeControlTestReport(comments: Array<{ body?: unknown }>, expectedTestNames: string[] = []) {
@@ -928,11 +942,7 @@ function negativeControlTestReport(comments: Array<{ body?: unknown }>, expected
     .filter(Boolean);
   const unreported = expectedTestNames.filter((expectedName) => {
     const normalizedExpectedName = normalizedNegativeControlTestName(expectedName);
-    const wildcardPattern = negativeControlTestNamePattern(normalizedExpectedName);
-    return !reportedNames.some((reportedName) => {
-      if (wildcardPattern) return wildcardPattern.test(reportedName);
-      return reportedName.includes(normalizedExpectedName) || normalizedExpectedName.includes(reportedName);
-    });
+    return !reportedNames.some((reportedName) => negativeControlTestNameMatches(normalizedExpectedName, reportedName));
   });
   return { markerLines, unreported };
 }
@@ -954,17 +964,24 @@ function parseNegativeControlMarker(markerLine: string): NegativeControlMarker {
   const assertionAt = targetText.search(/;\s*assertion=/);
   if (assertionAt < 0) return { ok: false, detail: 'no "; assertion=" follows its target= value' };
   const assertionText = targetText.slice(assertionAt).replace(/^;\s*assertion=/, '');
-  // Matched in one step against the whole remainder so the greedy `(.*)` backs off from
-  // the end and lands on the LAST ';' that still leaves a "<command> failed=<n>" tail,
-  // the same way target= already tolerates semicolons: a ';' inside assertion= is data.
-  const tail = assertionText.match(/^(.*);\s*(.+?)\s+failed=(\d+)/);
-  if (!tail) return { ok: false, detail: 'no "<command> failed=<n>" follows its assertion= value' };
+  // Anchored on the FIRST "failed=<n>", not a greedy `(.*)` that backs off from the end
+  // of the whole line: recovery guidance explicitly allows a ';' in the context that
+  // follows failed=<n> (e.g. "npm test failed=2 failure-kind=assertion; base run
+  // failed=0"), and a greedy match would back off onto that later ';' and read the
+  // wrong, later failed=<n> instead of the command that actually names the evidence.
+  const failedMatch = assertionText.match(/\s+failed=(\d+)/);
+  if (!failedMatch) return { ok: false, detail: 'no "<command> failed=<n>" follows its assertion= value' };
+  const beforeFailed = assertionText.slice(0, failedMatch.index);
+  // The command starts after the LAST ';' before that first failed=<n>, the same way
+  // target= tolerates semicolons: a ';' inside assertion= is data, not a delimiter.
+  const semiIndex = beforeFailed.lastIndexOf(';');
+  if (semiIndex < 0) return { ok: false, detail: 'no "<command> failed=<n>" follows its assertion= value' };
   return {
     ok: true,
     target: targetText.slice(0, assertionAt).trim(),
-    assertion: tail[1]!.trim(),
-    command: String(tail[2]!),
-    failed: Number(tail[3]!),
+    assertion: beforeFailed.slice(0, semiIndex).trim(),
+    command: beforeFailed.slice(semiIndex + 1).trim(),
+    failed: Number(failedMatch[1]!),
   };
 }
 
@@ -973,6 +990,7 @@ function negativeControlResult(ticket?: any, expectedTestNames: string[] = []) {
   if (!claimHolder) return { kind: 'missing' };
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
   let otherControlAuthor = '';
+  let skippedMalformed: { markerLine: string; detail: string } | null = null;
   for (const comment of comments.slice().reverse()) {
     const body = String(comment.body || '').trim();
     const markerLine = body.split(/\r?\n/).map((line: string) => line.trim()).find((line: string) => line.startsWith('[sidequest:negative-control]'));
@@ -997,10 +1015,19 @@ function negativeControlResult(ticket?: any, expectedTestNames: string[] = []) {
       const testReport = negativeControlTestReport(comments.filter((comment: { by?: unknown, body?: unknown }) => comment.by === claimHolder), expectedTestNames);
       return testReport.unreported.length ? { kind: 'unreported_tests', tests: testReport.unreported, markerLines: testReport.markerLines } : { kind: 'failed' };
     }
-    // The parse names the field it stopped at in every failure case, so that detail is
-    // always worth surfacing rather than only when the line happens to look conformant.
-    return { kind: 'missing_target_or_assertion', markerLine, detail: parsed.detail };
+    // A marker that still carries a real failed=<n> count named a genuine attempt gone
+    // wrong, not a stray pointer, so it is reported immediately: an older, unrelated
+    // marker must not paper over evidence this newer one already tried to give. A
+    // marker with no failed=<n> at all (e.g. "see the marker above") is skipped in
+    // favor of an older valid marker, the same way develop always has.
+    if (/^\[sidequest:negative-control\]\s+.+?\s+failed=\d+/.test(markerLine)) {
+      return { kind: 'missing_target_or_assertion', markerLine, detail: parsed.detail };
+    }
+    if (!skippedMalformed) skippedMalformed = { markerLine, detail: parsed.detail };
   }
+  // The parse names the field it stopped at in every failure case, so that detail is
+  // always worth surfacing rather than only when the line happens to look conformant.
+  if (skippedMalformed) return { kind: 'missing_target_or_assertion', markerLine: skippedMalformed.markerLine, detail: skippedMalformed.detail };
   return otherControlAuthor ? { kind: 'wrong_author', by: otherControlAuthor } : { kind: 'missing' };
 }
 
