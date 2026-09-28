@@ -51,8 +51,8 @@ test('published guidance excludes retired instructions', () => {
   assert.match(userStory, /Named uncertainty or safety-sensitive seam/);
   assert.match(ticketAuthoring, /do not invent a test count/);
   assert.match(orchestration, /read each submit report, then run one combined full gate for the wave/);
-  assert.match(orchestration, /Retire terminal teammates/);
-  assert.match(orchestration, /TaskStop mandate is authoritative in\s+`SKILL\.md`/);
+  assert.match(orchestration, /No TaskStop after terminal evidence/);
+  assert.match(orchestration, /TaskStop rule is authoritative in\s+`SKILL\.md`/);
   assert.match(skill, /TaskStop\(\{ task_id: "<agent name>" \}\)`\s+once/);
   assert.match(skill, /host action, not Sidequest/);
   assert.match(skill, /Never stop a live claim, retained continuation, or candidate awaiting integration/);

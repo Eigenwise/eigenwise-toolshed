@@ -12,6 +12,7 @@ const { spawnDescription } = store;
 const { compileContextProjection } = require("./context-packet.js");
 const { canonicalPreparedDispatchExecutor } = require("./prepared-dispatch.js");
 const { verificationRequirement } = require("./kernel/verification.js");
+const { scopeKey } = require("./scope-match.js");
 const TEMPLATE_PATH = path.join(__dirname, "..", "scripts", "_exec-template.md");
 const LEGACY_MARKER = "<!-- generated-by: sidequest-agentsync -->";
 const MARKER = "<!-- generated-by: sidequest-agentsync gen2 -->";
@@ -745,22 +746,23 @@ ${declaredFiles}${ticketReleaseFragmentScope(ticket)}`,
     "Never hold a claim waiting for a human verdict. Release with kind `oracle`, provide the ask in `oracle`, and exit so the ticket parks as awaiting-oracle. A user is not a board fallback: when no board path remains, comment the evidence and release with kind `technical_blocker`; never compose a command for a human to run.\n\nScope check: request scope when a needed path is outside the declared set. A granted ruling takes effect immediately for write enforcement and commit admission. On refusal, commit in-scope work and release with kind `handback`, naming the refused paths. The orchestrator can expand the ticket files and redispatch. A declared directory covers descendants, and globs match paths consistently at the hook and commit gate. On the first uncovered scope miss, sweep tests, fixtures, goldens, and generated outputs, then make one consolidated request. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix."
   ].join("\n\n");
 }
+function scopeListing(heading, files) {
+  return files.length ? `
+
+${heading}:
+${files.map((file) => `- ${file}`).join("\n")}` : "";
+}
+function scopeAddedBeyondDeclared(ticket, slug, declared) {
+  const declaredKeys = new Set(declared.map(scopeKey));
+  const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map(scopeKey));
+  const added = store.effectiveScope(slug, ticket).filter((file) => !declaredKeys.has(scopeKey(file)));
+  return scopeListing("Auto-paired tracked generated files (regenerate before verifying)", added.filter((file) => !alwaysKeys.has(scopeKey(file)))) + scopeListing("Board-added scope (board config alwaysInScope, not declared on this ticket; a dirty path here still blocks submit)", added.filter((file) => alwaysKeys.has(scopeKey(file))));
+}
 function taskAndScopeBody(ticket, slug) {
-  const category = ticket?.category || {};
   const declared = Array.isArray(ticket?.files) ? ticket.files : [];
   const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
-  const effectiveFiles = store.effectiveScope(slug, ticket);
-  const declaredKeys = new Set(declared.map((file) => process.platform === "win32" ? String(file).toLowerCase() : String(file)));
-  const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map((file) => process.platform === "win32" ? String(file).toLowerCase() : String(file)));
-  const generatedFiles = effectiveFiles.filter((file) => {
-    const key = process.platform === "win32" ? String(file).toLowerCase() : String(file);
-    return !declaredKeys.has(key) && !alwaysKeys.has(key);
-  });
-  const scopedFiles = generatedFiles.length ? `${declaredFiles}
-
-Auto-paired tracked generated files (regenerate before verifying):
-${generatedFiles.map((file) => `- ${file}`).join("\n")}` : declaredFiles;
-  return executorTaskBody(ticket, category, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket), ticketContinuationPacket(ticket));
+  const scopedFiles = declaredFiles + scopeAddedBeyondDeclared(ticket, slug, declared);
+  return executorTaskBody(ticket, ticket?.category || {}, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket), ticketContinuationPacket(ticket));
 }
 function executorHandlesBody(ticket, slug) {
   const links = Array.isArray(ticket.links) && ticket.links.length ? ticket.links.map((link) => `- ${link.type || "related"}: ${link.ref || "(unknown ticket)"}${linkedPlanSuffix(link, slug)}`).join("\n") : "(No ticket dependencies were recorded.)";
@@ -843,7 +845,7 @@ function withProjectIdentity(prompt, projectPath) {
   if (!project) return text;
   return `${text}
 
-Dispatch board identity: --project "${project.replace(/"/g, '\\"')}"`;
+Dispatch board identity: --project "${project.replace(/"/g, '\\"')}". Pass it as project on every board call: an unqualified ref resolves on the orchestrating session's board, and only calls naming your claim or worktree follow you to this one.`;
 }
 function quotedShellArgument(value) {
   return `"${String(value || "").replace(/"/g, '\\"')}"`;

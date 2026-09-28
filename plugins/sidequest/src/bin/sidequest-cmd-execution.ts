@@ -288,7 +288,7 @@ async function cmdGroomClose(opts: any, positional: any) {
   const by = workerId(opts);
   const ticket = store.getTicket(slug, idOrRef);
   const purpose = opts.integration ? 'integration' : opts['delivery-commit'] ? 'delivery' : 'grooming';
-  const recovery = store.groomCloseRecovery(slug, idOrRef, { by, reason, evidence: opts['recovery-evidence'] });
+  const recovery = store.groomCloseRecovery(slug, idOrRef, { by, reason, evidence: opts['recovery-evidence'], sessionId: sessionId(opts) });
   if (!recovery.ok) {
     if (opts.json) {
       process.stdout.write(JSON.stringify(Object.assign({ project: slug }, recovery.recovered), null, 2) + '\n');
@@ -398,11 +398,11 @@ async function cmdCommit(opts: any, positional: any) {
   if (foreignFragments.length) {
     fail(commitScope.foreignReleaseFragmentRefusalMessage('commit', ticket.ref, foreignFragments));
   }
-  const result = commitScope.commitScoped(process.cwd(), opts.message, scope);
+  const result = await commitScope.commitScoped(process.cwd(), opts.message, scope);
   if (!result.ok) {
     if (result.reason === 'missing_scope') fail(`commit: ${ticket.ref} has no declared file scope; use the explicit shared-tree escape hatch only for uncommitted-state work, not commits.`);
     if (result.reason === 'outside_scope') {
-      fail(`commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${result.outside.join(', ')}. Expand scope with: ${scopeRemedy(ticket, result.outside)}`);
+      fail(`commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${result.outside.join(', ')}. ${commitScope.outsideScopeCommitState(result)} Expand scope with: ${scopeRemedy(ticket, result.outside)}`);
     }
     if (result.reason === 'no_existing_scope') fail(`commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(', ')}.`);
     fail(`commit: git failed: ${result.message || result.reason}`);

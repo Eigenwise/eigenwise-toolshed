@@ -219,9 +219,10 @@ test('upstream-blocked survives a health check and clears on a successful Codex 
   const guide = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'docs', 'src', 'content', 'docs', 'getting-started', 'model-gateway.md'), 'utf8');
   for (const prose of [gatewaySkill, guide]) {
     assert.match(prose, /An attributed OpenAI 401, 403, or 429 rejection enters\s+`upstream-blocked`/);
-    assert.match(prose, /An attributed 429 has no TTL: `setup` or a completed successful Codex\s+response clears it, and a later rejected request can latch it again/);
-    assert.match(prose, /persistent 429\s+blocking is a known limitation\s+\(\[issue #190\]/);
-    assert.match(prose, /do not promise a retry or expiry as a cure|a retry or expiry does not cure it/);
+    assert.match(prose, /A 401 or 403 stays until `setup` or a completed successful Codex\s+response\s+clears it/);
+    assert.match(prose, /A 429 block expires: `upstreamBlocked\.expiresAt` comes from the 429's Retry-After,\s+else claude-code-proxy's usage-limit reset header, else 60 seconds/);
+    assert.match(prose, /It lifts by itself then, or sooner on a completed successful Codex response,\s+and a later rejected request can latch it again/);
+    assert.match(prose, /as an empty `end_turn`/);
   }
 });
 
