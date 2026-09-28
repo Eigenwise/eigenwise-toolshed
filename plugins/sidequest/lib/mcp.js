@@ -93,6 +93,7 @@ const MUTATING_TOOLS = /* @__PURE__ */ new Set([
   "commit",
   "submit",
   "supersede_submission",
+  "review_outcome",
   "comment",
   "plan",
   "link",
@@ -260,7 +261,7 @@ async function runTool(tool, rawArgs) {
     return acknowledgeAliases(["dispatch", "codex_dispatch"].includes(tool.name) ? output : redactDispatchCredentials(output), aliases);
   });
 }
-const ATTESTATION_VERIFY_CONTRACT = "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.";
+const ATTESTATION_VERIFY_CONTRACT = "Attestation: `attestation: <attestationArtifact verbatim> | <evidence> | <what it showed>`.";
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   context_page: {
     limit: "UTF-8 bytes."
@@ -268,7 +269,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   add: { complexity: "Legacy score; why required.", verify: ATTESTATION_VERIFY_CONTRACT },
   claim: { force: "Operator-only." },
   update: { verify: ATTESTATION_VERIFY_CONTRACT },
-  supersede_submission: { supersededBy: "Repair ticket ref, not a commit." },
+  supersede_submission: { supersededBy: "Repair ticket ref; not commit." },
   comments: {
     since: "Comment id or ISO timestamp."
   },
@@ -280,17 +281,17 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
     command: "Required for blocker/contradiction.",
     outputTail: "Required blocker/contradiction output."
   },
-  story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
+  story_log: { entry: "Start DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
   category_edit: { fallbackModel: "null clears." },
   dispatch: {
-    reducedAgentSchema: "Only when name/mode missing; hook needs agent_id+auto|bypass mode.",
-    recoveryEvidence: "Unverified; latest signal grace; only the bound runtime name counts."
+    reducedAgentSchema: "When name/mode missing; hook needs agent_id, auto|bypass.",
+    recoveryEvidence: "Unverified; latest signal grace; bound runtime name only."
   },
   integrate: { deliveryInteractionCommit: "Reviewed descendant, submitted paths only." },
   groomClose: {
     deliveryCommit: "Prepared integration target.",
     deliveryInteractionCommit: "Reviewed descendant, submitted paths only.",
-    recoveryEvidence: "Unverified; retires unclaimed attempts past deadline; CLI too."
+    recoveryEvidence: "Unverified; retires expired unclaimed attempts; CLI too."
   },
   verdict: {
     outcome: "Candidate, not reviewer prose."

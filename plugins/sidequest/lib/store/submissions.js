@@ -5,7 +5,7 @@ const { isFullSuiteCommand, runFullSuiteVerification } = require("../verify-capt
 const { worktreeSetupDeadlineMs } = require("../hook-timeouts.js");
 const { decideSubmissionAdmission } = require("../kernel/submission");
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require("../source-revision-capability.js");
-const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require("../kernel/review-binding");
+const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance, completedReviewAttempt } = require("../kernel/review-binding");
 const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require("../kernel/wave");
 const { isInScope, scopedPaths } = require("../scope-match");
 const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyDeliveryContentCommitGuidance } = require("../refusal-guidance.js");
@@ -22,6 +22,7 @@ function createSubmissions(dependencies) {
   const VERIFICATION_CAPTURE_MAX = 32;
   const REJECTION_REVIEW_MAX = 1e3;
   const REJECTION_REASON_MAX = 4e3;
+  const NATIVE_REVIEW_EVIDENCE_SCHEMA = "sidequest.bound-review.v1";
   const WORKING_TREE_DELIVERY_METHODS = /* @__PURE__ */ new Set(["reset", "working-tree", "manual"]);
   const INTEGRATION_TARGET_DIRTY_PATH_LIMIT = 8;
   function sourceRevisionMetadata(revision) {
@@ -112,6 +113,218 @@ function createSubmissions(dependencies) {
   function candidateReviewRelation(slug, ticket, tickets = listTickets(slug)) {
     return reviewRelationFor(ticket, tickets, (idOrRef) => getTicket(slug, idOrRef));
   }
+  function normalizedReviewEvidence(comment, candidate) {
+    const body = String(comment?.body || "").trim();
+    const fenced = body.match(/^```sidequest-review-v1\s*\r?\n([\s\S]*?)\r?\n```$/i);
+    if (fenced) {
+      let parsed;
+      try {
+        parsed = JSON.parse(fenced[1] || "");
+      } catch (_) {
+        return { recognized: true, ok: false, message: "the sidequest-review-v1 comment is not valid JSON" };
+      }
+      const outcome2 = String(parsed?.outcome || "").trim().toLowerCase();
+      const reportedCandidate = parsed?.candidate;
+      if (parsed?.schema !== NATIVE_REVIEW_EVIDENCE_SCHEMA || !["accepted", "rejected"].includes(outcome2) || !sameReviewCandidate(candidate, reportedCandidate)) {
+        return { recognized: true, ok: false, message: "the structured review comment must name this exact candidate and an accepted or rejected outcome" };
+      }
+      const summary2 = String(parsed?.summary || "").trim();
+      const checks2 = Array.isArray(parsed?.checks) ? parsed.checks.map((check) => ({
+        name: String(check?.name || "").trim(),
+        result: String(check?.result || "").trim().toLowerCase(),
+        evidence: String(check?.evidence || "").trim()
+      })) : [];
+      const findings = Array.isArray(parsed?.findings) ? parsed.findings.map((finding) => ({
+        description: String(finding?.description || "").trim(),
+        evidence: String(finding?.evidence || "").trim(),
+        requiredChange: String(finding?.requiredChange || "").trim(),
+        ...finding?.location ? { location: String(finding.location).trim() } : {}
+      })) : [];
+      const checksValid = checks2.every((check) => check.name && ["pass", "fail"].includes(check.result) && check.evidence);
+      const findingsValid = findings.every((finding) => finding.description && finding.evidence && finding.requiredChange);
+      if (!summary2 || !checksValid || !findingsValid || outcome2 === "accepted" && (!checks2.length || checks2.some((check) => check.result !== "pass") || findings.length) || outcome2 === "rejected" && !findings.length) {
+        return { recognized: true, ok: false, message: "structured review evidence needs a summary, passing checks for acceptance, or evidenced findings with required changes for rejection" };
+      }
+      return {
+        recognized: true,
+        ok: true,
+        outcome: outcome2,
+        evidence: {
+          schema: NATIVE_REVIEW_EVIDENCE_SCHEMA,
+          outcome: outcome2,
+          candidate,
+          summary: summary2,
+          checks: checks2,
+          findings,
+          format: "json"
+        }
+      };
+    }
+    const lines = body.split(/\r?\n/);
+    const firstIndex = lines.findIndex((line) => line.trim());
+    if (firstIndex < 0) return { recognized: false, ok: false };
+    const first = String(lines[firstIndex] || "").trim();
+    const direct = first.match(/^(PASS|ACCEPT(?:ED)?|FAIL|FIX|REJECT(?:ED)?)\s*:\s*(.*)$/i);
+    const header = first.match(/^(?:BOUND[- ]REVIEW(?:\s+OUTCOME)?|REVIEW[- ]OUTCOME|OUTCOME)\s*:\s*(PASS|ACCEPT(?:ED)?|FAIL|FIX|REJECT(?:ED)?)(?:\s*:\s*(.*))?$/i);
+    if (!direct && !header) return { recognized: false, ok: false };
+    const markerMatch = direct || header;
+    if (!markerMatch) return { recognized: false, ok: false };
+    const marker = String(markerMatch[1] || "").toLowerCase();
+    const markerDetail = String(direct ? direct[2] : header?.[2] || "").trim();
+    const outcome = ["pass", "accept", "accepted"].includes(marker) ? "accepted" : "rejected";
+    const values = {};
+    for (const line of lines.slice(firstIndex + 1)) {
+      const field = line.match(/^\s*(SUMMARY|CHECK|EVIDENCE|FINDING|REQUIRED(?: CHANGE)?|CANDIDATE)\s*:\s*(.*?)\s*$/i);
+      const key = field?.[1]?.toLowerCase();
+      if (key) (values[key] ||= []).push(field?.[2] || "");
+    }
+    const explicitCandidate = values.candidate?.[0];
+    if (explicitCandidate) {
+      const separator = explicitCandidate.indexOf(":");
+      const reported = separator > 0 ? { source: explicitCandidate.slice(0, separator), value: explicitCandidate.slice(separator + 1) } : { source: candidate?.source, value: explicitCandidate };
+      if (!sameReviewCandidate(candidate, reported)) {
+        return { recognized: true, ok: false, message: "the review comment names a different candidate" };
+      }
+    }
+    const checks = (values.check || []).map((value) => {
+      const [name, result, ...evidence2] = value.split("|").map((part) => part.trim());
+      return { name: name || "", result: String(result || "").toLowerCase(), evidence: evidence2.join(" | ") };
+    });
+    const evidenceLines = values.evidence || [];
+    const findingLines = (values.finding || []).filter(Boolean);
+    const evidence = evidenceLines.find(Boolean) || checks.find((check) => check.name && check.result === "fail" && check.evidence)?.evidence || "";
+    const requiredChange = [...values["required change"] || [], ...values.required || []].find(Boolean) || "";
+    const summary = (values.summary || [])[0] || markerDetail;
+    const acceptedEvidenceValid = outcome !== "accepted" || checks.length > 0 && checks.every((check) => check.name && check.result === "pass" && check.evidence);
+    const rejectedEvidenceValid = outcome !== "rejected" || findingLines.length > 0 && Boolean(evidence) && Boolean(requiredChange);
+    if (!summary || !acceptedEvidenceValid || !rejectedEvidenceValid) {
+      return { recognized: true, ok: false, message: "the review comment lacks the structured checks or evidenced finding and required change for its outcome" };
+    }
+    return {
+      recognized: true,
+      ok: true,
+      outcome,
+      evidence: {
+        schema: NATIVE_REVIEW_EVIDENCE_SCHEMA,
+        outcome,
+        candidate,
+        summary,
+        checks,
+        findings: outcome === "rejected" ? [{
+          description: findingLines[0],
+          evidence,
+          requiredChange
+        }] : [],
+        format: "comment-markers"
+      }
+    };
+  }
+  function nativeTerminalReviewEvidence(sourceTicket, reviewTicket, candidate) {
+    if (sourceTicket?.dispatch?.runtimeHost !== "codex" || reviewTicket?.dispatch?.runtimeHost !== "codex" || reviewTicket?.completion?.purpose === "oracle-review-verdict" || reviewTicket?.release?.kind === "oracle") {
+      return { recognized: false, ok: false, reason: "not_native_review" };
+    }
+    if (reviewTicket?.status !== "done" || reviewTicket?.completion?.state !== "done") {
+      return { recognized: false, ok: false, reason: "review_not_terminal", message: `${reviewTicket?.ref || "review"} must finish its own native dispatch before its outcome can be recorded.` };
+    }
+    const attempt = completedReviewAttempt(reviewTicket);
+    const agentId = String(attempt?.agentId || "").trim();
+    if (!attempt || attempt.outcome !== "done" || !agentId.startsWith("codex-thread:") || !attempt.claimedAt || !attempt.sessionId || reviewTicket.completion.by !== agentId || reviewTicket.completion.at !== attempt.terminalAt) {
+      return { recognized: false, ok: false, reason: "terminal_reviewer_identity_missing", message: `${reviewTicket.ref} has no terminal done attempt tied to its authenticated Codex reviewer runtime.` };
+    }
+    if (candidate?.source === "git" && String(reviewTicket.dispatch?.baseCommit || "").trim().toLowerCase() !== String(candidate.value || "").trim().toLowerCase()) {
+      return { recognized: true, ok: false, reason: "review_candidate_mismatch", message: `${reviewTicket.ref} did not dispatch its terminal reviewer on the exact submitted candidate.` };
+    }
+    const start = Date.parse(String(attempt.claimedAt));
+    const end = Date.parse(String(attempt.terminalAt));
+    const authenticated = (Array.isArray(reviewTicket.comments) ? reviewTicket.comments : []).filter((comment2) => {
+      if (comment2?.source !== "mcp" || comment2.by !== agentId) return false;
+      const at = Date.parse(String(comment2.at || ""));
+      if (!Number.isFinite(at) || !Number.isFinite(start) || !Number.isFinite(end) || at < start || at > end) return false;
+      if (comment2.id === reviewTicket.completion.commentId) {
+        return reviewTicket.completion.by === agentId && at === end;
+      }
+      return comment2.sourceSession === attempt.sessionId && comment2.actor === agentId && comment2.operation === "comment";
+    });
+    const decisions = authenticated.map((comment2) => ({ comment: comment2, parsed: normalizedReviewEvidence(comment2, candidate) })).filter((entry) => entry.parsed.recognized);
+    if (!decisions.length) return { recognized: false, ok: false, reason: "review_evidence_missing", message: `${reviewTicket.ref} has no explicit PASS, FIX, or FAIL evidence comment authored by its terminal reviewer runtime.` };
+    if (decisions.length !== 1) return { recognized: true, ok: false, reason: "review_evidence_ambiguous", message: `${reviewTicket.ref} has multiple terminal reviewer outcome comments; a fresh, single-outcome review is required.` };
+    const { comment, parsed } = decisions[0];
+    if (!parsed.ok) return { recognized: true, ok: false, reason: "review_evidence_invalid", message: `${reviewTicket.ref} outcome evidence is invalid: ${parsed.message}.` };
+    const provenance = reviewProvenance(sourceTicket, reviewTicket);
+    if (provenance.reason !== "ok") {
+      return { recognized: true, ok: false, reason: provenance.reason, message: `${reviewTicket.ref} outcome is not backed by a distinct terminal reviewer runtime: ${provenance.reason}.` };
+    }
+    const evidence = Object.assign({}, parsed.evidence, {
+      candidate,
+      decisionCommentId: comment.id,
+      reviewer: {
+        agentId,
+        sessionId: attempt.sessionId,
+        attemptTerminalAt: attempt.terminalAt
+      },
+      sourceAttempt: {
+        agentId: provenance.source?.agentId,
+        terminalAt: provenance.source?.terminalAt
+      }
+    });
+    return { recognized: true, ok: true, outcome: parsed.outcome, evidence };
+  }
+  function recordNativeReviewOutcome(slug, idOrRef) {
+    const found = getTicket(slug, idOrRef);
+    if (!found) return { ok: false, reason: "not_found" };
+    const initialTarget = found.reviewTarget;
+    const initialSource = initialTarget?.ticketId ? getTicket(slug, initialTarget.ticketId) : null;
+    if (!initialSource) return { ok: false, reason: "review_binding_missing", ticket: found, message: `${found.ref} has no bound source ticket.` };
+    return withTicketLock(slug, initialSource.id, () => {
+      const reviewTicket = getTicket(slug, found.id);
+      const sourceTicket = getTicket(slug, initialSource.id);
+      if (!reviewTicket || !sourceTicket) return { ok: false, reason: "review_binding_missing", ticket: reviewTicket || found };
+      const tickets = listTickets(slug);
+      const relation = candidateReviewRelation(slug, sourceTicket, tickets);
+      const target = reviewTicket.reviewTarget;
+      const candidate = reviewCandidateFromSubmission(sourceTicket.submission);
+      const category = reviewTicket.category?.id || reviewTicket.category || reviewTicket.categoryId;
+      if (category !== "review-audit" || !pendingSubmission(sourceTicket) || sourceTicket.submission?.integratedAt || !relation || relation.conflict || relation.side !== "both" || relation.reviewTicket?.id !== reviewTicket.id || target?.ticketId !== sourceTicket.id || target.ref && String(target.ref).toUpperCase() !== String(sourceTicket.ref).toUpperCase() || !sameReviewCandidate(candidate, target?.candidate) || !relation.mirror || relation.mirror.ticketId !== reviewTicket.id || String(relation.mirror.ref || "").toUpperCase() !== String(reviewTicket.ref).toUpperCase() || !sameReviewCandidate(candidate, relation.mirror.candidate)) {
+        return { ok: false, reason: "review_binding_conflict", ticket: reviewTicket, message: `${reviewTicket.ref} does not have the sole intact binding to the exact pending submitted candidate.` };
+      }
+      if (reviewTicket.completion?.purpose === "oracle-review-verdict" || reviewTicket.release?.kind === "oracle") {
+        return { ok: false, reason: "oracle_review", ticket: reviewTicket, message: `${reviewTicket.ref} is governed by the existing oracle verdict path; review_outcome cannot replace it.` };
+      }
+      const evidenceResult = nativeTerminalReviewEvidence(sourceTicket, reviewTicket, candidate);
+      if (!evidenceResult.ok) {
+        return { ok: false, reason: evidenceResult.reason || "review_evidence_invalid", ticket: reviewTicket, message: evidenceResult.message };
+      }
+      const existingTargetOutcome = String(target.outcome || "planned");
+      const existingMirrorOutcome = String(relation.mirror.outcome || "planned");
+      const existingEvidence = target.outcomeEvidence || relation.mirror.outcomeEvidence;
+      if (existingTargetOutcome !== "planned" || existingMirrorOutcome !== "planned") {
+        if (existingTargetOutcome === evidenceResult.outcome && existingMirrorOutcome === evidenceResult.outcome && existingEvidence?.schema === NATIVE_REVIEW_EVIDENCE_SCHEMA && existingEvidence.decisionCommentId === evidenceResult.evidence.decisionCommentId) {
+          return { ok: true, idempotent: true, ticket: reviewTicket, sourceRef: sourceTicket.ref, outcome: evidenceResult.outcome, evidence: existingEvidence };
+        }
+        return { ok: false, reason: "review_outcome_finalized", ticket: reviewTicket, message: `${reviewTicket.ref} already has a terminal review outcome and cannot be changed.` };
+      }
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const outcomeEvidence = Object.assign({}, evidenceResult.evidence, { recordedAt: now });
+      reviewTicket.reviewTarget = Object.assign({}, target, { outcome: evidenceResult.outcome, outcomeEvidence });
+      sourceTicket.submission = Object.assign({}, sourceTicket.submission, {
+        review: {
+          ticketId: reviewTicket.id,
+          ref: reviewTicket.ref,
+          candidate,
+          createdAt: relation.mirror.createdAt || now,
+          outcome: evidenceResult.outcome,
+          outcomeEvidence
+        }
+      });
+      reviewTicket.updatedAt = now;
+      sourceTicket.updatedAt = now;
+      transaction(() => {
+        putTicket(slug, sourceTicket);
+        putTicket(slug, reviewTicket);
+      });
+      return { ok: true, ticket: reviewTicket, sourceRef: sourceTicket.ref, outcome: evidenceResult.outcome, evidence: outcomeEvidence };
+    });
+  }
   function boundReviewPass(slug, ticket) {
     const relation = candidateReviewRelation(slug, ticket);
     if (!relation || relation.side !== "both" || relation.conflict) return false;
@@ -161,6 +374,14 @@ function createSubmissions(dependencies) {
     }
     if (provenance.reason === "shared_agent_identity") {
       return `${reviewRelationRef(relation)} was completed by the same runtime identity that submitted ${ticket.ref} (${provenance.source?.identity})`;
+    }
+    const candidate = reviewCandidateFromSubmission(ticket.submission);
+    const terminalEvidence = nativeTerminalReviewEvidence(ticket, reviewTicket, candidate);
+    if (terminalEvidence.recognized && !terminalEvidence.ok) {
+      return terminalEvidence.message || `${reviewRelationRef(relation)} has invalid terminal review evidence`;
+    }
+    if (terminalEvidence.ok && terminalEvidence.outcome === "rejected" && reviewRelationOutcome(relation) !== "rejected") {
+      return `${reviewRelationRef(relation)} has an authenticated FIX/FAIL outcome for ${ticket.ref}; record it with review_outcome before any integration attempt`;
     }
     return null;
   }
@@ -3009,6 +3230,6 @@ ${verify.outputTail}` : null
     }));
     return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || "merge" };
   }
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, boundReviewPass, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, boundReviewPass, recordNativeReviewOutcome, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
 }
 module.exports = { createSubmissions };

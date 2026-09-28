@@ -74,7 +74,7 @@ function commentAuthor(args, ticket, sessionId) {
 const tools = [
   {
     name: "supersede_submission",
-    description: "Close a pending submission with an integrated repair and reviewed retirements. A review-rejected candidate becomes eligible only after its oracle conclusion is recorded on the binding.",
+    description: "Close a pending submission with an integrated repair and reviewed retirements. A rejected candidate becomes eligible only after its authenticated native-review outcome or external-oracle conclusion is recorded on the binding.",
     inputSchema: {
       type: "object",
       properties: {
