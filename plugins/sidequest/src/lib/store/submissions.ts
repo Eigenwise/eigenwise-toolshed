@@ -1337,13 +1337,23 @@ function workingTreeDeliveryMethod(value: any) {
 // is genuinely a worktree of this same repository, not an arbitrary directory the pinned
 // verifier would then run a real command inside - checked the same way worktree lease
 // matching already does, by comparing git's own `--git-common-dir` rather than the path.
+// git answers `--git-common-dir` in the spelling it resolved the checkout under, while the caller
+// may hold an 8.3 alias of the same directory (C:\Users\RUNNER~1\... on the hosted Windows runner),
+// so both sides are canonicalized, and compared case-insensitively on win32, before they are matched.
+function canonicalCommonDir(value: string): string {
+  let resolved = value;
+  try { resolved = fs.realpathSync.native(value); } catch (_) { /* a missing dir keeps its resolved spelling */ }
+  const normalized = path.normalize(resolved);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
 function resolveDeliveryWorktree(registeredRepo: string, requestedWorktree: string) {
   const candidate = path.isAbsolute(requestedWorktree) ? requestedWorktree : path.resolve(registeredRepo, requestedWorktree);
   let candidateCommonDir: string;
   let registeredCommonDir: string;
   try {
-    candidateCommonDir = path.resolve(candidate, integrationGit(candidate, ['rev-parse', '--git-common-dir']));
-    registeredCommonDir = path.resolve(registeredRepo, integrationGit(registeredRepo, ['rev-parse', '--git-common-dir']));
+    candidateCommonDir = canonicalCommonDir(path.resolve(candidate, integrationGit(candidate, ['rev-parse', '--git-common-dir'])));
+    registeredCommonDir = canonicalCommonDir(path.resolve(registeredRepo, integrationGit(registeredRepo, ['rev-parse', '--git-common-dir'])));
   } catch (error: any) {
     return { ok: false, message: `${candidate} could not be inspected as a Git worktree: ${integrationGitError(error)}` };
   }

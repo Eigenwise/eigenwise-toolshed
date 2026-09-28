@@ -1130,13 +1130,22 @@ ${verify.outputTail}` : null
     const method = String(value || "").trim();
     return WORKING_TREE_DELIVERY_METHODS.has(method) ? method : null;
   }
+  function canonicalCommonDir(value) {
+    let resolved = value;
+    try {
+      resolved = fs.realpathSync.native(value);
+    } catch (_) {
+    }
+    const normalized = path.normalize(resolved);
+    return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  }
   function resolveDeliveryWorktree(registeredRepo, requestedWorktree) {
     const candidate = path.isAbsolute(requestedWorktree) ? requestedWorktree : path.resolve(registeredRepo, requestedWorktree);
     let candidateCommonDir;
     let registeredCommonDir;
     try {
-      candidateCommonDir = path.resolve(candidate, integrationGit(candidate, ["rev-parse", "--git-common-dir"]));
-      registeredCommonDir = path.resolve(registeredRepo, integrationGit(registeredRepo, ["rev-parse", "--git-common-dir"]));
+      candidateCommonDir = canonicalCommonDir(path.resolve(candidate, integrationGit(candidate, ["rev-parse", "--git-common-dir"])));
+      registeredCommonDir = canonicalCommonDir(path.resolve(registeredRepo, integrationGit(registeredRepo, ["rev-parse", "--git-common-dir"])));
     } catch (error) {
       return { ok: false, message: `${candidate} could not be inspected as a Git worktree: ${integrationGitError(error)}` };
     }
