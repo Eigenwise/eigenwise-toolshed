@@ -556,6 +556,8 @@ const {
   supersedeUnboundAttempt,
   readDispatchBriefing,
   recoverLiveClaimDispatch,
+  recordReleaseObservedCheckout,
+  rekeyReleasedCheckout,
   recordDispatchLaunch,
   recordDispatchAgentFailure,
   recoverDispatchQuotaFailure,
@@ -2523,6 +2525,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     } : null;
     if (release) t.release = release;
     if (dispatch) delete dispatch.failedClaimSurrender;
+    if (liveClaim) rekeyReleasedCheckout(slug, t, heldOwner);
     if (!dispatch?.terminalAt || dispatch.outcome !== terminalOutcome) {
       setDispatchTerminal(t, terminalOutcome, opts.source || 'cli', {
         slug,
@@ -3798,6 +3801,7 @@ module.exports = {
   syncLiveDispatchVerification,
   readDispatchBriefing,
   recoverLiveClaimDispatch,
+  recordReleaseObservedCheckout,
   dispatchTokenForRequest,
   isSupersededDispatchToken,
   recordDispatchLaunch,

@@ -1060,6 +1060,53 @@ function createDispatch(dependencies) {
     const reportedWorktree = String(worktree || "").trim();
     return Boolean(projectPath && reportedWorktree && canonicalPath(projectPath) === canonicalPath(reportedWorktree));
   }
+  function pinnedCandidateRevisions(repository) {
+    const pinned = /* @__PURE__ */ new Map();
+    try {
+      for (const line of gitOutput(repository, ["for-each-ref", "--format=%(refname) %(objectname)", "refs/sidequest/"]).split(/\r?\n/)) {
+        const [name, object] = line.trim().split(/\s+/);
+        if (name && object && name.startsWith("refs/sidequest/")) pinned.set(name.slice("refs/sidequest/".length), object.toLowerCase());
+      }
+    } catch (_) {
+    }
+    return pinned;
+  }
+  function ticketRecordedRevisions(ticket, state, pinned) {
+    const attempts = Array.isArray(state?.attempts) ? state.attempts : [];
+    return [
+      ...Array.isArray(state?.sanctionedCommits) ? state.sanctionedCommits : [],
+      ticket?.checkpoint?.commit,
+      ticket?.submission?.commit,
+      attempts[attempts.length - 1]?.commit,
+      pinned?.get(String(ticket?.ref || ""))
+    ].map((commit) => String(commit || "").trim().toLowerCase()).filter(Boolean);
+  }
+  function checkoutRangeOwnership(slug, ticket, state, repository, commits) {
+    const range = Array.isArray(commits) ? commits : [];
+    const pinned = pinnedCandidateRevisions(repository);
+    const own = ticketRecordedRevisions(ticket, state, pinned);
+    const owns = (recorded, commit) => recorded.some((revision) => sameRevision(revision, commit));
+    const foreignTickets = listTickets(slug).filter((other) => other && other.id !== ticket?.id).filter((other) => {
+      const recorded = ticketRecordedRevisions(other, dispatchState(other), pinned);
+      return recorded.length > 0 && range.some((commit) => owns(recorded, commit) && !owns(own, commit));
+    }).map((other) => String(other.ref)).sort();
+    const head = range[range.length - 1];
+    return { ownHead: Boolean(head && owns(own, head)), foreignTickets };
+  }
+  function liveCheckoutHolders(slug, ticket, worktree) {
+    const target = canonicalPath(worktree);
+    return listTickets(slug).filter((other) => {
+      const state = dispatchState(other);
+      return Boolean(other && other.id !== ticket?.id && other.status !== "done" && state && !state.terminalAt && state.sharedTree === false && state.worktree && canonicalPath(state.worktree) === target);
+    }).map((other) => String(other.ref)).sort();
+  }
+  function registeredProjectCheckout(facts) {
+    try {
+      return Boolean(facts && registeredWorktrees(facts.repository).includes(facts.worktree));
+    } catch (_) {
+      return false;
+    }
+  }
   function retainedWorktreeContinuationState(slug, ticket, state) {
     const attempts = Array.isArray(state?.attempts) ? state.attempts : [];
     const attempt = attempts[attempts.length - 1] || null;
@@ -1067,6 +1114,9 @@ function createDispatch(dependencies) {
     const checkpointedTerminalFailure = Boolean(state?.terminalAt && checkpointCommit && ["failed", "died"].includes(state.outcome));
     if (!state || !checkpointedTerminalFailure && state.outcome !== "released" || !state.terminalAt || state.sharedTree !== false) return null;
     const recordedWorktree = String(state.worktree || "").trim();
+    if (state.retainedWorktreeDropped) {
+      return { fallback: continuationFallback("released_worktree_binding_dropped", recordedWorktree, { observedWorktree: state.retainedWorktreeDropped.observed || null }) };
+    }
     if (!recordedWorktree || !fs.existsSync(recordedWorktree)) {
       return { fallback: continuationFallback("released_worktree_missing", recordedWorktree) };
     }
@@ -1143,6 +1193,13 @@ function createDispatch(dependencies) {
       }
       if (!commits.length) return { fallback: continuationFallback("released_worktree_has_no_committed_progress", worktree) };
       if (commits.length > 128) return { fallback: continuationFallback("released_worktree_commit_range_is_too_large", worktree) };
+      const ownership = checkoutRangeOwnership(slug, ticket, state, worktreeFacts.repository, commits);
+      if (ownership.foreignTickets.length) {
+        return { fallback: continuationFallback("retained_worktree_carries_another_tickets_commits", worktree, { commit: observedRevision, commits, foreignTickets: ownership.foreignTickets }) };
+      }
+      if (!ownership.ownHead) {
+        return { fallback: continuationFallback("retained_worktree_head_is_not_this_tickets", worktree, { commit: observedRevision, commits }) };
+      }
       return {
         continuation: {
           mode: "retained_worktree_resume",
@@ -1632,10 +1689,14 @@ function createDispatch(dependencies) {
       if (!facts) {
         return { ok: false, reason: "invalid_worktree", ticket, message: `${ticket.ref} recovery requires a linked worktree from this board project.` };
       }
-      if (state.worktree && canonicalPath(state.worktree) !== facts.worktree) {
-        return { ok: false, reason: "worktree_mismatch", ticket, message: `${ticket.ref} is bound to a different worktree and cannot be rebound.` };
-      }
       const now = (/* @__PURE__ */ new Date()).toISOString();
+      const recordedWorktree = state.worktree ? canonicalPath(state.worktree) : "";
+      let worktreeCorrection = null;
+      if (recordedWorktree && recordedWorktree !== facts.worktree) {
+        const rebind = liveClaimRebindDecision(slug, ticket, state, facts);
+        if (!rebind.ok) return { ok: false, reason: rebind.reason, ticket, message: rebind.message };
+        worktreeCorrection = { at: now, from: recordedWorktree, to: facts.worktree, reason: "live_claim_recovery", basis: rebind.basis };
+      }
       state.sessionId = sessionId;
       state.agentId = null;
       state.continuation = {
@@ -1654,6 +1715,7 @@ function createDispatch(dependencies) {
       state.worktreeBoundAt = now;
       state.resumedAt = now;
       state.liveClaimRecovery = { at: now, by, executor, evidence };
+      if (worktreeCorrection) state.worktreeCorrection = worktreeCorrection;
       ticket.dispatchNonce = mintDispatchToken();
       state.tokenPrefix = dispatchTokenPrefix(ticket.dispatchNonce);
       writeDispatchTokenFile(ticket);
@@ -1664,9 +1726,70 @@ function createDispatch(dependencies) {
         ok: true,
         ticket,
         token: ticket.dispatchNonce,
-        recovery: { kind: "live_claim_resume", at: now, worktree: facts.worktree }
+        recovery: { kind: "live_claim_resume", at: now, worktree: facts.worktree, ...worktreeCorrection ? { worktreeCorrection } : {} }
       };
     });
+  }
+  function liveClaimRebindDecision(slug, ticket, state, facts) {
+    if (!registeredProjectCheckout(facts)) {
+      return { ok: false, reason: "invalid_worktree", message: `${ticket.ref} recovery requires a registered linked worktree from this board project.` };
+    }
+    const holders = liveCheckoutHolders(slug, ticket, facts.worktree);
+    let commits = [];
+    try {
+      commits = gitOutput(facts.worktree, ["rev-list", "--reverse", `${String(state.baseCommit || "").trim()}^{commit}..${facts.revision}`, "--"]).split(/\r?\n/).filter(Boolean);
+    } catch (_) {
+    }
+    const ownership = commits.length ? checkoutRangeOwnership(slug, ticket, state, facts.repository, commits) : { ownHead: false, foreignTickets: [] };
+    if (holders.length && !ownership.ownHead) {
+      return { ok: false, reason: "worktree_mismatch", message: `${ticket.ref} cannot be rebound to ${facts.worktree}: it is leased to ${holders.join(", ")}, a live ticket, and its HEAD is not a commit this claim made.` };
+    }
+    if (ownership.foreignTickets.length) {
+      return { ok: false, reason: "worktree_mismatch", message: `${ticket.ref} cannot be rebound to ${facts.worktree}: it carries commits of ${ownership.foreignTickets.join(", ")}.` };
+    }
+    return { ok: true, basis: holders.length ? "own_commits" : "free_lease" };
+  }
+  function recordReleaseObservedCheckout(slug, idOrRef, opts) {
+    const by = String(opts?.by || "").trim();
+    const agentId = String(opts?.agentId || "").trim();
+    const supplied = String(opts?.observedWorktree || "").trim();
+    const found = getTicket(slug, idOrRef);
+    if (!found) return { ok: false, reason: "not_found" };
+    if (!by || !agentId || !supplied) return { ok: false, reason: "missing_release_observation" };
+    const observed = canonicalPath(supplied);
+    return withTicketLock(slug, found.id, () => {
+      const ticket = getTicket(slug, found.id);
+      const state = dispatchState(ticket);
+      if (!ticket?.claim?.by || ticket.claim.by !== by || !state || state.terminalAt || state.sharedTree !== false || state.worktreeBindingSource !== "worktree-create" || state.continuation?.sourceWorktree || state.agentId !== agentId) {
+        return { ok: false, reason: "release_observation_unavailable", ticket };
+      }
+      if (state.worktree && canonicalPath(state.worktree) === observed) return { ok: true, unchanged: true, ticket };
+      state.releaseObservedCheckout = { worktree: observed, by, agentId, at: (/* @__PURE__ */ new Date()).toISOString() };
+      putTicket(slug, ticket);
+      return { ok: true, ticket };
+    });
+  }
+  function rekeyReleasedCheckout(slug, ticket, by) {
+    const state = dispatchState(ticket);
+    const observation = state?.releaseObservedCheckout;
+    if (!observation) return;
+    delete state.releaseObservedCheckout;
+    if (!by || observation.by !== by || state.terminalAt || state.sharedTree !== false || observation.agentId !== state.agentId) return;
+    const recorded = state.worktree ? canonicalPath(state.worktree) : "";
+    const observed = canonicalPath(observation.worktree);
+    if (!observed || observed === recorded) return;
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const facts = immutableWorktreeFacts(slug, observed);
+    if (!facts || !registeredProjectCheckout(facts)) {
+      state.retainedWorktreeDropped = { at: now, reason: "release_observed_checkout_unverified", recorded: recorded || null, observed };
+      return;
+    }
+    state.worktree = facts.worktree;
+    state.worktreeGitDirectory = facts.gitDirectory;
+    state.worktreeCommonGitDirectory = facts.commonGitDirectory;
+    state.worktreeCheckoutInstance = facts.checkoutInstance;
+    state.worktreeObservedRevision = facts.revision;
+    state.worktreeCorrection = { at: now, from: recorded || null, to: facts.worktree, reason: "release_observed_checkout" };
   }
   function recordDispatchLaunch(slug, idOrRef, opts) {
     opts = opts || {};
@@ -2873,6 +2996,8 @@ function createDispatch(dependencies) {
     syncLiveDispatchVerification,
     readDispatchBriefing,
     recoverLiveClaimDispatch,
+    recordReleaseObservedCheckout,
+    rekeyReleasedCheckout,
     recordDispatchLaunch,
     recordDispatchAgentFailure,
     recoverDispatchQuotaFailure,

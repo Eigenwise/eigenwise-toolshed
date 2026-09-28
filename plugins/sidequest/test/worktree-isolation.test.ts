@@ -1207,6 +1207,130 @@ test('SQ-55: a crossed claim never moves the checkout binding of a sibling that 
   }
 });
 
+// SQ-75 (GitHub #298). Both siblings claimed from the parent checkout, so neither claim could settle the crossing:
+// each ticket is claimed and recorded against the checkout its sibling's executor runs in, and each executor has
+// committed its own work through the board in the checkout it really runs in.
+async function sq75CrossedClaims(label: string) {
+  const pair = sq55CrossedPair(label, false);
+  const holder = (runtime: Sq55Runtime) => `sq55-${runtime.agentId}`;
+  await pair.claim(pair.second, PROJECT);
+  await pair.claim(pair.first, PROJECT);
+  assert.equal(pair.recorded(pair.first.ref), worktrees.canonicalPath(pair.second.harnessWorktree), 'the fixture reproduces the #298 claimed crossing');
+  assert.equal(pair.recorded(pair.second.ref), worktrees.canonicalPath(pair.first.harnessWorktree));
+  const commitOwnWork = (runtime: Sq55Runtime) => {
+    fs.appendFileSync(path.join(runtime.harnessWorktree, 'README.md'), `${runtime.ref} work\n`);
+    execFileSync('git', ['add', 'README.md'], { cwd: runtime.harnessWorktree, windowsHide: true });
+    execFileSync('git', ['commit', '--quiet', '-m', `${runtime.ref}: own work`], { cwd: runtime.harnessWorktree, windowsHide: true });
+    const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: runtime.harnessWorktree, encoding: 'utf8', windowsHide: true }).trim();
+    assert.equal(store.recordSanctionedCommit(slug, runtime.ref, { by: holder(runtime), commit }).ok, true);
+    execFileSync('git', ['update-ref', `refs/sidequest/${runtime.ref}`, commit], { cwd: PROJECT, windowsHide: true });
+    return commit;
+  };
+  const commits = { first: commitOwnWork(pair.first), second: commitOwnWork(pair.second) };
+  const cleanup = () => {
+    pair.cleanup();
+    for (const runtime of [pair.first, pair.second]) {
+      execFileSync('git', ['update-ref', '-d', `refs/sidequest/${runtime.ref}`], { cwd: PROJECT, windowsHide: true });
+    }
+  };
+  return { pair, holder, commits, cleanup };
+}
+
+test('SQ-75: live-claim recovery rebinds a crossed claim to the checkout holding its own commits, and only for its holder', async () => {
+  const { pair, holder, cleanup } = await sq75CrossedClaims('sq75-recover');
+  const { first, second } = pair;
+  const recover = (runtime: Sq55Runtime, by: string, worktree: string) => store.recoverLiveClaimDispatch(slug, runtime.ref, {
+    by,
+    executor: runtime.executor,
+    worktree,
+    recoveryEvidence: 'verify-capture refused: the bound worktree is the sibling\'s checkout',
+    sessionId: `${pair.sessionId}-orchestrator`,
+  });
+  try {
+    const foreign = recover(first, holder(second), first.harnessWorktree);
+    assert.equal(foreign.ok, false);
+    assert.equal(foreign.reason, 'not_claim_holder');
+    assert.equal(pair.recorded(first.ref), worktrees.canonicalPath(second.harnessWorktree), 'a foreign holder moved the binding');
+
+    // The sibling still records this checkout, but its HEAD is the recovering claim's own board commit.
+    const rebound = recover(first, holder(first), first.harnessWorktree);
+    assert.equal(rebound.ok, true, `${first.ref} recovery: ${rebound.reason} ${rebound.message || ''}`);
+    assert.equal(pair.recorded(first.ref), worktrees.canonicalPath(first.harnessWorktree));
+    assert.deepEqual(
+      { from: rebound.recovery.worktreeCorrection?.from, to: rebound.recovery.worktreeCorrection?.to },
+      { from: worktrees.canonicalPath(second.harnessWorktree), to: worktrees.canonicalPath(first.harnessWorktree) },
+    );
+    assert.equal(store.getTicket(slug, first.ref).dispatch.worktreeCorrection?.reason, 'live_claim_recovery');
+
+    // Nothing live records the second checkout any more, so its lease is free.
+    const freed = recover(second, holder(second), second.harnessWorktree);
+    assert.equal(freed.ok, true, `${second.ref} recovery: ${freed.reason} ${freed.message || ''}`);
+    assert.equal(pair.recorded(second.ref), worktrees.canonicalPath(second.harnessWorktree));
+
+    const leased = recover(first, holder(first), second.harnessWorktree);
+    assert.equal(leased.ok, false);
+    assert.equal(leased.reason, 'worktree_mismatch');
+    assert.match(leased.message, new RegExp(`leased to ${second.ref}`));
+    assert.equal(pair.recorded(first.ref), worktrees.canonicalPath(first.harnessWorktree), 'a refused rebind moved the binding');
+  } finally {
+    cleanup();
+  }
+});
+
+test('SQ-75: a released crossed claim redispatched solo resumes its own checkout or a fresh one, never the sibling\'s', async () => {
+  const { pair, holder, commits, cleanup } = await sq75CrossedClaims('sq75-release');
+  const { first, second } = pair;
+  try {
+    // The first executor releases from the checkout it runs in, so the hook reports that checkout.
+    assert.equal(runHook(BIND_RUNTIME_IDENTITY, {
+      session_id: pair.sessionId,
+      agent_id: first.agentId,
+      agent_type: first.executor,
+      cwd: first.harnessWorktree,
+      tool_name: 'mcp__plugin_sidequest_board__release',
+      tool_input: { ref: first.ref, project: PROJECT, by: holder(first), kind: 'handback', reason: 'verify-capture refused the crossed binding' },
+    }), null);
+    assert.equal(store.releaseTicket(slug, first.ref, holder(first), {
+      status: 'todo', source: 'test', releaseKind: 'handback', releaseReason: 'verify-capture refused the crossed binding',
+    }).ok, true);
+    const firstRetry = store.prepareDispatch(slug, first.ref, { sessionId: `${pair.sessionId}-solo-first` }).ticket.dispatch;
+    assert.notEqual(worktrees.canonicalPath(firstRetry.worktree || ''), worktrees.canonicalPath(second.harnessWorktree), `${first.ref} was bound to its sibling's checkout`);
+    assert.equal(firstRetry.continuation?.mode, 'retained_worktree_resume');
+    assert.equal(worktrees.canonicalPath(firstRetry.worktree), worktrees.canonicalPath(first.harnessWorktree));
+    assert.equal(firstRetry.continuation.commit, commits.first);
+
+    // The orchestrator releases the second from the parent checkout, which observes nothing about where it ran.
+    assert.equal(store.releaseTicket(slug, second.ref, holder(second), {
+      status: 'todo', source: 'test', releaseKind: 'handback', releaseReason: 'verify-capture refused the crossed binding',
+    }).ok, true);
+    const secondRetry = store.prepareDispatch(slug, second.ref, { sessionId: `${pair.sessionId}-solo-second` }).ticket.dispatch;
+    assert.notEqual(worktrees.canonicalPath(secondRetry.worktree || ''), worktrees.canonicalPath(first.harnessWorktree), `${second.ref} was bound to its sibling's checkout`);
+    assert.equal(secondRetry.continuation, undefined);
+    assert.equal(secondRetry.continuationFallback?.reason, 'retained_worktree_carries_another_tickets_commits');
+    assert.deepEqual(secondRetry.continuationFallback.foreignTickets, [first.ref]);
+  } finally {
+    cleanup();
+  }
+});
+
+test('SQ-75: a release observed outside any registered checkout of the project drops the retained binding', async () => {
+  const { pair, holder, cleanup } = await sq75CrossedClaims('sq75-drop');
+  const { first } = pair;
+  try {
+    const unregistered = path.join(SIDEQUEST_HOME, 'sq75-unregistered', first.ref);
+    assert.equal(store.recordReleaseObservedCheckout(slug, first.ref, { by: holder(first), agentId: first.agentId, observedWorktree: unregistered }).ok, true);
+    assert.equal(store.releaseTicket(slug, first.ref, holder(first), {
+      status: 'todo', source: 'test', releaseKind: 'handback', releaseReason: 'verify-capture refused the crossed binding',
+    }).ok, true);
+    const retry = store.prepareDispatch(slug, first.ref, { sessionId: `${pair.sessionId}-solo-drop` }).ticket.dispatch;
+    assert.equal(retry.continuation, undefined);
+    assert.equal(retry.worktree ?? null, null, `${first.ref} kept a retained binding it could not establish`);
+    assert.equal(retry.continuationFallback?.reason, 'released_worktree_binding_dropped');
+  } finally {
+    cleanup();
+  }
+});
+
 test('a fresh re-dispatch binds its created checkout when the runtime reports the prior retained identity', () => {
   const sequence = `${process.pid}-${Date.now()}`;
   const ticket = store.createTicket(slug, {
@@ -2440,6 +2564,8 @@ function retainedContinuationFixture(label: string) {
   execFileSync('git', ['add', 'README.md'], { cwd: worktree, windowsHide: true });
   execFileSync('git', ['commit', '--quiet', '-m', `verified progress ${sequence}`], { cwd: worktree, windowsHide: true });
   const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
+  // Only a checkout whose HEAD the board can attribute to this ticket is resumed (SQ-75), so pin it as an executor does.
+  execFileSync('git', ['update-ref', `refs/sidequest/${ticket.ref}`, commit], { cwd: PROJECT, windowsHide: true });
   assert.equal(store.releaseTicket(slug, ticket.ref, owner, {
     status: 'todo',
     source: 'test',
