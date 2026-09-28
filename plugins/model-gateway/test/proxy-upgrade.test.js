@@ -147,7 +147,7 @@ test('stable command launcher follows registry changes and forwards command exit
   });
 
   assert.equal(update.status, 11, update.stderr);
-  assert.deepEqual(JSON.parse(fs.readFileSync(result, 'utf8')), [path.join(newInstall, 'bin', 'model-gateway.js'), 'setup']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(result, 'utf8')), [path.join(newInstall, 'bin', 'model-gateway.js'), 'setup', '--preserve-wiring']);
 
   const newer = spawnGatewayProcessSync(process.execPath, [launcher, 'status', '--json'], {
     encoding: 'utf8',

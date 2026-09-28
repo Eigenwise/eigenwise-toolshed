@@ -77,7 +77,11 @@ flags whose values equal plugin defaults. It leaves unrelated settings alone, sk
 agreeing, cannot change `process.env`, and needs a restart to affect a new session.
 Discovery needs Claude Code v2.1.129+; `models` shows exactly what the shim advertises. Claude Code
 only refetches gateway discovery when it has an API-key credential. OAuth subscriptions do not give it
-one, so Model Gateway writes Claude Code's discovery cache whenever its advertised list changes.
+one, so Model Gateway writes Claude Code's discovery cache whenever its advertised list changes, but
+only from a list the proxy answered. While the proxy is unreachable the shim serves `models.json` or its
+built-in list, keeps the previous cache, retries the proxy on its next refresh tick, and `status` says
+`fallback catalog (proxy unreachable)`. `setup --preserve-wiring` (what the Toolshed updater runs) never
+wires the directory it runs from.
 
 Restart remains necessary to surface new rows in `/model`: Claude Code reads the picker cache once at
 session start. `/reload-plugins` does not reload it. Restoring or refreshing auth on an already-wired
@@ -121,7 +125,7 @@ bring auth back, or you kill the session that was about to use it.
 - Caution: loading a huge reference skill (e.g. `claude-api`, ~800k chars) in a single turn can
   spike Codex context past the point proactive compaction can recover from. Prefer pulling large
   references incrementally on Codex models.
-- The advertised catalog is a built-in list (proxy v0.1.10 serves no /v1/models). A `models.json` file cannot add a backend that the claude-code-proxy allowlist does not support; update the proxy through `setup` instead.
+- The advertised catalog comes from the proxy's /v1/models; `models.json` and the built-in list only stand in while the proxy is unreachable. A `models.json` file cannot add a backend that the claude-code-proxy allowlist does not support; update the proxy through `setup` instead.
 - **Claude Desktop cannot use Codex/Grok models in this version**: Desktop has its own native Gateway
   configuration, separate from Claude Code CLI settings, and can point at this shim's endpoint. But
   installed Desktop 1.49585.0 validates every Gateway model ID client-side and rejects any

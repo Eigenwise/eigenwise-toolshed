@@ -389,7 +389,7 @@ async function restartProxyIfOutdated({
   return { restarted, onDisk, serving };
 }
 
-async function setup() {
+async function setup({ preserveWiring = false } = {}) {
   mkdirs();
   sweepOldProxyBinaries();
   const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
@@ -454,6 +454,7 @@ async function setup() {
   }
   log('ChatGPT auth: valid');
   await refreshDetectedPinsAndWiring({ force: true });
+  if (preserveWiring) return finishUpdateWithoutWiring();
   const { mode } = await resolveIntendedMode();
   if (isWired()) {
     const current = wiredMode();
@@ -751,16 +752,26 @@ async function resolveIntendedMode() {
   return { mode: compat.hostsDetected && compat.port80Bound ? 'compat' : 'default', compat };
 }
 
+// The shim serves these while its proxy is unreachable but never persists them as the discovery cache.
+const STAND_IN_CATALOG_NOTES = {
+  fallback: 'fallback catalog (proxy unreachable)',
+  'models.json': 'models.json catalog (proxy unreachable)',
+};
+
+function reportAdvertisedModels(health) {
+  const standIn = STAND_IN_CATALOG_NOTES[health?.catalog];
+  const catalogNote = standIn ? '; ' + standIn : '';
+  log(`models advertised to Claude Code: ${health?.models ?? 'unavailable'}${catalogNote}`);
+  log(health?.proxyRecovery
+    ? 'proxy recovery: shim supervisor probes /v1/models and restarts an unavailable proxy with bounded backoff'
+    : 'proxy recovery: unavailable until the shim supervisor is refreshed');
+}
+
 async function statusReport({ readiness = null } = {}) {
   const codex = readiness || await getCodexReadiness();
   const { checks, health } = codex;
   log(`proxy (claude-code-proxy) on :${PROXY_PORT}: ${checks.proxyModels ? 'answering /v1/models' : 'DOWN'}`);
-  if (checks.shimRunning) {
-    log(`models advertised to Claude Code: ${health?.models ?? 'unavailable'}`);
-    log(health?.proxyRecovery
-      ? 'proxy recovery: shim supervisor probes /v1/models and restarts an unavailable proxy with bounded backoff'
-      : 'proxy recovery: unavailable until the shim supervisor is refreshed');
-  }
+  if (checks.shimRunning) reportAdvertisedModels(health);
   log(`shim (model router) on :${SHIM_PORT}: ${checks.shimRunning ? `running${checks.servingVersion ? ` (serving ${checks.servingVersion})` : ' (serving version unavailable)'}` : 'DOWN'}`);
   const owner = await resolvePortOwner(PUBLIC_SHIM_PORT).catch(() => ({ state: 'unknown', pid: null }));
   if (owner.state === 'foreign-install') log(`shim supervisor conflict: PID ${owner.pid} owns :${PUBLIC_SHIM_PORT} from a different install root (${owner.installRoot || 'unknown'}).`);
@@ -1626,7 +1637,13 @@ function discoveryCacheBaseUrl() {
   return baseUrl === DEFAULT_BASE_URL ? DEFAULT_BASE_URL : null;
 }
 
-function writeGatewayDiscoveryCache(models) {
+// An older shim reports no catalog source; its list is written as before.
+function writeGatewayDiscoveryCache(models, catalogSource) {
+  const standIn = STAND_IN_CATALOG_NOTES[catalogSource];
+  if (standIn) {
+    log(`discovery cache: kept; the shim is serving its ${standIn}`);
+    return { state: 'skipped', reason: 'stand-in-catalog', modelCount: 0 };
+  }
   const result = syncGatewayDiscoveryCache({ models, baseUrl: discoveryCacheBaseUrl() });
   if (result.state === 'wrote') log(`discovery cache: wrote ${result.modelCount} models`);
   else if (result.state === 'unchanged') log('discovery cache: unchanged');
@@ -1655,7 +1672,7 @@ async function reportGatewayDiscoveryCache() {
 
 async function writeCatalog() {
   const shimModels = await fetchShimModels();
-  writeGatewayDiscoveryCache(shimModels);
+  writeGatewayDiscoveryCache(shimModels, (await fetchShimHealth())?.catalog);
   const ids = shimModels.map((model) => model.id).filter((id) => modelCatalogDetails(id) != null);
   // A zero-model catalog would merge straight back to the stored models with a fresh timestamp, so
   // publishing it would make a shim that advertises nothing routable look like a successful refresh.
@@ -1665,6 +1682,16 @@ async function writeCatalog() {
   const catalog = buildCatalog(ids, readiness);
   mkdirs();
   return writeCatalogFile(CATALOG_PATH, catalog);
+}
+
+// setup --preserve-wiring ends here. The stable updater runs from whatever directory
+// /update-toolshed was started in, and that directory is not consent to route it
+// through the gateway (GH-292). Recorded projects already had their pins synced by
+// refreshDetectedPinsAndWiring, and each wired session reconciles itself at SessionStart.
+async function finishUpdateWithoutWiring() {
+  log(`model-gateway: update leaves wiring as recorded and never wires the directory it runs from. To wire a project, run node "${resolveStableCommandPath()}" env --write-project inside it.`);
+  await writeCatalog().catch(() => { /* advisory only; the next ensure retries */ });
+  await statusReport();
 }
 
 function readCatalog() {
@@ -2449,7 +2476,7 @@ function loginSuccessMessage({ wired = isWired(), health = null } = {}) {
 }
 
 const commands = {
-  setup: () => setup(),
+  setup: () => setup({ preserveWiring: flag('--preserve-wiring') }),
   login: async () => {
     if (!fs.existsSync(PROXY_BIN)) die('proxy binary missing, run setup first');
     const mode = flag('--device') ? 'device' : 'login';
@@ -2567,6 +2594,7 @@ module.exports = {
   isWired,
   wiredMode,
   writeEnv,
+  finishUpdateWithoutWiring,
   migrateLegacyProjectSettings,
   effectiveBaseUrl,
   sessionStartWiringNotice,
