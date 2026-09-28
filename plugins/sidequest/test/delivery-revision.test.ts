@@ -224,7 +224,11 @@ function modeOnlyFixture() {
   const worktree = path.join(repo, '.claude', 'worktrees', 'agent-mode-candidate');
   git(['worktree', 'add', '-b', 'worktree-agent-mode-candidate', worktree, 'main'], repo);
   fs.chmodSync(path.join(worktree, MODE_FILE), 0o755);
-  const candidate = commitAll(worktree, 'make run.sh executable');
+  // core.fileMode=false on Windows CI makes a filesystem chmod invisible to git,
+  // so stage the mode bit explicitly instead of relying on `git add` to pick it up.
+  git(['update-index', '--chmod=+x', MODE_FILE], worktree);
+  git(['commit', '-m', 'make run.sh executable'], worktree);
+  const candidate = head(worktree);
 
   const { slug } = store.ensureProject(repo);
   const ticket = store.createTicket(slug, {
