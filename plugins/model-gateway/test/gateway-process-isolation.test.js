@@ -10,7 +10,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startGateway } = require('./support.js');
 const { commandIncludesFile, commandResultAsync, createProxyRecovery, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, processIsOwnedByThisInstall, probeTimeoutMs, recordedGatewayPid, resolvePortOwner, unknownPortOwnerReason } = require('../lib/process-supervision.js');
-const { startAll } = require('../lib/commands.js');
+const { PLUGIN_VERSION, startAll } = require('../lib/commands.js');
 const { canReplaceInstalledCliPath } = require('../lib/runtime.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
@@ -513,7 +513,7 @@ test('startup ownership leaves unknown and confirmed foreign listeners untouched
     recordLifecycle: (event, details) => lifecycle.push({ event, details }),
     resolveOwner: async () => owner,
     reapOrphans: () => calls.push('cleanup'),
-    shimReady: async () => false,
+    fetchHealth: async () => null,
     stopSupervisor: async () => calls.push('stop'),
     spawnSupervisor: () => calls.push('start'),
   });
@@ -537,7 +537,8 @@ test('startup leaves a healthy command-hidden listener running', async () => {
     proxyExists: () => true,
     reapOrphans: () => calls.push('cleanup'),
     resolveOwner: async () => ({ state: 'unknown', pid: 701, reason: 'unreadable-command' }),
-    shimReady: async () => true,
+    fetchHealth: async () => ({ ok: true, proxyRecovery: true, supervisorVersion: PLUGIN_VERSION }),
+    refreshCatalog: async () => {},
     spawnSupervisor: () => calls.push('start'),
     stopSupervisor: async () => calls.push('stop'),
   });

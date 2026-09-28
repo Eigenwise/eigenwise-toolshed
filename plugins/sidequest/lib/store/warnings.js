@@ -961,6 +961,8 @@ ${String(ticket?.description || "")}`;
     if (quantitativePremise) warnings.push(`Dispatch warning: ${quantitativePremise.replace("Planning-depth warning: ", "")}`);
     const worktreeWarning = dispatchState(ticket)?.worktreeWarning;
     if (worktreeWarning) warnings.push(worktreeWarning);
+    const crossBoundWorktree = dispatchState(ticket)?.crossBoundWorktree?.message;
+    if (crossBoundWorktree) warnings.push(`Dispatch warning: ${crossBoundWorktree}`);
     const pythonIoEncoding = dispatchState(ticket)?.pythonIoEncoding;
     if (pythonIoEncoding?.written) {
       warnings.push(`Dispatch update: wrote PYTHONIOENCODING=utf-8 to ${pythonIoEncoding.settingsPath}. Claude Code reads project settings env at session start, so it applies from the next session.`);

@@ -49,6 +49,7 @@ const { spawnDescription } = store;
 const { compileContextProjection } = require('./context-packet.js');
 const { canonicalPreparedDispatchExecutor } = require('./prepared-dispatch.js');
 const { verificationRequirement } = require('./kernel/verification.js');
+const { scopeKey } = require('./scope-match.js');
 
 type SyncOptions = { dir?: string; readOnlyDeniedTools?: any };
 type SyncResult = { written: number; removed: number; unchanged: number };
@@ -990,21 +991,23 @@ ${category.contract || '(No category-specific executor instructions were recorde
   ].join('\n\n');
 }
 
+function scopeListing(heading: string, files: string[]) {
+  return files.length ? `\n\n${heading}:\n${files.map((file) => `- ${file}`).join('\n')}` : '';
+}
+
+function scopeAddedBeyondDeclared(ticket: any, slug: string, declared: string[]) {
+  const declaredKeys = new Set(declared.map(scopeKey));
+  const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map(scopeKey));
+  const added = store.effectiveScope(slug, ticket).filter((file: string) => !declaredKeys.has(scopeKey(file)));
+  return scopeListing('Auto-paired tracked generated files (regenerate before verifying)', added.filter((file: string) => !alwaysKeys.has(scopeKey(file))))
+    + scopeListing('Board-added scope (board config alwaysInScope, not declared on this ticket; a dirty path here still blocks submit)', added.filter((file: string) => alwaysKeys.has(scopeKey(file))));
+}
+
 function taskAndScopeBody(ticket?: any, slug?: any) {
-  const category = ticket?.category || {};
   const declared = Array.isArray(ticket?.files) ? ticket.files : [];
   const declaredFiles = declared.length ? declared.map((file: any) => `- ${file}`).join('\n') : '(No files were declared.)';
-  const effectiveFiles = store.effectiveScope(slug, ticket);
-  const declaredKeys = new Set(declared.map((file: any) => process.platform === 'win32' ? String(file).toLowerCase() : String(file)));
-  const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map((file: any) => process.platform === 'win32' ? String(file).toLowerCase() : String(file)));
-  const generatedFiles = effectiveFiles.filter((file: any) => {
-    const key = process.platform === 'win32' ? String(file).toLowerCase() : String(file);
-    return !declaredKeys.has(key) && !alwaysKeys.has(key);
-  });
-  const scopedFiles = generatedFiles.length
-    ? `${declaredFiles}\n\nAuto-paired tracked generated files (regenerate before verifying):\n${generatedFiles.map((file: any) => `- ${file}`).join('\n')}`
-    : declaredFiles;
-  return executorTaskBody(ticket, category, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket), ticketContinuationPacket(ticket));
+  const scopedFiles = declaredFiles + scopeAddedBeyondDeclared(ticket, slug, declared);
+  return executorTaskBody(ticket, ticket?.category || {}, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket), ticketContinuationPacket(ticket));
 }
 
 function executorHandlesBody(ticket?: any, slug?: any) {
@@ -1094,7 +1097,7 @@ function withProjectIdentity(prompt?: any, projectPath?: any) {
   if (!text) throw new Error('Agent spawn prompt is required.');
   const project = String(projectPath || '').trim();
   if (!project) return text;
-  return `${text}\n\nDispatch board identity: --project "${project.replace(/"/g, '\\"')}"`;
+  return `${text}\n\nDispatch board identity: --project "${project.replace(/"/g, '\\"')}". Pass it as project on every board call: an unqualified ref resolves on the orchestrating session's board, and only calls naming your claim or worktree follow you to this one.`;
 }
 
 function quotedShellArgument(value?: any) {
