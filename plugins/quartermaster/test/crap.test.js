@@ -601,7 +601,9 @@ function lizardRow(file, name, complexity, start, end) {
   return `${end - start + 1},${complexity},10,1,${end - start + 1},"${name}@${start}-${end}@${file}","${file}","${name}","${name} ()",${start},${end}`;
 }
 
-function truncatedGridCsv(file) {
+// The gate may point lizard at a copy of the file rather than the file itself, so the fake names whatever it was pointed at.
+function truncatedGridCsv({ cwd }) {
+  const file = fs.readdirSync(cwd, { recursive: true }).map((entry) => String(entry).replaceAll('\\', '/')).find((entry) => /\.tsx?$/.test(entry));
   return `${[
     lizardRow(file, 'VirtualizedCardGrid', 1, 1, 6),
     lizardRow(file, '(anonymous)', 1, 12, 12),
@@ -624,7 +626,7 @@ test('a component whose lizard span stops inside its parameter list is measured 
   fs.writeFileSync(path.join(projectDir, 'coverage/lcov.info'), gridLcov('src/grid.tsx'), 'utf8');
   track(projectDir);
 
-  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => truncatedGridCsv('src/grid.tsx') });
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: truncatedGridCsv });
 
   const grid = report.functions.find((entry) => entry.function === 'VirtualizedCardGrid');
   assert.equal(grid.line, 1);
@@ -639,7 +641,7 @@ test('a body edit to a function lizard truncated at its parameter list counts as
   commitBase(projectDir);
   fs.writeFileSync(path.join(projectDir, 'src/grid.tsx'), GRID_SOURCE.replace('if (c.id) rows.push(c);', 'if (c.id) rows.unshift(c);'), 'utf8');
 
-  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => truncatedGridCsv('src/grid.tsx') });
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: truncatedGridCsv });
 
   assert.equal(report.checked, 1);
   assert.deepEqual(report.failures, []);
