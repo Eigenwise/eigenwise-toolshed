@@ -116,8 +116,17 @@ function startPinProbeServer() {
   });
 }
 
+// A test must never launch the user's real Claude Code: it runs with the test's
+// HOME but can still rewrite the real ~/.claude/settings.json, which is how a test
+// run clobbered a developer's settings on 28 Sep 2026. Tests that need a Claude
+// binary point CODEX_GATEWAY_CLAUDE_BIN at a fake one.
+function realClaudeRefusedUnderTest() {
+  return Boolean(process.env.NODE_TEST_CONTEXT) && !process.env.CODEX_GATEWAY_CLAUDE_BIN;
+}
+
 function claudeVersion() {
   return new Promise((resolve) => {
+    if (realClaudeRefusedUnderTest()) return resolve(null);
     const child = spawn(CLAUDE_BIN, ['--version'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: !WIN, shell: CLAUDE_BIN_IS_BATCH });
     let output = '';
     const timeout = setTimeout(() => { terminateProbe(child); resolve(null); }, PIN_PROBE_TIMEOUT_MS);
@@ -133,6 +142,7 @@ function claudeVersion() {
 
 function probeClaudeAlias(alias, endpoint, timeoutMs = PIN_PROBE_TIMEOUT_MS) {
   return new Promise((resolve) => {
+    if (realClaudeRefusedUnderTest()) return resolve(null);
     const probeTrafficControls = {
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       DISABLE_AUTOUPDATER: '1',
@@ -314,6 +324,6 @@ function ourBaseUrls() { return [DEFAULT_BASE_URL, COMPAT_BASE_URL]; }
 
 module.exports = {
   codexBaseFromId, comparePinVersions, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, pinLagNotice, pinProvenance, probeClaudeAlias, readPinOverrides,
+  isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, pinLagNotice, pinProvenance, probeClaudeAlias, readPinOverrides, realClaudeRefusedUnderTest,
   refreshDetectedPins, writePinOverrides,
 };
