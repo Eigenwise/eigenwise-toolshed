@@ -434,7 +434,6 @@ const tools = [
         worktreeBase: { type: "string", enum: ["auto", "origin-main", "local-main"], description: "Isolated-worktree base." },
         notIntegratedSalvageAgeHours: { type: "integer", minimum: 168, description: "Default 168 hours." },
         worktreeRecoveryRetentionAgeHours: { type: "integer", minimum: 1, description: "Hours, default 336." },
-        worktreeRecoveryRetentionMaxPerAgent: { type: "integer", minimum: 1, description: "Per agent, default 3." },
         autoApproveTestScope: { type: "boolean", description: "Auto-approve reachable test directories (default true)." },
         autoApproveScope: { type: "array", items: { type: "string" }, description: "Repo-relative auto-approved globs." },
         worktreeSetup: { type: ["string", "null"], description: "One-line command Sidequest runs after creating an isolated worktree; null clears it." },
@@ -467,7 +466,6 @@ const tools = [
       if (args.worktreeBase !== void 0) patch.worktreeBase = args.worktreeBase;
       if (args.notIntegratedSalvageAgeHours !== void 0) patch.notIntegratedSalvageAgeHours = args.notIntegratedSalvageAgeHours;
       if (args.worktreeRecoveryRetentionAgeHours !== void 0) patch.worktreeRecoveryRetentionAgeHours = args.worktreeRecoveryRetentionAgeHours;
-      if (args.worktreeRecoveryRetentionMaxPerAgent !== void 0) patch.worktreeRecoveryRetentionMaxPerAgent = args.worktreeRecoveryRetentionMaxPerAgent;
       if (args.autoApproveTestScope !== void 0) patch.autoApproveTestScope = args.autoApproveTestScope;
       if (args.autoApproveScope !== void 0) patch.autoApproveScope = args.autoApproveScope;
       if (args.worktreeSetup !== void 0) patch.worktreeSetup = args.worktreeSetup;

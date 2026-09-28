@@ -65,17 +65,22 @@ function callerWorktreePath(args) {
     return null;
   }
 }
+function worktreeBindsCaller(dispatch, callerWorktree) {
+  const recorded = String(dispatch.worktree || "").trim();
+  if (!recorded) return false;
+  const caller = callerWorktree();
+  return Boolean(caller) && worktrees.canonicalPath(recorded) === caller;
+}
+function claimNamesCaller(ticket, args) {
+  const by = String(args?.by || "").trim();
+  return Boolean(by) && ticket.claim?.by === by;
+}
 function boardBindsCaller(ticket, args, callerWorktree) {
   const dispatch = ticket?.dispatch;
   if (!dispatch) return false;
-  if (dispatch.sharedTree === false) {
-    const recorded = String(dispatch.worktree || "").trim();
-    if (!recorded) return false;
-    const caller = callerWorktree();
-    return Boolean(caller) && worktrees.canonicalPath(recorded) === caller;
-  }
-  const by = String(args?.by || "").trim();
-  return Boolean(by) && ticket.claim?.by === by;
+  if (dispatch.sharedTree !== false) return claimNamesCaller(ticket, args);
+  if (args?.worktree) return worktreeBindsCaller(dispatch, callerWorktree);
+  return claimNamesCaller(ticket, args) || worktreeBindsCaller(dispatch, callerWorktree);
 }
 function resolveLifecycleProject(projectArg, args, action) {
   const explicit = projectArg == null ? "" : String(projectArg).trim();
@@ -100,12 +105,6 @@ function runtimeSessionId() {
 }
 function sessionOf(args) {
   return runtimeSessionId() || args && String(args.session || "").trim() || null;
-}
-function controlPlaneIdentity(by, session) {
-  const explicitBy = String(by || "").trim();
-  if (explicitBy) return explicitBy;
-  const sessionId = String(session || runtimeSessionId() || "").trim();
-  return sessionId ? `orchestrator-${sessionId.slice(0, 12)}` : "control-plane";
 }
 function requireDispatchSession() {
   const sessionId = runtimeSessionId();
@@ -167,8 +166,8 @@ function pathList(paths) {
   const shown = all.slice(0, NO_OP_PATHS_SHOWN).join(", ");
   return all.length > NO_OP_PATHS_SHOWN ? `${shown} (+${all.length - NO_OP_PATHS_SHOWN} more)` : shown;
 }
-function provenNoOpCloseout(slug, ticket) {
-  const closeout = store.externalDeliverableCloseout(slug, ticket);
+function provenNoOpCloseout(slug, ticket, verify) {
+  const closeout = store.externalDeliverableCloseout(slug, ticket, verify);
   if (closeout.ok) return closeout;
   return { ok: false, detail: closeout.message };
 }
@@ -204,8 +203,8 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   remove: "",
   claim: "Claim before work; proceed only on ok:true.",
   dispatch: "Tree. token and spawn spec; retireOnly.",
-  done: "Finish; declared external needs current capture; commandless working-tree needs verify.",
-  release: "reason required; oracle handoff.",
+  done: "Finish; external/working-tree: pinned command needs capture; commandless needs verify.",
+  release: "reason/kind required; oracle handoff.",
   groomClose: "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; verifier replacement; reviewed interaction.",
   native_agent: "Agent spawn.",
   verdict: "",
@@ -814,7 +813,8 @@ function compactPulse(pulse) {
       state: pulse.dispatch.state,
       executor: pulse.dispatch.executor,
       agentName: pulse.dispatch.agentName,
-      outcome: pulse.dispatch.outcome
+      outcome: pulse.dispatch.outcome,
+      ...pulse.dispatch.submittedBy ? { submittedBy: pulse.dispatch.submittedBy } : {}
     },
     ...pulse.scope ? { scope: compactScope(pulse.scope) } : {}
   };
@@ -971,7 +971,6 @@ module.exports = {
   resolveLifecycleProject,
   runtimeSessionId,
   sessionOf,
-  controlPlaneIdentity,
   requireDispatchSession,
   workflowRecipe,
   requireBy,

@@ -4,6 +4,7 @@ import './_sidequest-install-fixture.js';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { creationGeneration } = require('./_creation-generation.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -132,7 +133,7 @@ function setupIsolatedDispatch(agentId: string) {
   const gitDirectoryValue = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
   const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
   worktreeLease.createCheckoutInstanceMarker(gitDirectory);
-  assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+  assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId, worktree).ok, true);
   return {
     project,
@@ -141,7 +142,10 @@ function setupIsolatedDispatch(agentId: string) {
     worktree,
     cleanup() {
       execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: project, windowsHide: true });
-      fs.rmSync(project, { recursive: true, force: true });
+      // Windows can report the just-removed worktree's directory as still busy for a
+      // moment after the process that used it as its cwd has already reported closed
+      // (SQ-2874); maxRetries/retryDelay is fs.rmSync's own facility for that.
+      fs.rmSync(project, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     },
   };
 }
@@ -179,7 +183,13 @@ test('full-suite capture serializes sibling captures and records the queue wait'
     assert.equal(waitedCapture.queuePosition, 2);
     assert.ok(waitedCapture.waitedForSlotMs >= 500, `waited ${waitedCapture.waitedForSlotMs}ms`);
   } finally {
-    fs.rmSync(project, { recursive: true, force: true });
+    // Both captures above ran as separate child processes with this directory as
+    // their own cwd. Node's 'close' event fires once their stdio pipes end, but on
+    // Windows the OS can hold the directory busy for a few more ms while that same
+    // just-closed process finishes tearing down (SQ-2874, reproduced under a loaded
+    // machine: EBUSY clears within one or two 100ms retries every time it fires).
+    // maxRetries/retryDelay is fs.rmSync's own facility for exactly this.
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -208,7 +218,7 @@ test('synchronous full-suite verification uses the capture slot', async () => {
     assert.ok(capture.waitedForSlotMs >= 500, `waited ${capture.waitedForSlotMs}ms`);
     assert.deepEqual(fs.readFileSync(observedSiblingCaptures, 'utf8').trim().split(/\r?\n/).sort(), ['0', '1']);
   } finally {
-    fs.rmSync(project, { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     fs.rmSync(captureSlotDirectory(project), { recursive: true, force: true });
   }
 });
@@ -775,7 +785,7 @@ test('(d) a working-tree-delivery ticket keeps its shared-checkout override unch
       // shared checkout, regardless of where the wrapper was invoked from.
       assert.equal(worktreeLease.canonicalPath(recorded.worktree), worktreeLease.canonicalPath(project));
     } finally {
-      fs.rmSync(outsideCwd, { recursive: true, force: true });
+      fs.rmSync(outsideCwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   } finally {
     fs.rmSync(project, { recursive: true, force: true });

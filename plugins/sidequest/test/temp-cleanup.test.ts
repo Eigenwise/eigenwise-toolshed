@@ -83,7 +83,11 @@ test('cleanup removes old roots, keeps recent roots, and reports reparse points'
   assert.equal(fs.existsSync(target), true);
   assert.equal(fs.existsSync(link), true);
 
-  fs.rmSync(link, { force: true });
+  // Node >= 24's rmSync refuses a symlink-to-directory without `recursive`
+  // (it would follow the link and delete oldRoot's sibling contents), while
+  // unlinkSync always removes just the link entry itself on every version
+  // and matches the platform's junction-removal semantics on Windows.
+  fs.unlinkSync(link);
 });
 
 test('cleanup records classification failures and continues scanning', () => {

@@ -152,14 +152,17 @@ function toolMutates(name?: any, args?: any) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === 'new_board_profile') return args.profile !== undefined;
   if (name === 'global_fallback') return args.model !== undefined || args.effort !== undefined;
-  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.generatedPairs !== undefined || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.worktreeBase !== undefined || args.notIntegratedSalvageAgeHours !== undefined || args.worktreeRecoveryRetentionAgeHours !== undefined || args.worktreeRecoveryRetentionMaxPerAgent !== undefined || args.autoApproveTestScope !== undefined || args.autoApproveScope !== undefined || args.worktreeSetup !== undefined || args.worktreeDependencyPaths !== undefined;
+  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.generatedPairs !== undefined || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.worktreeBase !== undefined || args.notIntegratedSalvageAgeHours !== undefined || args.worktreeRecoveryRetentionAgeHours !== undefined || args.autoApproveTestScope !== undefined || args.autoApproveScope !== undefined || args.worktreeSetup !== undefined || args.worktreeDependencyPaths !== undefined;
   return false;
 }
 
 function mutationQueueKey(name?: any, args?: any) {
   if (name === 'new_board_profile') return '<global>';
   if (GLOBAL_MUTATION_TOOLS.has(String(name)) && args.project == null) return '<global>';
-  return resolveProject(args.project).slug;
+  const board = resolveProject(args.project).slug;
+  // A commit runs the repository's hooks, which can take minutes; in the board-wide queue it held
+  // every other write on the board that long (GH-314). Its own board writes take the ticket lock.
+  return name === 'commit' ? `${board}\0commit\0${args.ref}` : board;
 }
 
 async function enqueueMutation<T>(board: string, operation: () => T | Promise<T>): Promise<T> {
@@ -285,8 +288,16 @@ function assertMutationFreshness(projectArg: unknown) {
   if (freshness.refusal) throw new Error(freshness.refusal);
 }
 
+function groomCloseArgs(tool: ToolDefinition, args: Record<string, unknown>) {
+  if (tool.name !== 'groomClose' || String(args.by || '').trim()) return args;
+  const sessionId = String(process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '').trim();
+  return sessionId ? Object.assign({}, args, { by: sessionId }) : args;
+}
+
 async function runTool(tool: ToolDefinition, rawArgs: any) {
-  const { args, aliases } = validateToolArguments(tool, rawArgs);
+  const validated = validateToolArguments(tool, rawArgs);
+  const args = groomCloseArgs(tool, validated.args);
+  const { aliases } = validated;
   if (!toolMutates(tool.name, args)) {
     const output = await tool.handler(args);
     return acknowledgeAliases(tool.name === 'context_page' ? output : boundedReadPayload(tool.name, output), aliases);
@@ -305,14 +316,12 @@ const ATTESTATION_VERIFY_CONTRACT = 'For attestation: `attestation: <attestation
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> = {
   context_page: {
     limit: 'UTF-8 bytes.',
-    expectedRevision: 'Revision.',
   },
   add: { complexity: 'Legacy score; why required.', verify: ATTESTATION_VERIFY_CONTRACT },
   claim: { force: 'Operator-only.' },
   update: { verify: ATTESTATION_VERIFY_CONTRACT },
   supersede_submission: { supersededBy: 'Repair ticket ref, not a commit.' },
   comments: {
-    full: 'Whole bodies.',
     since: 'Comment id or ISO timestamp.',
   },
   list: {
@@ -324,17 +333,16 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
     outputTail: 'Required blocker/contradiction output.',
   },
   story_log: { entry: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes.' },
-  category_edit: { fallbackModel: 'null clears fallback.' },
+  category_edit: { fallbackModel: 'null clears.' },
   dispatch: {
-    sharedTree: 'Tree.',
     reducedAgentSchema: 'Only when name/mode missing; hook needs agent_id+auto|bypass mode.',
-    recoveryEvidence: 'unbound or expired bound',
-    worktree: 'Checkout.',
+    recoveryEvidence: 'Unverified; preparer retires now, else latest signal grace; bound name only.',
   },
   integrate: { deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.' },
   groomClose: {
     deliveryCommit: 'Prepared integration target.',
     deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.',
+    recoveryEvidence: 'Unclaimed: preparing session retires now; others past deadline; CLI too.',
   },
   verdict: {
     outcome: 'Candidate, not reviewer prose.',

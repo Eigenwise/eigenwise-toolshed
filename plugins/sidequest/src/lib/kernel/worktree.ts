@@ -50,13 +50,6 @@ export type WorktreeLease = Readonly<WorktreeLeaseFacts & {
   observedCheckoutInstance: string | null;
 }>;
 export type LeaseDecision = Readonly<{ allowed: boolean; reason: string }>;
-export type LegacyWorktreeCleanupFacts = Readonly<{
-  registered: boolean;
-  clean: boolean;
-  oldEnough: boolean;
-  settled: boolean;
-}>;
-
 const CHECKOUT_INSTANCE_MARKER = 'sidequest-checkout-instance';
 
 function checkoutInstanceDigest(token: string): string {
@@ -275,14 +268,6 @@ export function worktreeCleanupDecision(lease: WorktreeLease, registeredWorktree
   if (lease.liveness.status !== 'terminal') return denied('Cleanup requires proven terminal liveness.');
   if (lease.provisioning === 'unknown') return denied('Cleanup refuses an unknown provisioning strategy.');
   return allowed('the terminal bound worktree is safe to clean.');
-}
-
-export function legacyWorktreeCleanupDecision(facts: LegacyWorktreeCleanupFacts): LeaseDecision {
-  if (!facts.registered) return denied('Legacy cleanup requires a canonical registered worktree.');
-  if (!facts.clean) return denied('Legacy cleanup refuses uncommitted changes.');
-  if (!facts.oldEnough) return denied('Legacy cleanup requires the minimum age.');
-  if (!facts.settled) return denied('Legacy cleanup requires a reachable or patch-equivalent revision.');
-  return allowed('the registered legacy worktree is clean, settled, and old enough.');
 }
 
 export function isCanonicalRegisteredWorktree(lease: WorktreeLease, registeredWorktrees: readonly string[]): boolean {

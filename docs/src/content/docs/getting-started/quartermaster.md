@@ -26,23 +26,52 @@ Setup reads the project, mines recent session history across your projects, asks
 
 Before it names a plugin in that plan, setup can check current sources for whether the plugin is still maintained, whether the description in the local catalog has gone stale, and whether something fits better, including something from a marketplace you have not added yet. Those lookups are bounded to the few candidates that would lead to an install, and searches use generic capability terms, so your project names and file paths stay out of the search engine's logs. With `WebSearch` and `WebFetch` turned off, Claude skips the check and labels the proposals unresearched rather than implying they were verified. What it reads informs the proposal; your approval is still what authorizes the install.
 
+### Host capabilities
+
+When work needs a coding-agent feature such as delegation, Quartermaster first identifies the host
+from available evidence. It separately checks native support, installed extensions, and tools that are
+actually usable in the current session. A working native or live capability needs no duplicate
+extension. An installed extension that has not loaded calls for the host's activation step and a live
+check, not another install. A local catalog only describes the installations it actually inventories;
+it cannot answer what another host has installed.
+
+If the capability is absent, Quartermaster checks the identified host's official extensions and
+examples before suitable third-party packages. It labels an example as source material that may need
+local adaptation, and only presents an install command when the checked source supplies one that fits
+the host. Each installation or configuration change still needs explicit approval, followed by the
+host's reload or restart boundary and a live-usability check. Missing host or tool evidence stays
+uncertain instead of assuming a Claude Code command or package ecosystem.
+
+For Pi coding agent, the checked upstream [Subagent Example](https://github.com/earendil-works/pi/tree/main/packages/coding-agent/examples/extensions/subagent)
+launches separate Pi processes and documents linking the extension, agent definitions, and workflow
+prompts into Pi configuration directories. That makes it a local-fit example, not a universal
+marketplace package. Quartermaster can recommend researching it for a proven delegation gap without
+claiming Quartermaster runs on Pi.
+
 Setup installs the approved plugins and writes the approved project files, then pauses at the activation boundary. Run `/reload-plugins`, or restart Claude Code when the change affects the process environment, and tell Claude `continue`. Setup verifies the selected plugins and project configuration after that boundary.
 
 ### Keep complex code tested
 
 Setup proposes a CRAP gate for a codebase. CRAP combines a function's branching complexity and test
-coverage, so a large function with little coverage gets a high score. The default ceiling is 6: keep
-each function small or cover it well.
+coverage, so a large function with little coverage gets a high score. The fixed threshold is 6, and
+6 fails. It checks every new or modified function, while untouched legacy functions stay out of scope.
 
 When you approve it, setup writes `.claude/quartermaster/crap.json` and a live rule that runs:
 
 ```text
-node "<quartermaster plugin root>/bin/quartermaster.js" crap --project "<project>"
+node "<quartermaster plugin root>/bin/quartermaster.js" crap
 ```
 
-It also shows the coverage command for your stack and asks you to pick the threshold. The gate needs
+The gate measures the Git checkout it runs in, so a linked worktree is measured in place instead of
+the main checkout, and a run from a subdirectory still reads the project's `crap.json`. Each run gives
+its coverage command a fresh `QUARTERMASTER_COVERAGE_DIR` to write `lcov.info` into, so concurrent runs
+on one checkout do not read each other's coverage. A coverage command that exits 0 without writing
+fresh coverage exits 2 instead of scoring stale results.
+
+It also shows the coverage command for your stack. The gate needs
 [lizard](https://github.com/terryyin/lizard) for complexity measurement. Setup never installs it. Exit
-2 means a prerequisite or coverage input is missing. Follow the printed hint, then run the gate again.
+2 means a prerequisite or measurement input is missing, including lizard finding zero functions for a
+file that has function-like source tokens. Follow the printed hint, then run the gate again.
 
 When setup wires Model Gateway or Sidequest routing, Quartermaster can offer the optional `325000` `autoCompactWindow` setting for a consistent Codex compaction point. Setup asks before writing it. If user or project settings already has a value, it reports which one wins and preserves that value.
 
@@ -63,6 +92,8 @@ Or run the maintenance skills directly:
 > /quartermaster:toolshed-doctor
 
 The requested updater reads Claude Code's installed-plugin registry and updates every active Eigenwise Toolshed install at its recorded user, project, or local scope and project path. It can update installs in other recorded projects, not only the project where you invoked it. Third-party plugins and marketplaces are left alone. Before it changes anything, it runs the configured Claude Code command once. The default uses `claude` from `PATH`; if Claude Code is installed elsewhere, retry with `--claude <absolute claude.exe path>`. An unavailable command stops the run before marketplace, plugin, or Model Gateway updates.
+
+Updating never wires a project. The Model Gateway step refreshes Claude alias pins only in projects already recorded as wired, and only when a pin value changed, so an update that changes nothing touches no settings file. The directory you start the updater from stays unwired unless you wire it yourself with Model Gateway's `env --write-project`.
 
 Freshness hooks are advisory. They report cached availability and loaded-version mismatches, and they point to `/quartermaster:update-toolshed`; they do not install, restart, or replace the requested updater. Marketplace auto-update is optional and must be enabled for the Eigenwise Toolshed marketplace in Claude Code. An open session still needs `/reload-plugins` after plugin code changes. Restart Claude Code when process-level gateway wiring or model discovery changed.
 
@@ -86,13 +117,15 @@ The miner reads local transcript files and emits a bounded aggregate. The active
 - the two directory segments nearest touched files, with scratch and opaque paths removed;
 - counts for prompts, tool calls, errors, denials, interrupts, and corrections;
 - a denial meaning that identifies `permission-rule` as a host-reported policy block, not proof of
-  whether a permission rule or PreToolUse hook blocked the call;
+  whether a permission rule or PreToolUse hook blocked the call, except when the hook's own stderr
+  is present in the transcript: that case is classified `hook_block`, counted separately, and left
+  out of the denial total so one hook-heavy session cannot drown out real denials;
 - repeated command names, plugin, skill, and MCP attribution, and fetched hostnames; and
 - short user-correction or denial evidence quotes clipped to 300 characters; leading harness blocks are excluded from correction evidence.
 
 Raw transcript files are never loaded into model context, and the resupply skill is forbidden from opening them. The default pass mines the current project. Setup explicitly requests the all-projects summary, while resupply only uses `--all-projects` for a global pass. A host policy label alone never justifies a permission allowlist or hook change; existing approval requirements still apply.
 
-Automatic permission learning stays off until the project opts in with `enable-auto-allowlist`; until then, resupply only reports what it would add. It only considers a fingerprint approved at least three times with no denial, and it never covers a destructive command such as `rm` or `git push --force`. It also excludes bare `PowerShell` rules as too broad, and it does not create scoped PowerShell rules or remove older bare `PowerShell` entries, which need user review. A manually approved scoped rule remains a user decision, and the opt-in marker and every learned rule stay in the project's own `.claude/settings.local.json`, never a user or global setting.
+Automatic permission learning stays off until the project opts in with `enable-auto-allowlist`; until then, resupply only reports what it would add. It only considers a fingerprint approved at least three times with no denial and no hook block, and it never covers a destructive command such as `rm` or `git push --force`. It also excludes bare `PowerShell` rules as too broad, and it does not create scoped PowerShell rules or remove older bare `PowerShell` entries, which need user review. It vetoes several other classes of rule that would be too broad however often approved: a shell control keyword or subshell opener (`for`, `if`, `{`); a compound command whose separator or redirection (`;`, `&`, `|`, `<`, `>`) proves the rest of the command was cut off the fingerprint; a `cd` target, other argument, or command substitution (`$VAR`, `$(...)`, a backtick) that only resolves at runtime; a wrapper (`nohup`, `timeout`, `nice`, `setsid`, `stdbuf`, `command`, `builtin`, `watch`, `script`, `chroot`), an interpreter, or `source`/`.` that runs caller-supplied code; and a version-pinned plugin cache path or per-session scratchpad path that goes stale on its own. A manually approved scoped rule remains a user decision, and the opt-in marker and every learned rule stay in the project's own `.claude/settings.local.json`, never a user or global setting.
 
 The skill ranks findings in this order: a missing measurement, manual work, existing capabilities that underperform, knowledge being re-derived, then setup friction. It first checks whether an existing project capability can meet the goal or be improved, and only proposes a new capability when the evidence says the existing choices do not fit. It keeps what works and changes a concrete weakness, never the workspace for novelty. Before it offers a change, it identifies the benefit, smallest approach, and boundary; focused research is only for an unknown that could change that call. It never starts a resupply pass without current or standing approval. It proposes at most seven findings one at a time with evidence and an exact change. A rejected recommendation records the user's own no to a proposal actually shown to them, and it does not return in that project; an accepted one is checked in a later pass. A finding the skill itself decides to skip, rather than one the user turned down, is left unrecorded or marked deferred instead of rejected.
 

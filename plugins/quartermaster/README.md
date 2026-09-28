@@ -42,7 +42,9 @@ The aggregate is more than counts. It can include:
 - the two directory segments nearest touched files, with scratch and opaque paths removed;
 - counts for prompts, tool calls, errors, denials, interrupts, and corrections;
 - a denial meaning that identifies `permission-rule` as a host-reported policy block, not proof of
-  whether a permission rule or PreToolUse hook blocked the call;
+  whether a permission rule or PreToolUse hook blocked the call, except when the hook's own stderr
+  is present in the transcript: that case is classified `hook_block`, counted separately, and left
+  out of the denial total so one hook-heavy session cannot drown out real denials;
 - repeated command names, plugin, skill, and MCP attribution, and fetched hostnames; and
 - short clipped user-correction or denial evidence, up to 300 characters per quote; leading harness blocks are excluded from correction evidence.
 
@@ -60,12 +62,14 @@ node bin/quartermaster.js status [--project <path>]
 node bin/quartermaster.js catalog [--query <terms>] [--installed]
 node bin/quartermaster.js decisions list
 node bin/quartermaster.js decisions add --title <t> --fingerprint <f> --status applied|rejected|deferred ...
+node bin/quartermaster.js decisions update <id> --status applied|rejected|deferred
+node bin/quartermaster.js decisions remove <id>
 node bin/quartermaster.js verify [--project <path>]
 node bin/quartermaster.js mark-resupply [--project <path>]
 node bin/quartermaster.js decline-resupply [--project <path>]
 node bin/quartermaster.js allowlist [--project <path>] [--days 30] [--sessions 40] [--blocked]
 node bin/quartermaster.js enable-auto-allowlist [--project <path>]
-node bin/quartermaster.js crap [--project <path>] [--max 6] [--ratchet <git-ref>] [--lcov <path>] [--complexity <lizard.csv>] [--coverage-command "<cmd>"] [--json]
+node bin/quartermaster.js crap [--project <path>] [--max 6] [--base <git-ref>] [--lcov <path>] [--complexity <lizard.csv>] [--coverage-command "<cmd>"] [--json]
 ```
 
 Everything prints JSON except `crap`. Node standard library only, no dependencies, cross-platform.
@@ -81,11 +85,11 @@ Settings come from `.claude/quartermaster/crap.json`, and flags override it:
   "sources": ["src"],
   "exclude": ["**/*.test.*"],
   "max": 6,
-  "ratchet": "main"
+  "base": "main"
 }
 ```
 
-Without `ratchet` every function has to stay under `max`. With it, functions in files changed against `git merge-base HEAD <ratchet>` may not get worse than they were, new functions still have to clear `max`, and the summary reports how many pre-existing functions are already at or above it.
+Without `base` every function has to stay under `max`. With it, functions in files changed against `git merge-base HEAD <base>` may not get worse than they were, new functions still have to clear `max`, and the summary reports how many pre-existing functions are already at or above it. `--ratchet` and the config key `ratchet` still work as a deprecated alias for `--base`/`base`; using either prints a one-line warning.
 
 Exit codes: 0 the gate passed, 1 the gate failed, 2 a prerequisite is missing (lizard is not resolvable, there is no lcov file, or the coverage command failed). Quartermaster looks for `lizard` on PATH, then `uvx lizard`, then `pipx run lizard`; it never installs it, it prints the install hint (`uv tool install lizard`, `pipx install lizard`, or `pip install lizard`).
 

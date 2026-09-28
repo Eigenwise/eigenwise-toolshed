@@ -164,6 +164,13 @@ function shellCannotParsePosixSyntax(logPath: string, exitCode: number, shell: S
   return /^'!' is not recognized as an internal or external command,$/m.test(fs.readFileSync(logPath, 'utf8'));
 }
 
+// GH-247: the board spawns verifiers from its MCP server, which Claude Code starts with the Sidequest
+// plugin's CLAUDE_PLUGIN_ROOT. A project suite that locates its own files through that variable would
+// read the Sidequest install instead.
+export function verifierEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(environment).filter(([name]) => !/^CLAUDE_PLUGIN_/i.test(name)));
+}
+
 function processTimedOut(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ETIMEDOUT';
 }
@@ -206,7 +213,7 @@ export function runProcessVerification(requirement: VerificationRequirement, opt
     try {
       outcome = spawnSync(shell.executable, shell.arguments, {
         cwd: options.cwd || process.cwd(),
-        env: options.environment,
+        env: verifierEnvironment(options.environment || process.env),
         windowsHide: true,
         timeout: timeoutMilliseconds,
         stdio: ['ignore', log, log],

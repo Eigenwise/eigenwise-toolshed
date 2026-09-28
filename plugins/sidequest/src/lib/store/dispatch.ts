@@ -49,7 +49,7 @@ function requirementsMatch(left: any, right: any) {
 }
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimGraceMs, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
 
   function syncLiveDispatchVerification(slug?: any, ticket?: any, amendment?: any) {
     const state = dispatchState(ticket);
@@ -124,6 +124,58 @@ function ticketEvidenceDirectory(slug?: any, ref?: any, projectPath?: any) {
   return insideRepository
     ? path.join(path.dirname(path.resolve(repository)), '.sidequest-verification', safeSlug, safeRef)
     : directory;
+}
+
+// Board-owned verification evidence is not repository content: dispatch creates the directory above,
+// the briefing sends executors there, and on a machine that keeps ~/.claude in a dotfiles repository
+// the whole subtree sits inside a Git checkout no dispatch holds a lease for. A write lease answers
+// for a repository, so letting the isolation guard resolve that enclosing checkout refused the board's
+// own directory while the same write through Bash, which no hook gates, went through (GH-163).
+//
+// The exemption is keyed to the caller's own resolved dispatch rather than to a path shape. A shape
+// match on `projects/<anything>/verification/**` cannot tell a registered ticket's directory from an
+// invented slug, and it cannot recognize ticketEvidenceDirectory's relocated form at all, since that
+// form lands beside the project repository rather than under the home. Comparing against the
+// evidenceDirectory the store actually recorded for the matched dispatch answers both at once: only
+// that one directory, wherever prepareDispatch resolved it to, is exempt.
+//
+// A dedicated lookup rather than a field folded into dispatchIsolationExpectation: that function
+// already scans every project and ticket to answer a much bigger question (worktree and lease facts
+// for every candidate dispatch), and this only ever needs one ticket's recorded directory once the
+// guard already knows which dispatch it is asking about.
+function dispatchEvidenceDirectory(project?: any, ref?: any) {
+  const state = dispatchState(getTicket(project, ref));
+  return state && state.evidenceDirectory ? String(state.evidenceDirectory) : null;
+}
+
+function segmentsUnder(root: string, target: string): string[] {
+  const relative = path.relative(canonicalPath(root), canonicalPath(path.resolve(target))).replace(/\\/g, '/');
+  // path.relative returns exactly '..' (no trailing slash) for root's immediate parent, so matching
+  // only the '../' prefix let that one directory - here, the verification directory itself, one level
+  // above any ticket's evidence directory - through as if it were nested inside root.
+  const outside = !relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative);
+  return outside ? [] : relative.split('/');
+}
+
+function trimmedString(value?: any): string {
+  return String(value || '').trim();
+}
+
+// `canonicalPath` realpaths only the longest existing prefix, so a symlink at the final path
+// component that does not resolve to anything yet stays unresolved and containment above would follow
+// it out of the evidence directory once the write actually creates something there. Refusing whenever
+// the requested path is itself a symlink, dangling or not, closes that; a live symlink pointing outside
+// the directory was already refused by the containment check.
+function boardVerificationEvidencePath(target?: any, evidenceDirectory?: any) {
+  const requested = trimmedString(target);
+  const root = trimmedString(evidenceDirectory);
+  if (!requested || !root) return false;
+  try {
+    if (fs.lstatSync(requested).isSymbolicLink()) return false;
+  } catch (_) {
+    // Not there yet: the common case is exactly the write that will create it.
+  }
+  return segmentsUnder(root, requested).length > 0;
 }
 
 function writeDispatchTokenFile(ticket?: any) {
@@ -253,12 +305,17 @@ function repositoryIdentity(cwd?: any) {
 // spawning checkout, the lease never binds, and the executor dies before it
 // starts (SQ-2570, SQ-2884). Refuse that case while the caller can still wait or
 // choose sharedTree. Linked worktrees of the project share its common git dir, so
-// they are NOT a mismatch; that case is the existing stale-cwd warning's.
-function isolatedTreeRuntimeRefusal(ticket?: any, projectPath?: any, runtimeCwd?: any, slug?: any, sessionId?: any) {
-  if (!runtimeCwd || !projectPath) return null;
+// they are NOT a mismatch; that case is the existing stale-cwd warning's. A runtime
+// outside any repository is a mismatch too: the hook has no checkout to fall back
+// to there, so it would crash after the launch was recorded (GH-269).
+function runtimeOutsideProjectRepository(projectPath?: any, runtimeCwd?: any) {
+  if (!runtimeCwd || !projectPath) return false;
   const project = repositoryIdentity(projectPath);
-  const runtime = repositoryIdentity(runtimeCwd);
-  if (!project || !runtime || project === runtime) return null;
+  return Boolean(project) && project !== repositoryIdentity(runtimeCwd);
+}
+
+function isolatedTreeRuntimeRefusal(ticket?: any, projectPath?: any, runtimeCwd?: any, slug?: any, sessionId?: any) {
+  if (!runtimeOutsideProjectRepository(projectPath, runtimeCwd)) return null;
   const competing = launchedIsolatedSessionProjects(String(sessionId || '').trim(), slug);
   if (!competing.length) return null;
   return `prepare dispatch: refused ${ticket.ref}; its project ${projectPath} is a different repository from this session's checkout ${runtimeCwd}, and this session already owns launched isolated dispatches on another board (${competing.map((entry: any) => entry.path).join(', ')}). WorktreeCreate follows the session id to one board, so with several live it cannot tell which ticket it is creating for and would cut this worktree from the wrong repository. Dispatch ${ticket.ref} once those are terminal, leaving ${projectPath} as this session's only isolated board. sharedTree:true stays available but runs the executor and its commit in ${runtimeCwd}; only its verification is redirected to ${projectPath}.`;
@@ -573,66 +630,212 @@ function pulseDispatchState(state?: any) {
 // message asserting it was bound, claimed, checkpointed, or terminal when it was none of those.
 const PRE_RUNTIME_DISPATCH_OUTCOMES = new Set(['prepared', 'launched']);
 
-function supersedableUnboundAttempt(ticket?: any, state?: any) {
+// Every dispatch-state timestamp a RUNTIME can produce before its first claim, newest wins; the eighth
+// signal is its own board writes, which live on the ticket rather than here. Measuring the
+// grace from `boundAt` alone retired executors that were demonstrably alive: SubagentStart stamps it
+// before the model's first turn, so a slow gateway turn, a briefing fetch, or a pre-claim skill load all
+// happen inside a window that counted as silence (SQ-2932 finding 1). `preparedAt` is deliberately absent:
+// it is the board stamping its own token, not a runtime saying anything, and an attempt that produced none
+// of these has nothing alive to protect.
+const PRE_CLAIM_RUNTIME_SIGNALS: ReadonlyArray<readonly [string, string]> = [
+  ['launchedAt', 'launch recorded'],
+  ['worktreeBoundAt', 'worktree creation started'],
+  ['worktreeCreationCompletedAt', 'worktree checkout recorded'],
+  ['worktreeProvisionedAt', 'worktree provisioning finished'],
+  ['boundAt', 'runtime bound'],
+  ['briefedAt', 'briefing fetched'],
+  ['claimedAt', 'claim recorded'],
+];
+
+// The eighth signal, and the only one the runtime produces with its own hands instead of a hook: a board
+// write. Two bound-unclaimed executors were posting comments while all seven stamps were two hours old, and
+// retireOnly and groomClose retired both mid-write (SQ-2953 finding 2).
+//
+// The launcher session is the trust boundary, and on its own it is far too wide: fan-out siblings and the
+// orchestrator all write on that one session, and the MCP transport carries no per-agent identity, so
+// matching the session alone let the orchestrator's own progress comments hold a dead attempt open forever
+// (SQ-2959 finding 1). So a comment speaks for the runtime only when it arrived on the launcher session the
+// dispatch recorded, on this attempt's own ticket, after its launch, before any claim, and under the exact
+// runtime name SubagentStart bound. A same-session caller that deliberately writes under that bound name is
+// trusted as that runtime; any other `by` - the orchestrator's identity included - is somebody else. An
+// attempt whose bind recorded only an agent id has no name to match, so no board write can speak for it.
+// After a claim the claim liveness rules take over and this stops being consulted at all.
+function lastAttributedBoardWriteAt(ticket?: any, state?: any) {
+  const sessionId = String(state?.sessionId || '').trim();
+  // Exact means byte-for-byte: a `by` that differs only by whitespace is somebody else (SQ-2964).
+  const agentName = typeof state?.agentName === 'string' ? state.agentName : '';
+  const launchedAt = Date.parse(state?.launchedAt);
+  if (!sessionId || !agentName.trim() || !Number.isFinite(launchedAt)) return null;
+  if (state.claimedAt || ticket?.claim?.by) return null;
+  let latest: number | null = null;
+  for (const comment of Array.isArray(ticket?.comments) ? ticket.comments : []) {
+    if (String(comment?.sourceSession || '').trim() !== sessionId) continue;
+    if (comment?.by !== agentName) continue;
+    const at = Date.parse(comment?.at);
+    if (!Number.isFinite(at) || at < launchedAt) continue;
+    if (latest === null || at > latest) latest = at;
+  }
+  return latest;
+}
+
+function lastRuntimeSignalAt(ticket?: any, state?: any): { at: number; label: string } | null {
+  let latest: { at: number; label: string } | null = null;
+  for (const [field, label] of PRE_CLAIM_RUNTIME_SIGNALS) {
+    const at = Date.parse(state?.[field]);
+    // An unparsable stamp is one missing signal, never a NaN that poisons the whole comparison.
+    if (!Number.isFinite(at)) continue;
+    if (!latest || at >= latest.at) latest = { at, label };
+  }
+  const wroteAt = lastAttributedBoardWriteAt(ticket, state);
+  if (wroteAt !== null && (!latest || wroteAt >= latest.at)) latest = { at: wroteAt, label: 'board write recorded' };
+  return latest;
+}
+
+// WorktreeCreate records its completed checkout identity BEFORE it runs provisioning, and a cold `npm ci`
+// runs for minutes after that with nothing else reaching the board, so neither the reservation nor the
+// completion proves the hook is finished. Only the provisioning stamp does, or SubagentStart binding a
+// runtime, which cannot happen until the hook returns (SQ-2932 finding 2).
+function worktreeProvisioningInFlight(state?: any) {
+  return Boolean(state?.worktreeBindingSource === 'worktree-create' && state.worktree
+    && !state.worktreeProvisionedAt && !state.boundAt);
+}
+
+// THE retirement authority. Every evidence path - prepareDispatch, retireOnly, clearUnclaimedDispatch,
+// pulse, the CLI and the refusal text - asks this and nothing else when an unclaimed attempt becomes
+// retirable, so the printed deadline is always the one the gate uses. It never returns null: three
+// reviews in a row found a caller that had invented its own answer for the missing case (SQ-2949).
+function unclaimedRetirement(ticket?: any, state?: any, now = Date.now()) {
+  const signal = lastRuntimeSignalAt(ticket, state);
+  const provisioning = worktreeProvisioningInFlight(state);
+  if (!signal) {
+    // Nothing alive ever reported in. Falling back to the board's own prepare stamp keeps the instant
+    // stable across repeated calls while leaving it in the past, which is the "retirable at once" the
+    // refusal text and the MCP description have always promised.
+    const preparedAt = Date.parse(state?.preparedAt);
+    return {
+      retirableAt: Number.isFinite(preparedAt) ? preparedAt : now,
+      signal: null,
+      provisioning,
+      reason: 'no_readable_signal' as const,
+    };
+  }
+  // A bound runtime's FIRST action is its tokened claim, so an attempt silent for a whole claim grace is
+  // not winding down, it is gone. An in-flight WorktreeCreate is the exception: the board cannot tell a
+  // cancelled hook from a running install, so it only ever reaches the idle backstop.
+  return provisioning
+    ? { retirableAt: signal.at + claimIdleMs(), signal, provisioning, reason: 'idle_backstop' as const }
+    : { retirableAt: signal.at + claimGraceMs(), signal, provisioning, reason: 'grace' as const };
+}
+
+// The deadline protects a runtime still starting from anyone who cannot see it. The session that prepared the
+// attempt spawned it, so it holds what the board never gets for a launch that dies before its first tool call:
+// the host's failure report, or the Agent call returning with no claim. Its evidence retires at once; every
+// other caller still waits for the deadline (SQ-3110, SQ-3071).
+function preparingSessionAttests(state?: any, sessionId?: any) {
+  const caller = String(sessionId || '').trim();
+  return Boolean(caller) && caller === String(state?.preparedBy?.sessionId || '').trim();
+}
+
+// The shape half of the decision: an attempt nobody claimed, checkpointed or ended. Whether it is retirable
+// YET is the authority's call, never this predicate's.
+function unclaimedEvidenceAttempt(ticket?: any, state?: any) {
   return Boolean(
     state
+    && ticket?.dispatchNonce
     && PRE_RUNTIME_DISPATCH_OUTCOMES.has(state.outcome)
     && !state.terminalAt
-    && !state.boundAt
-    && !state.agentId
     && !state.claimedAt
-    && !(ticket?.claim && ticket.claim.by)
-    && !ticket?.checkpoint
-    && ticket?.dispatchNonce,
+    && !ticket.claim?.by
+    && !ticket.checkpoint,
   );
 }
 
-// A bound runtime's FIRST action is its tokened claim, so a bound attempt that has not claimed within the
-// claim-idle backstop is not winding down, it is gone. WorktreeCreate has an earlier terminal fact: once it
-// reserved a checkout but could not record that checkout's identity, the hook was interrupted before a runtime
-// could claim. Recovery evidence must retire that attempt immediately rather than wait for an unrelated sweep.
-function strandedBoundAttempt(ticket?: any, state?: any) {
-  if (!state || !ticket?.dispatchNonce || !PRE_RUNTIME_DISPATCH_OUTCOMES.has(state.outcome)) return false;
-  if (state.terminalAt || state.claimedAt || ticket.claim?.by || ticket.checkpoint) return false;
-  if (state.worktreeBindingSource === 'worktree-create' && state.worktree && !state.worktreeCreationCompletedAt) return true;
-  const boundMs = Date.parse(state.boundAt);
-  return Number.isFinite(boundMs) && Date.now() - boundMs >= claimIdleMs();
+// An attempt that never reached a runtime at all, which is a launch that never arrived rather than a
+// stranded one. A WorktreeCreate holding the checkout counts as reached: the hook is the runtime.
+function unboundEvidenceAttempt(state?: any) {
+  return Boolean(state && !state.boundAt && !state.agentId && !worktreeProvisioningInFlight(state));
 }
 
-const EVIDENCE_SUPERSEDED_FAILURE_SHAPES = new Set(['unclaimed_launch_superseded', 'stranded_bound_launch_superseded']);
-
-function evidenceRetirableAttempt(ticket?: any, state?: any) {
-  return supersedableUnboundAttempt(ticket, state) || strandedBoundAttempt(ticket, state);
+function evidenceRetirableAttempt(ticket?: any, state?: any, now = Date.now(), sessionId?: any) {
+  if (!unclaimedEvidenceAttempt(ticket, state)) return false;
+  return preparingSessionAttests(state, sessionId) || now >= unclaimedRetirement(ticket, state, now).retirableAt;
 }
 
-function describeMinutes(ms: number) {
-  const minutes = Math.max(1, Math.round(ms / 60000));
+// A stop hook that beat the evidence to it already retired the attempt, so the same recovery call has nothing
+// left to do rather than a reason to refuse (GH-69: the evidence call had no window in that shape).
+function terminalUnclaimedAttempt(ticket?: any, state?: any) {
+  return Boolean(state?.terminalAt && !ticket?.dispatchNonce && !ticket?.claim?.by && !pendingSubmission(ticket));
+}
+
+function preparingSessionClause(state?: any) {
+  const preparingSession = String(state?.preparedBy?.sessionId || '').trim();
+  return preparingSession
+    ? `The session that prepared it (${preparingSession}) can retire it now with that evidence: it spawned the runtime, so the host's failure report or the Agent call returning without a claim is proof the board never gets.`
+    : 'No preparing session was recorded, so evidence waits for the deadline.';
+}
+
+// Every refusal that meets an attempt nobody claimed names this one recovery, never a release (there is no
+// claim holder) and never TaskStop (the host has already ended the runtime or will on its own).
+function unclaimedAttemptRecoveryGuidance(ticket?: any, state?: any) {
+  if (!unclaimedEvidenceAttempt(ticket, state)) return '';
+  const ref = ticket.ref;
+  return ` Nobody claimed this attempt, so there is no claim to release. The one recovery is recovery evidence: close it with \`groomClose ${ref} --recoveryEvidence "<the host's failure report>"\` (add \`--deliveryCommit <sha> --deliveryMethod manual\` for work landed by hand, reachable from the recorded integration branch), which retires the attempt in the same call, or retire it on its own with \`sidequest dispatch ${ref} --recovery-evidence "<that same evidence>" --retire-only\` (MCP \`recoveryEvidence\` with \`retireOnly: true\`). ${preparingSessionClause(state)} From any other session both refuse with the countdown to the retirement deadline.`;
+}
+
+function minuteCount(minutes: number) {
   return `${minutes} minute${minutes === 1 ? '' : 's'}`;
 }
 
-function boundRuntimeBlocker(state?: any) {
-  if (state?.worktreeBindingSource === 'worktree-create' && state.worktree && !state.worktreeCreationCompletedAt) {
-    return 'bound by WorktreeCreate without a completed checkout identity and is immediately retirable on recovery evidence';
-  }
-  const boundMs = Date.parse(state?.boundAt);
-  if (!Number.isFinite(boundMs)) return 'bound to a runtime';
-  const waited = Date.now() - boundMs;
-  return `bound to a runtime ${describeMinutes(waited)} ago and still unclaimed, which becomes retirable on evidence in ${describeMinutes(claimIdleMs() - waited)} unless its terminal hook fires first`;
+// Elapsed rounds down and remaining rounds up, so the two halves of the refusal always sum to the grace
+// rather than each claiming a minute the other already spent, and the countdown only reads "1 minute"
+// inside the final minute. The old pair rounded and clamped both halves at one minute, which reported
+// "60 minutes" the instant an attempt bound and "1 minute" for every minute after the deadline passed.
+function describeElapsed(ms: number) {
+  return minuteCount(Math.max(0, Math.floor(ms / 60000)));
 }
 
-function evidenceSupersessionBlocker(ticket?: any, state?: any) {
-  // Retiring an attempt clears its token, so repeating the evidence command answered "not an active attempt"
-  // while describing the exact case that had just been retired (SQ-2537). Name the retirement instead.
-  if (state?.terminalAt && EVIDENCE_SUPERSEDED_FAILURE_SHAPES.has(state.failureShape)) {
-    return `already retired on recovery evidence at ${state.terminalAt}, so dispatch again without recoveryEvidence to prepare the replacement`;
+function describeRemaining(ms: number) {
+  return minuteCount(Math.ceil(ms / 60000));
+}
+
+function unclaimedRuntimeBlocker(ticket?: any, state?: any, now = Date.now()) {
+  const boundMs = Date.parse(state?.boundAt);
+  const waited = Number.isFinite(boundMs)
+    ? `bound to a runtime ${describeElapsed(now - boundMs)} ago and still unclaimed, which`
+    : worktreeProvisioningInFlight(state)
+      ? 'still inside the WorktreeCreate that reserved its checkout, and unclaimed, which'
+      : 'unbound and unclaimed, which';
+  const retirement = unclaimedRetirement(ticket, state, now);
+  // Naming the signal is what stops an operator reading the deadline as arbitrary: it is the difference
+  // between "bound 20 minutes ago, still not retirable" and "its briefing fetch was 2 minutes ago".
+  const measured = retirement.signal
+    ? `last runtime signal: ${retirement.signal.label} at ${new Date(retirement.signal.at).toISOString()}`
+    : 'no runtime ever recorded a signal on this attempt, so its own prepare stamp is the deadline';
+  const window = retirement.provisioning
+    ? 'its WorktreeCreate has not recorded finished provisioning, so only the idle backstop applies'
+    : 'the claim grace runs from that signal';
+  const remaining = retirement.retirableAt - now;
+  if (remaining > 0) {
+    return `${waited} becomes retirable on evidence at ${new Date(retirement.retirableAt).toISOString()}, in ${describeRemaining(remaining)}, unless its terminal hook fires first (${measured}; ${window}). ${preparingSessionClause(state)}`;
   }
+  return `${waited} passed that deadline at ${new Date(retirement.retirableAt).toISOString()} but is not retirable in dispatch state ${pulseDispatchState(state)} (${measured})`;
+}
+
+// clearUnclaimedDispatch is a second door onto the same attempt, so it owes the caller the same countdown
+// rather than its own verdict: groomClose retired a fresh unbound attempt inside grace because it never
+// asked the authority at all (SQ-2949 finding 1).
+function unclaimedRetirementRefusal(ticket?: any, state?: any, now = Date.now()) {
+  return `${ticket?.ref || 'This attempt'} cannot be retired on recovery evidence yet because its dispatch is ${unclaimedRuntimeBlocker(ticket, state, now)}.`;
+}
+
+function evidenceSupersessionBlocker(ticket?: any, state?: any, now = Date.now()) {
   if (!state || !ticket?.dispatchNonce) return 'not an active attempt';
   if (state.terminalAt) return `already terminal (${state.outcome || 'terminal'})`;
   if (ticket.claim?.by) return `claimed by ${ticket.claim.by}`;
   if (state.claimedAt) return 'claimed';
   if (ticket.checkpoint) return 'checkpointed';
-  if (state.boundAt || state.agentId) return boundRuntimeBlocker(state);
-  return `in unrecognized state ${pulseDispatchState(state)}`;
+  if (!PRE_RUNTIME_DISPATCH_OUTCOMES.has(state.outcome)) return `in unrecognized state ${pulseDispatchState(state)}`;
+  return unclaimedRuntimeBlocker(ticket, state, now);
 }
 
 function retirePreparedCompatibilityStaleAttempt(slug?: any, ticket?: any, source = 'tokened-claim-refusal') {
@@ -710,15 +913,19 @@ function supersedeUnboundAttempt(slug?: any, idOrRef?: any, opts?: any) {
   return withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     const state = dispatchState(ticket);
-    if (!evidenceRetirableAttempt(ticket, state)) {
+    const now = Date.now();
+    if (terminalUnclaimedAttempt(ticket, state)) return { ok: true, ticket, alreadyTerminal: true };
+    if (!evidenceRetirableAttempt(ticket, state, now, opts?.sessionId)) {
       return {
         ok: false,
         reason: 'unclaimed_launch_not_supersedable',
         ticket,
-        message: `${ticket?.ref || idOrRef} cannot be superseded on recovery evidence because its dispatch is ${evidenceSupersessionBlocker(ticket, state)}. Evidence retires an attempt whose runtime is gone: one that minted a token and never reached a runtime, or one bound and unclaimed past the claim-idle backstop. Anything past that waits for its own terminal record.`,
+        message: `${ticket?.ref || idOrRef} cannot be superseded on recovery evidence because its dispatch is ${evidenceSupersessionBlocker(ticket, state, now)}. Evidence retires an unclaimed attempt at once from the session that prepared it, and from any other session once it has no readable runtime signal or its latest runtime signal is past its retirement deadline. A claimed attempt waits for its own terminal record.`,
       };
     }
-    const strandedBound = strandedBoundAttempt(ticket, state);
+    // What the runtime reached, not what the gate allowed: an attempt that bound or reserved a checkout
+    // is stranded, and one that never left the token is a launch that never arrived.
+    const strandedBound = !unboundEvidenceAttempt(state);
     setDispatchTerminal(ticket, 'failed', opts?.source || 'control-plane-unclaimed-launch-supersession', {
       slug,
       failureShape: strandedBound ? 'stranded_bound_launch_superseded' : 'unclaimed_launch_superseded',
@@ -1325,6 +1532,51 @@ function checkoutBelongsToAnotherDispatchAgent(slug?: any, projectPath?: any, ti
   });
 }
 
+function agentNamesCheckout(repository: string, agentId: unknown, target: string) {
+  const id = String(agentId || '').trim();
+  return Boolean(id) && agentWorktreeCandidates(repository, id).some((candidate: string) => canonicalPath(candidate) === target);
+}
+
+function liveCheckoutHolder(ticket?: any) {
+  const state = dispatchState(ticket);
+  return Boolean(ticket?.claim?.by) || Boolean(state && !state.terminalAt);
+}
+
+function recordsCheckout(repository: string, ticket: any, target: string) {
+  const state = dispatchState(ticket);
+  if (state?.worktree && canonicalPath(state.worktree) === target) return true;
+  return [state?.agentId, ticket.claim?.runtime?.agentId].some((agentId) => agentNamesCheckout(repository, agentId, target));
+}
+
+function siblingHoldsCheckout(repository: string, ticket: any, candidate: any, target: string) {
+  return candidate.id !== ticket.id && liveCheckoutHolder(candidate) && recordsCheckout(repository, candidate, target);
+}
+
+// A retired attempt's own record can name a sibling's checkout down to the sibling's agent id, because both
+// creation order and runtime binding can cross (SQ-3132: SQ-3104's recovery removed SQ-3101's live tree).
+// A live claim or dispatch that records the path, or whose agent the path is named after, outranks it.
+function liveSiblingHoldingCheckout(slug: string, projectPath: string, ticket: any, state: any) {
+  if (!projectPath || !state?.worktree) return null;
+  const target = canonicalPath(state.worktree);
+  return listTickets(slug).find((candidate: any) => siblingHoldsCheckout(projectPath, ticket, candidate, target)) || null;
+}
+
+function crossBoundCheckoutRefusal(ref: string, siblingRef: string, worktree: string) {
+  return `${ref} did not remove ${worktree}: its retired attempt's binding was a cross-bind onto ${siblingRef}'s live checkout, not a tree ${ref} created. The checkout stays with ${siblingRef}, and only ${ref}'s binding was cleared.`;
+}
+
+function reclaimRetiredAttemptCheckout(slug: string, projectPath: string, ticket: any, state: any, facts?: any) {
+  const sibling = liveSiblingHoldingCheckout(slug, projectPath, ticket, state);
+  if (!sibling) return reclaimUnclaimedDispatchWorktree(projectPath, state, facts);
+  return {
+    worktree: state.worktree,
+    reclaimed: false,
+    reason: 'cross_bound_worktree',
+    sibling: sibling.ref,
+    message: crossBoundCheckoutRefusal(ticket.ref, sibling.ref, state.worktree),
+  };
+}
+
 function unclaimedWorktreeRecoveryFacts(projectPath?: any, ticket?: any, state?: any) {
   const checkpointCommit = String(ticket?.checkpoint?.commit || ticket?.submission?.commit || '').trim();
   if (!checkpointCommit || !releaseFragmentOnlyCheckpoint(projectPath, ticket, checkpointCommit, state?.baseCommit)) {
@@ -1350,14 +1602,10 @@ function reusablePreparedRecovery(ticket: any, current: any) {
 function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   if (opts.retireOnly === true) {
-    const ticket = getTicket(slug, idOrRef);
-    const state = dispatchState(ticket);
-    if (!evidenceRetirableAttempt(ticket, state)) {
-      throw new Error(`prepare dispatch: ${idOrRef} cannot retire only because its dispatch is ${evidenceSupersessionBlocker(ticket, state)}. retireOnly accepts the same unclaimed attempt shapes as recovery evidence: prepared or launched before runtime binding, or bound and unclaimed past the claim-idle backstop.`);
-    }
     const superseded = supersedeUnboundAttempt(slug, idOrRef, {
       evidence: opts.recoveryEvidence,
       source: opts.source || opts.transport || 'dispatch',
+      sessionId: opts.sessionId,
     });
     if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${idOrRef} has no unbound dispatch attempt to retire (${superseded.reason}).`}`);
     return Object.assign(superseded, { retired: true });
@@ -1407,6 +1655,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const superseded = supersedeUnboundAttempt(slug, found.id, {
       evidence: opts.recoveryEvidence,
       source: opts.source || opts.transport || 'dispatch',
+      sessionId: opts.sessionId,
     });
     if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${found.ref} has no unbound dispatch attempt to supersede (${superseded.reason}).`}`);
   }
@@ -1432,6 +1681,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const t = getTicket(slug, found.id);
     if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
     const current = dispatchState(t);
+    let crossBoundWorktree: { sibling: string; worktree: string; message: string } | null = null;
     // A pending submission is a terminal outcome parked for the publish transaction, so preparing over it
     // minted a second attempt that outranked the submitted one in pulse while the submission stayed valid
     // (SQ-2117). Anything reading current dispatch.agentId then reads an executor that never touched the
@@ -1443,10 +1693,13 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by)
       && !checkoutBelongsToAnotherDispatchAgent(slug, projectPath, t, current)) {
       const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
-      const recovery = reclaimUnclaimedDispatchWorktree(projectPath, recoveryFacts.state, {
+      const recovery = reclaimRetiredAttemptCheckout(slug, projectPath, t, recoveryFacts.state, {
         checkpointCommit: recoveryFacts.checkpointCommit,
       });
-      if (recovery && recovery.reclaimed === false && recovery.discardable !== true && recovery.retainedCheckout !== true) {
+      if (recovery?.reason === 'cross_bound_worktree') {
+        releaseCrossedCreationBinding(current, recovery.sibling, new Date().toISOString(), 'cross_bound_supersede');
+        crossBoundWorktree = { sibling: recovery.sibling, worktree: recovery.worktree, message: recovery.message };
+      } else if (recovery && recovery.reclaimed === false && recovery.discardable !== true && recovery.retainedCheckout !== true) {
         const retainedContinuation = retainedWorktreeContinuationState(slug, t, current);
         if (!retainedContinuation?.continuation) {
           const checkpointCommit = String(t.checkpoint?.commit || '').trim();
@@ -1462,8 +1715,11 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     if (activeRuntimeAttempt) {
       const evidenceCall = `so the orchestrator can supersede it in one call: \`sidequest dispatch ${t.ref} --recovery-evidence "<observed failed-claim evidence>"\`.`;
       let recovery = ` Wait for that executor's terminal hook, then dispatch once from the returned todo state; do not mint a replacement token while it is still winding down. It is ${evidenceSupersessionBlocker(t, current)}.`;
-      if (supersedableUnboundAttempt(t, current)) recovery = ` It is unbound and unclaimed, ${evidenceCall}`;
-      else if (strandedBoundAttempt(t, current)) recovery = ` It bound a runtime and never claimed, and a claim is a bound runtime's first action, so that runtime is gone: ${evidenceCall}`;
+      if (evidenceRetirableAttempt(t, current, Date.now(), opts.sessionId)) {
+        recovery = unboundEvidenceAttempt(current)
+          ? ` It is unbound and unclaimed, ${evidenceCall}`
+          : ` It never claimed, so if you observed the host report that runtime gone: ${evidenceCall}`;
+      }
       throw new Error(`prepare dispatch: ${t.ref} already has a live dispatch attempt (${pulseDispatchState(current)}).${recovery}`);
     }
     const repeatFailure = repeatNoCommitDispatchError(t, current);
@@ -1599,6 +1855,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       : null;
     const artifactMode = Boolean(artifactRoot);
     const declaredFiles = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(effectiveFiles, t.files, t.ref);
+    const boardAddedFiles = declaredFiles.filter((file: string) => !commitScope.isInScope(file, t.files));
     const artifactScope = artifactMode ? effectiveFiles[0] : null;
     const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
     const dirtyBaselineCapture = sharedTree && !artifactMode ? captureDirtyBaseline(slug) : null;
@@ -1714,9 +1971,11 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       sharedTree,
       ...(reducedAgentSchema ? { reducedAgentSchema: true } : {}),
       ...(worktreeWarning ? { worktreeWarning } : {}),
+      ...(crossBoundWorktree ? { crossBoundWorktree } : {}),
       ...(pythonIoEncoding.written ? { pythonIoEncoding } : {}),
       ...(opts.dispatchSkew ? { dispatchSkew: opts.dispatchSkew } : {}),
       declaredFiles,
+      boardAddedFiles,
       ...(!sharedTree && releasedContinuation?.continuation ? {
         continuation: releasedContinuation.continuation,
         worktree: releasedContinuation.continuation.sourceWorktree,
@@ -1785,7 +2044,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     stampDispatchEvent(t, 'dispatch', now);
     writeDispatchTokenFile(t);
     putTicket(slug, t);
-    const warnings = [localAheadWarning?.message, dirtyBaselineCapture?.warning, servingCompatibilityWarning].filter(Boolean);
+    const warnings = [localAheadWarning?.message, dirtyBaselineCapture?.warning, servingCompatibilityWarning, crossBoundWorktree?.message].filter(Boolean);
     return { ok: true, ticket: t, token: t.dispatchNonce, recovery, ...(warnings.length ? { warnings } : {}) };
     });
     if (priorTokenFile && stagedTokenFile && priorTokenFile !== stagedTokenFile) {
@@ -1810,9 +2069,20 @@ function readDispatchBriefing(slug?: any, idOrRef?: any, token?: any, tokenFile?
   if (!dispatchTokenMatches(ticket.dispatchNonce, receivedToken)) {
     return { ok: false, reason: 'token' };
   }
+  // A briefing fetch is the running executor saying it got this far, and for a slow first turn it is the
+  // only thing it says before claiming, so record it as runtime liveness (SQ-2934).
+  const briefed = withTicketLock(slug, ticket.id, () => {
+    const current = getTicket(slug, ticket.id);
+    const currentState = dispatchState(current);
+    if (!currentState || currentState.terminalAt || !dispatchTokenMatches(current.dispatchNonce, receivedToken)) return null;
+    currentState.briefedAt = new Date().toISOString();
+    stampDispatchEvent(current, 'briefing-served', currentState.briefedAt);
+    putTicket(slug, current);
+    return current;
+  });
   // The renderer still validates the resolved credential. Returning only the
   // ticket made every token-file briefing fail after authentication (SQ-1866).
-  return { ok: true, ticket, token: receivedToken };
+  return { ok: true, ticket: briefed || ticket, token: receivedToken };
 }
 
 function recoverLiveClaimDispatch(slug?: any, idOrRef?: any, opts?: any) {
@@ -1848,6 +2118,13 @@ function recoverLiveClaimDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const now = new Date().toISOString();
     state.sessionId = sessionId;
     state.agentId = null;
+    state.continuation = {
+      mode: 'live_claim_resume',
+      ticketRef: ticket.ref,
+      sourceWorktree: facts.worktree,
+      baseCommit: state.baseCommit,
+      commit: facts.revision,
+    };
     state.worktree = facts.worktree;
     state.worktreeGitDirectory = facts.gitDirectory;
     state.worktreeCommonGitDirectory = facts.commonGitDirectory;
@@ -2156,9 +2433,41 @@ function unavailableWorktreeBinding(slug?: any, candidates: any[] = [], sessionI
   };
 }
 
-function bindDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: any) {
+// A WorktreeCreate callback carries only the session and the checkout path, and a replacement dispatch
+// reuses both, so a prior generation's late hook landed its stamp on the live attempt and shortened the
+// replacement's protection (SQ-2949 finding 3). `preparedAt` is the attempt's own generation stamp: the
+// binding hands it out and every later callback hands it back, so a stale one stamps nothing.
+//
+// The token is mandatory. Treating a missing one as current was the same corruption with an easier
+// trigger: every recorder stamped the replacement whenever a caller simply omitted it (SQ-2953 finding 1).
+// So the generation is the FIRST thing each recorder checks, before any state predicate, which is what
+// makes `dispatch_binding_unavailable` reachable only once the generation is known to be current.
+function missingWorktreeCallbackAttempt(attempt?: any) {
+  return !String(attempt || '').trim();
+}
+
+function worktreeCallbackGenerationRefusal(state?: any, attempt?: any) {
+  const claimed = String(attempt || '').trim();
+  if (!claimed) return { ok: false, reason: 'missing_attempt' };
+  return claimed === String(state?.preparedAt || '').trim() ? null : { ok: false, reason: 'stale_attempt' };
+}
+
+// The start recorder is the one callback that CANNOT present a generation: the hook learns its generation
+// from this very call, and nothing in a WorktreeCreate payload (a session id, a cwd, and a worktree name that
+// is just the checkout path again) tells two generations of the same session and checkout apart. So this
+// binding is session-and-checkout scoped, not generation-scoped, and the docs say so - but a caller that DOES
+// know its generation is held to it, and the two shapes a generation-blind caller could have hijacked are
+// closed (SQ-2959 finding 2):
+//   - A checkout whose attempt is already bound and still creating has a hook inside its creation window, and
+//     that hook already holds the generation. A second caller arriving there with none is a racing hook, not
+//     the owner, so it never acquires the live generation. Once creation is COMPLETE the same call is a
+//     re-entry that stamps nothing - `createWorktree` no-ops on an intact checkout - so it stays allowed.
+//   - A retired attempt still holding this checkout answers `stale_attempt`, rather than falling through and
+//     handing its late hook some other live attempt in the same session.
+function bindDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: any, attempt?: any) {
   const normalizedSessionId = String(sessionId || '').trim();
   const target = String(worktree || '').trim();
+  const claimedAttempt = String(attempt || '').trim();
   const meta = readMeta(slug);
   if (!normalizedSessionId || !target || !meta?.path) return { ok: false, reason: 'missing_binding_facts' };
   const repository = canonicalPath(meta.path);
@@ -2166,15 +2475,19 @@ function bindDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: an
   const bindingCandidates = listTickets(slug)
     .map((candidate: any) => ({ candidate, state: dispatchState(candidate) }))
     .filter(({ state }: any) => Boolean(state));
+  const holdsThisCheckout = (state?: any) => Boolean(state && state.sessionId === normalizedSessionId
+    && state.sharedTree === false && state.worktreeBindingSource === 'worktree-create'
+    && state.worktree && canonicalPath(state.worktree) === boundWorktree);
   for (const candidate of listTickets(slug)) {
     const state = dispatchState(candidate);
-    if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false || state.outcome !== 'launched'
-      || state.terminalAt || state.worktreeBindingSource !== 'worktree-create' || !state.worktree
-      || canonicalPath(state.worktree) !== boundWorktree) continue;
+    if (!holdsThisCheckout(state) || state.outcome !== 'launched' || state.terminalAt) continue;
+    if (claimedAttempt && claimedAttempt !== String(state.preparedAt || '').trim()) return { ok: false, reason: 'stale_attempt' };
+    if (!claimedAttempt && !state.worktreeCreationCompletedAt) return { ok: false, reason: 'missing_attempt' };
     const baseline = String(state.baseCommit || '').trim();
     if (baseline) return {
       ok: true,
       ref: candidate.ref,
+      attempt: String(state.preparedAt || ''),
       baseline,
       repository,
       worktree: boundWorktree,
@@ -2186,7 +2499,13 @@ function bindDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: an
     };
   }
   for (const candidate of listTickets(slug)) {
-    if (!dispatchCreationCandidate(dispatchState(candidate), normalizedSessionId)) continue;
+    const state = dispatchState(candidate);
+    if (holdsThisCheckout(state) && state.terminalAt) return { ok: false, reason: 'stale_attempt' };
+  }
+  for (const candidate of listTickets(slug)) {
+    const state = dispatchState(candidate);
+    if (!dispatchCreationCandidate(state, normalizedSessionId)) continue;
+    if (claimedAttempt && claimedAttempt !== String(state.preparedAt || '').trim()) return { ok: false, reason: 'stale_attempt' };
     const result = withTicketLock(slug, candidate.id, () => {
       const ticket = getTicket(slug, candidate.id);
       const state = dispatchState(ticket);
@@ -2198,7 +2517,7 @@ function bindDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: an
       state.worktreeBoundAt = new Date().toISOString();
       stampDispatchEvent(ticket, 'worktree-create-binding', state.worktreeBoundAt);
       putTicket(slug, ticket);
-      return { ok: true, ref: ticket.ref, baseline, repository, worktree: boundWorktree };
+      return { ok: true, ref: ticket.ref, attempt: String(state.preparedAt || ''), baseline, repository, worktree: boundWorktree };
     });
     if (result?.ok) return result;
   }
@@ -2208,7 +2527,8 @@ function bindDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: an
   return unavailableWorktreeBinding(slug, bindingCandidates, normalizedSessionId, boundWorktree);
 }
 
-function completeDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: any) {
+function completeDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: any, attempt?: any) {
+  if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: 'missing_attempt' };
   const normalizedSessionId = String(sessionId || '').trim();
   const target = String(worktree || '').trim();
   if (!normalizedSessionId || !target) return { ok: false, reason: 'missing_binding_facts' };
@@ -2221,6 +2541,8 @@ function completeDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?
     return withTicketLock(slug, candidate.id, () => {
       const ticket = getTicket(slug, candidate.id);
       const current = dispatchState(ticket);
+      const generation = worktreeCallbackGenerationRefusal(current, attempt);
+      if (generation) return generation;
       if (!current || current.sessionId !== normalizedSessionId || current.sharedTree !== false
         || current.outcome !== 'launched' || current.terminalAt || current.worktreeBindingSource !== 'worktree-create'
         || !current.worktree || canonicalPath(current.worktree) !== boundWorktree) {
@@ -2250,7 +2572,39 @@ function completeDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?
   return { ok: false, reason: 'dispatch_binding_unavailable' };
 }
 
-function recordDispatchWorktreeProvisioningFailure(slug?: any, sessionId?: any, worktree?: any, failure?: any) {
+// Creation completion is recorded before provisioning starts, so without this the board had no way to tell
+// a cold `npm ci` still running from a WorktreeCreate that died, and retired live ones (SQ-2932 finding 2).
+function recordDispatchWorktreeProvisioned(slug?: any, sessionId?: any, worktree?: any, attempt?: any) {
+  if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: 'missing_attempt' };
+  const normalizedSessionId = String(sessionId || '').trim();
+  const target = String(worktree || '').trim();
+  if (!normalizedSessionId || !target) return { ok: false, reason: 'missing_binding_facts' };
+  const boundWorktree = canonicalPath(target);
+  for (const candidate of listTickets(slug)) {
+    const state = dispatchState(candidate);
+    if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false
+      || state.outcome !== 'launched' || state.terminalAt || state.worktreeBindingSource !== 'worktree-create'
+      || !state.worktree || canonicalPath(state.worktree) !== boundWorktree) continue;
+    return withTicketLock(slug, candidate.id, () => {
+      const ticket = getTicket(slug, candidate.id);
+      const current = dispatchState(ticket);
+      const generation = worktreeCallbackGenerationRefusal(current, attempt);
+      if (generation) return generation;
+      if (!current || current.sessionId !== normalizedSessionId || current.terminalAt
+        || !current.worktree || canonicalPath(current.worktree) !== boundWorktree) {
+        return { ok: false, reason: 'dispatch_binding_unavailable' };
+      }
+      current.worktreeProvisionedAt = new Date().toISOString();
+      stampDispatchEvent(ticket, 'worktree-provisioned', current.worktreeProvisionedAt);
+      putTicket(slug, ticket);
+      return { ok: true };
+    });
+  }
+  return { ok: false, reason: 'dispatch_binding_unavailable' };
+}
+
+function recordDispatchWorktreeProvisioningFailure(slug?: any, sessionId?: any, worktree?: any, failure?: any, attempt?: any) {
+  if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: 'missing_attempt' };
   const normalizedSessionId = String(sessionId || '').trim();
   const target = String(worktree || '').trim();
   const command = String(failure?.command || '').trim();
@@ -2265,6 +2619,8 @@ function recordDispatchWorktreeProvisioningFailure(slug?: any, sessionId?: any, 
     return withTicketLock(slug, candidate.id, () => {
       const ticket = getTicket(slug, candidate.id);
       const current = dispatchState(ticket);
+      const generation = worktreeCallbackGenerationRefusal(current, attempt);
+      if (generation) return generation;
       if (!current || current.sessionId !== normalizedSessionId || current.sharedTree !== false
         || current.outcome !== 'launched' || current.terminalAt || current.worktreeBindingSource !== 'worktree-create'
         || !current.worktree || canonicalPath(current.worktree) !== boundWorktree || !current.worktreeCreationCompletedAt) {
@@ -2296,7 +2652,8 @@ function normalizedOwnedDependencyLink(worktree: string, dependency?: any) {
   return { relativePath, target: canonicalPath(target) };
 }
 
-function recordDispatchWorktreeDependencyLink(slug?: any, sessionId?: any, worktree?: any, dependency?: any) {
+function recordDispatchWorktreeDependencyLink(slug?: any, sessionId?: any, worktree?: any, dependency?: any, attempt?: any) {
+  if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: 'missing_attempt' };
   const normalizedSessionId = String(sessionId || '').trim();
   const target = String(worktree || '').trim();
   if (!normalizedSessionId || !target) return { ok: false, reason: 'missing_dependency_link_facts' };
@@ -2311,6 +2668,8 @@ function recordDispatchWorktreeDependencyLink(slug?: any, sessionId?: any, workt
     return withTicketLock(slug, candidate.id, () => {
       const ticket = getTicket(slug, candidate.id);
       const current = dispatchState(ticket);
+      const generation = worktreeCallbackGenerationRefusal(current, attempt);
+      if (generation) return generation;
       if (!current || current.sessionId !== normalizedSessionId || current.sharedTree !== false
         || current.outcome !== 'launched' || current.terminalAt || current.worktreeBindingSource !== 'worktree-create'
         || !current.worktree || canonicalPath(current.worktree) !== boundWorktree || !current.worktreeCreationCompletedAt
@@ -2342,7 +2701,12 @@ function recordDispatchWorktreeDependencyLink(slug?: any, sessionId?: any, workt
   return { ok: false, reason: 'dispatch_binding_unavailable' };
 }
 
-function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: any, error?: any) {
+// Recovery is the hook's failure path, and it is generation-scoped for the same reason the recorders are:
+// a retired hook that caught its own correct `stale_attempt` used to land here and terminalize the live
+// replacement, clearing its nonce and marking it failed while the hook's own stderr said the live attempt
+// was untouched (SQ-2953 finding 1, hook-race-probe.json).
+function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: any, error?: any, attempt?: any, options?: { created?: boolean }) {
+  if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: 'missing_attempt' };
   const normalizedSessionId = String(sessionId || '').trim();
   const target = String(worktree || '').trim();
   const meta = readMeta(slug);
@@ -2358,6 +2722,8 @@ function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?:
   const terminal = withTicketLock(slug, matches[0].id, () => {
     const ticket = getTicket(slug, matches[0].id);
     const state = dispatchState(ticket);
+    const generation = worktreeCallbackGenerationRefusal(state, attempt);
+    if (generation) return generation;
     if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false
       || state.outcome !== 'launched' || state.terminalAt || state.worktreeBindingSource !== 'worktree-create'
       || !state.worktree || canonicalPath(state.worktree) !== boundWorktree) {
@@ -2372,6 +2738,9 @@ function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?:
       state.worktreeObservedRevision = facts.revision;
       state.worktreeCreationCompletedAt = new Date().toISOString();
     }
+    // A hook that failed before its checkout existed must not leave the attempt naming a path it never
+    // created: whatever sits there later is someone else's, and retry cleanup would reclaim it (SQ-3132).
+    if (options?.created === false) releaseCrossedCreationBinding(state, null, new Date().toISOString(), 'worktree_create_failed');
     setDispatchTerminal(ticket, 'failed', 'worktree-create-recovery', {
       slug,
       error,
@@ -2384,7 +2753,7 @@ function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?:
     return { ok: true, ticket };
   });
   if (!terminal?.ok) return terminal;
-  const cleanup = reclaimUnclaimedDispatchWorktree(meta.path, dispatchState(terminal.ticket));
+  const cleanup = reclaimRetiredAttemptCheckout(slug, meta.path, terminal.ticket, dispatchState(terminal.ticket));
   return { ok: true, ticket: terminal.ticket, cleanup };
 }
 
@@ -2750,7 +3119,7 @@ function movedCreationRecord(state?: any) {
   };
 }
 
-function releaseCrossedCreationBinding(state?: any, otherRef?: any, now?: any) {
+function releaseCrossedCreationBinding(state?: any, otherRef?: any, now?: any, reason = 'creation_order') {
   const from = canonicalPath(state.worktree);
   Object.assign(state, movedCreationRecord(null), {
     worktreeBindingSource: null,
@@ -2760,7 +3129,7 @@ function releaseCrossedCreationBinding(state?: any, otherRef?: any, now?: any) {
     worktreeCheckoutInstance: null,
     worktreeObservedRevision: null,
     worktreeBoundAt: null,
-    worktreeBindingExchange: { at: now, from, with: otherRef, reason: 'creation_order' },
+    worktreeBindingExchange: { at: now, from, with: otherRef, reason },
   });
 }
 
@@ -3083,7 +3452,10 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     rederiveUnlaunchedPreparedRoute,
     stampDispatchEvent,
     pulseDispatchState,
-    supersedableUnboundAttempt,
+    unclaimedEvidenceAttempt,
+    unclaimedRetirementRefusal,
+    preparingSessionAttests,
+    unclaimedAttemptRecoveryGuidance,
     retirePreparedCompatibilityStaleAttempt,
     preparedCompatibilityHasProvenMismatch,
     preparedCompatibilityWarning,
@@ -3113,12 +3485,16 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     recoverDispatchQuotaFailure,
     bindDispatchWorktreeCreation,
     completeDispatchWorktreeCreation,
+    recordDispatchWorktreeProvisioned,
     recordDispatchWorktreeProvisioningFailure,
+    unclaimedRetirement,
     recordDispatchWorktreeDependencyLink,
     recoverDispatchWorktreeCreation,
     dispatchIdentityDiagnosis,
     dispatchIsolationExpectation,
     dispatchUnboundClaim,
+    boardVerificationEvidencePath,
+    dispatchEvidenceDirectory,
     recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,

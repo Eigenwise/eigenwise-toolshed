@@ -1,7 +1,8 @@
 'use strict';
 
-const { spawnSync } = require('node:child_process');
+const { execFile } = require('node:child_process');
 const { StringDecoder } = require('node:string_decoder');
+const { promisify } = require('node:util');
 const crypto = require('node:crypto');
 const dns = require('node:dns');
 const fs = require('node:fs');
@@ -26,16 +27,22 @@ const {
 const {
   ANTHROPIC_UPSTREAM, AUTH_HEADERS, CODEX_FAMILY_RE, COMPAT_HOST,
   COMPAT_PORT, DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GROK_ENDPOINT, GROK_PREFIX, LIST_DISPATCH_MODEL,
-  PLUGIN_VERSION, PREFIX, PROXY_BIN, PROXY_PORT, REQUEST_ROUTE_LOG,
+  PLUGIN_VERSION, PROXY_BIN, PROXY_PORT, REQUEST_ROUTE_LOG,
   REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT, SOCKET_PATH,
-  MODEL_WINDOW_POLICY, STATE, syncGatewayDiscoveryCache, TRACE_HEADERS, codexClientModelId,
+  MODEL_WINDOW_POLICY, STATE, syncGatewayDiscoveryCache, TRACE_HEADERS,
   codexContextWindow, codexContextWindowModelId, codexReadinessMessage, gatewayAdvertisedWindow, gatewayClientModelId, mkdirs,
   resolveGatewayModelPolicy,
 } = require('./runtime.js');
 
-function isAuthed() {
-  const r = spawnSync(PROXY_BIN, ['codex', 'auth', 'status'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
-  return r.status === 0 && /account/i.test((r.stdout || '') + (r.stderr || ''));
+const execFileAsync = promisify(execFile);
+
+// Asynchronous on purpose: /healthz runs this inside the worker, and a synchronous spawn froze
+// every in-flight request, /v1/models included, for as long as auth status took (issue #238).
+async function isAuthed() {
+  try {
+    const { stdout, stderr } = await execFileAsync(PROXY_BIN, ['codex', 'auth', 'status'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
+    return /account/i.test(stdout + stderr);
+  } catch { return false; }
 }
 
 async function proxyModelsAnswering() {
@@ -56,6 +63,12 @@ function readinessState(checks, upstreamBlocked, upstreamUnavailable) {
   return 'ready';
 }
 
+function readinessMessage(state, upstreamBlocked) {
+  return state === 'ready'
+    ? 'Codex readiness confirms local binary, /v1/models, authentication, shim, and serving-version checks. It does not prove a streaming request will succeed.'
+    : codexReadinessMessage(state, undefined, upstreamBlocked);
+}
+
 async function getCodexReadiness({
   binaryPresent = fs.existsSync(PROXY_BIN),
   probeProxyModels = proxyModelsAnswering,
@@ -65,11 +78,12 @@ async function getCodexReadiness({
   now = Date.now(),
 } = {}) {
   const proxyBinary = Boolean(binaryPresent);
-  const [proxyModels, health] = await Promise.all([
+  const [proxyModels, health, authenticated] = await Promise.all([
     proxyBinary ? probeProxyModels() : false,
     shimHealth === undefined ? fetchHealth() : shimHealth,
+    proxyBinary && authStatus(),
   ]);
-  const codexAuth = proxyBinary ? Boolean(authStatus()) : false;
+  const codexAuth = Boolean(authenticated);
   const shimRunning = Boolean(health?.ok);
   const servingVersion = servingShimVersion(health);
   const checks = {
@@ -81,15 +95,13 @@ async function getCodexReadiness({
     installedVersion: PLUGIN_VERSION,
     servingVersionMatches: shimRunning && servingVersionIsCurrentOrNewer(servingVersion, PLUGIN_VERSION),
   };
-  const upstreamBlocked = readUpstreamBlocked();
+  const upstreamBlocked = readUpstreamBlocked(now);
   const upstreamUnavailable = readUpstreamUnavailable(now);
   const state = readinessState(checks, upstreamBlocked, upstreamUnavailable);
   return {
     ready: state === 'ready',
     state,
-    message: state === 'ready'
-      ? 'Codex readiness confirms local binary, /v1/models, authentication, shim, and serving-version checks. It does not prove a streaming request will succeed.'
-      : codexReadinessMessage(state),
+    message: readinessMessage(state, upstreamBlocked),
     checks,
     upstreamBlocked,
     upstreamUnavailable,
@@ -108,14 +120,6 @@ function catalogReadiness(readiness) {
   };
 }
 
-function providerReadiness(readiness) {
-  return {
-    ready: Boolean(readiness?.ready),
-    state: typeof readiness?.state === 'string' ? readiness.state : 'unavailable',
-    message: typeof readiness?.message === 'string' ? readiness.message : 'Readiness is unavailable.',
-  };
-}
-
 function hasOpenAiRejectionEvidence(statusCode, headers, body) {
   if (![401, 403, 429].includes(statusCode)) return false;
   const headerNames = Object.keys(headers || {});
@@ -128,7 +132,7 @@ function noteCodexUpstreamRejection(statusCode, headers, body) {
   const headerNames = Object.keys(headers || {}).map((name) => name.toLowerCase())
     .filter((name) => name.startsWith('x-openai-') || name === 'openai-processing-ms' || name === 'content-type');
   const evidence = headerNames.length ? `headers:${headerNames.join(',')}` : 'body:openai';
-  setUpstreamBlocked({ statusCode, evidence });
+  setUpstreamBlocked({ statusCode, evidence, headers });
   console.error(`model-gateway: Codex request had an unambiguous OpenAI rejection (status ${statusCode}; ${evidence}); readiness is upstream-blocked.`);
   return true;
 }
@@ -171,6 +175,44 @@ const DEFAULT_MODELS = [
 ];
 const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 
+// Advertising an id the router can't claim back would hand it to
+// api.anthropic.com, so a local models.json is held to the same family rule.
+function isRoutableCodexId(id) {
+  return typeof id === 'string' && (id === 'auto' || CODEX_FAMILY_RE.test(id));
+}
+
+function routableCodexIds(ids) {
+  const routable = Array.isArray(ids) ? ids.filter(isRoutableCodexId) : [];
+  return routable.length ? routable : null;
+}
+
+async function proxyCodexIds() {
+  try {
+    const response = await fetchUrl(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { timeout: 2500 });
+    if (response.status !== 200) return null;
+    return (JSON.parse(response.body.toString()).data || []).map((model) => model.id).filter((id) => /^gpt-/.test(id));
+  } catch { return null; }
+}
+
+function isGrokBackendModel(model) {
+  return resolveGatewayModelPolicy(model.id)?.backend === 'grok';
+}
+
+function localModelsFileIds() {
+  try { return JSON.parse(fs.readFileSync(path.join(STATE, 'models.json'), 'utf8')); } catch { return null; }
+}
+
+// Only a list the proxy answered is a real catalog. models.json and the
+// built-in list stand in while the proxy is unreachable, which is routine for a
+// shim the supervisor starts alongside its proxy (GH-297).
+async function advertisedCodexCatalog() {
+  const proxyIds = routableCodexIds(await proxyCodexIds());
+  if (proxyIds) return { ids: proxyIds, source: 'proxy' };
+  const localIds = routableCodexIds(localModelsFileIds());
+  if (localIds) return { ids: localIds, source: 'models.json' };
+  return { ids: DEFAULT_MODELS, source: 'fallback' };
+}
+
 function statelessBackendThreadRefusal(payload) {
   if (!Object.prototype.hasOwnProperty.call(payload, 'thread')) return null;
   const thread = payload.thread;
@@ -185,37 +227,40 @@ function statelessBackendThreadRefusal(payload) {
   };
 }
 
-const CODEX_SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
+const SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
 const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
 const CODEX_COMPACT_HEADROOM = 40000;
 
-function effectiveCodexSentryPolicy(policy, compactTrigger = configuredCompactTrigger) {
-  if (policy?.sentry !== 'codex-synthetic-413') return null;
-  if (!Number.isFinite(policy.backendWindow) || policy.backendWindow <= CODEX_COMPACT_HEADROOM) {
-    throw new Error(`model-gateway: invalid Codex sentry backend window for ${policy.backendId}`);
+function sentryBackendWindow(policy) {
+  const backendWindow = policy.backendWindow;
+  if (!Number.isFinite(backendWindow) || backendWindow <= CODEX_COMPACT_HEADROOM) {
+    throw new Error(`model-gateway: invalid sentry backend window for ${policy.backendId}`);
   }
-  const derivedTrigger = policy.backendWindow - CODEX_COMPACT_HEADROOM;
-  if (Number.isFinite(compactTrigger) && compactTrigger > 0 && compactTrigger <= derivedTrigger) {
-    return { backendWindow: policy.backendWindow, compactTrigger, source: 'env' };
-  }
-  return { backendWindow: policy.backendWindow, compactTrigger: derivedTrigger, source: 'derived' };
+  return backendWindow;
+}
+
+function effectiveSentryPolicy(policy, compactTrigger = configuredCompactTrigger) {
+  if (policy?.sentry !== 'synthetic-413') return null;
+  const backendWindow = sentryBackendWindow(policy);
+  const derivedTrigger = backendWindow - CODEX_COMPACT_HEADROOM;
+  const useConfiguredTrigger = Number.isFinite(compactTrigger) && compactTrigger > 0 && compactTrigger <= derivedTrigger;
+  return useConfiguredTrigger
+    ? { backendWindow, compactTrigger, source: 'env' }
+    : { backendWindow, compactTrigger: derivedTrigger, source: 'derived' };
 }
 
 function sentryPolicyFor(model) {
-  const policy = resolveGatewayModelPolicy(model);
-  const sentryPolicy = effectiveCodexSentryPolicy(policy);
-  if (sentryPolicy && policy.backend !== 'codex') {
-    throw new Error(`model-gateway: non-Codex model ${policy.backendId} cannot use the Codex sentry`);
-  }
-  return sentryPolicy;
+  return effectiveSentryPolicy(resolveGatewayModelPolicy(model));
 }
 
 function assertAnthropicPassthroughSentryIsDisabled(model) {
   const policy = resolveGatewayModelPolicy(model);
   if (policy?.backend === 'anthropic' && policy.sentry !== 'none') {
-    throw new Error(`model-gateway: Anthropic passthrough model ${policy.backendId} must not use the Codex sentry`);
+    throw new Error(`model-gateway: Anthropic passthrough model ${policy.backendId} must not use the synthetic sentry`);
   }
 }
+const configuredModelsRefreshMs = Number(process.env.CODEX_GATEWAY_MODELS_REFRESH_MS);
+const MODELS_REFRESH_MS = configuredModelsRefreshMs > 0 ? configuredModelsRefreshMs : 60000;
 const configuredSseHeartbeatSeconds = Number(process.env.CODEX_GATEWAY_SSE_HEARTBEAT_S);
 const SSE_HEARTBEAT_MS = Number.isFinite(configuredSseHeartbeatSeconds) && configuredSseHeartbeatSeconds >= 0
   ? configuredSseHeartbeatSeconds * 1000
@@ -314,6 +359,44 @@ function upstreamErrorMessage(body, statusCode) {
   return detail
     ? `model-gateway: upstream returned ${statusCode}: ${detail}`
     : `model-gateway: upstream returned ${statusCode} with no readable error body`;
+}
+
+// The model stopped and closed every block, but the stream ended before message_stop.
+function closeFinishedTurn(attempt, clientRes) {
+  if (attempt.terminal || !deliverableAttempt(attempt)) return;
+  console.error('model-gateway: Codex stream finished its turn but ended without message_stop; synthesized the terminal event');
+  clientRes.write(SYNTHESIZED_MESSAGE_STOP);
+}
+
+function requestedStream(requestBody) {
+  try { return JSON.parse(requestBody).stream === true; } catch { return false; }
+}
+
+function emptyEndTurn(model, stream) {
+  const message = {
+    id: `msg_gateway_${crypto.randomUUID().replace(/-/g, '')}`, type: 'message', role: 'assistant', model,
+    content: [], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 },
+  };
+  if (!stream) return { contentType: 'application/json', body: JSON.stringify(message) };
+  const events = [
+    { type: 'message_start', message: { ...message, stop_reason: null } },
+    { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 0 } },
+    { type: 'message_stop' },
+  ];
+  return { contentType: 'text/event-stream', body: events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('') };
+}
+
+// claude-code-proxy answers a Codex turn that completed with no text, tool call, or thinking
+// (empty_codex_completion) with a retryable 503. Claude Code resends it, every resend comes back
+// empty too, and an executor dies at closeout after its work is done (issue #192).
+function answerEmptyCodexCompletion(statusCode, upstreamBody, requestBody, model, clientRes, routeTelemetry) {
+  if (statusCode !== 503 || upstreamErrorDetail(upstreamBody) !== 'Codex completed without producing output') return false;
+  console.error('model-gateway: Codex completed a turn with no output (claude-code-proxy empty_codex_completion); answered an empty end_turn instead of a retryable 503');
+  const answer = emptyEndTurn(model, requestedStream(requestBody));
+  routeTelemetry?.finish(200);
+  clientRes.writeHead(200, { 'content-type': answer.contentType, 'content-length': Buffer.byteLength(answer.body) });
+  clientRes.end(answer.body);
+  return true;
 }
 
 function codexAuthenticationFailure(body, statusCode) {
@@ -590,218 +673,6 @@ function dispatchRouteFromMessages(messages) {
   return onlyRoute(dispatchRouteMarkersFromMessages(messages));
 }
 
-// ------------------------------------------------------------ model catalog
-//
-// sidequest (same marketplace) auto-discovers Codex models by reading this
-// file: ~/.claude/model-gateway/catalog.json. Shape is a frozen contract
-// (see plugins/sidequest/lib/discovery.js) — don't change it casually.
-
-const CATALOG_PATH = path.join(STATE, 'catalog.json');
-const CATALOG_STALE_MS = 5 * 60 * 1000;
-const CATALOG_SCHEMA_VERSION = 4;
-
-// Slugs keep the `codex-` backend name and so survive the id rename byte for
-// byte: the board's route table pins slugs, and re-slugging would break every
-// persisted route at once.
-//
-// Provider + base, dots→dashes, kept inside ^[a-z0-9][a-z0-9-]{1,31}$; on
-// collision (or an over-length base) fall back to a short deterministic hash
-// so the slug stays unique without depending on iteration order.
-function slugFor(provider, base, used) {
-  const providerPrefix = `${provider}-`;
-  const providerBase = base.startsWith(providerPrefix) ? base.slice(providerPrefix.length) : base;
-  let s = (providerPrefix + providerBase).toLowerCase()
-    .replace(/\[1m\]$/, '')
-    .replace(/\./g, '-')
-    .replace(/[^a-z0-9-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  if (!/^[a-z0-9]/.test(s)) s = 'x' + s;
-  if (s.length > 32) {
-    const hash = crypto.createHash('sha1').update(s).digest('hex').slice(0, 6);
-    s = s.slice(0, 32 - 1 - hash.length) + '-' + hash;
-  }
-  let unique = s;
-  let n = 2;
-  while (used.has(unique)) {
-    const suffix = '-' + n;
-    unique = s.slice(0, Math.max(1, 32 - suffix.length)) + suffix;
-    n++;
-  }
-  used.add(unique);
-  return unique;
-}
-
-// "gpt-5.6-sol" -> "GPT-5.6 Sol", "gpt-5.3-codex-spark" -> "GPT-5.3 Codex Spark"
-function labelFor(base) {
-  const rest = base.replace(/^gpt-/, '');
-  const m = rest.match(/^(\d+(?:\.\d+)?)(?:-(.+))?$/);
-  if (!m) return 'GPT-' + rest.replace(/-/g, ' ');
-  const [, ver, suffix] = m;
-  const suffixLabel = suffix
-    ? ' ' + suffix.split('-').map((w) => w[0].toUpperCase() + w.slice(1)).join(' ')
-    : '';
-  return `GPT-${ver}${suffixLabel}`;
-}
-
-function modelCatalogDetails(id) {
-  const codexBase = codexBaseFromId(id);
-  if (codexBase && codexBase !== 'auto') {
-    return { provider: 'codex', base: codexBase, label: labelFor(codexBase) };
-  }
-  if (typeof id === 'string' && id.startsWith(GROK_PREFIX)) {
-    const base = id.slice(PREFIX.length).replace(/\[1m\]$/, '');
-    return { provider: 'grok', base, label: displayName(base, 'grok') };
-  }
-  return null;
-}
-
-function unavailableProviderReadiness(provider) {
-  return {
-    ready: false,
-    state: 'unavailable',
-    message: `${provider} readiness is unavailable.`,
-  };
-}
-
-function getGrokReadiness({ readAuth = grokBackend.readGrokAuth } = {}) {
-  try {
-    readAuth();
-    return {
-      ready: true,
-      state: 'ready',
-      message: 'Grok CLI auth is present.',
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Grok CLI auth is unavailable. Run `grok` and log in again.';
-    return {
-      ready: false,
-      state: /invalid/i.test(message) ? 'auth-invalid' : 'auth-missing',
-      message,
-    };
-  }
-}
-
-function providerCatalogReadiness(provider, readiness) {
-  const source = readiness?.[provider] ?? (provider === 'codex' ? readiness : null);
-  if (source) return providerReadiness(source);
-  if (provider === 'grok') return getGrokReadiness();
-  return unavailableProviderReadiness(provider);
-}
-
-function buildCatalog(ids, readiness = null) {
-  const used = new Set();
-  const models = ids
-    .map((id) => ({ id, details: modelCatalogDetails(id) }))
-    .filter(({ details }) => details)
-    .map(({ id, details }) => ({
-      slug: slugFor(details.provider, details.base, used),
-      id: details.provider === 'codex' ? codexClientModelId(id) : id,
-      label: details.label,
-      provider: details.provider,
-    }));
-  const providers = Object.fromEntries(
-    [...new Set(models.map((model) => model.provider))].map((provider) => [provider, providerCatalogReadiness(provider, readiness)]),
-  );
-  return {
-    schemaVersion: CATALOG_SCHEMA_VERSION,
-    source: 'model-gateway',
-    updatedAt: new Date().toISOString(),
-    writtenBy: PLUGIN_VERSION,
-    providers,
-    codexReadiness: providers.codex ?? null,
-    models,
-  };
-}
-
-function readJsonFile(file) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
-}
-
-function catalogSchemaVersion(catalog) {
-  if (!catalog || typeof catalog !== 'object') return null;
-  const version = catalog.schemaVersion ?? catalog.schema;
-  return Number.isInteger(version) && version > 0 ? version : null;
-}
-
-function catalogModelIds(catalog) {
-  return new Set(
-    Array.isArray(catalog?.models)
-      ? catalog.models.filter((model) => typeof model?.id === 'string').map((model) => model.id)
-      : [],
-  );
-}
-
-function mergeSubsetCatalog(existing, catalog) {
-  if (catalogSchemaVersion(existing) !== CATALOG_SCHEMA_VERSION || !Array.isArray(existing.models)) return catalog;
-
-  const existingIds = catalogModelIds(existing);
-  const fetchedIds = catalogModelIds(catalog);
-  const isStrictSubset = fetchedIds.size < existingIds.size && [...fetchedIds].every((id) => existingIds.has(id));
-  if (!isStrictSubset) return catalog;
-
-  // A removal-only response is indistinguishable from a stale writer. Adding a model makes the response authoritative, so intentional replacement can still remove entries.
-  const preserved = existing.models.filter((model) => typeof model?.id === 'string' && !fetchedIds.has(model.id));
-  const models = [...catalog.models, ...preserved];
-  const providers = { ...catalog.providers };
-  for (const model of preserved) {
-    if (typeof model.provider === 'string' && !providers[model.provider] && existing.providers?.[model.provider]) {
-      providers[model.provider] = existing.providers[model.provider];
-    }
-  }
-  log(`catalog: preserved ${preserved.map((model) => model.id).join(', ')} from a subset write`);
-  return { ...catalog, models, providers, codexReadiness: providers.codex ?? null };
-}
-
-function writeCatalogFile(catalogPath, catalog) {
-  const existing = readJsonFile(catalogPath);
-  const storedVersion = catalogSchemaVersion(existing);
-  if (storedVersion != null && storedVersion > CATALOG_SCHEMA_VERSION) {
-    throw new Error(`refusing to overwrite catalog schema ${storedVersion} at ${catalogPath}; this gateway supports schema ${CATALOG_SCHEMA_VERSION}, upgrade required`);
-  }
-  const nextCatalog = mergeSubsetCatalog(existing, catalog);
-  writeFileAtomically(catalogPath, JSON.stringify(nextCatalog, null, 2) + '\n');
-  return nextCatalog;
-}
-
-async function fetchShimModelIds() {
-  // the shim's own refreshModels() can still be mid-flight right after
-  // /healthz starts answering; retry once, short, before giving up
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const r = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/v1/models`, { timeout: 3000 });
-    if (r.status !== 200) throw new Error(`shim /v1/models returned ${r.status}`);
-    const ids = (JSON.parse(r.body.toString()).data || []).map((m) => m.id).filter((id) => modelCatalogDetails(id) != null);
-    if (ids.length || attempt === 1) return ids;
-    await new Promise((res) => setTimeout(res, 300));
-  }
-  return [];
-}
-
-async function writeCatalog() {
-  const ids = await fetchShimModelIds();
-  if (!ids.length) return null;
-  const readiness = await getCodexReadiness();
-  const catalog = buildCatalog(ids, readiness);
-  mkdirs();
-  return writeCatalogFile(CATALOG_PATH, catalog);
-}
-
-function readCatalog() {
-  return readJsonFile(CATALOG_PATH);
-}
-
-async function catalogCommand() {
-  const jsonOut = flag('--json');
-  let catalog = readCatalog();
-  const stale = !catalog || (Date.now() - Date.parse(catalog.updatedAt || 0) > CATALOG_STALE_MS);
-  if (stale && (await shimHealthy())) {
-    catalog = (await writeCatalog().catch(() => null)) || catalog;
-  }
-  if (!catalog) die('no catalog available yet (run setup or start first)');
-  if (jsonOut) process.stdout.write(JSON.stringify(catalog) + '\n');
-  else log(JSON.stringify(catalog, null, 2));
-}
-
 // dns.resolve4()/resolve6() query DNS directly and, unlike dns.lookup() (what
 // http/https use by default), never consult the OS hosts file. That's exactly
 // why this exists: RC-compatibility mode only works because the user's hosts
@@ -1070,7 +941,7 @@ function runWorker() {
   const controlToken = ensureControlToken();
   process.once('disconnect', () => process.exit(0));
   let modelCache = {
-    at: 0,
+    source: 'fallback',
     data: [...DEFAULT_MODELS, ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map(gatewayModel),
   };
   const counters = { models: 0, codex: 0, grok: 0, anthropic: 0 };
@@ -1153,8 +1024,8 @@ function runWorker() {
     }
   }
 
-  function codexSessionId(req) {
-    return CODEX_SENTRY_ENABLED ? requestSessionId(req) : null;
+  function sentrySessionId(req) {
+    return SENTRY_ENABLED ? requestSessionId(req) : null;
   }
 
   function sentryModel(model) {
@@ -1162,7 +1033,7 @@ function runWorker() {
     let state = sentryModels.get(modelId);
     if (!state) {
       const sentryPolicy = sentryPolicyFor(model);
-      if (!sentryPolicy) throw new Error(`model-gateway: no Codex sentry policy for ${modelId}`);
+      if (!sentryPolicy) throw new Error(`model-gateway: no sentry policy for ${modelId}`);
       state = { ...sentryPolicy, observedCeiling: null };
       sentryModels.set(modelId, state);
     }
@@ -1187,6 +1058,7 @@ function runWorker() {
 
   function recordSentryUsage(sessionId, event, model) {
     if (!sessionId || event.type !== 'message_delta' || !event.usage) return;
+    if (!sentryPolicyFor(model)) return;
     const usage = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']
       .reduce((total, field) => total + (Number.isFinite(event.usage[field]) ? event.usage[field] : 0), 0);
     if (usage <= 0) return;
@@ -1213,8 +1085,9 @@ function runWorker() {
     const compactTrigger = sentryModel(model).compactTrigger;
     if (!state || state.fired || state.usage <= compactTrigger) return false;
     state.fired = true;
+    const backendName = resolveGatewayModelPolicy(model)?.backend === 'grok' ? 'Grok' : 'Codex';
     const body = contextOverflowBody(state.usage, compactTrigger,
-      'Prompt is too long for the Codex context window; compact and retry.');
+      `Prompt is too long for the ${backendName} context window; compact and retry.`);
     res.writeHead(413, {
       'content-type': 'application/json',
       'content-length': Buffer.byteLength(body),
@@ -1252,7 +1125,7 @@ function runWorker() {
 
   function logAdvertisedSentryPolicies() {
     for (const policy of Object.values(MODEL_WINDOW_POLICY)) {
-      const sentryPolicy = effectiveCodexSentryPolicy(policy);
+      const sentryPolicy = effectiveSentryPolicy(policy);
       if (!sentryPolicy) {
         console.log(`model-gateway: sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=none`);
         continue;
@@ -1262,35 +1135,23 @@ function runWorker() {
   }
 
   async function refreshModels({ logSentryPolicies = false } = {}) {
-    let ids = null;
-    try {
-      const r = await fetchUrl(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { timeout: 2500 });
-      if (r.status === 200) {
-        ids = (JSON.parse(r.body.toString()).data || []).map((m) => m.id).filter((id) => /^gpt-/.test(id));
-        if (!ids.length) ids = null;
-      }
-    } catch { /* proxy down or no such route */ }
-    if (!ids) {
-      try { ids = JSON.parse(fs.readFileSync(path.join(STATE, 'models.json'), 'utf8')); } catch { /* absent */ }
-    }
-    // Advertising an id the router can't claim back would hand it to
-    // api.anthropic.com, so a local models.json is held to the same family rule.
-    if (Array.isArray(ids)) ids = ids.filter((id) => typeof id === 'string' && (id === 'auto' || CODEX_FAMILY_RE.test(id)));
-    if (!Array.isArray(ids) || !ids.length) ids = DEFAULT_MODELS;
+    const { ids, source } = await advertisedCodexCatalog();
     const grokModels = grokBackend.grokModelsFromCache();
     const advertisedGrokModels = grokModels.length ? grokModels : DEFAULT_GROK_MODELS;
     modelCache = {
-      at: Date.now(),
+      // A stand-in list is never persisted; the next refresh tick retries the proxy.
+      source,
       data: [
         ...[...ids.filter((id) => id !== 'auto'), ...(LIST_DISPATCH_MODEL ? ['auto'] : [])]
           .map((id) => gatewayModel(id))
           .filter(Boolean),
         ...advertisedGrokModels
-          .filter((model) => resolveGatewayModelPolicy(model.id)?.backend === 'grok')
+          .filter(isGrokBackendModel)
           .map((model) => gatewayModel(model.id, 'grok')),
       ],
     };
     if (logSentryPolicies) logAdvertisedSentryPolicies();
+    if (source !== 'proxy') return;
     try {
       syncGatewayDiscoveryCache({ models: modelCache.data, baseUrl: effectiveBaseUrl().value || null });
     } catch (error) {
@@ -1298,6 +1159,9 @@ function runWorker() {
     }
   }
   refreshModels({ logSentryPolicies: true });
+  // A refresh reads cache files synchronously, and one per stale request let a burst of
+  // /v1/models calls start one each (issue #238); the handler only ever reads this snapshot.
+  setInterval(refreshModels, MODELS_REFRESH_MS).unref();
 
   const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 64 });
   const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64 });
@@ -1591,7 +1455,7 @@ function runWorker() {
           });
           routeTelemetry?.finish(upRes.statusCode, statusOverride);
           // The status line is gone but the sentry's learned ceiling is not.
-          if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) noteGenuineOverflow(sessionId, contextModel);
+          if (normalizeContextErrors && SENTRY_ENABLED && upRes.statusCode === 413) noteGenuineOverflow(sessionId, contextModel);
           if (normalizeContextErrors) noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, Buffer.concat(chunks));
           const authenticationFailure = codexAuthenticationFailure(Buffer.concat(chunks), upRes.statusCode);
           const error = authenticationFailure ? JSON.parse(authenticationFailure).error : {
@@ -1669,7 +1533,7 @@ function runWorker() {
         upRes.once('aborted', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_aborted'));
         upRes.once('error', () => routeTelemetry?.finish(upRes.statusCode, 'upstream_error'));
       }
-      if (normalizeContextErrors && CODEX_SENTRY_ENABLED && upRes.statusCode === 413) {
+      if (normalizeContextErrors && SENTRY_ENABLED && upRes.statusCode === 413) {
         const chunks = [];
         let settled = false;
         const failBufferedResponse = (statusOverride) => {
@@ -1724,10 +1588,11 @@ function runWorker() {
           if (settled) return;
           settled = true;
           const upstreamBody = rewriteCodexJson(Buffer.concat(chunks), advertisedModel, false);
+          if (answerEmptyCodexCompletion(upRes.statusCode, upstreamBody, body, advertisedModel, clientRes, routeTelemetry)) return;
           noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, upstreamBody);
           const text = upstreamBody.toString();
           if (/context window|context length|input exceeds|prompt token count|too many tokens/i.test(text)) {
-            const normalized = CODEX_SENTRY_ENABLED
+            const normalized = SENTRY_ENABLED
               ? contextOverflowBody(noteGenuineOverflow(sessionId, contextModel) || codexContextWindow(contextModel) + 1,
                 codexContextWindow(contextModel), 'Input exceeds the model context window; compact and retry.')
               : JSON.stringify({
@@ -1778,7 +1643,7 @@ function runWorker() {
           const inference = attempt || newCompactAttempt();
           const observeEvent = (event) => {
             noteCompactEvent(inference, event);
-            if (filterPlanTools || (CODEX_SENTRY_ENABLED && sessionId)) recordSentryUsage(sessionId, event, contextModel);
+            if (filterPlanTools || (SENTRY_ENABLED && sessionId)) recordSentryUsage(sessionId, event, contextModel);
             usageCapture?.observeEvent(event);
           };
           const emit = attempt
@@ -1803,6 +1668,7 @@ function runWorker() {
           if (!attempt) {
             upRes.on('end', () => {
               filter.end();
+              closeFinishedTurn(inference, clientRes);
               routeTelemetry?.finish(upRes.statusCode, deliverableAttempt(inference) ? null : 'upstream_error');
               clientRes.end();
             });
@@ -1892,7 +1758,7 @@ function runWorker() {
       clientRes.writeHead(upRes.statusCode, resHeaders);
       if (successful && contentType.includes('text/event-stream')) {
         if (normalizeContextErrors) keepSseAlive(upRes, clientRes);
-        const observeSentry = normalizeContextErrors && CODEX_SENTRY_ENABLED && sessionId;
+        const observeSentry = normalizeContextErrors && SENTRY_ENABLED && sessionId;
         if (observeSentry || usageCapture) {
           const observer = createSseEventObserver(
             (event) => {
@@ -1951,7 +1817,7 @@ function runWorker() {
     else clientReq.pipe(upReq);
   }
 
-  async function forwardGrok(clientReq, clientRes, payload, model, advertisedModel, routeTelemetry, usageCapture) {
+  async function forwardGrok(clientReq, clientRes, payload, model, advertisedModel, sessionId, routeTelemetry, usageCapture) {
     let token;
     try {
       token = await grokBackend.grokAccessToken();
@@ -2022,7 +1888,11 @@ function runWorker() {
             try {
               const event = JSON.parse(data);
               transformer.event(event);
-              if (event?.response?.usage) usageCapture?.observeEvent({ type: 'message_delta', usage: grokBackend.anthropicUsage(event.response.usage) });
+              if (event?.response?.usage) {
+                const usage = grokBackend.anthropicUsage(event.response.usage);
+                usageCapture?.observeEvent({ type: 'message_delta', usage });
+                recordSentryUsage(sessionId, { type: 'message_delta', usage }, model);
+              }
             } catch {}
           }
         };
@@ -2036,6 +1906,8 @@ function runWorker() {
       upstream.on('end', () => {
         let response;
         try { response = JSON.parse(Buffer.concat(chunks).toString()); } catch { response = null; }
+        const usage = response?.usage && grokBackend.anthropicUsage(response.usage);
+        if (usage) recordSentryUsage(sessionId, { type: 'message_delta', usage }, model);
         const translated = grokBackend.translateResponse(response, advertisedModel);
         const translatedBody = Buffer.from(JSON.stringify(translated));
         usageCapture?.observeJson(translatedBody);
@@ -2082,6 +1954,7 @@ function runWorker() {
         ok: true,
         version: PLUGIN_VERSION,
         models: modelCache.data.length,
+        catalog: modelCache.source,
         served: counters,
         draining,
         activeRequests,
@@ -2110,7 +1983,6 @@ function runWorker() {
 
     if (req.method === 'GET' && pathOnly === '/v1/models') {
       counters.models++;
-      if (Date.now() - modelCache.at > 60000) refreshModels(); // serve stale, refresh behind
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ data: modelCache.data, has_more: false }));
     }
@@ -2261,7 +2133,7 @@ function runWorker() {
               via: dispatchVia || 'direct',
             });
             const requestBodySessionId = requestSessionId(req);
-            const sessionId = codexSessionId(req);
+            const sessionId = sentrySessionId(req);
             if (pathOnly === '/v1/messages' && fireContextSentry(res, sessionId, parsed.model)) {
               routeTelemetry.finish(413);
               return;
@@ -2327,6 +2199,11 @@ function runWorker() {
               fallback: false,
               via: 'direct',
             });
+            const sessionId = sentrySessionId(req);
+            if (fireContextSentry(res, sessionId, model)) {
+              routeTelemetry.finish(413);
+              return;
+            }
             recordRequestBodyHighWater(requestSessionId(req), raw.length);
             const usageCapture = usageEmitter.enabled
               ? usageEmitter.start({
@@ -2336,7 +2213,7 @@ function runWorker() {
                 route: { requestedModel: advertisedModel, effectiveModel: model, backend: 'grok', effort, via: 'direct' },
               })
               : null;
-            return forwardGrok(req, res, parsed, model, advertisedModel, routeTelemetry, usageCapture);
+            return forwardGrok(req, res, parsed, model, advertisedModel, sessionId, routeTelemetry, usageCapture);
           }
         } catch { /* not JSON; fall through to passthrough */ }
       }
@@ -2423,4 +2300,7 @@ function runWorker() {
   }
 }
 
-module.exports = { createHostsBypassResolver, effectiveCodexSentryPolicy, gatewayModel, runWorker };
+module.exports = {
+  catalogReadiness, createHostsBypassResolver, effectiveSentryPolicy, gatewayModel, getCodexReadiness,
+  hasOpenAiRejectionEvidence, noteCodexUpstreamRejection, runWorker,
+};

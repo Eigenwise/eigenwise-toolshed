@@ -4,6 +4,7 @@ import './_sidequest-install-fixture.js';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { creationGeneration } = require('./_creation-generation.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -1299,7 +1300,7 @@ function claimedReviewInWorktree(slug: string, repository: string, reviewRef: st
   assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
   git(repository, ['worktree', 'add', '--detach', worktree, String(prepared.ticket.dispatch.baseCommit)]);
   worktreeLease.createCheckoutInstanceMarker(path.resolve(worktree, git(worktree, ['rev-parse', '--git-dir'])));
-  assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+  assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId).ok, true);
   assert.equal(store.claimTicket(slug, reviewRef, agentId, {
     token: prepared.token,
@@ -1366,4 +1367,30 @@ test('SQ-2207: a review whose checkout cannot be read is refused instead of clos
   assert.equal(refused.reason, 'review_tree_unobservable');
   assert.ok(refused.message.includes('technical_blocker'), refused.message);
   assert.equal(store.getTicket(slug, review.ref).status, 'doing');
+});
+
+// GH-215. A bound review has to END on its candidate, so a write-scoped one that never touched its scope has no
+// commit it could submit. Demanding a submission there left done and submit pointing at each other.
+test('GH-215: a write-scoped bound review closes with done when it never used its write scope', () => {
+  const { repository, slug, commit } = board('close-write-scope');
+  const source = submittedSource(slug, commit, 'close-write-scope');
+  const review = store.createTicket(slug, {
+    title: 'write-scoped review',
+    category: 'review-audit',
+    files: ['candidate.txt'],
+    readonly: false,
+    executorVerify: 'manual: read the candidate',
+  }, { ref: source.ref, commit });
+  const { worktree, agentId } = claimedReviewInWorktree(slug, repository, review.ref, 'write-scope');
+  assert.equal(store.getTicket(slug, review.ref).dispatch.readonly, false);
+
+  fs.writeFileSync(path.join(worktree, 'candidate.txt'), 'review edit\n');
+  const dirty = store.releaseTicket(slug, review.ref, agentId, { status: 'done', source: 'test' });
+  assert.equal(dirty.ok, false);
+  assert.equal(dirty.reason, 'submission_required', 'write scope the review did use still needs commit and submit');
+
+  git(worktree, ['checkout', '--', 'candidate.txt']);
+  const closed = store.releaseTicket(slug, review.ref, agentId, { status: 'done', source: 'test' });
+  assert.equal(closed.ok, true, closed.message);
+  assert.equal(store.getTicket(slug, review.ref).status, 'done');
 });

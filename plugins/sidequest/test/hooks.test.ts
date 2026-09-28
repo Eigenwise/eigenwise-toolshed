@@ -6,6 +6,7 @@ import './_hook-runtime.js';
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
+const { creationGeneration } = require('./_creation-generation.js');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
@@ -180,14 +181,72 @@ function runHookProcessForBudget(script?: any, payload?: any, envOverrides?: any
   });
 }
 
-async function waitForPath(file: string): Promise<void> {
-  const deadline = Date.now() + 2000;
+// A fixed wall-clock bound can't tell a loaded CI runner from a stuck worker: the
+// detached sweep this waits on spawns its own node process, so its cost rides the
+// same machine load as a bare spawn does. Scale the bound against a spawn measured
+// in this run instead (SQ-2864 used the same shape for SubagentStop's budget), and
+// keep a floor above the ~3.6s durations already observed on a loaded Windows
+// runner (SQ-2895). The calibration spawn itself carries an explicit timeout so a
+// stalled child (or an inherited preload that never returns) fails loudly instead
+// of hanging test collection indefinitely (SQ-2999/SQ-3000).
+const PROCESS_SPAWN_CALIBRATION_TIMEOUT_MS = 5_000;
+const PROCESS_SPAWN_CALIBRATION_OPTIONS = {
+  windowsHide: true,
+  timeout: PROCESS_SPAWN_CALIBRATION_TIMEOUT_MS,
+} as const;
+const PROCESS_SPAWN_BASELINE_MS = (() => {
+  const started = Date.now();
+  execFileSync(process.execPath, ['-e', ''], PROCESS_SPAWN_CALIBRATION_OPTIONS);
+  return Math.max(1, Date.now() - started);
+})();
+const WAIT_FOR_PATH_DEFAULT_MS = Math.max(5000, PROCESS_SPAWN_BASELINE_MS * 40);
+
+async function waitForPath(file: string, budgetMs: number = WAIT_FOR_PATH_DEFAULT_MS): Promise<void> {
+  const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {
     if (fs.existsSync(file)) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  throw new Error(`Timed out waiting for ${file}`);
+  throw new Error(`Timed out waiting for ${file} after ${budgetMs}ms`);
 }
+
+test('waitForPath: resolves once a file appears after a deterministic delay, not only if it is already there', async () => {
+  const file = path.join(SIDEQUEST_HOME, `wait-for-path-delayed-${crypto.randomUUID()}.json`);
+  setTimeout(() => fs.writeFileSync(file, '{}'), 20);
+  assert.equal(fs.existsSync(file), false, 'the control must start without the file, or the wait proves nothing');
+  await waitForPath(file);
+  assert.equal(fs.existsSync(file), true);
+});
+
+test('waitForPath: still times out when the file never appears', async () => {
+  const file = path.join(SIDEQUEST_HOME, `wait-for-path-missing-${crypto.randomUUID()}.json`);
+  await assert.rejects(() => waitForPath(file, 50), /Timed out waiting for/);
+});
+
+test('the process-spawn calibration bounds its child with a finite timeout', () => {
+  assert.equal(PROCESS_SPAWN_CALIBRATION_OPTIONS.windowsHide, true);
+  assert.ok(
+    Number.isFinite(PROCESS_SPAWN_CALIBRATION_OPTIONS.timeout) && PROCESS_SPAWN_CALIBRATION_OPTIONS.timeout > 0,
+    'the calibration spawn must carry a finite, positive timeout or a stalled child can hang test collection forever',
+  );
+});
+
+test('a stalled process-spawn calibration terminates within its declared timeout bound, not indefinitely', () => {
+  const boundedTimeoutMs = 200;
+  const started = Date.now();
+  assert.throws(
+    () => execFileSync(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      windowsHide: true,
+      timeout: boundedTimeoutMs,
+    }),
+    (error: any) => error.code === 'ETIMEDOUT',
+  );
+  const elapsedMs = Date.now() - started;
+  assert.ok(
+    elapsedMs < boundedTimeoutMs + 5000,
+    `expected the stalled child to be killed near its ${boundedTimeoutMs}ms bound, took ${elapsedMs}ms`,
+  );
+});
 
 function publishStateLock(lockDirectory: string, ownerPid: number): string {
   const generation = `fixture-${crypto.randomUUID()}`;
@@ -363,7 +422,7 @@ function completeCheckoutCreation(project: string, sessionId: string, worktree: 
   const gitDirectoryValue = gitFixture(['rev-parse', '--git-dir'], worktree);
   const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
   worktreeLease.createCheckoutInstanceMarker(gitDirectory);
-  assert.equal(store.completeDispatchWorktreeCreation(project, sessionId, worktree).ok, true);
+  assert.equal(store.completeDispatchWorktreeCreation(project, sessionId, worktree, creationGeneration(project, sessionId, worktree)).ok, true);
 }
 
 function preparedPrompt(prepared: any): string {
@@ -472,6 +531,94 @@ test('pre-tool hook: terminal guard leaves live and submitted executors alone', 
     tool_input: { command: 'git status --short' },
   });
   assert.equal(submittedResult, null);
+});
+
+test('pre-tool hook: a closed sibling never refuses the executor still holding its own claim', () => {
+  const closed = addStopTicket('closed sibling of a live executor');
+  const live = addStopTicket('live executor beside a closed sibling');
+  const sessionId = `cross-ticket-terminal-${++sqSeq}`;
+  // The incident shape: one runtime identity recorded on two sibling dispatches of one
+  // session, reachable because a bind takes any sibling whose own agent id is still unset.
+  const agentId = `cross-ticket-agent-${sqSeq}`;
+  const bindSibling = (ticket?: any, by?: any, agentName?: any) => {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
+    const executor = prepared.ticket.dispatchExecutor;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId, token: prepared.token, executor, agentName,
+    }).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentName).ok, true);
+    const worktree = store.getTicket(slug, ticket.ref).dispatch?.worktree;
+    if (worktree) fs.mkdirSync(worktree, { recursive: true });
+    assert.equal(store.claimTicket(slug, ticket.ref, by, { sessionId, token: prepared.token, executor }).ok, true);
+    return executor;
+  };
+  const executor = bindSibling(closed, 'closed-sibling-worker', `closed-sibling-${sqSeq}`);
+  assert.equal(bindSibling(live, 'live-sibling-worker', `live-sibling-${sqSeq}`), executor);
+  assert.equal(store.getTicket(slug, closed.ref).dispatch.agentId, agentId);
+  assert.equal(store.getTicket(slug, live.ref).dispatch.agentId, agentId);
+
+  assert.equal(store.completeTicket(slug, closed.ref, 'closed-sibling-worker', {
+    model: 'sonnet',
+    effort: 'high',
+    cleanDeclaredScope: true,
+  }).ok, true);
+
+  const stillLive = store.getTicket(slug, live.ref);
+  assert.equal(stillLive.status, 'doing');
+  assert.equal(stillLive.claim.by, 'live-sibling-worker');
+
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    agent_type: executor,
+    agent_id: agentId,
+    cwd: BOARD_PATH,
+    tool_name: 'Bash',
+    tool_input: { command: 'echo diag-probe' },
+  }), null, `${closed.ref} must not deny Bash while ${live.ref} is claimed by the same identity`);
+});
+
+test('pre-tool hook: the name-prefix fallback stands down for an unclaimed live sibling', () => {
+  const closed = addStopTicket('closed sibling reached only through the name-prefix fallback');
+  const live = addStopTicket('live sibling reached only through the name-prefix fallback');
+  const sessionId = `name-prefix-terminal-${++sqSeq}`;
+  // No agent id is ever bound on either dispatch record here; the incoming call's agent_id
+  // reaches the closed sibling through dispatchIdentityMatches' prefix fallback (foo-2
+  // starts with foo-) and the live sibling through its exact-name fallback, the other
+  // route into that function, with no id shared between the two records.
+  const launchWithName = (ticket: any, agentName: string) => {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
+    const executor = prepared.ticket.dispatchExecutor;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId, token: prepared.token, executor, agentName,
+    }).ok, true);
+    return { executor, token: prepared.token };
+  };
+  const { executor, token: closedToken } = launchWithName(closed, 'foo');
+  launchWithName(live, 'foo-2');
+
+  const worktree = store.getTicket(slug, closed.ref).dispatch?.worktree;
+  if (worktree) fs.mkdirSync(worktree, { recursive: true });
+  assert.equal(store.claimTicket(slug, closed.ref, 'name-prefix-closed-worker', {
+    sessionId, token: closedToken, executor,
+  }).ok, true);
+  assert.equal(store.completeTicket(slug, closed.ref, 'name-prefix-closed-worker', {
+    model: 'sonnet',
+    effort: 'high',
+    cleanDeclaredScope: true,
+  }).ok, true);
+
+  const liveTicket = store.getTicket(slug, live.ref);
+  assert.equal(liveTicket.status, 'todo', 'the live sibling stands in unclaimed, through its dispatch record alone');
+  assert.equal(liveTicket.dispatch?.agentId, undefined, 'no agent id is ever bound on the live sibling');
+
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    agent_type: executor,
+    agent_id: 'foo-2',
+    cwd: BOARD_PATH,
+    tool_name: 'Bash',
+    tool_input: { command: 'echo diag-probe' },
+  }), null, `${closed.ref} must not deny Bash while ${live.ref} matches only through the unclaimed name-prefix fallback`);
 });
 
 test('pre-tool hook: an executor cannot redispatch its own active ticket', () => {
@@ -959,6 +1106,34 @@ test('pre-tool hook: an unbound helper inherits the sole active ticket', () => {
   });
   assert.equal(outside.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(outside.hookSpecificOutput.permissionDecisionReason, /effective scope/);
+});
+
+test('pre-tool hook: a declared path outside the repo is writable because it is declared (GH-300)', () => {
+  // add accepts an out-of-repo path for non-repo output, so the guard refusing that same
+  // declared path left the executor no way to deliver.
+  const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-outside-declared-'));
+  const declared = path.join(outsideRoot, 'handoffs', 'stories.md');
+  const ticket = addStopTicket('outside declared output', { files: [declared], readonlyOverride: true });
+  const acting = {
+    ...claimStopTicket(ticket, `outside-declared-${++sqSeq}`, 'outside-declared-claim'),
+    agent_type: 'general-purpose',
+    agent_id: `outside-declared-helper-${++sqSeq}`,
+    cwd: BOARD_PATH,
+  };
+
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    ...acting,
+    tool_name: 'Write',
+    tool_input: { file_path: declared },
+  }), null);
+
+  const undeclared = runHookOutput(FORCE_BYPASS, {
+    ...acting,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(outsideRoot, 'handoffs', 'other.md') },
+  });
+  assert.equal(undeclared.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(undeclared.hookSpecificOutput.permissionDecisionReason, /effective scope/);
 });
 
 test('pre-tool hook: a steer between turns is delivered, but a terminal failure is recorded', () => {
@@ -3408,7 +3583,12 @@ test('session-start reclaims a clean old worktree without lease identity', async
     assert.equal(fs.existsSync(old), false, 'SessionStart must reclaim a clean old worktree without lease identity');
   } finally {
     if (fs.existsSync(old)) gitFixture(['worktree', 'remove', '--force', old], repo);
-    fs.rmSync(repo, { recursive: true, force: true });
+    // Ending the session, like the sibling live-worktree test above, runs the sweep
+    // one more time in the foreground and only returns once that child process has
+    // exited — giving Windows a chance to release any handle the detached sweep
+    // worker still held on `repo` before cleanup deletes it (SQ-2907).
+    runHook(SESSION_END, { session_id: 'session-sweep', cwd: repo }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
+    fs.rmSync(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -3548,7 +3728,11 @@ test('sweep worker: records its notices for the next session instead of dropping
   assert.ok(Array.isArray(JSON.parse(fs.readFileSync(report, 'utf8')).notices));
 });
 
-test('session-start skips an unavailable integration target without failing the sweep', () => {
+// Was 'session-start skips an unavailable integration target without failing the
+// sweep'. Skipping is what left those projects reclaiming nothing forever, so the
+// sweep now runs against the repository default and says which ref it compared with
+// (SQ-2924).
+test('session-start sweeps against the repository default when the integration target is unavailable', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-sweep-target-'));
   gitFixture(['init', '-b', 'main'], repo);
   gitFixture(['config', 'user.name', 'Sidequest Test'], repo);
@@ -3564,8 +3748,8 @@ test('session-start skips an unavailable integration target without failing the 
   // turning the expected skip notice into a deferral notice; pin the deadline
   // so the sweep always finishes inside this test.
   const context = runHook(SESSION, { session_id: 'session-target', source: 'startup', cwd: repo }, { SIDEQUEST_SWEEP_DEADLINE_MS: '60000', CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
-  assert.match(context, /skipped worktree sweep/);
-  assert.match(context, /configured integration branch is unavailable locally/);
+  assert.match(context, /has no usable integration ref, so the worktree sweep compared against the repository default instead/);
+  assert.doesNotMatch(context, /skipped worktree sweep/);
   assert.doesNotMatch(context, /worktree sweep failed/);
 });
 
@@ -3670,6 +3854,68 @@ test('worktree-create binds a linked checkout to its registered main board', () 
     if (fs.existsSync(linkedCheckout)) gitFixture(['worktree', 'remove', '--force', linkedCheckout], repository);
     try { gitFixture(['branch', '-D', `worktree-${name}`], repository); } catch (_) {}
   }
+});
+
+// GH-274, GH-269, GH-84. The orchestrating session may be rooted in a plain folder that holds the
+// registered repositories, or in a different registered repository. Either way the checkout is cut
+// from the dispatched ticket's own project. Each spawning shape runs as its own dispatch and catch.
+test('worktree-create cuts the ticket project whatever repository the session cwd is in', () => {
+  const hub = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-non-git-hub-'));
+  assert.throws(() => gitFixture(['rev-parse', '--show-toplevel'], hub), 'the hub fixture must not sit inside a repository');
+  const child = path.join(hub, 'child');
+  const spawning = path.join(hub, 'spawning');
+  for (const repository of [child, spawning]) {
+    fs.mkdirSync(repository);
+    gitFixture(['init', '--quiet', '-b', 'main'], repository);
+    gitFixture(['config', 'user.email', 'test@example.invalid'], repository);
+    gitFixture(['config', 'user.name', 'Hub Worktree Hook Test'], repository);
+    fs.writeFileSync(path.join(repository, 'tracked.txt'), `${path.basename(repository)}\n`);
+    gitFixture(['add', 'tracked.txt'], repository);
+    gitFixture(['commit', '--quiet', '-m', 'seed'], repository);
+  }
+  const project = store.ensureProject(child, 'hub child').slug;
+  store.ensureProject(spawning, 'hub spawning');
+  const category = `hub-worktree-hook-${++sqSeq}`;
+  store.setCategory({ id: category, name: category, route: { model: 'sonnet', effort: 'medium' }, fallback: null, enabled: true });
+  const outcomes = [{ shape: 'non-git hub folder', cwd: hub }, { shape: 'another registered repository', cwd: spawning }].map(({ shape, cwd }) => {
+    const ticket = store.createTicket(project, { title: `hub creation from ${shape}`, category, files: ['tracked.txt'] });
+    const sessionId = `hub-worktree-hook-${++sqSeq}`;
+    const prepared = store.prepareDispatch(project, ticket.ref, { sessionId, runtimeCwd: cwd });
+    assert.equal(store.recordDispatchLaunch(project, ticket.ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId }).ok, true);
+    try {
+      const output = execFileSync(process.execPath, [WORKTREE_CREATE], {
+        input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: sessionId, cwd, name: `agent-hub-${sqSeq}` }),
+        encoding: 'utf8',
+        env: process.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+      const common = gitFixture(['rev-parse', '--path-format=absolute', '--git-common-dir'], output);
+      const cutFromChild = worktrees.canonicalPath(common) === worktrees.canonicalPath(path.join(child, '.git'));
+      const bound = worktrees.canonicalPath(store.getTicket(project, ticket.ref).dispatch.worktree) === worktrees.canonicalPath(output);
+      return `${shape}: ${cutFromChild && bound ? 'cut from the ticket project' : `wrong checkout ${output}`}`;
+    } catch (error: any) {
+      return `${shape}: failed ${String(error?.stderr || error?.message || error).trim()}`;
+    }
+  });
+  assert.deepEqual(outcomes, [
+    'non-git hub folder: cut from the ticket project',
+    'another registered repository: cut from the ticket project',
+  ]);
+});
+
+test('worktree-create names the missing reservation when a non-git cwd has nothing to follow', () => {
+  const hub = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-non-git-unreserved-'));
+  let stderr = '';
+  assert.throws(() => execFileSync(process.execPath, [WORKTREE_CREATE], {
+    input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: `unreserved-${++sqSeq}`, cwd: hub, name: `agent-unreserved-${sqSeq}` }),
+    encoding: 'utf8',
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  }), (error: any) => {
+    stderr = String(error.stderr || '');
+    return true;
+  });
+  assert.match(stderr, /is not inside a git repository, and this session holds no launched isolated dispatch on exactly one board/);
 });
 
 test('worktree-create refuses a pre-existing same-repository checkout without creation proof', () => {
@@ -3900,6 +4146,83 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   } finally {
     if (fs.existsSync(failedTarget)) gitFixture(['worktree', 'remove', '--force', failedTarget], repo);
     try { gitFixture(['branch', '-D', `worktree-${failedName}`], repo); } catch (_) {}
+  }
+});
+
+test('SQ-2955: a WorktreeCreate whose generation was retired mid-setup stamps nothing and leaves the replacement attempt alone', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktree-generation-race-'));
+  gitFixture(['init', '--quiet', '-b', 'main'], repo);
+  gitFixture(['config', 'user.email', 'test@example.invalid'], repo);
+  gitFixture(['config', 'user.name', 'Worktree Race Test'], repo);
+  fs.writeFileSync(path.join(repo, 'tracked.txt'), 'seed\n');
+  gitFixture(['add', 'tracked.txt'], repo);
+  gitFixture(['commit', '--quiet', '-m', 'seed'], repo);
+  const project = store.ensureProject(repo, 'worktree hook generation race').slug;
+  const category = `worktree-race-${++sqSeq}`;
+  store.setCategory({ id: category, name: category, route: { model: 'sonnet', effort: 'medium' }, fallback: null, enabled: true });
+  const ticket = store.createTicket(project, { title: 'generation race', category, files: ['tracked.txt'] });
+  const sessionId = 'hook-generation-race';
+  const receipt = path.join(os.tmpdir(), `sq-worktree-race-receipt-${sqSeq}.json`);
+  // Setup runs inside the half-provisioned checkout, the only window where the orchestrator can retire
+  // this attempt and redispatch the same ticket onto the same session before the hook stamps anything.
+  const racer = path.join(os.tmpdir(), `sq-worktree-race-${sqSeq}.js`);
+  fs.writeFileSync(racer, [
+    "'use strict';",
+    "const fs = require('fs');",
+    'const [storeLib, slug, ref, sessionId, worktree, receipt] = process.argv.slice(2);',
+    'const store = require(storeLib);',
+    'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);',
+    'try {',
+    "  const retired = store.prepareDispatch(slug, ref, { retireOnly: true, recoveryEvidence: 'race probe: the bound runtime never arrived' });",
+    '  const prepared = store.prepareDispatch(slug, ref, { sessionId });',
+    '  const launched = store.recordDispatchLaunch(slug, ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId });',
+    '  const bound = store.bindDispatchWorktreeCreation(slug, sessionId, worktree);',
+    '  fs.writeFileSync(receipt, JSON.stringify({ retired: retired.retired === true, launched: launched.ok === true, bound: bound.ok === true }));',
+    '} catch (error) {',
+    '  fs.writeFileSync(receipt, JSON.stringify({ raceFailed: String((error && error.message) || error) }));',
+    '}',
+  ].join('\n'));
+  const name = 'agent-hook-generation-race';
+  const target = worktrees.namedWorktreePath(repo, name);
+  // `cd ..` first: setup runs with the checkout as its working directory, and on Windows that handle
+  // blocks the retirement from reclaiming it, which is the fixture's problem and not the hook's.
+  store.setBoardConfig(project, {
+    worktreeDependencyPaths: [],
+    worktreeSetup: `cd .. && node "${racer}" "${require.resolve('../lib/store.js')}" "${project}" "${ticket.ref}" "${sessionId}" "${target}" "${receipt}"`,
+  });
+  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId });
+  assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+  }).ok, true);
+  const retiredGeneration = store.getTicket(project, ticket.ref).dispatch.preparedAt;
+  try {
+    const raced = spawnSync(process.execPath, [WORKTREE_CREATE], {
+      input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: sessionId, cwd: repo, name }),
+      encoding: 'utf8',
+      env: { ...process.env, SIDEQUEST_CLAIM_IDLE_MIN: '0.002' },
+    });
+    assert.deepEqual(JSON.parse(fs.readFileSync(receipt, 'utf8')), { retired: true, launched: true, bound: true }, 'the race must have retired the generation and bound a replacement');
+    assert.notEqual(raced.status, 0, 'a hook holding a retired generation must fail instead of stamping the replacement');
+    assert.match(raced.stderr, /could not record finished provisioning: this WorktreeCreate belongs to a retired dispatch attempt/);
+    assert.match(raced.stderr, /worktree recovery touched no attempt and left the checkout to the replacement that now owns it/);
+
+    const replacement = store.getTicket(project, ticket.ref);
+    assert.notEqual(replacement.dispatch.preparedAt, retiredGeneration, 'the live attempt must be the replacement generation');
+    assert.equal(replacement.dispatch.outcome, 'launched', 'the stale hook must not terminalize the replacement');
+    assert.equal(replacement.dispatch.terminalAt ?? null, null);
+    assert.ok(replacement.dispatchNonce, 'the replacement keeps the briefing nonce its runtime will present');
+    assert.equal(replacement.dispatch.worktreeCreationCompletedAt ?? null, null, 'no callback from the retired generation may land on the replacement');
+    assert.equal(replacement.dispatch.worktreeProvisionedAt ?? null, null);
+    assert.equal(replacement.dispatch.worktreeProvisioningFailure ?? null, null);
+  } finally {
+    // Retiring the stranded attempt already reclaimed this checkout, so cleanup only has to cover the
+    // runs where it did not.
+    if (fs.existsSync(target)) {
+      try { gitFixture(['worktree', 'remove', '--force', target], repo); } catch (_) { fs.rmSync(target, { recursive: true, force: true }); }
+      try { gitFixture(['branch', '-D', `worktree-${name}`], repo); } catch (_) {}
+    }
   }
 });
 
@@ -4225,7 +4548,7 @@ test('subagent-stop: a terminal Agent failure preserves recovery evidence then n
   assert.equal(recordTerminalAgentFailure(t, stop).ok, true);
   const context = runHookForBudget(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED after terminal died: ${t.ref}\\. Preserve recovery evidence before a replacement\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
   assert.equal(store.getTicket(slug, t.ref).claim, null);
   assert.equal(store.getTicket(slug, t.ref).dispatch.outcome, 'died');
   assert.ok(store.getTicket(slug, t.ref).dispatch.terminalAt);
@@ -4296,9 +4619,7 @@ test('subagent-stop: a terminal release preserves board closeout then names the 
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-released', { status: 'todo' }).ok, true);
   const context = runHook(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED after terminal release: ${t.ref}\\. The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
-  assert.match(context, /TaskStop is a Claude Code host action, not a Sidequest tool\./);
-  assert.equal((context.match(/TaskStop\(/g) || []).length, 1, 'a terminal teammate is named for retirement once');
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: a failed-before-claim attempt names its exact native teammate for retirement', () => {
@@ -4320,8 +4641,7 @@ test('subagent-stop: a failed-before-claim attempt names its exact native teamma
     agent_name: agentName,
   });
   assert.match(context, new RegExp(`^exec FINISHED after terminal failed: ${ticket.ref}\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${agentName}" \\}\\)`));
-  assert.equal((context.match(/TaskStop\(/g) || []).length, 1);
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: a superseded unclaimed attempt names its exact native teammate for retirement', () => {
@@ -4335,6 +4655,18 @@ test('subagent-stop: a superseded unclaimed attempt names its exact native teamm
     executor: prepared.ticket.dispatchExecutor,
     agentName,
   }).ok, true);
+  // Recovery evidence only retires an unclaimed attempt once its latest runtime signal is past the claim
+  // grace, so the launch has to be old before the replacement can supersede it.
+  const launched = store.getTicket(slug, ticket.ref);
+  const silentSince = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  for (const field of ['preparedAt', 'launchedAt']) {
+    launched.dispatch[field] = silentSince;
+    if (launched.dispatch.attempts?.at(-1)?.[field]) launched.dispatch.attempts.at(-1)[field] = silentSince;
+  }
+  db.putRow(database, 'tickets', {
+    id: launched.id, project: slug, ref: launched.ref, status: launched.status,
+    archived: launched.archived ? 1 : 0, ord: launched.order, claim_by: launched.claim?.by ?? null, data: launched,
+  });
   assert.doesNotThrow(() => store.prepareDispatch(slug, ticket.ref, {
     allowUnscoped: true,
     sessionId: `superseded-replacement-${ticket.id}`,
@@ -4349,8 +4681,7 @@ test('subagent-stop: a superseded unclaimed attempt names its exact native teamm
     agent_name: agentName,
   });
   assert.match(context, new RegExp(`^exec FINISHED after superseded terminal failed: ${ticket.ref}\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${agentName}" \\}\\)`));
-  assert.equal((context.match(/TaskStop\(/g) || []).length, 1);
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: completed board closeout overrides a contradictory task notification', () => {
@@ -4362,7 +4693,7 @@ test('subagent-stop: completed board closeout overrides a contradictory task not
   assert.strictEqual(store.closeTicketForGrooming(slug, t.ref, { by: 'hook-test-groomer', reason: 'Shipped abc1234.' }).ok, true);
   const context = runHook(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED: ${t.ref} done \\(abc1234\\); review the recorded board result\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: completed board closeout without a hash still overrides task state', () => {
@@ -4374,7 +4705,7 @@ test('subagent-stop: completed board closeout without a hash still overrides tas
   assert.strictEqual(store.closeTicketForGrooming(slug, t.ref, { by: 'hook-test-groomer', reason: 'Done and verified.' }).ok, true);
   const context = runHook(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED: ${t.ref} done WITHOUT commit hash; review the recorded board result\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: a legacy partial submission is not reported ready for integration', () => {
@@ -4390,7 +4721,7 @@ test('subagent-stop: a legacy partial submission is not reported ready for integ
   });
   const context = runHook(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED with PARTIAL_SUBMISSION: ${t.ref} has scope-gated paths \\(plugins/model-gateway/bin/model-gateway\\.js\\); do not integrate it`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: submitted board state overrides a contradictory task notification', () => {
@@ -4400,7 +4731,7 @@ test('subagent-stop: submitted board state overrides a contradictory task notifi
   assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-submitted', { commit: 'abc1234def5678abc1234def5678abc1234def56' }).ok, true);
   const context = runHook(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED: ${t.ref} READY_FOR_INTEGRATION \\(abc1234def56\\); run the publish transaction \\(references/publishing\\.md\\)\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: a prior owner is silent after another worker reclaims the ticket', () => {
@@ -4993,7 +5324,7 @@ test('subagent stop terminalizes an unclaimed launch so the next dispatch can re
     agent_name: 'stop-before-claim',
   });
   assert.match(context, new RegExp(`^exec FINISHED after terminal failed: ${ticket.ref}\\. Preserve recovery evidence before a replacement\\.`));
-  assert.match(context, /TaskStop\(\{ task_id: "stop-before-claim" \}\)/);
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
   const after = store.getTicket(slug, ticket.ref);
   assert.equal(after.dispatch.outcome, 'failed');
   assert.ok(after.dispatch.terminalAt);

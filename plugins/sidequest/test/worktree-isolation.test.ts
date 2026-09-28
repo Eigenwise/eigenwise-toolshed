@@ -11,6 +11,7 @@ import './_hook-runtime.js';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { creationGeneration } = require('./_creation-generation.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -103,7 +104,21 @@ function completeCheckoutCreation(sessionId: string, worktree: string): void {
   const gitDirectoryValue = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
   const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
   worktreeLease.createCheckoutInstanceMarker(gitDirectory);
-  assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+  assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
+}
+
+// An attempt whose WorktreeCreate has not recorded finished provisioning is protected until the idle
+// backstop (SQ-2934). These fixtures are about which checkout a retirement touches, not about that wait,
+// so they collapse the window instead of faking hours of board silence; the grace is clamped to it.
+function withoutRetirementGrace<T>(run: () => T): T {
+  const original = process.env.SIDEQUEST_CLAIM_IDLE_MIN;
+  process.env.SIDEQUEST_CLAIM_IDLE_MIN = '0.000001';
+  try {
+    return run();
+  } finally {
+    if (original === undefined) delete process.env.SIDEQUEST_CLAIM_IDLE_MIN;
+    else process.env.SIDEQUEST_CLAIM_IDLE_MIN = original;
+  }
 }
 
 function removeWorktreeBranch(worktree: string, branch: string): void {
@@ -367,7 +382,7 @@ test('an exact-path replacement checkout cannot inherit the bound write lease', 
   const linkedGitDirectoryValue = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: linked, encoding: 'utf8', windowsHide: true }).trim();
   const linkedGitDirectory = path.isAbsolute(linkedGitDirectoryValue) ? linkedGitDirectoryValue : path.resolve(linked, linkedGitDirectoryValue);
   worktreeLease.createCheckoutInstanceMarker(linkedGitDirectory);
-  assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, linked).ok, true);
+  assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, linked, creationGeneration(slug, sessionId, linked)).ok, true);
   assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, linked).ok, true);
   const boundDispatch = store.getTicket(slug, ticket.ref).dispatch;
   const boundGitDirectory = worktrees.canonicalPath(boundDispatch.worktreeGitDirectory);
@@ -1269,7 +1284,7 @@ test('a token-validated failed claimant can surrender an unclaimed dispatch imme
 test('parent-checkout SubagentStart binds each completed isolated target to its reserved native agent', () => {
   const created: Array<{ ref: string; worktree: string }> = [];
   const sequence = `${process.pid}-${Date.now()}`;
-  const reserveTarget = (agentId: string, sessionId: string) => {
+  const reserveTarget = (agentId: string, sessionId: string, duplicateCheckout = false) => {
     const ticket = store.createTicket(slug, {
       title: `parent checkout fixture ${agentId}`,
       category: 'codebase-exploration',
@@ -1286,7 +1301,12 @@ test('parent-checkout SubagentStart binds each completed isolated target to its 
       sessionId,
       agentName: agentId,
     }).ok, true);
-    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    const creation = store.bindDispatchWorktreeCreation(slug, sessionId, worktree);
+    // A second reservation of a checkout a live attempt is still creating is the racing-hook shape: that
+    // attempt's own WorktreeCreate already holds the generation, so the board refuses to hand it to a caller
+    // carrying none rather than let it stamp the attempt it found (SQ-2961).
+    if (duplicateCheckout) assert.equal(creation.reason, 'missing_attempt');
+    else assert.equal(creation.ok, true);
     created.push({ ref: ticket.ref, worktree });
     return { ticket, executor, sessionId, agentId, worktree };
   };
@@ -1367,7 +1387,7 @@ test('parent-checkout SubagentStart binds each completed isolated target to its 
     const ambiguousAgent = `parent-ambiguous-${sequence}`;
     const ambiguousSession = `parent-ambiguous-session-${sequence}`;
     const ambiguousFirst = reserveTarget(ambiguousAgent, ambiguousSession);
-    reserveTarget(ambiguousAgent, ambiguousSession);
+    reserveTarget(ambiguousAgent, ambiguousSession, true);
     const ambiguousBinding = store.bindDispatchAgent(ambiguousFirst.sessionId, ambiguousFirst.executor, ambiguousAgent, ambiguousAgent, PROJECT);
     assert.equal(ambiguousBinding.ok, false);
     assert.equal(ambiguousBinding.reason, 'ambiguous');
@@ -2213,20 +2233,32 @@ test('a continuation spawn that never reached a runtime is retired by the comman
     assert.equal(stalled.boundAt, null);
     assert.equal(stalled.claimedAt, null);
 
-    let refusal = '';
+    let waitingRefusal = '';
     assert.throws(
       () => store.prepareDispatch(slug, ticket.ref, { sessionId: `${sequence}-retry-session` }),
       (error: any) => {
-        refusal = String(error.message);
-        return /already has a live dispatch attempt \(launched\)/.test(refusal);
+        waitingRefusal = String(error.message);
+        return /already has a live dispatch attempt \(launched\)/.test(waitingRefusal);
       },
     );
-    const prescribed = /`sidequest dispatch (SQ-\d+) --recovery-evidence "([^"]*)"`/.exec(refusal);
-    assert.ok(prescribed, `the refusal must name the supersede command: ${refusal}`);
-    assert.equal(prescribed![1], ticket.ref);
+    assert.match(waitingRefusal, /last runtime signal: launch recorded/);
 
     const evidence = 'worktree lease refused creation: dispatch_binding_unavailable; the Agent call failed and no executor ran';
-    const retried = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sequence}-retry-session`, recoveryEvidence: evidence });
+    let retried: any;
+    withoutRetirementGrace(() => {
+      let refusal = '';
+      assert.throws(
+        () => store.prepareDispatch(slug, ticket.ref, { sessionId: `${sequence}-retry-session` }),
+        (error: any) => {
+          refusal = String(error.message);
+          return /already has a live dispatch attempt \(launched\)/.test(refusal);
+        },
+      );
+      const prescribed = /`sidequest dispatch (SQ-\d+) --recovery-evidence "([^"]*)"`/.exec(refusal);
+      assert.ok(prescribed, `the expired refusal must name the supersede command: ${refusal}`);
+      assert.equal(prescribed![1], ticket.ref);
+      retried = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sequence}-retry-session`, recoveryEvidence: evidence });
+    });
     assert.equal(retried.ok, true);
     assert.notEqual(retried.token, continued.token);
     assert.equal(retried.ticket.dispatch.outcome, 'prepared');
@@ -2308,18 +2340,19 @@ test('a checkout the attempt reserved itself still blocks the retry, and repeati
 
     // This attempt reserved the checkout itself, so the uncommitted work in it still blocks a retry.
     const evidence = 'observed terminal agent with no claim';
-    assert.throws(
+    withoutRetirementGrace(() => assert.throws(
       () => store.prepareDispatch(slug, ticket.ref, { sessionId: `${sequence}-retry`, recoveryEvidence: evidence }),
-      /cannot retry because immutable recovery fact: .* has uncommitted changes/,
-    );
+      /cannot retry because immutable recovery fact: .* holds uncommitted, untracked or ignored content/,
+    ));
     const retired = store.getTicket(slug, ticket.ref).dispatch;
     assert.equal(retired.failureShape, 'stranded_bound_launch_superseded');
     assert.equal(fs.existsSync(path.join(worktree, 'uncommitted.txt')), true);
 
-    // The attempt is gone, so repeating the command has to say that rather than deny it ever existed.
+    // The attempt is already retired, so repeating the command skips retirement and names the blocker that
+    // actually remains rather than refusing the evidence (SQ-3110).
     assert.throws(
       () => store.prepareDispatch(slug, ticket.ref, { sessionId: `${sequence}-retry`, recoveryEvidence: evidence }),
-      /already retired on recovery evidence[\s\S]*without recoveryEvidence/,
+      /cannot retry because immutable recovery fact: .* holds uncommitted, untracked or ignored content/,
     );
   } finally {
     store.releaseTicket(slug, ticket.ref, 'reserved-checkout-cleanup', { status: 'todo', source: 'test', force: true });
@@ -2384,9 +2417,12 @@ test('a checkout attributed to a reservation that never created one moves to the
     assert.equal(stalled.worktree, null);
     assert.equal(stalled.worktreeCreationCompletedAt, null);
     fs.writeFileSync(path.join(worktree, 'uncommitted.txt'), 'the sibling executor is still working\n');
-    const retried = store.prepareDispatch(slug, holder.ref, {
-      sessionId: `${sequence}-retry`,
-      recoveryEvidence: 'the Agent call died in WorktreeCreate and no executor ran',
+    let retried: any;
+    withoutRetirementGrace(() => {
+      retried = store.prepareDispatch(slug, holder.ref, {
+        sessionId: `${sequence}-retry`,
+        recoveryEvidence: 'the Agent call died in WorktreeCreate and no executor ran',
+      });
     });
     assert.equal(retried.ok, true);
     assert.equal(retried.ticket.dispatch.worktree || null, null);
@@ -2426,10 +2462,10 @@ test('a recovery fact naming a sibling agent checkout does not block the retry',
     execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT, windowsHide: true });
     fs.writeFileSync(path.join(worktree, 'uncommitted.txt'), 'the sibling executor is still working\n');
 
-    const retried = store.prepareDispatch(slug, ticket.ref, {
+    const retried = withoutRetirementGrace(() => store.prepareDispatch(slug, ticket.ref, {
       sessionId: `${sequence}-retry`,
       recoveryEvidence: 'the Agent call died in WorktreeCreate and no executor ran',
-    });
+    }));
     assert.equal(retried.ok, true);
     assert.equal(retried.ticket.dispatch.worktree || null, null);
     assert.equal(fs.existsSync(path.join(worktree, 'uncommitted.txt')), true, "the sibling's work is untouched");
@@ -2437,6 +2473,107 @@ test('a recovery fact naming a sibling agent checkout does not block the retry',
     store.releaseTicket(slug, ticket.ref, 'sq2926-fact-cleanup', { status: 'todo', source: 'test', force: true });
     store.releaseTicket(slug, sibling.ticket.ref, 'sq2926-fact-cleanup', { status: 'todo', source: 'test', force: true });
     removeWorktreeBranch(worktree, branch);
+  }
+});
+
+// SQ-3132. In a wave, a failed WorktreeCreate left a reservation bound to the checkout a sibling actually ran in,
+// and the runtime bind had crossed too, so the record even carried the sibling's agent id. Its recovery-evidence
+// supersede then removed the clean tree out from under the sibling's live claim.
+test('superseding a reservation cross-bound to a live sibling checkout leaves the checkout alone', () => {
+  const sequence = `sq3132-cross-${process.pid}-${Date.now()}`;
+  const siblingAgentId = `sq3132sibling${process.pid}`;
+  const sibling = dispatched(siblingAgentId);
+  const worktree = worktrees.resolvedAgentWorktree(PROJECT, siblingAgentId);
+  const branch = `sq3132-sibling-${sequence}`;
+  const worker = `${siblingAgentId}-worker`;
+  const sessionId = `${sequence}-session`;
+  const ticket = store.createTicket(slug, {
+    title: `cross-bound supersede fixture ${sequence}`,
+    category: 'codebase-exploration',
+    description: 'Its WorktreeCreate failed; the board bound it to the checkout a sibling runs in.',
+    files: ['README.md'],
+  });
+  try {
+    execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT, windowsHide: true });
+    const siblingToken = store.getTicket(slug, sibling.ticket.ref).dispatchNonce;
+    assert.equal(store.claimTicket(slug, sibling.ticket.ref, worker, { token: siblingToken, executor: sibling.executor }).ok, true);
+
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+      agentName: `${sequence}-agent`,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    // SubagentStart binds by session and executor type alone, so the crossed runtime lands the sibling's agent id.
+    assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, siblingAgentId, `${sequence}-agent`).ok, true);
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.agentId, siblingAgentId);
+
+    const retried = withoutRetirementGrace(() => store.prepareDispatch(slug, ticket.ref, {
+      sessionId: `${sequence}-retry`,
+      recoveryEvidence: 'the Agent call died in WorktreeCreate and no executor ran',
+    }));
+    assert.equal(retried.ok, true);
+    assert.equal(fs.existsSync(path.join(worktree, 'README.md')), true, "the sibling's checkout is untouched");
+    const registered = worktrees.parseWorktreeList(execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: PROJECT, encoding: 'utf8', windowsHide: true }));
+    assert.ok(registered.some((entry: any) => worktrees.canonicalPath(entry.worktree) === worktrees.canonicalPath(worktree)), 'the checkout is still registered');
+    const siblingAfter = store.getTicket(slug, sibling.ticket.ref);
+    assert.equal(siblingAfter.claim?.by, worker, "the sibling's claim survives");
+    assert.equal(siblingAfter.dispatch.worktree, worktrees.canonicalPath(worktree), "the sibling's claim still reads its worktree");
+    assert.equal(retried.ticket.dispatch.worktree || null, null, 'the replacement inherits no binding');
+    const refusal = retried.ticket.dispatch.crossBoundWorktree;
+    assert.equal(refusal.sibling, sibling.ticket.ref);
+    assert.ok(refusal.message.includes(sibling.ticket.ref), 'the refusal names the sibling ticket');
+    assert.match(refusal.message, /cross-bind/);
+    assert.match(refusal.message, /not a tree .* created/);
+    assert.ok(store.dispatchWarnings(retried.ticket, slug).some((warning: string) => warning.includes(refusal.message)), 'dispatch surfaces the refusal');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'sq3132-cross-cleanup', { status: 'todo', source: 'test', force: true });
+    store.releaseTicket(slug, sibling.ticket.ref, 'sq3132-cross-cleanup', { status: 'todo', source: 'test', force: true });
+    removeWorktreeBranch(worktree, branch);
+  }
+});
+
+// SQ-3132. WorktreeCreate binds the reservation before it creates anything, so a failure in between used to leave
+// the attempt `launched` and bound to a path it never created; plain re-dispatch then refused as a live attempt.
+test('a WorktreeCreate that fails before its checkout exists records the attempt failed and frees plain re-dispatch', () => {
+  const name = `sq3132-uncreated-${process.pid}-${Date.now()}`;
+  const sessionId = `${name}-session`;
+  const target = worktrees.namedWorktreePath(PROJECT, name);
+  const occupant = path.join(target, 'occupant.txt');
+  const ticket = store.createTicket(slug, {
+    title: `uncreated worktree fixture ${name}`,
+    category: 'codebase-exploration',
+    files: ['README.md'],
+  });
+  try {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+      agentName: name,
+    }).ok, true);
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(occupant, 'not created by this attempt\n');
+
+    const refusal = createWorktree(sessionId, name);
+    assert.equal(refusal.ok, false);
+    assert.match(refusal.output, /destination existed before this dispatch completed its creation/);
+    assert.match(refusal.output, /recorded the attempt failed/);
+    const failed = store.getTicket(slug, ticket.ref).dispatch;
+    assert.equal(failed.outcome, 'failed');
+    assert.equal(failed.failureShape, 'worktree_create_failed');
+    assert.equal(failed.worktree, null, 'the attempt keeps no binding to a path it never created');
+    assert.equal(fs.existsSync(occupant), true, 'recovery touched nothing at that path');
+
+    const replacement = store.prepareDispatch(slug, ticket.ref, { sessionId: `${name}-retry` });
+    assert.ok(replacement.token, 'a plain dispatch prepares without recovery evidence');
+    assert.equal(replacement.ticket.dispatch.outcome, 'prepared');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'sq3132-uncreated-cleanup', { status: 'todo', source: 'test', force: true });
+    fs.rmSync(target, { recursive: true, force: true });
   }
 });
 

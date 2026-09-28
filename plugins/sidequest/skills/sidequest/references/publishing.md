@@ -7,7 +7,10 @@ ready-for-integration with `sidequest submit` (claim released, status stays `doi
 verification, completing tickets in the control plane, then gating, assigning versions, and pushing
 main — is ONE serialized transaction owned by the orchestrator. This file is that transaction.
 
-`submit` derives the admitted range from the base recorded on the ticket's dispatch. Pass `--base <commit>`
+`submit` derives the admitted range from the base recorded on the ticket's dispatch, for isolated and shared-tree
+dispatches alike; the merge base replaces it only when upstream work was synced into the candidate after dispatch.
+Paths whose bytes at the tip already equal the integration target's do not count against scope, and a tip still at
+the recorded base is a no-op. Pass `--base <commit>`
 (or MCP `base`) only when automatic selection cannot identify the boundary. An explicit base must always lie on the
 submitted tip's history, and it must additionally either sit at or after the current merge base or already be
 reachable from the integration branch. A base that is not reachable from the integration branch must match the
@@ -40,7 +43,11 @@ push — instead of one transaction per ticket. Don't wait on work that isn't in
 The orchestrator is the integrator. A submitted range stays pinned at `refs/sidequest/<SQ-n>` until
 its exact assembled wave has delivered. A singleton can be assembled and gated during `integrate`; for
 a group, first run `sidequest assemble-wave <SQ-n> [SQ-n...] --verify "<gate evidence>"`, then pass
-that exact same participant set to `sidequest integrate`. The engine refuses delivery when the group
+that exact same participant set to `sidequest integrate`. When the participants pin a command, the gate
+runs it itself (`--verify` is only read for other verifier kinds): in a temporary detached checkout of
+the wave baseline with every candidate merged, cwd at its root, `CLAUDE_PLUGIN_*` stripped from the
+environment, and `verification.verifiedTree` naming the tree it checked. Candidates that do not merge
+cleanly refuse with `assembled_wave_compose_failed` and reject nobody. The engine refuses delivery when the group
 has no passing assembled-wave gate, includes a participant from another wave, omits a participant, or
 tries to deliver one participant from a multi-ticket wave. It records delivery only after one passing
 wave delivers its exact Git participant set and the resulting revision passes its delivery verification.
@@ -57,7 +64,10 @@ gate covers the newer target content. An assembly refusal leaves every submitted
 - `merge` is the default for release-pipeline repos such as Toolshed. It merges the submitted tip into
   the configured integration branch.
 - `replay` cherry-picks the submitted commits in order, keeping atomic history. A conflict aborts the
-  cherry-pick and restores the prior HEAD.
+  cherry-pick and restores the prior HEAD. To deliver it by hand, merge the pinned candidate itself
+  (`git merge --no-ff <candidate>`, never a cherry-pick), resolve the conflict in that merge commit,
+  re-gate, then record it with `integrate --delivery-commit <candidate>`. A hand-resolved cherry-pick
+  has a new patch identity and changed blobs, so its content check always refuses.
 - `apply` materializes the range without a commit so the user can review it in their changes view. It
   refuses overlapping uncommitted paths and names them. Its delivery record plus pinned ref is enough
   to close the ticket, no user-side commit is required.
@@ -76,6 +86,98 @@ This route still fails closed. Do not skip a verifier or review, substitute curr
 
 Set the board default with `sidequest board-config --delivery merge|replay|apply`. Consumer boards
 usually want `apply` or `replay`; use `merge` where the repository's release flow owns integration.
+
+### A repair whose range inherits a rejected candidate
+
+When a repair is built on top of an oracle-rejected candidate, its submitted range legitimately contains
+that candidate's commits. Sidequest admits that overlap instead of refusing it as a duplicate, and it does
+NOT shorten the range to do so: the repair submits with no explicit base, against the base its dispatch
+recorded, so review, delivery, and supersession all read the inherited bytes plus the repair delta.
+
+File the repair so all of this holds before dispatching it:
+
+- Link it `related` to the rejected source (`sidequest link <repair> related <source>`). Without that link
+  the overlap is refused; an unrelated submitted range is never inherited.
+- The source's candidate needs an oracle-confirmed rejection: a bound `review-audit` ticket whose verdict
+  rejected that exact candidate. A source-side `submission.review` mirror alone is not authority, and a
+  rejection pinned to a different commit than the submission now records does not count.
+- Declare the union of the inherited paths and the repair's own, including paths the rejected candidate
+  deleted or added and the repair never touches. Scope admission covers every path in the range.
+- The rejected range is inherited whole. A range carrying only part of it is refused.
+- The rejected source's release fragment doesn't need declaring. Submit admits it and records it in the
+  repair's scope snapshot, so a repair that renames `.release/unreleased/<source>.md` to its own fragment
+  passes the same range check again at integrate.
+
+An active, unrelated, unreviewed, or not-yet-rejected overlapping submission still refuses
+`duplicate_submission`, and the refusal names which half is missing. Do not answer that refusal with
+`--base`, a squash, or a rebuilt exact-tree candidate: those hide the inherited commits from the
+authorities that read them. `merge` and `replay` deliver the whole inherited tree, and
+`supersede_submission` then closes the rejected source with `reviewedReplacements` only for the paths the
+repair actually changed.
+
+`apply` needs one more step, because it materializes the range into the integration working tree instead
+of a commit: the head it records holds none of the delivered bytes, so per-path lineage has nothing to
+read and `supersede_submission` refuses `lineage_content_diverged`. Do not answer that by claiming
+unchanged inherited paths as `reviewedReplacements`; they were not replaced. Commit the materialized tree
+and bind it:
+
+1. On the recorded integration branch, commit the applied tree unchanged:
+   `git add -A <the delivered paths>` then `git commit`. Do not amend the content while committing it.
+2. Bind that commit to the delivery record: MCP `groomClose` with `ref`, `by`, `reason`, and
+   `deliveryCommit: <that commit>` (CLI `sidequest groom-close <ref> --delivery-commit <sha> --reason "…"`).
+   The repair is already closed, so this completes its delivery record rather than closing it again. It
+   re-runs the merged-tree verifier and refuses any commit that is not reachable from the recorded target,
+   or whose tree differs from the reviewed candidate on a submitted path. Every refusal here, a failing
+   verifier included, leaves the delivery record exactly as delivered, so fix the cause and bind the same
+   commit again.
+3. Then run `supersede_submission` as above, with `reviewedReplacements` only for the genuinely repaired
+   paths. The inherited addition and deletion now prove themselves from the committed tree.
+
+`integrate` with `deliveryCommit` refuses a closed repair with `submission_required`; the refusal names
+this same flow. Nothing here edits board state by hand or moves the immutable candidate.
+
+### A squash-merged branch whose source was deleted
+
+`integrate` refuses `expected_upstream_diverged` when the dispatch's frozen expected upstream no longer
+resolves from the target — typically because a maintainer squashed and deleted the branch by hand, so the
+candidate's own commit never lands and no automatic merge can reconcile it. The refusal names the
+recovery:
+
+1. Re-apply the verified candidate onto the current target (cherry-pick or squash) and re-gate it there.
+2. Record it with `groomClose`, passing `deliveryCommit: <the pinned candidate>` and
+   `deliveryMethod: "manual"` (CLI `--delivery-commit <sha> --delivery-method manual`).
+3. Keep the candidate's content present in the integration working tree; the merged-tree verifier and
+   content check still run against it.
+
+When the squash reached the target as its own commit, record that landed commit instead: `groomClose`
+with `deliveryCommit: <squash commit>` and no `deliveryMethod`. It passes when the squash commit's patch
+equals each candidate commit's patch or the patch of the whole submitted range. A squash that also
+carries another ticket's work matches neither and still refuses `delivery_content_missing`.
+
+### A conflict integrate cannot merge
+
+`integrate` never resolves a conflict. It aborts, restores the target, records `merge_failed` (or
+`replay_failed`) with the conflicted paths, and the refusal names this recovery:
+
+1. On the target branch, `git merge --no-ff <the pinned candidate>`, resolve the conflict, and commit the
+   merge. Keep the candidate as a parent of that merge: that ancestry is the content proof.
+2. Re-gate the merged tree.
+3. Record it with `groomClose`, passing `deliveryCommit: <the merge commit>`, `deliveryMethod: "manual"`,
+   and a reason (CLI `--delivery-commit <sha> --delivery-method manual --reason "…"`), or with `integrate`
+   passing `deliveryCommit: <the pinned candidate>` and a reason. Omit `integration: true`, which selects
+   the assembled-wave route instead.
+
+Don't submit the merge from a second ticket: its range contains the candidate's commits, so it is
+refused as `duplicate_submission`. A squash or cherry-pick of the resolution loses the ancestry and is
+refused as `delivery_content_missing`.
+
+### A post-merge suite failure
+
+When the merged tree fails its verifier, `integrate` hard-resets the target to the recorded pre-merge
+head. A sibling candidate submitted while that suite ran recorded the rolled-back merge as its expected
+upstream, so the same rollback rewrites that record back to the pre-merge head. The next `integrate` of
+the sibling, or a retry of the failed candidate, then runs normally. When the rollback itself is refused
+because the target moved past the delivery, nothing is rewritten; follow the refusal's manual recovery.
 
 If a repair ticket deliberately delivers an earlier parked submission, do not replay the obsolete range. Use MCP `supersede_submission` with the earlier ref, the later integrated repair ref, concise closure evidence, and `reviewedReplacements` for every original path whose delivered content intentionally differs. The control plane requires the repair's recorded delivery to include every original changed path, preserves the earlier submission and its lineage under `supersededBy`, marks it done, and removes its pending-submission warning. A missing path, an unintegrated repair, or unreviewed divergent content leaves the original submission parked.
 
@@ -123,12 +225,13 @@ before the merged-tree gate, version assignment, or push. A later failure can th
 ticket with an unpushed commit: finish the push when safe, or record the failure and unpushed state on
 the ticket.
 
-1. **Acquire the publish lock**: `sidequest publish lock`. The lock identity is derived internally
-   from the current session and worker, and the lock lives in the repo's common git dir, so every
-   session, process, and worktree serializes on it. If held, do NOT wait or poll: note the holder from
-   the failure output and retry at the next natural wakeup. `--steal` only when `publish status` shows
-   the holder stale (TTL expired or dead pid). Re-acquiring from the same session refreshes the lock —
-   that is the crash-recovery path for your own interrupted transaction.
+1. **Acquire the publish lock**: `sidequest publish lock`. The lock records the current worker and
+   session in the repo's common git dir, so every session, process, and worktree serializes on it. MCP
+   delivery recognizes that worker for this repository even when its server has a different runtime
+   session; a supplied `session` never changes that runtime identity. If held, do NOT wait or poll:
+   note the holder from the failure output and retry at the next natural wakeup. `--steal` only when
+   `publish status` shows the holder stale (TTL expired or dead pid). Re-acquiring as the same worker
+   refreshes the lock — that is the crash-recovery path for your own interrupted transaction.
 2. **Read the queue**: `sidequest publish queue --json`. Queue admission mechanically revalidates each durable range and its submit-time admitted scope snapshot. Rejected entries name their offending paths and stay parked. A legacy entry without a scope snapshot stays parked until its executor resubmits it.
 3. **Read each submitted handoff**: before integrating or closing a ticket, run
    `sidequest comments <ref> --json` for it. The queue is intentionally compact and does not replace the

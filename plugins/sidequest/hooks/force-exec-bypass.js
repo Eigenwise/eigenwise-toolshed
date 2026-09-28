@@ -22,8 +22,16 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// src/lib/git-process.ts
+var import_node_child_process = __toESM(require("node:child_process"));
+var import_node_util = require("node:util");
+var GIT_OUTPUT_MAX_BUFFER = 256 * 1024 * 1024;
+var execFileCallback = (0, import_node_util.promisify)(import_node_child_process.default.execFile);
+function execFileSync(file, args, options = {}) {
+  return import_node_child_process.default.execFileSync(file, args, { maxBuffer: GIT_OUTPUT_MAX_BUFFER, windowsHide: true, ...options });
+}
+
 // src/hooks/force-exec-bypass.ts
-var import_node_child_process = require("node:child_process");
 var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_os2 = __toESM(require("node:os"));
 var import_node_path3 = __toESM(require("node:path"));
@@ -713,7 +721,9 @@ function terminalExecutorTicket(input) {
     const matches = [];
     for (const project of store.listProjects({ all: true })) {
       for (const ticket of store.listTickets(project.slug)) {
-        if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId || !ticket.dispatch?.terminalAt || ticket.claim?.by || !dispatchIdentityMatches(ticket, agentId, executor)) continue;
+        if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId || !dispatchIdentityMatches(ticket, agentId, executor)) continue;
+        if (!ticket.dispatch?.terminalAt) return null;
+        if (ticket.claim?.by) continue;
         if (ticket.submission?.supersededBy?.ref || ticket.completion?.supersededBy?.ref) {
           const by = String(ticket.completion?.by || "the control plane").trim();
           matches.push({ ref: ticket.ref, closedBy: `superseded by ${ticket.submission?.supersededBy?.ref || ticket.completion?.supersededBy?.ref} through ${by}`, outcome: "superseded" });
@@ -834,14 +844,14 @@ function restoresCommittedContent(input, target) {
     } else {
       return false;
     }
-    const repository = canonicalPath((0, import_node_child_process.execFileSync)("git", ["rev-parse", "--show-toplevel"], {
+    const repository = canonicalPath(execFileSync("git", ["rev-parse", "--show-toplevel"], {
       cwd: import_node_path3.default.dirname(target),
       encoding: "utf8",
       windowsHide: true
     }).trim());
     const relative = import_node_path3.default.relative(repository, canonicalPath(target)).replace(/\\/g, "/");
     if (!relative || relative === ".." || relative.startsWith("../") || import_node_path3.default.isAbsolute(relative)) return false;
-    const committed = (0, import_node_child_process.execFileSync)("git", ["show", `HEAD:${relative}`], {
+    const committed = execFileSync("git", ["show", `HEAD:${relative}`], {
       cwd: repository,
       windowsHide: true
     });
@@ -862,12 +872,12 @@ function linkedWorktreeRelative(target, projectPath) {
     existing = parent;
   }
   try {
-    const checkout = canonicalPath((0, import_node_child_process.execFileSync)("git", ["rev-parse", "--show-toplevel"], {
+    const checkout = canonicalPath(execFileSync("git", ["rev-parse", "--show-toplevel"], {
       cwd: existing,
       encoding: "utf8",
       windowsHide: true
     }).trim());
-    const commonOutput = (0, import_node_child_process.execFileSync)("git", ["rev-parse", "--git-common-dir"], {
+    const commonOutput = execFileSync("git", ["rev-parse", "--git-common-dir"], {
       cwd: checkout,
       encoding: "utf8",
       windowsHide: true
@@ -888,8 +898,10 @@ function projectRelative(target, projectPath) {
   return linkedWorktreeRelative(target, projectPath);
 }
 function inScope(target, scope) {
-  const relative = projectRelative(canonicalPath(target), canonicalPath(scope.projectPath));
-  return relative != null && scopeMatch(relative, scope.files);
+  const canonicalTarget = canonicalPath(target);
+  const relative = projectRelative(canonicalTarget, canonicalPath(scope.projectPath));
+  if (relative != null) return scopeMatch(relative, scope.files);
+  return scopeMatch(canonicalTarget, scope.files.filter((file) => import_node_path3.default.isAbsolute(file)).map(canonicalPath));
 }
 function evidencePathRelation(target, scope) {
   const evidenceDirectory = canonicalPath(scope.evidenceDirectory);

@@ -21,7 +21,8 @@ __export(process_exports, {
   createProcessPort: () => createProcessPort,
   runProcessVerification: () => runProcessVerification,
   shellCommand: () => shellCommand,
-  shellScript: () => shellScript
+  shellScript: () => shellScript,
+  verifierEnvironment: () => verifierEnvironment
 });
 module.exports = __toCommonJS(process_exports);
 const fs = require("node:fs");
@@ -133,6 +134,9 @@ function shellCannotParsePosixSyntax(logPath, exitCode, shell) {
   if (exitCode !== 1 || shell.scriptExtension !== ".cmd") return false;
   return /^'!' is not recognized as an internal or external command,$/m.test(fs.readFileSync(logPath, "utf8"));
 }
+function verifierEnvironment(environment) {
+  return Object.fromEntries(Object.entries(environment).filter(([name]) => !/^CLAUDE_PLUGIN_/i.test(name)));
+}
 function processTimedOut(error) {
   return error instanceof Error && "code" in error && error.code === "ETIMEDOUT";
 }
@@ -173,7 +177,7 @@ function runProcessVerification(requirement, options = {}) {
     try {
       outcome = spawnSync(shell.executable, shell.arguments, {
         cwd: options.cwd || process.cwd(),
-        env: options.environment,
+        env: verifierEnvironment(options.environment || process.env),
         windowsHide: true,
         timeout: timeoutMilliseconds,
         stdio: ["ignore", log, log]
@@ -217,5 +221,6 @@ function createProcessPort() {
   createProcessPort,
   runProcessVerification,
   shellCommand,
-  shellScript
+  shellScript,
+  verifierEnvironment
 });

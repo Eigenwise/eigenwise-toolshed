@@ -40,9 +40,9 @@ function repositoryFor(cwd: string): string {
 // This hook only learns the spawning checkout's cwd, so a dispatch prepared for a
 // sibling project reserved a creation no WorktreeCreate could bind and its executor
 // died before it started (SQ-2884). The session's own reservation names the board it
-// belongs to. Consulted only after the spawning checkout fails to bind, so the
-// common case pays nothing for a scan across every board; an ambiguous session
-// resolves to nothing and prepareDispatch refuses it.
+// belongs to. Consulted only after the spawning checkout fails to bind or is no
+// repository at all, so the common case pays nothing for a scan across every board;
+// an ambiguous session resolves to nothing and prepareDispatch refuses it.
 function reservedDispatchRepository(sessionId: string): string | null {
   try {
     const store = require(runtimeModule('store')) as { isolatedDispatchRepositoryForSession: (session: string) => string | null };
@@ -50,6 +50,21 @@ function reservedDispatchRepository(sessionId: string): string | null {
     return reserved ? path.resolve(reserved) : null;
   } catch (_) {
     return null;
+  }
+}
+
+// A session rooted in a plain folder that holds the registered repositories has no
+// repository of its own, and `rev-parse` there used to crash the hook before the
+// reservation could name the ticket's project (GH-274, GH-269).
+function spawningRepository(hookCwd: string, sessionId: string): string {
+  const cwd = hookCwd || process.cwd();
+  try {
+    return repositoryFor(cwd);
+  } catch (error) {
+    const reserved = reservedDispatchRepository(sessionId);
+    if (reserved) return reserved;
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`the session cwd ${cwd} is not inside a git repository, and this session holds no launched isolated dispatch on exactly one board to name the ticket's project (${reason.trim()})`);
   }
 }
 
@@ -123,6 +138,7 @@ interface CreationBinding {
   baseline?: string;
   repository?: string;
   worktree?: string;
+  attempt?: string;
   creationCompleted?: boolean;
   expectedGitDirectory?: string | null;
   expectedCommonGitDirectory?: string | null;
@@ -140,6 +156,23 @@ interface WorktreeStore {
   nearestRepoRoot: (project: string) => string;
 }
 
+// `stale_attempt` is not an incomplete binding, it is this hook finding out it belongs to a generation the
+// board already retired. Saying so is the difference between an operator chasing a binding bug and reading
+// that a replacement dispatch owns this checkout now.
+function retiredGenerationRefusal(reason?: string) {
+  return reason === 'stale_attempt' || reason === 'missing_attempt';
+}
+
+function recordingRefusal(what: string, reason?: string, fallback = 'dispatch binding is incomplete') {
+  if (reason === 'stale_attempt') {
+    return `worktree lease could not record ${what}: this WorktreeCreate belongs to a retired dispatch attempt, so the board refused the stamp and the live attempt was left untouched`;
+  }
+  if (reason === 'missing_attempt') {
+    return `worktree lease could not record ${what}: this WorktreeCreate carried no dispatch attempt generation, so the board refused the stamp and the live attempt was left untouched`;
+  }
+  return `worktree lease could not record ${what}: ${reason || fallback}`;
+}
+
 function registeredProject(store: WorktreeStore, repository: string): ProjectLookup {
   return store.findProject(store.nearestRepoRoot(repository));
 }
@@ -153,31 +186,49 @@ function bindCreation(repository: string, sessionId: string, worktree: string): 
   return store.bindDispatchWorktreeCreation(project.slug, sessionId, worktree);
 }
 
-function completeCreation(repository: string, sessionId: string, worktree: string): CreationBinding {
-  const store = require(runtimeModule('store')) as WorktreeStore & {
-    completeDispatchWorktreeCreation: (slug: string, sessionId: string, worktree: string) => CreationBinding;
-  };
-  const project = registeredProject(store, repository);
-  if (!project.ok || !project.slug) return { ok: false, reason: 'project_unavailable' };
-  return store.completeDispatchWorktreeCreation(project.slug, sessionId, worktree);
+function bindSessionCreation(repository: string, sessionId: string, name: string, namedWorktreePath: (repo: string, worktreeName: string) => string) {
+  const binding = bindCreation(repository, sessionId, namedWorktreePath(repository, name));
+  if (binding.ok) return { repository, binding };
+  const reserved = reservedDispatchRepository(sessionId);
+  if (!reserved || samePath(reserved, repository)) return { repository, binding };
+  const reservedBinding = bindCreation(reserved, sessionId, namedWorktreePath(reserved, name));
+  return reservedBinding.ok ? { repository: reserved, binding: reservedBinding } : { repository, binding };
 }
 
-function recordProvisioningFailure(repository: string, sessionId: string, worktree: string, failure: { command: string; reason: string; stderrTail: string }): CreationBinding {
+function completeCreation(repository: string, sessionId: string, worktree: string, attempt: string): CreationBinding {
   const store = require(runtimeModule('store')) as WorktreeStore & {
-    recordDispatchWorktreeProvisioningFailure: (slug: string, sessionId: string, worktree: string, failure: { command: string; reason: string; stderrTail: string }) => CreationBinding;
+    completeDispatchWorktreeCreation: (slug: string, sessionId: string, worktree: string, attempt: string) => CreationBinding;
   };
   const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: 'project_unavailable' };
-  return store.recordDispatchWorktreeProvisioningFailure(project.slug, sessionId, worktree, failure);
+  return store.completeDispatchWorktreeCreation(project.slug, sessionId, worktree, attempt);
 }
 
-function recordDependencyLink(repository: string, sessionId: string, worktree: string, link: { relativePath: string; target: string }): CreationBinding {
+function recordProvisioned(repository: string, sessionId: string, worktree: string, attempt: string): CreationBinding {
   const store = require(runtimeModule('store')) as WorktreeStore & {
-    recordDispatchWorktreeDependencyLink: (slug: string, sessionId: string, worktree: string, link: { relativePath: string; target: string }) => CreationBinding;
+    recordDispatchWorktreeProvisioned: (slug: string, sessionId: string, worktree: string, attempt: string) => CreationBinding;
   };
   const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: 'project_unavailable' };
-  return store.recordDispatchWorktreeDependencyLink(project.slug, sessionId, worktree, link);
+  return store.recordDispatchWorktreeProvisioned(project.slug, sessionId, worktree, attempt);
+}
+
+function recordProvisioningFailure(repository: string, sessionId: string, worktree: string, failure: { command: string; reason: string; stderrTail: string }, attempt: string): CreationBinding {
+  const store = require(runtimeModule('store')) as WorktreeStore & {
+    recordDispatchWorktreeProvisioningFailure: (slug: string, sessionId: string, worktree: string, failure: { command: string; reason: string; stderrTail: string }, attempt: string) => CreationBinding;
+  };
+  const project = registeredProject(store, repository);
+  if (!project.ok || !project.slug) return { ok: false, reason: 'project_unavailable' };
+  return store.recordDispatchWorktreeProvisioningFailure(project.slug, sessionId, worktree, failure, attempt);
+}
+
+function recordDependencyLink(repository: string, sessionId: string, worktree: string, link: { relativePath: string; target: string }, attempt: string): CreationBinding {
+  const store = require(runtimeModule('store')) as WorktreeStore & {
+    recordDispatchWorktreeDependencyLink: (slug: string, sessionId: string, worktree: string, link: { relativePath: string; target: string }, attempt: string) => CreationBinding;
+  };
+  const project = registeredProject(store, repository);
+  if (!project.ok || !project.slug) return { ok: false, reason: 'project_unavailable' };
+  return store.recordDispatchWorktreeDependencyLink(project.slug, sessionId, worktree, link, attempt);
 }
 
 function plannedRevision(repository: string, name: string, baseline: string): string {
@@ -217,9 +268,12 @@ function provisioningConfig(repository: string): { worktreeDependencyPaths?: { p
   return project.ok && project.slug ? store.boardConfig(project.slug) || {} : {};
 }
 
-function recoverCreatedWorktree(repository: string, sessionId: string, target: string, error: unknown): string | null {
+// Recovery terminalizes an attempt and reclaims its checkout, so it is generation-scoped like every other
+// callback. Without the token a retired hook that had just been told `stale_attempt` went on to mark the
+// live replacement failed and clear its nonce (SQ-2953 finding 1).
+function recoverCreatedWorktree(repository: string, sessionId: string, target: string, error: unknown, attempt: string): string | null {
   const store = require(runtimeModule('store')) as WorktreeStore & {
-    recoverDispatchWorktreeCreation: (slug: string, sessionId: string, worktree: string, error: unknown) => {
+    recoverDispatchWorktreeCreation: (slug: string, sessionId: string, worktree: string, error: unknown, attempt: string) => {
       ok: boolean;
       reason?: string;
       cleanup?: { reclaimed?: boolean; reason?: string; message?: string } | null;
@@ -227,10 +281,40 @@ function recoverCreatedWorktree(repository: string, sessionId: string, target: s
   };
   const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return 'worktree recovery preserved the checkout because its project binding is unavailable';
-  const recovery = store.recoverDispatchWorktreeCreation(project.slug, sessionId, target, error);
+  const recovery = store.recoverDispatchWorktreeCreation(project.slug, sessionId, target, error, attempt);
+  if (retiredGenerationRefusal(recovery.reason)) {
+    return 'worktree recovery touched no attempt and left the checkout to the replacement that now owns it';
+  }
   if (!recovery.ok) return `worktree recovery preserved the checkout because ${recovery.reason || 'its dispatch binding is unavailable'}`;
   if (recovery.cleanup?.reclaimed) return null;
   return `worktree recovery preserved the checkout because ${recovery.cleanup?.message || recovery.cleanup?.reason || 'cleanup authority is incomplete'}`;
+}
+
+type UncreatedWorktreeRecovery = (slug: string, sessionId: string, worktree: string, error: unknown, attempt: string, options: { created: boolean }) => CreationBinding;
+
+function recordUncreatedWorktreeFailure(repository: string, sessionId: string, target: string, error: unknown, attempt: string): string {
+  const store = require(runtimeModule('store')) as WorktreeStore & { recoverDispatchWorktreeCreation: UncreatedWorktreeRecovery };
+  const project = registeredProject(store, repository);
+  const recovery = project.slug
+    ? store.recoverDispatchWorktreeCreation(project.slug, sessionId, target, error, attempt, { created: false })
+    : { ok: false, reason: 'its project binding is unavailable' };
+  return recovery.ok
+    ? 'the board recorded the attempt failed and kept no binding to that path, so a plain dispatch prepares its replacement'
+    : `the attempt still names that path because ${recovery.reason}`;
+}
+
+// Binding already pointed the reservation at this path, so a failure before the checkout exists has to retire
+// the attempt; otherwise it stays bound to a tree it never created and plain re-dispatch refuses (SQ-3132).
+function createBoundCheckout(binding: CreationBinding & Required<Pick<CreationBinding, 'ref' | 'baseline' | 'repository' | 'worktree'>>, name: string, sessionId: string, attempt: string): boolean {
+  try {
+    const decision = leaseKernel.worktreeCreateDecision(preparedWorktreeLease(binding, name));
+    if (!decision.allowed) throw new Error(`worktree lease refused creation: ${decision.reason}`);
+    return createWorktree(binding, name);
+  } catch (error) {
+    if (binding.creationCompleted) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message}; ${recordUncreatedWorktreeFailure(binding.repository, sessionId, binding.worktree, error, attempt)}`);
+  }
 }
 
 function main(): Promise<void> {
@@ -242,10 +326,8 @@ async function createWorktreeMain(): Promise<void> {
   if (!input || stringField(input, 'hook_event_name') !== 'WorktreeCreate') return;
   const name = stringField(input, 'name');
   const sessionId = stringField(input, 'session_id', 'sessionId');
-  const cwd = stringField(input, 'cwd') || process.cwd();
   if (!name) throw new Error('WorktreeCreate requires a worktree name.');
   if (!sessionId) throw new Error('WorktreeCreate requires a dispatch session binding.');
-  let repository = repositoryFor(cwd);
   const worktrees = require(runtimeModule('worktrees')) as {
     namedWorktreePath: (repo: string, worktreeName: string) => string;
     provisionWorktree: (
@@ -255,20 +337,13 @@ async function createWorktreeMain(): Promise<void> {
       options: { setupTimeoutMs?: number; onDependencyLink?: (link: { relativePath: string; target: string }) => void },
     ) => Promise<{ command: string; reason: string; stderrTail: string } | null>;
   };
-  let binding = bindCreation(repository, sessionId, worktrees.namedWorktreePath(repository, name));
-  if (!binding.ok) {
-    const reserved = reservedDispatchRepository(sessionId);
-    if (reserved && !samePath(reserved, repository)) {
-      const reservedBinding = bindCreation(reserved, sessionId, worktrees.namedWorktreePath(reserved, name));
-      if (reservedBinding.ok) {
-        repository = reserved;
-        binding = reservedBinding;
-      }
-    }
-  }
+  const { repository, binding } = bindSessionCreation(spawningRepository(stringField(input, 'cwd'), sessionId), sessionId, name, worktrees.namedWorktreePath);
   if (!binding.ok || !binding.ref || !binding.baseline || !binding.repository || !binding.worktree) {
     throw new Error(worktreeCreationRefusalMessage(String(binding.reason || ''), repository, binding.binding));
   }
+  const attempt = String(binding.attempt || '');
+  // Without the generation no callback can be recorded, so fail before creating a checkout nothing can stamp.
+  if (!attempt) throw new Error('worktree lease refused creation: the dispatch binding carried no attempt generation');
   const boundCreation: CreationBinding & Required<Pick<CreationBinding, 'ref' | 'baseline' | 'repository' | 'worktree'>> = {
     ...binding,
     ref: binding.ref,
@@ -276,16 +351,14 @@ async function createWorktreeMain(): Promise<void> {
     repository: binding.repository,
     worktree: binding.worktree,
   };
-  const decision = leaseKernel.worktreeCreateDecision(preparedWorktreeLease(boundCreation, name));
-  if (!decision.allowed) throw new Error(`worktree lease refused creation: ${decision.reason}`);
-  const created = createWorktree(boundCreation, name);
+  const created = createBoundCheckout(boundCreation, name, sessionId, attempt);
   if (created) {
     try {
       const identity = linkedCheckoutIdentity(boundCreation.worktree);
       if (!identity) throw new Error('new worktree identity is unavailable');
       leaseKernel.createCheckoutInstanceMarker(identity.gitDirectory);
-      const completed = completeCreation(boundCreation.repository, sessionId, boundCreation.worktree);
-      if (!completed.ok) throw new Error(`worktree lease could not record completed creation: ${completed.reason || 'completion binding is incomplete'}`);
+      const completed = completeCreation(boundCreation.repository, sessionId, boundCreation.worktree, attempt);
+      if (!completed.ok) throw new Error(recordingRefusal('completed creation', completed.reason, 'completion binding is incomplete'));
       const provisioningFailure = await worktrees.provisionWorktree(
         boundCreation.repository,
         boundCreation.worktree,
@@ -293,17 +366,21 @@ async function createWorktreeMain(): Promise<void> {
         {
           setupTimeoutMs: worktreeSetupDeadlineMs(),
           onDependencyLink: (link) => {
-            const recorded = recordDependencyLink(boundCreation.repository, sessionId, boundCreation.worktree, link);
-            if (!recorded.ok) throw new Error(`worktree lease could not record dependency link: ${recorded.reason || 'dispatch binding is incomplete'}`);
+            const recorded = recordDependencyLink(boundCreation.repository, sessionId, boundCreation.worktree, link, attempt);
+            if (!recorded.ok) throw new Error(recordingRefusal('dependency link', recorded.reason));
           },
         },
       );
+      // Completion above is recorded before provisioning, so this stamp is the only board fact saying the
+      // hook is done. Without it a cold `npm ci` looks identical to a dead WorktreeCreate (SQ-2934).
+      const provisioned = recordProvisioned(boundCreation.repository, sessionId, boundCreation.worktree, attempt);
+      if (!provisioned.ok) throw new Error(recordingRefusal('finished provisioning', provisioned.reason));
       if (provisioningFailure) {
-        const recorded = recordProvisioningFailure(boundCreation.repository, sessionId, boundCreation.worktree, provisioningFailure);
-        if (!recorded.ok) throw new Error(`worktree lease could not record setup failure: ${recorded.reason || 'dispatch binding is incomplete'}`);
+        const recorded = recordProvisioningFailure(boundCreation.repository, sessionId, boundCreation.worktree, provisioningFailure, attempt);
+        if (!recorded.ok) throw new Error(recordingRefusal('setup failure', recorded.reason));
       }
     } catch (error) {
-      const preservation = recoverCreatedWorktree(boundCreation.repository, sessionId, boundCreation.worktree, error);
+      const preservation = recoverCreatedWorktree(boundCreation.repository, sessionId, boundCreation.worktree, error, attempt);
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(preservation ? `${message}; ${preservation}` : message);
     }
