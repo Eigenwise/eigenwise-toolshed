@@ -449,43 +449,32 @@ test('the fallback a crossing refusal prints runs as printed', async () => {
 });
 
 // SQ-75 made live-claim recovery move a crossed binding (GitHub #298), so the refusal prescribes that rebind first.
-// Its safety condition is the checkout's HEAD: with no commit of this claim's own there, the sibling's lease wins and
-// the printed fallback is the only way out; once the executor's own commit is HEAD, the printed rebind succeeds.
-test('the rebind a crossing refusal prescribes waits for its own commit and then moves the live claim', async () => {
+// `crossedClaimedPair` is an exactly crossed pair by SQ-84's own definition (both hold the WorktreeCreate records
+// of one session and baseline, the holder records the checkout named, nobody else leases the claim's own checkout,
+// and neither carries a foreign commit), so the printed rebind reaches the swap directly, with nothing to commit
+// first: both executors land on the checkout they actually run in.
+test('the rebind a crossing refusal prescribes swaps an exactly crossed claimed pair at once', async () => {
   const holder = 'crossing-rebind-holder';
   const { mine, sibling, committed } = await crossedClaimedPair('crossing-printed-rebind', 'rebind', holder);
   assert.ok(!/nothing rebinds/i.test(committed.message), 'the rebind exists, so the refusal must not deny it');
   const remedy = printedRemedy(committed.message);
   assert.deepEqual(remedy.rebind, { ref: mine.ref, claimHolder: holder, worktree: canonical(sibling.worktree) });
   assert.equal(remedy.pinRef, `refs/sidequest/${mine.ref}`);
-  const rebind = () => store.recoverLiveClaimDispatch(slug, remedy.rebind.ref, {
+
+  const rebound = store.recoverLiveClaimDispatch(slug, remedy.rebind.ref, {
     by: remedy.rebind.claimHolder,
     executor: mine.executor,
     worktree: remedy.rebind.worktree,
     recoveryEvidence: committed.message,
     sessionId: 'crossing-printed-rebind-orchestrator',
   });
-
-  try {
-    const early = rebind();
-    assert.equal(early.ok, false, 'a checkout another live claim leases is not taken on an empty HEAD');
-    assert.equal(early.reason, 'worktree_mismatch');
-    assert.match(early.message, new RegExp(`leased to ${sibling.ref}, a live ticket, and its HEAD is not a commit this claim made`));
-    assert.equal(boundWorktree(mine.ref), canonical(mine.worktree), 'a refused rebind moved the binding');
-
-    fs.appendFileSync(path.join(sibling.worktree, 'README.md'), `${mine.ref} work\n`);
-    execFileSync('git', ['commit', '--quiet', '-am', `${mine.ref}: own work`], { cwd: sibling.worktree, windowsHide: true });
-    const hash = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sibling.worktree, encoding: 'utf8', windowsHide: true }).trim();
-    execFileSync('git', ['update-ref', remedy.pinRef, hash], { cwd: sibling.worktree, windowsHide: true });
-
-    const rebound = rebind();
-    assert.equal(rebound.ok, true, `the printed rebind was refused: ${rebound.reason} ${rebound.message || ''}`);
-    assert.equal(rebound.recovery.worktreeCorrection.basis, 'own_commits');
-    assert.equal(boundWorktree(mine.ref), canonical(sibling.worktree), 'the claim now leases the checkout it runs in');
-    assert.equal(store.getTicket(slug, mine.ref).claim.by, holder, 'the rebind keeps the claim');
-  } finally {
-    execFileSync('git', ['update-ref', '-d', remedy.pinRef], { cwd: PROJECT, windowsHide: true });
-  }
+  assert.equal(rebound.ok, true, `the printed rebind was refused: ${rebound.reason} ${rebound.message || ''}`);
+  assert.equal(rebound.recovery.worktreeCorrection.basis, 'mutual_swap');
+  assert.equal(rebound.recovery.worktreeCorrection.swappedWith, sibling.ref);
+  assert.equal(boundWorktree(mine.ref), canonical(sibling.worktree), 'the claim now leases the checkout it runs in');
+  assert.equal(boundWorktree(sibling.ref), canonical(mine.worktree), 'the sibling receives the claim\'s own checkout back');
+  assert.equal(store.getTicket(slug, mine.ref).claim.by, holder, 'the rebind keeps the claim');
+  assert.equal(store.getTicket(slug, sibling.ref).claim.by, `${holder}-sibling`, 'the sibling keeps its own claim');
 });
 
 // GitHub #305. In a wave of dispatches from one session, a reservation whose own WorktreeCreate failed was still

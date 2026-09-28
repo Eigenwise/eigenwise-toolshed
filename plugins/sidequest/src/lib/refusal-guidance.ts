@@ -157,18 +157,21 @@ export function worktreeCreationRefusalMessage(reason: string, repository: strin
 //
 // The remedy has to be one that exists, and each half of it has to work as printed. Live-claim recovery
 // (`recoverLiveClaimDispatch`, reached through `dispatch` with `claimHolder`) moves a crossed binding to the
-// checkout the executor names, and `liveClaimRebindDecision` refuses that only while another live ticket leases the
-// checkout and its HEAD is not this claim's own commit, or while it carries another ticket's commits (SQ-75). So the
-// rebind comes first, prepared by pinning the executor's own commit as HEAD. The fallback is real: with nothing to
-// pin, the sibling's lease wins and the rebind is refused. It is the board's ordinary blocker release, and it names
-// `--by` and `-s todo` because the CLI's own identity falls back to the environment or host name, and a release
-// without a status leaves the ticket `doing` with no claim.
+// checkout the executor names. Two claims launched together that hold exactly each other's WorktreeCreate
+// checkouts, with neither carrying another ticket's commits, are swapped onto their own checkouts at once
+// (SQ-84, GitHub #298). Outside that exact crossing, `liveClaimRebindDecision` refuses the rebind while another
+// live ticket leases the checkout and its HEAD is not this claim's own commit, or while it carries another
+// ticket's commits (SQ-75), so the rebind is prepared by pinning the executor's own commit as HEAD first. The
+// fallback is real: with no exact crossing to swap and nothing to pin, the sibling's lease wins and the rebind is
+// refused. It is the board's ordinary blocker release, and it names `--by` and `-s todo` because the CLI's own
+// identity falls back to the environment or host name, and a release without a status leaves the ticket `doing`
+// with no claim.
 export function crossedWorktreeRefusalMessage(gate: string, crossing: CrossedWorktreeBinding): string {
   return `${gate}: refused ${crossing.ref}; its dispatch is bound to worktree ${crossing.boundWorktree}, but this call ran from ${crossing.actualWorktree}, and ${crossing.owner.ref} holds ${crossing.owner.worktree} under a live claim by "${crossing.owner.claimHolder}".`
     + ` One of these checkouts is recorded to another live executor, so this is a crossed worktree binding, not a caller mistake: do not enter the bound tree, and do not expect it to hold this ticket's work - anything the board diffs there reports ${crossing.owner.ref}'s state, test names included.`
-    + ` Remedy: move this live claim to the checkout you run in. Commit your work there with git, pin that commit (\`git update-ref refs/sidequest/${crossing.ref} <hash>\`) so the checkout's HEAD is this claim's own commit, comment the hash as the crossing evidence, keep the claim, and ask the orchestrator to rebind it: MCP \`dispatch\` with \`ref:"${crossing.ref}"\`, \`claimHolder:"${crossing.claimHolder}"\`, \`worktree:"${crossing.actualWorktree}"\` and \`recoveryEvidence\` quoting this refusal.`
-    + ' The board refuses that rebind while another live ticket leases the checkout and its HEAD is not this claim\'s own commit, or while the checkout carries another ticket\'s commits.'
-    + ` Fallback, when there is no commit to pin or the rebind is refused: release this ticket with kind \`technical_blocker\`, quoting this refusal: \`sidequest release ${crossing.ref} --by "${crossing.claimHolder}" -s todo --release-kind technical_blocker --reason "crossed worktree binding" --command "<the call this refused>" --exit-code 1 --output-tail "<this refusal>"\` (MCP \`release\` with \`kind:"technical_blocker"\`, \`status:"todo"\` and the same four evidence fields).`
+    + ` Remedy: ask the orchestrator to rebind this live claim to the checkout you run in: MCP \`dispatch\` with \`ref:"${crossing.ref}"\`, \`claimHolder:"${crossing.claimHolder}"\`, \`worktree:"${crossing.actualWorktree}"\` and \`recoveryEvidence\` quoting this refusal. When both claims were launched together and hold exactly each other's checkouts with neither carrying another ticket's commits, that rebind swaps the two records onto their own checkouts at once. Otherwise commit your work there with git first, pin that commit (\`git update-ref refs/sidequest/${crossing.ref} <hash>\`) so the checkout's HEAD is this claim's own commit, and comment the hash as the crossing evidence before asking for the rebind.`
+    + ' The board refuses that rebind while another live ticket leases the checkout, its HEAD is not this claim\'s own commit, and the pair is not an exact crossing, or while the checkout carries another ticket\'s commits.'
+    + ` Fallback, when there is no exact crossing to swap and no commit to pin, or the rebind is refused: release this ticket with kind \`technical_blocker\`, quoting this refusal: \`sidequest release ${crossing.ref} --by "${crossing.claimHolder}" -s todo --release-kind technical_blocker --reason "crossed worktree binding" --command "<the call this refused>" --exit-code 1 --output-tail "<this refusal>"\` (MCP \`release\` with \`kind:"technical_blocker"\`, \`status:"todo"\` and the same four evidence fields).`
     + ' The orchestrator then redispatches it onto a checkout of its own and salvages any commit by hash.';
 }
 
