@@ -98,6 +98,20 @@ function ruleIsBlocked(entry) {
   return entry.destructive;
 }
 
+function bumpHookBlocks(entry) {
+  entry.hookBlocks = (entry.hookBlocks ?? 0) + 1;
+}
+
+// A hook block is not a rejection of the fingerprint itself, so it must not count as a denial (that
+// would misreport why the candidate was excluded) or as an approval (the call did not go through).
+// It gets its own counter, left absent until the first sighting, so a hook-blocked fingerprint is
+// kept off the allowlist without inventing a false denial reason for it.
+function recordOutcome(entry, event) {
+  if (event.denial === 'user-rejected') entry.denials += 1;
+  else if (event.denial === 'hook_block') bumpHookBlocks(entry);
+  else if (!event.isError) entry.approvals += 1;
+}
+
 function createPermissionCollector() {
   const fingerprints = new Map();
   const see = (name, input) => {
@@ -131,8 +145,7 @@ function createPermissionCollector() {
       if (event.kind !== 'tool_result') return;
       const entry = see(event.name, event.input);
       if (!entry) return;
-      if (event.denial === 'user-rejected') entry.denials += 1;
-      else if (!event.isError) entry.approvals += 1;
+      recordOutcome(entry, event);
     },
     onTranscriptEnd() {},
     entries() { return [...fingerprints.values()]; },
@@ -250,14 +263,15 @@ function enablePermissionAutomation(projectDir) {
 async function applyPermissionAllowlist(options = {}) {
   const projectDir = path.resolve(options.projectPath ?? process.cwd());
   const collected = await collectPermissionDecisions({ ...options, projectPath: projectDir });
-  const candidates = collected.decisions.filter((entry) => entry.approvals >= MIN_APPROVALS && entry.denials === 0);
+  const candidates = collected.decisions.filter((entry) => entry.approvals >= MIN_APPROVALS && entry.denials === 0 && !entry.hookBlocks);
+  const hookBlocked = collected.decisions.filter((entry) => entry.hookBlocks).length;
   const blocked = candidates.filter(ruleIsBlocked);
   const eligible = candidates.filter((entry) => !ruleIsBlocked(entry));
   // Writing permission rules is the opt-in itself, so a caller that has not
   // enabled the marker only ever gets the report. Without this, `quartermaster
   // allowlist` silently granted permissions in any project it was run in.
   if (!permissionAutomationEnabled(projectDir)) {
-    return { projectDir, additions: [], blocked, eligible, applied: false, scanned: collected.window.files.length };
+    return { projectDir, additions: [], blocked, eligible, hookBlocked, applied: false, scanned: collected.window.files.length };
   }
   const writable = eligible.filter((entry) => !ruleIsBlocked(entry));
   const added = appendRulesToSettings(projectDir, writable.map((entry) => ruleFor(entry.fingerprint)));
@@ -275,7 +289,7 @@ async function applyPermissionAllowlist(options = {}) {
       approvals: entry.approvals,
     }, options.env);
   }
-  return { projectDir, additions, blocked, eligible, applied: true, scanned: collected.window.files.length };
+  return { projectDir, additions, blocked, eligible, hookBlocked, applied: true, scanned: collected.window.files.length };
 }
 
 module.exports = {

@@ -18,8 +18,14 @@ function parseGatewayDoctorOutput(output) {
   };
 }
 
+/**
+ * model-gateway's doctor writes its own failure lines to stderr and everything else, including the
+ * optional Grok auth line, to stdout. Putting stderr first means compactDiagnostic's keyword scan
+ * below reaches a real "ERROR: ..." line before it reaches "grok auth: ... missing", so a doctor
+ * failure gets named by its own cause instead of by whichever optional line happens to match first.
+ */
 function doctorOutput(result) {
-  return `${result?.stdout || ''}${result?.stderr || ''}`.trim();
+  return `${result?.stderr || ''}${result?.stdout || ''}`.trim();
 }
 
 function compactDiagnostic(output) {

@@ -22,11 +22,15 @@ function permissionTranscript(command, outcome = 'approved', toolName = 'Bash') 
     timestamp: '2026-08-12T12:00:00.000Z',
     message: { content: [{ type: 'tool_use', id: identifier, name: toolName, input: { command } }] },
   };
+  const content = outcome === 'hook-blocked'
+    ? `PreToolUse:${toolName} hook error: blocked by policy`
+    : outcome === 'approved' ? 'done' : 'rejected';
   const user = {
     type: 'user',
     timestamp: '2026-08-12T12:01:00.000Z',
-    message: { content: [{ type: 'tool_result', tool_use_id: identifier, content: outcome === 'approved' ? 'done' : 'rejected', is_error: outcome !== 'approved' }] },
+    message: { content: [{ type: 'tool_result', tool_use_id: identifier, content, is_error: outcome !== 'approved' }] },
     ...(outcome === 'denied' ? { toolDenialKind: 'user-rejected' } : {}),
+    ...(outcome === 'hook-blocked' ? { toolDenialKind: 'permission-rule' } : {}),
   };
   return `${JSON.stringify(assistant)}\n${JSON.stringify(user)}\n`;
 }
@@ -128,6 +132,23 @@ test('a fingerprint with one denial is not added', async () => {
   const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
 
   assert.equal(result.additions.length, 0);
+  assert.equal(fs.existsSync(path.join(projectDir, '.claude', 'settings.local.json')), false);
+});
+
+test('a fingerprint a PreToolUse hook keeps blocking is excluded from candidates and counted separately', async () => {
+  const projectDir = temporaryProject();
+  const environment = writeWindow(projectDir, [
+    permissionTranscript('npm run lint'),
+    permissionTranscript('npm run lint'),
+    permissionTranscript('npm run lint'),
+    ...Array.from({ length: 32 }, () => permissionTranscript('npm run lint', 'hook-blocked')),
+  ]);
+
+  const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
+
+  assert.equal(result.additions.length, 0, 'a hook is actively vetoing this fingerprint; auto-approving it would be pointless');
+  assert.equal(result.eligible.length, 0);
+  assert.equal(result.hookBlocked, 1);
   assert.equal(fs.existsSync(path.join(projectDir, '.claude', 'settings.local.json')), false);
 });
 
