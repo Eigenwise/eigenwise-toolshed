@@ -176,6 +176,13 @@ function prepareMixedReview(label: string) {
   git(sourceTree, 'commit', '-qm', `mixed candidate ${label}`);
   const candidate = git(sourceTree, 'rev-parse', 'HEAD');
   const created = store.createTicket(slug, { title: `mixed source ${label}`, category: 'claude-mixed-source', files: ['candidate.txt'] });
+  // prepareBoundNativeReview preserves its candidate at refs/sidequest/<ref> so
+  // validateIntegrationSubmission's scope/reachability checks have a frozen ref
+  // to resolve; this claim-free fixture needs the same ref or integration-path
+  // assertions (e.g. ok:true after review_outcome accepted) fail on an
+  // unrelated "no frozen ref" refusal instead of exercising the review gate.
+  const gitRef = `refs/sidequest/${created.ref}`;
+  git(repository, 'update-ref', gitRef, candidate);
   const terminalAt = new Date().toISOString();
   const source = store.getTicket(slug, created.id);
   source.status = 'doing';
@@ -186,12 +193,24 @@ function prepareMixedReview(label: string) {
     agentId: `claude-agent-${sourceThread}`,
     attempts: [{ outcome: 'submitted', commit: candidate, agentId: `claude-agent-${sourceThread}`, terminalAt }],
   };
+  // Mirrors the range metadata the real submit tool derives from git for
+  // prepareBoundNativeReview's candidate, so validateIntegrationSubmission's
+  // scope/reachability check (unrelated to the review gate under test) can
+  // reach ok:true instead of refusing on missing_git_ref.
   source.submission = {
     by: `claude-thread:${sourceThread}`,
     at: terminalAt,
     commit: candidate,
+    gitRef,
     verify: 'manual: mixed fixture candidate verified',
+    base,
+    upstream: 'main',
+    upstreamCommit: base,
+    commits: [candidate],
     changedPaths: ['candidate.txt'],
+    admittedScope: ['candidate.txt'],
+    integrationMode: 'local',
+    integrationBranch: 'main',
     integratedAt: null,
   };
   persist(slug, source);
@@ -625,6 +644,37 @@ test('review_outcome records structured PASS evidence on both binding halves', (
   assert.notEqual(store.validateIntegrationSubmission(slug, fixture.source.ref, {}).reason, 'candidate_review_required');
 });
 
+test('a mirror-only accepted outcome does not integrate without a matching reviewTarget outcome', () => {
+  const fixture = prepareBoundNativeReview('mirror-only-accepted');
+  const comment = nativeReviewComment(fixture, [
+    'PASS: The exact submitted candidate satisfies the review contract.',
+    `CHECK: pinned candidate verification | PASS | The declared checks passed at ${fixture.candidate}.`,
+  ].join('\n'));
+  assert.equal(comment.ok, true, JSON.stringify(comment));
+  assert.equal(finishNativeReview(fixture, 'Reviewed the exact submitted candidate.').ok, true);
+
+  // Hand-craft a half-applied recording, as if the transaction that writes
+  // both binding halves together had been interrupted or hand-edited: only
+  // the source ticket's mirror is marked accepted, and the review ticket's
+  // own reviewTarget half is left untouched at `planned`.
+  const halfRecordedSource = store.getTicket(slug, fixture.source.ref);
+  halfRecordedSource.submission = Object.assign({}, halfRecordedSource.submission, {
+    review: Object.assign({}, halfRecordedSource.submission.review, { outcome: 'accepted' }),
+  });
+  persist(slug, halfRecordedSource);
+
+  assert.equal(store.getTicket(slug, fixture.review.ref).reviewTarget.outcome, undefined, 'fixture sanity: the reviewTarget half was never recorded');
+  const relation = reviewBinding.reviewRelationFor(
+    store.getTicket(slug, fixture.source.ref),
+    store.listTickets(slug),
+    (idOrRef: string) => store.getTicket(slug, idOrRef),
+  );
+  assert.equal(reviewBinding.reviewRelationOutcome(relation), 'accepted', 'fixture sanity: the generic OR-based helper alone already reads this as accepted');
+
+  const blocked = store.validateIntegrationSubmission(slug, fixture.source.ref, {});
+  assert.equal(blocked.reason, 'candidate_review_required', 'a mirror-only accepted outcome must not integrate; the reviewTarget half still needs review_outcome');
+});
+
 test('review_outcome refuses a nonterminal FAIL comment and a forged reviewer author', () => {
   const fixture = prepareBoundNativeReview('nonterminal-fail');
   const comment = nativeReviewComment(fixture, [
@@ -654,11 +704,37 @@ test('validateIntegrationSubmission blocks a native review after a bare done wit
   assert.equal(blocked.reason, 'candidate_review_required', 'a native reviewer\'s bare done with no PASS/FIX/FAIL evidence must not integrate');
   assert.equal(store.getTicket(slug, fixture.review.ref).reviewTarget.outcome, undefined);
   assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'planned');
+  assert.doesNotMatch(blocked.message, /\.\./, 'the review-evidence sentence and the appended guidance sentence must not collide into a double period');
 
   const result = recordNativeReviewOutcome(fixture);
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'review_evidence_missing');
   assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'planned');
+});
+
+test('validateIntegrationSubmission blocks a native review whose terminal attempt lost its identity binding', () => {
+  const fixture = prepareBoundNativeReview('identity-missing');
+  assert.equal(finishNativeReview(fixture, 'Reviewed the exact submitted candidate.').ok, true);
+
+  // Corrupt the terminal attempt's immutable identity snapshot directly (a
+  // hand-edited or half-migrated record), leaving the review ticket's own
+  // status and completion.state terminally done. This isolates the fail-open
+  // gap nativeTerminalReviewEvidence's own identity check has to catch, from
+  // terminalReviewFailure's separate top-level "review is not done at all"
+  // guard, which this scenario does not trip.
+  const review = store.getTicket(slug, fixture.review.ref);
+  const attempts = review.dispatch.attempts.slice();
+  attempts[attempts.length - 1] = Object.assign({}, attempts[attempts.length - 1], { sessionId: null });
+  review.dispatch = Object.assign({}, review.dispatch, { attempts });
+  persist(slug, review);
+
+  const blocked = store.validateIntegrationSubmission(slug, fixture.source.ref, {});
+  assert.equal(blocked.reason, 'candidate_review_required', 'a terminal review with no identified reviewer runtime must not integrate');
+  assert.match(blocked.message, /has no terminal done attempt tied to its authenticated Codex reviewer runtime/);
+
+  const result = recordNativeReviewOutcome(fixture);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'terminal_reviewer_identity_missing');
 });
 
 test('a Claude submitter bound to a native Codex reviewer still requires review_outcome to record acceptance', () => {
@@ -681,7 +757,59 @@ test('a Claude submitter bound to a native Codex reviewer still requires review_
   assert.equal(recorded.reviewOutcome, 'accepted');
   assert.equal(store.getTicket(slug, fixture.review.ref).reviewTarget.outcome, 'accepted');
   assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'accepted');
-  assert.notEqual(store.validateIntegrationSubmission(slug, fixture.source.ref, {}).reason, 'candidate_review_required');
+  const v = store.validateIntegrationSubmission(slug, fixture.source.ref, {});
+  assert.equal(v.ok, true, JSON.stringify(v));
+});
+
+test('a Claude submitter bound to a native Codex reviewer stays blocked behind a bare done with no evidence', () => {
+  const fixture = prepareMixedReview('mixed-bare-done');
+  assert.equal(finishNativeReview(fixture, 'Reviewed the exact submitted candidate.').ok, true);
+
+  const blocked = store.validateIntegrationSubmission(slug, fixture.source.ref, {});
+  assert.equal(blocked.reason, 'candidate_review_required', 'a native reviewer\'s bare done with no PASS/FIX/FAIL evidence must not integrate a Claude-submitted candidate either');
+  assert.equal(store.getTicket(slug, fixture.review.ref).reviewTarget.outcome, undefined);
+  assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'planned');
+
+  const result = recordNativeReviewOutcome(fixture);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'review_evidence_missing');
+});
+
+test('a Claude submitter bound to a native Codex reviewer stays blocked behind an authenticated FIX until it is recorded', () => {
+  const fixture = prepareMixedReview('mixed-fix-unrecorded');
+  const comment = nativeReviewComment(fixture, [
+    'FIX: The submitted completion path omits the durable bound-review outcome.',
+    'FINDING: The source mirror remains planned after the reviewer closed the exact candidate.',
+    'EVIDENCE: The terminal review left the source binding planned for this exact candidate.',
+    'REQUIRED: Record the authenticated terminal review result on both binding halves.',
+  ].join('\n'));
+  assert.equal(comment.ok, true, JSON.stringify(comment));
+  assert.equal(finishNativeReview(fixture, 'Reviewed the exact submitted candidate.').ok, true);
+
+  const blocked = store.validateIntegrationSubmission(slug, fixture.source.ref, {});
+  assert.equal(blocked.reason, 'candidate_review_required', 'an authenticated FIX/FAIL outcome still blocks integration until review_outcome records it, regardless of the submitter runtime');
+  assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'planned');
+});
+
+test('a Claude submitter bound to a native Codex reviewer is permanently blocked once review_outcome records rejection', () => {
+  const fixture = prepareMixedReview('mixed-rejected');
+  const comment = nativeReviewComment(fixture, [
+    'FIX: The submitted completion path omits the durable bound-review outcome.',
+    'FINDING: The source mirror remains planned after the reviewer closed the exact candidate.',
+    'EVIDENCE: The terminal review left the source binding planned for this exact candidate.',
+    'REQUIRED: Record the authenticated terminal review result on both binding halves.',
+  ].join('\n'));
+  assert.equal(comment.ok, true, JSON.stringify(comment));
+  assert.equal(finishNativeReview(fixture, 'Reviewed the exact submitted candidate.').ok, true);
+
+  const recorded = recordNativeReviewOutcome(fixture);
+  assert.equal(recorded.ok, true, JSON.stringify(recorded));
+  assert.equal(recorded.reviewOutcome, 'rejected');
+  assert.equal(store.getTicket(slug, fixture.review.ref).reviewTarget.outcome, 'rejected');
+  assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'rejected');
+
+  const after = store.validateIntegrationSubmission(slug, fixture.source.ref, {});
+  assert.equal(after.reason, 'candidate_rejected');
 });
 
 test('review_outcome rejects untrusted, malformed, and self-review evidence', () => {
