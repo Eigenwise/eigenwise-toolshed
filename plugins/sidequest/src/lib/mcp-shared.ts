@@ -919,6 +919,7 @@ function compactPulse(pulse?: any) {
       executor: pulse.dispatch.executor,
       agentName: pulse.dispatch.agentName,
       outcome: pulse.dispatch.outcome,
+      ...(pulse.dispatch.submittedBy ? { submittedBy: pulse.dispatch.submittedBy } : {}),
     },
     ...(pulse.scope ? { scope: compactScope(pulse.scope) } : {}),
   };

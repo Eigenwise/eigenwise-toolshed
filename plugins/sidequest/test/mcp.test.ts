@@ -2333,6 +2333,28 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   assert.ok(store.getTicket(project, malformed.ref).claim, 'malformed submission keeps the claim');
 });
 
+test('SQ-59: default pulse names the submitter of a pending submission without full:true', async (context: any) => {
+  const primary = createGitWorktree();
+  const project = store.ensureProject(primary).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main', worktreeBase: 'local-main' });
+  const ticket = store.createTicket(project, {
+    title: 'submitter identity fixture', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'exercise pulse exposing the submitter identity rework needs',
+  });
+  const by = 'submitter-identity-worker';
+  const worktree = prepareIsolatedWorktreeDispatch(project, primary, ticket, by);
+  context.after(() => removeTestWorktree(primary, worktree));
+  await submitIsolatedDeliveryCandidate(project, ticket, by, worktree);
+
+  // Submit clears the claim (submitTicket sets t.claim = null), so the compact default pulse —
+  // not full:true, not a comment-thread round trip — is the only cheap read left that can name
+  // who owns the pending candidate for `rework --by`.
+  const pulse = await callTool('pulse', { project, ref: ticket.ref });
+  assert.equal(pulse.claim, null);
+  assert.equal(pulse.dispatch.state, 'submitted');
+  assert.equal(pulse.dispatch.submittedBy, by);
+});
+
 test('MCP delivery reclaims a terminal isolated worktree immediately', async (context: any) => {
   const primary = createGitWorktree();
   const project = store.ensureProject(primary).slug;

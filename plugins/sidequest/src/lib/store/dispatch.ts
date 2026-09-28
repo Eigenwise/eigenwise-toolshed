@@ -126,6 +126,58 @@ function ticketEvidenceDirectory(slug?: any, ref?: any, projectPath?: any) {
     : directory;
 }
 
+// Board-owned verification evidence is not repository content: dispatch creates the directory above,
+// the briefing sends executors there, and on a machine that keeps ~/.claude in a dotfiles repository
+// the whole subtree sits inside a Git checkout no dispatch holds a lease for. A write lease answers
+// for a repository, so letting the isolation guard resolve that enclosing checkout refused the board's
+// own directory while the same write through Bash, which no hook gates, went through (GH-163).
+//
+// The exemption is keyed to the caller's own resolved dispatch rather than to a path shape. A shape
+// match on `projects/<anything>/verification/**` cannot tell a registered ticket's directory from an
+// invented slug, and it cannot recognize ticketEvidenceDirectory's relocated form at all, since that
+// form lands beside the project repository rather than under the home. Comparing against the
+// evidenceDirectory the store actually recorded for the matched dispatch answers both at once: only
+// that one directory, wherever prepareDispatch resolved it to, is exempt.
+//
+// A dedicated lookup rather than a field folded into dispatchIsolationExpectation: that function
+// already scans every project and ticket to answer a much bigger question (worktree and lease facts
+// for every candidate dispatch), and this only ever needs one ticket's recorded directory once the
+// guard already knows which dispatch it is asking about.
+function dispatchEvidenceDirectory(project?: any, ref?: any) {
+  const state = dispatchState(getTicket(project, ref));
+  return state && state.evidenceDirectory ? String(state.evidenceDirectory) : null;
+}
+
+function segmentsUnder(root: string, target: string): string[] {
+  const relative = path.relative(canonicalPath(root), canonicalPath(path.resolve(target))).replace(/\\/g, '/');
+  // path.relative returns exactly '..' (no trailing slash) for root's immediate parent, so matching
+  // only the '../' prefix let that one directory - here, the verification directory itself, one level
+  // above any ticket's evidence directory - through as if it were nested inside root.
+  const outside = !relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative);
+  return outside ? [] : relative.split('/');
+}
+
+function trimmedString(value?: any): string {
+  return String(value || '').trim();
+}
+
+// `canonicalPath` realpaths only the longest existing prefix, so a symlink at the final path
+// component that does not resolve to anything yet stays unresolved and containment above would follow
+// it out of the evidence directory once the write actually creates something there. Refusing whenever
+// the requested path is itself a symlink, dangling or not, closes that; a live symlink pointing outside
+// the directory was already refused by the containment check.
+function boardVerificationEvidencePath(target?: any, evidenceDirectory?: any) {
+  const requested = trimmedString(target);
+  const root = trimmedString(evidenceDirectory);
+  if (!requested || !root) return false;
+  try {
+    if (fs.lstatSync(requested).isSymbolicLink()) return false;
+  } catch (_) {
+    // Not there yet: the common case is exactly the write that will create it.
+  }
+  return segmentsUnder(root, requested).length > 0;
+}
+
 function writeDispatchTokenFile(ticket?: any) {
   const file = dispatchTokenFile(ticket);
   if (!file) throw new Error('dispatch token file is unavailable');
@@ -1560,6 +1612,51 @@ function checkoutBelongsToAnotherDispatchAgent(slug?: any, projectPath?: any, ti
   });
 }
 
+function agentNamesCheckout(repository: string, agentId: unknown, target: string) {
+  const id = String(agentId || '').trim();
+  return Boolean(id) && agentWorktreeCandidates(repository, id).some((candidate: string) => canonicalPath(candidate) === target);
+}
+
+function liveCheckoutHolder(ticket?: any) {
+  const state = dispatchState(ticket);
+  return Boolean(ticket?.claim?.by) || Boolean(state && !state.terminalAt);
+}
+
+function recordsCheckout(repository: string, ticket: any, target: string) {
+  const state = dispatchState(ticket);
+  if (state?.worktree && canonicalPath(state.worktree) === target) return true;
+  return [state?.agentId, ticket.claim?.runtime?.agentId].some((agentId) => agentNamesCheckout(repository, agentId, target));
+}
+
+function siblingHoldsCheckout(repository: string, ticket: any, candidate: any, target: string) {
+  return candidate.id !== ticket.id && liveCheckoutHolder(candidate) && recordsCheckout(repository, candidate, target);
+}
+
+// A retired attempt's own record can name a sibling's checkout down to the sibling's agent id, because both
+// creation order and runtime binding can cross (SQ-3132: SQ-3104's recovery removed SQ-3101's live tree).
+// A live claim or dispatch that records the path, or whose agent the path is named after, outranks it.
+function liveSiblingHoldingCheckout(slug: string, projectPath: string, ticket: any, state: any) {
+  if (!projectPath || !state?.worktree) return null;
+  const target = canonicalPath(state.worktree);
+  return listTickets(slug).find((candidate: any) => siblingHoldsCheckout(projectPath, ticket, candidate, target)) || null;
+}
+
+function crossBoundCheckoutRefusal(ref: string, siblingRef: string, worktree: string) {
+  return `${ref} did not remove ${worktree}: its retired attempt's binding was a cross-bind onto ${siblingRef}'s live checkout, not a tree ${ref} created. The checkout stays with ${siblingRef}, and only ${ref}'s binding was cleared.`;
+}
+
+function reclaimRetiredAttemptCheckout(slug: string, projectPath: string, ticket: any, state: any, facts?: any) {
+  const sibling = liveSiblingHoldingCheckout(slug, projectPath, ticket, state);
+  if (!sibling) return reclaimUnclaimedDispatchWorktree(projectPath, state, facts);
+  return {
+    worktree: state.worktree,
+    reclaimed: false,
+    reason: 'cross_bound_worktree',
+    sibling: sibling.ref,
+    message: crossBoundCheckoutRefusal(ticket.ref, sibling.ref, state.worktree),
+  };
+}
+
 function unclaimedWorktreeRecoveryFacts(projectPath?: any, ticket?: any, state?: any) {
   const checkpointCommit = String(ticket?.checkpoint?.commit || ticket?.submission?.commit || '').trim();
   if (!checkpointCommit || !releaseFragmentOnlyCheckpoint(projectPath, ticket, checkpointCommit, state?.baseCommit)) {
@@ -1668,6 +1765,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const t = getTicket(slug, found.id);
     if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
     const current = dispatchState(t);
+    let crossBoundWorktree: { sibling: string; worktree: string; message: string } | null = null;
     // A pending submission is a terminal outcome parked for the publish transaction, so preparing over it
     // minted a second attempt that outranked the submitted one in pulse while the submission stayed valid
     // (SQ-2117). Anything reading current dispatch.agentId then reads an executor that never touched the
@@ -1679,10 +1777,13 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by)
       && !checkoutBelongsToAnotherDispatchAgent(slug, projectPath, t, current)) {
       const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
-      const recovery = reclaimUnclaimedDispatchWorktree(projectPath, recoveryFacts.state, {
+      const recovery = reclaimRetiredAttemptCheckout(slug, projectPath, t, recoveryFacts.state, {
         checkpointCommit: recoveryFacts.checkpointCommit,
       });
-      if (recovery && recovery.reclaimed === false && recovery.discardable !== true && recovery.retainedCheckout !== true) {
+      if (recovery?.reason === 'cross_bound_worktree') {
+        releaseCrossedCreationBinding(current, recovery.sibling, new Date().toISOString(), 'cross_bound_supersede');
+        crossBoundWorktree = { sibling: recovery.sibling, worktree: recovery.worktree, message: recovery.message };
+      } else if (recovery && recovery.reclaimed === false && recovery.discardable !== true && recovery.retainedCheckout !== true) {
         const retainedContinuation = retainedWorktreeContinuationState(slug, t, current);
         if (!retainedContinuation?.continuation) {
           const checkpointCommit = String(t.checkpoint?.commit || '').trim();
@@ -1953,6 +2054,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       sharedTree,
       ...(reducedAgentSchema ? { reducedAgentSchema: true } : {}),
       ...(worktreeWarning ? { worktreeWarning } : {}),
+      ...(crossBoundWorktree ? { crossBoundWorktree } : {}),
       ...(pythonIoEncoding.written ? { pythonIoEncoding } : {}),
       ...(opts.dispatchSkew ? { dispatchSkew: opts.dispatchSkew } : {}),
       declaredFiles,
@@ -2024,7 +2126,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     stampDispatchEvent(t, 'dispatch', now);
     writeDispatchTokenFile(t);
     putTicket(slug, t);
-    const warnings = [localAheadWarning?.message, dirtyBaselineCapture?.warning, servingCompatibilityWarning].filter(Boolean);
+    const warnings = [localAheadWarning?.message, dirtyBaselineCapture?.warning, servingCompatibilityWarning, crossBoundWorktree?.message].filter(Boolean);
     return { ok: true, ticket: t, token: t.dispatchNonce, recovery, ...(warnings.length ? { warnings } : {}) };
     });
     if (priorTokenFile && stagedTokenFile && priorTokenFile !== stagedTokenFile) {
@@ -2685,7 +2787,7 @@ function recordDispatchWorktreeDependencyLink(slug?: any, sessionId?: any, workt
 // a retired hook that caught its own correct `stale_attempt` used to land here and terminalize the live
 // replacement, clearing its nonce and marking it failed while the hook's own stderr said the live attempt
 // was untouched (SQ-2953 finding 1, hook-race-probe.json).
-function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: any, error?: any, attempt?: any) {
+function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: any, error?: any, attempt?: any, options?: { created?: boolean }) {
   if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: 'missing_attempt' };
   const normalizedSessionId = String(sessionId || '').trim();
   const target = String(worktree || '').trim();
@@ -2718,6 +2820,9 @@ function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?:
       state.worktreeObservedRevision = facts.revision;
       state.worktreeCreationCompletedAt = new Date().toISOString();
     }
+    // A hook that failed before its checkout existed must not leave the attempt naming a path it never
+    // created: whatever sits there later is someone else's, and retry cleanup would reclaim it (SQ-3132).
+    if (options?.created === false) releaseCrossedCreationBinding(state, null, new Date().toISOString(), 'worktree_create_failed');
     setDispatchTerminal(ticket, 'failed', 'worktree-create-recovery', {
       slug,
       error,
@@ -2730,7 +2835,7 @@ function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?:
     return { ok: true, ticket };
   });
   if (!terminal?.ok) return terminal;
-  const cleanup = reclaimUnclaimedDispatchWorktree(meta.path, dispatchState(terminal.ticket));
+  const cleanup = reclaimRetiredAttemptCheckout(slug, meta.path, terminal.ticket, dispatchState(terminal.ticket));
   return { ok: true, ticket: terminal.ticket, cleanup };
 }
 
@@ -3096,7 +3201,7 @@ function movedCreationRecord(state?: any) {
   };
 }
 
-function releaseCrossedCreationBinding(state?: any, otherRef?: any, now?: any) {
+function releaseCrossedCreationBinding(state?: any, otherRef?: any, now?: any, reason = 'creation_order') {
   const from = canonicalPath(state.worktree);
   Object.assign(state, movedCreationRecord(null), {
     worktreeBindingSource: null,
@@ -3106,7 +3211,7 @@ function releaseCrossedCreationBinding(state?: any, otherRef?: any, now?: any) {
     worktreeCheckoutInstance: null,
     worktreeObservedRevision: null,
     worktreeBoundAt: null,
-    worktreeBindingExchange: { at: now, from, with: otherRef, reason: 'creation_order' },
+    worktreeBindingExchange: { at: now, from, with: otherRef, reason },
   });
 }
 
@@ -4012,6 +4117,8 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     dispatchIdentityDiagnosis,
     dispatchIsolationExpectation,
     dispatchUnboundClaim,
+    boardVerificationEvidencePath,
+    dispatchEvidenceDirectory,
     recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,

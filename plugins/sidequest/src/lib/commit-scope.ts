@@ -764,8 +764,15 @@ export function submissionRange(cwd: string, options: unknown) {
   }
 }
 
-export function validateStoredSubmissionRange(cwd: string, submissionValue: unknown, ticketRef?: unknown, integrationBranchOverride?: unknown) {
+export function validateStoredSubmissionRange(cwd: string, submissionValue: unknown, ticketRef?: unknown, integrationBranchOverride?: unknown, options?: unknown) {
   const submission = isRecord(submissionValue) ? submissionValue : {};
+  const opts = isRecord(options) ? options : {};
+  // The recorded expected upstream still has to be reachable before an automatic
+  // merge runs against it. A caller recording a delivery that already landed by
+  // hand proves its landing from the pinned candidate's own content instead, and
+  // holding it to this assertion refused the very recovery the divergence refusal
+  // prescribes (SQ-23). Every other stored-range invariant still runs.
+  const allowDivergedExpectedUpstream = opts.allowDivergedExpectedUpstream === true;
   // One derivation for every caller, including the override-less publish queue: the
   // submission itself records the mode, branch and upstream the dispatch froze.
   const integrationRefs = integrationRefNames(integrationBranchOverride, submission);
@@ -774,7 +781,7 @@ export function validateStoredSubmissionRange(cwd: string, submissionValue: unkn
     commit: submission.commit,
     gitRef: submission.gitRef,
     upstream: submission.upstream,
-    upstreamCommit: submission.upstreamCommit,
+    ...(allowDivergedExpectedUpstream ? {} : { upstreamCommit: submission.upstreamCommit }),
     integrationTarget: submission,
     integrationBranch: integrationRefs,
     base: submission.base,

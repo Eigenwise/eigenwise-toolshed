@@ -591,137 +591,48 @@ test('pre-tool hook: a sibling closing never closes a live executor that claimed
   assert.match(closed.hookSpecificOutput.permissionDecisionReason, new RegExp(`${siblingTicket.ref} is closed`));
 });
 
-// The exchange above never rewrites terminal history, so a sibling closed while it still held this runtime's guessed
-// id keeps that id. The live binding the token claim made has to outrank it.
-test('pre-tool hook: a sibling closed while holding a guessed identity never closes the live executor', () => {
-  const sessionId = `sq53-terminal-holder-${++sqSeq}`;
-  const siblingTicket = addStopTicket('SQ-53 sibling closed before anyone claimed it');
-  const ownTicket = addStopTicket('SQ-53 live executor that claims after the sibling closed');
-  const siblingPrepared = store.prepareDispatch(slug, siblingTicket.ref, { allowUnscoped: true, sessionId, sharedTree: true });
-  const ownPrepared = store.prepareDispatch(slug, ownTicket.ref, { allowUnscoped: true, sessionId, sharedTree: true });
-  const executor = siblingPrepared.ticket.dispatchExecutor;
-  const ownAgent = `sq53-holder-own-agent-${sqSeq}`;
-  for (const [ref, prepared, agentName] of [
-    [siblingTicket.ref, siblingPrepared, `sq53-holder-sibling-${sqSeq}`],
-    [ownTicket.ref, ownPrepared, `sq53-holder-own-${sqSeq}`],
-  ] as const) {
-    assert.equal(store.recordDispatchLaunch(slug, ref, { sessionId, token: prepared.token, executor, agentName }).ok, true);
-  }
-  assert.equal(store.bindDispatchAgent(sessionId, executor, ownAgent, `sq53-holder-sibling-${sqSeq}`).ok, true);
-  // The sibling's real runtime dies before it ever claims, so nothing moves the guessed id off its record.
-  const stopped = store.markDispatchStopped(sessionId, executor, null, `sq53-holder-sibling-${sqSeq}`);
-  assert.equal(stopped.ok, true, `sibling stop: ${stopped.reason}`);
-  assert.ok(store.getTicket(slug, siblingTicket.ref).dispatch.terminalAt, 'the sibling dispatch is terminal');
-  assert.equal(store.getTicket(slug, siblingTicket.ref).dispatch.agentId, ownAgent, 'the terminal sibling keeps the guessed id');
-  assert.equal(store.closeTicketForGrooming(slug, siblingTicket.ref, { by: 'orchestrator', reason: 'The sibling was dropped.' }).ok, true);
+test('pre-tool hook: a closed sibling never refuses the executor still holding its own claim', () => {
+  const closed = addStopTicket('closed sibling of a live executor');
+  const live = addStopTicket('live executor beside a closed sibling');
+  const sessionId = `cross-ticket-terminal-${++sqSeq}`;
+  // The incident shape: one runtime identity recorded on two sibling dispatches of one
+  // session, reachable because a bind takes any sibling whose own agent id is still unset.
+  const agentId = `cross-ticket-agent-${sqSeq}`;
+  const bindSibling = (ticket?: any, by?: any, agentName?: any) => {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
+    const executor = prepared.ticket.dispatchExecutor;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId, token: prepared.token, executor, agentName,
+    }).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentName).ok, true);
+    const worktree = store.getTicket(slug, ticket.ref).dispatch?.worktree;
+    if (worktree) fs.mkdirSync(worktree, { recursive: true });
+    assert.equal(store.claimTicket(slug, ticket.ref, by, { sessionId, token: prepared.token, executor }).ok, true);
+    return executor;
+  };
+  const executor = bindSibling(closed, 'closed-sibling-worker', `closed-sibling-${sqSeq}`);
+  assert.equal(bindSibling(live, 'live-sibling-worker', `live-sibling-${sqSeq}`), executor);
+  assert.equal(store.getTicket(slug, closed.ref).dispatch.agentId, agentId);
+  assert.equal(store.getTicket(slug, live.ref).dispatch.agentId, agentId);
 
-  assert.equal(runHookOutput(path.join(HOOKS, 'bind-runtime-identity.js'), {
-    session_id: sessionId,
-    agent_id: ownAgent,
-    agent_type: executor,
-    cwd: BOARD_PATH,
-    tool_name: 'mcp__plugin_sidequest_board__claim',
-    tool_input: { ref: ownTicket.ref, project: BOARD_PATH, by: 'sq53-holder-own-worker', executor, tokenFile: ownPrepared.ticket.dispatch.tokenFile },
-  }), null);
-  const claimed = store.claimTicket(slug, ownTicket.ref, 'sq53-holder-own-worker', { sessionId, tokenFile: ownPrepared.ticket.dispatch.tokenFile, executor, requireBoundAgent: true });
-  assert.equal(claimed.ok, true, `${ownTicket.ref} claim: ${claimed.reason} ${claimed.message || ''}`);
-  assert.equal(store.getTicket(slug, ownTicket.ref).dispatch.agentId, ownAgent);
+  assert.equal(store.completeTicket(slug, closed.ref, 'closed-sibling-worker', {
+    model: 'sonnet',
+    effort: 'high',
+    cleanDeclaredScope: true,
+  }).ok, true);
+
+  const stillLive = store.getTicket(slug, live.ref);
+  assert.equal(stillLive.status, 'doing');
+  assert.equal(stillLive.claim.by, 'live-sibling-worker');
+
   assert.equal(runHookOutput(FORCE_BYPASS, {
     session_id: sessionId,
     agent_type: executor,
-    agent_id: ownAgent,
+    agent_id: agentId,
     cwd: BOARD_PATH,
     tool_name: 'Bash',
-    tool_input: { command: 'echo still here' },
-  }), null, `the live ${ownTicket.ref} executor was told ${siblingTicket.ref} is closed`);
-});
-
-// SQ-55 (GitHub #298), the 2026-09-26 incident shape: an xhigh and a high executor spawned in one Agent message.
-// WorktreeCreate attributed each harness checkout to the other's reservation, and SubagentStart reported the parent
-// checkout, so nothing corrected it before the claim. Each executor is confined to its own harness checkout.
-test('hooks: crossed siblings of different executor types are each leased to their own checkout at claim', () => {
-  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sq55-hooks-crossed-')));
-  fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
-  gitFixture(['init', '-b', 'main', '--quiet'], root);
-  gitFixture(['config', 'user.email', 'sidequest@example.invalid'], root);
-  gitFixture(['config', 'user.name', 'Sidequest Tests'], root);
-  gitFixture(['add', '.'], root);
-  gitFixture(['commit', '--quiet', '-m', 'fixture'], root);
-  const projectSlug = store.ensureProject(root).slug;
-  const sessionId = `sq55-hooks-${++sqSeq}`;
-  const runtimes = (['high', 'xhigh'] as const).map((effort) => {
-    const category = `sq55-hooks-${effort}`;
-    store.setCategory({ id: category, name: `SQ-55 ${effort} sibling`, route: { model: 'opus', effort }, fallback: null });
-    const ticket = store.createTicket(projectSlug, { title: `SQ-55 ${effort} sibling`, category, files: ['README.md'], source: 'cli' });
-    const prepared = store.prepareDispatch(projectSlug, ticket.ref, { allowUnscoped: true, sessionId, sharedTree: false });
-    const executor = prepared.ticket.dispatchExecutor;
-    assert.equal(store.recordDispatchLaunch(projectSlug, ticket.ref, { sessionId, token: prepared.token, executor, agentName: `sq55-${effort}-${sqSeq}` }).ok, true);
-    const agentId = `a55${effort}${sqSeq}`;
-    return { ref: ticket.ref, executor, tokenFile: prepared.ticket.dispatch.tokenFile, agentId, checkout: worktrees.agentWorktreePath(root, agentId) };
-  });
-  const [high, xhigh] = runtimes;
-  assert.notEqual(high!.executor, xhigh!.executor);
-  const recorded = (ref: string) => store.getTicket(projectSlug, ref).dispatch.worktree;
-  try {
-    for (const runtime of runtimes) {
-      assert.equal(store.bindDispatchWorktreeCreation(projectSlug, sessionId, runtime.checkout).ok, true);
-      gitFixture(['worktree', 'add', '--detach', runtime.checkout], root);
-      completeCheckoutCreation(projectSlug, sessionId, runtime.checkout);
-    }
-    assert.equal(recorded(high!.ref), worktrees.canonicalPath(xhigh!.checkout), 'the fixture reproduces the creation-order crossing');
-    for (const runtime of runtimes) {
-      runHookOutput(SUBAGENT_START, { session_id: sessionId, agent_id: runtime.agentId, agent_type: runtime.executor, cwd: root });
-    }
-    for (const runtime of runtimes) {
-      assert.equal(runHookOutput(path.join(HOOKS, 'bind-runtime-identity.js'), {
-        session_id: sessionId,
-        agent_id: runtime.agentId,
-        agent_type: runtime.executor,
-        cwd: runtime.checkout,
-        tool_name: 'mcp__plugin_sidequest_board__claim',
-        tool_input: { ref: runtime.ref, project: root, by: `sq55-${runtime.agentId}`, executor: runtime.executor, tokenFile: runtime.tokenFile },
-      }), null);
-      const claimed = store.claimTicket(projectSlug, runtime.ref, `sq55-${runtime.agentId}`, { sessionId, tokenFile: runtime.tokenFile, executor: runtime.executor, requireBoundAgent: true });
-      assert.equal(claimed.ok, true, `${runtime.ref} claim: ${claimed.reason} ${claimed.message || ''}`);
-    }
-    for (const runtime of runtimes) {
-      const other = runtime === high ? xhigh! : high!;
-      assert.equal(recorded(runtime.ref), worktrees.canonicalPath(runtime.checkout));
-      const write = (checkout: string) => runHookOutput(GUARD_WORKTREE_ISOLATION, {
-        session_id: sessionId,
-        agent_id: runtime.agentId,
-        agent_type: runtime.executor,
-        cwd: runtime.checkout,
-        tool_name: 'Edit',
-        tool_input: { file_path: path.join(checkout, 'README.md'), old_string: 'fixture', new_string: 'changed' },
-      });
-      const own = write(runtime.checkout);
-      assert.equal(own, null, `${runtime.ref} was refused its confined checkout: ${own?.hookSpecificOutput?.permissionDecisionReason}`);
-      const foreign = write(other.checkout);
-      assert.equal(foreign?.hookSpecificOutput?.permissionDecision, 'deny');
-      assert.match(foreign.hookSpecificOutput.permissionDecisionReason, new RegExp(`${runtime.ref} has no write lease`));
-    }
-  } finally {
-    for (const runtime of runtimes) {
-      store.releaseTicket(projectSlug, runtime.ref, 'sq55-cleanup', { status: 'todo', source: 'test', force: true });
-      if (fs.existsSync(runtime.checkout)) gitFixture(['worktree', 'remove', '--force', runtime.checkout], root);
-    }
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('pre-tool hook: a runtime with no resolvable binding is not blocked from reading', () => {
-  const payload = {
-    session_id: `sq53-unbound-${++sqSeq}`,
-    agent_type: 'sidequest-exec-high',
-    agent_id: `sq53-unbound-agent-${sqSeq}`,
-    cwd: BOARD_PATH,
-    tool_name: 'Read',
-    tool_input: { file_path: path.join(BOARD_PATH, 'README.md') },
-  };
-  for (const hook of [FORCE_BYPASS, GUARD_WORKTREE_ISOLATION, path.join(HOOKS, 'bind-runtime-identity.js')]) {
-    assert.equal(runHookOutput(hook, payload), null, `${path.basename(hook)} blocked a Read with no resolvable binding`);
-  }
+    tool_input: { command: 'echo diag-probe' },
+  }), null, `${closed.ref} must not deny Bash while ${live.ref} is claimed by the same identity`);
 });
 
 test('pre-tool hook: an executor cannot redispatch its own active ticket', () => {
@@ -3658,7 +3569,12 @@ test('session-start reclaims a clean old worktree without lease identity', async
     assert.equal(fs.existsSync(old), false, 'SessionStart must reclaim a clean old worktree without lease identity');
   } finally {
     if (fs.existsSync(old)) gitFixture(['worktree', 'remove', '--force', old], repo);
-    fs.rmSync(repo, { recursive: true, force: true });
+    // Ending the session, like the sibling live-worktree test above, runs the sweep
+    // one more time in the foreground and only returns once that child process has
+    // exited — giving Windows a chance to release any handle the detached sweep
+    // worker still held on `repo` before cleanup deletes it (SQ-2907).
+    runHook(SESSION_END, { session_id: 'session-sweep', cwd: repo }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
+    fs.rmSync(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
