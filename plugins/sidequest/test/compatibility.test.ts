@@ -108,7 +108,7 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(byName.get('context_page')?.inputSchema.properties?.limit?.maximum, 70 * 1024);
   assert.match(byName.get('list')?.description ?? '', /changes\/pulse/);
   assert.equal(byName.get('changes')?.description, 'Poll ticket changes.');
-  assert.match(byName.get('claim')?.description ?? '', /Claim before work/);
+  assert.match(byName.get('claim')?.description ?? '', /Claim, then work only on ok:true/);
   assert.deepEqual(
     Object.keys(byName.get('claim')?.inputSchema.properties ?? {}).filter((name) => ['by', 'effort', 'executor', 'token', 'tokenFile'].includes(name)).sort(),
     ['by', 'effort', 'executor', 'tokenFile'],
@@ -122,8 +122,12 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.match(submit?.description ?? '', /clear\/force need owner/);
   const rework = byName.get('rework');
   assert.equal(rework?.inputSchema.properties?.force, undefined);
-  assert.match(rework?.description ?? '', /repair unbound; bound needs oracle/);
-  assert.match(byName.get('supersede_submission')?.description ?? '', /candidate rejection permits supersession/);
+  assert.match(rework?.description ?? '', /Unbound repair only; bound uses review_outcome/);
+  assert.match(byName.get('supersede_submission')?.description ?? '', /Integrated repair only/);
+  const reviewOutcome = byName.get('review_outcome');
+  assert.ok(reviewOutcome, 'native bound-review result is a separate MCP operation');
+  assert.equal(reviewOutcome?.inputSchema.properties?.outcome, undefined, 'the caller cannot supply a review verdict');
+  assert.match(reviewOutcome?.description ?? '', /Authenticated terminal evidence; derived/);
   assert.equal(byName.get('comments')?.inputSchema.properties?.full?.description, undefined);
   assert.match(byName.get('release')?.inputSchema.properties?.command?.description as string, /Required for blocker\/contradiction/);
   assert.match(byName.get('release')?.inputSchema.properties?.outputTail?.description as string, /Required blocker\/contradiction/);
@@ -133,32 +137,32 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   // SQ-2955: `sharedTree` and `worktree` carried 'Tree.' and 'Checkout.', which repeated their own property
   // names, and tools/list had 15 spare bytes. The pin stays a pin: nothing verbose may grow back here.
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.sharedTree?.description, undefined);
-  assert.match(byName.get('dispatch')?.inputSchema.properties?.reducedAgentSchema?.description ?? '', /Only when name\/mode missing/);
+  assert.match(byName.get('dispatch')?.inputSchema.properties?.reducedAgentSchema?.description ?? '', /When name\/mode missing/);
   assert.match(byName.get('dispatch')?.inputSchema.properties?.reducedAgentSchema?.description ?? '', /hook needs agent_id/);
   assert.match(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /latest signal grace/);
   // SQ-2961: and which board writes reach that grace, since a caller cannot see the trust boundary in the schema.
-  assert.match(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /only the bound runtime name counts/);
+  assert.match(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /bound runtime name only/);
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.retireOnly?.type, 'boolean');
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.worktree?.description, undefined);
   // The served groomClose said nothing about retirement while the source description still claimed evidence
   // only applies before runtime binding (SQ-2953 finding 4).
-  assert.match(byName.get('groomClose')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /retires unclaimed attempts past deadline/);
+  assert.match(byName.get('groomClose')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /retires expired unclaimed attempts/);
   // SQ-2961: and the CLI flag of the same name reaches the same terminal state, because both run one authority.
   assert.match(byName.get('groomClose')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /CLI too/);
   const addVerify = byName.get('add')?.inputSchema.properties?.verify?.description ?? '';
-  assert.ok(addVerify.includes('`attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`'), addVerify);
+  assert.ok(addVerify.includes('`attestation: <attestationArtifact verbatim> | <evidence> | <what it showed>`'), addVerify);
   assert.equal(byName.get('update')?.inputSchema.properties?.verify?.description, addVerify);
   assert.match(byName.get('add')?.inputSchema.properties?.complexity?.description ?? '', /why required/);
-  assert.match(byName.get('supersede_submission')?.inputSchema.properties?.supersededBy?.description ?? '', /ticket ref, not a commit/);
+  assert.match(byName.get('supersede_submission')?.inputSchema.properties?.supersededBy?.description ?? '', /ticket ref; not commit/);
   assert.match(byName.get('release')?.description ?? '', /reason\/kind required/);
-  assert.match(byName.get('groomClose')?.description ?? '', /Frozen ticket target/);
+  assert.match(byName.get('groomClose')?.description ?? '', /Frozen target/);
   assert.match(byName.get('groomClose')?.description ?? '', /abandonSubmission:true/);
-  assert.match(byName.get('groomClose')?.description ?? '', /reset\/working-tree\/manual/);
+  assert.deepEqual(byName.get('groomClose')?.inputSchema.properties?.deliveryMethod?.enum, ['reset', 'working-tree', 'manual']);
   assert.match(byName.get('groomClose')?.description ?? '', /reviewed interaction/);
   assert.match(byName.get('done')?.description ?? '', /pinned command needs capture; commandless needs verify/);
   assert.match(byName.get('done')?.description ?? '', /commandless needs verify/);
   assert.equal((byName.get('done')?.inputSchema.properties?.verify as any)?.maxLength, 4000);
-  assert.match(byName.get('integrate')?.description ?? '', /pinned deliveryMethod/);
+  assert.match(byName.get('integrate')?.description ?? '', /pin deliveryMethod/);
   assert.match(byName.get('integrate')?.description ?? '', /reviewed interaction/);
   assert.match(byName.get('groomClose')?.inputSchema.properties?.deliveryCommit?.description ?? '', /Prepared integration target/);
   assert.match(byName.get('groomClose')?.inputSchema.properties?.deliveryInteractionCommit?.description ?? '', /Reviewed descendant/);

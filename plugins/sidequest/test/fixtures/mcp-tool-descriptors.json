@@ -30,7 +30,7 @@
   },
   {
     "name": "list",
-    "description": "List; poll via changes/pulse.",
+    "description": "List; poll changes/pulse",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -194,7 +194,7 @@
         "entry": {
           "type": "string",
           "pattern": "^(DECISION|CONSTRAINT|DISCOVERY)\\s*:",
-          "description": "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes."
+          "description": "Start DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes."
         },
         "ref": {
           "type": "string"
@@ -311,7 +311,7 @@
         "verify": {
           "type": "string",
           "maxLength": 1000,
-          "description": "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
+          "description": "Attestation: `attestation: <attestationArtifact verbatim> | <evidence> | <what it showed>`."
         },
         "verifyKind": {
           "type": "string",
@@ -494,7 +494,7 @@
         "verify": {
           "type": "string",
           "maxLength": 1000,
-          "description": "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
+          "description": "Attestation: `attestation: <attestationArtifact verbatim> | <evidence> | <what it showed>`."
         },
         "verifyKind": {
           "type": "string",
@@ -655,7 +655,7 @@
   },
   {
     "name": "claim",
-    "description": "Claim before work; proceed only on ok:true.",
+    "description": "Claim, then work only on ok:true.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -811,8 +811,26 @@
     }
   },
   {
+    "name": "review_outcome",
+    "description": "Authenticated terminal evidence; derived",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref"
+      ]
+    }
+  },
+  {
     "name": "done",
-    "description": "Finish; external/working-tree: pinned command needs capture; commandless needs verify.",
+    "description": "external/working-tree: pinned command needs capture; commandless needs verify.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -858,7 +876,7 @@
   },
   {
     "name": "groomClose",
-    "description": "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; verifier replacement; reviewed interaction.",
+    "description": "Frozen target; abandonSubmission:true; pin candidate, replace verifier; reviewed interaction.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -920,7 +938,7 @@
         },
         "recoveryEvidence": {
           "type": "string",
-          "description": "Unverified; retires unclaimed attempts past deadline; CLI too."
+          "description": "Unverified; retires expired unclaimed attempts; CLI too."
         }
       },
       "required": [
@@ -1095,7 +1113,7 @@
   },
   {
     "name": "rework",
-    "description": "repair unbound; bound needs oracle.",
+    "description": "Unbound repair only; bound uses review_outcome.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1225,7 +1243,7 @@
   },
   {
     "name": "integrate",
-    "description": "Comma-ref group; wave=options, refs in ref; pinned deliveryMethod; reviewed interaction.",
+    "description": "Comma refs; wave=options; pin deliveryMethod; reviewed interaction.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1302,7 +1320,7 @@
   },
   {
     "name": "supersede_submission",
-    "description": "candidate rejection permits supersession.",
+    "description": "Integrated repair only; record result.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1317,7 +1335,7 @@
         },
         "supersededBy": {
           "type": "string",
-          "description": "Repair ticket ref, not a commit."
+          "description": "Repair ticket ref; not commit."
         },
         "reason": {
           "type": "string"
@@ -1531,6 +1549,12 @@
         },
         "integrationBranch": {
           "type": "string"
+        },
+        "allowRepeatFailure": {
+          "type": "boolean"
+        },
+        "recoveryEvidence": {
+          "type": "string"
         }
       },
       "required": [
@@ -1569,7 +1593,7 @@
   },
   {
     "name": "dispatch",
-    "description": "Tree. token and spawn spec; retireOnly.",
+    "description": "Tree, token, spawn spec; retireOnly.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1584,7 +1608,7 @@
         },
         "reducedAgentSchema": {
           "type": "boolean",
-          "description": "Only when name/mode missing; hook needs agent_id+auto|bypass mode."
+          "description": "When name/mode missing; hook needs agent_id, auto|bypass."
         },
         "allowRepeatFailure": {
           "type": "boolean"
@@ -1597,7 +1621,7 @@
         },
         "recoveryEvidence": {
           "type": "string",
-          "description": "Unverified; latest signal grace; only the bound runtime name counts."
+          "description": "Unverified; latest signal grace; bound runtime name only."
         },
         "retireOnly": {
           "type": "boolean"

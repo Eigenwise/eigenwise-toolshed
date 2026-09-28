@@ -413,7 +413,7 @@ test('tools/list advertises the board tools with input schemas', async () => {
   const dispatch = resp.result.tools.find((tool: any) => tool.name === 'dispatch');
   assert.match(dispatch.inputSchema.properties.recoveryEvidence.description, /latest signal grace/);
   // The one fact a caller cannot recover from the schema shape: its own comments do not hold an attempt open.
-  assert.match(dispatch.inputSchema.properties.recoveryEvidence.description, /only the bound runtime name counts/);
+  assert.match(dispatch.inputSchema.properties.recoveryEvidence.description, /bound runtime name only/);
   assert.match(dispatch.inputSchema.properties.recoveryEvidence.description, /Unverified/);
   const groomCloseTool = resp.result.tools.find((tool: any) => tool.name === 'groomClose');
   assert.match(groomCloseTool.inputSchema.properties.recoveryEvidence.description, /CLI too/);
@@ -1313,7 +1313,7 @@ test('tools/list preserves MCP contracts within the payload budget', async (cont
   assert.ok(payloadBytes <= mcp.MCP_TOOLS_LIST_MAX_BYTES, `tools/list payload is ${payloadBytes} bytes, over the ${mcp.MCP_TOOLS_LIST_MAX_BYTES}-byte budget`);
   assert.ok(headroom >= mcp.MCP_TOOLS_LIST_HEADROOM_BYTES, `tools/list headroom is ${headroom} bytes, below ${mcp.MCP_TOOLS_LIST_HEADROOM_BYTES}`);
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
-  assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /token and spawn spec/);
+  assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /token, spawn spec/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /retireOnly/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').inputSchema.properties.recoveryEvidence.description, /latest signal grace/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /pinned command needs capture; commandless needs verify/);

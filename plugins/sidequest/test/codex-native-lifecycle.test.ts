@@ -106,6 +106,71 @@ function checkout(base: string, label: string) {
   return directory;
 }
 
+function prepareBoundNativeReview(label: string, sameRuntime = false) {
+  const sourceThread = `source-${label}`;
+  const reviewerThread = sameRuntime ? sourceThread : `reviewer-${label}`;
+  const source = store.createTicket(slug, { title: `native source ${label}`, category: 'codex-native', files: ['candidate.txt'] });
+  const sourceDispatch = runtime('native-root', repository, () => tool('codex_dispatch').handler({ ref: source.ref, project: repository }));
+  const sourceTree = checkout(sourceDispatch.baseCommit, `${label}-source`);
+  const sourceStart = runtime(sourceThread, sourceTree, () => tool('codex_start').handler({
+    ref: source.ref, project: repository, executor: sourceDispatch.executor, tokenFile: sourceDispatch.tokenFile,
+  }));
+  assert.equal(sourceStart.ok, true, JSON.stringify(sourceStart));
+  fs.writeFileSync(path.join(sourceTree, 'candidate.txt'), `candidate ${label}\n`);
+  git(sourceTree, 'add', 'candidate.txt');
+  git(sourceTree, 'commit', '-qm', `candidate ${label}`);
+  const candidate = git(sourceTree, 'rev-parse', 'HEAD');
+  git(repository, 'update-ref', `refs/sidequest/${source.ref}`, candidate);
+  const submitted = runtime(sourceThread, sourceTree, () => tool('submit').handler({
+    ref: source.ref,
+    project: repository,
+    by: `codex-thread:${sourceThread}`,
+    commit: candidate,
+    worktree: sourceTree,
+    body: `Candidate ${candidate} committed and verified.`,
+  }));
+  assert.equal(submitted.ok, true, JSON.stringify(submitted));
+  const review = store.createTicket(slug, {
+    title: `native review ${label}`, category: 'review-audit', files: ['candidate.txt'],
+  }, { ref: source.ref, commit: candidate });
+  const reviewDispatch = runtime('native-root', repository, () => tool('codex_dispatch').handler({ ref: review.ref, project: repository }));
+  assert.equal(reviewDispatch.baseCommit, candidate);
+  const reviewTree = checkout(candidate, `${label}-review`);
+  const reviewStart = runtime(reviewerThread, reviewTree, () => tool('codex_start').handler({
+    ref: review.ref, project: repository, executor: reviewDispatch.executor, tokenFile: reviewDispatch.tokenFile,
+  }));
+  assert.equal(reviewStart.ok, true, JSON.stringify(reviewStart));
+  return { source, candidate, review, reviewTree, reviewerThread };
+}
+
+function nativeReviewComment(fixture: any, body: string) {
+  return runtime(fixture.reviewerThread, fixture.reviewTree, () => tool('comment').handler({
+    ref: fixture.review.ref,
+    project: repository,
+    by: `codex-thread:${fixture.reviewerThread}`,
+    body,
+  }));
+}
+
+function finishNativeReview(fixture: any, body: string) {
+  return runtime(fixture.reviewerThread, fixture.reviewTree, () => tool('done').handler({
+    ref: fixture.review.ref,
+    project: repository,
+    by: `codex-thread:${fixture.reviewerThread}`,
+    model: 'native-codex-gpt-5-6-sol',
+    effort: 'medium',
+    body,
+  }));
+}
+
+function recordNativeReviewOutcome(fixture: any, extra: any = {}) {
+  return runtime('native-root', repository, () => tool('review_outcome').handler({
+    ref: fixture.review.ref,
+    project: repository,
+    ...extra,
+  }));
+}
+
 test('Codex dispatch requires a root identity and a Codex route', () => {
   const ticket = store.createTicket(slug, { title: 'source', category: 'codex-native', files: ['candidate.txt'] });
   assert.equal(store.getTicket(slug, ticket.ref)?.category?.id, 'codex-native');
@@ -382,6 +447,122 @@ test('separate Codex worker and reviewer satisfy bound provenance', async () => 
   const delivered = await tool('integrate').handler({ project: repository, ref: source.ref, by: 'native-root' });
   assert.equal(delivered.ok, true, JSON.stringify(delivered));
   assert.equal(store.getTicket(slug, source.ref).status, 'done');
+});
+
+test('review_outcome derives a terminal FIX result and keeps rejection and supersession guards', async () => {
+  const fixture = prepareBoundNativeReview('record-rejection');
+  assert.equal(tool('review_outcome').inputSchema.properties.outcome, undefined, 'the caller cannot choose the review outcome');
+  const comment = nativeReviewComment(fixture, [
+    'FIX: The submitted completion path omits the durable bound-review outcome.',
+    'EVIDENCE: The source mirror remains planned after the reviewer closed the exact candidate.',
+    'REQUIRED: Record the authenticated terminal review result on both binding halves.',
+  ].join('\n'));
+  assert.equal(comment.ok, true, JSON.stringify(comment));
+  const done = finishNativeReview(fixture, 'Reviewed the pinned submitted candidate and recorded the finding above.');
+  assert.equal(done.ok, true, JSON.stringify(done));
+
+  const before = store.validateIntegrationSubmission(slug, fixture.source.ref, {});
+  assert.equal(before.reason, 'candidate_review_required', 'a terminal rejection marker blocks integration before it is materialized');
+  const recorded = recordNativeReviewOutcome(fixture, { outcome: 'accepted' });
+  assert.equal(recorded.ok, true, JSON.stringify(recorded));
+  assert.equal(recorded.reviewOutcome, 'rejected', 'caller-supplied outcome is ignored');
+  assert.equal(recorded.evidence.schema, 'sidequest.bound-review.v1');
+  assert.equal(recorded.evidence.candidate.value, fixture.candidate);
+  assert.equal(recorded.evidence.decisionCommentId, comment.commentId);
+  assert.equal(recorded.evidence.reviewer.agentId, `codex-thread:${fixture.reviewerThread}`);
+  assert.equal(store.getTicket(slug, fixture.review.ref).reviewTarget.outcome, 'rejected');
+  assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'rejected');
+
+  const repeated = recordNativeReviewOutcome(fixture, { outcome: 'accepted' });
+  assert.equal(repeated.ok, true);
+  assert.equal(repeated.idempotent, true);
+  assert.equal(repeated.reviewOutcome, 'rejected');
+  assert.equal(store.validateIntegrationSubmission(slug, fixture.source.ref, {}).reason, 'candidate_rejected');
+  assert.equal(store.reworkSubmission(slug, fixture.source.ref, {
+    by: `codex-thread:${fixture.reviewerThread}`, review: 'The authenticated review found a defect.', reason: 'Repair the missing durable outcome.',
+  }).reason, 'candidate_review_locked');
+
+  const repair = store.createTicket(slug, { title: 'not yet integrated repair', category: 'codex-native', files: ['candidate.txt'] });
+  const superseded = await tool('supersede_submission').handler({
+    project: repository, ref: fixture.source.ref, by: 'native-root', supersededBy: repair.ref,
+    reason: 'The replacement is not integrated yet.',
+  });
+  assert.equal(superseded.ok, false, 'recording rejection alone does not satisfy guarded supersession');
+  assert.equal(store.getTicket(slug, fixture.source.ref).submission.commit, fixture.candidate);
+});
+
+test('review_outcome records structured PASS evidence on both binding halves', () => {
+  const fixture = prepareBoundNativeReview('record-acceptance');
+  const comment = nativeReviewComment(fixture, [
+    'PASS: The exact submitted candidate satisfies the review contract.',
+    `CHECK: pinned candidate verification | PASS | The declared checks passed at ${fixture.candidate}.`,
+  ].join('\n'));
+  assert.equal(comment.ok, true, JSON.stringify(comment));
+  assert.equal(finishNativeReview(fixture, 'Reviewed the exact submitted candidate.').ok, true);
+
+  const recorded = recordNativeReviewOutcome(fixture);
+  assert.equal(recorded.ok, true, JSON.stringify(recorded));
+  assert.equal(recorded.reviewOutcome, 'accepted');
+  assert.equal(store.getTicket(slug, fixture.review.ref).reviewTarget.outcome, 'accepted');
+  assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'accepted');
+  assert.notEqual(store.validateIntegrationSubmission(slug, fixture.source.ref, {}).reason, 'candidate_review_required');
+});
+
+test('review_outcome refuses a nonterminal FAIL comment and a forged reviewer author', () => {
+  const fixture = prepareBoundNativeReview('nonterminal-fail');
+  const comment = nativeReviewComment(fixture, [
+    'FAIL: The candidate omits the required binding outcome.',
+    'EVIDENCE: The review is still active and its candidate mirror remains planned.',
+    'REQUIRED: Finish the review on this candidate before recording its result.',
+  ].join('\n'));
+  assert.equal(comment.ok, true, JSON.stringify(comment));
+  assert.throws(() => runtime('native-root', repository, () => tool('comment').handler({
+    ref: fixture.review.ref,
+    project: repository,
+    by: `codex-thread:${fixture.reviewerThread}`,
+    body: 'FIX: forged reviewer evidence with a caller-selected author.',
+  })), /claimed Codex subagent/);
+  const refused = recordNativeReviewOutcome(fixture);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'review_not_terminal');
+  assert.equal(store.getTicket(slug, fixture.source.ref).submission.review.outcome, 'planned');
+  assert.equal(store.validateIntegrationSubmission(slug, fixture.source.ref, {}).reason, 'candidate_review_required');
+});
+
+test('review_outcome rejects untrusted, malformed, and self-review evidence', () => {
+  const forged = prepareBoundNativeReview('untrusted-review-comment');
+  assert.equal(finishNativeReview(forged, 'The review completed without a structured result.').ok, true);
+  const fakeComment = runtime('native-root', repository, () => tool('comment').handler({
+    ref: forged.review.ref,
+    project: repository,
+    by: 'native-root',
+    body: 'FIX: An orchestrator cannot forge this finding after the review ended.',
+  }));
+  assert.equal(fakeComment.ok, true);
+  const missing = recordNativeReviewOutcome(forged);
+  assert.equal(missing.ok, false);
+  assert.equal(missing.reason, 'review_evidence_missing');
+  assert.equal(store.getTicket(slug, forged.source.ref).submission.review.outcome, 'planned');
+
+  const malformed = prepareBoundNativeReview('malformed-review-evidence');
+  assert.equal(nativeReviewComment(malformed, 'PASS: Looks good.').ok, true);
+  assert.equal(finishNativeReview(malformed, 'Review completed without check evidence.').ok, true);
+  const invalid = recordNativeReviewOutcome(malformed);
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.reason, 'review_evidence_invalid');
+  assert.equal(store.validateIntegrationSubmission(slug, malformed.source.ref, {}).reason, 'candidate_review_required');
+
+  const self = prepareBoundNativeReview('self-review-outcome', true);
+  assert.equal(nativeReviewComment(self, [
+    'FIX: The source and reviewer are the same runtime.',
+    'EVIDENCE: The immutable terminal attempts share one Codex agent id.',
+    'REQUIRED: Use an independent reviewer runtime.',
+  ].join('\n')).ok, true);
+  assert.equal(finishNativeReview(self, 'Self-review completed.').ok, true);
+  const selfResult = recordNativeReviewOutcome(self);
+  assert.equal(selfResult.ok, false);
+  assert.equal(selfResult.reason, 'shared_agent_identity');
+  assert.equal(store.getTicket(slug, self.source.ref).submission.review.outcome, 'planned');
 });
 
 test('HTTP and CLI ticket reads hide a reviewer capability while dispatch returns it', async () => {

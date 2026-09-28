@@ -1269,6 +1269,7 @@ const {
   verifyIntegration,
   validateIntegrationSubmission,
   boundReviewPass,
+  recordNativeReviewOutcome,
   recordDeliveredSubmission,
   recordAbandonedSubmission,
   integrateSubmission,
@@ -2302,7 +2303,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
             reason: 'pending_submission',
             ticket: t,
             submission: t.submission,
-            message: `${heldOwner ? '' : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. When a reviewed candidate already landed through an external conflict resolution, use the integrate route with deliveryCommit and reason. It verifies the named reachable delivery against the submitted content and merged tree before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`,
+            message: `${heldOwner ? '' : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a native review rejection, finish the bound review and call review_outcome to record the authenticated result; rework is only for an unbound candidate. When a reviewed candidate already landed through an external conflict resolution, use the integrate route with deliveryCommit and reason. It verifies the named reachable delivery against the submitted content and merged tree before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`,
           };
         }
         reopenedSubmission = t.submission;
@@ -3750,6 +3751,7 @@ module.exports = {
   ticketIntegrationTargets,
   normalizeDeliveryMode,
   validateIntegrationSubmission,
+  recordNativeReviewOutcome,
   recordDeliveredSubmission,
   recordAbandonedSubmission,
   integrateSubmission,

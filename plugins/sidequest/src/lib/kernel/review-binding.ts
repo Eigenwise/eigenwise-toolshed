@@ -229,6 +229,6 @@ export function reviewLockMessage(operation: string, ticket: any, relation: Revi
   const candidate = relation.candidate?.value || 'its candidate';
   return `${operation}: refused ${ticket?.ref}; candidate ${candidate} is bound to ${reviewRelationRef(relation)}`
     + ' and cannot be changed. Repair requires a fresh ticket, attempt, candidate, and review identity.'
-    + ' A failed review records its evidence on the review ticket and releases it for an external oracle;'
-    + ' an oracle-confirmed defect records the candidate rejection, and only an integrated repair may supersede it.';
+    + ' A failed review records its evidence on the review ticket; native Codex uses review_outcome for the authenticated terminal result.'
+    + ' External-oracle verdicts use their separate path, and only an integrated repair may supersede it.';
 }

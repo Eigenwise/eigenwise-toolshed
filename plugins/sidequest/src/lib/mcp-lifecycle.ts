@@ -552,6 +552,24 @@ const tools: ToolDefinition[] = [
     },
   },
   {
+    name: 'review_outcome',
+    description: 'Record a terminal bound-review result from its authenticated reviewer comment; callers cannot supply the outcome. Use PASS with passing CHECK evidence, or FIX/FAIL with a concrete finding, evidence, and required change.',
+    inputSchema: {
+      type: 'object',
+      properties: { ref: { type: 'string' }, project: PROJECT_PROP },
+      required: ['ref'],
+    },
+    handler(args) {
+      const { slug } = resolveLifecycleProject(args.project, args, 'review_outcome');
+      const result = store.recordNativeReviewOutcome(slug, args.ref);
+      return mutationAck(slug, result, result.ok ? {
+        reviewOutcome: result.outcome,
+        evidence: result.evidence,
+        ...(result.idempotent === true ? { idempotent: true } : {}),
+      } : null);
+    },
+  },
+  {
     name: 'done',
     description: 'Finish. A readonly last dispatch closes without a submission; a clean writable scope needs externalDeliverable:true plus a current-attempt pinned verify-capture, or typed verify evidence when the ticket has no pinned command. Commandless working-tree delivery requires typed verify evidence.',
     inputSchema: {
@@ -918,7 +936,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'rework',
-    description: 'Reject an unbound submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it. A candidate bound to a review is locked: this call refuses without writing, whatever by or reviewRef says. Record a failed review as evidence on the review ticket and release it with kind oracle. When that oracle accepts the defect conclusion, Sidequest records the bound candidate as rejected; only an integrated repair can then supersede it.',
+    description: 'Reject an unbound submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it. A candidate bound to a review is locked: this call refuses without writing, whatever by or reviewRef says. Native Codex reviews finish on their bound candidate, then use review_outcome to derive a result from authenticated terminal reviewer evidence. External oracle reviews keep the separate oracle release and verdict path; only an integrated repair can supersede a rejected candidate.',
     inputSchema: {
       type: 'object',
       properties: {

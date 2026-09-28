@@ -141,7 +141,7 @@ const TOOL_BY_NAME = new Map(TOOLS
 
 const MUTATING_TOOLS = new Set([
   'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next',
-  'done', 'groomClose', 'release', 'commit', 'submit', 'supersede_submission', 'comment', 'plan', 'link', 'unlink', 'assign', 'dispatch', 'codex_dispatch', 'codex_start',
+  'done', 'groomClose', 'release', 'commit', 'submit', 'supersede_submission', 'review_outcome', 'comment', 'plan', 'link', 'unlink', 'assign', 'dispatch', 'codex_dispatch', 'codex_start',
   'category_add', 'category_edit', 'category_detach', 'category_relink', 'category_rm',
   'profile_create', 'profile_edit', 'profile_retire', 'profile_use', 'profile_repoint', 'profile_promote',
   'archive_board', 'unarchive_board',
@@ -312,7 +312,7 @@ async function runTool(tool: ToolDefinition, rawArgs: any) {
 // compactSchema strips property descriptions, so an authored one that is not repeated here reaches nobody: the
 // full attestation grammar has been on `add.verify` in the source all along and three tickets in a row were still
 // refused for not knowing it (SQ-1955). Anything a caller cannot get right on the FIRST call belongs in this table.
-const ATTESTATION_VERIFY_CONTRACT = 'For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.';
+const ATTESTATION_VERIFY_CONTRACT = 'Attestation: `attestation: <attestationArtifact verbatim> | <evidence> | <what it showed>`.';
 
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> = {
   context_page: {
@@ -321,7 +321,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   add: { complexity: 'Legacy score; why required.', verify: ATTESTATION_VERIFY_CONTRACT },
   claim: { force: 'Operator-only.' },
   update: { verify: ATTESTATION_VERIFY_CONTRACT },
-  supersede_submission: { supersededBy: 'Repair ticket ref, not a commit.' },
+  supersede_submission: { supersededBy: 'Repair ticket ref; not commit.' },
   comments: {
     since: 'Comment id or ISO timestamp.',
   },
@@ -333,17 +333,17 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
     command: 'Required for blocker/contradiction.',
     outputTail: 'Required blocker/contradiction output.',
   },
-  story_log: { entry: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes.' },
+  story_log: { entry: 'Start DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes.' },
   category_edit: { fallbackModel: 'null clears.' },
   dispatch: {
-    reducedAgentSchema: 'Only when name/mode missing; hook needs agent_id+auto|bypass mode.',
-    recoveryEvidence: 'Unverified; latest signal grace; only the bound runtime name counts.',
+    reducedAgentSchema: 'When name/mode missing; hook needs agent_id, auto|bypass.',
+    recoveryEvidence: 'Unverified; latest signal grace; bound runtime name only.',
   },
   integrate: { deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.' },
   groomClose: {
     deliveryCommit: 'Prepared integration target.',
     deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.',
-    recoveryEvidence: 'Unverified; retires unclaimed attempts past deadline; CLI too.',
+    recoveryEvidence: 'Unverified; retires expired unclaimed attempts; CLI too.',
   },
   verdict: {
     outcome: 'Candidate, not reviewer prose.',
