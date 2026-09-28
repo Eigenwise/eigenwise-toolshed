@@ -1193,6 +1193,41 @@ function createDispatch(dependencies) {
       return Boolean(other) && [other.agentId, ...attempts.map((attempt) => attempt?.agentId)].some(namesCheckout);
     });
   }
+  function agentNamesCheckout(repository, agentId, target) {
+    const id = String(agentId || "").trim();
+    return Boolean(id) && agentWorktreeCandidates(repository, id).some((candidate) => canonicalPath(candidate) === target);
+  }
+  function liveCheckoutHolder(ticket) {
+    const state = dispatchState(ticket);
+    return Boolean(ticket?.claim?.by) || Boolean(state && !state.terminalAt);
+  }
+  function recordsCheckout(repository, ticket, target) {
+    const state = dispatchState(ticket);
+    if (state?.worktree && canonicalPath(state.worktree) === target) return true;
+    return [state?.agentId, ticket.claim?.runtime?.agentId].some((agentId) => agentNamesCheckout(repository, agentId, target));
+  }
+  function siblingHoldsCheckout(repository, ticket, candidate, target) {
+    return candidate.id !== ticket.id && liveCheckoutHolder(candidate) && recordsCheckout(repository, candidate, target);
+  }
+  function liveSiblingHoldingCheckout(slug, projectPath, ticket, state) {
+    if (!projectPath || !state?.worktree) return null;
+    const target = canonicalPath(state.worktree);
+    return listTickets(slug).find((candidate) => siblingHoldsCheckout(projectPath, ticket, candidate, target)) || null;
+  }
+  function crossBoundCheckoutRefusal(ref, siblingRef, worktree) {
+    return `${ref} did not remove ${worktree}: its retired attempt's binding was a cross-bind onto ${siblingRef}'s live checkout, not a tree ${ref} created. The checkout stays with ${siblingRef}, and only ${ref}'s binding was cleared.`;
+  }
+  function reclaimRetiredAttemptCheckout(slug, projectPath, ticket, state, facts) {
+    const sibling = liveSiblingHoldingCheckout(slug, projectPath, ticket, state);
+    if (!sibling) return reclaimUnclaimedDispatchWorktree(projectPath, state, facts);
+    return {
+      worktree: state.worktree,
+      reclaimed: false,
+      reason: "cross_bound_worktree",
+      sibling: sibling.ref,
+      message: crossBoundCheckoutRefusal(ticket.ref, sibling.ref, state.worktree)
+    };
+  }
   function unclaimedWorktreeRecoveryFacts(projectPath, ticket, state) {
     const checkpointCommit = String(ticket?.checkpoint?.commit || ticket?.submission?.commit || "").trim();
     if (!checkpointCommit || !releaseFragmentOnlyCheckpoint(projectPath, ticket, checkpointCommit, state?.baseCommit)) {
@@ -1284,16 +1319,20 @@ function createDispatch(dependencies) {
         const t = getTicket(slug, found.id);
         if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
         const current = dispatchState(t);
+        let crossBoundWorktree = null;
         if (pendingSubmission(t)) {
           const candidate = String(t.submission.commit || t.submission.sourceRevision?.value || "").trim();
           throw new Error(`prepare dispatch: ${t.ref} has a pending submission${candidate ? ` (${candidate})` : ""} waiting on integration, so it is parked for the publish transaction rather than for another executor. Integrate it (\`sidequest integrate ${t.ref} --by <who>\`), send it back for repair and dispatch the replacement (\`sidequest rework ${t.ref} --by ${t.submission.by || "<candidate-owner>"} --review <review-ticket-or-evidence> --reason "what needs repair"\`), or close it as abandoned (\`sidequest groom-close ${t.ref} --abandon-submission --reason "<evidence it never landed>"\`).`);
         }
         if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by) && !checkoutBelongsToAnotherDispatchAgent(slug, projectPath, t, current)) {
           const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
-          const recovery2 = reclaimUnclaimedDispatchWorktree(projectPath, recoveryFacts.state, {
+          const recovery2 = reclaimRetiredAttemptCheckout(slug, projectPath, t, recoveryFacts.state, {
             checkpointCommit: recoveryFacts.checkpointCommit
           });
-          if (recovery2 && recovery2.reclaimed === false && recovery2.discardable !== true && recovery2.retainedCheckout !== true) {
+          if (recovery2?.reason === "cross_bound_worktree") {
+            releaseCrossedCreationBinding(current, recovery2.sibling, (/* @__PURE__ */ new Date()).toISOString(), "cross_bound_supersede");
+            crossBoundWorktree = { sibling: recovery2.sibling, worktree: recovery2.worktree, message: recovery2.message };
+          } else if (recovery2 && recovery2.reclaimed === false && recovery2.discardable !== true && recovery2.retainedCheckout !== true) {
             const retainedContinuation = retainedWorktreeContinuationState(slug, t, current);
             if (!retainedContinuation?.continuation) {
               const checkpointCommit = String(t.checkpoint?.commit || "").trim();
@@ -1495,6 +1534,7 @@ function createDispatch(dependencies) {
           sharedTree,
           ...reducedAgentSchema ? { reducedAgentSchema: true } : {},
           ...worktreeWarning ? { worktreeWarning } : {},
+          ...crossBoundWorktree ? { crossBoundWorktree } : {},
           ...pythonIoEncoding.written ? { pythonIoEncoding } : {},
           ...opts.dispatchSkew ? { dispatchSkew: opts.dispatchSkew } : {},
           declaredFiles,
@@ -1564,7 +1604,7 @@ function createDispatch(dependencies) {
         stampDispatchEvent(t, "dispatch", now);
         writeDispatchTokenFile(t);
         putTicket(slug, t);
-        const warnings = [localAheadWarning?.message, dirtyBaselineCapture?.warning, servingCompatibilityWarning].filter(Boolean);
+        const warnings = [localAheadWarning?.message, dirtyBaselineCapture?.warning, servingCompatibilityWarning, crossBoundWorktree?.message].filter(Boolean);
         return { ok: true, ticket: t, token: t.dispatchNonce, recovery, ...warnings.length ? { warnings } : {} };
       });
       if (priorTokenFile && stagedTokenFile && priorTokenFile !== stagedTokenFile) {
@@ -2127,7 +2167,7 @@ function createDispatch(dependencies) {
     }
     return { ok: false, reason: "dispatch_binding_unavailable" };
   }
-  function recoverDispatchWorktreeCreation(slug, sessionId, worktree, error, attempt) {
+  function recoverDispatchWorktreeCreation(slug, sessionId, worktree, error, attempt, options) {
     if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: "missing_attempt" };
     const normalizedSessionId = String(sessionId || "").trim();
     const target = String(worktree || "").trim();
@@ -2156,6 +2196,7 @@ function createDispatch(dependencies) {
         state.worktreeObservedRevision = facts.revision;
         state.worktreeCreationCompletedAt = (/* @__PURE__ */ new Date()).toISOString();
       }
+      if (options?.created === false) releaseCrossedCreationBinding(state, null, (/* @__PURE__ */ new Date()).toISOString(), "worktree_create_failed");
       setDispatchTerminal(ticket, "failed", "worktree-create-recovery", {
         slug,
         error,
@@ -2168,7 +2209,7 @@ function createDispatch(dependencies) {
       return { ok: true, ticket };
     });
     if (!terminal?.ok) return terminal;
-    const cleanup = reclaimUnclaimedDispatchWorktree(meta.path, dispatchState(terminal.ticket));
+    const cleanup = reclaimRetiredAttemptCheckout(slug, meta.path, terminal.ticket, dispatchState(terminal.ticket));
     return { ok: true, ticket: terminal.ticket, cleanup };
   }
   function recordSanctionedCommit(slug, idOrRef, opts) {
@@ -2463,7 +2504,7 @@ function createDispatch(dependencies) {
       worktreeProvisioningFailure: state?.worktreeProvisioningFailure || null
     };
   }
-  function releaseCrossedCreationBinding(state, otherRef, now) {
+  function releaseCrossedCreationBinding(state, otherRef, now, reason = "creation_order") {
     const from = canonicalPath(state.worktree);
     Object.assign(state, movedCreationRecord(null), {
       worktreeBindingSource: null,
@@ -2473,7 +2514,7 @@ function createDispatch(dependencies) {
       worktreeCheckoutInstance: null,
       worktreeObservedRevision: null,
       worktreeBoundAt: null,
-      worktreeBindingExchange: { at: now, from, with: otherRef, reason: "creation_order" }
+      worktreeBindingExchange: { at: now, from, with: otherRef, reason }
     });
   }
   function applyExchangedCreationBinding(state, facts, otherRef, now) {
