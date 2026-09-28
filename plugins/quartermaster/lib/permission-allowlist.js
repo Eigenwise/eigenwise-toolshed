@@ -43,7 +43,11 @@ function normalizedCommandPrefix(command) {
   const words = String(command ?? '').trim().replace(/\s+/g, ' ').replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)+/, '').split(' ');
   if (!words[0]) return null;
   const executable = words[0].replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase();
-  const subcommand = words[1] && !words[1].startsWith('-') ? words[1].toLowerCase() : null;
+  // A glob in the argument (`ls foo/*.test.ts`) would be spliced ahead of the
+  // `:*` suffix in ruleFor, and Claude Code reads that `*` literally, so the
+  // rule matches nothing. Fall back to the bare executable when the arg is a glob.
+  const argumentIsGlob = /[*?[\]]/.test(words[1] ?? '');
+  const subcommand = words[1] && !words[1].startsWith('-') && !argumentIsGlob ? words[1].toLowerCase() : null;
   return subcommand ? `${executable} ${subcommand}` : executable;
 }
 
