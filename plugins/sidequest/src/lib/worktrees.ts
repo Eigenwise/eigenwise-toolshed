@@ -5,7 +5,8 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const nativeFs = require('node:fs');
-const { execFileSync, spawn, spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
+const { execFileSync } = require('./git-process.js');
 const commitScope = require('./commit-scope.js');
 const worktreeLease = require('./kernel/worktree.js') as {
   canonicalPath: (value: string) => string;
@@ -32,7 +33,6 @@ const IN_PROGRESS_GIT_OPERATION_STATE: ReadonlyArray<readonly [string, string]> 
 // remove` (SQ-2952). Every read of what a worktree holds goes through these arguments: untracked and
 // ignored, every file. `-z` keeps paths verbatim, which quoted porcelain output does not.
 const AT_RISK_STATUS_ARGUMENTS: readonly string[] = ['status', '--porcelain', '--ignored', '--untracked-files=all', '-z'];
-const AT_RISK_STATUS_MAX_BUFFER = 64 * 1024 * 1024;
 
 type WorktreeStatusEntry = { code: string; path: string };
 
@@ -82,7 +82,6 @@ function atRiskStatusEntriesSync(worktree: string, ticketOrDispatch: any = null)
     cwd: worktree,
     encoding: 'utf8',
     windowsHide: true,
-    maxBuffer: AT_RISK_STATUS_MAX_BUFFER,
   });
   return atRiskStatusEntries(stdout, worktree, recordedDependencyLinkPaths(worktree, ticketOrDispatch));
 }

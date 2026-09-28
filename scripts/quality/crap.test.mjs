@@ -65,6 +65,17 @@ test('keeps changed unverified functions in the result set', async () => {
   assert.deepEqual(await compareAgainstBase([unverified], ['plugins/example/lib/subject.js'], 'base-sha', baselineOf([])), []);
 });
 
+test('treats a file that is new since the base as entirely changed', async () => {
+  const fresh = metric({ complexity: 1, coverage: 1 });
+  const newFileAtBase = async (base, relativePath) => {
+    throw new Error(`fatal: path '${relativePath}' exists on disk, but not in '${base}'`);
+  };
+  const changedMetrics = await changedMetricsAgainstBase([fresh], ['plugins/example/lib/subject.js'], 'base-sha', newFileAtBase);
+  assert.deepEqual(changedMetrics, [fresh]);
+  const otherFailure = async () => { throw new Error('fatal: not a git repository'); };
+  await assert.rejects(changedMetricsAgainstBase([fresh], ['plugins/example/lib/subject.js'], 'base-sha', otherFailure), /not a git repository/);
+});
+
 test('accepts a changed function whose score falls below six', async () => {
   const lowered = metric({ complexity: 3, coverage: 1, fingerprint: 'lowered' });
   const failures = await compareAgainstBase(

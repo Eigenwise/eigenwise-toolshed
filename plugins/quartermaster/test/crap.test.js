@@ -143,6 +143,26 @@ test('accepts a modified function whose score falls below six', () => {
   assert.equal(formatReport(report), 'CRAP gate passed: 0 of 1 changed or new functions at or above 6\n');
 });
 
+test('base and its deprecated alias ratchet both resolve the same baseline, but only ratchet warns', () => {
+  const projectDir = fixtureProject({
+    'src/app.js': 'function subject(value) { return value; }\n',
+    'coverage/lcov.info': lcov([[1, 1]]),
+  });
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/app.js'), 'function subject(value) { if (value) return value; return 0; }\n', 'utf8');
+  const runLizard = () => csv([{ complexity: 2, name: 'subject', start: 1, end: 1 }]);
+
+  const viaBase = crapReport({ projectDir, base: 'main', runLizard });
+  assert.equal(viaBase.usedDeprecatedRatchet, false);
+
+  const viaRatchet = crapReport({ projectDir, ratchet: 'main', runLizard });
+  assert.equal(viaRatchet.base, viaBase.base, 'base and ratchet resolve to the same baseline commit');
+  assert.equal(viaRatchet.usedDeprecatedRatchet, true);
+
+  const viaBoth = crapReport({ projectDir, base: 'main', ratchet: 'HEAD', runLizard });
+  assert.equal(viaBoth.usedDeprecatedRatchet, false, 'base takes priority over the deprecated ratchet alias');
+});
+
 /**
  * The defect this fixture pins: identity by position among namesakes moves when a namesake is inserted
  * ahead of it, so Alpha's untouched `run` was read against Beta's baseline row, called changed, and failed
@@ -410,6 +430,22 @@ test('an unresolvable lizard exits two with the install hint', () => {
   assert.equal(result.status, 2, result.stderr);
   assert.match(result.stderr, /lizard is not resolvable/);
   assert.match(result.stderr, /uv tool install lizard/);
+});
+
+test('the CLI warns on stderr for --ratchet but stays quiet for --base', () => {
+  const projectDir = fixtureProject({
+    'complexity.csv': csv([{ complexity: 1, name: 'subject', start: 1, end: 1 }]),
+    'coverage/lcov.info': lcov([[1, 1]]),
+  });
+  commitBase(projectDir);
+
+  const viaBase = runCli(['--complexity', 'complexity.csv', '--base', 'main'], projectDir);
+  assert.equal(viaBase.status, 0, viaBase.stderr);
+  assert.doesNotMatch(viaBase.stderr, /deprecated/);
+
+  const viaRatchet = runCli(['--complexity', 'complexity.csv', '--ratchet', 'main'], projectDir);
+  assert.equal(viaRatchet.status, 0, viaRatchet.stderr);
+  assert.match(viaRatchet.stderr, /--ratchet and the config key "ratchet" are deprecated, use --base or "base" instead/);
 });
 
 test('without --project the config comes from the measured root, so its base and exclude hold from a subdirectory', () => {

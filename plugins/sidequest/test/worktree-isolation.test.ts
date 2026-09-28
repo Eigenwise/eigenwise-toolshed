@@ -1352,7 +1352,11 @@ for (const mixedExecutors of [false, true]) {
       });
       const verdict = stop?.hookSpecificOutput?.additionalContext || '';
       assert.match(verdict, /exec DIED before claiming; .*once pulse shows its ticket failed/);
-      assert.ok(verdict.includes(`TaskStop({ task_id: ${JSON.stringify(launchName)} })`), `the stop named another teammate to retire: ${verdict}`);
+      // develop's SQ-3110 stop hook no longer prints a teammate to retire, so the guard is that the verdict never
+      // points at the live executor: it names no ticket and no teammate other than the dead sibling's own.
+      const liveLaunchName = store.getTicket(slug, live.ref).dispatch.agentName;
+      assert.ok(!verdict.includes(live.ref) && !(liveLaunchName && verdict.includes(liveLaunchName)), `the stop pointed at the live executor: ${verdict}`);
+      assert.ok(launchName, 'the dead sibling has a launch name to compare against');
       assert.ok(!verdict.includes('content omitted'), `the verdict overran its context budget: ${verdict}`);
       const held = store.getTicket(slug, live.ref);
       assert.equal(held.dispatch.terminalAt || null, null, `the sibling's stop ended ${live.ref}: ${held.dispatch.failureShape}`);
@@ -2864,10 +2868,11 @@ test('a checkout the attempt reserved itself still blocks the retry, and repeati
     assert.equal(retired.failureShape, 'stranded_bound_launch_superseded');
     assert.equal(fs.existsSync(path.join(worktree, 'uncommitted.txt')), true);
 
-    // The attempt is gone, so repeating the command has to say that rather than deny it ever existed.
+    // The attempt is already retired, so repeating the command skips retirement and names the blocker that
+    // actually remains rather than refusing the evidence (SQ-3110).
     assert.throws(
       () => store.prepareDispatch(slug, ticket.ref, { sessionId: `${sequence}-retry`, recoveryEvidence: evidence }),
-      /already retired on recovery evidence[\s\S]*without recoveryEvidence/,
+      /cannot retry because immutable recovery fact: .* holds uncommitted, untracked or ignored content/,
     );
   } finally {
     store.releaseTicket(slug, ticket.ref, 'reserved-checkout-cleanup', { status: 'todo', source: 'test', force: true });

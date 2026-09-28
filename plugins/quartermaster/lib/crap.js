@@ -385,13 +385,16 @@ function gateSettings(options, config) {
   if (Number(firstDefined([options.max, config.max, DEFAULT_MAX])) !== DEFAULT_MAX) {
     throw new PrerequisiteError(`the CRAP threshold is fixed at ${DEFAULT_MAX}`, 'remove max from the command or config');
   }
+  const base = firstDefined([options.base, config.base]);
+  const ratchet = firstDefined([options.ratchet, config.ratchet]);
   return {
     sources: config.sources?.length ? config.sources : ['.'],
     exclude: firstDefined([config.exclude, []]),
     coverageCommand: firstDefined([options.coverageCommand, config.coverageCommand]),
     lcov: firstDefined([options.lcov, config.lcov]),
     runLizard: firstDefined([options.runLizard, lizardRunner()]),
-    baseReference: firstDefined([options.base, options.ratchet, config.base, config.ratchet]),
+    baseReference: firstDefined([base, ratchet]),
+    usedDeprecatedRatchet: base == null && ratchet != null,
   };
 }
 
@@ -426,9 +429,9 @@ function byCrapThenPlace(left, right) {
   return right.crap - left.crap || left.file.localeCompare(right.file) || left.line - right.line;
 }
 
-function gateResult(workDir, functions, candidates, baseline) {
+function gateResult(workDir, functions, candidates, baseline, usedDeprecatedRatchet) {
   const failures = candidates.filter((entry) => entry.crap >= DEFAULT_MAX).sort(byCrapThenPlace).map((entry) => ({ ...entry, reason: 'ceiling' }));
-  return { root: workDir, functions: functions.sort(byCrapThenPlace), failures, max: DEFAULT_MAX, checked: candidates.length, unmeasured: 0, base: baseline?.base ?? null };
+  return { root: workDir, functions: functions.sort(byCrapThenPlace), failures, max: DEFAULT_MAX, checked: candidates.length, unmeasured: 0, base: baseline?.base ?? null, usedDeprecatedRatchet };
 }
 
 /**
@@ -447,7 +450,7 @@ function crapReport(options) {
   const baseline = baselineFor(workDir, settings, functions);
   const candidates = changedFunctions(functions, baseline);
   assertMeasured(workDir, settings, { lizardEntries, changed: changedFiles(baseline, functions), candidates });
-  return gateResult(workDir, functions, candidates, baseline);
+  return gateResult(workDir, functions, candidates, baseline, settings.usedDeprecatedRatchet);
 }
 
 function formatReport(report) {
