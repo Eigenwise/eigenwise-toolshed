@@ -644,6 +644,43 @@ test('review_outcome records structured PASS evidence on both binding halves', (
   assert.notEqual(store.validateIntegrationSubmission(slug, fixture.source.ref, {}).reason, 'candidate_review_required');
 });
 
+test('a millisecond tick inside done still records and integrates a native PASS review', async () => {
+  const fixture = prepareBoundNativeReview('clock-tick-done');
+  const comment = nativeReviewComment(fixture, [
+    'PASS: The exact submitted candidate satisfies the review contract.',
+    `CHECK: pinned candidate verification | PASS | The declared checks passed at ${fixture.candidate}.`,
+  ].join('\n'));
+  assert.equal(comment.ok, true, JSON.stringify(comment));
+  // Force every zero-arg `new Date()` to advance >=1 ms so a second clock read
+  // during done would split completion.at from the attempt's terminalAt.
+  const RealDate = Date;
+  let last = RealDate.now();
+  class TickDate extends RealDate {
+    constructor(...args: any[]) {
+      if (args.length === 0) { last = Math.max(last + 1, RealDate.now()); super(last); }
+      else super(...(args as [any]));
+    }
+    static now() { return RealDate.now(); }
+  }
+  (globalThis as any).Date = TickDate;
+  let finished: any;
+  try {
+    finished = finishNativeReview(fixture, 'Reviewed the exact submitted candidate.');
+  } finally {
+    (globalThis as any).Date = RealDate;
+  }
+  assert.equal(finished.ok, true, JSON.stringify(finished));
+  const reviewTicket = store.getTicket(slug, fixture.review.ref);
+  const attempts = reviewTicket.dispatch.attempts;
+  assert.equal(reviewTicket.completion.at, attempts[attempts.length - 1].terminalAt, 'completion and terminal attempt share one clock read');
+  const recorded = recordNativeReviewOutcome(fixture);
+  assert.equal(recorded.ok, true, JSON.stringify(recorded));
+  assert.equal(recorded.reviewOutcome, 'accepted');
+  const delivered = await tool('integrate').handler({ project: repository, ref: fixture.source.ref, by: 'native-root' });
+  assert.equal(delivered.ok, true, JSON.stringify(delivered));
+  assert.equal(store.getTicket(slug, fixture.source.ref).status, 'done');
+});
+
 test('a mirror-only accepted outcome does not integrate without a matching reviewTarget outcome', () => {
   const fixture = prepareBoundNativeReview('mirror-only-accepted');
   const comment = nativeReviewComment(fixture, [
