@@ -14,7 +14,7 @@ function parseGatewayDoctorOutput(output) {
     proxyVersion: output.match(/^version:.*?(\d+\.\d+\.\d+\S*)\s*$/m)?.[1],
     auth: /authenticated/i.test(auth || '') && !/not authenticated/i.test(auth || ''),
     proxy: /^proxy \(claude-code-proxy\).*(answering \/v1\/models|running)/im.test(output),
-    shim: /^shim \(model router\).*running/im.test(output),
+    shim: /^shim \(model router\).*running(?!-foreign)/im.test(output),
   };
 }
 

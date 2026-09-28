@@ -553,6 +553,19 @@ test('parses a down gateway doctor report as down', () => {
   assert.equal(parsed.shim, false);
 });
 
+test('a shim owned by another install is not a running shim', () => {
+  const { parseGatewayDoctorOutput } = require('../hooks/session-start-freshness.js');
+  const foreign = [
+    'version: claude-code-proxy 0.1.33',
+    'codex auth: authenticated',
+    'proxy (claude-code-proxy) on :18765: answering /v1/models',
+    'shim (model router) on :18764: running-foreign (PID 4242, C:/elsewhere/model-gateway)',
+  ].join('\n');
+  assert.equal(parseGatewayDoctorOutput(foreign).shim, false);
+  const ours = foreign.replace(/running-foreign.*$/m, 'running-ours (serving 0.49.0)');
+  assert.equal(parseGatewayDoctorOutput(ours).shim, true);
+});
+
 test('a healthy doctor report produces no gateway problems from the audit', () => {
   const { parseGatewayDoctorOutput } = require('../hooks/session-start-freshness.js');
   const healthy = [
@@ -651,14 +664,16 @@ test('GH-141: a real doctor failure is named by its own stderr cause, not by an 
 });
 
 test('the doctor phrasings the audit parses still exist in model-gateway', () => {
-  const commandsSource = fs.readFileSync(
-    path.join(__dirname, '..', '..', 'model-gateway', 'lib', 'commands.js'),
-    'utf8',
-  );
+  const gatewayLib = path.join(__dirname, '..', '..', 'model-gateway', 'lib');
+  const commandsSource = ['commands.js', 'shim-state.js']
+    .map((file) => fs.readFileSync(path.join(gatewayLib, file), 'utf8'))
+    .join('\n');
   assert.match(commandsSource, /proxy \(claude-code-proxy\)[^\n]*answering \/v1\/models/,
     'model-gateway reworded the healthy proxy line; update parseGatewayDoctorOutput in lib/gateway-health.js');
-  assert.match(commandsSource, /shim \(model router\)[^\n]*running/,
-    'model-gateway reworded the healthy shim line; update parseGatewayDoctorOutput in lib/gateway-health.js');
+  assert.match(commandsSource, /shim \(model router\)[^\n]*\$\{shim\.state\}/,
+    'model-gateway reworded the shim state line; update parseGatewayDoctorOutput in lib/gateway-health.js');
+  assert.match(commandsSource, /'running-ours'/,
+    'model-gateway renamed the healthy shim state; update parseGatewayDoctorOutput in lib/gateway-health.js');
   assert.match(commandsSource, /codex auth: \$\{[^}]*'authenticated'/,
     'model-gateway reworded the codex auth line; update parseGatewayDoctorOutput in lib/gateway-health.js');
 });
