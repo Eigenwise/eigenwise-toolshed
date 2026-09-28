@@ -57,6 +57,15 @@ function without coverage data, is unverified rather than a pass. A file covered
 `exclude` pattern is never treated as unverified, even with zero lizard rows and function-like tokens.
 Fix the printed problem, then run the gate again.
 
+lizard's JavaScript, TypeScript and TSX readers end a function at the first `)` in its parameter list.
+A parameter list with parentheses of its own, such as a function-typed prop
+(`onSelect: (card: Card) => void`) or a default arrow (`read = (value) => value`), makes lizard report
+a span that stops inside the signature, where LCOV usually has no line data. The gate reads the source
+and widens that span to the function's real body before it looks up coverage or compares the function
+with the base revision, so such a function is measured instead of reported as unverified, and an edit
+to its body counts as a change. lizard's complexity for it still leaves out the body's branches, so
+treat that number as a floor.
+
 ## Produce LCOV coverage
 
 Pick the row for the detected stack and use its output path in `lcov`. The test command is still the

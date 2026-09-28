@@ -569,3 +569,114 @@ test('the real lizard backend measures a changed JavaScript file end to end', ()
   assert.equal(report.failures.length, 0);
   assert.equal(crapScore(2, 1), 2);
 });
+
+// lizard 1.24.0's TypeScript and TSX readers end a declaration at the first `)` they meet, so the nested
+// parens of a function-typed prop close the signature early: these are the rows it reports for GRID_SOURCE.
+const GRID_SOURCE = [
+  'export function VirtualizedCardGrid({',
+  '  cards,',
+  '  onSelect,',
+  '}: {',
+  '  cards: Card[];',
+  '  onSelect: (card: Card) => void;',
+  '}) {',
+  '  const rows = [];',
+  '  for (const c of cards) {',
+  '    if (c.id) rows.push(c);',
+  '  }',
+  '  return <ul>{rows.map((r) => <li key={r.id} onClick={() => onSelect(r)}>{r.id}</li>)}</ul>;',
+  '}',
+  '',
+  'export function after(x: number) {',
+  '  return x ? 1 : 2;',
+  '}',
+  '',
+].join('\n');
+
+function track(projectDir) {
+  execFileSync('git', ['add', '-A'], { cwd: projectDir, windowsHide: true });
+}
+
+function lizardRow(file, name, complexity, start, end) {
+  return `${end - start + 1},${complexity},10,1,${end - start + 1},"${name}@${start}-${end}@${file}","${file}","${name}","${name} ()",${start},${end}`;
+}
+
+function truncatedGridCsv(file) {
+  return `${[
+    lizardRow(file, 'VirtualizedCardGrid', 1, 1, 6),
+    lizardRow(file, '(anonymous)', 1, 12, 12),
+    lizardRow(file, '(anonymous)', 1, 12, 12),
+    lizardRow(file, 'after', 2, 15, 17),
+  ].join('\n')}\n`;
+}
+
+// Like istanbul, no DA record on signature lines: only the body's statements are executable.
+function gridLcov(file) {
+  return `SF:${file}\n${[8, 9, 10, 12, 16].map((line) => `DA:${line},1`).join('\n')}\nend_of_record\n`;
+}
+
+test('a component whose lizard span stops inside its parameter list is measured over its real body', () => {
+  const projectDir = fixtureProject({ 'README.md': 'base\n' });
+  commitBase(projectDir);
+  fs.mkdirSync(path.join(projectDir, 'src'));
+  fs.writeFileSync(path.join(projectDir, 'src/grid.tsx'), GRID_SOURCE, 'utf8');
+  fs.mkdirSync(path.join(projectDir, 'coverage'));
+  fs.writeFileSync(path.join(projectDir, 'coverage/lcov.info'), gridLcov('src/grid.tsx'), 'utf8');
+  track(projectDir);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => truncatedGridCsv('src/grid.tsx') });
+
+  const grid = report.functions.find((entry) => entry.function === 'VirtualizedCardGrid');
+  assert.equal(grid.line, 1);
+  assert.equal(grid.coverage, 1);
+  assert.equal(report.functions.find((entry) => entry.function === 'after').coverage, 1);
+  assert.equal(report.checked, 4);
+  assert.deepEqual(report.failures, []);
+});
+
+test('a body edit to a function lizard truncated at its parameter list counts as a change', () => {
+  const projectDir = fixtureProject({ 'src/grid.tsx': GRID_SOURCE, 'coverage/lcov.info': gridLcov('src/grid.tsx') });
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/grid.tsx'), GRID_SOURCE.replace('if (c.id) rows.push(c);', 'if (c.id) rows.unshift(c);'), 'utf8');
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => truncatedGridCsv('src/grid.tsx') });
+
+  assert.equal(report.checked, 1);
+  assert.deepEqual(report.failures, []);
+});
+
+test('a default arrow in a JavaScript parameter list does not cut the function off at its signature', () => {
+  const projectDir = fixtureProject({ 'README.md': 'base\n' });
+  commitBase(projectDir);
+  fs.mkdirSync(path.join(projectDir, 'src'));
+  fs.writeFileSync(path.join(projectDir, 'src/app.js'), 'function pick(read = (value) => value, fallback) {\n  if (read) return read(fallback);\n  return fallback;\n}\n', 'utf8');
+  fs.mkdirSync(path.join(projectDir, 'coverage'));
+  fs.writeFileSync(path.join(projectDir, 'coverage/lcov.info'), lcov([[2, 1], [3, 1]]), 'utf8');
+  track(projectDir);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => `${lizardRow('src/app.js', 'pick', 1, 1, 1)}\n` });
+
+  assert.equal(report.functions[0].coverage, 1);
+  assert.deepEqual(report.failures, []);
+});
+
+test('the real lizard backend measures a JSX component with a function-typed prop over its body', () => {
+  const probe = spawnSync('lizard', ['--version'], { encoding: 'utf8' });
+  if (probe.error || probe.status !== 0) return;
+  const projectDir = fixtureProject({
+    '.claude/quartermaster/crap.json': JSON.stringify({ base: 'main', sources: ['src'] }),
+    'README.md': 'base\n',
+  });
+  commitBase(projectDir);
+  fs.mkdirSync(path.join(projectDir, 'src'));
+  fs.writeFileSync(path.join(projectDir, 'src/grid.tsx'), GRID_SOURCE, 'utf8');
+  fs.mkdirSync(path.join(projectDir, 'coverage'));
+  fs.writeFileSync(path.join(projectDir, 'coverage/lcov.info'), gridLcov('src/grid.tsx'), 'utf8');
+  track(projectDir);
+
+  const result = runCli(['--json'], projectDir);
+
+  assert.equal(result.status, 0, result.stderr);
+  const grid = JSON.parse(result.stdout).functions.find((entry) => entry.function === 'VirtualizedCardGrid');
+  assert.equal(grid.coverage, 1);
+});

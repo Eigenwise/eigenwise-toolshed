@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { crapScore, functionTokenCount, parseLizardCsv } = require('./crap-core.cjs');
+const { crapScore, functionTokenCount, parseLizardCsv, withBodySpans } = require('./crap-core.cjs');
 
 const DEFAULT_MAX = 6;
 const DEFAULT_LCOV = 'coverage/lcov.info';
@@ -84,8 +84,16 @@ function fingerprint(projectDir, filePath, start, end) {
   }
 }
 
+function readSource(projectDir, filePath) {
+  try {
+    return fs.readFileSync(path.resolve(projectDir, filePath), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 function measure(lizardFunctions, coverage, projectDir) {
-  return lizardFunctions.map((entry) => {
+  return withBodySpans(lizardFunctions, (file) => readSource(projectDir, file)).map((entry) => {
     const file = displayPath(projectDir, entry.file);
     const lines = coverage.get(comparablePath(projectDir, entry.file));
     let executable = 0;
