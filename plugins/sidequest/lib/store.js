@@ -2362,6 +2362,9 @@ function releaseTicket(slug, idOrRef, by, opts) {
     if (!dispatch2?.terminalAt || dispatch2.outcome !== terminalOutcome) {
       setDispatchTerminal(t, terminalOutcome, opts.source || "cli", {
         slug,
+        // One clock read: completion.at and the done comment reuse `now`, and
+        // native review evidence requires completion.at === attempt.terminalAt.
+        at: now,
         failureShape: opts.failureShape || release?.kind || "unknown",
         releaseKind: release?.kind,
         releaseReason: release?.reason,

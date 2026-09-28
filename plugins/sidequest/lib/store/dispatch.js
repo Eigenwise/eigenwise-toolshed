@@ -788,7 +788,7 @@ function createDispatch(dependencies) {
   function setDispatchTerminal(ticket, outcome, source, opts) {
     const state = dispatchState(ticket);
     if (!state) return;
-    const at = (/* @__PURE__ */ new Date()).toISOString();
+    const at = opts?.at || (/* @__PURE__ */ new Date()).toISOString();
     captureTerminalWorktreeRevision(opts?.slug, state, at);
     const release = opts?.releaseKind ? {
       kind: opts.releaseKind,
