@@ -1042,7 +1042,7 @@ ${verify.outputTail}` : null
       stdio: ["pipe", "pipe", "pipe"]
     });
     if (result.status !== 0) throw result.error || new Error(`could not calculate patch identity: ${result.stderr}`);
-    return String(result.stdout).trim().split(" ")[0];
+    return String(result.stdout).trim().split(" ")[0] ?? "";
   }
   function submittedCommits(submission) {
     return Array.isArray(submission.commits) && submission.commits.length ? submission.commits.map(String) : [submission.commit];
@@ -1086,7 +1086,8 @@ ${verify.outputTail}` : null
         message: `${ticket.ref} reviewed interaction delivery requires a commit after source ${sourceCommit}.`
       };
     }
-    const unreachable = [[sourceCommit, "source"], [interactionCommit, "interaction"]].find(([commit]) => !integrationRefContains(repo, resultingHead, commit));
+    const lineage = [[sourceCommit, "source"], [interactionCommit, "interaction"]];
+    const unreachable = lineage.find(([commit]) => !integrationRefContains(repo, resultingHead, commit));
     if (unreachable) {
       return {
         ok: false,
@@ -1252,12 +1253,13 @@ ${verify.outputTail}` : null
       const completingApplyDelivery = opts.completingApplyDelivery === true && !workingTreeDelivery;
       const content = completingApplyDelivery ? applyDeliveryTreeMatchesCandidate(repo, ticket.submission, deliveryCommit) : workingTreeDelivery && !reachable ? workingTreeContainsSubmittedContent(repo, ticket.submission, deliveryCommit) : deliveryContainsSubmittedContent(repo, ticket.submission, deliveryCommit);
       if (!content.ok) {
+        const missing = content.missing ?? [];
         return {
           ok: false,
           reason: "delivery_content_missing",
           ticket,
-          ...completingApplyDelivery ? { divergentPaths: content.missing } : { missingCommits: content.missing },
-          message: completingApplyDelivery ? `${ticket.ref} reconciliation refused: ${deliveryCommit} is not the tree its apply delivery materialized; it differs from candidate ${ticket.submission.commit} for ${content.missing.join(", ")}. Commit the applied tree unchanged and record that commit.` : `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${content.missing.join(", ")}.`
+          ...completingApplyDelivery ? { divergentPaths: missing } : { missingCommits: missing },
+          message: completingApplyDelivery ? `${ticket.ref} reconciliation refused: ${deliveryCommit} is not the tree its apply delivery materialized; it differs from candidate ${ticket.submission.commit} for ${missing.join(", ")}. Commit the applied tree unchanged and record that commit.` : `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${missing.join(", ")}.`
         };
       }
       const interaction = workingTreeDelivery ? { ok: true, interaction: null } : reviewedMergedTreeInteraction(repo, ticket, deliveryCommit, resultingHead, opts.deliveryInteractionCommit);

@@ -1266,7 +1266,7 @@ function gitPatchId(repo: string, patch: string) {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   if (result.status !== 0) throw result.error || new Error(`could not calculate patch identity: ${result.stderr}`);
-  return String(result.stdout).trim().split(' ')[0];
+  return String(result.stdout).trim().split(' ')[0] ?? '';
 }
 
 function submittedCommits(submission: any): string[] {
@@ -1285,7 +1285,7 @@ function deliveryContainsSubmittedContent(repo: string, submission: any, deliver
   if (integrationRefContains(repo, deliveryCommit, candidate)) return { ok: true, evidence: 'candidate_ancestor' };
   const commonBase = integrationGit(repo, ['merge-base', candidate, deliveryCommit]);
   const deliveredCommits = integrationGit(repo, ['rev-list', '--reverse', `${commonBase}..${deliveryCommit}`]).split(/\r?\n/).filter(Boolean);
-  const deliveredPatchIds = new Set(deliveredCommits.map((commit: string) => patchIdForCommit(repo, commit)));
+  const deliveredPatchIds = new Set<string>(deliveredCommits.map((commit: string) => patchIdForCommit(repo, commit)));
   const missing = submittedCommits(submission).filter((commit: string) => !deliveredPatchIds.has(patchIdForCommit(repo, commit)));
   if (!missing.length) return { ok: true, evidence: 'equivalent_patches' };
   return squashedRangeDelivered(repo, submission, candidate, deliveredPatchIds)
@@ -1321,8 +1321,8 @@ function interactionLineageRefusal(repo: string, ticket: any, sourceCommit: stri
       message: `${ticket.ref} reviewed interaction delivery requires a commit after source ${sourceCommit}.`,
     };
   }
-  const unreachable = [[sourceCommit, 'source'], [interactionCommit, 'interaction']]
-    .find(([commit]) => !integrationRefContains(repo, resultingHead, commit));
+  const lineage: Array<[string, string]> = [[sourceCommit, 'source'], [interactionCommit, 'interaction']];
+  const unreachable = lineage.find(([commit]) => !integrationRefContains(repo, resultingHead, commit));
   if (unreachable) {
     return {
       ok: false,
@@ -1515,14 +1515,15 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
         ? workingTreeContainsSubmittedContent(repo, ticket.submission, deliveryCommit)
         : deliveryContainsSubmittedContent(repo, ticket.submission, deliveryCommit);
     if (!content.ok) {
+      const missing = content.missing ?? [];
       return {
         ok: false,
         reason: 'delivery_content_missing',
         ticket,
-        ...(completingApplyDelivery ? { divergentPaths: content.missing } : { missingCommits: content.missing }),
+        ...(completingApplyDelivery ? { divergentPaths: missing } : { missingCommits: missing }),
         message: completingApplyDelivery
-          ? `${ticket.ref} reconciliation refused: ${deliveryCommit} is not the tree its apply delivery materialized; it differs from candidate ${ticket.submission.commit} for ${content.missing.join(', ')}. Commit the applied tree unchanged and record that commit.`
-          : `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${content.missing.join(', ')}.`,
+          ? `${ticket.ref} reconciliation refused: ${deliveryCommit} is not the tree its apply delivery materialized; it differs from candidate ${ticket.submission.commit} for ${missing.join(', ')}. Commit the applied tree unchanged and record that commit.`
+          : `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${missing.join(', ')}.`,
       };
     }
     const interaction = workingTreeDelivery

@@ -7,7 +7,10 @@ ready-for-integration with `sidequest submit` (claim released, status stays `doi
 verification, completing tickets in the control plane, then gating, assigning versions, and pushing
 main — is ONE serialized transaction owned by the orchestrator. This file is that transaction.
 
-`submit` derives the admitted range from the base recorded on the ticket's dispatch. Pass `--base <commit>`
+`submit` derives the admitted range from the base recorded on the ticket's dispatch, for isolated and shared-tree
+dispatches alike; the merge base replaces it only when upstream work was synced into the candidate after dispatch.
+Paths whose bytes at the tip already equal the integration target's do not count against scope, and a tip still at
+the recorded base is a no-op. Pass `--base <commit>`
 (or MCP `base`) only when automatic selection cannot identify the boundary. An explicit base must always lie on the
 submitted tip's history, and it must additionally either sit at or after the current merge base or already be
 reachable from the integration branch. A base that is not reachable from the integration branch must match the
