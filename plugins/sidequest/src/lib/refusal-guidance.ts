@@ -134,6 +134,8 @@ export function candidateReviewRequiredGuidance(): string {
     + ' The reviewing side needs the hook-bound agent id and nothing else stands in: a dispatch token and agent name authenticate a dispatch, not the runtime that ran it, and one runtime can hold several of those.'
     + ' Run `sidequest pulse <ref>` and read `dispatch.attempts` on both tickets to see which half is missing.'
     + ' If the review never ran to a terminal done attempt, dispatch it and let it close normally.'
+    + ' A native Codex review that already reached a terminal done attempt with no structured PASS, FIX, or FAIL evidence comment cannot be recovered by re-dispatching that same review ticket: it already finished, and its binding to the candidate still holds.'
+    + ' Abandon the pending submission instead (`sidequest groom-close <ref> --abandon-submission --reason "<why this candidate is being superseded>"`), open a fresh ticket for the same work, submit its fresh candidate, dispatch a fresh native review on that candidate that records a structured PASS or FIX/FAIL comment, then record the authenticated result on both binding halves with `review_outcome`.'
     + ' If it reviewed a different candidate, that candidate needs its own bound review.'
     + ' If the review attempt carries no hook-bound agent id, its executor never bound a runtime: re-dispatch the review on a host whose PreToolUse hook reports agent_id, and let that attempt close normally.'
     + ' If the submitting attempt recorded no identity and no bind time at all, it bound nothing and nothing recovers it: re-dispatch that ticket so the replacement attempt binds, then review the resubmitted candidate.'

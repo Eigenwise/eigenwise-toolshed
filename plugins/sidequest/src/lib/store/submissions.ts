@@ -317,14 +317,21 @@ function nativeTerminalReviewEvidence(sourceTicket: any, reviewTicket: any, cand
     return { recognized: false, ok: false, reason: 'not_native_review' };
   }
   if (reviewTicket?.status !== 'done' || reviewTicket?.completion?.state !== 'done') {
-    return { recognized: false, ok: false, reason: 'review_not_terminal', message: `${reviewTicket?.ref || 'review'} must finish its own native dispatch before its outcome can be recorded.` };
+    // recognized:true, not just ok:false: nativeCodexReviewer(reviewTicket) is
+    // already established above, so a non-terminal native review is in scope
+    // for review_outcome and must block integration below rather than falling
+    // through as if it were never a native review at all (fail-open gap).
+    return { recognized: true, ok: false, reason: 'review_not_terminal', message: `${reviewTicket?.ref || 'review'} must finish its own native dispatch before its outcome can be recorded.` };
   }
   const attempt = completedReviewAttempt(reviewTicket);
   const agentId = String(attempt?.agentId || '').trim();
   if (!attempt || attempt.outcome !== 'done' || !agentId.startsWith('codex-thread:')
     || !attempt.claimedAt || !attempt.sessionId
     || reviewTicket.completion.by !== agentId || reviewTicket.completion.at !== attempt.terminalAt) {
-    return { recognized: false, ok: false, reason: 'terminal_reviewer_identity_missing', message: `${reviewTicket.ref} has no terminal done attempt tied to its authenticated Codex reviewer runtime.` };
+    // Same reasoning: this is a terminal native Codex dispatch with no attempt
+    // whose immutable snapshot identifies an authenticated Codex reviewer, so it
+    // must block integration rather than silently falling through unrecognized.
+    return { recognized: true, ok: false, reason: 'terminal_reviewer_identity_missing', message: `${reviewTicket.ref} has no terminal done attempt tied to its authenticated Codex reviewer runtime.` };
   }
   if (candidate?.source === 'git'
     && String(reviewTicket.dispatch?.baseCommit || '').trim().toLowerCase() !== String(candidate.value || '').trim().toLowerCase()) {
@@ -446,8 +453,13 @@ function boundReviewPass(slug: any, ticket: any) {
   if (category !== 'review-audit' || terminalReviewFailure(ticket, relation)) return false;
   const candidate = reviewCandidateFromSubmission(ticket.submission);
   const mirror = relation.mirror;
-  // A normal executor completion leaves the outcome planned. The binding and
-  // independent terminal attempts are the evidence; no verdict text is needed.
+  // A non-native (legacy/manual) reviewer's normal completion leaves the
+  // outcome planned: the binding and independent terminal attempts are the
+  // evidence, and no verdict text is needed. A native Codex reviewer instead
+  // reaches this point only after terminalReviewFailure has already refused
+  // above, and that gate now requires `accepted` recorded on BOTH binding
+  // halves via review_outcome, so a native review lands here with mirror and
+  // reviewTarget outcomes already equal and accepted, never merely `planned`.
   return mirror?.ticketId === review.id
     && String(mirror.ref || '').toUpperCase() === String(review.ref).toUpperCase()
     && sameReviewCandidate(candidate, mirror.candidate)
@@ -508,17 +520,33 @@ function terminalReviewFailure(ticket: any, relation: any) {
   const candidate = reviewCandidateFromSubmission(ticket.submission);
   const terminalEvidence = nativeTerminalReviewEvidence(ticket, reviewTicket, candidate);
   if (terminalEvidence.recognized && !terminalEvidence.ok) {
-    return terminalEvidence.message || `${reviewRelationRef(relation)} has invalid terminal review evidence`;
+    // terminalEvidence.message is a standalone sentence (it also serves as the
+    // top-level review_outcome refusal message) and always ends with a period,
+    // but every caller of terminalReviewFailure appends its own trailing
+    // punctuation. Strip the one it carries so callers never render "..end..".
+    const message = String(terminalEvidence.message || `${reviewRelationRef(relation)} has invalid terminal review evidence`);
+    return message.replace(/\.+$/, '');
   }
   // Valid PASS or FIX/FAIL evidence on its own is not the terminal fact: native
   // integration requires `accepted` (or the FIX/FAIL `rejected`) recorded on
-  // both binding halves via review_outcome. A `done` that only carries a PASS
-  // comment still leaves the mirror `planned` until that recording happens, so
-  // it blocks here exactly like a bare `done` with no comment at all.
-  if (terminalEvidence.ok && reviewRelationOutcome(relation) !== terminalEvidence.outcome) {
-    return terminalEvidence.outcome === 'rejected'
-      ? `${reviewRelationRef(relation)} has an authenticated FIX/FAIL outcome for ${ticket.ref}; record it with review_outcome before any integration attempt`
-      : `${reviewRelationRef(relation)} has authenticated PASS evidence for ${ticket.ref} that is not yet recorded; record it with review_outcome before any integration attempt`;
+  // BOTH binding halves via review_outcome -- the reviewTarget on the review
+  // ticket AND the mirror on the source ticket's submission, not either one
+  // alone. reviewRelationOutcome() falls back to whichever half is present,
+  // which is the right behavior for its other callers (checking for an
+  // already-rejected candidate) but would let a half-applied or hand-edited
+  // "accepted" mirror with a still-planned reviewTarget integrate here. A
+  // `done` that only carries a PASS comment still leaves both sides `planned`
+  // until review_outcome records them, so it blocks here exactly like a bare
+  // `done` with no comment at all.
+  if (terminalEvidence.ok) {
+    const mirrorOutcome = String(relation.mirror?.outcome || 'planned');
+    const targetOutcome = String(relation.reviewTarget?.outcome || 'planned');
+    const bothHalvesRecorded = mirrorOutcome === terminalEvidence.outcome && targetOutcome === terminalEvidence.outcome;
+    if (!bothHalvesRecorded) {
+      return terminalEvidence.outcome === 'rejected'
+        ? `${reviewRelationRef(relation)} has an authenticated FIX/FAIL outcome for ${ticket.ref}; record it with review_outcome before any integration attempt`
+        : `${reviewRelationRef(relation)} has authenticated PASS evidence for ${ticket.ref} that is not yet recorded on both binding halves; record it with review_outcome before any integration attempt`;
+    }
   }
   return null;
 }
