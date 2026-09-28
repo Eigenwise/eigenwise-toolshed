@@ -561,7 +561,10 @@ function createDispatch(dependencies) {
     }
     return provisioning ? { retirableAt: signal.at + claimIdleMs(), signal, provisioning, reason: "idle_backstop" } : { retirableAt: signal.at + claimGraceMs(), signal, provisioning, reason: "grace" };
   }
-  const EVIDENCE_SUPERSEDED_FAILURE_SHAPES = /* @__PURE__ */ new Set(["unclaimed_launch_superseded", "stranded_bound_launch_superseded"]);
+  function preparingSessionAttests(state, sessionId) {
+    const caller = String(sessionId || "").trim();
+    return Boolean(caller) && caller === String(state?.preparedBy?.sessionId || "").trim();
+  }
   function unclaimedEvidenceAttempt(ticket, state) {
     return Boolean(
       state && ticket?.dispatchNonce && PRE_RUNTIME_DISPATCH_OUTCOMES.has(state.outcome) && !state.terminalAt && !state.claimedAt && !ticket.claim?.by && !ticket.checkpoint
@@ -570,8 +573,21 @@ function createDispatch(dependencies) {
   function unboundEvidenceAttempt(state) {
     return Boolean(state && !state.boundAt && !state.agentId && !worktreeProvisioningInFlight(state));
   }
-  function evidenceRetirableAttempt(ticket, state, now = Date.now()) {
-    return unclaimedEvidenceAttempt(ticket, state) && now >= unclaimedRetirement(ticket, state, now).retirableAt;
+  function evidenceRetirableAttempt(ticket, state, now = Date.now(), sessionId) {
+    if (!unclaimedEvidenceAttempt(ticket, state)) return false;
+    return preparingSessionAttests(state, sessionId) || now >= unclaimedRetirement(ticket, state, now).retirableAt;
+  }
+  function terminalUnclaimedAttempt(ticket, state) {
+    return Boolean(state?.terminalAt && !ticket?.dispatchNonce && !ticket?.claim?.by && !pendingSubmission(ticket));
+  }
+  function preparingSessionClause(state) {
+    const preparingSession = String(state?.preparedBy?.sessionId || "").trim();
+    return preparingSession ? `The session that prepared it (${preparingSession}) can retire it now with that evidence: it spawned the runtime, so the host's failure report or the Agent call returning without a claim is proof the board never gets.` : "No preparing session was recorded, so evidence waits for the deadline.";
+  }
+  function unclaimedAttemptRecoveryGuidance(ticket, state) {
+    if (!unclaimedEvidenceAttempt(ticket, state)) return "";
+    const ref = ticket.ref;
+    return ` Nobody claimed this attempt, so there is no claim to release. The one recovery is recovery evidence: close it with \`groomClose ${ref} --recoveryEvidence "<the host's failure report>"\` (add \`--deliveryCommit <sha> --deliveryMethod manual\` for work landed by hand, reachable from the recorded integration branch), which retires the attempt in the same call, or retire it on its own with \`sidequest dispatch ${ref} --recovery-evidence "<that same evidence>" --retire-only\` (MCP \`recoveryEvidence\` with \`retireOnly: true\`). ${preparingSessionClause(state)} From any other session both refuse with the countdown to the retirement deadline.`;
   }
   function minuteCount(minutes) {
     return `${minutes} minute${minutes === 1 ? "" : "s"}`;
@@ -590,7 +606,7 @@ function createDispatch(dependencies) {
     const window = retirement.provisioning ? "its WorktreeCreate has not recorded finished provisioning, so only the idle backstop applies" : "the claim grace runs from that signal";
     const remaining = retirement.retirableAt - now;
     if (remaining > 0) {
-      return `${waited} becomes retirable on evidence at ${new Date(retirement.retirableAt).toISOString()}, in ${describeRemaining(remaining)}, unless its terminal hook fires first (${measured}; ${window})`;
+      return `${waited} becomes retirable on evidence at ${new Date(retirement.retirableAt).toISOString()}, in ${describeRemaining(remaining)}, unless its terminal hook fires first (${measured}; ${window}). ${preparingSessionClause(state)}`;
     }
     return `${waited} passed that deadline at ${new Date(retirement.retirableAt).toISOString()} but is not retirable in dispatch state ${pulseDispatchState(state)} (${measured})`;
   }
@@ -598,9 +614,6 @@ function createDispatch(dependencies) {
     return `${ticket?.ref || "This attempt"} cannot be retired on recovery evidence yet because its dispatch is ${unclaimedRuntimeBlocker(ticket, state, now)}.`;
   }
   function evidenceSupersessionBlocker(ticket, state, now = Date.now()) {
-    if (state?.terminalAt && EVIDENCE_SUPERSEDED_FAILURE_SHAPES.has(state.failureShape)) {
-      return `already retired on recovery evidence at ${state.terminalAt}, so dispatch again without recoveryEvidence to prepare the replacement`;
-    }
     if (!state || !ticket?.dispatchNonce) return "not an active attempt";
     if (state.terminalAt) return `already terminal (${state.outcome || "terminal"})`;
     if (ticket.claim?.by) return `claimed by ${ticket.claim.by}`;
@@ -653,12 +666,13 @@ function createDispatch(dependencies) {
       const ticket = getTicket(slug, found.id);
       const state = dispatchState(ticket);
       const now = Date.now();
-      if (!evidenceRetirableAttempt(ticket, state, now)) {
+      if (terminalUnclaimedAttempt(ticket, state)) return { ok: true, ticket, alreadyTerminal: true };
+      if (!evidenceRetirableAttempt(ticket, state, now, opts?.sessionId)) {
         return {
           ok: false,
           reason: "unclaimed_launch_not_supersedable",
           ticket,
-          message: `${ticket?.ref || idOrRef} cannot be superseded on recovery evidence because its dispatch is ${evidenceSupersessionBlocker(ticket, state, now)}. Evidence retires an attempt with no readable runtime signal, or one whose latest runtime signal is past its retirement deadline. Anything past that waits for its own terminal record.`
+          message: `${ticket?.ref || idOrRef} cannot be superseded on recovery evidence because its dispatch is ${evidenceSupersessionBlocker(ticket, state, now)}. Evidence retires an unclaimed attempt at once from the session that prepared it, and from any other session once it has no readable runtime signal or its latest runtime signal is past its retirement deadline. A claimed attempt waits for its own terminal record.`
         };
       }
       const strandedBound = !unboundEvidenceAttempt(state);
@@ -1275,15 +1289,10 @@ function createDispatch(dependencies) {
   function prepareDispatch(slug, idOrRef, opts) {
     opts = opts || {};
     if (opts.retireOnly === true) {
-      const ticket = getTicket(slug, idOrRef);
-      const state = dispatchState(ticket);
-      const now = Date.now();
-      if (!evidenceRetirableAttempt(ticket, state, now)) {
-        throw new Error(`prepare dispatch: ${idOrRef} cannot retire only because its dispatch is ${evidenceSupersessionBlocker(ticket, state, now)}. retireOnly accepts the same unclaimed attempt shapes as recovery evidence: one with no readable runtime signal, or one whose latest runtime signal is past its retirement deadline.`);
-      }
       const superseded = supersedeUnboundAttempt(slug, idOrRef, {
         evidence: opts.recoveryEvidence,
-        source: opts.source || opts.transport || "dispatch"
+        source: opts.source || opts.transport || "dispatch",
+        sessionId: opts.sessionId
       });
       if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${idOrRef} has no unbound dispatch attempt to retire (${superseded.reason}).`}`);
       return Object.assign(superseded, { retired: true });
@@ -1324,7 +1333,8 @@ function createDispatch(dependencies) {
     if (opts.recoveryEvidence) {
       const superseded = supersedeUnboundAttempt(slug, found.id, {
         evidence: opts.recoveryEvidence,
-        source: opts.source || opts.transport || "dispatch"
+        source: opts.source || opts.transport || "dispatch",
+        sessionId: opts.sessionId
       });
       if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${found.ref} has no unbound dispatch attempt to supersede (${superseded.reason}).`}`);
     }
@@ -1369,8 +1379,8 @@ function createDispatch(dependencies) {
         if (activeRuntimeAttempt) {
           const evidenceCall = `so the orchestrator can supersede it in one call: \`sidequest dispatch ${t.ref} --recovery-evidence "<observed failed-claim evidence>"\`.`;
           let recovery2 = ` Wait for that executor's terminal hook, then dispatch once from the returned todo state; do not mint a replacement token while it is still winding down. It is ${evidenceSupersessionBlocker(t, current)}.`;
-          if (evidenceRetirableAttempt(t, current)) {
-            recovery2 = unboundEvidenceAttempt(current) ? ` It is unbound and unclaimed, ${evidenceCall}` : ` It has produced no board signal for a whole claim grace and never claimed, so if you observed the host report that runtime gone: ${evidenceCall}`;
+          if (evidenceRetirableAttempt(t, current, Date.now(), opts.sessionId)) {
+            recovery2 = unboundEvidenceAttempt(current) ? ` It is unbound and unclaimed, ${evidenceCall}` : ` It never claimed, so if you observed the host report that runtime gone: ${evidenceCall}`;
           }
           throw new Error(`prepare dispatch: ${t.ref} already has a live dispatch attempt (${pulseDispatchState(current)}).${recovery2}`);
         }
@@ -2808,6 +2818,8 @@ function createDispatch(dependencies) {
     pulseDispatchState,
     unclaimedEvidenceAttempt,
     unclaimedRetirementRefusal,
+    preparingSessionAttests,
+    unclaimedAttemptRecoveryGuidance,
     retirePreparedCompatibilityStaleAttempt,
     preparedCompatibilityHasProvenMismatch,
     preparedCompatibilityWarning,

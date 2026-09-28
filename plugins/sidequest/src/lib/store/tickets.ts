@@ -10,7 +10,7 @@ function createTickets(dependencies: any) {
     getCategory, getStory, getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, normalizeRoute, path, pendingSubmission, putTicket,
     queryTickets, queueEventNotification, readMeta, readyTickets, releaseLock,
     requestedReadonlyOverride, requireStatus, requireVerifyOracle, normalizeVerifyOracleKind, saveAssetData, stripLinksTo,
-    ticketLockPath, ticketStoryId, touchClaimActivity, transaction, upperRef, withTicketLock,
+    ticketLockPath, ticketStoryId, touchClaimActivity, transaction, unclaimedAttemptRecoveryGuidance, upperRef, withTicketLock,
   } = dependencies;
   const coerceStoryId = ticketStoryId;
 
@@ -989,21 +989,12 @@ function updateDoneRefusal(ticket?: any) {
   }
   const state = dispatchState(ticket);
   if (ticket.dispatchNonce || (state && !state.terminalAt)) {
-    const unclaimedPreRuntime = Boolean(
-      ticket.dispatchNonce
-      && state
-      && ['prepared', 'launched'].includes(state.outcome)
-      && !state.boundAt
-      && !state.claimedAt
-      && !ticket.claim?.by,
-    );
-    if (unclaimedPreRuntime) {
-      return `${ticket.ref} has an unclaimed pre-runtime dispatch. update --status done cannot bypass that lifecycle. Once the delivery commit is reachable from the recorded integration branch, use \`groomClose ${ticket.ref} --deliveryCommit <sha> --deliveryMethod manual --recoveryEvidence "<why the attempt is dead>"\` (include by and reason). If the commit is not reachable from that branch, grooming still refuses until delivery reaches it. To retire without preparing a replacement first, dispatch with recoveryEvidence and retireOnly:true.`;
-    }
+    const unclaimedRecovery = unclaimedAttemptRecoveryGuidance(ticket, state);
+    if (unclaimedRecovery) return `${ticket.ref} has an unclaimed dispatch. update --status done cannot bypass that lifecycle.${unclaimedRecovery}`;
     return `${ticket.ref} has an active dispatch. Its executor must use done/completeTicket or commit and submit; update --status done cannot bypass that lifecycle.`;
   }
   if (state) {
-    return `${ticket.ref} has routed dispatch history. Executors cannot close released repository work unless their verified no-op release recorded clean scope. Otherwise commit and submit verified scoped changes, or release to todo with findings; the orchestrator can re-dispatch it or use the control-plane grooming closure with evidence.`;
+    return `${ticket.ref} has routed dispatch history. Executors cannot close released repository work unless their verified no-op release recorded clean scope. Otherwise commit and submit verified scoped changes, or release to todo with findings; the orchestrator can re-dispatch it, or close work that already landed with \`groomClose ${ticket.ref} --deliveryCommit <sha> --deliveryMethod manual --reason "<evidence>"\`.`;
   }
   return null;
 }

@@ -4520,7 +4520,7 @@ test('subagent-stop: a terminal Agent failure preserves recovery evidence then n
   assert.equal(recordTerminalAgentFailure(t, stop).ok, true);
   const context = runHookForBudget(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED after terminal died: ${t.ref}\\. Preserve recovery evidence before a replacement\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
   assert.equal(store.getTicket(slug, t.ref).claim, null);
   assert.equal(store.getTicket(slug, t.ref).dispatch.outcome, 'died');
   assert.ok(store.getTicket(slug, t.ref).dispatch.terminalAt);
@@ -4591,9 +4591,7 @@ test('subagent-stop: a terminal release preserves board closeout then names the 
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-released', { status: 'todo' }).ok, true);
   const context = runHook(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED after terminal release: ${t.ref}\\. The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
-  assert.match(context, /TaskStop is a Claude Code host action, not a Sidequest tool\./);
-  assert.equal((context.match(/TaskStop\(/g) || []).length, 1, 'a terminal teammate is named for retirement once');
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: a failed-before-claim attempt names its exact native teammate for retirement', () => {
@@ -4615,8 +4613,7 @@ test('subagent-stop: a failed-before-claim attempt names its exact native teamma
     agent_name: agentName,
   });
   assert.match(context, new RegExp(`^exec FINISHED after terminal failed: ${ticket.ref}\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${agentName}" \\}\\)`));
-  assert.equal((context.match(/TaskStop\(/g) || []).length, 1);
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: a superseded unclaimed attempt names its exact native teammate for retirement', () => {
@@ -4656,8 +4653,7 @@ test('subagent-stop: a superseded unclaimed attempt names its exact native teamm
     agent_name: agentName,
   });
   assert.match(context, new RegExp(`^exec FINISHED after superseded terminal failed: ${ticket.ref}\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${agentName}" \\}\\)`));
-  assert.equal((context.match(/TaskStop\(/g) || []).length, 1);
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: completed board closeout overrides a contradictory task notification', () => {
@@ -4669,7 +4665,7 @@ test('subagent-stop: completed board closeout overrides a contradictory task not
   assert.strictEqual(store.closeTicketForGrooming(slug, t.ref, { by: 'hook-test-groomer', reason: 'Shipped abc1234.' }).ok, true);
   const context = runHook(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED: ${t.ref} done \\(abc1234\\); review the recorded board result\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: completed board closeout without a hash still overrides task state', () => {
@@ -4681,7 +4677,7 @@ test('subagent-stop: completed board closeout without a hash still overrides tas
   assert.strictEqual(store.closeTicketForGrooming(slug, t.ref, { by: 'hook-test-groomer', reason: 'Done and verified.' }).ok, true);
   const context = runHook(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED: ${t.ref} done WITHOUT commit hash; review the recorded board result\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: a legacy partial submission is not reported ready for integration', () => {
@@ -4697,7 +4693,7 @@ test('subagent-stop: a legacy partial submission is not reported ready for integ
   });
   const context = runHook(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED with PARTIAL_SUBMISSION: ${t.ref} has scope-gated paths \\(plugins/model-gateway/bin/model-gateway\\.js\\); do not integrate it`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: submitted board state overrides a contradictory task notification', () => {
@@ -4707,7 +4703,7 @@ test('subagent-stop: submitted board state overrides a contradictory task notifi
   assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-submitted', { commit: 'abc1234def5678abc1234def5678abc1234def56' }).ok, true);
   const context = runHook(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED: ${t.ref} READY_FOR_INTEGRATION \\(abc1234def56\\); run the publish transaction \\(references/publishing\\.md\\)\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: a prior owner is silent after another worker reclaims the ticket', () => {
@@ -5300,7 +5296,7 @@ test('subagent stop terminalizes an unclaimed launch so the next dispatch can re
     agent_name: 'stop-before-claim',
   });
   assert.match(context, new RegExp(`^exec FINISHED after terminal failed: ${ticket.ref}\\. Preserve recovery evidence before a replacement\\.`));
-  assert.match(context, /TaskStop\(\{ task_id: "stop-before-claim" \}\)/);
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
   const after = store.getTicket(slug, ticket.ref);
   assert.equal(after.dispatch.outcome, 'failed');
   assert.ok(after.dispatch.terminalAt);

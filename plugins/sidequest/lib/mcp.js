@@ -279,13 +279,13 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   category_edit: { fallbackModel: "null clears." },
   dispatch: {
     reducedAgentSchema: "Only when name/mode missing; hook needs agent_id+auto|bypass mode.",
-    recoveryEvidence: "Unverified; latest signal grace; only the bound runtime name counts."
+    recoveryEvidence: "Unverified; preparer retires now, else latest signal grace; bound name only."
   },
   integrate: { deliveryInteractionCommit: "Reviewed descendant, submitted paths only." },
   groomClose: {
     deliveryCommit: "Prepared integration target.",
     deliveryInteractionCommit: "Reviewed descendant, submitted paths only.",
-    recoveryEvidence: "Unverified; retires unclaimed attempts past deadline; CLI too."
+    recoveryEvidence: "Unclaimed: preparing session retires now; others past deadline; CLI too."
   },
   verdict: {
     outcome: "Candidate, not reviewer prose."

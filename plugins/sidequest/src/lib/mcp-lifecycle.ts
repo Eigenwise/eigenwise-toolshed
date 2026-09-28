@@ -619,7 +619,7 @@ const tools: ToolDefinition[] = [
           required: ['verifyKind', 'verify'],
         },
         abandonSubmission: { type: 'boolean', description: 'Retire a candidate that never landed; refused while it is reachable from this ticket\'s prepared integration target.' },
-        recoveryEvidence: { type: 'string', description: 'Terminal-agent evidence that retires an unclaimed prepared or launched dispatch, whether or not a runtime ever bound to it, and closes the ticket in the same call - but only once it is past the retirement deadline one authority sets for every route. Inside that deadline this refuses with the same countdown `dispatch` prints, naming the instant it becomes retirable and the runtime signal it measured from. `sidequest groom-close --recovery-evidence` runs this exact authority, so both surfaces print the same refusal and retire-and-close together. With deliveryMethod:"manual", deliveryCommit must already be reachable from the recorded integration branch.' },
+        recoveryEvidence: { type: 'string', description: 'Terminal-agent evidence that retires an unclaimed prepared or launched dispatch, whether or not a runtime ever bound to it, and closes the ticket in the same call: at once from the session that prepared the dispatch, and from any other session only once it is past the retirement deadline one authority sets for every route. Inside that deadline a call from another session refuses with the same countdown `dispatch` prints, naming the instant it becomes retirable and the runtime signal it measured from. `sidequest groom-close --recovery-evidence` runs this exact authority, so both surfaces print the same refusal and retire-and-close together. With deliveryMethod:"manual", deliveryCommit must already be reachable from the recorded integration branch.' },
       },
       required: ['ref', 'reason'],
     },
@@ -658,7 +658,7 @@ const tools: ToolDefinition[] = [
           message: `${args.ref} has no terminal recorded submission whose verifier can be superseded.`,
         });
       }
-      const recovery = store.groomCloseRecovery(slug, args.ref, { by, reason, evidence: args.recoveryEvidence });
+      const recovery = store.groomCloseRecovery(slug, args.ref, { by, reason, evidence: args.recoveryEvidence, sessionId: runtimeSessionId() });
       if (!recovery.ok) return mutationAck(slug, recovery.recovered);
       const completionReason = recovery.reason;
       const purpose = args.integration ? 'integration' : args.abandonSubmission ? 'grooming' : args.deliveryCommit ? 'delivery' : 'grooming';
