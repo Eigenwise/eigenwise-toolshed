@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { makeMcpCaller } from './_helpers.js';
 
 interface ScopeResult {
   ok: boolean;
@@ -39,7 +40,7 @@ interface RangeResult {
 }
 
 const commitScope = require('../lib/commit-scope.js') as {
-  commitScoped(cwd: string, message: string, files: string[]): ScopeResult;
+  commitScoped(cwd: string, message: string, files: string[]): Promise<ScopeResult>;
   commitPaths(cwd: string, commit: string): string[];
   validateCommitScope(cwd: string, commit: string, files: string[]): ScopeResult;
   validateScopeResolution(cwd: string, files: string[], opts?: { inspectDescendants?: boolean }): { ok: boolean; reason: string | null; outside: string[]; indirect: string[] };
@@ -85,7 +86,7 @@ function ticketHandler(name: string): (args: Record<string, unknown>) => any {
   return tool.handler;
 }
 
-test('commit tool adds a DCO trailer when root CONTRIBUTING.md requires git commit -s', () => {
+test('commit tool adds a DCO trailer when root CONTRIBUTING.md requires git commit -s', async () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'CONTRIBUTING.md'), 'Use `git commit -s` for every change.\n');
   const slug = store.ensureProject(root, 'DCO commit fixture').slug;
@@ -99,13 +100,13 @@ test('commit tool adds a DCO trailer when root CONTRIBUTING.md requires git comm
   assert.equal(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'The lifecycle fixture claims its ticket directly.' }).ok, true);
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker.js'), 'export const worker = true;\n');
 
-  const committed = lifecycleHandler('commit')({ project: root, ref: ticket.ref, by, message: 'DCO scoped commit', worktree: root });
+  const committed = await lifecycleHandler('commit')({ project: root, ref: ticket.ref, by, message: 'DCO scoped commit', worktree: root });
 
   assert.equal(committed.ok, true, committed.message as string);
   assert.match(git(root, ['log', '-1', '--format=%(trailers)']), /^Signed-off-by: Sidequest Test <sidequest-test@example\.invalid>$/m);
 });
 
-test('configured generated pairs add only tracked outputs to effective scope and scoped commits', () => {
+test('configured generated pairs add only tracked outputs to effective scope and scoped commits', async () => {
   const root = repo();
   const source = 'plugins/sidequest/src/lib/worker.ts';
   const output = 'plugins/sidequest/lib/worker.js';
@@ -127,7 +128,7 @@ test('configured generated pairs add only tracked outputs to effective scope and
   assert.equal(commitScope.isInScope('plugins/sidequest/src/hooks/worker.ts', outputDirectoryScope), false, 'output scope does not admit unrelated sources');
   fs.writeFileSync(path.join(root, source), 'export const worker = false;\n');
   fs.writeFileSync(path.join(root, output), 'exports.worker = false;\n');
-  const committed = commitScope.commitScoped(root, 'paired output', scope);
+  const committed = await commitScope.commitScoped(root, 'paired output', scope);
   assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.paths.sort(), [output, source]);
 });
@@ -219,7 +220,7 @@ test('generated pairs leave unmapped boards and untracked counterparts unchanged
 // SQ-900: the store used to keep only the first 20 declared paths, so an approved
 // 28-path scope reached the commit gate 8 paths short and the executor's commit was
 // refused for work the orchestrator had signed off on.
-test('a declared scope beyond 20 entries survives the store and gates the commit it approved', () => {
+test('a declared scope beyond 20 entries survives the store and gates the commit it approved', async () => {
   const root = repo();
   const slug = store.ensureProject(root, 'SQ-900 scope cap').slug;
   const scope = Array.from({ length: 28 }, (_, i) => `plugins/sidequest/part-${String(i).padStart(2, '0')}.js`);
@@ -237,7 +238,7 @@ test('a declared scope beyond 20 entries survives the store and gates the commit
   const last = scope[scope.length - 1]!;
   assert.ok(commitScope.isInScope(last, approved), 'the last approved path is in scope');
   fs.writeFileSync(path.join(root, last), 'tail\n');
-  const committed = commitScope.commitScoped(root, 'tail of a wide scope', approved);
+  const committed = await commitScope.commitScoped(root, 'tail of a wide scope', approved);
   assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.paths, [last]);
 });
@@ -285,18 +286,18 @@ test('updating declared files with an absolute path is refused with non-repo gui
   assert.deepEqual(store.getTicket(slug, ticket.ref).files, ['plugins/sidequest/worker.js'], 'the refused update changed nothing');
 });
 
-test('missing declared paths warn while existing declared paths commit', () => {
+test('missing declared paths warn while existing declared paths commit', async () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
   git(root, ['add', '.']);
 
-  const committed = commitScope.commitScoped(root, 'worker a', ['plugins/sidequest/worker-a.js', 'plugins/sidequest/phantom.js']);
+  const committed = await commitScope.commitScoped(root, 'worker a', ['plugins/sidequest/worker-a.js', 'plugins/sidequest/phantom.js']);
   assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.paths, ['plugins/sidequest/worker-a.js']);
   assert.deepEqual(committed.missingScopes, ['plugins/sidequest/phantom.js']);
 });
 
-test('ignored declared directories do not block tracked scoped commits', () => {
+test('ignored declared directories do not block tracked scoped commits', async () => {
   const root = repo();
   fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(root, '.gitignore'), '.claude/\n');
@@ -305,24 +306,24 @@ test('ignored declared directories do not block tracked scoped commits', () => {
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
   fs.writeFileSync(path.join(root, '.claude', 'settings.local.json'), '{"enabled":true}\n');
 
-  const committed = commitScope.commitScoped(root, 'worker a', ['plugins/sidequest/worker-a.js', '.claude']);
+  const committed = await commitScope.commitScoped(root, 'worker a', ['plugins/sidequest/worker-a.js', '.claude']);
   assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.paths, ['plugins/sidequest/worker-a.js']);
   assert.deepEqual(commitScope.commitPaths(root, committed.commit), ['plugins/sidequest/worker-a.js']);
 });
 
 
-test('exact declared paths commit untracked additions', () => {
+test('exact declared paths commit untracked additions', async () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
 
-  const committed = commitScope.commitScoped(root, 'worker a', ['plugins/sidequest/worker-a.js']);
+  const committed = await commitScope.commitScoped(root, 'worker a', ['plugins/sidequest/worker-a.js']);
   assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.paths, ['plugins/sidequest/worker-a.js']);
   assert.deepEqual(committed.missingScopes, []);
 });
 
-test('exact declared paths commit tracked deletions', () => {
+test('exact declared paths commit tracked deletions', async () => {
   const root = repo();
   const worker = path.join(root, 'plugins', 'sidequest', 'worker-a.js');
   fs.writeFileSync(worker, 'a\n');
@@ -330,14 +331,14 @@ test('exact declared paths commit tracked deletions', () => {
   git(root, ['commit', '-m', 'add worker']);
   fs.unlinkSync(worker);
 
-  const committed = commitScope.commitScoped(root, 'remove worker', ['plugins/sidequest/worker-a.js']);
+  const committed = await commitScope.commitScoped(root, 'remove worker', ['plugins/sidequest/worker-a.js']);
   assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.paths, ['plugins/sidequest/worker-a.js']);
   assert.deepEqual(committed.missingScopes, []);
 });
 
 
-test('exact declared paths commit staged deletions', () => {
+test('exact declared paths commit staged deletions', async () => {
   const root = repo();
   const worker = path.join(root, 'plugins', 'sidequest', 'worker-a.js');
   fs.writeFileSync(worker, 'a\n');
@@ -345,7 +346,7 @@ test('exact declared paths commit staged deletions', () => {
   git(root, ['commit', '-m', 'add worker']);
   git(root, ['rm', 'plugins/sidequest/worker-a.js']);
 
-  const committed = commitScope.commitScoped(root, 'remove worker', ['plugins/sidequest/worker-a.js']);
+  const committed = await commitScope.commitScoped(root, 'remove worker', ['plugins/sidequest/worker-a.js']);
   assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.paths, ['plugins/sidequest/worker-a.js']);
   assert.deepEqual(committed.missingScopes, []);
@@ -353,14 +354,14 @@ test('exact declared paths commit staged deletions', () => {
   assert.deepEqual(commitScope.commitPaths(root, committed.commit), ['plugins/sidequest/worker-a.js']);
 });
 
-test('exact declared rename paths commit staged renames atomically', () => {
+test('exact declared rename paths commit staged renames atomically', async () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'old.txt'), 'old\n');
   git(root, ['add', 'old.txt']);
   git(root, ['commit', '-m', 'add old']);
   git(root, ['mv', 'old.txt', 'new.txt']);
 
-  const committed = commitScope.commitScoped(root, 'rename', ['old.txt', 'new.txt']);
+  const committed = await commitScope.commitScoped(root, 'rename', ['old.txt', 'new.txt']);
   assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.missingScopes, []);
   assert.deepEqual(committed.paths.sort(), ['new.txt', 'old.txt']);
@@ -369,13 +370,13 @@ test('exact declared rename paths commit staged renames atomically', () => {
 });
 
 
-test('scoped commit leaves another executor’s staged file in the shared index', () => {
+test('scoped commit leaves another executor’s staged file in the shared index', async () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
   fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'worker-b.js'), 'b\n');
   git(root, ['add', '.']);
 
-  const committed = commitScope.commitScoped(root, 'worker a', ['plugins/sidequest']);
+  const committed = await commitScope.commitScoped(root, 'worker a', ['plugins/sidequest']);
   assert.equal(committed.ok, true);
   assert.deepEqual(committed.paths, ['plugins/sidequest/worker-a.js']);
   assert.deepEqual(committed.unscopedPaths, ['plugins/other-plugin/worker-b.js']);
@@ -383,23 +384,23 @@ test('scoped commit leaves another executor’s staged file in the shared index'
   assert.deepEqual(commitScope.commitPaths(root, committed.commit), ['plugins/sidequest/worker-a.js']);
 });
 
-test('scoped commit preserves an uppercase tracked path from a nested directory', () => {
+test('scoped commit preserves an uppercase tracked path from a nested directory', async () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'README.md'), 'changed\n');
   git(root, ['add', 'README.md']);
 
-  const committed = commitScope.commitScoped(path.join(root, 'plugins', 'sidequest'), 'preserve README case', ['README.md']);
+  const committed = await commitScope.commitScoped(path.join(root, 'plugins', 'sidequest'), 'preserve README case', ['README.md']);
   assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.paths, ['README.md']);
   assert.equal(git(root, ['show', '--format=', '--name-only', 'HEAD']), 'README.md');
 });
 
-test('Windows scope matching emits canonical tracked casing', { skip: process.platform !== 'win32' }, () => {
+test('Windows scope matching emits canonical tracked casing', { skip: process.platform !== 'win32' }, async () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'README.md'), 'changed\n');
   git(root, ['add', 'README.md']);
 
-  const committed = commitScope.commitScoped(path.join(root, 'plugins', 'sidequest'), 'canonical README case', ['readme.md']);
+  const committed = await commitScope.commitScoped(path.join(root, 'plugins', 'sidequest'), 'canonical README case', ['readme.md']);
   assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.paths, ['README.md']);
   assert.equal(git(root, ['show', '--format=', '--name-only', 'HEAD']), 'README.md');
@@ -623,11 +624,11 @@ test('SQ-1749: reconciliation refuses a whitespace-variant patch', () => {
   assert.equal(revalidated.divergedPath, 'plugins/sidequest/whitespace.js');
 });
 
-test('SQ-923: a scoped commit that advanced the integration branch submits against its own parent', () => {
+test('SQ-923: a scoped commit that advanced the integration branch submits against its own parent', async () => {
   const root = repo();
   const parent = git(root, ['rev-parse', 'HEAD']);
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'engine.js'), 'shared tree work\n');
-  const committed = commitScope.commitScoped(root, 'scoped shared-tree work', ['plugins/sidequest']);
+  const committed = await commitScope.commitScoped(root, 'scoped shared-tree work', ['plugins/sidequest']);
   assert.equal(committed.ok, true, committed.message as string);
   const tip = committed.commit;
   pin(root, 'refs/sidequest/SQ-2', tip);
@@ -803,7 +804,7 @@ test('SQ-1875: a merge introduced by submitted work is retained as an immutable 
 // dead end (27 tickets in three days). Closing it needs proof that the run is a
 // no-op, and that proof is exactly this: nothing uncommitted and nothing
 // committed past the dispatch baseline, inside the declared scope.
-test('SQ-923: pending scoped work separates a genuine no-op from uncommitted and committed work', () => {
+test('SQ-923: pending scoped work separates a genuine no-op from uncommitted and committed work', async () => {
   const root = repo();
   const base = commitScope.headCommit(root);
   assert.equal(base, git(root, ['rev-parse', 'HEAD']));
@@ -819,7 +820,7 @@ test('SQ-923: pending scoped work separates a genuine no-op from uncommitted and
   assert.deepEqual(dirty.working, ['plugins/sidequest/draft.js'], "out-of-scope noise is not this ticket's work");
   assert.deepEqual(dirty.committed, []);
 
-  assert.equal(commitScope.commitScoped(root, 'scoped work', ['plugins/sidequest']).ok, true);
+  assert.equal((await commitScope.commitScoped(root, 'scoped work', ['plugins/sidequest'])).ok, true);
   const committed = commitScope.scopedWorkPending(root, ['plugins/sidequest'], { base });
   assert.equal(committed.pending, true, 'committed-but-unsubmitted work still owes a submission');
   assert.deepEqual(committed.working, []);
@@ -923,7 +924,7 @@ test('scopeRequest reports every mixed foreign and ordinary refusal in its messa
   assert.match(scopeRequested.message, /Scope expansion refused:/);
 });
 
-test('scopeRequest and commit refuse a foreign release fragment with the same rule', () => {
+test('scopeRequest and commit refuse a foreign release fragment with the same rule', async () => {
   const root = repo();
   const slug = store.ensureProject(root, 'foreign release fragment scope').slug;
   const ticket = store.createTicket(slug, {
@@ -953,7 +954,7 @@ test('scopeRequest and commit refuse a foreign release fragment with the same ru
 
   fs.mkdirSync(path.dirname(path.join(root, foreignFragment)), { recursive: true });
   fs.writeFileSync(path.join(root, foreignFragment), 'foreign release fragment\n');
-  const committed = lifecycleHandler('commit')({ project: root, ref: ticket.ref, by, message: 'attempt foreign fragment', worktree: root });
+  const committed = await lifecycleHandler('commit')({ project: root, ref: ticket.ref, by, message: 'attempt foreign fragment', worktree: root });
   assert.equal(committed.ok, false);
   assert.equal(committed.reason, 'outside_scope');
   assert.equal(
@@ -1203,4 +1204,74 @@ test('SQ-2720: submissionRange resolves a remote target through its qualified re
   });
   assert.equal(unrelatedTarget.ok, false, 'an unrelated target must still refuse the candidate');
   assert.equal(unrelatedTarget.reason, 'unrelated_history');
+});
+
+const { callTool, callToolRaw } = makeMcpCaller(require('../lib/mcp.js'));
+
+async function toolText(name: string, args: Record<string, unknown>): Promise<string> {
+  return String((await callToolRaw(name, args))?.content?.[0]?.text);
+}
+
+// Skip-worktree entries keep the listing large without writing thousands of files: `git ls-files`
+// and `git ls-tree` print them all while `git status` stays quiet, the shape GH-216 and GH-218 hit.
+function largeListingRepo(pathCount: number): string {
+  const root = repo();
+  const run = (args: string[], input?: string) => execFileSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, input, maxBuffer: 64 * 1024 * 1024 }).trim();
+  const blob = run(['hash-object', '-w', '--stdin'], 'generated\n');
+  const paths = Array.from({ length: pathCount }, (_, index) => `vendor/generated/module-${String(index % 400).padStart(4, '0')}/src/components/file-${String(index).padStart(6, '0')}.ts`);
+  run(['update-index', '--index-info'], paths.map((file) => `100644 ${blob}\t${file}`).join('\n') + '\n');
+  run(['commit', '-q', '-m', 'large listing']);
+  run(['update-index', '--skip-worktree', '--stdin'], paths.join('\n') + '\n');
+  assert.ok(Buffer.byteLength(run(['ls-files'])) > 1024 * 1024, 'the fixture listing passes Node\'s 1 MiB default');
+  return root;
+}
+
+test('GH-216/GH-218: every board git path works in a repository whose listing passes 1 MiB', async () => {
+  const root = largeListingRepo(24000);
+  const slug = store.ensureProject(root, 'large listing').slug;
+  const create = (title: string) => store.createTicket(slug, { title, files: ['plugins/sidequest/worker.js'], complexity: 1, complexityWhy: 'The board must read a repository listing past 1 MiB.' });
+  const ticket = create('large listing commit');
+  const repair = create('large listing repair');
+  const by = 'large-listing-worker';
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'The large listing fixture claims its ticket directly.' }).ok, true);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker.js'), 'export const worker = true;\n');
+
+  const committed = await callTool<{ ok: boolean; commit: string }>('commit', { project: root, ref: ticket.ref, by, message: 'large listing commit', worktree: root });
+  assert.equal(committed.ok, true, JSON.stringify(committed));
+  git(root, ['update-ref', `refs/sidequest/${ticket.ref}`, committed.commit]);
+  const submitted = await toolText('submit', { project: root, ref: ticket.ref, by, commit: committed.commit, worktree: root, gitRef: `refs/sidequest/${ticket.ref}`, body: 'large listing report', verify: 'manual: large listing fixture' });
+  assert.match(submitted, /"ok": true/, submitted);
+  for (const [name, args] of [
+    ['integrate', { ref: ticket.ref, by: 'large-listing-orchestrator' }],
+    ['supersede_submission', { ref: ticket.ref, by: 'large-listing-orchestrator', supersededBy: repair.ref, reason: 'large listing fixture' }],
+    ['sweepClaims', {}],
+  ] as const) {
+    assert.doesNotMatch(await toolText(name, { project: root, ...args }), /ENOBUFS|git_error/, name);
+  }
+});
+
+test('GH-314: a commit running a slow hook leaves pulse and other board writes answering', async () => {
+  const root = repo();
+  const hook = path.join(root, '.git', 'hooks', 'pre-commit');
+  fs.writeFileSync(hook, '#!/bin/sh\nsleep 3\n');
+  fs.chmodSync(hook, 0o755);
+  const slug = store.ensureProject(root, 'slow commit hook').slug;
+  const create = (title: string) => store.createTicket(slug, { title, files: ['plugins/sidequest/worker.js'], complexity: 1, complexityWhy: 'A slow commit hook must not stall the board server.' });
+  const committing = create('slow hook commit');
+  const other = create('another ticket');
+  const by = 'slow-hook-worker';
+  assert.equal(store.claimTicket(slug, committing.ref, by, { direct: true, reason: 'The slow hook fixture claims its ticket directly.' }).ok, true);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker.js'), 'export const worker = true;\n');
+
+  const finished: string[] = [];
+  const track = <T>(label: string, operation: Promise<T>) => operation.then((result) => { finished.push(label); return result; });
+  const commit = track('commit', callTool<{ ok: boolean }>('commit', { project: root, ref: committing.ref, by, message: 'slow hook commit', worktree: root }));
+  await Promise.all([
+    track('pulse', callTool('pulse', { project: root, ref: other.ref })),
+    track('comment', callTool('comment', { project: root, ref: other.ref, by: 'orchestrator', body: 'written while a commit runs' })),
+  ]);
+
+  assert.deepEqual([...finished].sort(), ['comment', 'pulse'], 'pulse and a write on another ticket answer before the commit hook ends');
+  const committed = await commit;
+  assert.equal(committed.ok, true, JSON.stringify(committed));
 });

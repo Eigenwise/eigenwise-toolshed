@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFileText } from './git-process.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { hasGlob, isInScope, normalizeScope, scopeKey, scopedPaths } from './scope-match.js';
@@ -840,7 +840,15 @@ export function validateStoredSubmissionRange(cwd: string, submissionValue: unkn
   });
 }
 
-export function commitScoped(cwd: string, message: unknown, files: unknown) {
+async function addAndCommitScopes(root: string, message: unknown, stageableScopes: readonly string[], committableScopes: readonly string[]): Promise<string> {
+  if (stageableScopes.length) await execFileText('git', ['add', '--all', '--', ...stageableScopes], { cwd: root });
+  const commitArgs = ['commit', '--only'];
+  if (repoRequestsSignoff(root)) commitArgs.push('--signoff');
+  await execFileText('git', [...commitArgs, '-m', String(message || ''), '--', ...committableScopes], { cwd: root });
+  return git(root, ['rev-parse', 'HEAD']).trim();
+}
+
+export async function commitScoped(cwd: string, message: unknown, files: unknown) {
   const scopes = scopedPaths(files);
   if (!scopes.length) return { ok: false, reason: 'missing_scope' };
   try {
@@ -861,11 +869,7 @@ export function commitScoped(cwd: string, message: unknown, files: unknown) {
       ...directScopes.filter((scope) => !ignoredUntrackedScope(root, scope)),
       ...concreteGlobPaths.filter((scope) => !ignoredUntrackedScope(root, scope)),
     ])];
-    if (stageableScopes.length) git(root, ['add', '--all', '--', ...stageableScopes]);
-    const commitArgs = ['commit', '--only'];
-    if (repoRequestsSignoff(root)) commitArgs.push('--signoff');
-    git(root, [...commitArgs, '-m', String(message || ''), '--', ...committableScopes]);
-    const commit = git(root, ['rev-parse', 'HEAD']).trim();
+    const commit = await addAndCommitScopes(root, message, stageableScopes, committableScopes);
     const validation = validateCommitScope(root, commit, scopes);
     return Object.assign({ commit, missingScopes, unscopedPaths }, validation);
   } catch (error) {

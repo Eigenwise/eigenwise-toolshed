@@ -31,7 +31,8 @@ const os = require('os');
 const path = require('path');
 const { dispatchLaunchName, isReadOnlyExecutor, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('./exec-names.js');
 const crypto = require('crypto');
-const { execFileSync, spawnSync } = require('child_process');
+const { spawnSync } = require('child_process');
+const { execFileSync } = require('./git-process.js');
 const db = require('./db.js');
 const sourceRevisionCapability = require('./source-revision-capability.js');
 const {

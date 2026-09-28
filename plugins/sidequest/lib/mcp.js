@@ -124,7 +124,8 @@ function toolMutates(name, args) {
 function mutationQueueKey(name, args) {
   if (name === "new_board_profile") return "<global>";
   if (GLOBAL_MUTATION_TOOLS.has(String(name)) && args.project == null) return "<global>";
-  return resolveProject(args.project).slug;
+  const board = resolveProject(args.project).slug;
+  return name === "commit" ? `${board}\0commit\0${args.ref}` : board;
 }
 async function enqueueMutation(board, operation) {
   const previous = mutationTails.get(board) || Promise.resolve();

@@ -726,7 +726,7 @@ const tools = [
       },
       required: ["ref", "by", "message", "worktree"]
     },
-    handler(args) {
+    async handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, "commit");
       const by = requireBy(args, "commit");
       const message = requiredText(args, "message", "commit");
@@ -771,7 +771,7 @@ const tools = [
           message: commitScope.foreignReleaseFragmentRefusalMessage("commit", ticket.ref, foreignFragments)
         });
       }
-      const result = commitScope.commitScoped(root, message, scope);
+      const result = await commitScope.commitScoped(root, message, scope);
       if (!result.ok) {
         const message2 = result.reason === "missing_scope" ? `commit: ${ticket.ref} has no declared file scope.` : result.reason === "outside_scope" ? `commit: refused ${ticket.ref}; commit contains paths outside its declared scope: ${(result.outside || []).join(", ")}. Expand scope with: ${store.scopeExpansionCommand(ticket, result.outside)}` : result.reason === "no_existing_scope" ? `commit: ${ticket.ref} has no declared paths that exist in this worktree. Missing: ${(result.missingScopes || []).join(", ")}.` : `commit: git failed: ${result.message || result.reason}`;
         return mutationAck(slug, { ok: false, ticket, reason: result.reason, message: message2 });

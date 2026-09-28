@@ -831,7 +831,7 @@ const tools: ToolDefinition[] = [
       },
       required: ['ref', 'by', 'message', 'worktree'],
     },
-    handler(args) {
+    async handler(args) {
       const { slug, meta } = resolveLifecycleProject(args.project, args, 'commit');
       const by = requireBy(args, 'commit');
       const message = requiredText(args, 'message', 'commit');
@@ -878,7 +878,7 @@ const tools: ToolDefinition[] = [
           message: commitScope.foreignReleaseFragmentRefusalMessage('commit', ticket.ref, foreignFragments),
         });
       }
-      const result = commitScope.commitScoped(root, message, scope);
+      const result = await commitScope.commitScoped(root, message, scope);
       if (!result.ok) {
         const message = result.reason === 'missing_scope'
           ? `commit: ${ticket.ref} has no declared file scope.`
