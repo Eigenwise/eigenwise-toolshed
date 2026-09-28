@@ -2770,9 +2770,14 @@ test('CLI: board config stores a worktree setup command', () => {
   const setup = 'cd plugins/sidequest && npm ci';
   const pairs = JSON.stringify([{ from: 'plugins/*/src/lib/*.ts', to: 'plugins/*/lib/*.js' }]);
   const configured = cliJson(['board-config', '--worktree-setup', setup, '--generated-pairs', pairs, '--json']);
-  assert.strictEqual(configured.worktreeSetup, setup);
-  assert.deepStrictEqual(configured.generatedPairs, JSON.parse(pairs));
-  assert.strictEqual(cliJson(['board-config', '--json']).worktreeSetup, setup);
+  try {
+    assert.strictEqual(configured.worktreeSetup, setup);
+    assert.deepStrictEqual(configured.generatedPairs, JSON.parse(pairs));
+    assert.strictEqual(cliJson(['board-config', '--json']).worktreeSetup, setup);
+  } finally {
+    // Later wave gates provision their composed checkout with this board's setup; `npm ci` has no lockfile here.
+    store.setBoardConfig(slug, { worktreeSetup: null });
+  }
 });
 
 test('CLI: board config renames only the display name', () => {
@@ -4697,14 +4702,14 @@ test('SQ-2429: pending candidates block a singleton without invalidation while a
   try {
     const docsPath = path.join(PROJECT_DIR, 'docs', 'guide.md');
     fs.mkdirSync(path.dirname(docsPath), { recursive: true });
-    fs.writeFileSync(docsPath, 'base\n');
+    fs.writeFileSync(docsPath, 'top\nkeep\nkeep\nkeep\nbottom\n');
     git(['add', 'docs/guide.md']);
     git(['commit', '-m', 'same-file wave baseline']);
     const baseline = git(['rev-parse', 'HEAD']);
 
     const primary = addTicket('primary prose candidate', { files: ['docs'] });
     assert.strictEqual(store.claimTicket(slug, primary.ref, 'primary-prose-worker', { direct: true, reason: 'The same-file wave fixture requires a local direct claim.' }).ok, true);
-    fs.writeFileSync(docsPath, 'base\nprimary\n');
+    fs.writeFileSync(docsPath, 'top primary\nkeep\nkeep\nkeep\nbottom\n');
     git(['add', 'docs/guide.md']);
     git(['commit', '-m', 'primary prose candidate']);
     const primaryCandidate = git(['rev-parse', 'HEAD']);
@@ -4725,7 +4730,7 @@ test('SQ-2429: pending candidates block a singleton without invalidation while a
     git(['reset', '--hard', baseline]);
     const sibling = addTicket('submitted prose sibling', { files: ['docs'] });
     assert.strictEqual(store.claimTicket(slug, sibling.ref, 'submitted-prose-worker', { direct: true, reason: 'The same-file wave fixture requires a local direct claim.' }).ok, true);
-    fs.writeFileSync(docsPath, 'base\n\nsibling\n');
+    fs.writeFileSync(docsPath, 'top\nkeep\nkeep\nkeep\nbottom sibling\n');
     git(['add', 'docs/guide.md']);
     git(['commit', '-m', 'submitted prose sibling']);
     const siblingCandidate = git(['rev-parse', 'HEAD']);
@@ -5105,7 +5110,7 @@ test('SQ-2463: wave assembly replaces a stale wave baseline with the current tar
   try {
     const docsPath = path.join(PROJECT_DIR, 'docs', 'wave-baseline.md');
     fs.mkdirSync(path.dirname(docsPath), { recursive: true });
-    fs.writeFileSync(docsPath, 'base\n');
+    fs.writeFileSync(docsPath, 'top\nkeep\nkeep\nkeep\nbottom\n');
     git(['add', 'docs/wave-baseline.md']);
     git(['commit', '-m', 'wave baseline fixture']);
     const candidateBaseline = git(['rev-parse', 'HEAD']);
@@ -5119,7 +5124,7 @@ test('SQ-2463: wave assembly replaces a stale wave baseline with the current tar
 
     const primary = addTicket('primary stale-wave candidate', { files: ['docs'] });
     assert.strictEqual(store.claimTicket(slug, primary.ref, 'primary-wave-worker', { direct: true, reason: 'The stale wave fixture requires a local direct claim.' }).ok, true);
-    fs.writeFileSync(docsPath, 'base\nprimary\n');
+    fs.writeFileSync(docsPath, 'top primary\nkeep\nkeep\nkeep\nbottom\n');
     git(['add', 'docs/wave-baseline.md']);
     git(['commit', '-m', 'primary stale-wave candidate']);
     const primaryCandidate = git(['rev-parse', 'HEAD']);
@@ -5136,7 +5141,7 @@ test('SQ-2463: wave assembly replaces a stale wave baseline with the current tar
     git(['reset', '--hard', candidateBaseline]);
     const sibling = addTicket('sibling stale-wave candidate', { files: ['docs'] });
     assert.strictEqual(store.claimTicket(slug, sibling.ref, 'sibling-wave-worker', { direct: true, reason: 'The stale wave fixture requires a local direct claim.' }).ok, true);
-    fs.writeFileSync(docsPath, 'base\nsibling\n');
+    fs.writeFileSync(docsPath, 'top\nkeep\nkeep\nkeep\nbottom sibling\n');
     git(['add', 'docs/wave-baseline.md']);
     git(['commit', '-m', 'sibling stale-wave candidate']);
     const siblingCandidate = git(['rev-parse', 'HEAD']);
