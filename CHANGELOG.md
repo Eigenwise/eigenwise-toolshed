@@ -8,6 +8,20 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.580.0 (2026-09-28)
+
+### observability 0.7.34 → 0.7.35
+
+#### Fixes
+
+- Observability SessionStart no longer replaces a live observer whose record reads a millisecond ahead of the clock on Windows (SQ-3130)
+
+### quartermaster 0.11.4 → 0.11.5
+
+#### Fixes
+
+- Quartermaster CLI loads again from the plugin cache: the CRAP module now ships inside the plugin (GH-261, GH-262, GH-301, GH-302, GH-309) (SQ-3095)
+
 ## v3.579.0 (2026-09-23)
 
 ### sidequest 5.3.2 → 5.3.3
