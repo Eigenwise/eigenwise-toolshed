@@ -306,10 +306,21 @@ function sourceFiles(directory) {
   }
 }
 
-function unmeasuredLizardFiles(projectDir, sources, entries, changed) {
+// lizard's own -x matching is fnmatch against the raw os.walk path it builds from the source
+// argument, which carries a "./" prefix that makes an anchored pattern like "dist/**" never
+// match. path.matchesGlob against the display-relative path instead gives every documented
+// pattern ("**/*.test.*", "dist/**", "**/node_modules/**") its plainly intended meaning.
+function excludedByConfig(projectDir, exclude) {
+  const patterns = exclude ?? [];
+  return (filePath) => patterns.some((pattern) => path.matchesGlob(displayPath(projectDir, filePath), pattern));
+}
+
+function unmeasuredLizardFiles(projectDir, sources, entries, changed, exclude) {
   const measured = new Set(entries.map((entry) => comparablePath(projectDir, entry.file)));
+  const isExcluded = excludedByConfig(projectDir, exclude);
   return sources.flatMap((source) => sourceFiles(path.resolve(projectDir, source)))
     .filter((file) => changed.has(displayPath(projectDir, file)))
+    .filter((file) => !isExcluded(file))
     .filter((file) => functionTokenCount(fs.readFileSync(file, 'utf8')) && !measured.has(comparablePath(projectDir, file)))
     .map((file) => displayPath(projectDir, file));
 }
@@ -405,7 +416,7 @@ function functionLabel(entry) {
 }
 
 function assertMeasured(workDir, settings, { lizardEntries, changed, candidates }) {
-  const lizardFailures = unmeasuredLizardFiles(workDir, settings.sources, lizardEntries, changed);
+  const lizardFailures = unmeasuredLizardFiles(workDir, settings.sources, lizardEntries, changed, settings.exclude);
   if (lizardFailures.length) throw new PrerequisiteError(`lizard reported zero functions for ${lizardFailures.join(', ')}`, 'measurement is unverified; fix the parser input before passing the gate');
   const unmeasured = candidates.filter((entry) => entry.unmeasured);
   if (unmeasured.length) throw new PrerequisiteError(`coverage is unverified for ${unmeasured.map(functionLabel).join(', ')}`, 'run coverage that includes every changed function before passing the gate');
