@@ -3,7 +3,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("node:child_process");
-const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME, bundledAgentType } = require("./exec-names.js");
+const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require("./exec-names.js");
 const { createWorktreeLease, canonicalPath } = require("./kernel/worktree.js");
 const crypto = require("crypto");
 const store = require("./store.js");
@@ -111,7 +111,6 @@ function renderDiagnosticProbe() {
     "model: haiku",
     "maxTurns: 3",
     "tools: Read, Glob, Grep",
-    "permissionMode: bypassPermissions",
     "---",
     MARKER,
     "Diagnose only the Agent spawn path. Read repository files and report concise evidence. Do not edit, run commands, use network tools, delegate, mention tickets, or investigate ordinary work.",
@@ -149,9 +148,12 @@ function renderDispatchAgent(_effort) {
     extraNote: dispatchNote()
   }));
 }
+function withoutPermissionMode(source) {
+  return source.replace(/^permissionMode: bypassPermissions\n/m, "");
+}
 function renderReadOnlyDispatchAgent(_effort, readOnlyDeniedTools) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
-  return collapseEffortProse(renderExecAgent({
+  return withoutPermissionMode(collapseEffortProse(renderExecAgent({
     name: stableReadOnlyDispatchName(),
     effort: "high",
     modelId: DISPATCH_MODEL_ID,
@@ -159,18 +161,18 @@ function renderReadOnlyDispatchAgent(_effort, readOnlyDeniedTools) {
     extraNote: `${dispatchNote()}${readOnlyNote()}`,
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools
-  }));
+  })));
 }
 function renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
-  return renderExecAgent({
+  return withoutPermissionMode(renderExecAgent({
     name: stableReadOnlyClaudeName(effort),
     effort,
     marker: MARKER,
     extraNote: readOnlyNote(),
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools
-  });
+  }));
 }
 function implementationExecutorSources() {
   const sources = /* @__PURE__ */ new Map();
@@ -397,6 +399,15 @@ function ticketContinuationPacket(ticket) {
   const evidence = cause ? ` Validation evidence: ${cause}.` : "";
   return `Continuation fallback: the previous released worktree was not carried (${String(fallback.reason).replace(/_/g, " ")}). This dispatch uses a fresh worktree.${fallback.sourceWorktree ? ` Previous worktree: ${fallback.sourceWorktree}.` : ""}${evidence}${replay}`.trim();
 }
+function explicitBaseMoveSync(continuation, checkpointBase, commit, root, branch) {
+  if (!continuation.retainReason || !checkpointBase || checkpointBase === commit) return null;
+  return [
+    `Worktree synchronization (run before work): ${continuation.retainReason}.`,
+    `Confirm the candidate first: \`git rev-parse HEAD\` must be ${continuation.commit} and \`git status --porcelain\` must still list the retained changes with no unmerged entries. If not, stop and report that this checkout is not the retained candidate.`,
+    `Then preserve before moving: commit every retained change on this worktree's own branch with \`git add -A && git commit\`, confirm \`git status --porcelain\` is empty, then run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` and \`git rebase --onto ${commit} ${checkpointBase}\`.`,
+    "Never check out or discard over the retained changes, and never use `git stash`. If the commit or the rebase fails, stop and report it rather than resolving toward either side."
+  ].join(" ");
+}
 function ticketWorktreeSync(ticket, projectPath) {
   const dispatch = ticket?.dispatch;
   const root = String(projectPath || "").trim();
@@ -433,6 +444,8 @@ function ticketWorktreeSync(ticket, projectPath) {
     ].join(" ");
   }
   if (continuation?.mode === "dirty_worktree_resume") {
+    const explicitMove = explicitBaseMoveSync(continuation, checkpointBase, commit, root, branch);
+    if (explicitMove) return explicitMove;
     const candidateCheck = `Worktree synchronization (run before work): this worktree holds uncommitted work retained from the previous attempt. Base ancestry alone never proves the retained candidate is here, so confirm the candidate first: \`git rev-parse HEAD\` must be ${continuation.commit} and \`git status --porcelain\` must still list the retained changes with no unmerged (\`UU\`, \`AA\`, \`DU\`, \`UD\`, \`AU\`, \`UA\`, \`DD\`) entries. If any of that fails, stop and report that this checkout is not the retained candidate. Only then check \`git merge-base --is-ancestor ${commit} HEAD\`, and change nothing if it passes.`;
     if (!checkpointBase) {
       return [
@@ -533,8 +546,10 @@ function ticketIsolationContract(ticket, projectPath) {
     "Worktree isolation contract: this dispatch runs in its own linked worktree, never in the shared checkout.",
     "The harness refuses heredocs in isolated worktrees; Write scripts to your scratchpad and run them by path.",
     `Expected worktree root: ${expected}`,
+    "If the claim result carries `worktreeCorrection`, its `worktree` replaces this root: siblings launched together can be recorded against each other's checkouts until they claim.",
     "Confirm it before your first write, and again after any resume from a coordinator message: `git rev-parse --git-dir` must differ from `git rev-parse --git-common-dir`.",
-    `If they match you are in the shared checkout ${root}. Stop. Write nothing, tell the orchestrator this ticket lost its worktree and needs re-dispatch, and name any work you already have staged there so it can be committed out of the shared tree rather than lost.`
+    `If they match you are in the shared checkout ${root}. Stop. Write nothing, tell the orchestrator this ticket lost its worktree and needs re-dispatch, and name any work you already have staged there so it can be committed out of the shared tree rather than lost.`,
+    `If it is a DIFFERENT linked worktree, the binding is crossed: commit, submit and verify-capture refuse and name the other live claim, because anything the board diffs in ${expected} would be that executor's work, test names included. Do not enter the bound tree or work around the refusal. Follow the refusal's remedy and ask the orchestrator to rebind this live claim to that checkout (\`dispatch\` with \`claimHolder\`, \`worktree\` and \`recoveryEvidence\`). When both claims were launched together and hold exactly each other's checkouts with neither carrying another ticket's commits, the board swaps the two records onto their own checkouts at once. Otherwise it allows the rebind only once the checkout's HEAD is this claim's own commit: commit your work with git in the checkout you run in, pin that hash at \`refs/sidequest/${ticket.ref}\`, and comment it as the crossing evidence before asking for the rebind. If you have no exact crossing to swap and no commit to pin, or the rebind is refused, release this ticket with kind \`technical_blocker\` and status \`todo\`, quoting the refusal as its command and output evidence, so the orchestrator redispatches it onto a checkout of its own and salvages your commit by hash.`
   ].join("\n")];
 }
 const DEPENDENCY_LINK_TYPES = /* @__PURE__ */ new Set(["blocks", "blocked-by"]);
@@ -653,6 +668,7 @@ function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeou
     ...worktreeSync ? [worktreeSync] : [],
     ...ticketIsolationContract(ticket, project) || [],
     verify,
+    ...ticket.executorVerifyCwd ? [`verifyCwd: the wrapper runs it from ${ticket.executorVerifyCwd}, relative to the checkout root; the integrate gate does the same.`] : [],
     verifierCommand ? "Run it through " + capturedVerifyCommand(verifierCommand, ticket?.ref, project, dispatchBoundWorktree(ticket)) + " in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. Run it only over a clean worktree: a successful wrapper run records its completed capture identity against this ticket and the checked Git revision, and submit refuses prose or a retyped command without that matching record. A backgrounded verify's completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. When the pinned verifier needs paths outside declared scope, call scopeRequest with those paths and wait; do not release a verified candidate instead. Executors may report evidence only; they cannot replace, skip, or weaken this verifier." : "Record evidence for the pinned verifier. Executors may not replace, skip, or weaken it; skipping requires an authorized bounded waiver recorded as a Diagnostic.",
     evidenceGuidance || "",
     "Execution survival: Budget tool calls and preserve progress early. If the budget nears exhaustion before completing the ticket contract, use the existing Continuation checkpoint path: make a scoped checkpoint commit, write a `Continuation checkpoint` comment with the exact remaining work and verification status, release the ticket to `todo`, and end for a fresh continuation dispatch. Do not submit incomplete ticket work as ready. Never leave verified work uncommitted. Board MCP is the executor lifecycle authority. If the Board MCP server is unavailable, stop and report it to the user instead of retrying. The user must run /mcp and reconnect plugin:sidequest:board, or restart Claude Code. Do not use the Sidequest CLI or raw Agent as a fallback.",
@@ -969,13 +985,17 @@ function renderDispatchStub(ticket, projectPath) {
     ...marker ? ["", marker] : []
   ].join("\n");
 }
+function unattendedSpawnMode(subagentType) {
+  return isReadOnlyExecutor(subagentType) ? {} : { mode: "bypassPermissions" };
+}
 function agentSpawn(name, isolation, model, agentType, prompt, description, options) {
   const suppliedLabel = typeof description === "string" ? description.replace(EMBEDDED_ROUTE_MARKER_RE, "").replace(/\s+/g, " ").trim() : "";
   const taskLabel = suppliedLabel || "Sidequest ticket executor.";
   const reducedAgentSchema = options?.reducedAgentSchema === true;
+  const subagentType = bundledAgentType(agentType || name);
   return Object.assign(
-    { subagent_type: bundledAgentType(agentType || name), description: taskLabel },
-    reducedAgentSchema ? {} : { name, mode: "bypassPermissions" },
+    { subagent_type: subagentType, description: taskLabel },
+    reducedAgentSchema ? {} : { name, ...unattendedSpawnMode(subagentType) },
     isolation ? { isolation } : {},
     model ? { model } : {},
     prompt ? { prompt } : {}

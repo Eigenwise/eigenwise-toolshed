@@ -190,29 +190,65 @@ function ignoredPathsMissingFromWorktree(repository, worktree, candidatePaths) {
     return scopes.some((scope) => pathIsInside(scope, repositoryPath) || pathIsInside(repositoryPath, scope));
   }).sort();
 }
-function configuredDependencyDirectory(repository, worktree, relativePath) {
-  const source = path.resolve(repository, relativePath);
-  const target = path.resolve(worktree, relativePath);
-  if (!pathIsInside(repository, source) || !pathIsInside(worktree, target)) {
-    throw new Error(`worktree dependency path must stay inside the repository: ${relativePath}`);
-  }
-  if (!nativeFs.existsSync(source)) throw new Error(`configured worktree dependency path does not exist: ${relativePath}`);
-  if (!nativeFs.statSync(source).isDirectory()) throw new Error(`configured worktree dependency path must be a directory: ${relativePath}`);
-  if (nativeFs.existsSync(target)) throw new Error(`worktree dependency path already exists after checkout: ${relativePath}`);
+function dependencyPlacement(repository, worktree, dependency) {
+  const source = path.resolve(repository, dependency.path);
+  const target = path.resolve(worktree, dependency.path);
+  const boundary = dependency.mode === "copy" ? worktree : path.dirname(worktree);
+  if (!pathIsInside(boundary, target)) throw new Error(`worktree dependency path would land outside ${boundary}: ${dependency.path}`);
+  if (!nativeFs.existsSync(source)) throw new Error(`configured worktree dependency path does not exist: ${dependency.path}`);
   return { source, target };
 }
-function provisionDependencyDirectory(repository, worktree, dependency) {
-  const { source, target } = configuredDependencyDirectory(repository, worktree, dependency.path);
+function copyDependencyPath(source, target, options) {
   nativeFs.mkdirSync(path.dirname(target), { recursive: true });
+  nativeFs.cpSync(source, target, { recursive: true, force: options.overwrite });
+}
+function createDirectoryLink(source, target) {
+  nativeFs.mkdirSync(path.dirname(target), { recursive: true });
+  nativeFs.symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
+}
+function provisionDependencyPath(repository, worktree, dependency) {
+  const { source, target } = dependencyPlacement(repository, worktree, dependency);
   if (dependency.mode === "copy") {
-    nativeFs.cpSync(source, target, { recursive: true });
+    copyDependencyPath(source, target, { overwrite: true });
     return null;
   }
-  nativeFs.symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
+  if (!nativeFs.statSync(source).isDirectory()) throw new Error(`link mode needs a directory, use copy mode for a file: ${dependency.path}`);
+  if (!pathIsInside(worktree, target)) return linkBesideWorktree(source, target, dependency.path);
+  if (nativeFs.existsSync(target)) {
+    throw new Error(`worktree dependency path already exists after checkout: ${dependency.path}. link mode fills only a path the checkout leaves absent; use copy mode for a tracked path`);
+  }
+  createDirectoryLink(source, target);
   return {
     relativePath: path.relative(worktree, target).split(path.sep).join("/"),
     target: canonicalPath(source)
   };
+}
+function linkBesideWorktree(source, target, relativePath) {
+  try {
+    createDirectoryLink(source, target);
+    return null;
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+  }
+  if (nativeFs.lstatSync(target).isSymbolicLink() && canonicalPath(target) === canonicalPath(source)) return null;
+  throw new Error(`worktree dependency link ${relativePath} cannot be created at ${target}: something other than a link to ${source} is already there`);
+}
+function provisionGateDependencies(repository, checkout, dependencies) {
+  if (!dependencies.length) return { ok: true, evidence: "Worktree dependency provisioning was skipped because no paths are configured." };
+  let created = 0;
+  try {
+    for (const dependency of dependencies) created += provisionGateDependency(repository, checkout, dependency);
+  } catch (error) {
+    return { ok: false, message: `Could not provision gate worktree dependencies: ${error.message}` };
+  }
+  return { ok: true, evidence: `Worktree dependency provisioning created ${created} and retained ${dependencies.length - created} of ${dependencies.length} configured paths.` };
+}
+function provisionGateDependency(repository, checkout, dependency) {
+  const { source, target } = dependencyPlacement(repository, checkout, dependency);
+  const existed = nativeFs.existsSync(target);
+  if (dependency.mode === "copy") copyDependencyPath(source, target, { overwrite: false });
+  else if (!existed) createDirectoryLink(source, target);
+  return existed ? 0 : 1;
 }
 function runWorktreeSetup(setup, worktree, timeoutMs) {
   return new Promise((resolve) => {
@@ -275,7 +311,7 @@ function runWorktreeSetup(setup, worktree, timeoutMs) {
 }
 async function provisionWorktree(repository, worktree, config, options = {}) {
   for (const dependency of config.worktreeDependencyPaths || []) {
-    const createdLink = provisionDependencyDirectory(repository, worktree, dependency);
+    const createdLink = provisionDependencyPath(repository, worktree, dependency);
     if (createdLink) options.onDependencyLink?.(createdLink);
   }
   const setup = String(config.worktreeSetup || "").trim();
@@ -320,6 +356,14 @@ function agentWorktreePath(repository, agentId) {
 function agentWorktreeCandidates(repository, agentId) {
   const segment = `agent-${String(agentId).trim()}`;
   return agentWorktreeRoots(repository).map((root) => path.join(root, segment));
+}
+function agentIdFromWorktreePath(repository, worktree) {
+  const target = canonicalPath(worktree);
+  const segment = path.basename(target);
+  if (!/^agent-.+$/.test(segment)) return "";
+  const roots = agentWorktreeRoots(repository).map((root) => canonicalPath(root));
+  if (!roots.includes(canonicalPath(path.dirname(target)))) return "";
+  return segment.slice("agent-".length);
 }
 function resolvedAgentWorktree(repository, agentId) {
   const existing = agentWorktreeCandidates(repository, agentId).find((candidate) => nativeFs.existsSync(candidate));
@@ -1899,4 +1943,4 @@ async function sweep(repo, tickets, options = {}) {
     failures
   };
 }
-module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };
+module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };

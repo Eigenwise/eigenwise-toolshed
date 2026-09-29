@@ -271,7 +271,7 @@ function stopVerdict(store, claims, classification, dispatchStopped, terminalTic
     return `exec WAITING: ${label} ended a turn while holding its claim; it may resume. Do not re-dispatch or release it without a recorded terminal Agent failure.`;
   }
   if (dispatchStopped && classification.kind !== "unknown") {
-    return `exec DIED before claiming; fresh-dispatch only after diagnosis.`;
+    return `exec DIED before claiming; fresh-dispatch only after diagnosis, once pulse shows its ticket failed. A stop is held while a sibling launched with it is unclaimed, until that sibling's claim settles whose ticket it was.`;
   }
   return null;
 }

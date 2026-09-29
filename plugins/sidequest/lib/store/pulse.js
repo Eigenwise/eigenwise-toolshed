@@ -58,6 +58,7 @@ function createPulse(dependencies) {
     boardConfig,
     checkpointProjection,
     claimPulse,
+    claimStaleness,
     commitScope,
     dispatchState,
     effectiveScope,
@@ -162,6 +163,7 @@ function createPulse(dependencies) {
     return {
       reclaimable: claim.reclaimable,
       ...claim,
+      ...claimStaleness(ticket, now),
       boardQuietMs,
       boardQuietNote: "Time since the claim holder last wrote to the board; this is not process liveness.",
       lastBoardActivityAt: boardQuietMs == null ? null : new Date(now - boardQuietMs).toISOString()

@@ -251,13 +251,20 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   second caller acquire the live generation of a checkout that is still being created.
   **A WorktreeCreate that fails before its checkout exists** (lease refusal, an occupied destination, a failed
   `git worktree add`) records the attempt `failed` with `worktree_create_failed` and the hook error, and clears its
-  binding to that path. Its stderr says so; dispatch again plainly, without `recoveryEvidence`.
+  binding to that path. Its stderr says so; dispatch again plainly, without `recoveryEvidence`. While another
+  isolated reservation on this board from the same session has not claimed, creation order may have bound this one for that live
+  executor, so the attempt only loses the binding and stays live; stderr names the sibling. Wait for the claim,
+  then retire whichever attempt never claimed.
   **A retired attempt never removes a checkout another ticket is running in.** Creation order and the runtime bind
   can both cross, so a stranded record can name a sibling's checkout down to the sibling's agent id. Before the
   retry reclaims that checkout, the board looks for another ticket whose live claim or live dispatch records the
   same path, or whose agent id names it. When one does, nothing is removed, only the retired attempt's binding is
   cleared, and the dispatch prepares with a `Dispatch warning` naming the sibling and saying the binding was a
-  cross-bind, not a tree this ticket created. Leave that checkout alone; it belongs to the sibling.
+  cross-bind, not a tree this ticket created. Leave that checkout alone; it belongs to the sibling. The same holds
+  while any isolated sibling on this board from the retired attempt's session has not claimed: the checkout stays, the warning names that
+  sibling, and the retired creation record is parked so the sibling's token claim takes the checkout it runs in,
+  only on an exact checkout-instance match. A checkout that claim gives up stays parked while another sibling is
+  still unclaimed.
   TaskStop output and host task notifications do not include the dispatch token, attempt generation, and immutable
   ticket binding, so they cannot record a terminal dispatch, but they are the evidence `--recovery-evidence`
   wants: you spawned the runtime, so you are the authority that can attest the host reported it gone. Attest what
