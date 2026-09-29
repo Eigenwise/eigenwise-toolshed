@@ -58,6 +58,7 @@ const SESSION_END = path.join(HOOKS, 'session-end.js');
 const FORCE_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 const SUBAGENT_START = path.join(HOOKS, 'subagent-start.js');
 const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
+const AGENT_DISPATCH_STATE = path.join(HOOKS, 'agent-dispatch-state.js');
 const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
 const GUARD_WORKTREE_ISOLATION = path.join(HOOKS, 'guard-worktree-isolation.js');
@@ -4375,6 +4376,116 @@ test('SQ-2955: a WorktreeCreate whose generation was retired mid-setup stamps no
       try { gitFixture(['branch', '-D', `worktree-${name}`], repo); } catch (_) {}
     }
   }
+});
+
+// Two claimed isolated executors under ONE session id with distinct bound agent ids, which is how a fan-out
+// launches them: native subagents inherit their parent's session, so only the agent id tells them apart.
+function sessionSharingExecutors(label: string) {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), `sq-siblings-${label}-`));
+  gitFixture(['init', '--quiet', '-b', 'main'], repository);
+  gitFixture(['config', 'user.email', 'test@example.invalid'], repository);
+  gitFixture(['config', 'user.name', 'Sibling Executors Test'], repository);
+  fs.writeFileSync(path.join(repository, 'tracked.txt'), 'seed\n');
+  gitFixture(['add', 'tracked.txt'], repository);
+  gitFixture(['commit', '--quiet', '-m', 'seed'], repository);
+  const project = store.ensureProject(repository, `siblings ${label}`).slug;
+  const category = `siblings-${label}-${++sqSeq}`;
+  store.setCategory({ id: category, name: category, route: { model: 'sonnet', effort: 'medium' }, fallback: null, enabled: true });
+  const sessionId = `siblings-${label}-${sqSeq}`;
+  const claimedExecutor = (name: string) => {
+    const ticket = store.createTicket(project, {
+      title: `${name} sibling executor`,
+      description: 'Where: sibling fixture. Contract: hold one isolated dispatch. Verify: inspect hook output.',
+      category,
+      files: ['tracked.txt'],
+      source: 'cli',
+    });
+    const agentId = `sibling-${label}-${name}-agent`;
+    const prepared = store.prepareDispatch(project, ticket.ref, { sharedTree: false, sessionId });
+    const executor = prepared.ticket.dispatchExecutor;
+    assert.equal(store.recordDispatchLaunch(project, ticket.ref, { token: prepared.token, executor, sessionId, agentName: agentId }).ok, true);
+    const worktree = worktrees.agentWorktreePath(repository, agentId);
+    assert.equal(store.bindDispatchWorktreeCreation(project, sessionId, worktree).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
+    assert.equal(store.claimTicket(project, ticket.ref, agentId, { token: prepared.token, executor, sessionId }).ok, true);
+    const gitDirectory = path.join(repository, '.git', 'worktrees', agentId);
+    fs.mkdirSync(gitDirectory, { recursive: true });
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(worktree, '.git'), `gitdir: ${gitDirectory}\n`);
+    const recorded = store.getTicket(project, ticket.ref).dispatch.worktree;
+    return { ref: ticket.ref, agentId, executor, token: prepared.token, worktree: recorded, gitDirectory };
+  };
+  const first = claimedExecutor('first');
+  const second = claimedExecutor('second');
+  return { repository, project, sessionId, first, second };
+}
+
+test('subagent-start keys the receiving agent\'s own worktree on its bound agent id, not the shared session (GH-155)', () => {
+  const { repository, sessionId, first, second } = sessionSharingExecutors('diagnostics');
+  // SubagentStart can report the parent's checkout as cwd, so the session's checkout is all a session-keyed
+  // lookup sees, and both siblings got the same answer: each other's worktree AND their own called foreign.
+  const input = (executor: typeof first) => ({
+    session_id: sessionId,
+    agent_type: executor.executor,
+    agent_id: executor.agentId,
+    cwd: repository,
+  });
+  const ownException = (executor: typeof first) => `Your own worktree is ${path.basename(executor.worktree)}; nothing else under`;
+
+  // SubagentStart delivers only the first 512 bytes, so the count and the ownership sentence have to lead.
+  const delivered = runHook(SUBAGENT_START, input(first));
+  assert.match(delivered, /1 foreign agent worktree in play/, 'only the sibling worktree is foreign');
+  assert.ok(delivered.includes(ownException(first)), delivered);
+
+  const { diagnosticWorktreeWarning } = require('../hooks/diagnostic-worktree-warning.js');
+  const toFirst = diagnosticWorktreeWarning(input(first));
+  assert.match(toFirst, new RegExp(`1 holds a live claim \\(${second.ref}\\)`));
+  assert.doesNotMatch(toFirst, new RegExp(`\\b${first.ref}\\b`), 'an executor is never told its own ticket is foreign');
+  const toSecond = diagnosticWorktreeWarning(input(second));
+  assert.match(toSecond, new RegExp(`1 holds a live claim \\(${first.ref}\\)`));
+  assert.ok(toSecond.includes(ownException(second)), toSecond);
+
+  const toOrchestrator = diagnosticWorktreeWarning({ session_id: sessionId, cwd: repository });
+  assert.match(toOrchestrator, /2 foreign agent worktrees in play/, 'the session itself owns neither worktree');
+  assert.doesNotMatch(toOrchestrator, /Your own worktree/);
+});
+
+test('an executor stop records its own dispatch state in its own worktree, never a sibling\'s (GH-150)', () => {
+  const { repository, project, sessionId, first, second } = sessionSharingExecutors('stack-owner');
+  const stateFile = (executor: typeof first) => path.join(executor.gitDirectory, 'sidequest-dispatch.json');
+  const stop = (executor: typeof first) => runHook(AGENT_DISPATCH_STATE, {
+    hook_event_name: 'SubagentStop',
+    session_id: sessionId,
+    agent_type: executor.executor,
+    agent_id: executor.agentId,
+    cwd: repository,
+  });
+
+  assert.equal(store.recordDispatchAgentFailure(project, first.ref, {
+    token: first.token,
+    executor: first.executor,
+    sessionId,
+    taskName: first.agentId,
+    agentId: first.agentId,
+    agentName: first.agentId,
+    error: 'Prompt is too long',
+  }).ok, true);
+  stop(first);
+  assert.equal(fs.existsSync(stateFile(first)), true, 'the stopped executor\'s own worktree records its dispatch state');
+  const ended = JSON.parse(fs.readFileSync(stateFile(first), 'utf8'));
+  assert.equal(ended.ref, first.ref);
+  assert.equal(ended.agentId, first.agentId, 'ownership names the executor, not the session that launched it');
+  assert.equal(ended.sessionId, sessionId);
+  assert.equal(ended.terminalAt, store.getTicket(project, first.ref).dispatch.terminalAt, 'the terminal event is the board\'s own');
+  assert.ok(Date.parse(ended.stoppedAt) >= Date.parse(ended.terminalAt));
+  assert.equal(fs.existsSync(stateFile(second)), false, 'the sibling under the same session is still running');
+
+  // A parked executor's run ends too, but its claim is live and it can be resumed, so nothing is terminal yet.
+  stop(second);
+  const parked = JSON.parse(fs.readFileSync(stateFile(second), 'utf8'));
+  assert.equal(parked.agentId, second.agentId);
+  assert.equal(parked.terminalAt, null);
+  assert.equal(JSON.parse(fs.readFileSync(stateFile(first), 'utf8')).agentId, first.agentId, 'a sibling stop never rewrites another worktree');
 });
 
 test('subagent-start warns only for embedded worktrees outside the receiving agent checkout', () => {

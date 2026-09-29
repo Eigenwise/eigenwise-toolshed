@@ -534,17 +534,31 @@ function foreignWorktrees(location, roots, now) {
   }
   return [...byPath.values()];
 }
+function boundAgentWorktree(input) {
+  const agentId = stringField(input, "agent_id", "agentId");
+  if (!agentId) return "";
+  try {
+    const store = require(runtimeModule("store"));
+    return store.agentDispatchWorktrees(stringField(input, "session_id", "sessionId"), agentId)[0]?.worktree || "";
+  } catch (_) {
+    return "";
+  }
+}
+function ownershipSentence(roots, ownWorktree) {
+  const nothingElse = `under ${roots.join(" or ")} is yours.`;
+  return ownWorktree ? `Your own worktree is ${import_node_path5.default.basename(ownWorktree)}; nothing else ${nothingElse}` : `Nothing ${nothingElse}`;
+}
 function refList(worktrees) {
   const refs = worktrees.map((entry) => entry.ref).filter(Boolean).sort();
   return refs.length ? refs.join(", ") : "an unnamed dispatch";
 }
-function warningFor(worktrees, roots) {
+function warningFor(worktrees, roots, ownWorktree) {
   const live = worktrees.filter((entry) => entry.lifecycle === "live");
   const candidates = worktrees.filter((entry) => entry.lifecycle === "candidate");
   const gone = worktrees.filter((entry) => !entry.onDisk);
   const sentences = [
     `sidequest: ${worktrees.length} foreign agent worktree${worktrees.length === 1 ? "" : "s"} in play, and Claude Code delivers their LSP diagnostics into YOUR context because that registry is keyed per session, not per agent.`,
-    `Nothing under ${roots.join(" or ")} is yours.`
+    ownershipSentence(roots, ownWorktree)
   ];
   if (gone.length) sentences.push(`${gone.length} of those ${gone.length === 1 ? "paths is" : "paths are"} already gone from disk, and a diagnostic naming a path that no longer exists is always false.`);
   if (live.length) sentences.push(`${live.length} hold${live.length === 1 ? "s" : ""} a live claim (${refList(live)}): errors there are expected mid-refactor state and never outrank that executor's own verify.`);
@@ -552,13 +566,20 @@ function warningFor(worktrees, roots) {
   sentences.push("Keep error-severity diagnostics in your own files actionable.");
   return sentences.join(" ");
 }
-function diagnosticWorktreeWarning(input, now = Date.now()) {
+function receivingCheckout(input) {
   const start = stringField(input, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const location = checkoutLocation(start);
+  return location && { ...location, checkoutRoot: boundAgentWorktree(input) || location.checkoutRoot };
+}
+function ownAgentWorktree(location) {
+  return comparablePath(location.checkoutRoot) === comparablePath(location.projectRoot) ? "" : location.checkoutRoot;
+}
+function diagnosticWorktreeWarning(input, now) {
+  const location = receivingCheckout(input);
   if (!location) return "";
   const roots = agentWorktreeRoots(location.projectRoot);
-  const worktrees = foreignWorktrees(location, roots, now);
-  return worktrees.length ? warningFor(worktrees, roots) : "";
+  const worktrees = foreignWorktrees(location, roots, now ?? Date.now());
+  return worktrees.length ? warningFor(worktrees, roots, ownAgentWorktree(location)) : "";
 }
 
 // src/lib/plugin-freshness.ts
