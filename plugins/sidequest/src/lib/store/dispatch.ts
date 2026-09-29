@@ -1702,8 +1702,11 @@ function unsettledSiblingCheckoutRefusal(ref: string, siblingRef: string, worktr
   return `${ref} did not remove ${worktree}: ${siblingRef} from the same dispatch session has not claimed yet, and creation order can hand one sibling's checkout to the other's reservation, so this may be the tree ${siblingRef}'s executor runs in. The checkout stays, and only ${ref}'s binding was cleared.`;
 }
 
+// Creation only ever attributes a checkout to an isolated reservation on its own board, so a shared-tree or
+// other-board sibling can never be the crossed one (SQ-3147).
 function guessedSessionSibling(entry: { slug: string; ticket: any }, slug: string, ticket: any, sessionId: string) {
-  return !(entry.slug === slug && entry.ticket.id === ticket.id) && guessedReservation(entry.ticket, dispatchState(entry.ticket), sessionId);
+  const state = dispatchState(entry.ticket);
+  return entry.slug === slug && entry.ticket.id !== ticket.id && state?.sharedTree === false && guessedReservation(entry.ticket, state, sessionId);
 }
 
 // Creation order and SubagentStart both bind by guess, so until every sibling of this session has claimed, the
@@ -3736,21 +3739,35 @@ function observedClaimCheckout(sessionId?: any, observedWorktree?: any) {
   return claim.sessionId && claim.observed ? { sessionId: claim.sessionId, observed: canonicalPath(claim.observed) } : null;
 }
 
-// An isolated reservation holding no checkout because its guessed binding was released (SQ-3139): the checkout its
-// executor runs in is still named by some other record, so it can only arrive one way.
-function releasedCheckoutReservation(ticket?: any, state?: any, sessionId?: any) {
+// An isolated reservation holding no checkout: the checkout its executor runs in is named by some other record, or
+// was parked by a supersede (SQ-3139), so it can only arrive one way.
+function checkoutlessReservation(ticket?: any, state?: any, sessionId?: any) {
   return unclaimedLaunchedReservation(ticket, state, sessionId) && !state.claimedAt && state.sharedTree === false
     && !state.worktree && !state.continuation?.sourceWorktree;
 }
 
-function claimTakesObservedCheckout(ticket?: any, state?: any, claim?: any) {
-  const leasedElsewhere = crossedClaimCheckoutReservation(ticket, state, claim.sessionId) && canonicalPath(state.worktree) !== claim.observed;
-  return leasedElsewhere || releasedCheckoutReservation(ticket, state, claim.sessionId);
+// Only a binding a pre-creation failure released is traded with a live holder at claim time. A reservation that never
+// held one is the one-sided crossing its holder's agent report settles (GH-235), and trading it at claim time emptied
+// the holder's record that the SQ-3132 retry route reads to keep the claimed sibling's tree (GH-305, SQ-3147).
+function releasedCheckoutReservation(ticket?: any, state?: any, sessionId?: any) {
+  return checkoutlessReservation(ticket, state, sessionId) && state.worktreeBindingExchange?.reason === 'worktree_create_failed';
 }
 
-function crossedCheckoutTarget(slug?: any, ticketId?: any, claim?: any) {
+function leasesAnotherCheckout(ticket?: any, state?: any, claim?: any) {
+  return crossedClaimCheckoutReservation(ticket, state, claim.sessionId) && canonicalPath(state.worktree) !== claim.observed;
+}
+
+function claimExchangesObservedCheckout(ticket?: any, state?: any, claim?: any) {
+  return leasesAnotherCheckout(ticket, state, claim) || releasedCheckoutReservation(ticket, state, claim.sessionId);
+}
+
+function claimAdoptsObservedCheckout(ticket?: any, state?: any, claim?: any) {
+  return leasesAnotherCheckout(ticket, state, claim) || checkoutlessReservation(ticket, state, claim.sessionId);
+}
+
+function crossedCheckoutTarget(slug: any, ticketId: any, claim: any, takesCheckout: typeof claimAdoptsObservedCheckout) {
   const target = getTicket(slug, ticketId);
-  return claimTakesObservedCheckout(target, dispatchState(target), claim) ? target : null;
+  return takesCheckout(target, dispatchState(target), claim) ? target : null;
 }
 
 function recordedCheckout(state?: any) {
@@ -3771,14 +3788,14 @@ function crossedCheckoutHolder(slug?: any, target?: any, claim?: any) {
 
 function crossedCheckoutExchange(slug?: any, ticketId?: any, sessionId?: any, observedWorktree?: any) {
   const claim = observedClaimCheckout(sessionId, observedWorktree);
-  const target = claim ? crossedCheckoutTarget(slug, ticketId, claim) : null;
+  const target = claim ? crossedCheckoutTarget(slug, ticketId, claim, claimExchangesObservedCheckout) : null;
   const holder = target ? crossedCheckoutHolder(slug, target, claim) : null;
   const facts = holder ? immutableWorktreeFacts(slug, claim!.observed) : null;
   return observedCheckoutMatchesRecord(dispatchState(holder), facts) ? { slug, target, holder, facts, ...claim! } : null;
 }
 
 function crossedCheckoutStillHolds(exchange: any, current?: any, currentHolder?: any) {
-  return claimTakesObservedCheckout(current, dispatchState(current), exchange)
+  return claimExchangesObservedCheckout(current, dispatchState(current), exchange)
     && recordedCheckout(dispatchState(current)) === recordedCheckout(dispatchState(exchange.target))
     && guessedSiblingCheckout(currentHolder, dispatchState(currentHolder), exchange.sessionId)
     && observedCheckoutMatchesRecord(dispatchState(currentHolder), exchange.facts);
@@ -3835,16 +3852,24 @@ function parkedCheckoutHolder(slug: string, target: any, claim: any) {
 
 function parkedCheckoutAdoption(slug: string, ticketId: string, sessionId: string, observedWorktree: string) {
   const claim = observedClaimCheckout(sessionId, observedWorktree);
-  const target = claim ? crossedCheckoutTarget(slug, ticketId, claim) : null;
+  const target = claim ? crossedCheckoutTarget(slug, ticketId, claim, claimAdoptsObservedCheckout) : null;
   const parker = target ? parkedCheckoutHolder(slug, target, claim) : null;
   const facts = parker ? immutableWorktreeFacts(slug, claim!.observed) : null;
   return observedCheckoutMatchesRecord(parkedCheckoutOf(parker), facts) ? { slug, target, parker, facts, ...claim! } : null;
 }
 
 function parkedCheckoutStillHolds(adoption: any, current: any, parker: any) {
-  return claimTakesObservedCheckout(current, dispatchState(current), adoption)
+  return claimAdoptsObservedCheckout(current, dispatchState(current), adoption)
     && recordedCheckout(dispatchState(current)) === recordedCheckout(dispatchState(adoption.target))
     && observedCheckoutMatchesRecord(parkedCheckoutOf(parker), adoption.facts);
+}
+
+// In a rotation of three or more, the record the claim gives up can be the checkout a still-unsettled sibling runs
+// in, and dropping it left that sibling leased to a dead tree with nothing naming its own (SQ-3147).
+function reparkDisplacedCheckout(slug: string, claimant: any, parker: any, displaced: any) {
+  const crossBound = dispatchState(parker).crossBoundWorktree;
+  if (displaced.worktree && unsettledSessionSibling(slug, claimant, dispatchState(claimant))) crossBound.parkedCheckout = displaced;
+  else delete crossBound.parkedCheckout;
 }
 
 function applyParkedCheckoutAdoption(adoption: any, admitted?: ClaimAdmission) {
@@ -3855,9 +3880,10 @@ function applyParkedCheckoutAdoption(adoption: any, admitted?: ClaimAdmission) {
   const parked = parkedCheckoutOf(parker);
   const now = new Date().toISOString();
   const from = recordedCheckout(state);
+  const displaced = parkedCreationRecord(state);
   for (const field of CHECKOUT_BINDING_FIELDS) state[field] = parked[field];
   state.worktreeBindingExchange = { at: now, from, with: parker.ref, reason: 'claim_parked_checkout' };
-  delete dispatchState(parker).crossBoundWorktree.parkedCheckout;
+  reparkDisplacedCheckout(adoption.slug, current, parker, displaced);
   stampDispatchEvent(current, 'claim-worktree-adopted', now);
   stampDispatchEvent(parker, 'claim-worktree-adopted', now);
   putTicket(adoption.slug, current);

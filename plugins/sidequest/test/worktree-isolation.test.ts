@@ -3099,7 +3099,7 @@ test('a WorktreeCreate that fails before its checkout exists records the attempt
 
 // SQ-3139. Two reservations from one session whose launches cross: the first executor's WorktreeCreate binds the
 // second reservation, so each record names the other ticket's executor until a token claim settles it.
-function sq3139CrossedWave(label: string) {
+function sq3139CrossedWave(label: string, roles = ['one', 'two']) {
   const sequence = `${label}${process.pid}${Date.now()}`;
   const sessionId = `sq3139-${sequence}`;
   const reserve = (role: string) => {
@@ -3110,8 +3110,8 @@ function sq3139CrossedWave(label: string) {
     const name = `agent-${agentId}`;
     return { ref: ticket.ref, executor: prepared.ticket.dispatchExecutor, tokenFile: prepared.ticket.dispatch.tokenFile, agentId, name, path: worktrees.namedWorktreePath(PROJECT, name) };
   };
-  const first = reserve('one');
-  const second = reserve('two');
+  const runtimes = roles.map(reserve);
+  const [first, second] = runtimes as [ReturnType<typeof reserve>, ReturnType<typeof reserve>];
   const claim = async (runtime: typeof first) => {
     const args = { ref: runtime.ref, project: PROJECT, by: `sq3139-${runtime.agentId}`, executor: runtime.executor, tokenFile: runtime.tokenFile };
     runHook(BIND_RUNTIME_IDENTITY, { session_id: sessionId, agent_id: runtime.agentId, agent_type: runtime.executor, cwd: runtime.path, tool_name: 'mcp__plugin_sidequest_board__claim', tool_input: args });
@@ -3121,7 +3121,7 @@ function sq3139CrossedWave(label: string) {
   const supersede = (runtime: typeof first, evidence: string) => withoutRetirementGrace(() => store.prepareDispatch(slug, runtime.ref, { sessionId, recoveryEvidence: evidence }));
   const recorded = (runtime: typeof first) => store.getTicket(slug, runtime.ref).dispatch;
   const cleanup = () => {
-    for (const runtime of [first, second]) {
+    for (const runtime of runtimes) {
       store.releaseTicket(slug, runtime.ref, 'sq3139-cleanup', { status: 'todo', source: 'test', force: true });
       if (fs.existsSync(runtime.path)) {
         try { execFileSync('git', ['worktree', 'remove', '--force', runtime.path], { cwd: PROJECT, windowsHide: true, stdio: 'ignore' }); } catch (_) {}
@@ -3130,7 +3130,7 @@ function sq3139CrossedWave(label: string) {
       try { execFileSync('git', ['branch', '-D', `worktree-${runtime.name}`], { cwd: PROJECT, windowsHide: true, stdio: 'ignore' }); } catch (_) {}
     }
   };
-  return { sessionId, first, second, claim, supersede, recorded, cleanup };
+  return { sessionId, first, second, runtimes, claim, supersede, recorded, cleanup };
 }
 
 test('SQ-3139: a crossed WorktreeCreate that fails before creating leaves the live sibling claimable and its tree alive', async () => {
@@ -3211,6 +3211,85 @@ test('SQ-3139: a claim adopts a parked checkout only when the checkout instance 
   } finally {
     wave.cleanup();
   }
+});
+
+// SQ-3147. Creation in the order one, three, two leaves one on two's tree, two on three's and three on one's.
+function sq3147RotatedWave(label: string) {
+  const wave = sq3139CrossedWave(label, ['one', 'two', 'three']);
+  const [one, two, three] = wave.runtimes as [typeof wave.first, typeof wave.first, typeof wave.first];
+  for (const runtime of [one, three, two]) assert.equal(createWorktree(wave.sessionId, runtime.name).ok, true);
+  for (const runtime of [two, three, one]) store.bindDispatchAgent(wave.sessionId, runtime.executor, runtime.agentId, null, runtime.path);
+  assert.equal(wave.recorded(one).worktree, worktrees.canonicalPath(two.path), 'the fixture reproduces the rotation');
+  assert.equal(wave.recorded(two).worktree, worktrees.canonicalPath(three.path));
+  assert.equal(wave.recorded(three).worktree, worktrees.canonicalPath(one.path));
+  return { wave, one, two, three };
+}
+
+test('SQ-3147: a rotated crossing settles through the claim-time exchange when nobody is superseded', async () => {
+  const { wave, two, three } = sq3147RotatedWave('rotation');
+  try {
+    assert.equal((await wave.claim(two)).ok, true);
+    assert.equal((await wave.claim(three)).ok, true);
+    assert.equal(wave.recorded(two).worktree, worktrees.canonicalPath(two.path));
+    assert.equal(wave.recorded(three).worktree, worktrees.canonicalPath(three.path));
+  } finally {
+    wave.cleanup();
+  }
+});
+
+test('SQ-3147: a claim that adopts a parked checkout re-parks the one it gave up for the next unsettled sibling', async () => {
+  const { wave, one, two, three } = sq3147RotatedWave('repark');
+  try {
+    const replacement = wave.supersede(one, 'one died before claiming');
+    assert.equal(replacement.ticket.dispatch.crossBoundWorktree.parkedCheckout.worktree, worktrees.canonicalPath(two.path));
+
+    assert.equal((await wave.claim(two)).ok, true);
+    assert.equal(wave.recorded(two).worktree, worktrees.canonicalPath(two.path), 'two adopts its own tree from the park');
+    assert.equal(wave.recorded(one).crossBoundWorktree.parkedCheckout.worktree, worktrees.canonicalPath(three.path), "the record two gave up is three's tree, so it stays parked");
+
+    assert.equal((await wave.claim(three)).ok, true);
+    assert.equal(wave.recorded(three).worktree, worktrees.canonicalPath(three.path), 'three leases the checkout its executor runs in, not the dead one');
+    assert.equal(wave.recorded(one).crossBoundWorktree.parkedCheckout, undefined, "with no unsettled sibling left, the dead tree is nobody's");
+  } finally {
+    wave.cleanup();
+  }
+});
+
+// A lone isolated reservation whose WorktreeCreate fails before its checkout exists, beside a same-session bystander
+// that can never be the crossed reservation, so SQ-3132 must still record the failure (SQ-3147).
+function sq3147LoneFailureBeside(label: string, bystander: { slug: string; sharedTree: boolean }) {
+  const sequence = `${label}${process.pid}${Date.now()}`;
+  const sessionId = `sq3147-${sequence}`;
+  const launch = (project: string, sharedTree: boolean, role: string) => {
+    const ticket = store.createTicket(project, { title: `sq3147 ${role} ${sequence}`, category: 'codebase-exploration', files: ['README.md'] });
+    const prepared = store.prepareDispatch(project, ticket.ref, { sessionId, sharedTree });
+    assert.equal(store.recordDispatchLaunch(project, ticket.ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId, agentName: `sq3147-${role}-${sequence}` }).ok, true);
+    return ticket.ref;
+  };
+  const bystanderRef = launch(bystander.slug, bystander.sharedTree, 'bystander');
+  const lone = launch(slug, false, 'lone');
+  const name = `sq3147-lone-${sequence}`;
+  const target = worktrees.namedWorktreePath(PROJECT, name);
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, 'occupant.txt'), 'blocks creation\n');
+  try {
+    assert.equal(createWorktree(sessionId, name).ok, false);
+    const state = store.getTicket(slug, lone).dispatch;
+    assert.equal(state.outcome, 'failed', 'no sibling can be the crossed reservation, so the attempt is recorded failed');
+    assert.equal(state.worktree || null, null);
+  } finally {
+    store.releaseTicket(slug, lone, 'sq3147-cleanup', { status: 'todo', source: 'test', force: true });
+    store.releaseTicket(bystander.slug, bystanderRef, 'sq3147-cleanup', { status: 'todo', source: 'test', force: true });
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+}
+
+test('SQ-3147: a same-session reservation on another board never holds a lone pre-creation failure open', () => {
+  sq3147LoneFailureBeside('otherboard', { slug: store.ensureProject(initRepo('sq3147-other-board-')).slug, sharedTree: false });
+});
+
+test('SQ-3147: a same-session shared-tree reservation never holds a lone pre-creation failure open', () => {
+  sq3147LoneFailureBeside('sharedtree', { slug, sharedTree: true });
 });
 
 // SQ-2938 / GH-125. A recovery dispatch cherry-picked the preserved candidate into a fresh checkout, the
