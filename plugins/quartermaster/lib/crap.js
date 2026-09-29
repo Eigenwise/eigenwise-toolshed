@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { crapScore, functionTokenCount, parseLizardCsv } = require('./crap-core.cjs');
+const { crapScore, functionTokenCount, parseLizardCsv, withBodySpans } = require('./crap-core.cjs');
 
 const DEFAULT_MAX = 6;
 const DEFAULT_LCOV = 'coverage/lcov.info';
@@ -98,6 +98,14 @@ function fingerprint(projectDir, filePath, start, end) {
   }
 }
 
+function readSource(projectDir, filePath) {
+  try {
+    return fs.readFileSync(path.resolve(projectDir, filePath), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 /** A named function rather than an inline callback, so V8 coverage can attribute its ranges to it. */
 function measuredFunction(entry, coverage, projectDir) {
   const file = displayPath(projectDir, entry.file);
@@ -126,8 +134,9 @@ function measuredFunction(entry, coverage, projectDir) {
   };
 }
 
+/** Each row is widened against its own real source before scoring, so a truncated signature's counted branches raise cc the same way for every reader. */
 function measure(lizardFunctions, coverage, projectDir) {
-  return lizardFunctions.map((entry) => measuredFunction(entry, coverage, projectDir));
+  return withBodySpans(lizardFunctions, (file) => readSource(projectDir, file)).map((entry) => measuredFunction(entry, coverage, projectDir));
 }
 
 /** lizard picks its reader by extension, case-insensitively; undefined for a file its default reader measures honestly. */
