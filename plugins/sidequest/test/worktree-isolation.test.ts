@@ -3245,7 +3245,7 @@ test('SQ-3147: a claim that adopts a parked checkout re-parks the one it gave up
 
     assert.equal((await wave.claim(two)).ok, true);
     assert.equal(wave.recorded(two).worktree, worktrees.canonicalPath(two.path), 'two adopts its own tree from the park');
-    assert.equal(wave.recorded(one).crossBoundWorktree.parkedCheckout.worktree, worktrees.canonicalPath(three.path), "the record two gave up is three's tree, so it stays parked");
+    assert.equal(wave.recorded(one).crossBoundWorktree.parkedCheckout?.worktree, worktrees.canonicalPath(three.path), "the record two gave up is three's tree, so it stays parked");
 
     assert.equal((await wave.claim(three)).ok, true);
     assert.equal(wave.recorded(three).worktree, worktrees.canonicalPath(three.path), 'three leases the checkout its executor runs in, not the dead one');
