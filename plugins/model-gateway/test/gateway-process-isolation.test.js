@@ -583,7 +583,7 @@ test('proxy command identity resolves the physical executable path', (t) => {
 
 test('gateway fixture processes isolate outer body, socket, and Codex state', async (t) => {
   const outerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-outer-user-'));
-  t.after(() => fs.rmSync(outerHome, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(outerHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   let defaultContacts = 0;
   const defaultEndpoint = http.createServer((request, response) => {
     defaultContacts += 1;
@@ -620,7 +620,7 @@ test('gateway fixture processes isolate outer body, socket, and Codex state', as
   assert.notEqual(isolatedEnvironment.MODEL_GATEWAY_REQUEST_BODY_DIR, outer.bodyDirectory);
   assert.notEqual(isolatedEnvironment.CODEX_HOME, outer.codexHome);
   assert.equal(isolatedEnvironment.ANTHROPIC_UNIX_SOCKET, undefined);
-  started.child.kill();
+  killProcessTree(started.child.pid);
   await waitForExit(started.child);
 
   const negativeControl = await startGateway(t, 'serve-shim', {
@@ -628,14 +628,14 @@ test('gateway fixture processes isolate outer body, socket, and Codex state', as
     CODEX_GATEWAY_REQUEST_LOG: '0',
   }, { isolatedOverrides: { MODEL_GATEWAY_REQUEST_BODY_DIR: outer.bodyDirectory } });
   assert.equal(await request(negativeControl.port, codexMessage()), 200);
-  negativeControl.child.kill();
+  killProcessTree(negativeControl.child.pid);
   await waitForExit(negativeControl.child);
   assert.throws(() => assertNoBodyRecord(outer.bodyDirectory), /true !== false/);
 });
 
 test('sync gateway fixture cleanup removes helper-owned homes and preserves supplied homes', (t) => {
   const outerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-outer-user-'));
-  t.after(() => fs.rmSync(outerHome, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(outerHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const outer = setOuterGatewayEnvironment(t, outerHome, 9);
   const before = testHomes(outer.temporaryDirectory);
 
