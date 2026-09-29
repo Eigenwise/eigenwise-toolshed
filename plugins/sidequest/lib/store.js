@@ -1362,6 +1362,7 @@ const {
   integrationTargetCommit,
   ticketIntegrationTarget,
   ticketIntegrationTargets,
+  deliveryIntegrationTarget,
   listTickets,
   manualVerify,
   VERIFY_ORACLE_KINDS,
@@ -2808,6 +2809,25 @@ function ticketIntegrationTargets(slug, tickets) {
   }
   return { ok: true, target: first, targets: resolved };
 }
+function deliveryIntegrationTarget(slug, recorded, integrationBranch) {
+  const branch = integrationBranch == null ? checkedOutBranchDescendingFrom(readMeta(slug)?.path, commitScope.integrationTargetRef(recorded)) : normalizeIntegrationBranch(integrationBranch);
+  if (!branch || branch === recorded.branch) return recorded;
+  return integrationTarget(slug, { mode: deliveryBranchMode(slug, recorded.mode, branch), branch });
+}
+function deliveryBranchMode(slug, recordedMode, branch) {
+  return recordedMode === "remote" && integrationBranchExists(readMeta(slug)?.path, `refs/remotes/origin/${branch}`) ? "remote" : "local";
+}
+function checkedOutBranchDescendingFrom(repo, ref) {
+  const git = (args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", windowsHide: true, stdio: "pipe" }).trim();
+  const currentBranch = git(["branch", "--show-current"]);
+  try {
+    git(["merge-base", "--is-ancestor", ref, "HEAD"]);
+    return currentBranch;
+  } catch (error) {
+    if (error?.status === 1) return "";
+    throw error;
+  }
+}
 function recordedDelivery(slug, ticket, commit, evidence) {
   const requestedCommit = String(commit || "").trim();
   const recordedEvidence = String(evidence || "").trim();
@@ -3081,7 +3101,11 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
     ticket
   };
   if (purpose === "integration") {
-    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireDeliveredWave: true, deliveryMethod: opts.deliveryMethod });
+    const admitted = validateIntegrationSubmission(slug, idOrRef, {
+      requireDeliveredWave: true,
+      deliveryMethod: opts.deliveryMethod,
+      integrationBranch: ticket.submission?.integration?.targetBranch
+    });
     if (!admitted.ok) return admitted;
   }
   const recorded = delivery;
@@ -3403,6 +3427,7 @@ module.exports = {
   integrationTarget,
   ticketIntegrationTarget,
   ticketIntegrationTargets,
+  deliveryIntegrationTarget,
   normalizeDeliveryMode,
   validateIntegrationSubmission,
   recordDeliveredSubmission,

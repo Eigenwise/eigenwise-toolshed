@@ -55,6 +55,12 @@ wave delivers its exact Git participant set and the resulting revision passes it
 participant only after the record exists. It validates each submitted range and admitted scope again,
 names stray paths, and never deletes a pinned ref.
 
+Delivery lands on the branch recorded at dispatch, unless the checkout is on that branch's fast-forward
+(it is the recorded branch or descends from it): then it lands on the checked-out branch. Pass
+`integrationBranch` (CLI `--integration-branch`) to deliver onto another checked-out branch on purpose.
+The integration record's `targetBranch` names the branch that got the delivery. Any other checkout
+refuses `branch_not_checked_out`.
+
 `integrate` with `wave: {}` opens a fresh wave at the matching tickets' recorded delivery target current head.
 A recorded wave for the same participants whose baseline is behind that head is superseded rather than
 reused. A candidate verified against an ancestor of the current target can join that wave; the merged-tree
