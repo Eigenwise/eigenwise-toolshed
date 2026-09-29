@@ -64,7 +64,10 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // the 2.5KB reserve. A nested workspace's gate had no other way to run from its own directory.
 // Raised from 24200 for deniedTools on board_config and category_edit (GH-222): +114 bytes compacted. The two
 // changes landed in one wave, so the cap moved once for both while preserving the 2.5KB reserve.
-const MCP_TOOLS_LIST_MAX_BYTES = 24300;
+// Raised from 24300 for groomClose/integrate deliveryRevision and resolvedPaths (GitHub #144), the only route
+// that closes a candidate rebased or squash-merged before it landed: +980 bytes compacted, measured on the
+// wave-3 tree with SQ-3118 and GH-222 already in, so the 2.5KB reserve still holds.
+const MCP_TOOLS_LIST_MAX_BYTES = 25400;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -266,6 +269,10 @@ async function runTool(tool: ToolDefinition, rawArgs: any) {
 // full attestation grammar has been on `add.verify` in the source all along and three tickets in a row were still
 // refused for not knowing it (SQ-1955). Anything a caller cannot get right on the FIRST call belongs in this table.
 const ATTESTATION_VERIFY_CONTRACT = 'For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.';
+// A rebased or squash-merged candidate never byte-matches the working tree, and the
+// refusal only reaches an operator who already knows these two properties exist.
+const DELIVERY_REVISION_CONTRACT = 'Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable.';
+const RESOLVED_PATHS_CONTRACT = 'Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable. reason is the evidence.';
 
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> = {
   context_page: {
@@ -292,10 +299,16 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
     reducedAgentSchema: 'Only when name/mode missing; hook needs agent_id+auto|bypass mode.',
     recoveryEvidence: 'Unverified; preparer retires now, else latest signal grace; bound name only.',
   },
-  integrate: { deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.' },
+  integrate: {
+    deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.',
+    deliveryRevision: DELIVERY_REVISION_CONTRACT,
+    resolvedPaths: RESOLVED_PATHS_CONTRACT,
+  },
   groomClose: {
     deliveryCommit: 'Prepared integration target.',
     deliveryInteractionCommit: 'Reviewed descendant, submitted paths only.',
+    deliveryRevision: DELIVERY_REVISION_CONTRACT,
+    resolvedPaths: RESOLVED_PATHS_CONTRACT,
     recoveryEvidence: 'Unclaimed: preparing session retires now; others past deadline; CLI too.',
   },
   verdict: {
