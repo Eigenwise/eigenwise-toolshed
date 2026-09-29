@@ -1,5 +1,7 @@
 'use strict';
 
+const { normalizeDeniedTools } = require('../denied-tools.js');
+
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 const DEFAULT_WORKTREE_RECOVERY_RETENTION_AGE_HOURS = 14 * 24;
 
@@ -354,6 +356,7 @@ function boardConfig(slug?: any) {
     name: meta.name,
     alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
     readOnlyDeniedTools: normalizeReadOnlyDeniedTools(meta.readOnlyDeniedTools),
+    deniedTools: normalizeDeniedTools(meta.deniedTools),
     generatedPairs: normalizeGeneratedPairs(meta.generatedPairs),
     integrationMode: normalizeIntegrationMode(meta.integrationMode),
     integrationBranch: normalizeIntegrationBranch(meta.integrationBranch),
@@ -396,6 +399,9 @@ function setBoardConfig(slug?: any, patch?: any) {
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'readOnlyDeniedTools')) {
       meta.readOnlyDeniedTools = normalizeReadOnlyDeniedTools(patch.readOnlyDeniedTools);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'deniedTools')) {
+      meta.deniedTools = normalizeDeniedTools(patch.deniedTools);
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'generatedPairs')) {
       meta.generatedPairs = normalizeGeneratedPairs(patch.generatedPairs);

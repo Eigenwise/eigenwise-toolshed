@@ -3,7 +3,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("node:child_process");
-const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME, bundledAgentType } = require("./exec-names.js");
+const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require("./exec-names.js");
 const { createWorktreeLease, canonicalPath } = require("./kernel/worktree.js");
 const crypto = require("crypto");
 const store = require("./store.js");
@@ -111,7 +111,6 @@ function renderDiagnosticProbe() {
     "model: haiku",
     "maxTurns: 3",
     "tools: Read, Glob, Grep",
-    "permissionMode: bypassPermissions",
     "---",
     MARKER,
     "Diagnose only the Agent spawn path. Read repository files and report concise evidence. Do not edit, run commands, use network tools, delegate, mention tickets, or investigate ordinary work.",
@@ -149,9 +148,12 @@ function renderDispatchAgent(_effort) {
     extraNote: dispatchNote()
   }));
 }
+function withoutPermissionMode(source) {
+  return source.replace(/^permissionMode: bypassPermissions\n/m, "");
+}
 function renderReadOnlyDispatchAgent(_effort, readOnlyDeniedTools) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
-  return collapseEffortProse(renderExecAgent({
+  return withoutPermissionMode(collapseEffortProse(renderExecAgent({
     name: stableReadOnlyDispatchName(),
     effort: "high",
     modelId: DISPATCH_MODEL_ID,
@@ -159,18 +161,18 @@ function renderReadOnlyDispatchAgent(_effort, readOnlyDeniedTools) {
     extraNote: `${dispatchNote()}${readOnlyNote()}`,
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools
-  }));
+  })));
 }
 function renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
-  return renderExecAgent({
+  return withoutPermissionMode(renderExecAgent({
     name: stableReadOnlyClaudeName(effort),
     effort,
     marker: MARKER,
     extraNote: readOnlyNote(),
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools
-  });
+  }));
 }
 function implementationExecutorSources() {
   const sources = /* @__PURE__ */ new Map();
@@ -970,13 +972,17 @@ function renderDispatchStub(ticket, projectPath) {
     ...marker ? ["", marker] : []
   ].join("\n");
 }
+function unattendedSpawnMode(subagentType) {
+  return isReadOnlyExecutor(subagentType) ? {} : { mode: "bypassPermissions" };
+}
 function agentSpawn(name, isolation, model, agentType, prompt, description, options) {
   const suppliedLabel = typeof description === "string" ? description.replace(EMBEDDED_ROUTE_MARKER_RE, "").replace(/\s+/g, " ").trim() : "";
   const taskLabel = suppliedLabel || "Sidequest ticket executor.";
   const reducedAgentSchema = options?.reducedAgentSchema === true;
+  const subagentType = bundledAgentType(agentType || name);
   return Object.assign(
-    { subagent_type: bundledAgentType(agentType || name), description: taskLabel },
-    reducedAgentSchema ? {} : { name, mode: "bypassPermissions" },
+    { subagent_type: subagentType, description: taskLabel },
+    reducedAgentSchema ? {} : { name, ...unattendedSpawnMode(subagentType) },
     isolation ? { isolation } : {},
     model ? { model } : {},
     prompt ? { prompt } : {}

@@ -112,7 +112,9 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // `properties` without `type: 'object'`. +91 bytes compacted, while preserving the 2.5KB reserve.
 // Raised from 24100 for add/update verifyCwd (SQ-3118 / GitHub #259): +60 bytes compacted, while preserving
 // the 2.5KB reserve. A nested workspace's gate had no other way to run from its own directory.
-const MCP_TOOLS_LIST_MAX_BYTES = 24200;
+// Raised from 24200 for deniedTools on board_config and category_edit (GH-222): +114 bytes compacted. The two
+// changes landed in one wave, so the cap moved once for both while preserving the 2.5KB reserve.
+const MCP_TOOLS_LIST_MAX_BYTES = 24300;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -154,7 +156,7 @@ function toolMutates(name?: any, args?: any) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === 'new_board_profile') return args.profile !== undefined;
   if (name === 'global_fallback') return args.model !== undefined || args.effort !== undefined;
-  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.generatedPairs !== undefined || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.worktreeBase !== undefined || args.notIntegratedSalvageAgeHours !== undefined || args.worktreeRecoveryRetentionAgeHours !== undefined || args.autoApproveTestScope !== undefined || args.autoApproveScope !== undefined || args.worktreeSetup !== undefined || args.worktreeDependencyPaths !== undefined;
+  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.deniedTools !== undefined || args.readOnlyDeniedTools !== undefined || args.generatedPairs !== undefined || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.worktreeBase !== undefined || args.notIntegratedSalvageAgeHours !== undefined || args.worktreeRecoveryRetentionAgeHours !== undefined || args.autoApproveTestScope !== undefined || args.autoApproveScope !== undefined || args.worktreeSetup !== undefined || args.worktreeDependencyPaths !== undefined;
   return false;
 }
 

@@ -701,7 +701,7 @@ test('pre-tool hook: shared-tree claims cannot run raw git commit', () => {
   }), null);
 });
 
-test('pre-tool hook: readonly Claude executors bypass while dispatch executors require preparation', () => {
+test('pre-tool hook: readonly Claude executors inherit the session mode while dispatch executors require preparation', () => {
   for (const effort of EFFORTS) {
     const claude = runHookOutput(FORCE_BYPASS, {
       tool_name: 'Agent',
@@ -712,7 +712,7 @@ test('pre-tool hook: readonly Claude executors bypass while dispatch executors r
       },
     });
     assert.equal(claude.hookSpecificOutput.permissionDecision, undefined);
-    assert.equal(claude.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+    assert.equal(claude.hookSpecificOutput.updatedInput.mode, undefined);
 
     const dispatch = runHookOutput(FORCE_BYPASS, {
       tool_name: 'Agent',
@@ -5359,4 +5359,133 @@ test('pre-tool hook: dispatch executor requires an exact briefing and legacy exe
   });
   assert.equal(legacy.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(legacy.hookSpecificOutput.permissionDecisionReason, /invalid or retired/);
+});
+
+const GUARD_DENIED_TOOLS = path.join(HOOKS, 'guard-denied-tools.js');
+
+function readOnlyShellCheckout(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-readonly-shell-'));
+  gitFixture(['init', '-q'], root);
+  gitFixture(['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'init'], root);
+  fs.mkdirSync(path.join(root, 'sub'));
+  return root;
+}
+
+function runReadOnlyShell(command: string, cwd: string, agentType = stableReadOnlyClaudeName('high'), toolName = 'Bash') {
+  return runHookOutput(FORCE_BYPASS, { tool_name: toolName, agent_type: agentType, agent_id: 'readonly-shell-agent', cwd, tool_input: { command } });
+}
+
+function msysPath(value: string): string {
+  return value.replace(/^([A-Za-z]):[\\/]/, (_match: string, drive: string) => `/${drive.toLowerCase()}/`).replace(/\\/g, '/');
+}
+
+test('read-only shell guard: refuses write-shaped Bash and PowerShell inside the checkout and names the alternative (GH-282)', () => {
+  const root = readOnlyShellCheckout();
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-readonly-scratch-'));
+  const writes = [
+    'echo x > file',
+    'echo x >> notes.md',
+    'npm test &> out.log',
+    'rm -f a.txt',
+    'mv a.txt b.txt',
+    'cd sub && touch f',
+    `cp "${scratch}/x" ./y`,
+    "sed -i 's/a/b/' a.txt",
+    'git commit -m x',
+    'git -C . reset --hard',
+    'echo x | tee sub/log.txt',
+    `echo x > "${path.join(root, 'quoted path.txt')}"`,
+    ...(process.platform === 'win32' ? [`echo x > ${msysPath(path.join(root, 'msys.txt'))}`] : []),
+  ];
+  for (const command of writes) {
+    const reason = runReadOnlyShell(command, root)?.hookSpecificOutput?.permissionDecisionReason || '';
+    assert.match(reason, /read-only executor, refusing a shell write inside the repository checkout/, command);
+    assert.match(reason, /in your scratchpad or the ticket's verification directory/, command);
+    assert.match(reason, /comment the needed edit on the ticket and release it instead/, command);
+  }
+  const powershell = runReadOnlyShell('Set-Content -Path a.txt -Value x', root, stableReadOnlyDispatchName(), 'PowerShell');
+  assert.equal(powershell.hookSpecificOutput.permissionDecision, 'deny');
+
+  for (const command of [
+    'git status',
+    'git log --oneline -3 2>&1',
+    'grep -rn "a > b" . 2>/dev/null',
+    'npm test 2>&1 | tail -5',
+    'cat a.txt > /dev/null',
+    "sed -n '1,5p' a.txt",
+    `echo x > "${scratch}/out.txt"`,
+    `cd "${scratch}" && echo x > y.txt`,
+    `cp a.txt "${scratch}/a.txt"`,
+    'echo x > ~/sq-readonly-home-probe.txt',
+    'git diff > $OUT',
+  ]) {
+    assert.equal(runReadOnlyShell(command, root), null, command);
+  }
+  assert.equal(runReadOnlyShell('echo x > file', scratch), null, 'outside any checkout nothing is protected');
+  assert.equal(runReadOnlyShell('echo x > file', root, 'sidequest-exec-high'), null, 'write executors keep their shell');
+  assert.equal(runHookOutput(FORCE_BYPASS, { tool_name: 'Bash', cwd: root, tool_input: { command: 'echo x > file' } }), null);
+});
+
+test('read-only shell guard: a linked worktree cannot write into its main checkout (GH-282)', () => {
+  const root = readOnlyShellCheckout();
+  const linked = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-readonly-linked-')), 'tree');
+  gitFixture(['worktree', 'add', '-q', '--detach', linked], root);
+  const reason = runReadOnlyShell(`echo x > "${path.join(root, 'leak.txt')}"`, linked)?.hookSpecificOutput?.permissionDecisionReason || '';
+  assert.match(reason, /refusing a shell write inside the repository checkout/);
+  assert.equal(runReadOnlyShell('git status', linked), null);
+});
+
+test('read-only executors never ship or spawn with bypassPermissions (GH-282)', () => {
+  const sources = agentsync.bundledExecutorSources();
+  for (const [filename, source] of sources) {
+    const frontmatter = source.split('\n---\n')[0];
+    const readOnly = /readonly|diagnostic-probe/.test(filename);
+    assert.equal(/^permissionMode:/m.test(frontmatter), !readOnly, filename);
+  }
+  for (const subagentType of [stableReadOnlyClaudeName('high'), `sidequest:${stableReadOnlyClaudeName('low')}`]) {
+    const out = runHookOutput(FORCE_BYPASS, {
+      tool_name: 'Agent',
+      tool_input: { subagent_type: subagentType, isolation: 'worktree', model: 'opus', name: 'ro-review', prompt: 'work SQ-36', mode: 'bypassPermissions' },
+    });
+    assert.equal(out.hookSpecificOutput.updatedInput.mode, undefined, subagentType);
+  }
+  assert.equal(agentsync.agentSpawn('ro', 'worktree', 'opus', stableReadOnlyClaudeName('high'), 'p', 'd').mode, undefined);
+  assert.equal(agentsync.agentSpawn('rw', 'worktree', 'opus', 'sidequest-exec-high', 'p', 'd').mode, 'bypassPermissions');
+});
+
+test('denied-tools guard: board and category deniedTools refuse an executor call; read-only adds readOnlyDeniedTools (GH-222)', () => {
+  const category = `hooks-denied-${++fixtureSeq}`;
+  const readOnlyCategory = `hooks-denied-ro-${fixtureSeq}`;
+  const route = { model: 'sonnet', effort: 'high' };
+  store.setCategory({ id: category, name: category, route, fallback: null, enabled: true, deniedTools: ['Agent', 'Agent', 'mcp__claude-in-chrome'] });
+  store.setCategory({ id: readOnlyCategory, name: readOnlyCategory, route, fallback: null, enabled: true, readonly: true });
+  assert.deepEqual(store.getCategory(category, { project: slug }).deniedTools, ['Agent', 'mcp__claude-in-chrome']);
+  assert.equal(Object.hasOwn(store.getCategory(readOnlyCategory, { project: slug }), 'deniedTools'), false);
+  assert.throws(() => store.setCategory({ id: category, name: category, route, fallback: null, enabled: true, deniedTools: ['mcp__plugin_sidequest_board__claim'] }), /cannot deny the Sidequest board tools/);
+  assert.throws(() => store.setBoardConfig(slug, { deniedTools: 'Agent' }), /must be an array/);
+  assert.throws(() => store.setBoardConfig(slug, { deniedTools: ['two words'] }), /tool names or MCP prefixes/);
+  const { deniedToolMatch } = require('../lib/denied-tools.js');
+  assert.equal(deniedToolMatch('mcp__claude-in-chrome__navigate', ['Agent', 'mcp__claude-in-chrome']), 'mcp__claude-in-chrome');
+  assert.equal(deniedToolMatch('mcp__claude-in-chrome-extra__navigate', ['mcp__claude-in-chrome']), null, 'a prefix denies only its own server');
+  assert.equal(deniedToolMatch('Agent', ['Agent']), 'Agent');
+  const previous = store.boardConfig(slug);
+  store.setBoardConfig(slug, { deniedTools: ['WebFetch'], readOnlyDeniedTools: ['mcp__playwright'] });
+  try {
+    assert.deepEqual(store.boardConfig(slug).deniedTools, ['WebFetch']);
+    const writer = claimStopTicket(store.createTicket(slug, { title: 'denied tools writer', category, source: 'cli' }), `denied-tools-${++sqSeq}`, 'denied-writer');
+    const reader = claimStopTicket(store.createTicket(slug, { title: 'denied tools reader', category: readOnlyCategory, source: 'cli' }), `denied-tools-${++sqSeq}`, 'denied-reader');
+    const run = (acting: any, toolName: string) => runHookOutput(GUARD_DENIED_TOOLS, { ...acting, cwd: BOARD_PATH, tool_name: toolName, tool_input: {} });
+    for (const toolName of ['Agent', 'mcp__claude-in-chrome__navigate', 'WebFetch']) {
+      const reason = run(writer, toolName)?.hookSpecificOutput?.permissionDecisionReason || '';
+      assert.match(reason, /is denied to executors on SQ-\d+ by the board deniedTools setting/, toolName);
+      assert.match(reason, /comment why on the ticket and release it/, toolName);
+    }
+    for (const toolName of ['Read', 'Bash', 'mcp__playwright__browser_click', 'AgentX']) assert.equal(run(writer, toolName), null, toolName);
+    assert.equal(run(reader, 'mcp__playwright__browser_click').hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal(run(reader, 'WebFetch').hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal(run(reader, 'mcp__claude-in-chrome__navigate'), null);
+    assert.equal(runHookOutput(GUARD_DENIED_TOOLS, { session_id: 'main-session', cwd: BOARD_PATH, tool_name: 'WebFetch', tool_input: {} }), null);
+  } finally {
+    store.setBoardConfig(slug, { deniedTools: previous.deniedTools, readOnlyDeniedTools: previous.readOnlyDeniedTools });
+  }
 });

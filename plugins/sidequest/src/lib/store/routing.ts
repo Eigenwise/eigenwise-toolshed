@@ -1,5 +1,7 @@
 'use strict';
 
+const { normalizeDeniedTools } = require('../denied-tools.js');
+
 function createRouting(dependencies: any) {
   const {
     activeDispatchRoute,
@@ -651,7 +653,14 @@ function normalizeCategory(raw?: any) {
     artifactRoots: normalizeArtifactRoots(raw.artifactRoots),
     readonly: raw.readonly === true,
     enabled: raw.enabled !== false,
+    ...categoryDeniedTools(raw.deniedTools),
   };
+}
+
+// Omitted when empty so categories without denials keep their stored shape and fingerprints.
+function categoryDeniedTools(value?: unknown) {
+  const deniedTools = normalizeDeniedTools(value, 'Category deniedTools');
+  return deniedTools.length ? { deniedTools } : {};
 }
 
 function routingProfileCategory(profileId?: any, id?: any) {
