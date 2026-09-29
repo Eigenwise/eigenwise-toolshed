@@ -4320,6 +4320,7 @@ test('an executor stop records its own dispatch state in its own worktree, never
     error: 'Prompt is too long',
   }).ok, true);
   stop(first);
+  assert.equal(fs.existsSync(stateFile(first)), true, 'the stopped executor\'s own worktree records its dispatch state');
   const ended = JSON.parse(fs.readFileSync(stateFile(first), 'utf8'));
   assert.equal(ended.ref, first.ref);
   assert.equal(ended.agentId, first.agentId, 'ownership names the executor, not the session that launched it');
