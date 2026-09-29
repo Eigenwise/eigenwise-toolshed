@@ -87,6 +87,63 @@ function decisionsFile(env = process.env) {
   return path.join(stateRoot(env), 'decisions.jsonl');
 }
 
+function decisionLines(env) {
+  try {
+    return fs.readFileSync(decisionsFile(env), 'utf8').split('\n').filter((line) => line.trim());
+  } catch {
+    return [];
+  }
+}
+
+function writeDecisionLines(env, lines) {
+  const file = decisionsFile(env);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, lines.length ? `${lines.join('\n')}\n` : '', 'utf8');
+  fs.renameSync(temporary, file);
+}
+
+/**
+ * add is append-only by design: every proposal surfaced gets its own row. A status change is not a
+ * new proposal, so update rewrites the existing row in place rather than appending a second one that
+ * would leave the first as a stale duplicate alongside it.
+ */
+function updateDecision(id, changes, env = process.env) {
+  let updated = null;
+  const lines = decisionLines(env).map(function updatedOrOriginalLine(line) {
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      return line;
+    }
+    if (entry.id !== id) return line;
+    updated = { ...entry, ...changes };
+    return JSON.stringify(updated);
+  });
+  if (!updated) throw new Error(`no decision with id ${id}`);
+  writeDecisionLines(env, lines);
+  return updated;
+}
+
+function removeDecision(id, env = process.env) {
+  let removed = false;
+  const lines = decisionLines(env).filter(function keepUnlessMatchingId(line) {
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      return true;
+    }
+    if (entry.id !== id) return true;
+    removed = true;
+    return false;
+  });
+  if (!removed) throw new Error(`no decision with id ${id}`);
+  writeDecisionLines(env, lines);
+  return { id, removed: true };
+}
+
 function readJson(file, fallback) {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -417,7 +474,9 @@ module.exports = {
   readProjectState,
   recordSessionTally,
   rejectedFingerprints,
+  removeDecision,
   resupplyThresholds,
   statusFor,
+  updateDecision,
   verifyDecisions,
 };

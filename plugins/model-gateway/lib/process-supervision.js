@@ -244,18 +244,24 @@ function processOwningPortInProc(port) {
   } catch {}
   return null;
 }
+function portListingCommand(port) {
+  return WIN ? ['netstat', ['-ano', '-p', 'tcp']] : ['lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']];
+}
+function portOwnerFromListing(result, port) {
+  if (result.status !== 0) return null;
+  const pids = WIN ? listeningPidsFromNetstat(result.stdout, port) : String(result.stdout).split(/\s+/).map(Number);
+  return pids.find(Boolean) || null;
+}
 function processOwningPortSync(port) {
   if (!port) return null;
-  const result = WIN
-    ? commandResultSync('netstat', ['-ano', '-p', 'tcp'])
-    : commandResultSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']);
-  if (!WIN) {
-    const ownerPid = result.status === 0 ? Number(String(result.stdout).trim().split(/\s+/)[0]) || null : null;
-    return ownerPid || processOwningPortInProc(port);
-  }
-  if (result.status !== 0) return null;
-  const portPattern = new RegExp(`^\\s*TCP\\s+[^\\s]*:${port}\\s+[^\\s]+\\s+LISTENING\\s+(\\d+)\\s*$`, 'im');
-  return Number(String(result.stdout).match(portPattern)?.[1]) || null;
+  const ownerPid = portOwnerFromListing(commandResultSync(...portListingCommand(port)), port);
+  return ownerPid || (WIN ? null : processOwningPortInProc(port));
+}
+// netstat prints the state column in the Windows UI language (ABHÖREN, À L'ÉCOUTE), so a listener is
+// recognized by its unconnected foreign address and the numeric PID column instead (#296).
+function listeningPidsFromNetstat(output, port) {
+  const listener = new RegExp(`^\\s*TCP\\s+\\S*:${port}\\s+(?:0\\.0\\.0\\.0|\\[::\\]):0\\s.*\\s(\\d+)\\s*$`, 'gim');
+  return [...new Set(Array.from(String(output).matchAll(listener), (match) => Number(match[1])).filter(Boolean))];
 }
 function processInfoFromOutput(output) {
   if (WIN) {
@@ -434,12 +440,9 @@ function commandResultAsync(command, commandArgs, { timeout = probeTimeoutMs(), 
 }
 async function processOwningPortAsync(port, { commandResult = commandResultAsync, probeChildren = null, timeout } = {}) {
   if (!port) return null;
-  const result = await commandResult(WIN ? 'netstat' : 'lsof', WIN ? ['-ano', '-p', 'tcp'] : ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { probeChildren, timeout });
-  if (result.timedOut) return undefined;
-  if (result.status !== 0) return null;
-  if (!WIN) return Number(String(result.stdout).trim().split(/\s+/)[0]) || null;
-  const portPattern = new RegExp(`^\\s*TCP\\s+[^\\s]*:${port}\\s+[^\\s]+\\s+LISTENING\\s+(\\d+)\\s*$`, 'im');
-  return Number(String(result.stdout).match(portPattern)?.[1]) || null;
+  const [command, args] = portListingCommand(port);
+  const result = await commandResult(command, args, { probeChildren, timeout });
+  return result.timedOut ? undefined : portOwnerFromListing(result, port);
 }
 async function processInfoAsync(pid, { commandResult = commandResultAsync, probeChildren = null, timeout } = {}) {
   if (!pid) return null;
@@ -808,10 +811,14 @@ function createProxyRecovery({
   recordLifecycle = () => {},
   initialBackoffMs = 1000,
   maximumBackoffMs = 30000,
+  // The proxy binds its port at once but answers /v1/models only after model discovery, so a second
+  // proxy started inside that window can only die on EADDRINUSE (#251).
+  startupGraceMs = 30000,
 } = {}) {
   let recovery = null;
   let halted = false;
   let supervisedProxy = null;
+  let supervisedProxyStartedAt = 0;
   let restartAttempt = 0;
   let nextRestartAt = 0;
 
@@ -824,6 +831,17 @@ function createProxyRecovery({
     nextRestartAt = 0;
   }
 
+  function supervisedProxyIsWarmingUp() {
+    return Boolean(supervisedProxy) && now() - supervisedProxyStartedAt < startupGraceMs;
+  }
+
+  async function stopSupervisedProxy() {
+    const proxy = supervisedProxy;
+    if (!proxy) return;
+    await stop(proxy.pid);
+    await waitForRelease(proxyPort, { listening });
+  }
+
   async function recover() {
     if (recovery) return recovery;
     if (halted) return { ok: false, state: 'foreign-port-owner' };
@@ -833,6 +851,7 @@ function createProxyRecovery({
         return { ok: true, state: 'healthy' };
       }
       if (halted) return { ok: false, state: 'stopped' };
+      if (supervisedProxyIsWarmingUp()) return { ok: false, state: 'starting', pid: supervisedProxy.pid };
       if (now() < nextRestartAt) return { ok: false, state: 'backing-off', nextRestartAt };
 
       const proxyIsListening = await listening(proxyPort);
@@ -899,10 +918,15 @@ function createProxyRecovery({
           recordLifecycle('proxy-recovery-finished', { component: 'supervisor', pid: process.pid, outcome: 'port-stuck' });
           return { ok: false, state: 'port-stuck', retryAt: nextRestartAt };
         }
+      } else {
+        await stopSupervisedProxy();
       }
       if (halted) return { ok: false, state: 'stopped' };
       const proxy = await start({ command: proxyBinary, port: proxyPort });
-      if (proxy?.pid) supervisedProxy = proxy;
+      if (proxy?.pid) {
+        supervisedProxy = proxy;
+        supervisedProxyStartedAt = now();
+      }
       onStarted(proxy?.pid);
       if (proxy?.pid) {
         recordLifecycle('proxy-started', {
@@ -940,18 +964,14 @@ function createProxyRecovery({
     halted = true;
     await probeChildren.stop();
     if (recovery) await recovery;
-    const proxy = supervisedProxy;
-    if (proxy?.pid) {
-      await stop(proxy.pid);
-      await waitForRelease(proxyPort, { listening });
-    }
+    await stopSupervisedProxy();
   }
 
   return { recover, stop: stopRecovery, stopSync: () => probeChildren.stopSync() };
 }
 
 module.exports = {
-  commandIncludesFile, commandResultAsync, commandResultSync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, killPidAsync, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
+  commandIncludesFile, commandResultAsync, commandResultSync, createProbeChildRegistry, createProxyRecovery, fetchUrl, foreignPortOwner, foreignPortOwnerReason, gatewayInstallRoot, installBelongsToThisPlugin, isDescendantOfAsync, killPid, killPidAsync, listeningPidsFromNetstat, pidFile, pidRecordFile, pluginCacheIdentity, portListening, postJson,
   probeTimeoutMs, processInfoAsync, processInfoSync, processIsOwnedByThisInstall, processIsOwnedByThisInstallAsync, processOwningPort: processOwningPortSync, processOwningPortAsync, processTableAsync, processTableSync, resolvePortOwner, unknownPortOwnerReason,
   proxyModelsAnswering, readPid, readPidRecord, recordedGatewayPid, recordedGatewayPids, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
   spawnSupervisedProxy, stopAll, stopProcess, stopProcessAsync, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit, writePidRecord, writePidRecordAsync,

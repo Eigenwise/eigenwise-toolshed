@@ -1,7 +1,7 @@
 "use strict";
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 const DEFAULT_WORKTREE_RECOVERY_RETENTION_AGE_HOURS = 14 * 24;
-function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, integrationTargetRef, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }) {
+function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, integrationTargetRef, isInScope, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }) {
   function defaultProjectName(absPath) {
     return path.basename(path.resolve(absPath)) || "project";
   }
@@ -377,15 +377,20 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       return { ok: true, config: boardConfig(slug) };
     });
   }
+  function arrayOrEmpty(value) {
+    return Array.isArray(value) ? value : [];
+  }
+  function alwaysInScopeBeside(config, files) {
+    return arrayOrEmpty(config.alwaysInScope).filter((entry) => !files.some((file) => isInScope(file, [entry])));
+  }
   function effectiveScope(slug, filesOrTicket) {
     const ticket = Array.isArray(filesOrTicket) ? null : filesOrTicket;
-    const files = Array.isArray(filesOrTicket) ? filesOrTicket : ticket?.files;
-    const granted = ticket?.scopeResolution?.granted;
-    const config = boardConfig(slug);
+    const files = arrayOrEmpty(ticket ? ticket.files : filesOrTicket);
+    const config = boardConfig(slug) || {};
     const generatedConfig = Object.assign({ path: readMeta(slug)?.path }, config);
-    const generatedPairs = [...config && config.generatedPairs || [], ...derivedGeneratedPairs(generatedConfig, files)];
+    const generatedPairs = [...arrayOrEmpty(config.generatedPairs), ...derivedGeneratedPairs(generatedConfig, files)];
     const paired = trackedGeneratedPaths(Object.assign({}, generatedConfig, { generatedPairs }), files);
-    return Array.from(/* @__PURE__ */ new Set([...Array.isArray(files) ? files : [], ...Array.isArray(granted) ? granted : [], ...config && config.alwaysInScope || [], ...paired]));
+    return Array.from(/* @__PURE__ */ new Set([...files, ...arrayOrEmpty(ticket?.scopeResolution?.granted), ...alwaysInScopeBeside(config, files), ...paired]));
   }
   return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeWorktreeBase, normalizeNotIntegratedSalvageAgeHours, normalizeWorktreeRecoveryRetentionAgeHours, normalizeAutoApproveTestScope, normalizeAutoApproveScope, normalizeWorktreeSetup, normalizeWorktreeDependencyPaths, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
 }

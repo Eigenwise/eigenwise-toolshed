@@ -175,7 +175,7 @@ var CLAIM_REFUSAL_MESSAGES = Object.freeze({
   empty: () => "No tickets are available on this board. Run `sidequest ready` to inspect the queue.",
   submitted: (ref) => `${ref} is READY_FOR_INTEGRATION with a submitted commit. Run the orchestrator publish flow. While it is UNBOUND, a review rejection is \`sidequest rework ${ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the same ticket for a normal repair claim; the old candidate remains recorded until replacement submission. Once a \`review-audit\` ticket is bound to the candidate, rework, clear, reclaim, and amendment all refuse without writing: record the failed review's evidence on the review ticket, release that review with kind \`oracle\`, and repair through a fresh ticket, dispatch, commit, review, and candidate. \`submit --clear\` intentionally drops an unbound candidate and is only for an integration bounce. \`release\`/\`update\` alone refuse rather than silently leaving it wedged (SQ-1010).`,
   dispatch_required: (ref) => `${ref} is category-routed and has no prepared dispatch. File a spike for investigation when needed, then run \`sidequest dispatch ${ref}\` and spawn its returned executor. Inline is limited to the inline-safe allowlist: \`sidequest claim ${ref} --direct --reason "why this is inline-safe"\` (MCP \`direct:true\` with \`reason\`).`,
-  token: (ref) => `${ref} has a prepared dispatch whose token file was missing, unreadable, or invalid. Re-run the exact claim from this executor's briefing with its dispatched \`tokenFile\` path; do not transcribe the token, retry dispatch from this executor, or release a dispatch you did not claim. The orchestrator should run \`sidequest pulse ${ref}\`: if it reports stalled because an unclaimed runtime has no readable signal or is past its deadline, retire it in one call with \`sidequest dispatch ${ref} --recovery-evidence "<observed failed-claim evidence>"\` (MCP \`recoveryEvidence\`), which records the evidence on the failed attempt and prepares a fresh one; otherwise wait for the active attempt to become terminal before dispatching again.`,
+  token: (ref) => `${ref} has a prepared dispatch whose token file was missing, unreadable, or invalid. Re-run the exact claim from this executor's briefing with its dispatched \`tokenFile\` path; do not transcribe the token, retry dispatch from this executor, or release a dispatch you did not claim. The orchestrator should run \`sidequest pulse ${ref}\`: from the session that prepared the dispatch with the host's failure report in hand, or once pulse reports stalled because an unclaimed runtime has no readable signal or is past its deadline, retire it in one call with \`sidequest dispatch ${ref} --recovery-evidence "<observed failed-claim evidence>"\` (MCP \`recoveryEvidence\`), which records the evidence on the failed attempt and prepares a fresh one; otherwise wait for the active attempt to become terminal before dispatching again.`,
   prepared_compatibility_stale: (ref) => `${ref}'s prepared Sidequest runtime/version snapshot no longer matches the installed MCP and hooks configuration, so the token-file refusal already retired that dispatch attempt. Stop without claiming. The orchestrator can dispatch ${ref} again for a fresh token file.`,
   unbound_dispatch: (ref) => `${ref} could not bind this executor runtime to its isolated dispatch. Claim it with the dispatched token file and exact executor from its briefing; the token file binds the claiming runtime. If that claim still fails, comment the refusal evidence and release ${ref} with kind \`technical_blocker\` so the orchestrator can redispatch it. Do not hand a command to the user.`,
   executor_mismatch: (ref, ticket, projectPath) => `${ref} has a prepared dispatch for a different executor. A token-file-valid claim from the currently-derived executor self-heals version skew, so re-run the claim from its briefing with that token file. ${dispatchedClaimGuidance(ref, ticket, projectPath)}`,
@@ -244,6 +244,17 @@ function reservedDispatchRepository(sessionId) {
     return null;
   }
 }
+function spawningRepository(hookCwd, sessionId) {
+  const cwd = hookCwd || process.cwd();
+  try {
+    return repositoryFor(cwd);
+  } catch (error) {
+    const reserved = reservedDispatchRepository(sessionId);
+    if (reserved) return reserved;
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`the session cwd ${cwd} is not inside a git repository, and this session holds no launched isolated dispatch on exactly one board to name the ticket's project (${reason.trim()})`);
+  }
+}
 function samePath(left, right) {
   return leaseKernel.canonicalPath(left) === leaseKernel.canonicalPath(right);
 }
@@ -308,6 +319,14 @@ function bindCreation(repository, sessionId, worktree) {
   const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
   return store.bindDispatchWorktreeCreation(project.slug, sessionId, worktree);
+}
+function bindSessionCreation(repository, sessionId, name, namedWorktreePath) {
+  const binding = bindCreation(repository, sessionId, namedWorktreePath(repository, name));
+  if (binding.ok) return { repository, binding };
+  const reserved = reservedDispatchRepository(sessionId);
+  if (!reserved || samePath(reserved, repository)) return { repository, binding };
+  const reservedBinding = bindCreation(reserved, sessionId, namedWorktreePath(reserved, name));
+  return reservedBinding.ok ? { repository: reserved, binding: reservedBinding } : { repository, binding };
 }
 function completeCreation(repository, sessionId, worktree, attempt) {
   const store = require(runtimeModule("store"));
@@ -375,6 +394,23 @@ function recoverCreatedWorktree(repository, sessionId, target, error, attempt) {
   if (recovery.cleanup?.reclaimed) return null;
   return `worktree recovery preserved the checkout because ${recovery.cleanup?.message || recovery.cleanup?.reason || "cleanup authority is incomplete"}`;
 }
+function recordUncreatedWorktreeFailure(repository, sessionId, target, error, attempt) {
+  const store = require(runtimeModule("store"));
+  const project = registeredProject(store, repository);
+  const recovery = project.slug ? store.recoverDispatchWorktreeCreation(project.slug, sessionId, target, error, attempt, { created: false }) : { ok: false, reason: "its project binding is unavailable" };
+  return recovery.ok ? "the board recorded the attempt failed and kept no binding to that path, so a plain dispatch prepares its replacement" : `the attempt still names that path because ${recovery.reason}`;
+}
+function createBoundCheckout(binding, name, sessionId, attempt) {
+  try {
+    const decision = leaseKernel.worktreeCreateDecision(preparedWorktreeLease(binding, name));
+    if (!decision.allowed) throw new Error(`worktree lease refused creation: ${decision.reason}`);
+    return createWorktree(binding, name);
+  } catch (error) {
+    if (binding.creationCompleted) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message}; ${recordUncreatedWorktreeFailure(binding.repository, sessionId, binding.worktree, error, attempt)}`);
+  }
+}
 function main() {
   return createWorktreeMain();
 }
@@ -383,22 +419,10 @@ async function createWorktreeMain() {
   if (!input || stringField(input, "hook_event_name") !== "WorktreeCreate") return;
   const name = stringField(input, "name");
   const sessionId = stringField(input, "session_id", "sessionId");
-  const cwd = stringField(input, "cwd") || process.cwd();
   if (!name) throw new Error("WorktreeCreate requires a worktree name.");
   if (!sessionId) throw new Error("WorktreeCreate requires a dispatch session binding.");
-  let repository = repositoryFor(cwd);
   const worktrees = require(runtimeModule("worktrees"));
-  let binding = bindCreation(repository, sessionId, worktrees.namedWorktreePath(repository, name));
-  if (!binding.ok) {
-    const reserved = reservedDispatchRepository(sessionId);
-    if (reserved && !samePath(reserved, repository)) {
-      const reservedBinding = bindCreation(reserved, sessionId, worktrees.namedWorktreePath(reserved, name));
-      if (reservedBinding.ok) {
-        repository = reserved;
-        binding = reservedBinding;
-      }
-    }
-  }
+  const { repository, binding } = bindSessionCreation(spawningRepository(stringField(input, "cwd"), sessionId), sessionId, name, worktrees.namedWorktreePath);
   if (!binding.ok || !binding.ref || !binding.baseline || !binding.repository || !binding.worktree) {
     throw new Error(worktreeCreationRefusalMessage(String(binding.reason || ""), repository, binding.binding));
   }
@@ -411,9 +435,7 @@ async function createWorktreeMain() {
     repository: binding.repository,
     worktree: binding.worktree
   };
-  const decision = leaseKernel.worktreeCreateDecision(preparedWorktreeLease(boundCreation, name));
-  if (!decision.allowed) throw new Error(`worktree lease refused creation: ${decision.reason}`);
-  const created = createWorktree(boundCreation, name);
+  const created = createBoundCheckout(boundCreation, name, sessionId, attempt);
   if (created) {
     try {
       const identity2 = linkedCheckoutIdentity(boundCreation.worktree);

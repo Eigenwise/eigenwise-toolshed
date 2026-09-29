@@ -368,10 +368,11 @@ test('leaves gateway wiring to the stable updater', () => withRegistry(registry,
   }
 }));
 
-test('documents that the stable updater preserves recorded gateway wiring scope', () => {
+test('documents that the stable updater never wires a project', () => {
   const skillPath = path.join(__dirname, '..', 'skills', 'update-toolshed', 'SKILL.md');
-  const document = fs.readFileSync(skillPath, 'utf8');
-  assert.match(document.replace(/\s+/g, ' '), /stable updater delegates to setup, which preserves per-project `\.claude\/settings\.local\.json` or user-level `~\/\.claude\/settings\.json` wiring and never escalates scope/);
+  const document = fs.readFileSync(skillPath, 'utf8').replace(/\s+/g, ' ');
+  assert.match(document, /stable updater runs `setup --preserve-wiring`, which never wires a project, including the directory the updater runs from/);
+  assert.match(document, /an update that changes nothing touches no settings file/);
   assert.doesNotMatch(document, /Gateway wiring is global now/);
 });
 

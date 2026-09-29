@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import crapCore from './crap-core.cjs';
-import { changedMetricsAgainstBase, collectFunctions, compareAgainstBase, emptyChangedFunctionWarning, isScoredSource, lizardMetric, sourceMetrics } from './crap.mjs';
+import { baselineFunctions, changedMetricsAgainstBase, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, isScoredSource, lizardMetric, sourceMetrics } from './crap.mjs';
 
 const { crapScore, parseLizardCsv } = crapCore;
 
@@ -62,6 +63,17 @@ test('keeps changed unverified functions in the result set', async () => {
   );
   assert.deepEqual(changedMetrics, [unverified]);
   assert.deepEqual(await compareAgainstBase([unverified], ['plugins/example/lib/subject.js'], 'base-sha', baselineOf([])), []);
+});
+
+test('treats a file that is new since the base as entirely changed', async () => {
+  const fresh = metric({ complexity: 1, coverage: 1 });
+  const newFileAtBase = async (base, relativePath) => {
+    throw new Error(`fatal: path '${relativePath}' exists on disk, but not in '${base}'`);
+  };
+  const changedMetrics = await changedMetricsAgainstBase([fresh], ['plugins/example/lib/subject.js'], 'base-sha', newFileAtBase);
+  assert.deepEqual(changedMetrics, [fresh]);
+  const otherFailure = async () => { throw new Error('fatal: not a git repository'); };
+  await assert.rejects(changedMetricsAgainstBase([fresh], ['plugins/example/lib/subject.js'], 'base-sha', otherFailure), /not a git repository/);
 });
 
 test('accepts a changed function whose score falls below six', async () => {
@@ -161,4 +173,71 @@ test('warns when a clean tree has changed scored files but no changed functions'
     'Warning: no changed functions were found in a clean working tree; this CRAP result is vacuous.',
   );
   assert.equal(emptyChangedFunctionWarning(caveatInput({ workingTreeIsClean: false })), null);
+});
+
+function runGitFixture(fixtureRoot, argumentsList) {
+  const result = spawnSync('git', argumentsList, { cwd: fixtureRoot, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(result.stderr || `git ${argumentsList.join(' ')} failed in fixture`);
+  return result.stdout.trim();
+}
+
+function commitFixture(fixtureRoot, message) {
+  runGitFixture(fixtureRoot, ['add', '-A']);
+  runGitFixture(fixtureRoot, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', message]);
+  return runGitFixture(fixtureRoot, ['rev-parse', 'HEAD']);
+}
+
+const TWO_FUNCTION_SOURCE = 'function first() {\n  return 1;\n}\n\nfunction second() {\n  return 2;\n}\n';
+
+async function createRenamedFixture(secondFunctionSource = 'function second() {\n  return 2;\n}\n') {
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-rename-fixture-'));
+  await fs.writeFile(path.join(fixtureRoot, 'module.js'), TWO_FUNCTION_SOURCE);
+  runGitFixture(fixtureRoot, ['init', '-q']);
+  const baseCommit = commitFixture(fixtureRoot, 'initial');
+  runGitFixture(fixtureRoot, ['mv', 'module.js', 'renamed.js']);
+  const renamedSource = `function first() {\n  return 1;\n}\n\n${secondFunctionSource}`;
+  await fs.writeFile(path.join(fixtureRoot, 'renamed.js'), renamedSource);
+  runGitFixture(fixtureRoot, ['add', '-A']);
+  const renameCommit = commitFixture(fixtureRoot, 'rename');
+  return { fixtureRoot, baseCommit, renameCommit, renamedSource };
+}
+
+async function metricsForFixture(renamedSource) {
+  const descriptors = await collectFunctions(renamedSource, 'renamed.js');
+  return descriptors.map((descriptor) => ({
+    ...descriptor,
+    relativePath: 'renamed.js',
+    complexity: 7,
+    coverage: 0,
+    crap: crapScore(7, 0),
+  }));
+}
+
+test('a pure rename produces no findings for untouched legacy functions', async () => {
+  const { fixtureRoot, baseCommit, renamedSource } = await createRenamedFixture();
+  try {
+    const entries = diffEntries(baseCommit, null, fixtureRoot);
+    assert.deepEqual(entries, [{ path: 'renamed.js', baselinePath: 'module.js' }]);
+    const metrics = await metricsForFixture(renamedSource);
+    const readBaseline = (base, relativePath) => baselineFunctions(base, relativePath, fixtureRoot);
+    const failures = await compareAgainstBase(metrics, entries, baseCommit, readBaseline);
+    assert.deepEqual(failures, []);
+  } finally {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test('a rename plus one edited function reports only that function', async () => {
+  const { fixtureRoot, baseCommit, renamedSource } = await createRenamedFixture('function second() {\n  if (Math.random() > 2) return 3;\n  return 2;\n}\n');
+  try {
+    const entries = diffEntries(baseCommit, null, fixtureRoot);
+    assert.deepEqual(entries, [{ path: 'renamed.js', baselinePath: 'module.js' }]);
+    const metrics = await metricsForFixture(renamedSource);
+    const readBaseline = (base, relativePath) => baselineFunctions(base, relativePath, fixtureRoot);
+    const failures = await compareAgainstBase(metrics, entries, baseCommit, readBaseline);
+    assert.equal(failures.length, 1);
+    assert.match(failures[0], /renamed\.js:\d+ second/);
+  } finally {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
 });
