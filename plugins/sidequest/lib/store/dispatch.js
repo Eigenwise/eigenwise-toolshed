@@ -2781,6 +2781,21 @@ function createDispatch(dependencies) {
     }
     return { ok: true, ticket: tickets[0], tickets, stopped };
   }
+  function isolatedDispatchOfAgent(state, sessionId, agentId) {
+    return state?.sessionId === sessionId && state.agentId === agentId && state.sharedTree === false && Boolean(state.worktree);
+  }
+  function agentDispatchWorktrees(sessionId, agentId) {
+    if (!sessionId || !agentId) return [];
+    const owned = [];
+    for (const { ticket } of ticketsMentioningSession(sessionId)) {
+      const state = dispatchState(ticket);
+      if (isolatedDispatchOfAgent(state, sessionId, agentId)) owned.push(agentDispatchWorktree(ticket.ref, state));
+    }
+    return owned;
+  }
+  function agentDispatchWorktree(ref, state) {
+    return { ref, worktree: String(state.worktree), outcome: state.outcome || null, terminalAt: state.terminalAt || null };
+  }
   function reconcileLaunchedDispatches(sessionId, opts) {
     const reconciled = [];
     if (!sessionId) return { ok: true, reconciled };
@@ -2879,6 +2894,7 @@ function createDispatch(dependencies) {
     bindDispatchAgent,
     dispatchMatchesStopIdentity,
     markDispatchStopped,
+    agentDispatchWorktrees,
     reconcileLaunchedDispatches
   };
 }

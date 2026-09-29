@@ -3418,6 +3418,27 @@ function stopMatchingDispatches(candidates: any[], normalizedSessionId: string, 
   return { ok: true, ticket: tickets[0], tickets, stopped };
 }
 
+function isolatedDispatchOfAgent(state: any, sessionId: string, agentId: string): boolean {
+  return state?.sessionId === sessionId && state.agentId === agentId && state.sharedTree === false && Boolean(state.worktree);
+}
+
+// Native subagents share their parent's session id, so anything keyed on the session alone answers the same for
+// the orchestrator and every sibling executor. The agent id SubagentStart bound to a dispatch tells them apart
+// (GH-155, GH-150).
+function agentDispatchWorktrees(sessionId: string, agentId: string) {
+  if (!sessionId || !agentId) return [];
+  const owned: { ref: string; worktree: string; outcome: string | null; terminalAt: string | null }[] = [];
+  for (const { ticket } of ticketsMentioningSession(sessionId)) {
+    const state = dispatchState(ticket);
+    if (isolatedDispatchOfAgent(state, sessionId, agentId)) owned.push(agentDispatchWorktree(ticket.ref, state));
+  }
+  return owned;
+}
+
+function agentDispatchWorktree(ref: string, state: any) {
+  return { ref, worktree: String(state.worktree), outcome: state.outcome || null, terminalAt: state.terminalAt || null };
+}
+
 function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
   const reconciled: any[] = [];
   if (!sessionId) return { ok: true, reconciled };
@@ -3518,6 +3539,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     bindDispatchAgent,
     dispatchMatchesStopIdentity,
     markDispatchStopped,
+    agentDispatchWorktrees,
     reconcileLaunchedDispatches,
   };
 }

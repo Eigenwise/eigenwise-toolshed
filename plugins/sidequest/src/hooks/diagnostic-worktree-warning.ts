@@ -36,6 +36,7 @@ interface BoardStore {
   listTickets: (slug: string) => BoardTicket[];
   claimReclaimable: (ticket: BoardTicket, now: number) => boolean;
   pendingSubmission: (ticket: BoardTicket) => boolean;
+  agentDispatchWorktrees: (sessionId: string, agentId: string) => { worktree: string }[];
 }
 
 interface ForeignWorktree {
@@ -156,18 +157,37 @@ function foreignWorktrees(location: CheckoutLocation, roots: string[], now: numb
   return [...byPath.values()];
 }
 
+// SubagentStart can report the parent session's checkout as cwd, and native subagents share their parent's session
+// id, so neither says which worktree is this agent's own. The dispatch bound to its agent id does (GH-155).
+function boundAgentWorktree(input: HookInput): string {
+  const agentId = stringField(input, 'agent_id', 'agentId');
+  if (!agentId) return '';
+  try {
+    const store = require(runtimeModule('store')) as BoardStore;
+    return store.agentDispatchWorktrees(stringField(input, 'session_id', 'sessionId'), agentId)[0]?.worktree || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+// SubagentStart delivers only the head of this warning, so an agent's own worktree is named before the long roots.
+function ownershipSentence(roots: string[], ownWorktree: string): string {
+  const nothingElse = `under ${roots.join(' or ')} is yours.`;
+  return ownWorktree ? `Your own worktree is ${path.basename(ownWorktree)}; nothing else ${nothingElse}` : `Nothing ${nothingElse}`;
+}
+
 function refList(worktrees: ForeignWorktree[]): string {
   const refs = worktrees.map((entry) => entry.ref).filter(Boolean).sort();
   return refs.length ? refs.join(', ') : 'an unnamed dispatch';
 }
 
-function warningFor(worktrees: ForeignWorktree[], roots: string[]): string {
+function warningFor(worktrees: ForeignWorktree[], roots: string[], ownWorktree: string): string {
   const live = worktrees.filter((entry) => entry.lifecycle === 'live');
   const candidates = worktrees.filter((entry) => entry.lifecycle === 'candidate');
   const gone = worktrees.filter((entry) => !entry.onDisk);
   const sentences = [
     `sidequest: ${worktrees.length} foreign agent worktree${worktrees.length === 1 ? '' : 's'} in play, and Claude Code delivers their LSP diagnostics into YOUR context because that registry is keyed per session, not per agent.`,
-    `Nothing under ${roots.join(' or ')} is yours.`,
+    ownershipSentence(roots, ownWorktree),
   ];
   if (gone.length) sentences.push(`${gone.length} of those ${gone.length === 1 ? 'paths is' : 'paths are'} already gone from disk, and a diagnostic naming a path that no longer exists is always false.`);
   if (live.length) sentences.push(`${live.length} hold${live.length === 1 ? 's' : ''} a live claim (${refList(live)}): errors there are expected mid-refactor state and never outrank that executor's own verify.`);
@@ -176,11 +196,20 @@ function warningFor(worktrees: ForeignWorktree[], roots: string[]): string {
   return sentences.join(' ');
 }
 
-export function diagnosticWorktreeWarning(input: HookInput, now: number = Date.now()): string {
+function receivingCheckout(input: HookInput): CheckoutLocation | null {
   const start = stringField(input, 'cwd', 'project_dir', 'projectDir') || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const location = checkoutLocation(start);
+  return location && { ...location, checkoutRoot: boundAgentWorktree(input) || location.checkoutRoot };
+}
+
+function ownAgentWorktree(location: CheckoutLocation): string {
+  return comparablePath(location.checkoutRoot) === comparablePath(location.projectRoot) ? '' : location.checkoutRoot;
+}
+
+export function diagnosticWorktreeWarning(input: HookInput, now?: number): string {
+  const location = receivingCheckout(input);
   if (!location) return '';
   const roots = agentWorktreeRoots(location.projectRoot);
-  const worktrees = foreignWorktrees(location, roots, now);
-  return worktrees.length ? warningFor(worktrees, roots) : '';
+  const worktrees = foreignWorktrees(location, roots, now ?? Date.now());
+  return worktrees.length ? warningFor(worktrees, roots, ownAgentWorktree(location)) : '';
 }

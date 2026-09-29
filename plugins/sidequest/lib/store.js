@@ -676,6 +676,7 @@ const {
   bindDispatchAgent,
   dispatchMatchesStopIdentity,
   markDispatchStopped,
+  agentDispatchWorktrees,
   reconcileLaunchedDispatches
 } = dispatch = createDispatch({
   ARTIFACT_BASELINE_MAX_PATHS,
@@ -3447,6 +3448,7 @@ module.exports = {
   terminalDispatchTarget,
   terminalDispatchForIdle,
   markDispatchStopped,
+  agentDispatchWorktrees,
   reconcileLaunchedDispatches,
   claimAdmission,
   bindClaimRuntimeIdentity,
