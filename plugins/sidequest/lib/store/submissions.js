@@ -1329,6 +1329,22 @@ ${verify.outputTail}` : null
       deliveredFiles: submittedPaths
     };
   }
+  function deliveryRevisionPreflight(repo, ticket, deliveryCommit, request) {
+    if (!request.workingTreeDelivery) {
+      return {
+        refusal: request.resolvedPaths.length ? {
+          ok: false,
+          reason: "resolved_paths_invalid",
+          ticket,
+          message: `${ticket.ref} reconciliation refused: ${deliveryCommit} is already reachable from ${request.targetBranch}, so its own content answers for it and resolvedPaths attests nothing. Record this delivery without resolvedPaths and deliveryRevision.`
+        } : null,
+        revisionProof: null
+      };
+    }
+    if (!request.requested) return { refusal: null, revisionProof: null };
+    const revisionProof = deliveryRevisionProof(repo, ticket, deliveryCommit, request);
+    return revisionProof.ok ? { refusal: null, revisionProof } : { refusal: Object.assign({ ticket }, revisionProof), revisionProof: null };
+  }
   function workingTreeDeliveryPaths(repo) {
     const tracked = integrationGit(repo, ["diff", "--name-only", "HEAD"]).split(/\r?\n/).filter(Boolean);
     const untracked = integrationGit(repo, ["ls-files", "--others", "--exclude-standard"]).split(/\r?\n/).filter(Boolean);
@@ -1432,24 +1448,18 @@ ${verify.outputTail}` : null
           message: `${ticket.ref} reconciliation refused: non-reachable delivery must name its immutable ${submissionGitRef(ticket)} candidate, not ${deliveryCommit}.`
         };
       }
-      if (resolvedPaths.length && !workingTreeDelivery) {
-        return {
-          ok: false,
-          reason: "resolved_paths_invalid",
-          ticket,
-          message: `${ticket.ref} reconciliation refused: ${deliveryCommit} is already reachable from ${target.branch}, so its own content answers for it and resolvedPaths attests nothing. Record this delivery without resolvedPaths and deliveryRevision.`
-        };
-      }
-      const completingApplyDelivery = opts.completingApplyDelivery === true && !workingTreeDelivery;
-      const revisionProof = workingTreeDelivery && requestedDeliveryRevision ? deliveryRevisionProof(repo, ticket, deliveryCommit, {
+      const revisionPreflight = deliveryRevisionPreflight(repo, ticket, deliveryCommit, {
         requested: requestedDeliveryRevision,
         resolvedPaths,
+        workingTreeDelivery,
         targetBranch: target.branch,
         resultingHead,
         by: String(opts.by || "").trim(),
         reason
-      }) : null;
-      if (revisionProof && !revisionProof.ok) return Object.assign({ ticket }, revisionProof);
+      });
+      if (revisionPreflight.refusal) return revisionPreflight.refusal;
+      const revisionProof = revisionPreflight.revisionProof;
+      const completingApplyDelivery = opts.completingApplyDelivery === true && !workingTreeDelivery;
       const content = completingApplyDelivery ? applyDeliveryTreeMatchesCandidate(repo, ticket.submission, deliveryCommit) : revisionProof ? revisionProof.content : workingTreeDelivery && !reachable ? workingTreeContainsSubmittedContent(repo, ticket.submission, deliveryCommit) : deliveryContainsSubmittedContent(repo, ticket.submission, deliveryCommit);
       if (!content.ok) {
         const missing = content.missing ?? [];
