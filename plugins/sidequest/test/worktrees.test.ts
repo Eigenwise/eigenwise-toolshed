@@ -1131,6 +1131,70 @@ test('sweep removes a finished tree whose only ignored link is a directory symli
   }
 });
 
+// SQ-80: the delete-time re-read judges the tree at its quarantine destination, where an absolute
+// in-tree link (the shape `npm ci` writes for a Windows junction) resolves under the path the tree was
+// renamed from. Without that vacated source, the re-read counted `node_modules/.bin/tsx` as escaping
+// and parked every finished tree as late_content_quarantined. Passing `destination` where the
+// vacated source belongs (the swap at the `releaseQuarantinedDependencyLinks` call) leaves the same
+// link escaping, so this test also fails for that.
+test('an executing sweep removes a finished tree whose unrecorded absolute in-tree link resolves under the path it was renamed from', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-vacated-source-sweep-'));
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'vacated-source-link');
+  const ticket = integratedTicket('SQ-VACATED-SOURCE-LINK', 'vacated-source-link', worktree, baseCommit);
+  createAbsoluteInTreeDependencyLink(worktree, 'node_modules/.bin/tsx', 'node_modules/tsx/dist');
+  const oldTimestamp = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(worktree, oldTimestamp, oldTimestamp);
+  try {
+    assert.match(
+      git(worktree, ['status', '--porcelain', '--ignored', '--untracked-files=all']),
+      /^!! node_modules\/\.bin\/tsx(\/sentinel\.txt)?$/m,
+      'git reports the absolute install link as ignored content',
+    );
+
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget, quarantineDir });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.action, 'remove');
+    assert.equal(entry.reason, 'ticket_done');
+    assert.deepEqual(result.quarantined, []);
+    assert.equal(result.removed.some((removed: string) => worktrees.canonicalPath(removed) === worktrees.canonicalPath(worktree)), true);
+    assert.equal(fs.existsSync(worktree), false);
+    assert.deepEqual(fs.readdirSync(quarantineDir), [], 'the moved copy was deleted, not parked');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
+  }
+});
+
+// SQ-80: a link resolving anywhere but the tree or the path it left still has to park, so trusting
+// the vacated source did not turn the re-read into a rubber stamp.
+test('an executing sweep still parks a finished tree whose absolute link resolves outside both the tree and the path it was renamed from', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-vacated-source-outside-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-vacated-source-outside-target-'));
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'vacated-source-outside-link');
+  const ticket = integratedTicket('SQ-VACATED-SOURCE-OUTSIDE', 'vacated-source-outside-link', worktree, baseCommit);
+  fs.writeFileSync(path.join(outside, 'sentinel.txt'), 'outside');
+  createDependencyLink(worktree, 'node_modules/.bin/tsx', outside);
+  const oldTimestamp = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(worktree, oldTimestamp, oldTimestamp);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget, quarantineDir });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.notEqual(entry.action, 'remove');
+    assert.deepEqual(result.removed, []);
+    assert.equal(fs.readFileSync(path.join(outside, 'sentinel.txt'), 'utf8'), 'outside');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 // The hazard the exemption guards: a link under node_modules pointing at a shared store the tree
 // never owned is data, and removal following it would delete what nothing else holds (SQ-2952).
 test('sweep quarantines a finished tree whose ignored link under node_modules leaves it', async () => {
@@ -2052,6 +2116,26 @@ test('releaseQuarantinedDependencyLinks accepts an absolute-target link that sti
   } finally {
     if (fs.existsSync(source)) fs.rmSync(source, { recursive: true, force: true });
     fs.rmSync(quarantineDir, { recursive: true, force: true });
+  }
+});
+
+// SQ-80: a recorded path is exempt from the late-content read by name alone, so before the release
+// unlinks it, it has to still be the link the record named. A regular file that took its place is
+// content the tree holds, and unlinking it would delete data no read ever judged.
+test('releaseQuarantinedDependencyLinks leaves a recorded path alone once it is no longer a link', () => {
+  const destination = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-recorded-replaced-'));
+  const kept = path.join(destination, 'node_modules', 'recorded');
+  fs.mkdirSync(path.dirname(kept), { recursive: true });
+  fs.writeFileSync(kept, 'work that replaced the link\n');
+  try {
+    const released = worktrees.releaseQuarantinedDependencyLinks(destination, ['node_modules/recorded'], destination);
+
+    assert.equal(released.ok, false);
+    assert.equal(released.reason, 'dependency_link_changed');
+    assert.match(released.detail, /node_modules\/recorded/);
+    assert.equal(fs.readFileSync(kept, 'utf8'), 'work that replaced the link\n');
+  } finally {
+    fs.rmSync(destination, { recursive: true, force: true });
   }
 });
 

@@ -50,20 +50,27 @@ function parseWorktreeStatus(stdout: string): WorktreeStatusEntry[] {
   return entries;
 }
 
-function atRiskStatusEntries(stdout: string, worktree: string, recordedLinks: readonly string[]): WorktreeStatusEntry[] {
+// `vacatedSource` is the path a quarantined tree was renamed from: an absolute in-tree link written
+// before the rename still names it, and reading such a link has to land back inside the tree (SQ-80).
+function atRiskStatusEntries(stdout: string, worktree: string, recordedLinks: readonly string[], vacatedSource: string | null = null): WorktreeStatusEntry[] {
   return parseWorktreeStatus(stdout)
     .filter((entry) => !recordedLinks.some((link) => entry.path === link || entry.path.startsWith(`${link}/`)))
-    .filter((entry) => !installedDependencyCacheFile(worktree, entry));
+    .filter((entry) => !installedDependencyCacheFile(worktree, entry, vacatedSource));
 }
 
 // A path component that is itself a link is resolved once here, so the segment loop below only
 // ever judges a real file or directory. `null` means the component could not be trusted: it escaped
 // the worktree, or `linkTargetPath` left a link behind (a chain the platform could not resolve, such
 // as a cycle).
-function resolvedInTreePathComponent(canonicalWorktree: string, current: string): { stats: import('node:fs').Stats; current: string; followedLink: boolean } | null {
+// A target under the vacated source no longer exists there, so it is read at the same place in the
+// tree it moved into instead.
+function resolvedInTreePathComponent(canonicalWorktree: string, current: string, canonicalVacatedSource: string | null): { stats: import('node:fs').Stats; current: string; followedLink: boolean } | null {
   const stats = nativeFs.lstatSync(current);
   if (!stats.isSymbolicLink()) return { stats, current, followedLink: false };
-  const resolved = linkTargetPath(current, nativeFs.readlinkSync(current));
+  const target = linkTargetPath(current, nativeFs.readlinkSync(current));
+  const resolved = canonicalVacatedSource && pathIsInside(canonicalVacatedSource, target)
+    ? path.join(canonicalWorktree, path.relative(canonicalVacatedSource, target))
+    : target;
   if (!pathIsInside(canonicalWorktree, resolved)) return null;
   const resolvedStats = nativeFs.lstatSync(resolved);
   if (resolvedStats.isSymbolicLink()) return null;
@@ -88,21 +95,22 @@ function acceptedDependencyCacheLeaf(resolved: { stats: import('node:fs').Stats;
 // and not just the leaf, but a plain POSIX directory symlink is never walked -- git reports it as the
 // leaf itself, so pnpm's `node_modules/<dep> -> .pnpm/...` and a workspace's
 // `node_modules/<pkg> -> ../packages/<pkg>` need `acceptedDependencyCacheLeaf` above (#224 review item 1).
-function installedDependencyCacheFile(worktree: string, entry: WorktreeStatusEntry): boolean {
+function installedDependencyCacheFile(worktree: string, entry: WorktreeStatusEntry, vacatedSource: string | null): boolean {
   if (entry.code !== '!!' || !dependencyCachePath(entry.path)) return false;
-  return dependencyCacheEntryResolvesToAcceptedLeaf(worktree, entry.path);
+  return dependencyCacheEntryResolvesToAcceptedLeaf(worktree, entry.path, vacatedSource);
 }
 
 // Split from the entry-shape guard above so that check stays a single early return; this is the part
 // that walks every path component and judges the leaf (#224 review item 3).
-function dependencyCacheEntryResolvesToAcceptedLeaf(worktree: string, relativePath: string): boolean {
+function dependencyCacheEntryResolvesToAcceptedLeaf(worktree: string, relativePath: string, vacatedSource: string | null): boolean {
   const segments = relativePath.split(/[\\/]+/).filter(Boolean);
   const canonicalWorktree = canonicalPath(worktree);
+  const canonicalVacatedSource = vacatedSource ? canonicalPath(vacatedSource) : null;
   let current = worktree;
   try {
     for (let depth = 0; depth < segments.length; depth += 1) {
       current = path.join(current, segments[depth]!);
-      const resolved = resolvedInTreePathComponent(canonicalWorktree, current);
+      const resolved = resolvedInTreePathComponent(canonicalWorktree, current, canonicalVacatedSource);
       if (!resolved) return false;
       current = resolved.current;
       if (depth === segments.length - 1) return acceptedDependencyCacheLeaf(resolved);
@@ -1745,11 +1753,12 @@ async function lateContentInMovedWorktree(
   classifiedHead: string | null,
   recordedLinks: readonly string[],
   branch: string | null,
+  vacatedSource: string,
 ): Promise<{ blocked: string | null; head: string | null; branchTip: string | null }> {
   const blockedBy = (blocked: string) => ({ blocked, head: null, branchTip: null });
   const status = await git(destination, [...AT_RISK_STATUS_ARGUMENTS]);
   if (!status.ok) return blockedBy(`the moved tree could not be read again: ${status.stderr || `git status exited ${status.status}`}`);
-  const held = atRiskStatusEntries(status.stdout, destination, recordedLinks);
+  const held = atRiskStatusEntries(status.stdout, destination, recordedLinks, vacatedSource);
   if (held.length) return blockedBy(`the moved tree holds ${held.length} entries the classification did not see, starting with ${held[0]!.code} ${held[0]!.path}`);
   const head = await git(destination, ['rev-parse', 'HEAD']);
   if (!head.ok) return blockedBy(`the moved tree's HEAD could not be read again: ${head.stderr || `git rev-parse exited ${head.status}`}`);
@@ -1763,6 +1772,17 @@ async function lateContentInMovedWorktree(
   return { blocked: null, head: head.stdout, branchTip: tip.stdout };
 }
 
+// The late-content read exempts a recorded path by name alone, so what stands there now has to still
+// be a link before it is unlinked; anything else is content no read judged, and unlinking it would
+// delete it (SQ-80). A missing path is left to the unlink to report.
+function recordedPathHoldsNonLink(linkPath: string): boolean {
+  try {
+    return !nativeFs.lstatSync(linkPath).isSymbolicLink();
+  } catch (_) {
+    return false;
+  }
+}
+
 // Links are released only at the destination, once the tree has actually moved, so a failed move
 // leaves the source record-for-record as well as byte-for-byte (SQ-2952, SQ-2958). The final walk is
 // the gate on deletion: a link still pointing out of the moved tree could reach data the tree does
@@ -1771,6 +1791,8 @@ async function lateContentInMovedWorktree(
 // Windows junction can take is an absolute target) still resolves there, and that still counts as
 // staying with the tree rather than escaping it.
 function releaseQuarantinedDependencyLinks(destination: string, recordedLinks: readonly string[], vacatedSource: string): { ok: boolean; reason: string; detail: string } {
+  const replaced = recordedLinks.find((relativePath) => recordedPathHoldsNonLink(path.resolve(destination, relativePath)));
+  if (replaced) return { ok: false, reason: 'dependency_link_changed', detail: `${replaced} is no longer the dependency link that was recorded` };
   if (!unlinkOwnedDependencyLinks(recordedLinks.map((relativePath) => path.resolve(destination, relativePath)))) {
     return { ok: false, reason: 'dependency_link_unlink_failed', detail: 'a recorded dependency link could not be released' };
   }
@@ -2434,7 +2456,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       }
       const classifiedReason = entry.reason;
       const branch = localBranchName(entry.branch);
-      const movedRead = await lateContentInMovedWorktree(destination, entry.head, recordedLinks, branch);
+      const movedRead = await lateContentInMovedWorktree(destination, entry.head, recordedLinks, branch, entry.path);
       if (movedRead.blocked) {
         await park('late_content_quarantined', `classified ${classifiedReason}, but ${movedRead.blocked}, so the moved tree was parked instead of deleted`);
         continue;

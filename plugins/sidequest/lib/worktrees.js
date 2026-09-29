@@ -31,13 +31,14 @@ function parseWorktreeStatus(stdout) {
   }
   return entries;
 }
-function atRiskStatusEntries(stdout, worktree, recordedLinks) {
-  return parseWorktreeStatus(stdout).filter((entry) => !recordedLinks.some((link) => entry.path === link || entry.path.startsWith(`${link}/`))).filter((entry) => !installedDependencyCacheFile(worktree, entry));
+function atRiskStatusEntries(stdout, worktree, recordedLinks, vacatedSource = null) {
+  return parseWorktreeStatus(stdout).filter((entry) => !recordedLinks.some((link) => entry.path === link || entry.path.startsWith(`${link}/`))).filter((entry) => !installedDependencyCacheFile(worktree, entry, vacatedSource));
 }
-function resolvedInTreePathComponent(canonicalWorktree, current) {
+function resolvedInTreePathComponent(canonicalWorktree, current, canonicalVacatedSource) {
   const stats = nativeFs.lstatSync(current);
   if (!stats.isSymbolicLink()) return { stats, current, followedLink: false };
-  const resolved = linkTargetPath(current, nativeFs.readlinkSync(current));
+  const target = linkTargetPath(current, nativeFs.readlinkSync(current));
+  const resolved = canonicalVacatedSource && pathIsInside(canonicalVacatedSource, target) ? path.join(canonicalWorktree, path.relative(canonicalVacatedSource, target)) : target;
   if (!pathIsInside(canonicalWorktree, resolved)) return null;
   const resolvedStats = nativeFs.lstatSync(resolved);
   if (resolvedStats.isSymbolicLink()) return null;
@@ -46,18 +47,19 @@ function resolvedInTreePathComponent(canonicalWorktree, current) {
 function acceptedDependencyCacheLeaf(resolved) {
   return resolved.stats.isFile() || resolved.followedLink && resolved.stats.isDirectory();
 }
-function installedDependencyCacheFile(worktree, entry) {
+function installedDependencyCacheFile(worktree, entry, vacatedSource) {
   if (entry.code !== "!!" || !dependencyCachePath(entry.path)) return false;
-  return dependencyCacheEntryResolvesToAcceptedLeaf(worktree, entry.path);
+  return dependencyCacheEntryResolvesToAcceptedLeaf(worktree, entry.path, vacatedSource);
 }
-function dependencyCacheEntryResolvesToAcceptedLeaf(worktree, relativePath) {
+function dependencyCacheEntryResolvesToAcceptedLeaf(worktree, relativePath, vacatedSource) {
   const segments = relativePath.split(/[\\/]+/).filter(Boolean);
   const canonicalWorktree = canonicalPath(worktree);
+  const canonicalVacatedSource = vacatedSource ? canonicalPath(vacatedSource) : null;
   let current = worktree;
   try {
     for (let depth = 0; depth < segments.length; depth += 1) {
       current = path.join(current, segments[depth]);
-      const resolved = resolvedInTreePathComponent(canonicalWorktree, current);
+      const resolved = resolvedInTreePathComponent(canonicalWorktree, current, canonicalVacatedSource);
       if (!resolved) return false;
       current = resolved.current;
       if (depth === segments.length - 1) return acceptedDependencyCacheLeaf(resolved);
@@ -1342,11 +1344,11 @@ function worktreeSymbolicLinks(worktree) {
   };
   return walk(worktree) ? links : null;
 }
-async function lateContentInMovedWorktree(destination, classifiedHead, recordedLinks, branch) {
+async function lateContentInMovedWorktree(destination, classifiedHead, recordedLinks, branch, vacatedSource) {
   const blockedBy = (blocked) => ({ blocked, head: null, branchTip: null });
   const status = await git(destination, [...AT_RISK_STATUS_ARGUMENTS]);
   if (!status.ok) return blockedBy(`the moved tree could not be read again: ${status.stderr || `git status exited ${status.status}`}`);
-  const held = atRiskStatusEntries(status.stdout, destination, recordedLinks);
+  const held = atRiskStatusEntries(status.stdout, destination, recordedLinks, vacatedSource);
   if (held.length) return blockedBy(`the moved tree holds ${held.length} entries the classification did not see, starting with ${held[0].code} ${held[0].path}`);
   const head = await git(destination, ["rev-parse", "HEAD"]);
   if (!head.ok) return blockedBy(`the moved tree's HEAD could not be read again: ${head.stderr || `git rev-parse exited ${head.status}`}`);
@@ -1356,7 +1358,16 @@ async function lateContentInMovedWorktree(destination, classifiedHead, recordedL
   if (!tip.ok) return blockedBy(`the moved tree's branch ${branch} could not be read again: ${tip.stderr || `git rev-parse exited ${tip.status}`}`);
   return { blocked: null, head: head.stdout, branchTip: tip.stdout };
 }
+function recordedPathHoldsNonLink(linkPath) {
+  try {
+    return !nativeFs.lstatSync(linkPath).isSymbolicLink();
+  } catch (_) {
+    return false;
+  }
+}
 function releaseQuarantinedDependencyLinks(destination, recordedLinks, vacatedSource) {
+  const replaced = recordedLinks.find((relativePath) => recordedPathHoldsNonLink(path.resolve(destination, relativePath)));
+  if (replaced) return { ok: false, reason: "dependency_link_changed", detail: `${replaced} is no longer the dependency link that was recorded` };
   if (!unlinkOwnedDependencyLinks(recordedLinks.map((relativePath) => path.resolve(destination, relativePath)))) {
     return { ok: false, reason: "dependency_link_unlink_failed", detail: "a recorded dependency link could not be released" };
   }
@@ -1890,7 +1901,7 @@ async function sweep(repo, tickets, options = {}) {
       }
       const classifiedReason = entry.reason;
       const branch = localBranchName(entry.branch);
-      const movedRead = await lateContentInMovedWorktree(destination, entry.head, recordedLinks, branch);
+      const movedRead = await lateContentInMovedWorktree(destination, entry.head, recordedLinks, branch, entry.path);
       if (movedRead.blocked) {
         await park("late_content_quarantined", `classified ${classifiedReason}, but ${movedRead.blocked}, so the moved tree was parked instead of deleted`);
         continue;
