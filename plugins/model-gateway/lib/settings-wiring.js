@@ -29,7 +29,9 @@ function retireWiringModeConfig() {
 function settingsPath(scope) {
   if (scope === 'project') return path.join(process.cwd(), '.claude', 'settings.local.json');
   if (scope === 'legacy-project' || scope === 'project-shared') return path.join(process.cwd(), '.claude', 'settings.json');
-  return path.join(os.homedir(), '.claude', 'settings.json');
+  const file = path.join(os.homedir(), '.claude', 'settings.json');
+  assertTestSafeSettingsPath(file);
+  return file;
 }
 
 function effectiveBaseUrl() {
@@ -79,7 +81,30 @@ function readSettingsForWrite(file) {
   }
 }
 
+// Under node's test runner a settings write may only land in the temp directory.
+// A test that leaked its HOME once overwrote a developer's real ~/.claude/settings.json,
+// so this refuses loudly instead of trusting every test to isolate itself.
+function assertTestSafeSettingsPath(file) {
+  if (!process.env.NODE_TEST_CONTEXT) return;
+  const inside = (target, root) => {
+    const relative = path.relative(root, target);
+    return Boolean(relative) && !relative.startsWith('..') && !path.isAbsolute(relative);
+  };
+  // Resolve symlinks through the nearest existing ancestor (macOS /var is /private/var).
+  const real = (p) => {
+    const rest = [];
+    for (let current = path.resolve(p); ; current = path.dirname(current)) {
+      try { return path.join(fs.realpathSync(current), ...rest); } catch {}
+      if (path.dirname(current) === current) return path.resolve(p);
+      rest.unshift(path.basename(current));
+    }
+  };
+  if (inside(real(file), real(os.tmpdir()))) return;
+  throw new Error(`model-gateway: refusing to touch ${file} under the test runner; tests may only use settings inside ${os.tmpdir()} (HOME=${process.env.HOME})`);
+}
+
 function writeSettings(file, settings) {
+  assertTestSafeSettingsPath(file);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
 }
@@ -394,5 +419,5 @@ module.exports = {
   cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isUnsupportedRemoteControlHttpsUrl, isWired,
   migrateLegacyProjectSettings, processEnvGatewayBypass, readSettingsForWrite, reconcileRegisteredProjectWirings,
   recordProjectWiring, registeredProjectPinDisagreements, registeredProjectWirings, retireWiringModeConfig, selectedWiringScope,
-  settingsPath, syncRegisteredProjectPins, unsafeRemoteControlProcessEnv, wiredMode, writeSettings,
+  assertTestSafeSettingsPath, settingsPath, syncRegisteredProjectPins, unsafeRemoteControlProcessEnv, wiredMode, writeSettings,
 };
