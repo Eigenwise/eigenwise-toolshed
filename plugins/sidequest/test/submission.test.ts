@@ -4784,6 +4784,64 @@ test('SQ-2429: pending candidates block a singleton without invalidation while a
   }
 });
 
+test('SQ-3143: non-executable verifier kinds assemble one wave by kind agreement while executable mismatches still refuse', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']) });
+  const participants: any[] = [];
+  try {
+    const baseline = git(['rev-parse', 'HEAD']);
+    for (const name of ['a', 'b', 'c']) {
+      git(['reset', '--hard', baseline]);
+      const notePath = `docs/sq-3143-note-${name}.md`;
+      const ticket = addTicket(`note ${name}`, { files: [notePath] });
+      assert.strictEqual(store.claimTicket(slug, ticket.ref, `note-${name}-worker`, { direct: true, reason: 'The document wave fixture requires a local direct claim.' }).ok, true);
+      fs.mkdirSync(path.join(PROJECT_DIR, 'docs'), { recursive: true });
+      fs.writeFileSync(path.join(PROJECT_DIR, notePath), `note ${name}\n`);
+      git(['add', notePath]);
+      git(['commit', '-m', `note ${name}`]);
+      const candidate = git(['rev-parse', 'HEAD']);
+      pin(ticket, candidate);
+      assert.strictEqual(store.submitTicket(slug, ticket.ref, `note-${name}-worker`, { commit: candidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+      const submitted = store.getTicket(slug, ticket.ref);
+      Object.assign(submitted.submission, {
+        base: baseline, upstream: 'origin/main', upstreamCommit: baseline, integrationBranch: git(['branch', '--show-current']),
+        commits: [candidate], changedPaths: [notePath],
+      });
+      participants.push(submitted);
+    }
+    const pinVerifiers = (verifiers: Array<[string, string]>) => participants.forEach((ticket, index) => {
+      const [kind, verify] = verifiers[index]!;
+      Object.assign(ticket, { executorVerifyKind: kind, executorVerify: verify });
+      persist(ticket);
+    });
+    const refs = participants.map((ticket) => ticket.ref);
+
+    pinVerifiers([['document', 'docs/sq-3143-note-a.md describes a'], ['document', 'docs/sq-3143-note-b.md describes b'], ['document', 'docs/sq-3143-note-c.md describes c']]);
+    const documents = store.assembleSubmissionWave(slug, refs, { verification: { kind: 'document', status: 'passed', evidence: 'each note was checked at submission' } });
+    assert.strictEqual(documents.ok, true, documents.message);
+    assert.deepStrictEqual(documents.wave.participants, refs);
+
+    pinVerifiers([['document', 'docs/sq-3143-note-a.md describes a'], ['suite', 'npm test'], ['document', 'docs/sq-3143-note-c.md describes c']]);
+    const mixed = store.assembleSubmissionWave(slug, refs);
+    assert.strictEqual(mixed.reason, 'wave_verifier_mismatch');
+    assert.match(mixed.message, new RegExp(`pin different verifier kinds \\(${refs[0]} document, ${refs[1]} suite, ${refs[2]} document\\)`));
+    assert.match(mixed.message, /Non-executable kinds \(document, link, manual, attestation, review\) only need to agree on kind/);
+
+    pinVerifiers([['suite', 'npm test'], ['suite', 'npm run test:unit'], ['suite', 'npm test']]);
+    const suites = store.assembleSubmissionWave(slug, refs);
+    assert.strictEqual(suites.reason, 'wave_verifier_mismatch');
+    assert.match(suites.message, /all pin kind suite but with different commands or evidence/);
+    assert.match(suites.message, /executable kinds must pin the same command/);
+  } finally {
+    for (const ticket of participants) {
+      persist(Object.assign(store.getTicket(slug, ticket.ref), { archived: true }));
+    }
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
 test('SQ-2752: a pending candidate blocks a singleton only where their recorded changed paths collide', () => {
   cleanBranch();
   const originalConfig = store.boardConfig(slug);

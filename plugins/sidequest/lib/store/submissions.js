@@ -2838,17 +2838,24 @@ ${verify.outputTail}` : null
       return surfaces.length ? { ref: sibling.ref, surfaces } : null;
     }).filter((overlap) => overlap !== null);
   }
+  const NON_EXECUTABLE_WAVE_VERIFICATION_KINDS = ["document", "link", "manual", "attestation", "review"];
+  function waveVerifierIdentity(requirement) {
+    return JSON.stringify({ kind: requirement.kind, command: requirement.command || null, evidenceContract: requirement.evidenceContract, artifact: requirement.artifact || null });
+  }
+  function waveVerifierMismatchMessage(tickets, requirements) {
+    const pinnedKinds = tickets.map((ticket, index) => `${ticket.ref} ${requirements[index].kind}`).join(", ");
+    const difference = new Set(requirements.map((requirement) => requirement.kind)).size > 1 ? `pin different verifier kinds (${pinnedKinds})` : `all pin kind ${requirements[0].kind} but with different commands or evidence (${pinnedKinds})`;
+    return `Wave assembly requires one project-defined verification gate. Its participants ${difference}, so this assembly cannot choose or rewrite one. Non-executable kinds (${NON_EXECUTABLE_WAVE_VERIFICATION_KINDS.join(", ")}) only need to agree on kind; executable kinds must pin the same command. ${manualCandidateDeliveryGuidance()}`;
+  }
   function waveVerificationRequirement(tickets) {
     const requirements = tickets.map(pinnedVerificationRequirement);
     const first = requirements[0];
     if (!first) return { ok: false, reason: "wave_verification_required", message: "Wave assembly requires a pinned project verification requirement." };
-    const identity = JSON.stringify({ kind: first.kind, command: first.command || null, evidenceContract: first.evidenceContract, artifact: first.artifact || null });
-    if (requirements.some((requirement) => JSON.stringify({ kind: requirement.kind, command: requirement.command || null, evidenceContract: requirement.evidenceContract, artifact: requirement.artifact || null }) !== identity)) {
-      return {
-        ok: false,
-        reason: "wave_verifier_mismatch",
-        message: `Wave assembly requires one project-defined verification gate. Its participants pin different verifier requirements, so this assembly cannot choose or rewrite one. ${manualCandidateDeliveryGuidance()}`
-      };
+    const sameKind = requirements.every((requirement) => requirement.kind === first.kind);
+    if (sameKind && NON_EXECUTABLE_WAVE_VERIFICATION_KINDS.includes(first.kind)) return { ok: true, requirement: first };
+    const identity = waveVerifierIdentity(first);
+    if (requirements.some((requirement) => waveVerifierIdentity(requirement) !== identity)) {
+      return { ok: false, reason: "wave_verifier_mismatch", message: waveVerifierMismatchMessage(tickets, requirements) };
     }
     return { ok: true, requirement: first };
   }
