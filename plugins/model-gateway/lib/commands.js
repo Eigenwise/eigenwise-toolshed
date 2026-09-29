@@ -1739,6 +1739,16 @@ function readCatalog() {
   return readJsonFile(CATALOG_PATH);
 }
 
+// "Not answering" was the only reason a refresh ever gave, even when /healthz answered with an error or
+// answered too slowly, which sent people hunting for a dead port that was alive (issue #227).
+async function requireShimHealth() {
+  const where = `/healthz on 127.0.0.1:${SHIM_PORT}`;
+  const response = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/healthz`, { timeout: 3000 }).catch((error) => {
+    throw new Error(`shim is not answering ${where} (${error.message})`);
+  });
+  if (response.status !== 200) throw new Error(`shim ${where} returned ${response.status}`);
+}
+
 async function catalogCommand() {
   const jsonOut = flag('--json');
   const refresh = flag('--refresh');
@@ -1747,7 +1757,7 @@ async function catalogCommand() {
   let refusal = null;
   if (refresh || stale) {
     try {
-      if (!(await shimHealthy())) throw new Error(`shim is not answering /healthz on 127.0.0.1:${SHIM_PORT}`);
+      await requireShimHealth();
       catalog = await writeCatalog();
     } catch (error) {
       refusal = error.message;

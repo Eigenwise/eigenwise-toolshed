@@ -116,6 +116,26 @@ test('#190: a 429 block expires at its Retry-After, the proxy reset, or 60 s; 40
   assert.match(result.credentialMessage, /Run `node "gw" setup`/);
 });
 
+test('#175: a transient upstream failure holds for 30 s and its refusal names when it happened and when it ends', async (t) => {
+  const result = await runInGatewayHome(t, `
+    const state = require(${JSON.stringify(STATE_MODULE)});
+    const { codexReadinessMessage } = require(${JSON.stringify(RUNTIME_MODULE)});
+    const now = Date.parse('2026-09-23T15:05:55.807Z');
+    const unavailable = state.setUpstreamUnavailable({ statusCode: 503, now });
+    process.stdout.write(JSON.stringify({
+      unavailable,
+      held: state.readUpstreamUnavailable(now + 29_999),
+      lifted: state.readUpstreamUnavailable(now + 30_000),
+      message: codexReadinessMessage('upstream-unavailable', 'gw', unavailable),
+    }));
+  `);
+
+  assert.equal(result.unavailable.expiresAt, '2026-09-23T15:06:25.807Z');
+  assert.equal(result.held?.state, 'upstream-unavailable');
+  assert.equal(result.lifted, null, 'the hold lifts by itself 30 s after the failure');
+  assert.match(result.message, /terminal upstream failure \(HTTP 503\) at 2026-09-23T15:05:55\.807Z\. Dispatch holds until 2026-09-23T15:06:25\.807Z, or until a Codex request succeeds/);
+});
+
 test('#190: a live 429 carries its Retry-After into readiness, lifts on time, and a later 2xx clears it early', async (t) => {
   const answers = [
     { status: 429, headers: { 'retry-after': '1' } },

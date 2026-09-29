@@ -9,6 +9,7 @@ function createRouting(dependencies) {
     db,
     dispatchReadOnly,
     discoverExternalModels,
+    gatewayCatalogRefreshFailure,
     invalidateStoreCaches,
     listProjects,
     projectRoutingEnabled,
@@ -71,9 +72,11 @@ function createRouting(dependencies) {
     for (const entry of discoverExternalModels()) if (!(entry.slug in out)) out[entry.slug] = entry;
     return out;
   }
+  const GATEWAY_SHIM_PROVIDERS = /* @__PURE__ */ new Set(["codex", "grok"]);
   function resolvedBackend(entry, discovered) {
     const agentSlug = discovered.filter((candidate) => candidate.slug === entry.slug).length > 1 ? `${entry.source}-${entry.slug}` : entry.slug;
-    return { backend: "codex", provider: entry.provider, source: entry.source, slug: entry.slug, agentSlug, id: entry.id, label: entry.label };
+    const backend = GATEWAY_SHIM_PROVIDERS.has(entry.provider) ? "codex" : entry.provider;
+    return { backend, provider: entry.provider, source: entry.source, slug: entry.slug, agentSlug, id: entry.id, label: entry.label };
   }
   function normalizeRouteModel(model) {
     if (typeof model !== "string") return null;
@@ -137,11 +140,17 @@ function createRouting(dependencies) {
       ...exec && exec.dispatchModel ? { marker: exec.dispatchModel } : {}
     };
   }
+  function gatewayMarkerExec(backend, effort) {
+    const resolvedEffort = effort || HAIKU_BACKEND_EFFORT;
+    return { agent: stableDispatchName(resolvedEffort), effort: resolvedEffort, model: null, spawnId: backend.id, dispatchModel: dispatchModelFor(backend.id), backend: "codex", source: backend.source, slug: backend.slug, runsModel: backend.slug, apiModel: backend.id, runsLabel: backend.label || backend.slug, dispatch: "native-agent" };
+  }
+  function discoveredModelExec(backend, effort) {
+    const resolvedEffort = effort || HAIKU_BACKEND_EFFORT;
+    return { agent: stableClaudeName(resolvedEffort), effort: resolvedEffort, model: backend.id, spawnId: backend.id, backend: backend.backend, source: backend.source, slug: backend.slug, runsModel: backend.slug, apiModel: backend.id, runsLabel: backend.label, dispatch: "native-agent" };
+  }
   function execFromBackend(backend, effort) {
-    if (backend.backend === "codex") {
-      const resolvedEffort = effort || HAIKU_BACKEND_EFFORT;
-      return { agent: stableDispatchName(resolvedEffort), effort: resolvedEffort, model: null, spawnId: backend.id, dispatchModel: dispatchModelFor(backend.id), backend: "codex", source: backend.source, slug: backend.slug, runsModel: backend.slug, apiModel: backend.id, runsLabel: backend.label || backend.slug, dispatch: "native-agent" };
-    }
+    if (backend.backend === "codex") return gatewayMarkerExec(backend, effort);
+    if (backend.backend !== "claude") return discoveredModelExec(backend, effort);
     const runtime = backend.slug;
     const agent = effort ? stableClaudeName(effort) : null;
     return { agent, model: runtime, spawnId: runtime, backend: "claude", slug: runtime, runsModel: runtime, apiModel: backend.id, runsLabel: backend.label, dispatch: "native-agent" };
@@ -1016,34 +1025,37 @@ function createRouting(dependencies) {
     }
     return { model: exec.runsModel, effort: override.effort, exec, warnings, override: true };
   }
+  function categoryRouteCandidates(category, primary) {
+    return [
+      { source: "route", route: primary },
+      { source: "category fallback", route: normalizeRoute(category.fallback) },
+      { source: "global fallback", route: normalizeRoute(getRoutingFallback()) }
+    ].filter((candidate) => candidate.route);
+  }
+  function categoryCandidateOutcome(category, candidate, provider) {
+    const { source, route } = candidate;
+    if (source === "global fallback" && routeProvider(route) !== provider) {
+      return { warning: `Category "${category.id}" global fallback route "${route.model}" crosses providers and was refused.` };
+    }
+    const exec = resolveExec(route.model, route.effort);
+    if (exec && routeReadyForAutomaticFallback(route)) return { exec };
+    return { warning: `Category "${category.id}" ${source} model "${route.model}" isn't currently available.` };
+  }
+  function categoryFallbackReason(candidate, primary) {
+    if (candidate.source === "route") return {};
+    const refusal = providerDispatchRefusal(primary) || `${primary.model} is not in the live model catalog.`;
+    const unavailable = refusal.replace(/\s*No Anthropic fallback was used\./, "");
+    return { fallbackReason: `${candidate.source} ${candidate.route.model} replaced unavailable ${primary.model}. ${unavailable}` };
+  }
   function resolveCategoryRoute(category) {
     const warnings = [];
     const primary = normalizeRoute(category && category.route);
     if (!primary) return { model: null, effort: null, exec: null, warnings: ["Category route is missing or invalid."] };
     const provider = routeProvider(primary);
-    const candidates = [
-      { source: "route", route: primary },
-      { source: "category fallback", route: category && category.fallback },
-      { source: "global fallback", route: getRoutingFallback() }
-    ];
-    for (const candidate of candidates) {
-      const route = normalizeRoute(candidate.route);
-      if (!route) continue;
-      if (candidate.source !== "route" && routeProvider(route) !== provider) {
-        warnings.push(`Category "${category.id}" ${candidate.source} route "${route.model}" crosses providers and was refused.`);
-        continue;
-      }
-      const exec = resolveExec(route.model, route.effort);
-      if (exec && routeReadyForAutomaticFallback(route)) {
-        return {
-          model: exec.runsModel,
-          effort: route.effort,
-          exec,
-          warnings,
-          ...candidate.source === "route" ? {} : { fallbackReason: `${candidate.source} replaced unavailable ${primary.model}.` }
-        };
-      }
-      warnings.push(`Category "${category.id}" ${candidate.source} model "${route.model}" isn't currently available.`);
+    for (const candidate of categoryRouteCandidates(category, primary)) {
+      const { exec, warning } = categoryCandidateOutcome(category, candidate, provider);
+      if (exec) return { model: exec.runsModel, effort: candidate.route.effort, exec, warnings, ...categoryFallbackReason(candidate, primary) };
+      warnings.push(warning);
     }
     return { model: primary.model, effort: primary.effort, exec: null, warnings };
   }
@@ -1092,7 +1104,11 @@ function createRouting(dependencies) {
   function dispatchRouteRefusal(route) {
     const normalized = normalizeRoute(route);
     if (!normalized) return "Dispatch refused: the resolved route is missing or invalid.";
-    return providerDispatchRefusal(normalized);
+    return withGatewayRefreshFailure(providerDispatchRefusal(normalized));
+  }
+  function withGatewayRefreshFailure(refusal) {
+    const failure = refusal && gatewayCatalogRefreshFailure();
+    return failure ? `${refusal} Last gateway catalog refresh: ${failure}` : refusal;
   }
   function ticketCategory(ticket) {
     if (!ticket || ticket.category == null) return null;

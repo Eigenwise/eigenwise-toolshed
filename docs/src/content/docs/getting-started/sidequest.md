@@ -148,7 +148,9 @@ A ticket with `workingTreeDelivery` runs in the board's registered checkout, nev
 
 Use Sidequest for independent candidate reviews, repository audits, and shortcut debt scans. They use the existing read-only review route and only report findings.
 
-An explicit per-ticket route can use a different provider when the ticket is effectively readonly. It leaves the category route alone; writable tickets and automatic fallbacks stay with their provider.
+An explicit per-ticket route can use a different provider when the ticket is effectively readonly. It leaves the category route alone; writable tickets stay with their category's provider.
+
+When a category's route can't run right now (ChatGPT sign-in missing, gateway readiness unavailable, the model gone from the catalog), dispatch uses the category's own `fallback`, even when that's a Claude model. The dispatch result's `fallbackReason` and the executor briefing both say which fallback ran and why the primary couldn't, including the gateway's login or setup command. The global fallback never crosses providers, so a Codex category with no fallback of its own is refused with that same reason. A discovered model whose provider isn't served by Model Gateway (anything but Codex or Grok) dispatches with its own id as the executor's model.
 
 - A candidate review starts from the submitted ticket and its immutable candidate, never a working tree. Ask Claude to bind the review to that submission.
 - A repository audit names the directory or subsystem to inspect. It reports concrete delete, reuse, standard-library, native-platform, YAGNI, and shrinking opportunities with source locations. It does not edit code.

@@ -261,9 +261,9 @@ agree).
   (`doctor` shows auth), then proxy log. OpenAI gates non-Codex clients by request fingerprint;
   when they tighten it, requests die mid-stream until claude-code-proxy ships a fix, so
   suggest re-running `setup` (it fetches the latest release).
-- **`doctor` says `upstream-unavailable`**: a final Codex inference failed in the last 60 seconds.
+- **`doctor` says `upstream-unavailable`**: a final Codex inference failed in the last 30 seconds; the message names its status, time, and hold end.
   It records completed request outcomes, not `/v1/models` or a health check, and clears only after
-  a completed successful Codex response. The 60-second expiry means there is no recent failure
+  a completed successful Codex response. The 30-second expiry means there is no recent failure
   evidence, not that Codex is live. An attributed OpenAI 401, 403, or 429 rejection enters
   `upstream-blocked`. A 401 or 403 stays until `setup` or a completed successful Codex response
   clears it. A 429 block expires: `upstreamBlocked.expiresAt` comes from the 429's Retry-After,
