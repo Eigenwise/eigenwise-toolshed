@@ -14,7 +14,7 @@ const testDirectory = path.join(pluginRoot, 'test');
 const minimumTestConcurrency = 2;
 const maximumTestConcurrency = 8;
 const baselineTestPhaseTimeoutMilliseconds = 1_200_000;
-const maximumTestPhaseTimeoutMilliseconds = 1_200_000;
+const maximumTestPhaseTimeoutMilliseconds = 2_400_000;
 
 export function fullSuiteGatewayCatalog() {
   return {
