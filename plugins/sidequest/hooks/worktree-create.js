@@ -400,11 +400,18 @@ function recoverCreatedWorktree(repository, sessionId, target, error, attempt) {
   if (recovery.cleanup?.reclaimed) return null;
   return `worktree recovery preserved the checkout because ${recovery.cleanup?.message || recovery.cleanup?.reason || "cleanup authority is incomplete"}`;
 }
+function uncreatedWorktreeFailureReport(recovery) {
+  if (!recovery.ok) return `the attempt still names that path because ${recovery.reason}`;
+  if (recovery.heldFor) {
+    return `the board kept no binding to that path but left the reservation live, because ${recovery.heldFor} from this session has not claimed and creation order may have bound this reservation for a live executor; the attempt that never claims is the one to retire`;
+  }
+  return "the board recorded the attempt failed and kept no binding to that path, so a plain dispatch prepares its replacement";
+}
 function recordUncreatedWorktreeFailure(repository, sessionId, target, error, attempt) {
   const store = require(runtimeModule("store"));
   const project = registeredProject(store, repository);
   const recovery = project.slug ? store.recoverDispatchWorktreeCreation(project.slug, sessionId, target, error, attempt, { created: false }) : { ok: false, reason: "its project binding is unavailable" };
-  return recovery.ok ? "the board recorded the attempt failed and kept no binding to that path, so a plain dispatch prepares its replacement" : `the attempt still names that path because ${recovery.reason}`;
+  return uncreatedWorktreeFailureReport(recovery);
 }
 function createBoundCheckout(binding, name, sessionId, attempt) {
   try {
