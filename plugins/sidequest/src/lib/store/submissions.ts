@@ -2516,7 +2516,7 @@ function submissionAdmissionDecision(slug: any, ticket: any, by: string, opts: a
   const verification = submissionVerificationResult(ticket, sourceRevision, verify, opts.commit);
   const completion = sourceRevision
     ? { ok: true }
-    : completionTreeCheck(slug, ticket, { explicitNoOp: range?.noOp === true });
+    : completionTreeCheck(slug, ticket, { explicitNoOp: range?.noOp === true, attributionBase: range?.base });
   const admitted = adapterFacts.admittedScope || executionScope(slug, ticket);
   const scope = adapterFacts.scope || commitScope.ticketCommitScope(admitted, ticket.files, ticket.ref);
   const descendantPaths = sourceRevision ? { ok: true, paths: [] } : sharedTreeDescendantPaths(slug, ticket, range, scope);

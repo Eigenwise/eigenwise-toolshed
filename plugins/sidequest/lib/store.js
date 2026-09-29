@@ -859,74 +859,160 @@ function capturedTestName(match) {
   if (!name || name.includes("${")) return null;
   return name.replace(/\\(['"`\\])/g, "$1");
 }
-function changedTestNames(delta, changedPaths) {
-  if (!delta?.workspace) return [];
+function testDefinitionName(line, modifiers = false) {
+  const call = modifiers ? /\b(?:test|it|specify)(?:\.(?:only|skip|todo))?\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/ : /\b(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/;
+  return capturedTestName(line.match(call) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/));
+}
+function addDiffTestNames(names, source, diff) {
+  const definitions = source.split(/\r?\n/).map((line, index) => {
+    const name = testDefinitionName(line);
+    return name ? { line: index + 1, name } : null;
+  }).filter(Boolean);
+  let width = 0;
+  let newLine = 0;
+  let changedInHunk = false;
+  const addNearestDefinition = (line) => {
+    const definition = definitions.filter((entry) => entry.line <= line).at(-1);
+    if (definition) names.add(definition.name);
+  };
+  for (const line of diff.split(/\r?\n/)) {
+    const hunk = line.match(/^(@{2,}) (?:-\d+(?:,\d+)? )+\+(\d+)(?:,\d+)? \1/);
+    if (hunk) {
+      if (changedInHunk) addNearestDefinition(newLine);
+      width = hunk[1].length - 1;
+      newLine = Number(hunk[2]);
+      changedInHunk = false;
+      continue;
+    }
+    if (!width) continue;
+    const marks = line.slice(0, width);
+    if (marks.includes("-")) {
+      changedInHunk = true;
+      continue;
+    }
+    if (marks.includes("+")) {
+      changedInHunk = true;
+      const addedName = testDefinitionName(line.slice(width), true);
+      if (addedName) names.add(addedName);
+      addNearestDefinition(newLine);
+      newLine += 1;
+      continue;
+    }
+    if (marks.length === width && !marks.trim()) newLine += 1;
+  }
+  if (changedInHunk) addNearestDefinition(newLine);
+}
+function gitOutput(root, args) {
+  return execFileSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+}
+function attributionBase(workspace, requested) {
+  const dispatchBase = String(workspace?.base || "");
+  const candidate = String(requested || "").trim();
+  if (!candidate) return dispatchBase;
+  try {
+    const resolved = gitOutput(workspace.root, ["rev-parse", "--verify", `${candidate}^{commit}`]).trim();
+    if (resolved === gitOutput(workspace.root, ["rev-parse", "--verify", `${dispatchBase}^{commit}`]).trim()) return dispatchBase;
+    gitOutput(workspace.root, ["merge-base", "--is-ancestor", dispatchBase, resolved]);
+    gitOutput(workspace.root, ["merge-base", "--is-ancestor", resolved, "HEAD"]);
+    return resolved;
+  } catch (_) {
+    return dispatchBase;
+  }
+}
+function attributionSegments(root, base) {
+  let merges = [];
+  try {
+    merges = gitOutput(root, ["rev-list", "--first-parent", "--merges", "--reverse", `${base}..HEAD`]).split(/\r?\n/).filter(Boolean);
+  } catch (_) {
+    merges = [];
+  }
+  const segments = [];
+  let from = base;
+  for (const merge of merges) {
+    segments.push({ from, to: `${merge}^1` }, { merge });
+    from = merge;
+  }
+  segments.push({ from, to: null });
+  return segments;
+}
+function segmentPaths(root, segment, working) {
+  const listed = (args) => gitOutput(root, args).split("\0").filter(Boolean).map((file) => file.replace(/\\/g, "/"));
+  try {
+    if ("merge" in segment) {
+      return listed(["diff-tree", "--cc", "-r", "--name-only", "-z", "--no-commit-id", segment.merge]).filter((file) => segmentDiff(root, segment, file).trim());
+    }
+    if (segment.to) return listed(["diff", "--name-only", "--no-renames", "-z", segment.from, segment.to]);
+    return [...listed(["diff", "--name-only", "--no-renames", "-z", segment.from, "HEAD"]), ...working];
+  } catch (_) {
+    return [];
+  }
+}
+function segmentDiff(root, segment, file) {
+  if ("merge" in segment) return gitOutput(root, ["diff-tree", "--cc", "--unified=0", "--no-commit-id", segment.merge, "--", file]);
+  return gitOutput(root, ["diff", "--no-ext-diff", "--unified=0", segment.from, ...segment.to ? [segment.to] : [], "--", file]);
+}
+function segmentSource(root, segment, file) {
+  const revision = "merge" in segment ? segment.merge : segment.to;
+  return revision ? gitOutput(root, ["cat-file", "blob", `${revision}:${file}`]) : fs.readFileSync(path.join(root, file), "utf8");
+}
+function segmentTestNames(root, segment, files) {
   const names = /* @__PURE__ */ new Set();
-  for (const file of changedPaths || []) {
+  for (const file of files) {
     if (!isTestSidePath(file)) continue;
     let source = "";
     let diff = "";
     try {
-      source = fs.readFileSync(path.join(delta.workspace.root, file), "utf8");
+      source = segmentSource(root, segment, file);
+      diff = segmentDiff(root, segment, file);
     } catch (_) {
       continue;
     }
-    try {
-      diff = execFileSync("git", ["diff", "--no-ext-diff", "--unified=0", delta.workspace.base, "--", file], {
-        cwd: delta.workspace.root,
-        encoding: "utf8",
-        windowsHide: true
-      });
-    } catch (_) {
-      continue;
-    }
-    const definitions = source.split(/\r?\n/).map((line, index) => {
-      const match = line.match(/\b(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
-      const name = capturedTestName(match);
-      return name ? { line: index + 1, name } : null;
-    }).filter(Boolean);
-    try {
-      execFileSync("git", ["cat-file", "-e", `${delta.workspace.base}:${file}`], {
-        cwd: delta.workspace.root,
-        stdio: "ignore",
-        windowsHide: true
-      });
-    } catch (_) {
-      for (const definition of definitions) names.add(definition.name);
-      continue;
-    }
-    let newLine = 0;
-    let changedInHunk = false;
-    const addNearestDefinition = (line) => {
-      const definition = definitions.filter((entry) => entry.line <= line).at(-1);
-      if (definition) names.add(definition.name);
-    };
-    for (const line of diff.split(/\r?\n/)) {
-      const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-      if (hunk) {
-        if (changedInHunk) addNearestDefinition(newLine);
-        newLine = Number(hunk[1]);
-        changedInHunk = false;
+    if (!("merge" in segment) && !segment.to) {
+      try {
+        execFileSync("git", ["cat-file", "-e", `${segment.from}:${file}`], { cwd: root, stdio: "ignore", windowsHide: true });
+      } catch (_) {
+        for (const line of source.split(/\r?\n/)) {
+          const name = testDefinitionName(line);
+          if (name) names.add(name);
+        }
         continue;
       }
-      if (line.startsWith("+") && !line.startsWith("+++")) {
-        changedInHunk = true;
-        const addedDefinition = line.match(/\b(?:test|it|specify)(?:\.(?:only|skip|todo))?\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
-        const addedName = capturedTestName(addedDefinition);
-        if (addedName) names.add(addedName);
-        addNearestDefinition(newLine);
-        newLine += 1;
-        continue;
-      }
-      if (line.startsWith("-") && !line.startsWith("---")) {
-        changedInHunk = true;
-        continue;
-      }
-      if (line.startsWith(" ")) newLine += 1;
     }
-    if (changedInHunk) addNearestDefinition(newLine);
+    addDiffTestNames(names, source, diff);
   }
-  return Array.from(names);
+  return names;
+}
+function negativeControlChanges(delta, changedPaths, requestedBase) {
+  const workspace = delta?.workspace;
+  if (!workspace?.base) return { paths: changedPaths, testNames: [] };
+  const base = attributionBase(workspace, requestedBase);
+  const segments = attributionSegments(workspace.root, base);
+  const changed = new Set(changedPaths);
+  const working = Array.isArray(delta.working) ? delta.working : [];
+  const owned = /* @__PURE__ */ new Set();
+  const names = /* @__PURE__ */ new Set();
+  for (const segment of segments) {
+    const files = segmentPaths(workspace.root, segment, working).filter((file) => changed.has(file));
+    for (const file of files) owned.add(file);
+    for (const name of segmentTestNames(workspace.root, segment, files)) names.add(name);
+  }
+  const linear = segments.length === 1 && base === workspace.base;
+  if (linear) return { paths: changedPaths, testNames: Array.from(names) };
+  const current = /* @__PURE__ */ new Set();
+  for (const file of owned) {
+    if (!isTestSidePath(file)) continue;
+    try {
+      for (const line of fs.readFileSync(path.join(workspace.root, file), "utf8").split(/\r?\n/)) {
+        const name = testDefinitionName(line, true);
+        if (name) current.add(name);
+      }
+    } catch (_) {
+    }
+  }
+  return {
+    paths: changedPaths.filter((file) => owned.has(file)),
+    testNames: Array.from(names).filter((name) => current.has(name))
+  };
 }
 function normalizedNegativeControlTestName(name) {
   return String(name || "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -1008,7 +1094,7 @@ function negativeControlRefusal(ticket, result) {
     return {
       ok: false,
       reason: "negative_control_test_required",
-      message: `${ticket.ref} completion refused: the negative control did not report these added or modified tests: ${result.tests.join(", ")}. Claim-holder test markers found: ${(result.markerLines || []).map((line) => `"${line}"`).join(", ") || "none"}. ${recipe}`
+      message: `${ticket.ref} completion refused: the negative control did not report these tests this candidate added or modified: ${result.tests.join(", ")}. Claim-holder test markers found: ${(result.markerLines || []).map((line) => `"${line}"`).join(", ") || "none"}. ${recipe}`
     };
   }
   if (result.kind === "short_waiver") {
@@ -1035,7 +1121,7 @@ function negativeControlRefusal(ticket, result) {
   return {
     ok: false,
     reason: "negative_control_required",
-    message: `${ticket.ref} completion refused: changed scoped paths include both test-side and non-test-side files, but the claim holder has not recorded a negative control. ${recipe}`
+    message: `${ticket.ref} completion refused: this candidate's own scoped changes include both test-side and non-test-side files, but the claim holder has not recorded a negative control. ${recipe}`
   };
 }
 function completionScope(slug, ticket) {
@@ -1064,9 +1150,13 @@ function completionTreeCheck(slug, ticket, opts) {
       message: `${ticket.ref} completion refused: its declared write scope has an empty diff since dispatch base. Declared files: ${declaredFiles.join(", ")}. A claim holder may record factual failed_suite or could_not_run verification evidence before editing, but a successful completion, submit, or done still needs scoped work. If this run intentionally made no repository change, report [sidequest:verify-complete] no-op: <evidence>; verification outcomes use [sidequest:verify-complete] <passed|failed_suite|toolchain_missing|could_not_run|timeout|manual|attestation|skipped|failed_check>: <evidence>.`
     };
   }
-  if (changedPaths.some(isTestSidePath) && changedPaths.some((file) => !isTestSidePath(file))) {
-    const negativeControl = negativeControlResult(ticket, changedTestNames(delta, changedPaths));
-    if (negativeControl.kind !== "failed" && negativeControl.kind !== "waived") return negativeControlRefusal(ticket, negativeControl);
+  const mixedChange = (paths) => paths.some(isTestSidePath) && paths.some((file) => !isTestSidePath(file));
+  if (mixedChange(changedPaths)) {
+    const own = negativeControlChanges(delta, changedPaths, opts?.attributionBase);
+    if (mixedChange(own.paths)) {
+      const negativeControl = negativeControlResult(ticket, own.testNames);
+      if (negativeControl.kind !== "failed" && negativeControl.kind !== "waived") return negativeControlRefusal(ticket, negativeControl);
+    }
   }
   return { ok: true, applicable: true, changedPaths, noOp: !changedPaths.length };
 }
