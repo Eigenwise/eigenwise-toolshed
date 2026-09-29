@@ -6,7 +6,7 @@ const fs = require('node:fs') as typeof import('node:fs');
 const os = require('node:os') as typeof import('node:os');
 const path = require('node:path') as typeof import('node:path');
 const { createHash, randomUUID } = require('node:crypto') as typeof import('node:crypto');
-const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
+const { execFileSync } = require('./git-process.js') as typeof import('./git-process.js');
 const { runProcessVerification, shellCommand } = require('./ports/process.js') as typeof import('./ports/process.js');
 const { canonicalPath } = require('./kernel/worktree.js') as { canonicalPath(value: string): string };
 
@@ -544,6 +544,29 @@ function resolveCaptureCwd(target: CaptureTarget | null, cwd: string, explicitWo
   return Object.freeze({ cwd: target ? captureWorkingDirectory(target, cwd) : cwd, refusal: null });
 }
 
+function checkoutRoot(directory: string): string {
+  try {
+    return String(execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: directory,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })).trim() || directory;
+  } catch {
+    return directory;
+  }
+}
+
+// GH-259: a nested workspace's gate runs from the ticket's verifyCwd, which is relative to the checkout
+// root; the checkout itself (and so the revision and cleanliness checks) stays where it was resolved.
+function verifyCommandDirectory(target: CaptureTarget, captureCwd: string): string {
+  const project = captureProject(target);
+  const store = require('./store.js') as VerificationCaptureStore;
+  const ticket = project ? store.getTicket(project.slug, target.ticket) as { executorVerifyCwd?: string } | null : null;
+  const directory = String(ticket?.executorVerifyCwd || '');
+  return directory ? path.join(checkoutRoot(captureCwd), directory) : captureCwd;
+}
+
 async function runCapturedVerification(command: string, target: CaptureTarget | null, cwd = process.cwd(), fileSystem: CaptureSlotFileSystem = fs, explicitWorktree?: string) {
   const resolution = resolveCaptureCwd(target, cwd, explicitWorktree);
   if (resolution.refusal) return Object.freeze({ capture: null, recorded: null, refusal: resolution.refusal });
@@ -558,9 +581,10 @@ async function runCapturedVerification(command: string, target: CaptureTarget | 
       refusal: `verify-capture: capture=unrecorded reason=verification_capture_dirty_worktree\nVerification capture for ${target!.ticket} ran with uncommitted changes in ${captureCwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`,
     });
   }
+  const commandCwd = target ? verifyCommandDirectory(target, captureCwd) : captureCwd;
   const capture = target && isFullSuiteCommand(command)
-    ? await runFullSuiteCapture(command, target.project, captureCwd, fileSystem)
-    : await runVerifyCapture(command, captureCwd);
+    ? await runFullSuiteCapture(command, target.project, commandCwd, fileSystem)
+    : await runVerifyCapture(command, commandCwd);
   const recorded = target ? recordCapture(target, capture, captureCwd, cleanWorktree) : null;
   return Object.freeze({ capture, recorded, refusal: null });
 }

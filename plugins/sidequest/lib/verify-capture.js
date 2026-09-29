@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
-const { execFileSync } = require("node:child_process");
+const { execFileSync } = require("./git-process.js");
 const { runProcessVerification, shellCommand } = require("./ports/process.js");
 const { canonicalPath } = require("./kernel/worktree.js");
 const captureSlotTimeoutMilliseconds = 30 * 60 * 1e3;
@@ -436,6 +436,25 @@ function resolveCaptureCwd(target, cwd, explicitWorktree) {
   }
   return Object.freeze({ cwd: target ? captureWorkingDirectory(target, cwd) : cwd, refusal: null });
 }
+function checkoutRoot(directory) {
+  try {
+    return String(execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: directory,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"]
+    })).trim() || directory;
+  } catch {
+    return directory;
+  }
+}
+function verifyCommandDirectory(target, captureCwd) {
+  const project = captureProject(target);
+  const store = require("./store.js");
+  const ticket = project ? store.getTicket(project.slug, target.ticket) : null;
+  const directory = String(ticket?.executorVerifyCwd || "");
+  return directory ? path.join(checkoutRoot(captureCwd), directory) : captureCwd;
+}
 async function runCapturedVerification(command, target, cwd = process.cwd(), fileSystem = fs, explicitWorktree) {
   const resolution = resolveCaptureCwd(target, cwd, explicitWorktree);
   if (resolution.refusal) return Object.freeze({ capture: null, recorded: null, refusal: resolution.refusal });
@@ -449,7 +468,8 @@ async function runCapturedVerification(command, target, cwd = process.cwd(), fil
 Verification capture for ${target.ticket} ran with uncommitted changes in ${captureCwd}. A verifier must run over the committed candidate, so nothing is recorded. Commit or discard the changes, then rerun the pinned verifier.`
     });
   }
-  const capture = target && isFullSuiteCommand(command) ? await runFullSuiteCapture(command, target.project, captureCwd, fileSystem) : await runVerifyCapture(command, captureCwd);
+  const commandCwd = target ? verifyCommandDirectory(target, captureCwd) : captureCwd;
+  const capture = target && isFullSuiteCommand(command) ? await runFullSuiteCapture(command, target.project, commandCwd, fileSystem) : await runVerifyCapture(command, commandCwd);
   const recorded = target ? recordCapture(target, capture, captureCwd, cleanWorktree) : null;
   return Object.freeze({ capture, recorded, refusal: null });
 }

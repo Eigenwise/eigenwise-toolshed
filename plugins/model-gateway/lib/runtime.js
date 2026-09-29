@@ -207,18 +207,30 @@ function resolveStableCommandPath({ pathExists = fs.existsSync } = {}) {
   return pathExists(STABLE_COMMAND_PATH) ? STABLE_COMMAND_PATH : CLI_PATH;
 }
 
+function upstreamBlockedMessage(commandPath, blocked) {
+  if (blocked?.expiresAt) return `Codex is rate-limited by OpenAI (429) until ${blocked.expiresAt}. The block lifts by itself then, or sooner when a Codex request succeeds; wait, or explicitly re-route this ticket.`;
+  return `Codex is blocked by an OpenAI rejection. Run \`node "${commandPath}" setup\`; if it persists, wait for a claude-code-proxy update or explicitly re-route this ticket. Codex tickets remain blocked.`;
+}
+
 const CODEX_READINESS_MESSAGES = {
   'binary-missing': (commandPath = resolveStableCommandPath()) => `Codex dispatch refused: claude-code-proxy is missing. Run \`node "${commandPath}" setup\`, then retry. No Anthropic fallback was used.`,
   'auth-missing': (commandPath = resolveStableCommandPath()) => `Codex dispatch refused: ChatGPT sign-in is required. Run \`node "${commandPath}" login\`, finish browser OAuth, then run \`node "${commandPath}" setup\` and retry. Credentials live in \`~/.config/claude-code-proxy/\`.`,
   'proxy-down': () => `Codex dispatch refused: claude-code-proxy is not answering on /v1/models. The running shim supervisor retries recovery with bounded backoff; check ${path.join(LOGS, 'guardian.log')} if it does not recover. No Anthropic fallback was used.`,
   'shim-down': (commandPath = resolveStableCommandPath()) => `Codex dispatch refused: the model-gateway shim is down. Run \`node "${commandPath}" ensure\`, then retry. No Anthropic fallback was used.`,
   'serving-version-mismatch': (commandPath = resolveStableCommandPath()) => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${commandPath}" ensure\`, then retry. No Anthropic fallback was used.`,
-  'upstream-blocked': (commandPath = resolveStableCommandPath()) => `Codex is blocked by an OpenAI rejection. Run \`node "${commandPath}" setup\`; if it persists, wait for a claude-code-proxy update or explicitly re-route this ticket. Codex tickets remain blocked.`,
-  'upstream-unavailable': () => 'Codex had a terminal upstream failure in the last 60 seconds. Wait briefly, then retry; /v1/models only proves the local proxy is answering.',
+  'upstream-blocked': (commandPath = resolveStableCommandPath(), blocked = null) => upstreamBlockedMessage(commandPath, blocked),
+  'upstream-unavailable': (commandPath, unavailable = null) => upstreamUnavailableMessage(unavailable),
 };
 
-function codexReadinessMessage(state, commandPath) {
-  return CODEX_READINESS_MESSAGES[state](commandPath);
+// The hold names its own failure and its end, so a refusal that outlives it is visibly stale (issue #175).
+function upstreamUnavailableMessage(unavailable) {
+  if (!unavailable?.observedAt) return 'Codex had a terminal upstream failure in the last 30 seconds. Wait briefly, then retry; /v1/models only proves the local proxy is answering.';
+  const until = unavailable.expiresAt || 'about 30 seconds later';
+  return `Codex had a terminal upstream failure (HTTP ${unavailable.statusCode}) at ${unavailable.observedAt}. Dispatch holds until ${until}, or until a Codex request succeeds; /v1/models only proves the local proxy is answering.`;
+}
+
+function codexReadinessMessage(state, commandPath, upstreamBlocked = null) {
+  return CODEX_READINESS_MESSAGES[state](commandPath, upstreamBlocked);
 }
 
 function gatewayDiscoveryModels(models) {

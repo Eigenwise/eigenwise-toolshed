@@ -98,7 +98,7 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   }>;
   const byName = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
   const categoryEdit = byName.get('category_edit');
-  assert.deepEqual(Object.keys(categoryEdit?.inputSchema.properties ?? {}), ['id', 'project', 'profile', 'name', 'description', 'contract', 'artifactRoots', 'routeModel', 'routeEffort', 'fallbackModel', 'fallbackEffort', 'enabled', 'readonly']);
+  assert.deepEqual(Object.keys(categoryEdit?.inputSchema.properties ?? {}), ['id', 'project', 'profile', 'name', 'description', 'contract', 'artifactRoots', 'routeModel', 'routeEffort', 'fallbackModel', 'fallbackEffort', 'enabled', 'readonly', 'deniedTools']);
   assert.deepEqual(categoryEdit?.inputSchema.properties?.fallbackModel, { type: ['string', 'null'], description: 'null clears.' });
   assert.equal(byName.size, descriptors.length);
   assert.equal(byName.has('ask'), false);
@@ -135,14 +135,14 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.sharedTree?.description, undefined);
   assert.match(byName.get('dispatch')?.inputSchema.properties?.reducedAgentSchema?.description ?? '', /Only when name\/mode missing/);
   assert.match(byName.get('dispatch')?.inputSchema.properties?.reducedAgentSchema?.description ?? '', /hook needs agent_id/);
-  assert.match(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /latest signal grace/);
+  assert.match(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /preparer retires now, else latest signal grace/);
   // SQ-2961: and which board writes reach that grace, since a caller cannot see the trust boundary in the schema.
-  assert.match(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /only the bound runtime name counts/);
+  assert.match(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /bound name only/);
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.retireOnly?.type, 'boolean');
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.worktree?.description, undefined);
   // The served groomClose said nothing about retirement while the source description still claimed evidence
   // only applies before runtime binding (SQ-2953 finding 4).
-  assert.match(byName.get('groomClose')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /retires unclaimed attempts past deadline/);
+  assert.match(byName.get('groomClose')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /preparing session retires now; others past deadline/);
   // SQ-2961: and the CLI flag of the same name reaches the same terminal state, because both run one authority.
   assert.match(byName.get('groomClose')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /CLI too/);
   const addVerify = byName.get('add')?.inputSchema.properties?.verify?.description ?? '';
@@ -165,6 +165,18 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.match(byName.get('integrate')?.inputSchema.properties?.deliveryInteractionCommit?.description ?? '', /Reviewed descendant/);
   assert.deepEqual(byName.get('groomClose')?.inputSchema.properties?.deliveryMethod?.enum, ['reset', 'working-tree', 'manual']);
   assert.deepEqual(byName.get('integrate')?.inputSchema.properties?.deliveryMethod?.enum, ['reset', 'working-tree', 'manual']);
+  for (const tool of ['groomClose', 'integrate']) {
+    const properties = byName.get(tool)?.inputSchema.properties as Record<string, any> | undefined;
+    assert.equal(properties?.deliveryRevision?.pattern, '^[0-9a-fA-F]{7,64}$', `${tool} deliveryRevision`);
+    assert.match(properties?.deliveryRevision?.description ?? '', /not the working tree/);
+    assert.match(properties?.deliveryRevision?.description ?? '', /Ignored when reachable/);
+    assert.match(properties?.deliveryRevision?.description ?? '', /never an ancestor of the candidate base/);
+    assert.equal(properties?.resolvedPaths?.items?.type, 'string', `${tool} resolvedPaths`);
+    assert.match(properties?.resolvedPaths?.description ?? '', /needs deliveryRevision/);
+    assert.match(properties?.resolvedPaths?.description ?? '', /refused when reachable/);
+  }
+  assert.match(byName.get('groomClose')?.description ?? '', /deliveryRevision/);
+  assert.match(byName.get('integrate')?.description ?? '', /deliveryRevision/);
   assert.equal(byName.get('board_config')?.inputSchema.properties?.worktreeRecoveryRetentionMaxPerAgent, undefined);
 
   const payload = JSON.stringify(descriptors);

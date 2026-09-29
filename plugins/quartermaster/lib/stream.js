@@ -29,6 +29,20 @@ function resultIsError(block, record) {
   return false;
 }
 
+const HOOK_ERROR_PREFIX = /^PreToolUse:\S+ hook error:/;
+
+// The host stamps `permission-rule` on a denial whether it came from a settings rule or a
+// PreToolUse hook's structured deny. The one case it also wraps distinctly is a hook that exits
+// nonzero with stderr: the tool_result text starts with "PreToolUse:<tool> hook error: <stderr>".
+// That prefix is the only generically reliable way to tell a hook block apart from an actual
+// permission-rule denial, so only that case gets reclassified; a hook using the structured
+// deny protocol is indistinguishable from a rule denial and stays 'permission-rule'.
+function denialKindOf(record, block) {
+  const kind = record.toolDenialKind ?? null;
+  if (kind !== 'permission-rule') return kind;
+  return HOOK_ERROR_PREFIX.test(textOf(block?.content)) ? 'hook_block' : kind;
+}
+
 function mcpServerOf(toolName) {
   const match = /^mcp__(.+?)__[^_]/.exec(String(toolName ?? ''));
   if (!match) return null;
@@ -145,7 +159,7 @@ async function streamTranscript(source, collector) {
           name: call?.name ?? null,
           input: call?.input ?? null,
           isError: resultIsError(block, record),
-          denial: record.toolDenialKind ?? null,
+          denial: denialKindOf(record, block),
         });
       }
     }

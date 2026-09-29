@@ -59,7 +59,7 @@ const UPDATE_LAUNCHER = `#!/usr/bin/env node
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const result = spawnSync(process.execPath, [path.join(__dirname, 'model-gateway.js'), 'setup'], { stdio: 'inherit', windowsHide: true });
+const result = spawnSync(process.execPath, [path.join(__dirname, 'model-gateway.js'), 'setup', '--preserve-wiring'], { stdio: 'inherit', windowsHide: true });
 if (result.error) throw result.error;
 process.exit(result.status == null ? 1 : result.status);
 `;

@@ -57,6 +57,26 @@ function shellDefinition(platform = process.platform): ShellDefinition {
   return Object.freeze({ executable: posixShell, label: `POSIX shell (${posixShell})`, scriptExtension: '.sh' });
 }
 
+// GH-290: Git for Windows sh.exe reads an unquoted backslash as an escape, so `cd C:\repo\app` arrives as
+// `C:repoapp`. A command that names an unquoted backslash path runs through Command Prompt, which takes it
+// verbatim. Backslashes inside quotes (`"C:\tools\node.exe" -e "...'a\n'..."`) survive sh.exe and stay there:
+// Command Prompt would read the script's `\"` as quote toggles and run its `||` and `&&` as operators (SQ-3117).
+const WINDOWS_BACKSLASH_PATH = /(?:^|[\s=(])(?:[A-Za-z]:|\.{1,2}|[\w.-]+)\\[\w.-]/;
+const QUOTED_SEGMENT = /"(?:\\.|[^"\\])*"|'[^']*'/g;
+
+function unquotedText(command: string): string {
+  return command.replace(QUOTED_SEGMENT, ' ');
+}
+
+function commandPromptShell(): ShellDefinition {
+  const commandPrompt = process.env.ComSpec || 'cmd.exe';
+  return Object.freeze({ executable: commandPrompt, label: `Command Prompt (${commandPrompt})`, scriptExtension: '.cmd' });
+}
+
+function verifierShell(command: string, platform = process.platform): ShellDefinition {
+  return platform === 'win32' && WINDOWS_BACKSLASH_PATH.test(unquotedText(command)) ? commandPromptShell() : shellDefinition(platform);
+}
+
 function commandForShell(scriptPath: string, shell: ShellDefinition): ShellCommand {
   const arguments_ = shell.scriptExtension === '.cmd'
     ? Object.freeze(['/d', '/s', '/c', scriptPath])
@@ -83,7 +103,7 @@ function shellScript(command: string, shell: ShellDefinition): string {
 }
 
 function temporaryScript(command: string): Readonly<{ scriptPath: string; shell: ShellCommand }> {
-  const shell = shellDefinition();
+  const shell = verifierShell(command);
   const scriptPath = path.join(os.tmpdir(), `sidequest-verify-${process.pid}-${randomUUID()}${shell.scriptExtension}`);
   fs.writeFileSync(scriptPath, shellScript(command, shell), { encoding: 'utf8', flag: 'wx', mode: 0o700 });
   return Object.freeze({ scriptPath, shell: commandForShell(scriptPath, shell) });
@@ -136,6 +156,19 @@ function shellCannotParsePosixSyntax(logPath: string, exitCode: number, shell: S
   return /^'!' is not recognized as an internal or external command,$/m.test(fs.readFileSync(logPath, 'utf8'));
 }
 
+// GH-247: the board spawns verifiers from its MCP server, which Claude Code starts with the Sidequest
+// plugin's CLAUDE_PLUGIN_ROOT. A project suite that locates its own files through that variable would
+// read the Sidequest install instead.
+export function verifierEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(environment).filter(([name]) => !/^CLAUDE_PLUGIN_/i.test(name)));
+}
+
+// GH-189: a shell that never started leaves no output, so the spawn error is the only text that says why.
+function shellExitReason(shell: ShellDefinition, shellExitCode: number | null, spawnError?: Error): string {
+  const reason = `The ${shell.label} exited ${shellExitCode ?? 'without a code'} before reporting the suite exit code.`;
+  return spawnError ? `${reason} ${spawnError.message}` : reason;
+}
+
 function processTimedOut(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ETIMEDOUT';
 }
@@ -178,7 +211,7 @@ export function runProcessVerification(requirement: VerificationRequirement, opt
     try {
       outcome = spawnSync(shell.executable, shell.arguments, {
         cwd: options.cwd || process.cwd(),
-        env: options.environment,
+        env: verifierEnvironment(options.environment || process.env),
         windowsHide: true,
         timeout: timeoutMilliseconds,
         stdio: ['ignore', log, log],
@@ -199,7 +232,7 @@ export function runProcessVerification(requirement: VerificationRequirement, opt
   const exitCode = markerExitCode(logPath);
   if (exitCode === null) {
     const shellExitCode = outcome?.status ?? (outcome?.error ? 2 : null);
-    return failedResult(requirement, 'could_not_run', command, logPath, `The ${shell.label} exited ${shellExitCode ?? 'without a code'} before reporting the suite exit code.`, shellExitCode, tail, undefined, shell.label);
+    return failedResult(requirement, 'could_not_run', command, logPath, shellExitReason(shell, shellExitCode, outcome?.error), shellExitCode, tail, undefined, shell.label);
   }
   if (shellCannotParsePosixSyntax(logPath, exitCode, shell)) {
     return failedResult(requirement, 'could_not_run', command, logPath, `The ${shell.label} fallback could not parse POSIX syntax while running ${JSON.stringify(command)} (exit code ${exitCode}).`, exitCode, tail, undefined, shell.label);

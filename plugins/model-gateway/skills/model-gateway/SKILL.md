@@ -77,7 +77,11 @@ flags whose values equal plugin defaults. It leaves unrelated settings alone, sk
 agreeing, cannot change `process.env`, and needs a restart to affect a new session.
 Discovery needs Claude Code v2.1.129+; `models` shows exactly what the shim advertises. Claude Code
 only refetches gateway discovery when it has an API-key credential. OAuth subscriptions do not give it
-one, so Model Gateway writes Claude Code's discovery cache whenever its advertised list changes.
+one, so Model Gateway writes Claude Code's discovery cache whenever its advertised list changes, but
+only from a list the proxy answered. While the proxy is unreachable the shim serves `models.json` or its
+built-in list, keeps the previous cache, retries the proxy on its next refresh tick, and `status` says
+`fallback catalog (proxy unreachable)`. `setup --preserve-wiring` (what the Toolshed updater runs) never
+wires the directory it runs from.
 
 Restart remains necessary to surface new rows in `/model`: Claude Code reads the picker cache once at
 session start. `/reload-plugins` does not reload it. Restoring or refreshing auth on an already-wired
@@ -106,7 +110,8 @@ bring auth back, or you kill the session that was about to use it.
   real 1M aliases (Opus, Sonnet, Fable) to `[1m]` ids so a gateway session on one gets its full 1M
   window instead of the 200k gateway default; Haiku stays unpinned (it's 200k). An `env --write-*`
   command resolves those aliases through the installed Claude CLI's credential-free headless probe;
-  SessionStart refreshes its cache after the CLI changes or the cache ages out. A failed probe keeps
+  SessionStart refreshes its cache after the CLI changes or the cache ages out, and rewrites stale pins
+  it wrote, including in a project where the gateway was turned off for Remote Control. A failed probe keeps
   the last good pin, then a shipped safe default. Set a persistent per-alias override with
   `pin --opus claude-opus-5-5[1m]` (same for `--sonnet` and `--fable`), or use `pin --opus default`
   to return to auto-detection. Overrides always win. `pin` with no arguments and `doctor` show each
@@ -121,7 +126,7 @@ bring auth back, or you kill the session that was about to use it.
 - Caution: loading a huge reference skill (e.g. `claude-api`, ~800k chars) in a single turn can
   spike Codex context past the point proactive compaction can recover from. Prefer pulling large
   references incrementally on Codex models.
-- The advertised catalog is a built-in list (proxy v0.1.10 serves no /v1/models). A `models.json` file cannot add a backend that the claude-code-proxy allowlist does not support; update the proxy through `setup` instead.
+- The advertised catalog comes from the proxy's /v1/models; `models.json` and the built-in list only stand in while the proxy is unreachable. A `models.json` file cannot add a backend that the claude-code-proxy allowlist does not support; update the proxy through `setup` instead.
 - **Claude Desktop cannot use Codex/Grok models in this version**: Desktop has its own native Gateway
   configuration, separate from Claude Code CLI settings, and can point at this shim's endpoint. But
   installed Desktop 1.49585.0 validates every Gateway model ID client-side and rejects any
@@ -224,6 +229,12 @@ or User-scope edits cannot be promised to win. Disabling stays available.
 ... env --remove   # unwire Claude Code (do this BEFORE uninstalling the plugin)
 ```
 
+`status`, `doctor` and `ensure` read the shim through one shared probe and print the same line,
+`shim (model router) on :<port>: <state>`, where the state is `running-ours (serving <version>)`,
+`running-foreign (PID <pid>, <install root or owner unidentified>)`, `starting (PID <pid> since <time>)` or
+`stopped`. `ensure` leaves `running-ours` at the installed version alone and succeeds, waits up to its startup
+window for `starting` before replacing anything, and refuses `running-foreign`.
+
 `doctor` prints the full model-window table: backend and picker ids, backend and advertised windows,
 Claude Code's resolved client window and compaction point, sentry mode and trigger, and the measurement
 date. It includes Codex, Grok, and native Claude pin rows. Its model-id check is useful for stale shim ids,
@@ -251,15 +262,20 @@ agree).
   (`doctor` shows auth), then proxy log. OpenAI gates non-Codex clients by request fingerprint;
   when they tighten it, requests die mid-stream until claude-code-proxy ships a fix, so
   suggest re-running `setup` (it fetches the latest release).
-- **`doctor` says `upstream-unavailable`**: a final Codex inference failed in the last 60 seconds.
+- **`doctor` says `upstream-unavailable`**: a final Codex inference failed in the last 30 seconds; the message names its status, time, and hold end.
   It records completed request outcomes, not `/v1/models` or a health check, and clears only after
-  a completed successful Codex response. The 60-second expiry means there is no recent failure
+  a completed successful Codex response. The 30-second expiry means there is no recent failure
   evidence, not that Codex is live. An attributed OpenAI 401, 403, or 429 rejection enters
-  `upstream-blocked`. An attributed 429 has no TTL: `setup` or a completed successful Codex
-  response clears it, and a later rejected request can latch it again. That persistent 429
-  blocking is a known limitation ([issue #190](https://github.com/Eigenwise/eigenwise-toolshed/issues/190));
-  do not promise a retry or expiry as a cure. Sidequest consumes a cached catalog and can lag this
-  state by up to five minutes.
+  `upstream-blocked`. A 401 or 403 stays until `setup` or a completed successful Codex response
+  clears it. A 429 block expires: `upstreamBlocked.expiresAt` comes from the 429's Retry-After,
+  else claude-code-proxy's usage-limit reset header, else 60 seconds, and the `doctor` message
+  names that time. It lifts by itself then, or sooner on a completed successful Codex response,
+  and a later rejected request can latch it again. Sidequest consumes a cached catalog and can lag
+  this state by up to five minutes.
+- **Codex turn with no output**: claude-code-proxy answers a Codex turn that completed with no
+  text, tool call, or thinking as a 503 "Codex completed without producing output". The shim
+  answers it as an empty `end_turn` instead, so the session ends the turn rather than retrying
+  into the same empty answer; the shim log records each one.
 - **Gateway models vanish from a Sidequest board a few minutes after the shim starts**: Sidequest
   discards a catalog older than five minutes and refreshes it by running `catalog --refresh --json`.
   Run that command by hand and read stderr plus the exit code. It exits non-zero and names the reason

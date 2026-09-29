@@ -38,6 +38,9 @@ Claude Desktop's own native Gateway configuration can point at Model Gateway's e
 In Claude Code v2.1.129+, open `/model` and choose a row labeled `From gateway`. Claude Code only refetches gateway discovery
 with an API-key credential. Model Gateway writes its discovery cache for OAuth subscriptions, and
 new rows appear after a full Claude Code restart. `/reload-plugins` does not reload the picker cache.
+The cache is written only from a model list the proxy actually answered. While the proxy is unreachable
+the shim serves a short built-in list, keeps the previous cache, and `status` reports
+`fallback catalog (proxy unreachable)`.
 
 - `lib/runtime.js`'s `MODEL_WINDOW_POLICY` is the authority for every gateway picker row. GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured at 920,012 accepted and 935,012 refused on 2026-09-05, so the gateway advertises 920k. Other Codex proxy rows use the table's explicit unmeasured 920k default until measured.
 - A gateway row above Claude Code's 200k unknown-model window gets a `[1m]` picker alias. That alias gives Claude Code a 1M client window, but a lower explicit `autoCompactWindow` still wins. The optional `325000` setting is a cap, and with that cap the client compacts around `292000`. The alias is removed before forwarding to Codex or Grok, and it does not promise a 1M backend input limit. Use `/context` to inspect the selected model and effective cap.
@@ -107,7 +110,7 @@ Ask Claude to enable, disable, or diagnose RC-compatibility. Its read-only diagn
 
 ### Turn the gateway off for this project
 
-To get Remote Control without RC-compatibility, remove only `ANTHROPIC_BASE_URL` from the `env` object in that project's `.claude/settings.local.json`. Keep every other gateway setting, then restart Claude Code. The project talks to `api.anthropic.com` directly and Remote Control becomes available.
+To get Remote Control without RC-compatibility, remove only `ANTHROPIC_BASE_URL` from the `env` object in that project's `.claude/settings.local.json`. Keep every other gateway setting, then restart Claude Code. Session start keeps the Claude model pins among those settings current, so the project still gets new Claude releases. The project talks to `api.anthropic.com` directly and Remote Control becomes available.
 
 That project has no gateway models after the restart: gateway rows disappear from `/model` and typed gateway ids do not work either. A process-exported `ANTHROPIC_BASE_URL` still wins over the file edit. If you control the Claude Code CLI launch, correct or unset that value, then restart. If the host replaces it, use the supported Claude Code CLI on the wired project instead. Desktop routing is unsupported under forced overrides on Windows and macOS, and settings, parent, or User-scope edits cannot be promised to win.
 

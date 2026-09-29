@@ -6,7 +6,10 @@ const { writeFileAtomically } = require('./atomic-file.js');
 const { CODEX_UPSTREAM_BLOCK_PATH, STATE } = require('./runtime.js');
 
 const CODEX_UPSTREAM_UNAVAILABLE_PATH = path.join(STATE, 'codex-upstream-unavailable.json');
-const UPSTREAM_UNAVAILABLE_TTL_MS = 60_000;
+const UPSTREAM_UNAVAILABLE_TTL_MS = 30_000;
+// A 429 names its own end: Retry-After, or the reset instant claude-code-proxy copies from a
+// ChatGPT usage limit. Without either the block still has to lift by itself (issue #190).
+const RATE_LIMIT_BLOCK_DEFAULT_MS = 60_000;
 
 function readJsonFile(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
@@ -22,17 +25,40 @@ function writeState(file, state) {
   return state;
 }
 
-function readUpstreamBlocked() {
+function readUpstreamBlocked(now = Date.now()) {
   const blocked = readJsonFile(CODEX_UPSTREAM_BLOCK_PATH);
-  return blocked?.state === 'upstream-blocked' ? blocked : null;
+  if (blocked?.state !== 'upstream-blocked') return null;
+  return now >= blocked.expiresAtMs ? null : blocked;
 }
 
-function setUpstreamBlocked({ statusCode, evidence }) {
+function retryAfterInstant(value, now) {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return now + Math.max(0, seconds) * 1000;
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? date : null;
+}
+
+function unifiedResetInstant(value) {
+  const seconds = Number(value);
+  return typeof value === 'string' && seconds > 0 ? seconds * 1000 : null;
+}
+
+function rateLimitExpiresAtMs(headers, now) {
+  return retryAfterInstant(headers['retry-after'], now)
+    ?? unifiedResetInstant(headers['anthropic-ratelimit-unified-reset'])
+    ?? now + RATE_LIMIT_BLOCK_DEFAULT_MS;
+}
+
+// 401 and 403 are credential verdicts and wait for setup or a success; only a 429 expires.
+function setUpstreamBlocked({ statusCode, evidence, headers, now = Date.now() }) {
+  const expiresAtMs = statusCode === 429 ? rateLimitExpiresAtMs(headers || {}, now) : null;
   return writeState(CODEX_UPSTREAM_BLOCK_PATH, {
     state: 'upstream-blocked',
-    observedAt: new Date().toISOString(),
+    observedAt: new Date(now).toISOString(),
     statusCode,
     evidence,
+    ...(expiresAtMs === null ? {} : { expiresAt: new Date(expiresAtMs).toISOString(), expiresAtMs }),
   });
 }
 
@@ -52,6 +78,7 @@ function setUpstreamUnavailable({ statusCode, now = Date.now() }) {
     state: 'upstream-unavailable',
     observedAt: new Date(now).toISOString(),
     observedAtMs: now,
+    expiresAt: new Date(now + UPSTREAM_UNAVAILABLE_TTL_MS).toISOString(),
     statusCode,
   });
 }
@@ -63,6 +90,7 @@ function clearUpstreamUnavailable() {
 module.exports = {
   CODEX_UPSTREAM_BLOCK_PATH,
   CODEX_UPSTREAM_UNAVAILABLE_PATH,
+  RATE_LIMIT_BLOCK_DEFAULT_MS,
   UPSTREAM_UNAVAILABLE_TTL_MS,
   clearUpstreamBlocked,
   clearUpstreamUnavailable,

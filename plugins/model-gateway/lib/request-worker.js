@@ -1,7 +1,8 @@
 'use strict';
 
-const { spawnSync } = require('node:child_process');
+const { execFile } = require('node:child_process');
 const { StringDecoder } = require('node:string_decoder');
+const { promisify } = require('node:util');
 const crypto = require('node:crypto');
 const dns = require('node:dns');
 const fs = require('node:fs');
@@ -33,9 +34,15 @@ const {
   resolveGatewayModelPolicy,
 } = require('./runtime.js');
 
-function isAuthed() {
-  const r = spawnSync(PROXY_BIN, ['codex', 'auth', 'status'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
-  return r.status === 0 && /account/i.test((r.stdout || '') + (r.stderr || ''));
+const execFileAsync = promisify(execFile);
+
+// Asynchronous on purpose: /healthz runs this inside the worker, and a synchronous spawn froze
+// every in-flight request, /v1/models included, for as long as auth status took (issue #238).
+async function isAuthed() {
+  try {
+    const { stdout, stderr } = await execFileAsync(PROXY_BIN, ['codex', 'auth', 'status'], { encoding: 'utf8', timeout: 15000, windowsHide: true });
+    return /account/i.test(stdout + stderr);
+  } catch { return false; }
 }
 
 async function proxyModelsAnswering() {
@@ -56,6 +63,12 @@ function readinessState(checks, upstreamBlocked, upstreamUnavailable) {
   return 'ready';
 }
 
+function readinessMessage(state, upstreamBlocked, upstreamUnavailable) {
+  return state === 'ready'
+    ? 'Codex readiness confirms local binary, /v1/models, authentication, shim, and serving-version checks. It does not prove a streaming request will succeed.'
+    : codexReadinessMessage(state, undefined, upstreamBlocked || upstreamUnavailable);
+}
+
 async function getCodexReadiness({
   binaryPresent = fs.existsSync(PROXY_BIN),
   probeProxyModels = proxyModelsAnswering,
@@ -65,11 +78,12 @@ async function getCodexReadiness({
   now = Date.now(),
 } = {}) {
   const proxyBinary = Boolean(binaryPresent);
-  const [proxyModels, health] = await Promise.all([
+  const [proxyModels, health, authenticated] = await Promise.all([
     proxyBinary ? probeProxyModels() : false,
     shimHealth === undefined ? fetchHealth() : shimHealth,
+    proxyBinary && authStatus(),
   ]);
-  const codexAuth = proxyBinary ? Boolean(authStatus()) : false;
+  const codexAuth = Boolean(authenticated);
   const shimRunning = Boolean(health?.ok);
   const servingVersion = servingShimVersion(health);
   const checks = {
@@ -81,15 +95,13 @@ async function getCodexReadiness({
     installedVersion: PLUGIN_VERSION,
     servingVersionMatches: shimRunning && servingVersionIsCurrentOrNewer(servingVersion, PLUGIN_VERSION),
   };
-  const upstreamBlocked = readUpstreamBlocked();
+  const upstreamBlocked = readUpstreamBlocked(now);
   const upstreamUnavailable = readUpstreamUnavailable(now);
   const state = readinessState(checks, upstreamBlocked, upstreamUnavailable);
   return {
     ready: state === 'ready',
     state,
-    message: state === 'ready'
-      ? 'Codex readiness confirms local binary, /v1/models, authentication, shim, and serving-version checks. It does not prove a streaming request will succeed.'
-      : codexReadinessMessage(state),
+    message: readinessMessage(state, upstreamBlocked, upstreamUnavailable),
     checks,
     upstreamBlocked,
     upstreamUnavailable,
@@ -120,7 +132,7 @@ function noteCodexUpstreamRejection(statusCode, headers, body) {
   const headerNames = Object.keys(headers || {}).map((name) => name.toLowerCase())
     .filter((name) => name.startsWith('x-openai-') || name === 'openai-processing-ms' || name === 'content-type');
   const evidence = headerNames.length ? `headers:${headerNames.join(',')}` : 'body:openai';
-  setUpstreamBlocked({ statusCode, evidence });
+  setUpstreamBlocked({ statusCode, evidence, headers });
   console.error(`model-gateway: Codex request had an unambiguous OpenAI rejection (status ${statusCode}; ${evidence}); readiness is upstream-blocked.`);
   return true;
 }
@@ -162,6 +174,44 @@ const DEFAULT_MODELS = [
   'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra',
 ];
 const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
+
+// Advertising an id the router can't claim back would hand it to
+// api.anthropic.com, so a local models.json is held to the same family rule.
+function isRoutableCodexId(id) {
+  return typeof id === 'string' && (id === 'auto' || CODEX_FAMILY_RE.test(id));
+}
+
+function routableCodexIds(ids) {
+  const routable = Array.isArray(ids) ? ids.filter(isRoutableCodexId) : [];
+  return routable.length ? routable : null;
+}
+
+async function proxyCodexIds() {
+  try {
+    const response = await fetchUrl(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { timeout: 2500 });
+    if (response.status !== 200) return null;
+    return (JSON.parse(response.body.toString()).data || []).map((model) => model.id).filter((id) => /^gpt-/.test(id));
+  } catch { return null; }
+}
+
+function isGrokBackendModel(model) {
+  return resolveGatewayModelPolicy(model.id)?.backend === 'grok';
+}
+
+function localModelsFileIds() {
+  try { return JSON.parse(fs.readFileSync(path.join(STATE, 'models.json'), 'utf8')); } catch { return null; }
+}
+
+// Only a list the proxy answered is a real catalog. models.json and the
+// built-in list stand in while the proxy is unreachable, which is routine for a
+// shim the supervisor starts alongside its proxy (GH-297).
+async function advertisedCodexCatalog() {
+  const proxyIds = routableCodexIds(await proxyCodexIds());
+  if (proxyIds) return { ids: proxyIds, source: 'proxy' };
+  const localIds = routableCodexIds(localModelsFileIds());
+  if (localIds) return { ids: localIds, source: 'models.json' };
+  return { ids: DEFAULT_MODELS, source: 'fallback' };
+}
 
 function statelessBackendThreadRefusal(payload) {
   if (!Object.prototype.hasOwnProperty.call(payload, 'thread')) return null;
@@ -209,6 +259,8 @@ function assertAnthropicPassthroughSentryIsDisabled(model) {
     throw new Error(`model-gateway: Anthropic passthrough model ${policy.backendId} must not use the synthetic sentry`);
   }
 }
+const configuredModelsRefreshMs = Number(process.env.CODEX_GATEWAY_MODELS_REFRESH_MS);
+const MODELS_REFRESH_MS = configuredModelsRefreshMs > 0 ? configuredModelsRefreshMs : 60000;
 const configuredSseHeartbeatSeconds = Number(process.env.CODEX_GATEWAY_SSE_HEARTBEAT_S);
 const SSE_HEARTBEAT_MS = Number.isFinite(configuredSseHeartbeatSeconds) && configuredSseHeartbeatSeconds >= 0
   ? configuredSseHeartbeatSeconds * 1000
@@ -307,6 +359,44 @@ function upstreamErrorMessage(body, statusCode) {
   return detail
     ? `model-gateway: upstream returned ${statusCode}: ${detail}`
     : `model-gateway: upstream returned ${statusCode} with no readable error body`;
+}
+
+// The model stopped and closed every block, but the stream ended before message_stop.
+function closeFinishedTurn(attempt, clientRes) {
+  if (attempt.terminal || !deliverableAttempt(attempt)) return;
+  console.error('model-gateway: Codex stream finished its turn but ended without message_stop; synthesized the terminal event');
+  clientRes.write(SYNTHESIZED_MESSAGE_STOP);
+}
+
+function requestedStream(requestBody) {
+  try { return JSON.parse(requestBody).stream === true; } catch { return false; }
+}
+
+function emptyEndTurn(model, stream) {
+  const message = {
+    id: `msg_gateway_${crypto.randomUUID().replace(/-/g, '')}`, type: 'message', role: 'assistant', model,
+    content: [], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 },
+  };
+  if (!stream) return { contentType: 'application/json', body: JSON.stringify(message) };
+  const events = [
+    { type: 'message_start', message: { ...message, stop_reason: null } },
+    { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 0 } },
+    { type: 'message_stop' },
+  ];
+  return { contentType: 'text/event-stream', body: events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('') };
+}
+
+// claude-code-proxy answers a Codex turn that completed with no text, tool call, or thinking
+// (empty_codex_completion) with a retryable 503. Claude Code resends it, every resend comes back
+// empty too, and an executor dies at closeout after its work is done (issue #192).
+function answerEmptyCodexCompletion(statusCode, upstreamBody, requestBody, model, clientRes, routeTelemetry) {
+  if (statusCode !== 503 || upstreamErrorDetail(upstreamBody) !== 'Codex completed without producing output') return false;
+  console.error('model-gateway: Codex completed a turn with no output (claude-code-proxy empty_codex_completion); answered an empty end_turn instead of a retryable 503');
+  const answer = emptyEndTurn(model, requestedStream(requestBody));
+  routeTelemetry?.finish(200);
+  clientRes.writeHead(200, { 'content-type': answer.contentType, 'content-length': Buffer.byteLength(answer.body) });
+  clientRes.end(answer.body);
+  return true;
 }
 
 function codexAuthenticationFailure(body, statusCode) {
@@ -851,7 +941,7 @@ function runWorker() {
   const controlToken = ensureControlToken();
   process.once('disconnect', () => process.exit(0));
   let modelCache = {
-    at: 0,
+    source: 'fallback',
     data: [...DEFAULT_MODELS, ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map(gatewayModel),
   };
   const counters = { models: 0, codex: 0, grok: 0, anthropic: 0 };
@@ -1045,35 +1135,23 @@ function runWorker() {
   }
 
   async function refreshModels({ logSentryPolicies = false } = {}) {
-    let ids = null;
-    try {
-      const r = await fetchUrl(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { timeout: 2500 });
-      if (r.status === 200) {
-        ids = (JSON.parse(r.body.toString()).data || []).map((m) => m.id).filter((id) => /^gpt-/.test(id));
-        if (!ids.length) ids = null;
-      }
-    } catch { /* proxy down or no such route */ }
-    if (!ids) {
-      try { ids = JSON.parse(fs.readFileSync(path.join(STATE, 'models.json'), 'utf8')); } catch { /* absent */ }
-    }
-    // Advertising an id the router can't claim back would hand it to
-    // api.anthropic.com, so a local models.json is held to the same family rule.
-    if (Array.isArray(ids)) ids = ids.filter((id) => typeof id === 'string' && (id === 'auto' || CODEX_FAMILY_RE.test(id)));
-    if (!Array.isArray(ids) || !ids.length) ids = DEFAULT_MODELS;
+    const { ids, source } = await advertisedCodexCatalog();
     const grokModels = grokBackend.grokModelsFromCache();
     const advertisedGrokModels = grokModels.length ? grokModels : DEFAULT_GROK_MODELS;
     modelCache = {
-      at: Date.now(),
+      // A stand-in list is never persisted; the next refresh tick retries the proxy.
+      source,
       data: [
         ...[...ids.filter((id) => id !== 'auto'), ...(LIST_DISPATCH_MODEL ? ['auto'] : [])]
           .map((id) => gatewayModel(id))
           .filter(Boolean),
         ...advertisedGrokModels
-          .filter((model) => resolveGatewayModelPolicy(model.id)?.backend === 'grok')
+          .filter(isGrokBackendModel)
           .map((model) => gatewayModel(model.id, 'grok')),
       ],
     };
     if (logSentryPolicies) logAdvertisedSentryPolicies();
+    if (source !== 'proxy') return;
     try {
       syncGatewayDiscoveryCache({ models: modelCache.data, baseUrl: effectiveBaseUrl().value || null });
     } catch (error) {
@@ -1081,6 +1159,9 @@ function runWorker() {
     }
   }
   refreshModels({ logSentryPolicies: true });
+  // A refresh reads cache files synchronously, and one per stale request let a burst of
+  // /v1/models calls start one each (issue #238); the handler only ever reads this snapshot.
+  setInterval(refreshModels, MODELS_REFRESH_MS).unref();
 
   const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 64 });
   const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64 });
@@ -1507,6 +1588,7 @@ function runWorker() {
           if (settled) return;
           settled = true;
           const upstreamBody = rewriteCodexJson(Buffer.concat(chunks), advertisedModel, false);
+          if (answerEmptyCodexCompletion(upRes.statusCode, upstreamBody, body, advertisedModel, clientRes, routeTelemetry)) return;
           noteCodexUpstreamRejection(upRes.statusCode, upRes.headers, upstreamBody);
           const text = upstreamBody.toString();
           if (/context window|context length|input exceeds|prompt token count|too many tokens/i.test(text)) {
@@ -1586,6 +1668,7 @@ function runWorker() {
           if (!attempt) {
             upRes.on('end', () => {
               filter.end();
+              closeFinishedTurn(inference, clientRes);
               routeTelemetry?.finish(upRes.statusCode, deliverableAttempt(inference) ? null : 'upstream_error');
               clientRes.end();
             });
@@ -1871,6 +1954,7 @@ function runWorker() {
         ok: true,
         version: PLUGIN_VERSION,
         models: modelCache.data.length,
+        catalog: modelCache.source,
         served: counters,
         draining,
         activeRequests,
@@ -1899,7 +1983,6 @@ function runWorker() {
 
     if (req.method === 'GET' && pathOnly === '/v1/models') {
       counters.models++;
-      if (Date.now() - modelCache.at > 60000) refreshModels(); // serve stale, refresh behind
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ data: modelCache.data, has_more: false }));
     }
@@ -2217,4 +2300,7 @@ function runWorker() {
   }
 }
 
-module.exports = { createHostsBypassResolver, effectiveSentryPolicy, gatewayModel, runWorker };
+module.exports = {
+  catalogReadiness, createHostsBypassResolver, effectiveSentryPolicy, gatewayModel, getCodexReadiness,
+  hasOpenAiRejectionEvidence, noteCodexUpstreamRejection, runWorker,
+};

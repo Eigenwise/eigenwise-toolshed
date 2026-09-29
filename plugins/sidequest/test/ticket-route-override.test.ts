@@ -151,7 +151,7 @@ test('effective readonly state controls cross-provider routes through add and up
   }
 });
 
-test('automatic fallbacks still refuse provider crossings', () => {
+test('a category fallback may cross providers and is named; the global fallback may not (GH-217)', () => {
   store.setCategory({
     id: 'ticket.override.fallback',
     name: 'Fallback provider boundary',
@@ -162,8 +162,8 @@ test('automatic fallbacks still refuse provider crossings', () => {
 
   const resolved = store.resolveCategoryRoute(store.getCategory('ticket.override.fallback'));
 
-  assert.equal(resolved.exec, null);
-  assert.match(resolved.warnings.join('\n'), /category fallback route "sonnet" crosses providers and was refused/);
+  assert.equal(resolved.model, 'sonnet');
+  assert.match(resolved.fallbackReason, /^category fallback sonnet replaced unavailable codex-unavailable\./);
 
   store.setCategory({
     id: 'ticket.override.global-fallback',

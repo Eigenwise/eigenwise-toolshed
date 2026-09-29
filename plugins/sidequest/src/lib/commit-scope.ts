@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFileText } from './git-process.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { hasGlob, isInScope, normalizeScope, scopeKey, scopedPaths } from './scope-match.js';
@@ -452,7 +452,7 @@ export function rangePaths(cwd: string, commits: readonly string[]): string[] {
   return paths;
 }
 
-function validatePaths(files: unknown, paths: string[]) {
+export function validatePaths(files: unknown, paths: string[]) {
   const scopes = scopedPaths(files);
   if (!scopes.length) return { ok: false, reason: 'missing_scope', paths: [] as string[], outside: [] as string[] };
   const outside = paths.filter((file) => !isInScope(file, scopes));
@@ -486,6 +486,32 @@ function isAncestor(cwd: string, ancestor: string, descendant: string): boolean 
   } catch {
     return false;
   }
+}
+
+// The recorded dispatch baseline bounds the range while it is on the tip. The merge-base only
+// wins when it sits between them, meaning upstream work was synced into the candidate after
+// dispatch; a merge-base below the baseline (a stale remote, a cherry-picked sibling) or equal
+// to the tip (a shared tree that advanced the branch) says nothing about this ticket (GH-139, GH-195).
+function recordedBaselineBoundsRange(cwd: string, baseline: string, mergeBase: string, tip: string): boolean {
+  if (!isAncestor(cwd, baseline, tip)) return false;
+  return mergeBase === tip || isAncestor(cwd, mergeBase, baseline);
+}
+
+// A path whose bytes at the candidate already equal the integration branch's delivers nothing:
+// it is upstream movement the candidate's history carries, such as a sibling integrated by
+// cherry-pick (GH-139). A candidate already on the branch equals it everywhere, so nothing folds.
+export function candidatePaths(cwd: string, changedPaths: readonly string[], commit: string, upstreamCommit: string): string[] {
+  if (isAncestor(cwd, commit, upstreamCommit)) return [...changedPaths];
+  const differing = gitResult(cwd, ['diff', '--name-only', '--no-renames', '-z', upstreamCommit, commit]);
+  if (!differing.ok) return [...changedPaths];
+  const differingKeys = new Set(differing.value.split('\0').filter(Boolean).map(scopeKey));
+  return changedPaths.filter((file) => differingKeys.has(scopeKey(file)));
+}
+
+function rangeCandidatePaths(cwd: string, range: { ok: boolean; commit?: unknown; upstreamCommit?: unknown }, changedPaths: string[]): string[] {
+  return range.ok && typeof range.commit === 'string' && typeof range.upstreamCommit === 'string'
+    ? candidatePaths(cwd, changedPaths, range.commit, range.upstreamCommit)
+    : changedPaths;
 }
 
 // Which ref proves the candidate landed, and at what commit. Callers record the
@@ -685,15 +711,11 @@ export function submissionRange(cwd: string, options: unknown) {
     }
   }
 
-  let effectiveBase = requestedBase ? requestedBase.value : mergeBase.value;
-  if (!requestedBase && dispatchBase) {
-    const dispatchBaseIsOnTip = dispatchBase.ok && isAncestor(cwd, dispatchBase.value, tip.value);
-    const dispatchBaseIsAfterMergeBase = dispatchBase.ok && isAncestor(cwd, mergeBase.value, dispatchBase.value);
-    const dispatchBaseIsIntegrated = dispatchBase.ok && integratedFrom(dispatchBase.value) !== null;
-    if (dispatchBaseIsOnTip && (dispatchBaseIsAfterMergeBase || dispatchBaseIsIntegrated)) {
-      effectiveBase = dispatchBase.value;
-    }
-  }
+  const recordedBase = !requestedBase && dispatchBase?.ok && recordedBaselineBoundsRange(cwd, dispatchBase.value, mergeBase.value, tip.value)
+    ? dispatchBase.value
+    : null;
+  const pinnedBase = requestedBase ? requestedBase.value : recordedBase;
+  let effectiveBase = pinnedBase ?? mergeBase.value;
   if (!requestedBase && !rootBase && Array.isArray(opts.baseCandidates) && opts.baseCandidates.length) {
     const candidates = new Set<string>();
     for (const name of opts.baseCandidates) {
@@ -729,15 +751,17 @@ export function submissionRange(cwd: string, options: unknown) {
     const commitList = gitResult(cwd, ['rev-list', '--reverse', `${effectiveBase}..${tip.value}`]);
     if (!commitList.ok) return { ok: false, reason: 'git_error', message: commitList.message };
     commits = commitList.value ? commitList.value.split(/\r?\n/).filter(Boolean) : [];
+    // A tip that is still the pinned base did no work. For a recorded dispatch baseline,
+    // walking to its parent would submit the pre-dispatch commit's own paths (GH-195).
+    if (!commits.length && pinnedBase === tip.value) {
+      noOp = true;
+    }
     // An empty range does not mean nothing was done — it means the tip is not
     // AHEAD of the integration branch, which is what happens whenever the scoped
     // commit IS the branch tip: a greenfield repo whose first commit is the board
     // commit, or a shared-tree dispatch whose commit advanced main. Merge-base and
     // tip are then the same commit. Recover the way the orchestrator did by hand,
     // submitting against the tip's own parent (SQ-923).
-    if (!commits.length && requestedBase && requestedBase.value === tip.value) {
-      noOp = true;
-    }
     if (!commits.length && !noOp && !requestedBase && effectiveBase === tip.value) {
       const tipParents = parentCommits(cwd, tip.value);
       rootCommit = tipParents.length === 0;
@@ -764,8 +788,15 @@ export function submissionRange(cwd: string, options: unknown) {
   }
 }
 
-export function validateStoredSubmissionRange(cwd: string, submissionValue: unknown, ticketRef?: unknown, integrationBranchOverride?: unknown) {
+export function validateStoredSubmissionRange(cwd: string, submissionValue: unknown, ticketRef?: unknown, integrationBranchOverride?: unknown, options?: unknown) {
   const submission = isRecord(submissionValue) ? submissionValue : {};
+  const opts = isRecord(options) ? options : {};
+  // The recorded expected upstream still has to be reachable before an automatic
+  // merge runs against it. A caller recording a delivery that already landed by
+  // hand proves its landing from the pinned candidate's own content instead, and
+  // holding it to this assertion refused the very recovery the divergence refusal
+  // prescribes (SQ-23). Every other stored-range invariant still runs.
+  const allowDivergedExpectedUpstream = opts.allowDivergedExpectedUpstream === true;
   // One derivation for every caller, including the override-less publish queue: the
   // submission itself records the mode, branch and upstream the dispatch froze.
   const integrationRefs = integrationRefNames(integrationBranchOverride, submission);
@@ -774,7 +805,7 @@ export function validateStoredSubmissionRange(cwd: string, submissionValue: unkn
     commit: submission.commit,
     gitRef: submission.gitRef,
     upstream: submission.upstream,
-    upstreamCommit: submission.upstreamCommit,
+    ...(allowDivergedExpectedUpstream ? {} : { upstreamCommit: submission.upstreamCommit }),
     integrationTarget: submission,
     integrationBranch: integrationRefs,
     base: submission.base,
@@ -818,7 +849,7 @@ export function validateStoredSubmissionRange(cwd: string, submissionValue: unkn
     });
   }
   const submissionScope = ticketCommitScope(admittedScope, admittedScope, ticketRef);
-  const scopeValidation = validatePaths(submissionScope, rangeChangedPaths);
+  const scopeValidation = validatePaths(submissionScope, rangeCandidatePaths(cwd, range, rangeChangedPaths));
   if (!scopeValidation.ok) return Object.assign({}, range, scopeValidation, { admittedScope });
   return Object.assign({}, range, {
     ok: true,
@@ -833,7 +864,35 @@ export function validateStoredSubmissionRange(cwd: string, submissionValue: unkn
   });
 }
 
-export function commitScoped(cwd: string, message: unknown, files: unknown) {
+// A commit hook can stage paths the pathspec never named (GH-229). A refusal that leaves the commit
+// on HEAD reads as "nothing committed", so an out-of-scope commit is undone in the same call;
+// --soft keeps the declared paths staged the way this call staged them.
+function validateCommitOrUndo(root: string, commit: string, scopes: readonly string[], previousHead: GitResult) {
+  const validation = validateCommitScope(root, commit, scopes);
+  if (validation.reason !== 'outside_scope') return validation;
+  const undone = previousHead.ok
+    ? gitResult(root, ['reset', '--soft', previousHead.value])
+    : gitResult(root, ['update-ref', '-d', 'HEAD']);
+  return { ...validation, rolledBack: undone.ok, message: undone.ok ? undefined : undone.message };
+}
+
+async function commitWithinScope(root: string, message: unknown, scopes: readonly string[], stageableScopes: readonly string[], committableScopes: readonly string[]) {
+  if (stageableScopes.length) await execFileText('git', ['add', '--all', '--', ...stageableScopes], { cwd: root });
+  const previousHead = gitResult(root, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  const commitArgs = ['commit', '--only'];
+  if (repoRequestsSignoff(root)) commitArgs.push('--signoff');
+  await execFileText('git', [...commitArgs, '-m', String(message || ''), '--', ...committableScopes], { cwd: root });
+  const commit = git(root, ['rev-parse', 'HEAD']).trim();
+  return Object.assign({ commit }, validateCommitOrUndo(root, commit, scopes, previousHead));
+}
+
+export function outsideScopeCommitState(result: { commit?: string; rolledBack?: boolean; message?: string }): string {
+  return result.rolledBack
+    ? 'Nothing was committed: the commit was undone, HEAD is back where it was and the declared paths stay staged. A commit hook usually stages the extra paths.'
+    : `Commit ${result.commit} is still on HEAD because undoing it failed: ${result.message}.`;
+}
+
+export async function commitScoped(cwd: string, message: unknown, files: unknown) {
   const scopes = scopedPaths(files);
   if (!scopes.length) return { ok: false, reason: 'missing_scope' };
   try {
@@ -854,13 +913,7 @@ export function commitScoped(cwd: string, message: unknown, files: unknown) {
       ...directScopes.filter((scope) => !ignoredUntrackedScope(root, scope)),
       ...concreteGlobPaths.filter((scope) => !ignoredUntrackedScope(root, scope)),
     ])];
-    if (stageableScopes.length) git(root, ['add', '--all', '--', ...stageableScopes]);
-    const commitArgs = ['commit', '--only'];
-    if (repoRequestsSignoff(root)) commitArgs.push('--signoff');
-    git(root, [...commitArgs, '-m', String(message || ''), '--', ...committableScopes]);
-    const commit = git(root, ['rev-parse', 'HEAD']).trim();
-    const validation = validateCommitScope(root, commit, scopes);
-    return Object.assign({ commit, missingScopes, unscopedPaths }, validation);
+    return Object.assign({ missingScopes, unscopedPaths }, await commitWithinScope(root, message, scopes, stageableScopes, committableScopes));
   } catch (error) {
     return { ok: false, reason: 'git_error', message: errorMessage(error) };
   }

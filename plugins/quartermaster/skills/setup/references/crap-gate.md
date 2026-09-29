@@ -69,6 +69,33 @@ count and lizard's number. A function nested in the body keeps its own row, so i
 counted twice. When the gate cannot find where the body ends, it keeps lizard's span, and the function
 is reported as unverified, as before.
 
+## React files (.tsx and .jsx)
+
+lizard 1.24.0, the current release, has a TSX reader that abandons an opening tag as soon as one of
+its attributes is not `name="text"` or `name={expr}`. A hyphenated attribute (`data-testid`), a
+valueless one (`required`), a spread (`{...props}`), even tag text holding `(`, `)`, `;` or `=` is
+enough. It then re-emits the `{` of every brace attribute it had already matched, and those
+unbalanced braces keep the enclosing component open to the end of the file. The component reads a
+complexity nothing in it branches on, and the functions it swallowed are never gated at all.
+
+So the gate measures `.tsx` and `.jsx` through lizard's TypeScript reader instead, by handing lizard a
+byte-for-byte copy of the file under a `.ts` or `.js` name. Nothing in the source is rewritten: line
+numbers, and with them coverage ranges and baseline pairing, still come from the real file. The base
+revision's copy of the file is read the same way, so an untouched component pairs with its own
+baseline row instead of a phantom one and is not gated as changed.
+
+Every offender line for one of these files names the measurement behind it, and `--json` carries the
+same `source` for every function:
+
+```text
+src/sale.tsx:27 SaleTotals cc=3 coverage=0% CRAP=12 source=lizard-typescript
+```
+
+`source=lizard-typescript` is the reader above. `source=lizard-tsx` means the file was measured by
+lizard's TSX reader after all, which happens only when the gate was handed a ready-made
+`--complexity` CSV, could not read the file, or the TypeScript reader found no function in it; treat a
+complexity that no branch in the function explains as this defect, not as real complexity.
+
 ## Produce LCOV coverage
 
 Pick the row for the detected stack and use its output path in `lcov`. The test command is still the

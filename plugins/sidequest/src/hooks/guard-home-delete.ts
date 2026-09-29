@@ -21,15 +21,23 @@ function normalizePath(value: string): string {
   return value.toLowerCase().replace(/[\\/]+$/, '');
 }
 
+const LEADING_HOME_REFERENCE = /^(?:~|\$home|\$env:userprofile|%userprofile%)(?=[\\/]|$)/i;
+const HOME_REFERENCE = /\$home\b|\$env:userprofile\b|%userprofile%|(?<!\w)~(?=[\\/\s]|$)/i;
+
+function deleteTargets(command: string): string[] {
+  const home = os.homedir();
+  return command.replace(/["']/g, '').split(/\s+/).map((target) => target.replace(LEADING_HOME_REFERENCE, () => home));
+}
+
 function isProtectedPath(command: string): boolean {
-  if (/\$home\b|\$env:userprofile\b|%userprofile%|(?<!\w)~(?=[\\/\s"']|$)/i.test(command)) return true;
+  const targets = deleteTargets(command);
+  // A home reference anywhere but the start of a target cannot be resolved here, so it still blocks.
+  if (HOME_REFERENCE.test(targets.join(' '))) return true;
 
   const home = path.resolve(os.homedir());
   const protectedRoots = [home, path.join(home, '.claude'), path.dirname(home), path.parse(home).root]
     .map(normalizePath);
-  return command
-    .replace(/["']/g, '')
-    .split(/\s+/)
+  return targets
     .filter((target) => target !== '\\' && path.isAbsolute(target))
     .some((target) => {
       const resolved = path.resolve(target);
