@@ -71,12 +71,14 @@ is reported as unverified, as before.
 
 A parameter list that holds a call (`load(path = resolve(), opts)`) is worse for a `function`, method or
 constructor: lizard reports no row for it at all, and can lose plain functions after it in the same
-file, so the gate would never have checked it. The gate reads each such definition from the source, on
-a line no lizard row starts on, and scores it with its own branch count. In a file where it finds one,
-it also reads every other definition lizard gave no row. These rows are labelled `source=source-scan`
-in the report, they pair with the base revision the same way lizard's rows do, and a file counts as
-measured once these rows account for every `function` keyword in it. An arrow with a call in its
-parameter list keeps the row lizard gives it.
+file, so the gate would never have checked it. The gate reads each such definition from the source,
+unless a lizard row of the same name starts on its line, and scores it with its own branch count. In a
+file where it finds one, it also reads every other definition lizard gave no row. These rows are
+labelled `source=source-scan` in the report, and they pair with the base revision the same way lizard's
+rows do. A file lizard gave no row counts as measured only when every definition in it (a `function`
+keyword, a `=>`, or a `name(...) {` head) lies inside one of these rows; otherwise the gate still exits
+2 with "lizard reported zero functions". An arrow with a call in its parameter list keeps the row lizard
+gives it.
 
 ## React files (.tsx and .jsx)
 
