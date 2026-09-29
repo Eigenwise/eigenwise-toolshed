@@ -313,6 +313,9 @@
           "maxLength": 1000,
           "description": "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
         },
+        "verifyCwd": {
+          "type": "string"
+        },
         "verifyKind": {
           "type": "string",
           "enum": [
@@ -509,6 +512,9 @@
           "type": "string",
           "maxLength": 1000,
           "description": "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
+        },
+        "verifyCwd": {
+          "type": "string"
         },
         "verifyKind": {
           "type": "string",
@@ -872,7 +878,7 @@
   },
   {
     "name": "groomClose",
-    "description": "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; verifier replacement; reviewed interaction.",
+    "description": "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate proven in the working tree or at deliveryRevision; verifier replacement; reviewed interaction.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -908,6 +914,18 @@
             "working-tree",
             "manual"
           ]
+        },
+        "deliveryRevision": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,64}$",
+          "description": "Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable."
+        },
+        "resolvedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable. reason is the evidence."
         },
         "verificationSupersession": {
           "type": "object",
@@ -1242,7 +1260,7 @@
   },
   {
     "name": "integrate",
-    "description": "Comma-ref group; wave=options, refs in ref; pinned deliveryMethod; reviewed interaction.",
+    "description": "Comma-ref group; wave=options, refs in ref; pinned deliveryMethod with working tree or deliveryRevision; reviewed interaction.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1280,6 +1298,18 @@
             "working-tree",
             "manual"
           ]
+        },
+        "deliveryRevision": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,64}$",
+          "description": "Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable."
+        },
+        "resolvedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable. reason is the evidence."
         },
         "reason": {
           "type": "string"
@@ -1944,6 +1974,12 @@
         },
         "readonly": {
           "type": "boolean"
+        },
+        "deniedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -2054,6 +2090,12 @@
           }
         },
         "readOnlyDeniedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deniedTools": {
           "type": "array",
           "items": {
             "type": "string"

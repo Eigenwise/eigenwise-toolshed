@@ -9,6 +9,7 @@ import { runSweep } from './shared/sweep-handoff.js';
 import { registerSweepSession } from './shared/worktree-sweep.js';
 import { diagnosticWorktreeWarning } from './diagnostic-worktree-warning.js';
 import { reportLoadedSidequestVersion, sidequestReloadWarning } from '../lib/plugin-freshness.js';
+import { classify } from '../lib/exec-names.js';
 
 const MAX_SESSION_CONTEXT_BYTES = 4 * 1024;
 const MAX_WORKFORCE_BYTES = 800;
@@ -118,6 +119,27 @@ function nudgeOff(): boolean {
   return value === 'off' || value === '0' || value === 'false' || value === 'no';
 }
 
+// Only a registered board makes this session an orchestrator. Claim and dispatch records cannot mark an executor:
+// native executors run inside the orchestrator's process and share its session id, so a headless executor session
+// is known by its launch identity instead (GH-225).
+function sessionRole(data: HookInput): 'orchestrator' | 'executor' | 'plain' {
+  if (process.env.SIDEQUEST_AGENT || classify(stringField(data, 'agent_type', 'agentType')).kind !== 'unknown') return 'executor';
+  return projectHasBoard(data) ? 'orchestrator' : 'plain';
+}
+
+function projectHasBoard(data: HookInput): boolean {
+  try {
+    const store = require(runtimeModule('store')) as Store;
+    return store.findProject(store.nearestRepoRoot(sessionProjectStart(data))).ok;
+  } catch (_) {
+    return true;
+  }
+}
+
+function sessionProjectStart(data: HookInput): string {
+  return stringField(data, 'cwd', 'project_dir', 'projectDir') || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+}
+
 function checkpointingGuidance(data: HookInput): string {
   const model = stringField(data, 'model').toLowerCase();
   const tier = model.includes('haiku') ? 'Haiku' : model.includes('sonnet') ? 'Sonnet' : '';
@@ -178,6 +200,14 @@ function hasMidWaveBoard(data: HookInput): boolean {
   }
 }
 
+// Sweep reports and lost-launch notices are drained once, so a session that gets no briefing still gets them.
+function briefingWithheld(data: HookInput, notice: string): boolean {
+  if (nudgeOff()) return true;
+  if (sessionRole(data) === 'orchestrator') return false;
+  if (notice) writeContext('SessionStart', notice);
+  return true;
+}
+
 function emit(context: string, notice: string, initialUserMessage = ''): void {
   const output = notice ? `${notice}\n${context}` : context;
   writeContext('SessionStart', withWorkforce(output), initialUserMessage);
@@ -208,13 +238,13 @@ async function main(): Promise<void> {
     ...sweepNotices,
   ].filter(Boolean).join('\n');
 
-  if (nudgeOff()) return;
+  if (briefingWithheld(data, restartNotice)) return;
   const cli = `node "${pluginRoot()}/bin/sidequest.js"`;
   const watch = `Arm a persistent Monitor running ${cli} watch --project <path>; ticket alerts default to dispatches prepared by this session plus unowned and terminal tickets, while failed GitHub CI runs stay project-wide. Use --all for project-wide ticket alerts. Skip it if Monitor is unavailable.`;
   const dispatchAdmission = dispatchAdmissionStatus(data);
   const boardAuthorization = dispatchAdmission === 'routed'
     ? 'Quick edits at a named or known location, one-line fixes, operational requests, and direct questions stay inline and do not load user-story. For work beyond a small task, load the user-story skill before ticketing or dispatching; do not plan it inline. A usable Sidequest project route is standing authorization to file tickets and dispatch returned executors without offering it or asking for a further user request when work is a multi-file change, at an unknown location that needs discovery, or an investigation. For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together. Ask before work beyond the approved scope unless explicit standing permission covers it.'
-    : 'Sidequest has no usable project route here, so substantive work may stay inline. The first Board MCP call auto-registers this project; then use board_config to enable a category with an available executor before asking for board dispatch.';
+    : 'Sidequest has no usable project route here, so substantive work may stay inline. Use board_config to enable a category with an available executor before asking for board dispatch.';
   const inlineBoundary = dispatchAdmission === 'routed' ? '' : 'Specific one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch; say why. Ask before work beyond the approved scope unless explicit standing permission covers it.';
   const fanoutGuidance = dispatchAdmission === 'routed' ? '' : 'For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together.';
   const upstreamDefects = `If Sidequest itself misbehaves (a refusal contradicting observed state, a dead retrieval handle, a guard loop, a reproducible tool error), report it to the user with the reproducing evidence as an upstream defect; never encode a workaround into project rules, hooks, or memory, and mark any unavoidable stopgap temporary, naming the defect it awaits. ${upstreamDefectDestination()}`;

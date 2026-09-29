@@ -24,7 +24,9 @@ A present valid category takes precedence over a stored complexity score. A miss
 The category projection includes its contract text. Inject that text verbatim into the executor prompt
 with the ticket contract. The `exec` object remains the dispatch authority. Resolve the category route
 when its model is available, then its category fallback, then the global fallback, then hardwired
-Sonnet/high. If the read shows a degraded route, do nothing special: trust `exec` from that read.
+Sonnet/high. The category fallback may cross providers (a Codex route that can't run falls back to its
+Claude fallback); the global fallback may not. A fallback dispatch names itself in `fallbackReason` and
+the briefing. If the read shows a degraded route, do nothing special: trust `exec` from that read.
 
 ## Legacy complexity bands
 

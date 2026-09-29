@@ -51,7 +51,7 @@ const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCand
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, isCanonicalRegisteredWorktree } = require('./kernel/worktree.js');
 const { reviewLockMessage } = require('./kernel/review-binding.js');
 const { migrateIfNeeded } = require('./migrate.js');
-const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, providerReadiness } = require('./discovery.js');
+const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, gatewayCatalogRefreshFailure, providerReadiness } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
 const { negativeControlRecoveryGuidance, routingDisabledMessage, filesystemSnapshotLimitGuidance, filesystemSnapshotChildFailureGuidance, landedWithoutSubmissionGuidance } = require('./refusal-guidance.js');
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require('./prepared-dispatch.js');
@@ -321,6 +321,7 @@ function normalizeVerifyOracleKind(...args: any[]) { return warningsLayer.normal
 function attestationErrors(...args: any[]) { return warningsLayer.attestationErrors(...args); }
 function verifyOracleErrors(...args: any[]) { return warningsLayer.verifyOracleErrors(...args); }
 function requireVerifyOracle(...args: any[]) { return warningsLayer.requireVerifyOracle(...args); }
+function normalizeVerifyCwd(...args: any[]) { return warningsLayer.normalizeVerifyCwd(...args); }
 function verifyCommandErrors(...args: any[]) { return warningsLayer.verifyCommandErrors(...args); }
 function verifyCommandError(...args: any[]) { return warningsLayer.verifyCommandError(...args); }
 function requireVerifyCommand(...args: any[]) {
@@ -482,6 +483,7 @@ const {
   db,
   dispatchReadOnly: (...args: any[]) => dispatchReadOnly(...args),
   discoverExternalModels,
+  gatewayCatalogRefreshFailure,
   invalidateStoreCaches,
   listProjects,
   projectRoutingEnabled,
@@ -584,6 +586,7 @@ const {
   bindDispatchAgent,
   dispatchMatchesStopIdentity,
   markDispatchStopped,
+  agentDispatchWorktrees,
   reconcileLaunchedDispatches,
 } = (dispatch = createDispatch({
   ARTIFACT_BASELINE_MAX_PATHS,
@@ -1043,6 +1046,7 @@ const {
   claimReleaseBlocker,
   claimReleaseNote,
   claimReleaseVerdict,
+  claimStaleness,
   claimVerification,
   hasNoOpReleaseProof,
   preparedDispatchTtlMs,
@@ -1186,6 +1190,7 @@ const {
   requestedReadonlyOverride,
   requireStatus,
   requireVerifyOracle,
+  normalizeVerifyCwd,
   transaction: (...args: any[]) => transaction(...args),
   normalizeVerifyOracleKind,
   saveAssetData,
@@ -1221,7 +1226,7 @@ const {
 } = createReads({
   checkpointProjection: checkpointProjectionForRead,
   claimIdleMs,
-  claimReclaimable,
+  claimStaleness,
   classifierCategories,
   contractMetadata,
   countTickets,
@@ -1326,6 +1331,7 @@ const {
   normalizeIntegrationBranch,
   normalizeIntegrationVerifyTimeoutMs,
   nullableText,
+  os,
   path,
   prepareComment,
   projectDir,
@@ -3312,6 +3318,8 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
       deliveryCommit: opts.deliveryCommit,
       deliveryInteractionCommit: opts.deliveryInteractionCommit,
       deliveryMethod: opts.deliveryMethod,
+      deliveryRevision: opts.deliveryRevision,
+      resolvedPaths: opts.resolvedPaths,
       verificationSupersession: opts.verificationSupersession,
       completingApplyDelivery,
       by,
@@ -3622,6 +3630,7 @@ const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createP
   boardConfig,
   checkpointProjection,
   claimPulse,
+  claimStaleness,
   claimReleaseVerdict,
   unclaimedRetirement,
   claimVerification,
@@ -3684,6 +3693,7 @@ module.exports = {
   sharedTreeArtifactMode,
   resolveTicketRoute,
   resolveCategoryRoute,
+  dispatchRouteRefusal,
   projectDispatchAdmission,
   claudeQuotaFailure,
   classifyDispatchFailure,
@@ -3751,6 +3761,7 @@ module.exports = {
   verifyOracleErrors,
   verifyCommandErrors,
   verifyCommandError,
+  normalizeVerifyCwd,
   completionTreeCheck,
   listProjects,
   findProject,
@@ -3814,6 +3825,7 @@ module.exports = {
   terminalDispatchTarget,
   terminalDispatchForIdle,
   markDispatchStopped,
+  agentDispatchWorktrees,
   reconcileLaunchedDispatches,
   claimAdmission,
   bindClaimRuntimeIdentity,

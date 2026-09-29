@@ -1,6 +1,4 @@
 "use strict";
-const fs = require("fs");
-const os = require("os");
 const path = require("path");
 const store = require("./store");
 const { compactSchema, conciseDescription, resolveProject, TOOL_DESCRIPTION_OVERRIDES, boundedReadPayload } = require("./mcp-shared");
@@ -13,50 +11,9 @@ const { tools: routingTools } = require("./mcp-routing");
 function boardMcpSessionId() {
   return String(process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "").trim();
 }
-function boardMcpLivenessFile(sessionId) {
-  const home = process.env.SIDEQUEST_HOME || path.join(os.homedir(), ".claude", "sidequest");
-  return path.join(home, "tmp", "state", `board-mcp-${encodeURIComponent(sessionId)}.json`);
-}
-function isBoardMcpLiveness(value) {
-  return value !== null && typeof value === "object" && Object.hasOwn(value, "pid") && Number.isInteger(Reflect.get(value, "pid")) && Reflect.get(value, "pid") > 0;
-}
-function readBoardMcpLiveness(sessionId) {
-  try {
-    const value = JSON.parse(fs.readFileSync(boardMcpLivenessFile(sessionId), "utf8"));
-    return isBoardMcpLiveness(value) ? value : null;
-  } catch (_) {
-    return null;
-  }
-}
-function writeBoardMcpLiveness(sessionId = boardMcpSessionId()) {
-  if (!sessionId) return;
-  const file = boardMcpLivenessFile(sessionId);
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({ pid: process.pid }));
-  } catch (_) {
-  }
-}
-function clearBoardMcpLiveness(sessionId = boardMcpSessionId()) {
-  if (!sessionId || readBoardMcpLiveness(sessionId)?.pid !== process.pid) return;
-  try {
-    fs.rmSync(boardMcpLivenessFile(sessionId), { force: true });
-  } catch (_) {
-  }
-}
-function isBoardMcpLive(sessionId) {
-  const marker = sessionId ? readBoardMcpLiveness(sessionId) : null;
-  if (!marker) return false;
-  try {
-    process.kill(marker.pid, 0);
-    return true;
-  } catch (error) {
-    return !(error instanceof Error && "code" in error && error.code === "ESRCH");
-  }
-}
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 25600;
+const MCP_TOOLS_LIST_MAX_BYTES = 25800;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
@@ -118,7 +75,7 @@ function toolMutates(name, args) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === "new_board_profile") return args.profile !== void 0;
   if (name === "global_fallback") return args.model !== void 0 || args.effort !== void 0;
-  if (name === "board_config") return args.name !== void 0 || args.alwaysInScope != null || args.generatedPairs !== void 0 || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== void 0 || args.worktreeBase !== void 0 || args.notIntegratedSalvageAgeHours !== void 0 || args.worktreeRecoveryRetentionAgeHours !== void 0 || args.autoApproveTestScope !== void 0 || args.autoApproveScope !== void 0 || args.worktreeSetup !== void 0 || args.worktreeDependencyPaths !== void 0;
+  if (name === "board_config") return args.name !== void 0 || args.alwaysInScope != null || args.deniedTools !== void 0 || args.readOnlyDeniedTools !== void 0 || args.generatedPairs !== void 0 || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== void 0 || args.worktreeBase !== void 0 || args.notIntegratedSalvageAgeHours !== void 0 || args.worktreeRecoveryRetentionAgeHours !== void 0 || args.autoApproveTestScope !== void 0 || args.autoApproveScope !== void 0 || args.worktreeSetup !== void 0 || args.worktreeDependencyPaths !== void 0;
   return false;
 }
 function mutationQueueKey(name, args) {
@@ -256,6 +213,8 @@ async function runTool(tool, rawArgs) {
   return enqueueMutation(board, async () => acknowledgeAliases(await tool.handler(args), aliases));
 }
 const ATTESTATION_VERIFY_CONTRACT = "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.";
+const DELIVERY_REVISION_CONTRACT = "Landed revision reachable from the target, never an ancestor of the candidate base; proves each submitted path at its tree, not the working tree. Ignored when reachable.";
+const RESOLVED_PATHS_CONTRACT = "Diverging submitted paths resolved by hand; needs deliveryRevision, refused when reachable. reason is the evidence.";
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   context_page: {
     limit: "UTF-8 bytes."
@@ -285,10 +244,16 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
     reducedAgentSchema: "Only when name/mode missing; hook needs agent_id+auto|bypass mode.",
     recoveryEvidence: "Unverified; preparer retires now, else latest signal grace; bound name only."
   },
-  integrate: { deliveryInteractionCommit: "Reviewed descendant, submitted paths only." },
+  integrate: {
+    deliveryInteractionCommit: "Reviewed descendant, submitted paths only.",
+    deliveryRevision: DELIVERY_REVISION_CONTRACT,
+    resolvedPaths: RESOLVED_PATHS_CONTRACT
+  },
   groomClose: {
     deliveryCommit: "Prepared integration target.",
     deliveryInteractionCommit: "Reviewed descendant, submitted paths only.",
+    deliveryRevision: DELIVERY_REVISION_CONTRACT,
+    resolvedPaths: RESOLVED_PATHS_CONTRACT,
     recoveryEvidence: "Unclaimed: preparing session retires now; others past deadline; CLI too."
   },
   verdict: {
@@ -370,9 +335,6 @@ module.exports = {
   SERVER_NAME,
   DEFAULT_PROTOCOL_VERSION,
   boardMcpSessionId,
-  writeBoardMcpLiveness,
-  clearBoardMcpLiveness,
-  isBoardMcpLive,
   MCP_TOOLS_LIST_MAX_BYTES,
   MCP_TOOLS_LIST_HEADROOM_BYTES,
   ARGUMENT_ALIASES,

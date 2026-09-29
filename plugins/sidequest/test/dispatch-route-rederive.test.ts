@@ -68,7 +68,7 @@ test('dead Codex refuses before creating dispatch state', () => {
   assert.deepEqual(after.dispatch, before.dispatch);
 });
 
-test('a Codex route never falls through to a Claude fallback', () => {
+test('an unusable Codex route falls through to its Claude category fallback, and only to that (GH-217)', () => {
   writeCatalog([], READY);
   store.setCategory({
     id: 'dispatch.cross-provider',
@@ -77,14 +77,30 @@ test('a Codex route never falls through to a Claude fallback', () => {
     fallback: { model: 'sonnet', effort: 'high' },
     enabled: true,
   });
-  const ticket = store.createTicket(slug, {
+  const fallbackTicket = store.createTicket(slug, {
     title: 'Cross-provider fallback fixture',
+    category: 'dispatch.cross-provider',
+    source: 'test',
+  });
+  const prepared = store.prepareDispatch(slug, fallbackTicket.ref, { allowUnscoped: true, sessionId: 'cross-provider-fallback' });
+  assert.equal(prepared.ticket.dispatch.route.model, 'sonnet');
+  assert.match(prepared.ticket.dispatch.fallbackReason, /^category fallback sonnet replaced unavailable codex-gpt-missing\./);
+
+  store.setCategory({
+    id: 'dispatch.cross-provider',
+    name: 'Cross provider fallback',
+    route: { model: 'codex-gpt-missing', effort: 'medium' },
+    fallback: null,
+    enabled: true,
+  });
+  const ticket = store.createTicket(slug, {
+    title: 'Global fallback fixture',
     category: 'dispatch.cross-provider',
     source: 'test',
   });
   const resolved = store.resolveCategoryRoute(store.getCategory('dispatch.cross-provider'));
   assert.equal(resolved.model, 'codex-gpt-missing');
-  assert.equal(resolved.exec, null);
+  assert.equal(resolved.exec, null, 'the global fallback never crosses providers');
   assert.throws(
     () => store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: 'cross-provider' }),
     /Codex dispatch refused: configured route codex-gpt-missing is not available/,
@@ -106,7 +122,7 @@ test('same-provider fallback is prepared with its reason and re-derives when the
 
   const degraded = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: 'degraded-roster' });
   assert.deepEqual(degraded.ticket.dispatch.route, { model: 'codex-gpt-fallback', effort: 'medium', marker: 'gpt-fallback' });
-  assert.equal(degraded.ticket.dispatch.fallbackReason, 'category fallback replaced unavailable codex-gpt-recovered.');
+  assert.match(degraded.ticket.dispatch.fallbackReason, /^category fallback codex-gpt-fallback replaced unavailable codex-gpt-recovered\. Codex dispatch refused: configured route codex-gpt-recovered is not available from the live model-gateway catalog\./);
 
   writeCatalog([{
     slug: 'codex-gpt-fallback',

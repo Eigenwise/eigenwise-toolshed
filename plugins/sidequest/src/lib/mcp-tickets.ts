@@ -88,6 +88,8 @@ type ToolDefinition = {
   handler: (args: any) => any | Promise<any>;
 };
 
+const VERIFY_CWD_PROP = { type: 'string', description: 'Directory the verify command runs from, relative to the project root. The capture and the integrate gate both honour it; unset runs from the project root.' };
+
 const VERIFY_ORACLE_PROP = {
   type: 'string',
   maxLength: store.EXECUTOR_VERIFY_MAX,
@@ -151,6 +153,7 @@ const tools: ToolDefinition[] = [
         workingTreeDelivery: { type: 'boolean', description: 'Shared-checkout deliverable that forbids commits. Command or suite verification needs final verify-capture; commandless kinds need explicit done.verify evidence.' },
         anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Executor anchors, verbatim in the task prompt.' },
         verify: VERIFY_ORACLE_PROP,
+        verifyCwd: VERIFY_CWD_PROP,
         verifyKind: { type: 'string', enum: store.VERIFY_ORACLE_KINDS, description: 'Pinned verification kind. command and suite execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command.' },
         attestationArtifact: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command.' },
         storyId: { type: 'string', pattern: '^US-\\d+$', description: 'A story ref (US-n) to file this ticket into.' },
@@ -208,6 +211,7 @@ const tools: ToolDefinition[] = [
         executorVerifyKind: args.verifyKind,
         executorAttestationArtifact: args.attestationArtifact,
         executorVerify: args.verify,
+        executorVerifyCwd: args.verifyCwd,
         storyId: args.storyId,
         complexity: args.complexity,
         complexityWhy: args.why,
@@ -253,6 +257,7 @@ const tools: ToolDefinition[] = [
         externalDeliverable: { type: 'boolean', description: 'Explicitly declare the deliverable is outside the repository. The orchestrator may set this during a live claim; it lets that executor close a clean writable dispatch with its current-attempt pinned verify-capture.' },
         anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Executor anchors, verbatim in the task prompt.' },
         verify: VERIFY_ORACLE_PROP,
+        verifyCwd: VERIFY_CWD_PROP,
         verifyKind: { type: 'string', enum: store.VERIFY_ORACLE_KINDS, description: 'Verification kind for future dispatches. An open dispatch keeps its pinned kind. command and suite execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command.' },
         attestationArtifact: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command.' },
         storyId: { anyOf: [{ type: 'string', pattern: '^US-\\d+$' }, { const: 'none' }] },
@@ -300,7 +305,8 @@ const tools: ToolDefinition[] = [
       }
       const verificationWasAmended = (args.verify !== undefined && args.verify !== existing.executorVerify)
         || (args.verifyKind !== undefined && args.verifyKind !== existing.executorVerifyKind)
-        || (args.attestationArtifact !== undefined && args.attestationArtifact !== existing.executorAttestationArtifact);
+        || (args.attestationArtifact !== undefined && args.attestationArtifact !== existing.executorAttestationArtifact)
+        || (args.verifyCwd !== undefined && args.verifyCwd !== (existing.executorVerifyCwd || ''));
       const verificationAmendmentRefusal = verificationWasAmended
         ? recordedSubmissionVerificationAmendmentRefusal(existing)
         : null;
@@ -323,6 +329,7 @@ const tools: ToolDefinition[] = [
       if (args.externalDeliverable !== undefined) patch.externalDeliverable = args.externalDeliverable;
       if (args.anchors !== undefined) patch.executorAnchors = args.anchors;
       if (args.verify !== undefined) patch.executorVerify = args.verify;
+      if (args.verifyCwd !== undefined) patch.executorVerifyCwd = args.verifyCwd;
       if (args.verifyKind !== undefined) patch.executorVerifyKind = args.verifyKind;
       if (args.attestationArtifact !== undefined) patch.executorAttestationArtifact = args.attestationArtifact;
       if (args.storyId !== undefined) {

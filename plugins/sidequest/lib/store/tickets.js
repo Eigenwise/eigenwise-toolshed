@@ -42,6 +42,7 @@ function createTickets(dependencies) {
     requestedReadonlyOverride,
     requireStatus,
     requireVerifyOracle,
+    normalizeVerifyCwd,
     normalizeVerifyOracleKind,
     saveAssetData,
     stripLinksTo,
@@ -252,6 +253,7 @@ function createTickets(dependencies) {
       executorVerifyKind,
       executorAttestationArtifact: executorText(fields.executorAttestationArtifact, EXECUTOR_VERIFY_MAX, "executor attestation artifact"),
       executorVerify,
+      executorVerifyCwd: normalizeVerifyCwd(fields.executorVerifyCwd),
       assets,
       comments: [],
       // [{ id, by, body, kind: 'comment', at }]
@@ -1050,7 +1052,8 @@ function createTickets(dependencies) {
       ...patch.externalDeliverable !== void 0 && patch.externalDeliverable === true !== (ticket.externalDeliverable === true) ? ["externalDeliverable"] : [],
       ...patch.executorVerify !== void 0 && patch.executorVerify !== ticket.executorVerify ? ["verify"] : [],
       ...patch.executorVerifyKind !== void 0 && patch.executorVerifyKind !== ticket.executorVerifyKind ? ["verifyKind"] : [],
-      ...patch.executorAttestationArtifact !== void 0 && patch.executorAttestationArtifact !== ticket.executorAttestationArtifact ? ["attestationArtifact"] : []
+      ...patch.executorAttestationArtifact !== void 0 && patch.executorAttestationArtifact !== ticket.executorAttestationArtifact ? ["attestationArtifact"] : [],
+      ...patch.executorVerifyCwd !== void 0 && normalizeVerifyCwd(patch.executorVerifyCwd) !== (ticket.executorVerifyCwd || "") ? ["verifyCwd"] : []
     ];
     if (!changedFields.length) return null;
     const caller = String(patch.by || "").trim();
@@ -1160,7 +1163,8 @@ function createTickets(dependencies) {
       const nextVerifyKind = patch.executorVerifyKind === void 0 ? t.executorVerifyKind : patch.executorVerifyKind;
       const nextAttestationArtifact = patch.executorAttestationArtifact === void 0 ? t.executorAttestationArtifact : patch.executorAttestationArtifact;
       const nextVerify = patch.executorVerify === void 0 ? t.executorVerify : patch.executorVerify;
-      if (patch.executorVerify !== void 0 || patch.executorVerifyKind !== void 0 || patch.executorAttestationArtifact !== void 0) {
+      if (patch.executorVerifyCwd !== void 0) t.executorVerifyCwd = normalizeVerifyCwd(patch.executorVerifyCwd);
+      if (patch.executorVerify !== void 0 || patch.executorVerifyKind !== void 0 || patch.executorAttestationArtifact !== void 0 || patch.executorVerifyCwd !== void 0) {
         requireVerifyOracle(nextVerifyKind, nextVerify, nextAttestationArtifact);
         const executorVerify = executorText(nextVerify, EXECUTOR_VERIFY_MAX, "executor verify command");
         const executorVerifyKind = normalizeVerifyOracleKind(nextVerifyKind, executorVerify);

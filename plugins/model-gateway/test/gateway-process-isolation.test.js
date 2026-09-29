@@ -583,7 +583,7 @@ test('proxy command identity resolves the physical executable path', (t) => {
 
 test('gateway fixture processes isolate outer body, socket, and Codex state', async (t) => {
   const outerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-outer-user-'));
-  t.after(() => fs.rmSync(outerHome, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(outerHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   let defaultContacts = 0;
   const defaultEndpoint = http.createServer((request, response) => {
     defaultContacts += 1;
@@ -620,7 +620,7 @@ test('gateway fixture processes isolate outer body, socket, and Codex state', as
   assert.notEqual(isolatedEnvironment.MODEL_GATEWAY_REQUEST_BODY_DIR, outer.bodyDirectory);
   assert.notEqual(isolatedEnvironment.CODEX_HOME, outer.codexHome);
   assert.equal(isolatedEnvironment.ANTHROPIC_UNIX_SOCKET, undefined);
-  started.child.kill();
+  killProcessTree(started.child.pid);
   await waitForExit(started.child);
 
   const negativeControl = await startGateway(t, 'serve-shim', {
@@ -628,14 +628,14 @@ test('gateway fixture processes isolate outer body, socket, and Codex state', as
     CODEX_GATEWAY_REQUEST_LOG: '0',
   }, { isolatedOverrides: { MODEL_GATEWAY_REQUEST_BODY_DIR: outer.bodyDirectory } });
   assert.equal(await request(negativeControl.port, codexMessage()), 200);
-  negativeControl.child.kill();
+  killProcessTree(negativeControl.child.pid);
   await waitForExit(negativeControl.child);
   assert.throws(() => assertNoBodyRecord(outer.bodyDirectory), /true !== false/);
 });
 
 test('sync gateway fixture cleanup removes helper-owned homes and preserves supplied homes', (t) => {
   const outerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-outer-user-'));
-  t.after(() => fs.rmSync(outerHome, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(outerHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const outer = setOuterGatewayEnvironment(t, outerHome, 9);
   const before = testHomes(outer.temporaryDirectory);
 
@@ -651,6 +651,20 @@ test('sync gateway fixture cleanup removes helper-owned homes and preserves supp
   });
   assert.equal(suppliedResult.status, 0, suppliedResult.stderr);
   assert.equal(fs.existsSync(suppliedHome), true);
+});
+
+test('gateway fixture home teardown stops a supervisor even after later commands reused its home', async (t) => {
+  const environment = gatewayTestEnvironment(t, { CODEX_GATEWAY_REQUEST_LOG: '0' });
+  let supervisorPid = null;
+  // Runs after the home teardown and before startGateway's own stop hook, so it sees what
+  // the home teardown alone left behind.
+  t.after(() => {
+    assert.equal(processIsRunning(supervisorPid), false, 'home teardown stopped the supervisor before removing its home');
+    assert.equal(fs.existsSync(environment.HOME), false);
+  });
+  supervisorPid = (await startGateway(t, 'serve-shim', environment)).child.pid;
+  const status = spawnGatewayProcess(t, process.execPath, [CLI, 'status'], { env: environment, stdio: 'ignore' });
+  await waitForExit(status);
 });
 
 test('isolated ensure preserves a foreign serve-shim process and cleans its own supervisor', async (t) => {

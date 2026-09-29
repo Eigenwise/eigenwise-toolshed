@@ -63,10 +63,10 @@ function readinessState(checks, upstreamBlocked, upstreamUnavailable) {
   return 'ready';
 }
 
-function readinessMessage(state, upstreamBlocked) {
+function readinessMessage(state, upstreamBlocked, upstreamUnavailable) {
   return state === 'ready'
     ? 'Codex readiness confirms local binary, /v1/models, authentication, shim, and serving-version checks. It does not prove a streaming request will succeed.'
-    : codexReadinessMessage(state, undefined, upstreamBlocked);
+    : codexReadinessMessage(state, undefined, upstreamBlocked || upstreamUnavailable);
 }
 
 async function getCodexReadiness({
@@ -101,7 +101,7 @@ async function getCodexReadiness({
   return {
     ready: state === 'ready',
     state,
-    message: readinessMessage(state, upstreamBlocked),
+    message: readinessMessage(state, upstreamBlocked, upstreamUnavailable),
     checks,
     upstreamBlocked,
     upstreamUnavailable,

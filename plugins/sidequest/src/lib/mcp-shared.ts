@@ -271,7 +271,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   rework: 'repair unbound; bound needs oracle.',
   supersede_submission: 'candidate rejection permits supersession.',
   submit: 'clear/force need owner.',
-  integrate: 'Comma-ref group; wave=options, refs in ref; pinned deliveryMethod; reviewed interaction.',
+  integrate: 'Comma-ref group; wave=options, refs in ref; pinned deliveryMethod with working tree or deliveryRevision; reviewed interaction.',
   comment: '',
   comments: 'Read comments before work.',
   plan: '',
@@ -281,7 +281,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   dispatch: 'Tree. token and spawn spec; retireOnly.',
   done: 'Finish; external/working-tree: pinned command needs capture; commandless needs verify.',
   release: 'reason/kind required; oracle handoff.',
-  groomClose: 'Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; verifier replacement; reviewed interaction.',
+  groomClose: 'Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate proven in the working tree or at deliveryRevision; verifier replacement; reviewed interaction.',
   native_agent: 'Agent spawn.',
   verdict: '',
   archive: '',
@@ -536,12 +536,16 @@ function listContextRows(project: string, args: any) {
     : payload.tickets.map((ticket: any) => ticketWithContextHandles(project, ticket));
 }
 
+const CLAIM_LIVENESS_FIELDS = new Set(['stale', 'staleAfterMs']);
+
+function rowWithoutClaimLiveness(row: any) {
+  if (!row?.claim || typeof row.claim !== 'object' || !Object.prototype.hasOwnProperty.call(row.claim, 'stale')) return row;
+  const claim = Object.fromEntries(Object.entries(row.claim).filter(([key]) => !CLAIM_LIVENESS_FIELDS.has(key)));
+  return Object.assign({}, row, { claim });
+}
+
 function listContextRevision(rows: any[]) {
-  return contextRevision(rows.map((row: any) => {
-    if (!row?.claim || typeof row.claim !== 'object' || !Object.prototype.hasOwnProperty.call(row.claim, 'stale')) return row;
-    const claim = Object.fromEntries(Object.entries(row.claim).filter(([key]) => key !== 'stale'));
-    return Object.assign({}, row, { claim });
-  }));
+  return contextRevision(rows.map(rowWithoutClaimLiveness));
 }
 
 function listRowsContextRetrieval(project: string, args: any, position: number) {

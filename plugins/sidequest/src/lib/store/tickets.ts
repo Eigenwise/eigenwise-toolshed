@@ -9,7 +9,7 @@ function createTickets(dependencies: any) {
     database, deleteCachedRow, dispatchState, dispatchVerifyCommandError, syncLiveDispatchVerification, effectiveScope, execFileSync, executorText, fs,
     getCategory, getStory, getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, normalizeRoute, path, pendingSubmission, putTicket,
     queryTickets, queueEventNotification, readMeta, readyTickets, releaseLock,
-    requestedReadonlyOverride, requireStatus, requireVerifyOracle, normalizeVerifyOracleKind, saveAssetData, stripLinksTo,
+    requestedReadonlyOverride, requireStatus, requireVerifyOracle, normalizeVerifyCwd, normalizeVerifyOracleKind, saveAssetData, stripLinksTo,
     ticketLockPath, ticketStoryId, touchClaimActivity, transaction, unclaimedAttemptRecoveryGuidance, upperRef, withTicketLock,
   } = dependencies;
   const coerceStoryId = ticketStoryId;
@@ -241,6 +241,7 @@ function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
     executorVerifyKind,
     executorAttestationArtifact: executorText(fields.executorAttestationArtifact, EXECUTOR_VERIFY_MAX, 'executor attestation artifact'),
     executorVerify,
+    executorVerifyCwd: normalizeVerifyCwd(fields.executorVerifyCwd),
     assets,
     comments: [],              // [{ id, by, body, kind: 'comment', at }]
     links: [],                 // [{ type: 'blocks'|'blocked-by'|'related', ref }]
@@ -1226,6 +1227,7 @@ function activeClaimCloseoutUpdateRefusal(ticket?: any, patch?: any, options: Up
     ...(patch.executorVerify !== undefined && patch.executorVerify !== ticket.executorVerify ? ['verify'] : []),
     ...(patch.executorVerifyKind !== undefined && patch.executorVerifyKind !== ticket.executorVerifyKind ? ['verifyKind'] : []),
     ...(patch.executorAttestationArtifact !== undefined && patch.executorAttestationArtifact !== ticket.executorAttestationArtifact ? ['attestationArtifact'] : []),
+    ...(patch.executorVerifyCwd !== undefined && normalizeVerifyCwd(patch.executorVerifyCwd) !== (ticket.executorVerifyCwd || '') ? ['verifyCwd'] : []),
   ];
   if (!changedFields.length) return null;
   const caller = String(patch.by || '').trim();
@@ -1349,7 +1351,8 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
     const nextVerifyKind = patch.executorVerifyKind === undefined ? t.executorVerifyKind : patch.executorVerifyKind;
     const nextAttestationArtifact = patch.executorAttestationArtifact === undefined ? t.executorAttestationArtifact : patch.executorAttestationArtifact;
     const nextVerify = patch.executorVerify === undefined ? t.executorVerify : patch.executorVerify;
-    if (patch.executorVerify !== undefined || patch.executorVerifyKind !== undefined || patch.executorAttestationArtifact !== undefined) {
+    if (patch.executorVerifyCwd !== undefined) t.executorVerifyCwd = normalizeVerifyCwd(patch.executorVerifyCwd);
+    if (patch.executorVerify !== undefined || patch.executorVerifyKind !== undefined || patch.executorAttestationArtifact !== undefined || patch.executorVerifyCwd !== undefined) {
       requireVerifyOracle(nextVerifyKind, nextVerify, nextAttestationArtifact);
       const executorVerify = executorText(nextVerify, EXECUTOR_VERIFY_MAX, 'executor verify command');
       const executorVerifyKind = normalizeVerifyOracleKind(nextVerifyKind, executorVerify);
