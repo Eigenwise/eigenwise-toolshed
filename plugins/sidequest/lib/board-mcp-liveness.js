@@ -94,8 +94,11 @@ function processAlive(pid) {
     return !(error instanceof Error && "code" in error && error.code === "ESRCH");
   }
 }
+function markerServesSessionOrProject(marker, sessionId, projectKey) {
+  return marker.sessionId === sessionId || projectKey !== "" && marker.project === projectKey;
+}
 function observeMarkers(markers, sessionId, projectKey, directory) {
-  const candidates = markers.filter((marker) => marker.sessionId === sessionId || projectKey !== "" && marker.project === projectKey);
+  const candidates = markers.filter((marker) => markerServesSessionOrProject(marker, sessionId, projectKey));
   const live = candidates.find((marker) => processAlive(marker.pid));
   if (live) return { state: live.sessionId === sessionId ? "live" : "rotated", marker: live };
   const exited = candidates.find((marker) => marker.sessionId === sessionId) || candidates[0];

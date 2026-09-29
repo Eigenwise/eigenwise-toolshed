@@ -85,8 +85,12 @@ function processAlive(pid: number): boolean {
   }
 }
 
+function markerServesSessionOrProject(marker: BoardMcpMarker, sessionId: string, projectKey: string): boolean {
+  return marker.sessionId === sessionId || (projectKey !== '' && marker.project === projectKey);
+}
+
 function observeMarkers(markers: BoardMcpMarker[], sessionId: string, projectKey: string, directory: string): BoardMcpObservation {
-  const candidates = markers.filter((marker) => marker.sessionId === sessionId || (projectKey !== '' && marker.project === projectKey));
+  const candidates = markers.filter((marker) => markerServesSessionOrProject(marker, sessionId, projectKey));
   const live = candidates.find((marker) => processAlive(marker.pid));
   if (live) return { state: live.sessionId === sessionId ? 'live' : 'rotated', marker: live };
   const exited = candidates.find((marker) => marker.sessionId === sessionId) || candidates[0];
