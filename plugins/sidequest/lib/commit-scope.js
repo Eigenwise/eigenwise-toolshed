@@ -773,7 +773,7 @@ async function commitScoped(cwd, message, files) {
     }
     const concreteGlobPaths = globScopedWorkingPaths(root, commitScopes);
     const directScopes = commitScopes.filter((scope) => !(0, import_scope_match.hasGlob)(scope));
-    const stageableScopes = [.../* @__PURE__ */ new Set([...stageableScopedPaths(root, directScopes), ...concreteGlobPaths])];
+    const stageableScopes = stageableScopedPaths(root, [.../* @__PURE__ */ new Set([...directScopes, ...concreteGlobPaths])]);
     const committableScopes = [.../* @__PURE__ */ new Set([
       ...directScopes.filter((scope) => !ignoredUntrackedScope(root, scope)),
       ...concreteGlobPaths.filter((scope) => !ignoredUntrackedScope(root, scope))

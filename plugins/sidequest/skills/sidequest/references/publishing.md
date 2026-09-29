@@ -55,6 +55,12 @@ wave delivers its exact Git participant set and the resulting revision passes it
 participant only after the record exists. It validates each submitted range and admitted scope again,
 names stray paths, and never deletes a pinned ref.
 
+Delivery lands on the branch recorded at dispatch, unless the checkout is on that branch's fast-forward
+(it is the recorded branch or descends from it): then it lands on the checked-out branch. Pass
+`integrationBranch` (CLI `--integration-branch`) to deliver onto another checked-out branch on purpose.
+The integration record's `targetBranch` names the branch that got the delivery. Any other checkout
+refuses `branch_not_checked_out`.
+
 `integrate` with `wave: {}` opens a fresh wave at the matching tickets' recorded delivery target current head.
 A recorded wave for the same participants whose baseline is behind that head is superseded rather than
 reused. A candidate verified against an ancestor of the current target can join that wave; the merged-tree
@@ -105,7 +111,7 @@ gate covers the newer target content. An assembly refusal leaves every submitted
 
 ### Overlapping candidates with different pinned verifiers
 
-A wave refuses when participants pin different verifier requirements. Keep those frozen records intact. When reviewed candidates overlap, compose their exact accepted candidate refs in the registered target, run every participant's pinned verifier and the full composed gate against that tree, then record each delivery through `groomClose` with its own immutable candidate as `deliveryCommit` and `deliveryMethod: "manual"`. Omit `integration: true`: that field selects the assembled-wave route and requires a matching delivered wave.
+A wave refuses `wave_verifier_mismatch` when participants pin different verifier requirements. Non-executable kinds (document, link, manual, attestation, review) only need to agree on kind, so three document tickets with different verify text still assemble as one wave; executable kinds must pin the same command, and a mix of executable and non-executable kinds refuses. Keep those frozen records intact. When reviewed candidates overlap, compose their exact accepted candidate refs in the registered target, run every participant's pinned verifier and the full composed gate against that tree, then record each delivery through `groomClose` with its own immutable candidate as `deliveryCommit` and `deliveryMethod: "manual"`. Omit `integration: true`: that field selects the assembled-wave route and requires a matching delivered wave.
 
 This route still fails closed. Do not skip a verifier or review, substitute current `HEAD` for the pinned candidate, claim an unverified target, or close when the candidate's submitted paths are missing or differ without naming the hand-resolved ones in `resolvedPaths`. `groomClose` compares the pinned candidate to the registered target working tree, or to the tree at `deliveryRevision` when one is named, and reruns delivery verification before it records delivery.
 
