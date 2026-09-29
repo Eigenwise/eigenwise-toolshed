@@ -1599,6 +1599,16 @@ function reusablePreparedRecovery(ticket: any, current: any) {
   return Boolean(current && current.recovery && current.outcome === 'prepared' && ticket.dispatchNonce && canonicalPreparedDispatchExecutor(ticket));
 }
 
+// Only live-claim recovery reads `worktree`. A fresh attempt used to drop it silently, so a workingTreeDelivery
+// ticket got a lease on the registered checkout and its executor then refused to write anywhere else (GH-162).
+function dispatchWorktreeOverrideRefusal(ticket: any, worktree: unknown, projectPath: string): string | null {
+  if (worktree == null || String(worktree).trim() === '') return null;
+  const placement = ticket.workingTreeDelivery === true
+    ? `${ticket.ref} declares workingTreeDelivery, so it runs and delivers in the board's registered checkout ${projectPath}; to deliver from a linked worktree instead, clear workingTreeDelivery so the ticket runs in an isolated worktree and submits a commit.`
+    : 'sharedTree:true runs in the board\'s registered checkout and sharedTree:false in a board-provisioned worktree.';
+  return `prepare dispatch: worktree only names a resumed executor's checkout for live-claim recovery with claimHolder; it cannot choose where a new attempt runs. ${placement}`;
+}
+
 function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   if (opts.retireOnly === true) {
@@ -1618,6 +1628,8 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   const projectPath = readMeta(slug)?.path;
   const found = getTicket(slug, idOrRef);
   if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+  const worktreeOverrideRefusal = dispatchWorktreeOverrideRefusal(found, opts.worktree, projectPath);
+  if (worktreeOverrideRefusal) throw new Error(worktreeOverrideRefusal);
   const executorClaimRefusal = executorClaimDispatchRefusal(slug, opts.sessionId);
   if (executorClaimRefusal) throw new Error(executorClaimRefusal);
   const initialNoDeclaredFileScope = unscopedWriteCannotAutoApprove(found, {

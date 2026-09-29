@@ -10,6 +10,7 @@ const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, rev
 const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require('../kernel/wave');
 const { isInScope, scopedPaths } = require('../scope-match');
 const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyDeliveryContentCommitGuidance, landedWithoutSubmissionGuidance } = require('../refusal-guidance.js');
+const worktrees = require('../worktrees.js');
 import type { VerificationResult } from '../kernel/verification.js';
 import type { CandidateInvalidation } from '../kernel/wave.js';
 
@@ -3047,11 +3048,6 @@ function waveVerificationRequirement(tickets: any[]) {
   return { ok: true, requirement: first };
 }
 
-function pathIsInside(root: string, candidate: string) {
-  const relative = path.relative(root, candidate);
-  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
-}
-
 function provisionWaveGateWorktree(slug: any, candidateWorktree: string) {
   if (!candidateWorktree) {
     return { ok: true, evidence: 'The gate used the project root, so isolated-worktree provisioning was skipped.' };
@@ -3062,36 +3058,9 @@ function provisionWaveGateWorktree(slug: any, candidateWorktree: string) {
   const repository = String(readMeta(slug)?.path || '').trim();
   if (!repository) return { ok: false, message: 'The board repository is unavailable for gate provisioning.' };
   const config = boardConfig(slug) || {};
-  const dependencies = Array.isArray(config.worktreeDependencyPaths) ? config.worktreeDependencyPaths : [];
-  let created = 0;
-  let existing = 0;
-  try {
-    for (const dependency of dependencies) {
-      const dependencyPath = String(dependency?.path || '').trim();
-      const source = path.resolve(repository, dependencyPath);
-      const target = path.resolve(candidateWorktree, dependencyPath);
-      if (!dependencyPath || !pathIsInside(repository, source) || !pathIsInside(candidateWorktree, target)) {
-        return { ok: false, message: `Configured worktree dependency path ${JSON.stringify(dependencyPath)} is outside the gate worktree.` };
-      }
-      if (fs.existsSync(target)) {
-        existing += 1;
-        continue;
-      }
-      if (!fs.existsSync(source) || !fs.statSync(source).isDirectory()) {
-        return { ok: false, message: `Configured worktree dependency path ${JSON.stringify(dependencyPath)} is unavailable in the board repository.` };
-      }
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      if (dependency.mode === 'copy') fs.cpSync(source, target, { recursive: true });
-      else if (dependency.mode === 'link') fs.symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
-      else return { ok: false, message: `Configured worktree dependency path ${JSON.stringify(dependencyPath)} has an unsupported mode.` };
-      created += 1;
-    }
-  } catch (error: any) {
-    return { ok: false, message: `Could not provision gate worktree dependencies: ${error.message || String(error)}` };
-  }
-  const dependenciesEvidence = dependencies.length
-    ? `Worktree dependency provisioning created ${created} path${created === 1 ? '' : 's'} and retained ${existing} existing path${existing === 1 ? '' : 's'}.`
-    : 'Worktree dependency provisioning was skipped because no paths are configured.';
+  const dependencies = worktrees.provisionGateDependencies(repository, candidateWorktree, config.worktreeDependencyPaths || []);
+  if (!dependencies.ok) return dependencies;
+  const dependenciesEvidence = dependencies.evidence;
   const setup = String(config.worktreeSetup || '').trim();
   if (!setup) return { ok: true, evidence: `${dependenciesEvidence} Worktree setup was skipped because none is configured.` };
   const setupResult = spawnSync(setup, {

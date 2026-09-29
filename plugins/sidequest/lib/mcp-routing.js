@@ -439,7 +439,7 @@ const tools = [
         worktreeSetup: { type: ["string", "null"], description: "One-line command Sidequest runs after creating an isolated worktree; null clears it." },
         worktreeDependencyPaths: {
           type: "array",
-          description: 'Dependency directories to provision from the primary checkout before dispatch. Each entry is { path: repo-relative directory, mode: "link" | "copy" }.',
+          description: 'Copied or linked from the primary checkout into each isolated worktree. copy: repo file or directory, tracked too, working-tree version. link: untracked directory; "../<name>" links a sibling checkout beside the worktree.',
           items: {
             type: "object",
             properties: {

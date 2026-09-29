@@ -1136,7 +1136,7 @@ test('worktree provisioning config stays out of executor briefings', () => {
   assert.throws(() => store.setBoardConfig(slug, { worktreeSetup: 'npm ci\nnode --test' }), /one-line command/);
   assert.throws(() => store.setBoardConfig(slug, { worktreeSetup: 'x'.repeat(1001) }), /1000-character/);
   assert.throws(() => store.setBoardConfig(slug, { worktreeDependencyPaths: [{ path: '.venv', mode: 'move' }] }), /"link" or "copy"/);
-  assert.throws(() => store.setBoardConfig(slug, { worktreeDependencyPaths: [{ path: '../node_modules', mode: 'link' }] }), /stay inside the board repo/);
+  assert.throws(() => store.setBoardConfig(slug, { worktreeDependencyPaths: [{ path: '../node_modules', mode: 'copy' }] }), /copy mode must stay inside the board repo/);
 });
 
 test('briefings synchronize stale worktrees to their recorded integration target', () => {

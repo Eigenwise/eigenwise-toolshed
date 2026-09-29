@@ -203,26 +203,45 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
   function normalizeWorktreeDependencyPaths(value) {
     if (value == null) return [];
     if (!Array.isArray(value)) throw new Error("worktreeDependencyPaths must be an array of { path, mode } entries.");
-    const seen = /* @__PURE__ */ new Set();
-    const normalized = [];
-    for (const entry of value) {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        throw new Error("worktreeDependencyPaths entries must be { path, mode }.");
-      }
-      const dependencyPath = String(entry.path || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
-      if (!dependencyPath || dependencyPath === ".." || dependencyPath.startsWith("../") || dependencyPath.includes("/../") || path.isAbsolute(dependencyPath)) {
-        throw new Error(`worktreeDependencyPaths path must stay inside the board repo: ${entry.path}`);
-      }
-      const mode = String(entry.mode || "").trim().toLowerCase();
-      if (!["link", "copy"].includes(mode)) {
-        throw new Error(`worktreeDependencyPaths mode must be "link" or "copy": ${entry.mode}`);
-      }
-      const key = process.platform === "win32" ? dependencyPath.toLowerCase() : dependencyPath;
-      if (seen.has(key)) throw new Error(`worktreeDependencyPaths cannot configure the same path twice: ${dependencyPath}`);
-      seen.add(key);
-      normalized.push({ path: dependencyPath, mode });
+    const normalized = value.map(normalizeWorktreeDependencyPath);
+    const keys = /* @__PURE__ */ new Set();
+    for (const dependency of normalized) {
+      const key = platformPathKey(dependency.path);
+      if (keys.has(key)) throw new Error(`worktreeDependencyPaths cannot configure the same path twice: ${dependency.path}`);
+      keys.add(key);
     }
     return normalized;
+  }
+  function platformPathKey(value) {
+    return process.platform === "win32" ? value.toLowerCase() : value;
+  }
+  function normalizeWorktreeDependencyPath(value) {
+    const entry = worktreeDependencyEntry(value);
+    const mode = worktreeDependencyMode(entry.mode);
+    const dependencyPath = path.posix.normalize(String(entry.path ?? "").trim().replace(/\\/g, "/")).replace(/\/+$/, "");
+    const refusal = worktreeDependencyPathRefusal(dependencyPath, mode);
+    if (refusal) throw new Error(`worktreeDependencyPaths ${refusal}: ${entry.path}`);
+    return { path: dependencyPath, mode };
+  }
+  function worktreeDependencyEntry(value) {
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) return value;
+    throw new Error("worktreeDependencyPaths entries must be { path, mode }.");
+  }
+  function worktreeDependencyMode(value) {
+    const mode = String(value ?? "").trim().toLowerCase();
+    if (mode === "link" || mode === "copy") return mode;
+    throw new Error(`worktreeDependencyPaths mode must be "link" or "copy": ${value}`);
+  }
+  function worktreeDependencyPathRefusal(dependencyPath, mode) {
+    if (path.isAbsolute(dependencyPath)) return 'path must be relative to the board repo, because each worktree places it at the same relative spot; for a sibling checkout use "../<name>" with mode link';
+    if (dependencyPath === "." || dependencyPath === "") return "path must name a file or directory inside the board repo";
+    return outsideRepoDependencyRefusal(dependencyPath.split("/"), mode);
+  }
+  function outsideRepoDependencyRefusal(segments, mode) {
+    if (segments[0] !== "..") return null;
+    if (mode === "copy") return "copy mode must stay inside the board repo, because a copy outside it would be shared by every worktree and never cleaned up; use mode link for a sibling checkout";
+    const leavesByOneLevel = segments.length > 1 && segments[1] !== "..";
+    return leavesByOneLevel ? null : 'link path may leave the board repo by one level only ("../<name>"), because the link lands in the worktree root beside the worktree';
   }
   function normalizeIntegrationVerifyTimeoutMs(value) {
     if (value == null || value === "") return DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS;
