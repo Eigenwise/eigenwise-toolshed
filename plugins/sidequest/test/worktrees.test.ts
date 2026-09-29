@@ -558,6 +558,31 @@ test('unclaimed dispatch recovery removes a recorded dependency link without fol
   }
 });
 
+// A record whose own identity has drifted (here: the revision it was recorded against no longer
+// matches) never authorizes trusting the recorded list: `dependencyLinkSafety` reports unsafe and
+// recovery falls back to unlinking every symlink the tree holds, still without following any of them
+// (#224 review item 3 coverage).
+test('unclaimed dispatch recovery falls back to unlinking every link when a recorded identity has drifted', () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const target = dependencyTarget(repository, 'drifted-identity');
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'drifted-identity');
+  const ticket = integratedTicket('SQ-DRIFTED-IDENTITY', 'drifted-identity', worktree, baseCommit);
+  const link = createDependencyLink(worktree, 'node_modules/link', target);
+  recordedDependencyLink(ticket, worktree, 'node_modules/link', target);
+  ticket.dispatch.ownedDependencyLinks[0]!.revision = 'stale-revision';
+  try {
+    const result = worktrees.reclaimUnclaimedDispatchWorktree(repository, ticket.dispatch);
+
+    assert.equal(result.reclaimed, true);
+    assert.equal(fs.existsSync(worktree), false);
+    assert.equal(fs.existsSync(link), false);
+    assert.equal(fs.readFileSync(path.join(target, 'sentinel.txt'), 'utf8'), 'drifted-identity');
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test('sweep prunes expired quarantine entries and preserves live agents', async () => {
   const { repository } = repositoryFixture();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-recovery-retention-'));
@@ -962,7 +987,7 @@ test('sweep removes a finished tree whose only ignored link is a directory symli
   const { repository, baseCommit, worktreeRoot } = repositoryFixture();
   const worktree = createAgentWorktree(repository, worktreeRoot, 'in-tree-dir-symlink-leaf');
   const ticket = integratedTicket('SQ-IN-TREE-DIR-SYMLINK-LEAF', 'in-tree-dir-symlink-leaf', worktree, baseCommit);
-  createInTreeDependencyLink(worktree, 'node_modules/tsx-alias', 'node_modules/tsx');
+  const link = createInTreeDependencyLink(worktree, 'node_modules/tsx-alias', 'node_modules/tsx');
   try {
     const status = git(worktree, ['status', '--porcelain', '--ignored', '--untracked-files=all']);
     if (process.platform === 'win32') {
@@ -978,6 +1003,11 @@ test('sweep removes a finished tree whose only ignored link is a directory symli
     assert.equal(entry.reason, 'ticket_done');
     assert.equal(entry.action, 'remove');
   } finally {
+    // The junction (and, through it, the in-tree link it resolves to) has to come off before
+    // `worktree remove` walks the tree: some git builds descend into a directory-symlink leaf
+    // instead of treating it as a single reparse point, and fail "Directory not empty" trying
+    // to delete the same files twice (owner's local Windows, git version-dependent; #224 item 2).
+    if (fs.existsSync(link)) fs.unlinkSync(link);
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
     fs.rmSync(repository, { recursive: true, force: true });
   }
@@ -1830,7 +1860,6 @@ test('a dependency link no record names is safe to remove once its target resolv
     const safety = worktrees.dependencyLinkSafety(worktree, ticket, matchingWorktreeLease(worktree, ticket));
 
     assert.equal(safety.safe, true);
-    assert.equal(safety.detail, '');
     assert.deepEqual(safety.links, []);
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
@@ -1851,7 +1880,6 @@ test('a dependency link whose target leaves the worktree stays untrusted and nam
     const safety = worktrees.dependencyLinkSafety(worktree, ticket, matchingWorktreeLease(worktree, ticket));
 
     assert.equal(safety.safe, false);
-    assert.equal(safety.detail, `node_modules/shared escapes worktree -> ${worktrees.canonicalPath(target)}`);
     assert.equal(fs.readFileSync(path.join(target, 'sentinel.txt'), 'utf8'), 'shared-store');
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);

@@ -48,7 +48,10 @@ function acceptedDependencyCacheLeaf(resolved) {
 }
 function installedDependencyCacheFile(worktree, entry) {
   if (entry.code !== "!!" || !dependencyCachePath(entry.path)) return false;
-  const segments = entry.path.split(/[\\/]+/).filter(Boolean);
+  return dependencyCacheEntryResolvesToAcceptedLeaf(worktree, entry.path);
+}
+function dependencyCacheEntryResolvesToAcceptedLeaf(worktree, relativePath) {
+  const segments = relativePath.split(/[\\/]+/).filter(Boolean);
   const canonicalWorktree = canonicalPath(worktree);
   let current = worktree;
   try {
@@ -1228,29 +1231,35 @@ function recordedDependencyLinkPaths(worktree, ticketOrDispatch) {
   }
   return paths;
 }
-function dependencyLinkSafety(worktree, ticketOrDispatch, lease) {
-  const records = ownedDependencyLinks(ticketOrDispatch, worktree, lease);
-  if (!records) return { safe: false, links: [], detail: "" };
-  const recordsByPath = new Map(records.map((record) => [record.relativePath, record]));
-  if (recordsByPath.size !== records.length) return { safe: false, links: [], detail: "" };
+function verifiedOwnedDependencyLinkPaths(worktree, records) {
   const links = [];
   for (const record of records) {
     const linkPath = path.resolve(worktree, record.relativePath);
     try {
       nativeFs.lstatSync(linkPath);
     } catch (error) {
-      if (error?.code !== "ENOENT") return { safe: false, links: [], detail: "" };
+      if (error?.code !== "ENOENT") return null;
       continue;
     }
-    if (!ownedDependencyLinkMatches(linkPath, record)) return { safe: false, links: [], detail: "" };
+    if (!ownedDependencyLinkMatches(linkPath, record)) return null;
     links.push(linkPath);
   }
-  const refusal = firstUntrustedDependencyLink(worktree, (linkPath) => {
-    const relativePath = normalizedWorktreeRelativePath(worktree, linkPath);
-    const record = relativePath ? recordsByPath.get(relativePath) : null;
-    return Boolean(record && ownedDependencyLinkMatches(linkPath, record));
-  });
-  return refusal ? { safe: false, links: [], detail: refusal.detail } : { safe: true, links, detail: "" };
+  return links;
+}
+function recordedLinkIsOwned(worktree, recordsByPath, linkPath) {
+  const relativePath = normalizedWorktreeRelativePath(worktree, linkPath);
+  const record = relativePath ? recordsByPath.get(relativePath) : null;
+  return Boolean(record && ownedDependencyLinkMatches(linkPath, record));
+}
+function dependencyLinkSafety(worktree, ticketOrDispatch, lease) {
+  const records = ownedDependencyLinks(ticketOrDispatch, worktree, lease);
+  if (!records) return { safe: false, links: [] };
+  const recordsByPath = new Map(records.map((record) => [record.relativePath, record]));
+  if (recordsByPath.size !== records.length) return { safe: false, links: [] };
+  const links = verifiedOwnedDependencyLinkPaths(worktree, records);
+  if (!links) return { safe: false, links: [] };
+  const refusal = firstUntrustedDependencyLink(worktree, (linkPath) => recordedLinkIsOwned(worktree, recordsByPath, linkPath));
+  return refusal ? { safe: false, links: [] } : { safe: true, links };
 }
 function unlinkOwnedDependencyLinks(links) {
   for (const linkPath of links) {
@@ -1310,18 +1319,20 @@ function releaseQuarantinedDependencyLinks(destination, recordedLinks, vacatedSo
   const refusal = firstUntrustedDependencyLink(destination, void 0, vacatedSource);
   return refusal ? { ok: false, reason: refusal.reason, detail: refusal.detail } : { ok: true, reason: "", detail: "" };
 }
-function releaseWorktreeDependencyLinks(worktree, ticketOrDispatch, lease) {
-  const verified = dependencyLinkSafety(worktree, ticketOrDispatch, lease);
-  const links = verified.safe ? verified.links : worktreeSymbolicLinks(worktree);
-  if (!links) return { ok: false, reason: "dependency_link_unreadable", detail: `unreadable ${worktree}` };
-  if (!unlinkOwnedDependencyLinks(links)) return { ok: false, reason: "dependency_link_unlink_failed", detail: "a dependency link could not be released" };
-  const remaining = firstUntrustedDependencyLink(worktree);
+function releaseWorktreeDependencyLinksResult(remaining) {
   if (!remaining) return { ok: true };
   return {
     ok: false,
     reason: remaining.reason === "dependency_link_unreadable" ? remaining.reason : "dependency_link_changed",
     detail: remaining.detail
   };
+}
+function releaseWorktreeDependencyLinks(worktree, ticketOrDispatch, lease) {
+  const verified = dependencyLinkSafety(worktree, ticketOrDispatch, lease);
+  const links = verified.safe ? verified.links : worktreeSymbolicLinks(worktree);
+  if (!links) return { ok: false, reason: "dependency_link_unreadable", detail: `unreadable ${worktree}` };
+  if (!unlinkOwnedDependencyLinks(links)) return { ok: false, reason: "dependency_link_unlink_failed", detail: "a dependency link could not be released" };
+  return releaseWorktreeDependencyLinksResult(firstUntrustedDependencyLink(worktree));
 }
 function reclaimUnclaimedDispatchWorktree(repository, dispatch, facts = {}) {
   const worktree = String(dispatch?.worktree || "").trim();

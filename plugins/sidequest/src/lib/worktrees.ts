@@ -90,7 +90,13 @@ function acceptedDependencyCacheLeaf(resolved: { stats: import('node:fs').Stats;
 // `node_modules/<pkg> -> ../packages/<pkg>` need `acceptedDependencyCacheLeaf` above (#224 review item 1).
 function installedDependencyCacheFile(worktree: string, entry: WorktreeStatusEntry): boolean {
   if (entry.code !== '!!' || !dependencyCachePath(entry.path)) return false;
-  const segments = entry.path.split(/[\\/]+/).filter(Boolean);
+  return dependencyCacheEntryResolvesToAcceptedLeaf(worktree, entry.path);
+}
+
+// Split from the entry-shape guard above so that check stays a single early return; this is the part
+// that walks every path component and judges the leaf (#224 review item 3).
+function dependencyCacheEntryResolvesToAcceptedLeaf(worktree: string, relativePath: string): boolean {
+  const segments = relativePath.split(/[\\/]+/).filter(Boolean);
   const canonicalWorktree = canonicalPath(worktree);
   let current = worktree;
   try {
@@ -1459,7 +1465,7 @@ type OwnedDependencyLink = {
   revision: string;
 };
 
-type DependencyLinkSafety = { safe: boolean; links: string[]; detail: string };
+type DependencyLinkSafety = { safe: boolean; links: string[] };
 type DependencyLinkRefusal = { reason: string; detail: string };
 
 function normalizedWorktreeRelativePath(worktree: string, pathname: string): string | null {
@@ -1583,34 +1589,48 @@ function recordedDependencyLinkPaths(worktree: string, ticketOrDispatch: any): s
   return paths;
 }
 
-// A caller that gets `safe: false` back never trusts the recorded list either way: it falls back to
-// unlinking every symlink the tree holds and re-checks what is left (`releaseWorktreeDependencyLinks`),
-// so none of these early exits is a refusal a caller ever shows -- only the untrusted-link check at
-// the end names anything, because that is the one result a caller still passes through (#224 review
+// Each record has to still be the link it was when recorded, or a stale record could authorize
+// unlinking something else entirely; `null` means at least one has drifted (moved, replaced, or
+// missing with an error other than ENOENT) and the caller has to fall back to distrust (#224 review
 // item 3).
-function dependencyLinkSafety(worktree: string, ticketOrDispatch: any, lease: any): DependencyLinkSafety {
-  const records = ownedDependencyLinks(ticketOrDispatch, worktree, lease);
-  if (!records) return { safe: false, links: [], detail: '' };
-  const recordsByPath = new Map(records.map((record) => [record.relativePath, record]));
-  if (recordsByPath.size !== records.length) return { safe: false, links: [], detail: '' };
+function verifiedOwnedDependencyLinkPaths(worktree: string, records: readonly OwnedDependencyLink[]): string[] | null {
   const links: string[] = [];
   for (const record of records) {
     const linkPath = path.resolve(worktree, record.relativePath);
     try {
       nativeFs.lstatSync(linkPath);
     } catch (error: any) {
-      if (error?.code !== 'ENOENT') return { safe: false, links: [], detail: '' };
+      if (error?.code !== 'ENOENT') return null;
       continue;
     }
-    if (!ownedDependencyLinkMatches(linkPath, record)) return { safe: false, links: [], detail: '' };
+    if (!ownedDependencyLinkMatches(linkPath, record)) return null;
     links.push(linkPath);
   }
-  const refusal = firstUntrustedDependencyLink(worktree, (linkPath) => {
-    const relativePath = normalizedWorktreeRelativePath(worktree, linkPath);
-    const record = relativePath ? recordsByPath.get(relativePath) : null;
-    return Boolean(record && ownedDependencyLinkMatches(linkPath, record));
-  });
-  return refusal ? { safe: false, links: [], detail: refusal.detail } : { safe: true, links, detail: '' };
+  return links;
+}
+
+// Whether a link the untrusted-link scan is looking at is one of these records' own is judged by
+// normalizing it back to a relative path and checking that record's match, not by walking the
+// records list per link.
+function recordedLinkIsOwned(worktree: string, recordsByPath: Map<string, OwnedDependencyLink>, linkPath: string): boolean {
+  const relativePath = normalizedWorktreeRelativePath(worktree, linkPath);
+  const record = relativePath ? recordsByPath.get(relativePath) : null;
+  return Boolean(record && ownedDependencyLinkMatches(linkPath, record));
+}
+
+// A caller that gets `safe: false` back never trusts the recorded list either way: it falls back to
+// unlinking every symlink the tree holds and re-checks what is left (`releaseWorktreeDependencyLinks`),
+// so none of these early exits is a refusal a caller ever shows -- only the untrusted-link check at
+// the end decides the result a caller passes through (#224 review item 3).
+function dependencyLinkSafety(worktree: string, ticketOrDispatch: any, lease: any): DependencyLinkSafety {
+  const records = ownedDependencyLinks(ticketOrDispatch, worktree, lease);
+  if (!records) return { safe: false, links: [] };
+  const recordsByPath = new Map(records.map((record) => [record.relativePath, record]));
+  if (recordsByPath.size !== records.length) return { safe: false, links: [] };
+  const links = verifiedOwnedDependencyLinkPaths(worktree, records);
+  if (!links) return { safe: false, links: [] };
+  const refusal = firstUntrustedDependencyLink(worktree, (linkPath) => recordedLinkIsOwned(worktree, recordsByPath, linkPath));
+  return refusal ? { safe: false, links: [] } : { safe: true, links };
 }
 
 function unlinkOwnedDependencyLinks(links: readonly string[]): boolean {
@@ -1695,6 +1715,19 @@ function releaseQuarantinedDependencyLinks(destination: string, recordedLinks: r
   return refusal ? { ok: false, reason: refusal.reason, detail: refusal.detail } : { ok: true, reason: '', detail: '' };
 }
 
+// A link that reappears after every one this call knew about was just unlinked has drifted since
+// `dependencyLinkSafety` looked; the only prior classification still trusted here is an unreadable
+// tree, so anything else reports as changed rather than repeating that stale reason (#224 review
+// item 3).
+function releaseWorktreeDependencyLinksResult(remaining: DependencyLinkRefusal | null): { ok: boolean; reason?: string; detail?: string } {
+  if (!remaining) return { ok: true };
+  return {
+    ok: false,
+    reason: remaining.reason === 'dependency_link_unreadable' ? remaining.reason : 'dependency_link_changed',
+    detail: remaining.detail,
+  };
+}
+
 // Failed-creation recovery still hands its checkout to `git worktree remove`, which follows a
 // junction and deletes what it points at, so every link is unlinked before that removal.
 function releaseWorktreeDependencyLinks(worktree: string, ticketOrDispatch: any, lease: any): { ok: boolean; reason?: string; detail?: string } {
@@ -1702,13 +1735,7 @@ function releaseWorktreeDependencyLinks(worktree: string, ticketOrDispatch: any,
   const links = verified.safe ? verified.links : worktreeSymbolicLinks(worktree);
   if (!links) return { ok: false, reason: 'dependency_link_unreadable', detail: `unreadable ${worktree}` };
   if (!unlinkOwnedDependencyLinks(links)) return { ok: false, reason: 'dependency_link_unlink_failed', detail: 'a dependency link could not be released' };
-  const remaining = firstUntrustedDependencyLink(worktree);
-  if (!remaining) return { ok: true };
-  return {
-    ok: false,
-    reason: remaining.reason === 'dependency_link_unreadable' ? remaining.reason : 'dependency_link_changed',
-    detail: remaining.detail,
-  };
+  return releaseWorktreeDependencyLinksResult(firstUntrustedDependencyLink(worktree));
 }
 
 function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, facts: any = {}): any {
