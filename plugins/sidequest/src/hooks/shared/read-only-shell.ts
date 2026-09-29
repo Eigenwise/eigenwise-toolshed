@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { enclosingCheckout } from './runtime-identity.js';
+import { canonicalPath, enclosingCheckout } from './runtime-identity.js';
 
 // ponytail: a lexical guard, not a sandbox. It catches the shell forms an agent reaches for when it
 // edits files (redirects, file commands, in-place sed, mutating git). An interpreter such as `node -e`
@@ -84,13 +84,15 @@ function nativePath(word: string): string {
   return process.platform === 'win32' ? word.replace(/^\/([a-z])(\/|$)/i, '$1:/') : word;
 }
 
+// The checkout root comes back canonical (a Git Bash /c/x drive, an 8.3 short name such as RUNNER~1
+// on a CI runner), so the cwd and every target are canonicalized the same way before comparing.
 function resolvedTarget(base: string, word: string): string | null {
-  return ignoredTarget(word) ? null : path.resolve(base, nativePath(word));
+  return ignoredTarget(word) ? null : canonicalPath(path.resolve(base, nativePath(word)));
 }
 
 function mainCheckoutOf(linkedRoot: string): string | null {
   const pointer = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(path.join(linkedRoot, '.git'), 'utf8'));
-  return pointer ? path.resolve(linkedRoot, pointer[1]!.trim(), '..', '..', '..') : null;
+  return pointer ? canonicalPath(path.resolve(linkedRoot, pointer[1]!.trim(), '..', '..', '..')) : null;
 }
 
 // A linked worktree's shared checkout is protected too: a read-only run must not reach past its own tree.
@@ -126,7 +128,7 @@ function segmentWriteTargets(segment: ShellSegment, base: string): string[] {
 
 function firstCheckoutWrite(command: string, cwd: string): string | null {
   const roots = checkoutRoots(cwd);
-  let base = path.resolve(cwd);
+  let base = canonicalPath(cwd);
   for (const segment of shellSegments(command)) {
     base = nextBase(segment.words, base);
     const blocked = segmentWriteTargets(segment, base).find((target) => insideAny(roots, target));
