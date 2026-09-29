@@ -968,13 +968,15 @@ function pendingReworkBody(ticket?: any) {
     : [];
   const latest = rejections[rejections.length - 1];
   if (!latest || latest.rejectionKind !== 'rework' || latest.supersededAt || ticket?.submission) return null;
-  const candidate = latest.commit || latest.sourceRevision?.value || '(unknown candidate)';
+  const candidate = latest.commit || latest.sourceRevision.value;
+  // A failed ref preservation leaves the row pending, so the ref may not exist yet.
+  const preserved = latest.quarantineRef && latest.preservationState !== 'pending' ? ` (preserved at ${latest.quarantineRef})` : '';
   return [
     '## Pending rework',
-    `This dispatch repairs a rejected candidate. ${latest.rejectedBy || 'The orchestrator'} sent candidate ${candidate} back for rework${latest.rejectedAt ? ` at ${latest.rejectedAt}` : ''} and returned the ticket to todo. This rejection overrides any earlier comment that accepted, approved, or queued that candidate, so this launch is not a duplicate: do the repair below and submit a fresh candidate. Do not release over that earlier acceptance as a contradiction or oracle question.`,
-    `Rejected candidate: ${candidate}${latest.quarantineRef ? ` (preserved at ${latest.quarantineRef})` : ''}`,
-    `Rework reason:\n${latest.reason || '(No reason recorded.)'}`,
-    `Review:\n${latest.review || '(No review evidence recorded.)'}`,
+    `This dispatch repairs a rejected candidate. Candidate ${candidate} was sent back for rework at ${latest.rejectedAt} and the ticket returned to todo. This rejection overrides any earlier comment that accepted, approved, or queued that candidate, so this launch is not a duplicate: do the repair below and submit a fresh candidate. Do not release over that earlier acceptance as a contradiction or oracle question.`,
+    `Rejected candidate: ${candidate}${preserved}`,
+    `Rework reason:\n${latest.reason}`,
+    `Review:\n${latest.review}`,
   ].join('\n\n');
 }
 

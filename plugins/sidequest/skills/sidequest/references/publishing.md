@@ -357,7 +357,7 @@ is recorded against the already-done ticket; it must not be described as remotel
 - For an **unbound** candidate that a review rejects or otherwise needs its original work redone,
   use `sidequest rework <ref> --by <candidate-owner> --review "<evidence>" --reason "<repair>"`.
   It preserves the candidate and rejection evidence while returning the ticket to `todo` for a
-  normal repair claim. The repair dispatch's briefing opens with a "Pending rework" section naming
+  normal repair claim. The repair dispatch's briefing carries a "Pending rework" section naming
   the rejected candidate, reason, and review above the comment thread, so do not restate the rework
   as a comment before dispatching.
 - Use `sidequest submit <ref> --clear -s todo` only for an actual integration bounce: delivery
