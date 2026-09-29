@@ -42,9 +42,14 @@ const { WORKTREE_CREATE_HOOK_TIMEOUT_SECONDS } = require('../src/lib/hook-timeou
 const db = require('../lib/db.js');
 const { EFFORTS, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('../lib/exec-names.js');
 const agentsync = require('../lib/agentsync.js');
-const { writeBoardMcpLiveness, clearBoardMcpLiveness } = require('../lib/mcp.js');
+const { writeBoardMcpLiveness, clearBoardMcpLiveness, observeBoardMcp } = require('../lib/board-mcp-liveness.js');
 const BOARD_PATH = path.join(os.tmpdir(), 'sq-hooks-fixtures', 'board');
 const { slug } = store.ensureProject(BOARD_PATH);
+// SessionStart briefs only a session whose project has a board (GH-225). Session runs that name no project of their
+// own start in this registered, unrouted fixture, which keeps the default briefing on its no-usable-route text.
+const SESSION_PROJECT = path.join(os.tmpdir(), 'sq-hooks-fixtures', 'session-project');
+fs.mkdirSync(SESSION_PROJECT, { recursive: true });
+store.setProjectRouting(store.ensureProject(SESSION_PROJECT).slug, 'disabled');
 const database = db.openDb(SIDEQUEST_HOME);
 
 const HOOKS = path.join(__dirname, '..', 'hooks');
@@ -53,6 +58,7 @@ const SESSION_END = path.join(HOOKS, 'session-end.js');
 const FORCE_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 const SUBAGENT_START = path.join(HOOKS, 'subagent-start.js');
 const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
+const AGENT_DISPATCH_STATE = path.join(HOOKS, 'agent-dispatch-state.js');
 const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
 const GUARD_WORKTREE_ISOLATION = path.join(HOOKS, 'guard-worktree-isolation.js');
@@ -123,11 +129,15 @@ const GENERIC_AGENT_DENY_REASON = 'sidequest: implementation-agent is a generic 
 
 // Run a hook with the given stdin payload and return the injected
 // additionalContext string (or '' when the hook stays silent).
+function sessionProjectDefault(script: string): Record<string, string> {
+  return script === SESSION ? { CLAUDE_PROJECT_DIR: SESSION_PROJECT } : {};
+}
+
 function runHookOutput(script?: any, payload?: any, envOverrides?: any) {
   const out = execFileSync(process.execPath, [script], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
-    env: { ...process.env, ...(envOverrides || {}) },
+    env: { ...process.env, ...sessionProjectDefault(script), ...(envOverrides || {}) },
   });
   return out.trim() ? JSON.parse(out) : null;
 }
@@ -164,6 +174,7 @@ function runHookProcessForBudget(script?: any, payload?: any, envOverrides?: any
     const child = spawn(process.execPath, [script], {
       env: {
         ...process.env,
+        ...sessionProjectDefault(script),
         CLAUDE_PLUGIN_ROOT: FIXED_PLUGIN_ROOT,
         SIDEQUEST_SWEEP_DEADLINE_MS: BUDGET_SWEEP_DEADLINE_MS,
         ...(envOverrides || {}),
@@ -289,11 +300,13 @@ function windowsShortPath(pathname: string): string {
 }
 
 function runSessionWithHome(home?: any, envOverrides?: any) {
+  registerProject(home, SESSION_PROJECT);
   return execFileSync(process.execPath, [SESSION], {
     input: JSON.stringify({ session_id: 'bootstrap-test' }),
     encoding: 'utf8',
     env: {
       ...process.env,
+      CLAUDE_PROJECT_DIR: SESSION_PROJECT,
       SIDEQUEST_HOME: home,
       SIDEQUEST_SWEEP_DEADLINE_MS: '60000',
       ...(envOverrides || {}),
@@ -701,7 +714,7 @@ test('pre-tool hook: shared-tree claims cannot run raw git commit', () => {
   }), null);
 });
 
-test('pre-tool hook: readonly Claude executors bypass while dispatch executors require preparation', () => {
+test('pre-tool hook: readonly Claude executors inherit the session mode while dispatch executors require preparation', () => {
   for (const effort of EFFORTS) {
     const claude = runHookOutput(FORCE_BYPASS, {
       tool_name: 'Agent',
@@ -712,7 +725,7 @@ test('pre-tool hook: readonly Claude executors bypass while dispatch executors r
       },
     });
     assert.equal(claude.hookSpecificOutput.permissionDecision, undefined);
-    assert.equal(claude.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+    assert.equal(claude.hookSpecificOutput.updatedInput.mode, undefined);
 
     const dispatch = runHookOutput(FORCE_BYPASS, {
       tool_name: 'Agent',
@@ -893,33 +906,136 @@ test('pre-tool hook: arbitrary implementation agents are denied and directed to 
   assert.doesNotMatch(mismatch.hookSpecificOutput.permissionDecisionReason, new RegExp(RETIRED_SCOUT));
 });
 
-test('pre-tool hook: an unavailable Board MCP server tells the agent to report it to the user', () => {
-  const session_id = `board-mcp-unavailable-${Date.now()}`;
+function genericAgentDenial(session_id: string, envOverrides: Record<string, string> = {}): string {
   const out = runHookOutput(FORCE_BYPASS, {
     session_id, cwd: BOARD_PATH, tool_name: 'Agent',
     tool_input: { subagent_type: 'implementation-agent', isolation: 'worktree', prompt: 'Implement the new flow.' },
-  });
-  const reason = out.hookSpecificOutput.permissionDecisionReason;
+  }, { CLAUDE_PROJECT_DIR: BOARD_PATH, ...envOverrides });
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(reason, /Board MCP server for this session is not running/);
-  assert.match(reason, /Stop and report this to the user instead of retrying/);
-  assert.match(reason, /The user must run \/mcp and reconnect plugin:sidequest:board, or restart Claude Code/);
-  assert.doesNotMatch(reason, /reload or reconnect Sidequest/);
+  return out.hookSpecificOutput.permissionDecisionReason;
+}
+
+function withBoardMcpMarker(sessionId: string, project: string, run: () => void): void {
+  writeBoardMcpLiveness(sessionId, project);
+  try {
+    run();
+  } finally {
+    clearBoardMcpLiveness();
+  }
+}
+
+const BOARD_MCP_RECONNECT = /Stop and report this to the user instead of retrying\. The user must run \/mcp and reconnect plugin:sidequest:board, or restart Claude Code/;
+
+test('pre-tool hook: no Board MCP marker for the session or project names that absence and the reconnect', () => {
+  const reason = genericAgentDenial(`board-mcp-absent-${Date.now()}`);
+  assert.match(reason, /no Board MCP server has recorded itself for this session or project in /);
+  assert.match(reason, BOARD_MCP_RECONNECT);
+  assert.doesNotMatch(reason, /is not running|generic Agent, not a Sidequest ticket executor/);
+
+  const otherProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-other-board-'));
+  withBoardMcpMarker('another-session', otherProject, () => {
+    assert.match(genericAgentDenial(`board-mcp-foreign-${Date.now()}`), /no Board MCP server has recorded itself/, 'another project\'s live server is not this board');
+  });
 });
 
-test('pre-tool hook: a live Board MCP server keeps the generic Agent refusal unchanged', () => {
-  const session_id = `board-mcp-live-${Date.now()}`;
-  writeBoardMcpLiveness(session_id);
+test('pre-tool hook: a Board MCP marker whose server exited names the pid and the reconnect', () => {
+  const session_id = `board-mcp-exited-${Date.now()}`;
+  const exitedPid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }));
+  // The session-keyed name is the pre-pid marker format a still-running older server writes.
+  const legacyMarker = path.join(SIDEQUEST_HOME, 'tmp', 'state', `board-mcp-${encodeURIComponent(session_id)}.json`);
+  fs.mkdirSync(path.dirname(legacyMarker), { recursive: true });
+  fs.writeFileSync(legacyMarker, JSON.stringify({ pid: exitedPid }));
   try {
-    const out = runHookOutput(FORCE_BYPASS, {
-      session_id, cwd: BOARD_PATH, tool_name: 'Agent',
-      tool_input: { subagent_type: 'implementation-agent', isolation: 'worktree', prompt: 'Implement the new flow.' },
-    });
-    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-    assert.equal(out.hookSpecificOutput.permissionDecisionReason, GENERIC_AGENT_DENY_REASON);
+    const reason = genericAgentDenial(session_id);
+    assert.match(reason, new RegExp(`\\(pid ${exitedPid}, [^)]*board-mcp-[^)]*\\) has exited`));
+    assert.match(reason, BOARD_MCP_RECONNECT);
   } finally {
-    clearBoardMcpLiveness(session_id);
+    fs.rmSync(legacyMarker, { force: true });
   }
+});
+
+test('pre-tool hook: a live Board MCP server keeps the generic Agent refusal across session id rotation', () => {
+  const session_id = `board-mcp-live-${Date.now()}`;
+  withBoardMcpMarker(session_id, BOARD_PATH, () => {
+    assert.equal(genericAgentDenial(session_id), GENERIC_AGENT_DENY_REASON, 'marker under this session id');
+    assert.equal(genericAgentDenial(`${session_id}-resumed`), GENERIC_AGENT_DENY_REASON, 'resume after compaction reads the old session marker (GH-257)');
+    assert.equal(
+      genericAgentDenial(`${session_id}-cleared`, { CLAUDE_CODE_SESSION_ID: `${session_id}-cleared` }),
+      GENERIC_AGENT_DENY_REASON,
+      '/clear hands the hook a new session id while the same server pid keeps serving (GH-310)',
+    );
+  });
+  withBoardMcpMarker('', BOARD_PATH, () => {
+    assert.equal(genericAgentDenial(`${session_id}-unnamed`), GENERIC_AGENT_DENY_REASON, 'a server started without a session id still records its project');
+  });
+});
+
+test('board mcp liveness: observes live, rotated, exited, absent, and unreadable markers by pid and project', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-liveness-observe-'));
+  const markers = path.join(home, 'tmp', 'state');
+  const project = path.join(home, 'project');
+  const otherProject = path.join(home, 'other');
+  const exitedPid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }));
+  const writeMarker = (name: string, body: string) => fs.writeFileSync(path.join(markers, name), body);
+  const previousHome = process.env.SIDEQUEST_HOME;
+  process.env.SIDEQUEST_HOME = home;
+  try {
+    assert.deepEqual(observeBoardMcp('s1', project), { state: 'absent', directory: markers }, 'no marker directory yet');
+    fs.mkdirSync(markers, { recursive: true });
+    writeMarker('board-mcp-garbage.json', 'not json');
+    writeMarker('board-mcp-nopid.json', JSON.stringify({ sessionId: 's1' }));
+    writeMarker('board-mcp-zero.json', JSON.stringify({ pid: 0, sessionId: 's1' }));
+    writeMarker('unrelated.json', JSON.stringify({ pid: process.pid, sessionId: 's1' }));
+    assert.equal(observeBoardMcp('s1', project).state, 'absent', 'malformed markers and other files are ignored');
+
+    writeMarker('board-mcp-' + encodeURIComponent('old session') + '.json', JSON.stringify({ pid: exitedPid }));
+    const exited = observeBoardMcp('old session', project);
+    assert.equal(exited.state, 'exited', 'a legacy marker takes its session id from the file name');
+    assert.equal(exited.marker.pid, exitedPid);
+
+    writeBoardMcpLiveness('s1', project);
+    try {
+      assert.equal(observeBoardMcp('s1', project).state, 'live');
+      assert.equal(observeBoardMcp('s1', '').state, 'live', 'no project still matches by session id');
+      assert.equal(observeBoardMcp('s2', project).state, 'rotated', 'same project after a session id change');
+      assert.equal(observeBoardMcp('s2', otherProject).state, 'absent', 'another project is not this board');
+      assert.equal(observeBoardMcp('s2', '').state, 'absent');
+    } finally {
+      clearBoardMcpLiveness();
+    }
+
+    fs.rmSync(path.join(home, 'tmp'), { recursive: true, force: true });
+    fs.mkdirSync(path.join(home, 'tmp'));
+    fs.writeFileSync(markers, 'not a directory');
+    const unreadable = observeBoardMcp('s1', project);
+    assert.equal(unreadable.state, 'unreadable');
+    assert.match(unreadable.detail, /ENOTDIR/);
+  } finally {
+    if (previousHome === undefined) delete process.env.SIDEQUEST_HOME;
+    else process.env.SIDEQUEST_HOME = previousHome;
+  }
+});
+
+test('pre-tool hook: unreadable Board MCP liveness says the state is unknown instead of down', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-liveness-unreadable-'));
+  fs.mkdirSync(path.join(home, 'tmp'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'tmp', 'state'), 'not a directory');
+  const reason = genericAgentDenial(`board-mcp-unreadable-${Date.now()}`, { SIDEQUEST_HOME: home });
+  assert.match(reason, /could not read Board MCP liveness markers in .*state \(.*ENOTDIR/);
+  assert.match(reason, /so the board server state is unknown\. If board tools answer, dispatch through them/);
+  assert.doesNotMatch(reason, /Stop and report this to the user|is not running/);
+});
+
+test('pre-tool hook: a project with no Sidequest install names the install instead of the board server (GH-158)', () => {
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-no-install-'));
+  const session_id = `board-mcp-no-install-${Date.now()}`;
+  withBoardMcpMarker(session_id, BOARD_PATH, () => {
+    const reason = genericAgentDenial(session_id, { SIDEQUEST_CLAUDE_HOME: claudeHome });
+    assert.match(reason, /implementation-agent is a generic Agent, and this project cannot dispatch a ticket executor either\./);
+    assert.match(reason, /has no install with a lifecycle-compatible runtime registered for /);
+    assert.match(reason, /Run `claude plugin install sidequest@eigenwise-toolshed --scope project`/);
+    assert.doesNotMatch(reason, /reconnect plugin:sidequest:board|is not running/);
+  });
 });
 
 test('pre-tool hook: executor helpers allow mechanical sweeps with parent-tree safeguards', () => {
@@ -1659,7 +1775,7 @@ test('pre-tool repeated-command hook ignores main-thread and unrelated subagent 
 });
 
 test('pre-tool repeated-command hook warns on the third repeat and every fifth after', () => {
-  const agentId = `repeated-command-${Date.now()}`;
+  const agentId = `repeated-command-${process.pid}-${Date.now()}`;
   const payload = { tool_name: 'Bash', agent_type: 'sidequest-exec-high', agent_id: agentId, tool_input: { command: 'npm   run\n test' } };
   assert.equal(runHookOutput(REPEATED_COMMAND_WARN, payload), null);
   assert.equal(runHookOutput(REPEATED_COMMAND_WARN, { ...payload, tool_input: { command: 'npm run test' } }), null);
@@ -1673,7 +1789,7 @@ test('pre-tool repeated-command hook warns on the third repeat and every fifth a
 });
 
 test('pre-tool repeated-command hook warns for PowerShell commands', () => {
-  const agentId = `repeated-command-powershell-${Date.now()}`;
+  const agentId = `repeated-command-powershell-${process.pid}-${Date.now()}`;
   const payload = { tool_name: 'PowerShell', agent_type: 'sidequest-exec-high', agent_id: agentId, tool_input: { command: 'npm test' } };
   assert.equal(runHookOutput(REPEATED_COMMAND_WARN, payload), null);
   assert.equal(runHookOutput(REPEATED_COMMAND_WARN, payload), null);
@@ -2596,6 +2712,23 @@ test('home-delete guard: preserves protected recursive deletes', () => {
   }
 });
 
+// GH-86. `rm -r ~/repos/project/build` was blocked while the same target spelled as an absolute path was
+// allowed: any `~/` path counted as the profile. A leading home reference now resolves before the root check.
+test('home-delete guard: judges a home-relative target by where it resolves', () => {
+  for (const command of [
+    'rm -r ~/repos/project/build',
+    'rm -rf "$HOME/repos/project/build"',
+    'Remove-Item -Recurse -Force $env:USERPROFILE\\repos\\project\\build',
+    'rd /s %USERPROFILE%\\repos\\project\\build',
+    `rm -r ${path.join(os.homedir(), 'repos', 'project', 'build')}`,
+  ]) {
+    assert.strictEqual(runHomeDeleteGuard('Bash', command), null, command);
+  }
+  for (const command of ['rm -rf ~/', 'rm -rf ~/.claude/', 'rm -rf ~/..', 'rm -rf $HOME/.claude', 'rm -rf --dir=$HOME']) {
+    assert.equal(runHomeDeleteGuard('Bash', command).hookSpecificOutput.permissionDecision, 'deny', command);
+  }
+});
+
 test('home-delete guard: allows forced non-recursive and continued scoped deletes', () => {
   for (const command of [
     'rm -f C:/Users/x/AppData/Local/Temp/observability/file',
@@ -3247,7 +3380,8 @@ test('session-start force-loads the Sidequest skill only for orchestrator mid-wa
     source: 'startup',
     cwd: midWaveProject,
   }, { SIDEQUEST_HOME: midWaveHome, CLAUDE_PROJECT_DIR: midWaveProject, SIDEQUEST_AGENT: 'fixture-executor' });
-  assert.equal(midWaveExecutor.hookSpecificOutput.initialUserMessage, undefined);
+  assert.equal(midWaveExecutor?.hookSpecificOutput?.initialUserMessage, undefined);
+  assert.doesNotMatch(midWaveExecutor?.hookSpecificOutput?.additionalContext || '', /ROLE: ORCHESTRATOR/);
 
   const midWaveCompact = runHookOutput(SESSION, {
     session_id: 'mid-wave-skill-compact',
@@ -3313,7 +3447,6 @@ test('session-start: states usable-route admission while preserving the specific
   for (const source of ['', 'compact', 'resume']) {
     const context = runHookForBudget(SESSION, { session_id: `authorization-${source || 'startup'}`, source });
     assert.match(context, /no usable project route here, so substantive work may stay inline/i);
-    assert.match(context, /the first Board MCP call auto-registers this project/i);
     assert.match(context, /use board_config to enable a category with an available executor before asking for board dispatch/i);
     assert.match(context, /one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch/i);
     assert.match(context, /ask before work beyond the approved scope unless explicit standing permission covers it/i);
@@ -3435,6 +3568,7 @@ test('session-start: names the upstream-defect filing destination for the local 
   assert.match(maintainerContext, commonClause);
 
   const nonMaintainerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-toolshed-non-maintainer-'));
+  registerProject(nonMaintainerHome, SESSION_PROJECT);
   const nonMaintainerContext = runHookForBudget(SESSION, { session_id: 'upstream-defect-non-maintainer' }, {
     SIDEQUEST_HOME: nonMaintainerHome,
     SIDEQUEST_SWEEP_DEADLINE_MS: '60000',
@@ -3774,6 +3908,40 @@ test('session-start source excludes the retired lifecycle CLI fallback', () => {
   assert.match(source, /reconnect plugin:sidequest:board, or restart Claude Code; do not retry/);
 });
 
+test('session-start: briefs only an orchestrator; plain users and executors get no orchestrator block (GH-225)', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-session-role-'));
+  const plainProject = path.join(home, 'plain');
+  const boardProject = path.join(home, 'board');
+  fs.mkdirSync(plainProject, { recursive: true });
+  registerProject(home, boardProject);
+  const briefing = (cwd: string, payload: Record<string, string> = {}, env: Record<string, string> = {}) => runHook(
+    SESSION,
+    { session_id: 'session-role', source: 'startup', cwd, ...payload },
+    { SIDEQUEST_HOME: home, SIDEQUEST_SWEEP_DEADLINE_MS: '60000', SIDEQUEST_NUDGE: '', SIDEQUEST_AGENT: '', ...env },
+  );
+  for (const nudge of ['', 'on', 'off']) {
+    assert.doesNotMatch(briefing(plainProject, {}, { SIDEQUEST_NUDGE: nudge }), /ROLE: ORCHESTRATOR/, `plain user, SIDEQUEST_NUDGE=${nudge || 'unset'}`);
+  }
+  assert.doesNotMatch(briefing(boardProject, { agent_type: 'sidequest:sidequest-exec-high' }), /ROLE: ORCHESTRATOR/, 'headless executor session');
+  assert.doesNotMatch(briefing(boardProject, {}, { SIDEQUEST_AGENT: 'fixture-executor' }), /ROLE: ORCHESTRATOR/, 'executor-launched session');
+  assert.match(briefing(boardProject), /ROLE: ORCHESTRATOR/, 'a session on a registered board is the orchestrator');
+});
+
+test('pre-tool hooks: a plain user Bash call gets no output from any Sidequest guard (GH-225)', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-plain-pretool-'));
+  const project = path.join(home, 'plain');
+  fs.mkdirSync(project, { recursive: true });
+  const groups: Array<{ matcher: string; hooks: Array<{ command: string }> }> = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8')).hooks.PreToolUse;
+  const bashHooks = groups
+    .filter((group) => new RegExp(`^(?:${group.matcher === '*' ? '.*' : group.matcher})$`).test('Bash'))
+    .flatMap((group) => group.hooks.map((hook) => path.join(HOOKS, /hooks\/([\w-]+\.js)/.exec(hook.command)?.[1] || '')));
+  assert.ok(bashHooks.length >= 5, `expected the Bash guard set, got ${bashHooks.length}`);
+  for (const hook of bashHooks) {
+    const out = runHookOutput(hook, { session_id: 'plain-user', cwd: project, tool_name: 'Bash', tool_input: { command: 'ls' } }, { SIDEQUEST_HOME: home });
+    assert.equal(out, null, path.basename(hook));
+  }
+});
+
 test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
   const out = execFileSync(process.execPath, [SESSION], {
     input: JSON.stringify({ session_id: 'test' }),
@@ -3810,7 +3978,8 @@ test('worktree-create refuses an unbound request before Git or target mutation',
 
 test('worktree-create binds a linked checkout to its registered main board', () => {
   const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-linked-worktree-hook-repo-'));
-  const linkedCheckout = path.join(os.tmpdir(), `sq-linked-worktree-hook-${++sqSeq}`);
+  // force-exec-bypass.test.ts runs this file again in a parallel process with the same sqSeq sequence.
+  const linkedCheckout = `${repository}-linked-${++sqSeq}`;
   gitFixture(['init', '--quiet', '-b', 'main'], repository);
   gitFixture(['config', 'user.email', 'test@example.invalid'], repository);
   gitFixture(['config', 'user.name', 'Linked Worktree Hook Test'], repository);
@@ -4224,6 +4393,116 @@ test('SQ-2955: a WorktreeCreate whose generation was retired mid-setup stamps no
       try { gitFixture(['branch', '-D', `worktree-${name}`], repo); } catch (_) {}
     }
   }
+});
+
+// Two claimed isolated executors under ONE session id with distinct bound agent ids, which is how a fan-out
+// launches them: native subagents inherit their parent's session, so only the agent id tells them apart.
+function sessionSharingExecutors(label: string) {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), `sq-siblings-${label}-`));
+  gitFixture(['init', '--quiet', '-b', 'main'], repository);
+  gitFixture(['config', 'user.email', 'test@example.invalid'], repository);
+  gitFixture(['config', 'user.name', 'Sibling Executors Test'], repository);
+  fs.writeFileSync(path.join(repository, 'tracked.txt'), 'seed\n');
+  gitFixture(['add', 'tracked.txt'], repository);
+  gitFixture(['commit', '--quiet', '-m', 'seed'], repository);
+  const project = store.ensureProject(repository, `siblings ${label}`).slug;
+  const category = `siblings-${label}-${++sqSeq}`;
+  store.setCategory({ id: category, name: category, route: { model: 'sonnet', effort: 'medium' }, fallback: null, enabled: true });
+  const sessionId = `siblings-${label}-${sqSeq}`;
+  const claimedExecutor = (name: string) => {
+    const ticket = store.createTicket(project, {
+      title: `${name} sibling executor`,
+      description: 'Where: sibling fixture. Contract: hold one isolated dispatch. Verify: inspect hook output.',
+      category,
+      files: ['tracked.txt'],
+      source: 'cli',
+    });
+    const agentId = `sibling-${label}-${name}-agent`;
+    const prepared = store.prepareDispatch(project, ticket.ref, { sharedTree: false, sessionId });
+    const executor = prepared.ticket.dispatchExecutor;
+    assert.equal(store.recordDispatchLaunch(project, ticket.ref, { token: prepared.token, executor, sessionId, agentName: agentId }).ok, true);
+    const worktree = worktrees.agentWorktreePath(repository, agentId);
+    assert.equal(store.bindDispatchWorktreeCreation(project, sessionId, worktree).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
+    assert.equal(store.claimTicket(project, ticket.ref, agentId, { token: prepared.token, executor, sessionId }).ok, true);
+    const gitDirectory = path.join(repository, '.git', 'worktrees', agentId);
+    fs.mkdirSync(gitDirectory, { recursive: true });
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(worktree, '.git'), `gitdir: ${gitDirectory}\n`);
+    const recorded = store.getTicket(project, ticket.ref).dispatch.worktree;
+    return { ref: ticket.ref, agentId, executor, token: prepared.token, worktree: recorded, gitDirectory };
+  };
+  const first = claimedExecutor('first');
+  const second = claimedExecutor('second');
+  return { repository, project, sessionId, first, second };
+}
+
+test('subagent-start keys the receiving agent\'s own worktree on its bound agent id, not the shared session (GH-155)', () => {
+  const { repository, sessionId, first, second } = sessionSharingExecutors('diagnostics');
+  // SubagentStart can report the parent's checkout as cwd, so the session's checkout is all a session-keyed
+  // lookup sees, and both siblings got the same answer: each other's worktree AND their own called foreign.
+  const input = (executor: typeof first) => ({
+    session_id: sessionId,
+    agent_type: executor.executor,
+    agent_id: executor.agentId,
+    cwd: repository,
+  });
+  const ownException = (executor: typeof first) => `Your own worktree is ${path.basename(executor.worktree)}.`;
+
+  // SubagentStart delivers only the first 512 bytes, so the count and the ownership sentence have to lead.
+  const delivered = runHook(SUBAGENT_START, input(first));
+  assert.match(delivered, /1 foreign agent worktree in play/, 'only the sibling worktree is foreign');
+  assert.ok(delivered.includes(ownException(first)), delivered);
+
+  const { diagnosticWorktreeWarning } = require('../hooks/diagnostic-worktree-warning.js');
+  const toFirst = diagnosticWorktreeWarning(input(first));
+  assert.match(toFirst, new RegExp(`1 holds a live claim \\(${second.ref}\\)`));
+  assert.doesNotMatch(toFirst, new RegExp(`\\b${first.ref}\\b`), 'an executor is never told its own ticket is foreign');
+  const toSecond = diagnosticWorktreeWarning(input(second));
+  assert.match(toSecond, new RegExp(`1 holds a live claim \\(${first.ref}\\)`));
+  assert.ok(toSecond.includes(ownException(second)), toSecond);
+
+  const toOrchestrator = diagnosticWorktreeWarning({ session_id: sessionId, cwd: repository });
+  assert.match(toOrchestrator, /2 foreign agent worktrees in play/, 'the session itself owns neither worktree');
+  assert.doesNotMatch(toOrchestrator, /Your own worktree/);
+});
+
+test('an executor stop records its own dispatch state in its own worktree, never a sibling\'s (GH-150)', () => {
+  const { repository, project, sessionId, first, second } = sessionSharingExecutors('stack-owner');
+  const stateFile = (executor: typeof first) => path.join(executor.gitDirectory, 'sidequest-dispatch.json');
+  const stop = (executor: typeof first) => runHook(AGENT_DISPATCH_STATE, {
+    hook_event_name: 'SubagentStop',
+    session_id: sessionId,
+    agent_type: executor.executor,
+    agent_id: executor.agentId,
+    cwd: repository,
+  });
+
+  assert.equal(store.recordDispatchAgentFailure(project, first.ref, {
+    token: first.token,
+    executor: first.executor,
+    sessionId,
+    taskName: first.agentId,
+    agentId: first.agentId,
+    agentName: first.agentId,
+    error: 'Prompt is too long',
+  }).ok, true);
+  stop(first);
+  assert.equal(fs.existsSync(stateFile(first)), true, 'the stopped executor\'s own worktree records its dispatch state');
+  const ended = JSON.parse(fs.readFileSync(stateFile(first), 'utf8'));
+  assert.equal(ended.ref, first.ref);
+  assert.equal(ended.agentId, first.agentId, 'ownership names the executor, not the session that launched it');
+  assert.equal(ended.sessionId, sessionId);
+  assert.equal(ended.terminalAt, store.getTicket(project, first.ref).dispatch.terminalAt, 'the terminal event is the board\'s own');
+  assert.ok(Date.parse(ended.stoppedAt) >= Date.parse(ended.terminalAt));
+  assert.equal(fs.existsSync(stateFile(second)), false, 'the sibling under the same session is still running');
+
+  // A parked executor's run ends too, but its claim is live and it can be resumed, so nothing is terminal yet.
+  stop(second);
+  const parked = JSON.parse(fs.readFileSync(stateFile(second), 'utf8'));
+  assert.equal(parked.agentId, second.agentId);
+  assert.equal(parked.terminalAt, null);
+  assert.equal(JSON.parse(fs.readFileSync(stateFile(first), 'utf8')).agentId, first.agentId, 'a sibling stop never rewrites another worktree');
 });
 
 test('subagent-start warns only for embedded worktrees outside the receiving agent checkout', () => {
@@ -5359,4 +5638,133 @@ test('pre-tool hook: dispatch executor requires an exact briefing and legacy exe
   });
   assert.equal(legacy.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(legacy.hookSpecificOutput.permissionDecisionReason, /invalid or retired/);
+});
+
+const GUARD_DENIED_TOOLS = path.join(HOOKS, 'guard-denied-tools.js');
+
+function readOnlyShellCheckout(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-readonly-shell-'));
+  gitFixture(['init', '-q', '-b', 'main'], root);
+  gitFixture(['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'initial commit'], root);
+  fs.mkdirSync(path.join(root, 'sub'));
+  return root;
+}
+
+function runReadOnlyShell(command: string, cwd: string, agentType = stableReadOnlyClaudeName('high'), toolName = 'Bash') {
+  return runHookOutput(FORCE_BYPASS, { tool_name: toolName, agent_type: agentType, agent_id: 'readonly-shell-agent', cwd, tool_input: { command } });
+}
+
+function msysPath(value: string): string {
+  return value.replace(/^([A-Za-z]):[\\/]/, (_match: string, drive: string) => `/${drive.toLowerCase()}/`).replace(/\\/g, '/');
+}
+
+test('read-only shell guard: refuses write-shaped Bash and PowerShell inside the checkout and names the alternative (GH-282)', () => {
+  const root = readOnlyShellCheckout();
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-readonly-scratch-'));
+  const writes = [
+    'echo x > file',
+    'echo x >> notes.md',
+    'npm test &> out.log',
+    'rm -f a.txt',
+    'mv a.txt b.txt',
+    'cd sub && touch f',
+    `cp "${scratch}/x" ./y`,
+    "sed -i 's/a/b/' a.txt",
+    'git commit -m x',
+    'git -C . reset --hard',
+    'echo x | tee sub/log.txt',
+    `echo x > "${path.join(root, 'quoted path.txt')}"`,
+    ...(process.platform === 'win32' ? [`echo x > ${msysPath(path.join(root, 'msys.txt'))}`] : []),
+  ];
+  for (const command of writes) {
+    const reason = runReadOnlyShell(command, root)?.hookSpecificOutput?.permissionDecisionReason || '';
+    assert.match(reason, /read-only executor, refusing a shell write inside the repository checkout/, command);
+    assert.match(reason, /in your scratchpad or the ticket's verification directory/, command);
+    assert.match(reason, /comment the needed edit on the ticket and release it instead/, command);
+  }
+  const powershell = runReadOnlyShell('Set-Content -Path a.txt -Value x', root, stableReadOnlyDispatchName(), 'PowerShell');
+  assert.equal(powershell.hookSpecificOutput.permissionDecision, 'deny');
+
+  for (const command of [
+    'git status',
+    'git log --oneline -3 2>&1',
+    'grep -rn "a > b" . 2>/dev/null',
+    'npm test 2>&1 | tail -5',
+    'cat a.txt > /dev/null',
+    "sed -n '1,5p' a.txt",
+    `echo x > "${scratch}/out.txt"`,
+    `cd "${scratch}" && echo x > y.txt`,
+    `cp a.txt "${scratch}/a.txt"`,
+    'echo x > ~/sq-readonly-home-probe.txt',
+    'git diff > $OUT',
+  ]) {
+    assert.equal(runReadOnlyShell(command, root), null, command);
+  }
+  assert.equal(runReadOnlyShell('echo x > file', scratch), null, 'outside any checkout nothing is protected');
+  assert.equal(runReadOnlyShell('echo x > file', root, 'sidequest-exec-high'), null, 'write executors keep their shell');
+  assert.equal(runHookOutput(FORCE_BYPASS, { tool_name: 'Bash', cwd: root, tool_input: { command: 'echo x > file' } }), null);
+});
+
+test('read-only shell guard: a linked worktree cannot write into its main checkout (GH-282)', () => {
+  const root = readOnlyShellCheckout();
+  const linked = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-readonly-linked-')), 'tree');
+  gitFixture(['worktree', 'add', '-q', '--detach', linked], root);
+  const reason = runReadOnlyShell(`echo x > "${path.join(root, 'leak.txt')}"`, linked)?.hookSpecificOutput?.permissionDecisionReason || '';
+  assert.match(reason, /refusing a shell write inside the repository checkout/);
+  assert.equal(runReadOnlyShell('git status', linked), null);
+});
+
+test('read-only executors never ship or spawn with bypassPermissions (GH-282)', () => {
+  const sources = agentsync.bundledExecutorSources();
+  for (const [filename, source] of sources) {
+    const frontmatter = source.split('\n---\n')[0];
+    const readOnly = /readonly|diagnostic-probe/.test(filename);
+    assert.equal(/^permissionMode:/m.test(frontmatter), !readOnly, filename);
+  }
+  for (const subagentType of [stableReadOnlyClaudeName('high'), `sidequest:${stableReadOnlyClaudeName('low')}`]) {
+    const out = runHookOutput(FORCE_BYPASS, {
+      tool_name: 'Agent',
+      tool_input: { subagent_type: subagentType, isolation: 'worktree', model: 'opus', name: 'ro-review', prompt: 'work SQ-36', mode: 'bypassPermissions' },
+    });
+    assert.equal(out.hookSpecificOutput.updatedInput.mode, undefined, subagentType);
+  }
+  assert.equal(agentsync.agentSpawn('ro', 'worktree', 'opus', stableReadOnlyClaudeName('high'), 'p', 'd').mode, undefined);
+  assert.equal(agentsync.agentSpawn('rw', 'worktree', 'opus', 'sidequest-exec-high', 'p', 'd').mode, 'bypassPermissions');
+});
+
+test('denied-tools guard: board and category deniedTools refuse an executor call; read-only adds readOnlyDeniedTools (GH-222)', () => {
+  const category = `hooks-denied-${++fixtureSeq}`;
+  const readOnlyCategory = `hooks-denied-ro-${fixtureSeq}`;
+  const route = { model: 'sonnet', effort: 'high' };
+  store.setCategory({ id: category, name: category, route, fallback: null, enabled: true, deniedTools: ['Agent', 'Agent', 'mcp__claude-in-chrome'] });
+  store.setCategory({ id: readOnlyCategory, name: readOnlyCategory, route, fallback: null, enabled: true, readonly: true });
+  assert.deepEqual(store.getCategory(category, { project: slug }).deniedTools, ['Agent', 'mcp__claude-in-chrome']);
+  assert.equal(Object.hasOwn(store.getCategory(readOnlyCategory, { project: slug }), 'deniedTools'), false);
+  assert.throws(() => store.setCategory({ id: category, name: category, route, fallback: null, enabled: true, deniedTools: ['mcp__plugin_sidequest_board__claim'] }), /cannot deny the Sidequest board tools/);
+  assert.throws(() => store.setBoardConfig(slug, { deniedTools: 'Agent' }), /must be an array/);
+  assert.throws(() => store.setBoardConfig(slug, { deniedTools: ['two words'] }), /tool names or MCP prefixes/);
+  const { deniedToolMatch } = require('../lib/denied-tools.js');
+  assert.equal(deniedToolMatch('mcp__claude-in-chrome__navigate', ['Agent', 'mcp__claude-in-chrome']), 'mcp__claude-in-chrome');
+  assert.equal(deniedToolMatch('mcp__claude-in-chrome-extra__navigate', ['mcp__claude-in-chrome']), null, 'a prefix denies only its own server');
+  assert.equal(deniedToolMatch('Agent', ['Agent']), 'Agent');
+  const previous = store.boardConfig(slug);
+  store.setBoardConfig(slug, { deniedTools: ['WebFetch'], readOnlyDeniedTools: ['mcp__playwright'] });
+  try {
+    assert.deepEqual(store.boardConfig(slug).deniedTools, ['WebFetch']);
+    const writer = claimStopTicket(store.createTicket(slug, { title: 'denied tools writer', category, source: 'cli' }), `denied-tools-${++sqSeq}`, 'denied-writer');
+    const reader = claimStopTicket(store.createTicket(slug, { title: 'denied tools reader', category: readOnlyCategory, source: 'cli' }), `denied-tools-${++sqSeq}`, 'denied-reader');
+    const run = (acting: any, toolName: string) => runHookOutput(GUARD_DENIED_TOOLS, { ...acting, cwd: BOARD_PATH, tool_name: toolName, tool_input: {} });
+    for (const toolName of ['Agent', 'mcp__claude-in-chrome__navigate', 'WebFetch']) {
+      const reason = run(writer, toolName)?.hookSpecificOutput?.permissionDecisionReason || '';
+      assert.match(reason, /is denied to executors on SQ-\d+ by the board deniedTools setting/, toolName);
+      assert.match(reason, /comment why on the ticket and release it/, toolName);
+    }
+    for (const toolName of ['Read', 'Bash', 'mcp__playwright__browser_click', 'AgentX']) assert.equal(run(writer, toolName), null, toolName);
+    assert.equal(run(reader, 'mcp__playwright__browser_click').hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal(run(reader, 'WebFetch').hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal(run(reader, 'mcp__claude-in-chrome__navigate'), null);
+    assert.equal(runHookOutput(GUARD_DENIED_TOOLS, { session_id: 'main-session', cwd: BOARD_PATH, tool_name: 'WebFetch', tool_input: {} }), null);
+  } finally {
+    store.setBoardConfig(slug, { deniedTools: previous.deniedTools, readOnlyDeniedTools: previous.readOnlyDeniedTools });
+  }
 });

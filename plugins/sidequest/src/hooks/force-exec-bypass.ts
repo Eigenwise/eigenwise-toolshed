@@ -8,7 +8,10 @@ import { runtimeModule } from './shared/paths.js';
 import { readSessionState, sessionStateFile, writeSessionState } from './shared/session-state.js';
 // Dependency-free, so bundling it keeps launch naming identical in the hook and
 // in the store even when the installed lib is mid-upgrade.
-import { canonicalExecutorName, dispatchLaunchName, DIAGNOSTIC_PROBE_NAME } from '../lib/exec-names.js';
+import { canonicalExecutorName, dispatchLaunchName, DIAGNOSTIC_PROBE_NAME, isReadOnlyExecutor } from '../lib/exec-names.js';
+import { readOnlyShellRefusal } from './shared/read-only-shell.js';
+import { observeBoardMcp, type BoardMcpObservation } from '../lib/board-mcp-liveness.js';
+import { checkSidequestInstall, installRefusalMessage } from '../lib/dispatch-preflight.js';
 
 const { canonicalPath } = require(path.join(__dirname, '..', 'lib', 'worktrees.js')) as { canonicalPath: (value: unknown) => string };
 const { isInScope: scopeMatch } = require(path.join(__dirname, '..', 'lib', 'scope-match.js')) as { isInScope: (file: unknown, files: unknown) => boolean };
@@ -93,7 +96,7 @@ interface DispatchAdmission {
 }
 
 interface Store {
-  findProject: (project: string) => { ok: boolean; slug?: string };
+  findProject: (project: string) => { ok: boolean; slug?: string; meta?: { path?: string } };
   projectDispatchAdmission: (slug: string) => DispatchAdmission;
   getTicket: (slug: string, ref: string) => Ticket | null;
   recordDispatchLaunch: (slug: string, ref: string, options: Record<string, unknown>) => unknown;
@@ -125,6 +128,7 @@ interface HelperScopeResolution {
 }
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 
 function fallbackClassify(type: string): ExecutorClassification {
   const readOnlyDispatch = /^sidequest-exec-dispatch-readonly(?:-(low|medium|high|xhigh|max))?$/.exec(type);
@@ -222,18 +226,51 @@ function diagnosticProbeDenyReason(): string {
   return `sidequest: ${DIAGNOSTIC_PROBE_NAME} is reserved for a foreground dispatch self-test. Use description "Sidequest dispatch self-test." and prompt "Diagnose Sidequest dispatch machinery. Read package.json, then report whether the Agent spawn can use a read-only tool." Omit model, ticket refs, isolation, and background mode. Ordinary work needs a ticket.`;
 }
 
-function agentDenyReason(input: HookInput, type: string, classification: ExecutorClassification): string {
-  if (type.startsWith('sidequest-')) {
-    if (classification.kind === 'ticket' || classification.kind === 'legacy_ticket') {
-      return `sidequest: ${type} looks like a Sidequest executor name but is invalid or retired. Re-run dispatch and spawn the returned executor.`;
-    }
-    return `sidequest: ${type} is an unknown Sidequest agent type. Use the executor returned by dispatch.`;
+function sidequestTypeDenyReason(type: string, classification: ExecutorClassification): string {
+  if (classification.kind === 'ticket' || classification.kind === 'legacy_ticket') {
+    return `sidequest: ${type} looks like a Sidequest executor name but is invalid or retired. Re-run dispatch and spawn the returned executor.`;
   }
-  if (!boardMcpAvailable(input)) {
-    return 'sidequest: the Board MCP server for this session is not running. Stop and report this to the user instead of retrying. The user must run /mcp and reconnect plugin:sidequest:board, or restart Claude Code. Do not use a raw Agent or Sidequest CLI fallback.';
-  }
+  return `sidequest: ${type} is an unknown Sidequest agent type. Use the executor returned by dispatch.`;
+}
+
+function genericAgentDenyReason(type: string): string {
   return `sidequest: ${type || 'custom'} is a generic Agent, not a Sidequest ticket executor. ` +
     'For a tiny lookup, use Read, Glob, Grep, or WebFetch inline, not WebSearch. A usable route needs a fresh Board MCP dispatch and its exact returned executor. Board MCP is the lifecycle authority: reload or reconnect Sidequest, then re-dispatch. Do not use a raw Agent or Sidequest CLI fallback. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor. The blocked work still gates any dependent action: do not proceed to a PR, merge, publish, or ship until its ticket is filed, dispatched, and closed; rerouting around this block is a violation.';
+}
+
+// Dispatch refuses a project with no Sidequest install, and /mcp cannot fix that, so the install goes first (GH-158).
+function missingInstallDenyReason(input: HookInput, type: string): string | null {
+  const project = registeredProjectPath(input);
+  if (!project) return null;
+  const check = checkSidequestInstall(project);
+  return check.ok ? null : `sidequest: ${type || 'custom'} is a generic Agent, and this project cannot dispatch a ticket executor either. ${installRefusalMessage(check, project)}`;
+}
+
+const BOARD_MCP_RECONNECT = 'Stop and report this to the user instead of retrying. The user must run /mcp and reconnect plugin:sidequest:board, or restart Claude Code. Do not use a raw Agent or Sidequest CLI fallback.';
+
+// A live server recorded under an earlier session id (/clear, resume, compaction) is still this session's board.
+function boardMcpDownReason(input: HookInput): string | null {
+  const sessionId = stringField(input, 'session_id', 'sessionId').trim();
+  if (!sessionId) return null;
+  return boardMcpDownDescription(observeBoardMcp(sessionId, process.env.CLAUDE_PROJECT_DIR || stringField(input, 'cwd')));
+}
+
+function boardMcpDownDescription(observed: BoardMcpObservation): string | null {
+  if (observed.state === 'exited') {
+    return `sidequest: the Board MCP server last recorded for this session or project (pid ${observed.marker.pid}, ${observed.marker.file}) has exited. ${BOARD_MCP_RECONNECT}`;
+  }
+  if (observed.state === 'absent') {
+    return `sidequest: no Board MCP server has recorded itself for this session or project in ${observed.directory}. ${BOARD_MCP_RECONNECT}`;
+  }
+  if (observed.state === 'unreadable') {
+    return `sidequest: could not read Board MCP liveness markers in ${observed.directory} (${observed.detail}), so the board server state is unknown. If board tools answer, dispatch through them; otherwise the user must run /mcp and reconnect plugin:sidequest:board. Do not use a raw Agent or Sidequest CLI fallback.`;
+  }
+  return null;
+}
+
+function agentDenyReason(input: HookInput, type: string, classification: ExecutorClassification): string {
+  if (type.startsWith('sidequest-')) return sidequestTypeDenyReason(type, classification);
+  return missingInstallDenyReason(input, type) || boardMcpDownReason(input) || genericAgentDenyReason(type);
 }
 
 // Explore needs no prepared dispatch, so it is the open door next to every generic-Agent deny: a live
@@ -258,19 +295,6 @@ function guardSessionId(input: HookInput): string {
     || process.env.CLAUDE_SESSION_ID
     || ''
   ).trim();
-}
-
-function boardMcpAvailable(input: HookInput): boolean {
-  const sessionId = stringField(input, 'session_id', 'sessionId').trim();
-  if (!sessionId) return true;
-  try {
-    const mcp: unknown = require(runtimeModule('mcp'));
-    if (mcp === null || typeof mcp !== 'object') return false;
-    const isLive = Reflect.get(mcp, 'isBoardMcpLive');
-    return typeof isLive === 'function' && Boolean(Reflect.apply(isLive, mcp, [sessionId]));
-  } catch (_) {
-    return false;
-  }
 }
 
 function normalizedWork(value: unknown): string {
@@ -407,8 +431,8 @@ function toolInputOf(input: HookInput): Record<string, unknown> | null {
 
 const CLOSEOUT_UPDATE_FIELDS = new Set([
   'files', 'status', 'readonly', 'readonlyOverride', 'workingTreeDelivery',
-  'externalDeliverable', 'verify', 'verifyKind', 'attestationArtifact',
-  'executorVerify', 'executorVerifyKind', 'executorAttestationArtifact',
+  'externalDeliverable', 'verify', 'verifyKind', 'attestationArtifact', 'verifyCwd',
+  'executorVerify', 'executorVerifyKind', 'executorAttestationArtifact', 'executorVerifyCwd',
 ]);
 
 function executorLiveClaimMutationRefusal(input: HookInput): boolean {
@@ -497,9 +521,23 @@ function resolveStampedModel(input: HookInput): ResolveResult {
   return { status: 'ok', refs, model: [...models][0] };
 }
 
+function requestedProject(input: HookInput): string {
+  return extractProjectArg(toolInputOf(input)?.prompt) || stringField(input, 'cwd') || process.env.CLAUDE_PROJECT_DIR || '';
+}
+
+function registeredProjectPath(input: HookInput): string {
+  const project = requestedProject(input);
+  if (!project) return '';
+  try {
+    const found = (require(runtimeModule('store')) as Store).findProject(project);
+    return found.ok ? found.meta?.path || project : '';
+  } catch (_) {
+    return '';
+  }
+}
+
 function dispatchAdmission(input: HookInput): DispatchAdmission {
-  const toolInput = toolInputOf(input);
-  const project = extractProjectArg(toolInput?.prompt) || stringField(input, 'cwd') || process.env.CLAUDE_PROJECT_DIR;
+  const project = requestedProject(input);
   if (!project) return { status: 'no-project' };
   try {
     const store = require(runtimeModule('store')) as Store;
@@ -944,6 +982,18 @@ function guardHelperWrite(input: HookInput): void {
   );
 }
 
+function guardReadOnlyShell(input: HookInput): void {
+  if (!isReadOnlyExecutor(stringField(input, 'agent_type', 'agentType'))) return;
+  const refusal = readOnlyShellRefusal(String(toolInputOf(input)?.command ?? ''), stringField(input, 'cwd') || process.cwd());
+  if (refusal) writeDeny('PreToolUse', refusal);
+}
+
+// Claude Code ignores permissionMode in plugin agent files and the Agent mode field, but older hosts
+// honored the spawn field, so a read-only executor is never launched into bypassPermissions (GH-282).
+function spawnPermissionFields(reducedAgentSchema: boolean, type: string): { mode?: string } {
+  return reducedAgentSchema || isReadOnlyExecutor(type) ? {} : { mode: 'bypassPermissions' };
+}
+
 // A steer aimed at an executor with a recorded terminal Agent failure cannot be
 // delivered. The sender is the only party holding the text, so this is the one
 // place it can be saved.
@@ -993,6 +1043,10 @@ function main(): void {
   }
   if (WRITE_TOOLS.has(toolName)) {
     guardHelperWrite(input);
+    return;
+  }
+  if (SHELL_TOOLS.has(toolName)) {
+    guardReadOnlyShell(input);
     return;
   }
   if (toolName !== 'Agent') return;
@@ -1077,15 +1131,14 @@ function main(): void {
   }
 
   const reducedAgentSchema = preparedSpawn?.reducedAgentSchema === true;
+  const permissionFields = spawnPermissionFields(reducedAgentSchema, type);
   const updatedInput: Record<string, unknown> = {
     ...toolInput,
-    ...(reducedAgentSchema ? {} : { mode: 'bypassPermissions' }),
+    ...permissionFields,
     ...(!reducedAgentSchema && isSubagentCaller(input) ? { run_in_background: true } : {}),
   };
-  if (reducedAgentSchema) {
-    delete updatedInput.name;
-    delete updatedInput.mode;
-  }
+  if (reducedAgentSchema) delete updatedInput.name;
+  if (!permissionFields.mode) delete updatedInput.mode;
   if (isSubagentCaller(input)) delete updatedInput.isolation;
   const corrections: string[] = [];
   if (preparedSpawn?.description && toolInput.description !== preparedSpawn.description) {

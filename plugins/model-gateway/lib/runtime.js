@@ -219,8 +219,15 @@ const CODEX_READINESS_MESSAGES = {
   'shim-down': (commandPath = resolveStableCommandPath()) => `Codex dispatch refused: the model-gateway shim is down. Run \`node "${commandPath}" ensure\`, then retry. No Anthropic fallback was used.`,
   'serving-version-mismatch': (commandPath = resolveStableCommandPath()) => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${commandPath}" ensure\`, then retry. No Anthropic fallback was used.`,
   'upstream-blocked': (commandPath = resolveStableCommandPath(), blocked = null) => upstreamBlockedMessage(commandPath, blocked),
-  'upstream-unavailable': () => 'Codex had a terminal upstream failure in the last 60 seconds. Wait briefly, then retry; /v1/models only proves the local proxy is answering.',
+  'upstream-unavailable': (commandPath, unavailable = null) => upstreamUnavailableMessage(unavailable),
 };
+
+// The hold names its own failure and its end, so a refusal that outlives it is visibly stale (issue #175).
+function upstreamUnavailableMessage(unavailable) {
+  if (!unavailable?.observedAt) return 'Codex had a terminal upstream failure in the last 30 seconds. Wait briefly, then retry; /v1/models only proves the local proxy is answering.';
+  const until = unavailable.expiresAt || 'about 30 seconds later';
+  return `Codex had a terminal upstream failure (HTTP ${unavailable.statusCode}) at ${unavailable.observedAt}. Dispatch holds until ${until}, or until a Codex request succeeds; /v1/models only proves the local proxy is answering.`;
+}
 
 function codexReadinessMessage(state, commandPath, upstreamBlocked = null) {
   return CODEX_READINESS_MESSAGES[state](commandPath, upstreamBlocked);

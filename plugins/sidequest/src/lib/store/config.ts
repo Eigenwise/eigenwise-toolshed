@@ -1,5 +1,7 @@
 'use strict';
 
+const { normalizeDeniedTools } = require('../denied-tools.js');
+
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 const DEFAULT_WORKTREE_RECOVERY_RETENTION_AGE_HOURS = 14 * 24;
 
@@ -223,29 +225,59 @@ function normalizeWorktreeSetup(value?: any) {
   return setup;
 }
 
-function normalizeWorktreeDependencyPaths(value?: any) {
+type WorktreeDependencyPath = { path: string; mode: 'link' | 'copy' };
+
+function normalizeWorktreeDependencyPaths(value?: any): WorktreeDependencyPath[] {
   if (value == null) return [];
   if (!Array.isArray(value)) throw new Error('worktreeDependencyPaths must be an array of { path, mode } entries.');
-  const seen = new Set();
-  const normalized: any[] = [];
-  for (const entry of value) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      throw new Error('worktreeDependencyPaths entries must be { path, mode }.');
-    }
-    const dependencyPath = String(entry.path || '').trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
-    if (!dependencyPath || dependencyPath === '..' || dependencyPath.startsWith('../') || dependencyPath.includes('/../') || path.isAbsolute(dependencyPath)) {
-      throw new Error(`worktreeDependencyPaths path must stay inside the board repo: ${entry.path}`);
-    }
-    const mode = String(entry.mode || '').trim().toLowerCase();
-    if (!['link', 'copy'].includes(mode)) {
-      throw new Error(`worktreeDependencyPaths mode must be "link" or "copy": ${entry.mode}`);
-    }
-    const key = process.platform === 'win32' ? dependencyPath.toLowerCase() : dependencyPath;
-    if (seen.has(key)) throw new Error(`worktreeDependencyPaths cannot configure the same path twice: ${dependencyPath}`);
-    seen.add(key);
-    normalized.push({ path: dependencyPath, mode });
+  const normalized = value.map(normalizeWorktreeDependencyPath);
+  const keys = new Set<string>();
+  for (const dependency of normalized) {
+    const key = platformPathKey(dependency.path);
+    if (keys.has(key)) throw new Error(`worktreeDependencyPaths cannot configure the same path twice: ${dependency.path}`);
+    keys.add(key);
   }
   return normalized;
+}
+
+function platformPathKey(value: string): string {
+  return process.platform === 'win32' ? value.toLowerCase() : value;
+}
+
+function normalizeWorktreeDependencyPath(value: unknown): WorktreeDependencyPath {
+  const entry = worktreeDependencyEntry(value);
+  const mode = worktreeDependencyMode(entry.mode);
+  const dependencyPath = path.posix.normalize(String(entry.path ?? '').trim().replace(/\\/g, '/')).replace(/\/+$/, '');
+  const refusal = worktreeDependencyPathRefusal(dependencyPath, mode);
+  if (refusal) throw new Error(`worktreeDependencyPaths ${refusal}: ${entry.path}`);
+  return { path: dependencyPath, mode };
+}
+
+function worktreeDependencyEntry(value: unknown): { path?: unknown; mode?: unknown } {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) return value;
+  throw new Error('worktreeDependencyPaths entries must be { path, mode }.');
+}
+
+function worktreeDependencyMode(value: unknown): 'link' | 'copy' {
+  const mode = String(value ?? '').trim().toLowerCase();
+  if (mode === 'link' || mode === 'copy') return mode;
+  throw new Error(`worktreeDependencyPaths mode must be "link" or "copy": ${value}`);
+}
+
+function worktreeDependencyPathRefusal(dependencyPath: string, mode: string): string | null {
+  if (path.isAbsolute(dependencyPath)) return 'path must be relative to the board repo, because each worktree places it at the same relative spot; for a sibling checkout use "../<name>" with mode link';
+  if (dependencyPath === '.' || dependencyPath === '') return 'path must name a file or directory inside the board repo';
+  return outsideRepoDependencyRefusal(dependencyPath.split('/'), mode);
+}
+
+// A path outside the repo lands beside the worktree, in the worktree root every worktree of the board shares.
+// A link there is one shared pointer at the sibling checkout; a copy would be shared too and nothing would ever
+// clean it up, and a deeper "../../" would escape the worktree root altogether.
+function outsideRepoDependencyRefusal(segments: string[], mode: string): string | null {
+  if (segments[0] !== '..') return null;
+  if (mode === 'copy') return 'copy mode must stay inside the board repo, because a copy outside it would be shared by every worktree and never cleaned up; use mode link for a sibling checkout';
+  const leavesByOneLevel = segments.length > 1 && segments[1] !== '..';
+  return leavesByOneLevel ? null : 'link path may leave the board repo by one level only ("../<name>"), because the link lands in the worktree root beside the worktree';
 }
 
 function normalizeIntegrationVerifyTimeoutMs(value?: any) {
@@ -324,6 +356,7 @@ function boardConfig(slug?: any) {
     name: meta.name,
     alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
     readOnlyDeniedTools: normalizeReadOnlyDeniedTools(meta.readOnlyDeniedTools),
+    deniedTools: normalizeDeniedTools(meta.deniedTools),
     generatedPairs: normalizeGeneratedPairs(meta.generatedPairs),
     integrationMode: normalizeIntegrationMode(meta.integrationMode),
     integrationBranch: normalizeIntegrationBranch(meta.integrationBranch),
@@ -366,6 +399,9 @@ function setBoardConfig(slug?: any, patch?: any) {
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'readOnlyDeniedTools')) {
       meta.readOnlyDeniedTools = normalizeReadOnlyDeniedTools(patch.readOnlyDeniedTools);
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'deniedTools')) {
+      meta.deniedTools = normalizeDeniedTools(patch.deniedTools);
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'generatedPairs')) {
       meta.generatedPairs = normalizeGeneratedPairs(patch.generatedPairs);

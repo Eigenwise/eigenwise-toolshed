@@ -321,6 +321,7 @@ const tools: ToolDefinition[] = [
           allowRepeatFailure: args.allowRepeatFailure === true,
           allowUnscoped: args.allowUnscoped === true,
           integrationBranch: args.integrationBranch,
+          worktree: args.worktree,
           recoveryEvidence: args.recoveryEvidence,
           retireOnly: args.retireOnly === true,
           ...(freshness.skew ? { dispatchSkew: freshness.skew } : {}),

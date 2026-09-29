@@ -110,7 +110,8 @@ bring auth back, or you kill the session that was about to use it.
   real 1M aliases (Opus, Sonnet, Fable) to `[1m]` ids so a gateway session on one gets its full 1M
   window instead of the 200k gateway default; Haiku stays unpinned (it's 200k). An `env --write-*`
   command resolves those aliases through the installed Claude CLI's credential-free headless probe;
-  SessionStart refreshes its cache after the CLI changes or the cache ages out. A failed probe keeps
+  SessionStart refreshes its cache after the CLI changes or the cache ages out, and rewrites stale pins
+  it wrote, including in a project where the gateway was turned off for Remote Control. A failed probe keeps
   the last good pin, then a shipped safe default. Set a persistent per-alias override with
   `pin --opus claude-opus-5-5[1m]` (same for `--sonnet` and `--fable`), or use `pin --opus default`
   to return to auto-detection. Overrides always win. `pin` with no arguments and `doctor` show each
@@ -261,9 +262,9 @@ agree).
   (`doctor` shows auth), then proxy log. OpenAI gates non-Codex clients by request fingerprint;
   when they tighten it, requests die mid-stream until claude-code-proxy ships a fix, so
   suggest re-running `setup` (it fetches the latest release).
-- **`doctor` says `upstream-unavailable`**: a final Codex inference failed in the last 60 seconds.
+- **`doctor` says `upstream-unavailable`**: a final Codex inference failed in the last 30 seconds; the message names its status, time, and hold end.
   It records completed request outcomes, not `/v1/models` or a health check, and clears only after
-  a completed successful Codex response. The 60-second expiry means there is no recent failure
+  a completed successful Codex response. The 30-second expiry means there is no recent failure
   evidence, not that Codex is live. An attributed OpenAI 401, 403, or 429 rejection enters
   `upstream-blocked`. A 401 or 403 stays until `setup` or a completed successful Codex response
   clears it. A 429 block expires: `upstreamBlocked.expiresAt` comes from the 429's Retry-After,

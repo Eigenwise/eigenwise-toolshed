@@ -92,14 +92,21 @@ function requestGatewayProcessStop(pid) {
   return waitForProcessExit(pid);
 }
 
+// A child with no IPC stop path is never going to exit on its own, so waiting for it only
+// burned the full cleanup timeout per test. Windows gets taskkill /T so a supervisor's worker
+// goes with it instead of surviving untracked.
+async function requestGatewayChildStop(child) {
+  if (child.fixtureShutdown) return requestFixtureSupervisorStop(child);
+  if (child.gracefulShutdown && child.connected) return child.disconnect();
+  if (process.platform === 'win32') return forceStopGatewayProcess(child.pid);
+  child.kill('SIGTERM');
+}
+
 function stopGatewayChild(child) {
   if (child.stopPromise) return child.stopPromise;
   const stopping = (async () => {
     if (!child?.pid || child.exitCode != null) return true;
-    if (child.fixtureShutdown) await requestFixtureSupervisorStop(child);
-    else if (child.gracefulShutdown && child.connected && typeof child.disconnect === 'function') {
-      try { child.disconnect(); } catch {}
-    }
+    await requestGatewayChildStop(child);
     if (await waitForChildExit(child)) return true;
     forceStopGatewayProcess(child.pid);
     return waitForChildExit(child);
@@ -108,12 +115,20 @@ function stopGatewayChild(child) {
   return stopping;
 }
 
-async function stopGatewayFixtureProcess(home) {
-  const child = gatewayFixtureProcesses.get(home);
+// Every process spawned against a home is tracked, not just the latest: a `status` run after
+// `serve-shim` used to replace the supervisor here, so teardown killed only the recorded worker,
+// the untracked supervisor respawned it into the home being removed, and the removal error
+// skipped the after hook that would have stopped the supervisor (SQ-3075).
+async function stopGatewayFixtureProcesses(home) {
+  const children = [...(gatewayFixtureProcesses.get(home) || [])];
   gatewayFixtureProcesses.delete(home);
-  if (!child?.pid || child.exitCode != null) return child?.pid ? [child.pid] : [];
-  await stopGatewayChild(child);
-  return [child.pid];
+  await Promise.all(children.map(stopGatewayChild));
+  return children.map((child) => child.pid).filter(Boolean);
+}
+
+function trackGatewayFixtureProcess(home, child) {
+  if (!gatewayFixtureProcesses.has(home)) gatewayFixtureProcesses.set(home, new Set());
+  gatewayFixtureProcesses.get(home).add(child);
 }
 
 function stopRecordedGatewayProcesses(home, pids = []) {
@@ -128,7 +143,7 @@ function stopRecordedGatewayProcesses(home, pids = []) {
 }
 
 async function stopTrackedGatewayProcesses(home) {
-  return stopRecordedGatewayProcesses(home, await stopGatewayFixtureProcess(home));
+  return stopRecordedGatewayProcesses(home, await stopGatewayFixtureProcesses(home));
 }
 
 function stopTrackedGatewayProcessesSynchronously(home) {
@@ -299,11 +314,8 @@ function spawnGatewayProcess(t, command, args, options = {}) {
     ? { ...overrides, ...isolatedOverrides }
     : gatewayTestEnvironment(t, overrides, isolatedOverrides);
   const child = spawn(command, args, { ...spawnOptions, env: environment });
-  if (existingTestEnvironment?.ownsHome) gatewayFixtureProcesses.set(existingTestEnvironment.home, child);
-  else {
-    const testEnvironment = gatewayTestEnvironments.get(environment);
-    if (testEnvironment?.ownsHome) gatewayFixtureProcesses.set(testEnvironment.home, child);
-  }
+  const testEnvironment = existingTestEnvironment || gatewayTestEnvironments.get(environment);
+  if (testEnvironment?.ownsHome) trackGatewayFixtureProcess(testEnvironment.home, child);
   return child;
 }
 

@@ -1136,7 +1136,7 @@ test('worktree provisioning config stays out of executor briefings', () => {
   assert.throws(() => store.setBoardConfig(slug, { worktreeSetup: 'npm ci\nnode --test' }), /one-line command/);
   assert.throws(() => store.setBoardConfig(slug, { worktreeSetup: 'x'.repeat(1001) }), /1000-character/);
   assert.throws(() => store.setBoardConfig(slug, { worktreeDependencyPaths: [{ path: '.venv', mode: 'move' }] }), /"link" or "copy"/);
-  assert.throws(() => store.setBoardConfig(slug, { worktreeDependencyPaths: [{ path: '../node_modules', mode: 'link' }] }), /stay inside the board repo/);
+  assert.throws(() => store.setBoardConfig(slug, { worktreeDependencyPaths: [{ path: '../node_modules', mode: 'copy' }] }), /copy mode must stay inside the board repo/);
 });
 
 test('briefings synchronize stale worktrees to their recorded integration target', () => {
@@ -1396,17 +1396,16 @@ test('workflow recipes use the Claude runtime alias without a prompt prefix', ()
   });
 });
 
-test('workflow recipes refuse a silent cross-provider fallback', () => {
+test('workflow recipes follow a category fallback across providers and name it (GH-217)', () => {
   clearCatalog();
   const store = require('../lib/store.js');
   configure(store, 'workflow-fallback', { model: TERRA.slug, effort: 'high' }, { model: 'opus', effort: 'medium' });
   const category = Object.assign(store.getCategory('workflow-fallback'), { project: 'recipe-project' });
   const resolved = store.resolveCategoryRoute(category);
 
-  assert.equal(resolved.exec, null);
-  assert.equal(resolved.model, TERRA.slug);
-  assert.match(resolved.warnings.join('\n'), /crosses providers and was refused/);
-  assert.throws(() => agentsync.workflowRecipe(category, resolved), /resolved category route is required/i);
+  assert.equal(resolved.model, 'opus');
+  assert.ok(resolved.fallbackReason.startsWith(`category fallback opus replaced unavailable ${TERRA.slug}. `), resolved.fallbackReason);
+  assert.equal(agentsync.workflowRecipe(category, resolved).route.model, 'opus');
 });
 
 test('workflow recipes reject an invalid Codex marker before spawning', () => {

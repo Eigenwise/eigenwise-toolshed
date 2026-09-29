@@ -290,16 +290,27 @@ function ignoredPathsMissingFromWorktree(repository: string, worktree: string, c
     .sort();
 }
 
-function configuredDependencyDirectory(repository: string, worktree: string, relativePath: string): { source: string; target: string } {
-  const source = path.resolve(repository, relativePath);
-  const target = path.resolve(worktree, relativePath);
-  if (!pathIsInside(repository, source) || !pathIsInside(worktree, target)) {
-    throw new Error(`worktree dependency path must stay inside the repository: ${relativePath}`);
-  }
-  if (!nativeFs.existsSync(source)) throw new Error(`configured worktree dependency path does not exist: ${relativePath}`);
-  if (!nativeFs.statSync(source).isDirectory()) throw new Error(`configured worktree dependency path must be a directory: ${relativePath}`);
-  if (nativeFs.existsSync(target)) throw new Error(`worktree dependency path already exists after checkout: ${relativePath}`);
+type WorktreeDependency = { path: string; mode: string };
+
+// Board config already refuses anything else; this re-check keeps a hand-edited board from writing outside the
+// worktree (copy) or outside the worktree root that holds it (a "../<name>" link).
+function dependencyPlacement(repository: string, worktree: string, dependency: WorktreeDependency): { source: string; target: string } {
+  const source = path.resolve(repository, dependency.path);
+  const target = path.resolve(worktree, dependency.path);
+  const boundary = dependency.mode === 'copy' ? worktree : path.dirname(worktree);
+  if (!pathIsInside(boundary, target)) throw new Error(`worktree dependency path would land outside ${boundary}: ${dependency.path}`);
+  if (!nativeFs.existsSync(source)) throw new Error(`configured worktree dependency path does not exist: ${dependency.path}`);
   return { source, target };
+}
+
+function copyDependencyPath(source: string, target: string, options: { overwrite: boolean }): void {
+  nativeFs.mkdirSync(path.dirname(target), { recursive: true });
+  nativeFs.cpSync(source, target, { recursive: true, force: options.overwrite });
+}
+
+function createDirectoryLink(source: string, target: string): void {
+  nativeFs.mkdirSync(path.dirname(target), { recursive: true });
+  nativeFs.symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
 }
 
 type ProvisionedDependencyLink = {
@@ -307,18 +318,57 @@ type ProvisionedDependencyLink = {
   target: string;
 };
 
-function provisionDependencyDirectory(repository: string, worktree: string, dependency: { path: string; mode: string }): ProvisionedDependencyLink | null {
-  const { source, target } = configuredDependencyDirectory(repository, worktree, dependency.path);
-  nativeFs.mkdirSync(path.dirname(target), { recursive: true });
+function provisionDependencyPath(repository: string, worktree: string, dependency: WorktreeDependency): ProvisionedDependencyLink | null {
+  const { source, target } = dependencyPlacement(repository, worktree, dependency);
   if (dependency.mode === 'copy') {
-    nativeFs.cpSync(source, target, { recursive: true });
+    copyDependencyPath(source, target, { overwrite: true });
     return null;
   }
-  nativeFs.symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
+  if (!nativeFs.statSync(source).isDirectory()) throw new Error(`link mode needs a directory, use copy mode for a file: ${dependency.path}`);
+  if (!pathIsInside(worktree, target)) return linkBesideWorktree(source, target, dependency.path);
+  if (nativeFs.existsSync(target)) {
+    throw new Error(`worktree dependency path already exists after checkout: ${dependency.path}. link mode fills only a path the checkout leaves absent; use copy mode for a tracked path`);
+  }
+  createDirectoryLink(source, target);
   return {
     relativePath: path.relative(worktree, target).split(path.sep).join('/'),
     target: canonicalPath(source),
   };
+}
+
+// Every worktree of the board shares this link, so an existing link to the same source is the expected case,
+// and a concurrent WorktreeCreate may create it between our check and our symlink. It is never recorded as an
+// owned link: it sits outside the worktree, so reclaiming the worktree cannot follow it.
+function linkBesideWorktree(source: string, target: string, relativePath: string): null {
+  try {
+    createDirectoryLink(source, target);
+    return null;
+  } catch (error: any) {
+    if (error?.code !== 'EEXIST') throw error;
+  }
+  if (nativeFs.lstatSync(target).isSymbolicLink() && canonicalPath(target) === canonicalPath(source)) return null;
+  throw new Error(`worktree dependency link ${relativePath} cannot be created at ${target}: something other than a link to ${source} is already there`);
+}
+
+function provisionGateDependencies(repository: string, checkout: string, dependencies: WorktreeDependency[]): { ok: true; evidence: string } | { ok: false; message: string } {
+  if (!dependencies.length) return { ok: true, evidence: 'Worktree dependency provisioning was skipped because no paths are configured.' };
+  let created = 0;
+  try {
+    for (const dependency of dependencies) created += provisionGateDependency(repository, checkout, dependency);
+  } catch (error: any) {
+    return { ok: false, message: `Could not provision gate worktree dependencies: ${error.message}` };
+  }
+  return { ok: true, evidence: `Worktree dependency provisioning created ${created} and retained ${dependencies.length - created} of ${dependencies.length} configured paths.` };
+}
+
+// A copy fills what the checkout lacks but never overwrites a file: in a singleton gate the checkout is the
+// candidate's own worktree, and the gate must verify what the candidates committed.
+function provisionGateDependency(repository: string, checkout: string, dependency: WorktreeDependency): 0 | 1 {
+  const { source, target } = dependencyPlacement(repository, checkout, dependency);
+  const existed = nativeFs.existsSync(target);
+  if (dependency.mode === 'copy') copyDependencyPath(source, target, { overwrite: false });
+  else if (!existed) createDirectoryLink(source, target);
+  return existed ? 0 : 1;
 }
 
 type WorktreeProvisioningFailure = {
@@ -384,7 +434,7 @@ async function provisionWorktree(
   options: { setupTimeoutMs?: number; onDependencyLink?: (link: ProvisionedDependencyLink) => void } = {},
 ): Promise<WorktreeProvisioningFailure | null> {
   for (const dependency of config.worktreeDependencyPaths || []) {
-    const createdLink = provisionDependencyDirectory(repository, worktree, dependency);
+    const createdLink = provisionDependencyPath(repository, worktree, dependency);
     if (createdLink) options.onDependencyLink?.(createdLink);
   }
   const setup = String(config.worktreeSetup || '').trim();
@@ -2487,4 +2537,4 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   };
 }
 
-module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, dependencyLinkSafety, releaseQuarantinedDependencyLinks, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };
+module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks };
