@@ -32,9 +32,9 @@ function execFileSync(file, args, options = {}) {
 }
 
 // src/hooks/force-exec-bypass.ts
-var import_node_fs5 = __toESM(require("node:fs"));
-var import_node_os3 = __toESM(require("node:os"));
-var import_node_path5 = __toESM(require("node:path"));
+var import_node_fs8 = __toESM(require("node:fs"));
+var import_node_os5 = __toESM(require("node:os"));
+var import_node_path8 = __toESM(require("node:path"));
 
 // src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
@@ -493,9 +493,238 @@ function readOnlyShellRefusal(command, cwd) {
   return blocked ? `sidequest: read-only executor, refusing a shell write inside the repository checkout (${blocked}). Keep temporary files and evidence outside the checkout, in your scratchpad or the ticket's verification directory. If the ticket needs a repository change, comment the needed edit on the ticket and release it instead.` : null;
 }
 
+// src/lib/board-mcp-liveness.ts
+var import_node_fs6 = __toESM(require("node:fs"));
+var import_node_os3 = __toESM(require("node:os"));
+var import_node_path6 = __toESM(require("node:path"));
+
+// src/lib/kernel/worktree.ts
+var import_node_fs5 = __toESM(require("node:fs"));
+var import_node_path5 = __toESM(require("node:path"));
+var import_node_crypto2 = __toESM(require("node:crypto"));
+function platformPath(value) {
+  return process.platform === "win32" ? value.toLowerCase() : value;
+}
+function canonicalPath2(value) {
+  const gitBashDrive = process.platform === "win32" ? /^\/([a-zA-Z])(?=\/|$)/.exec(value) : null;
+  const resolved = import_node_path5.default.resolve(gitBashDrive ? `${gitBashDrive[1]}:${value.slice(2)}` : value);
+  const missing = [];
+  let existing = resolved;
+  while (!import_node_fs5.default.existsSync(existing)) {
+    const parent = import_node_path5.default.dirname(existing);
+    if (parent === existing) return platformPath(resolved);
+    missing.unshift(import_node_path5.default.basename(existing));
+    existing = parent;
+  }
+  try {
+    return platformPath(import_node_path5.default.join(import_node_fs5.default.realpathSync.native(existing), ...missing));
+  } catch {
+    return platformPath(resolved);
+  }
+}
+
+// src/lib/board-mcp-liveness.ts
+var MARKER_PREFIX = "board-mcp-";
+var MARKER_SUFFIX = ".json";
+function boardMcpMarkerDirectory() {
+  const home = process.env.SIDEQUEST_HOME || import_node_path6.default.join(import_node_os3.default.homedir(), ".claude", "sidequest");
+  return import_node_path6.default.join(home, "tmp", "state");
+}
+function markerField(value, key) {
+  return value !== null && typeof value === "object" ? Reflect.get(value, key) : void 0;
+}
+function markerText(value, key, fallback) {
+  const text = markerField(value, key);
+  return typeof text === "string" ? text : fallback;
+}
+function markerPid(value) {
+  const pid = markerField(value, "pid");
+  return typeof pid === "number" && Number.isInteger(pid) && pid > 0 ? pid : 0;
+}
+function legacySessionId(name) {
+  return decodeURIComponent(name.slice(MARKER_PREFIX.length, -MARKER_SUFFIX.length));
+}
+function readMarker(directory, name) {
+  const file = import_node_path6.default.join(directory, name);
+  try {
+    const value = JSON.parse(import_node_fs6.default.readFileSync(file, "utf8"));
+    const pid = markerPid(value);
+    if (!pid) return [];
+    return [{ pid, sessionId: markerText(value, "sessionId", legacySessionId(name)), project: markerText(value, "project", ""), file }];
+  } catch (_) {
+    return [];
+  }
+}
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(error instanceof Error && "code" in error && error.code === "ESRCH");
+  }
+}
+function markerServesSessionOrProject(marker, sessionId, projectKey) {
+  return marker.sessionId === sessionId || projectKey !== "" && marker.project === projectKey;
+}
+function observeMarkers(markers, sessionId, projectKey, directory) {
+  const candidates = markers.filter((marker) => markerServesSessionOrProject(marker, sessionId, projectKey));
+  const live = candidates.find((marker) => processAlive(marker.pid));
+  if (live) return { state: live.sessionId === sessionId ? "live" : "rotated", marker: live };
+  const exited = candidates.find((marker) => marker.sessionId === sessionId) || candidates[0];
+  return exited ? { state: "exited", marker: exited } : { state: "absent", directory };
+}
+function isMarkerName(name) {
+  return name.startsWith(MARKER_PREFIX) && name.endsWith(MARKER_SUFFIX);
+}
+function unlistableMarkers(error, directory) {
+  const code = error instanceof Error && "code" in error ? error.code : "";
+  return code === "ENOENT" ? { state: "absent", directory } : { state: "unreadable", directory, detail: String(error) };
+}
+function observeBoardMcp(sessionId, project) {
+  const directory = boardMcpMarkerDirectory();
+  let names;
+  try {
+    names = import_node_fs6.default.readdirSync(directory).filter(isMarkerName);
+  } catch (error) {
+    return unlistableMarkers(error, directory);
+  }
+  const markers = names.flatMap((name) => readMarker(directory, name));
+  return observeMarkers(markers, sessionId, project ? canonicalPath2(project) : "", directory);
+}
+
+// src/lib/dispatch-preflight.ts
+var import_node_child_process2 = require("node:child_process");
+var import_node_crypto3 = require("node:crypto");
+var import_node_fs7 = __toESM(require("node:fs"));
+var import_node_os4 = __toESM(require("node:os"));
+var import_node_path7 = __toESM(require("node:path"));
+var PLUGIN_ID = "sidequest@eigenwise-toolshed";
+var REPAIR_COMMAND = "claude plugin install sidequest@eigenwise-toolshed --scope project";
+var FILE_READ_RETRY_DELAYS_MS = [20, 60, 140, 300];
+var RETRYABLE_FILE_READ_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY", "ENOENT"]);
+function isRetryableFileReadError(error) {
+  if (!error || typeof error !== "object" || !("code" in error)) return false;
+  const code = error.code;
+  return typeof code === "string" && RETRYABLE_FILE_READ_CODES.has(code);
+}
+function readFileSyncWithRetry(filePath, encoding) {
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return encoding ? import_node_fs7.default.readFileSync(filePath, encoding) : import_node_fs7.default.readFileSync(filePath);
+    } catch (error) {
+      const delay = FILE_READ_RETRY_DELAYS_MS[attempt];
+      if (delay == null || !isRetryableFileReadError(error)) throw error;
+      Atomics.wait(waitBuffer, 0, 0, delay);
+    }
+  }
+}
+function claudeHomeDir(opts = {}) {
+  return opts.claudeHome || process.env.SIDEQUEST_CLAUDE_HOME || import_node_path7.default.join(import_node_os4.default.homedir(), ".claude");
+}
+function normalizeDir(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  return import_node_path7.default.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+function jsonRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  const record = jsonRecord(value);
+  if (!record) return value;
+  return Object.fromEntries(Object.keys(record).sort().map((key) => [key, canonicalJson(record[key])]));
+}
+function canonicalJsonFile(filePath) {
+  let content;
+  try {
+    content = readFileSyncWithRetry(filePath, "utf8");
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`could not read ${filePath}: ${detail}`);
+  }
+  try {
+    return canonicalJson(JSON.parse(content));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`could not parse ${filePath}: ${detail}`);
+  }
+}
+function installRuntimeSnapshot(installPath, version) {
+  if (typeof installPath !== "string" || !installPath.trim()) return { detail: "the registry entry has no installPath" };
+  if (typeof version !== "string" || !version.trim()) return { detail: `the registry entry for ${installPath} has no plugin version` };
+  try {
+    const mcpManifest = canonicalJsonFile(import_node_path7.default.join(installPath, ".mcp.json"));
+    const hooks = canonicalJsonFile(import_node_path7.default.join(installPath, "hooks", "hooks.json"));
+    const manifest = jsonRecord(mcpManifest);
+    const mcpServers = jsonRecord(manifest?.mcpServers);
+    const identity = (0, import_node_crypto3.createHash)("sha256").update(JSON.stringify({
+      schemaVersion: 2,
+      plugin: { id: PLUGIN_ID, version: version.trim() },
+      mcpManifest,
+      hooks
+    })).digest("hex");
+    return { identity, advertisesBoardMcp: Boolean(mcpServers && Object.keys(mcpServers).length) };
+  } catch (error) {
+    return { detail: error instanceof Error ? error.message : String(error) };
+  }
+}
+function checkSidequestInstall(projectPath, opts = {}) {
+  const claudeHome = claudeHomeDir(opts);
+  const registryPath = import_node_path7.default.join(claudeHome, "plugins", "installed_plugins.json");
+  let registry;
+  try {
+    registry = JSON.parse(readFileSyncWithRetry(registryPath, "utf8"));
+  } catch (err) {
+    if (err && err.code === "ENOENT") return { ok: false, reason: "missing", registryPath };
+    return { ok: false, reason: "registry_unreadable", registryPath, detail: String(err && err.message || err) };
+  }
+  const installs = registry?.plugins?.[PLUGIN_ID];
+  if (!Array.isArray(installs) || !installs.length) return { ok: false, reason: "missing", registryPath };
+  const target = normalizeDir(projectPath);
+  const matching = installs.filter((install) => {
+    if (!install) return false;
+    if (install.scope === "user") return true;
+    if (!target) return false;
+    return normalizeDir(install.projectPath) === target;
+  });
+  if (!matching.length) return { ok: false, reason: "missing", registryPath };
+  for (const install of matching) {
+    const snapshot = installRuntimeSnapshot(install.installPath, install.version);
+    if ("detail" in snapshot) {
+      return {
+        ok: false,
+        reason: "runtime_unreadable",
+        registryPath,
+        ...typeof install.installPath === "string" ? { installPath: install.installPath } : {},
+        detail: snapshot.detail
+      };
+    }
+    if (snapshot.advertisesBoardMcp) {
+      return { ok: true, registryPath, installPath: install.installPath, version: install.version.trim(), identity: snapshot.identity };
+    }
+  }
+  return { ok: false, reason: "stale", registryPath, detail: "the .mcp.json snapshot declares no MCP server" };
+}
+function repairGuidance() {
+  return `Run \`${REPAIR_COMMAND}\` from / for the target project, then start a new session or run \`/reload-plugins\` before dispatching again.`;
+}
+function installRefusalMessage(check, projectPath) {
+  if (check.reason === "registry_unreadable") {
+    return `Dispatch refused: could not read Claude Code's plugin registry at ${check.registryPath} (${check.detail}). Fix or remove the corrupt registry, confirm sidequest@eigenwise-toolshed is installed for ${projectPath}, then dispatch again.`;
+  }
+  if (check.reason === "runtime_unreadable") {
+    return `Dispatch refused: could not compute the lifecycle-compatible Sidequest install identity for ${check.installPath || projectPath} (${check.detail}). Prepared dispatch compatibility requires the registry plugin version, .mcp.json, and hooks/hooks.json. ${repairGuidance()}`;
+  }
+  if (check.reason === "stale") {
+    return `Dispatch refused: the sidequest@eigenwise-toolshed install registered for ${projectPath} (checked ${check.registryPath}) does not declare a board MCP server, so prepared dispatch compatibility cannot be proven. ${repairGuidance()}`;
+  }
+  return `Dispatch refused: sidequest@eigenwise-toolshed has no install with a lifecycle-compatible runtime registered for ${projectPath} in ${check.registryPath}. A \`.claude/settings.json\` enabledPlugins entry is not proof of an install. ${repairGuidance()}`;
+}
+
 // src/hooks/force-exec-bypass.ts
-var { canonicalPath: canonicalPath2 } = require(import_node_path5.default.join(__dirname, "..", "lib", "worktrees.js"));
-var { isInScope: scopeMatch } = require(import_node_path5.default.join(__dirname, "..", "lib", "scope-match.js"));
+var { canonicalPath: canonicalPath3 } = require(import_node_path8.default.join(__dirname, "..", "lib", "worktrees.js"));
+var { isInScope: scopeMatch } = require(import_node_path8.default.join(__dirname, "..", "lib", "scope-match.js"));
 var PASS_THROUGH_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "statusline-setup"]);
 var EXECUTOR_HELPER_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "web-researcher", "general-purpose"]);
 var HELPER_REVIEW_WORK_RE = /\b(?:audits?|auditors?|auditing|audited|reviews?|reviewers?|reviewing|reviewed|review-audit)\b/i;
@@ -544,7 +773,7 @@ function helperModelDenyReason(type) {
 }
 function helperEvidenceRule(input) {
   const transcriptPath = stringField(input, "transcript_path", "transcriptPath").trim();
-  const sessionPaths = transcriptPath ? [transcriptPath, import_node_path5.default.join(import_node_path5.default.dirname(transcriptPath), "subagents")] : [];
+  const sessionPaths = transcriptPath ? [transcriptPath, import_node_path8.default.join(import_node_path8.default.dirname(transcriptPath), "subagents")] : [];
   const knownLocations = sessionPaths.length ? ` Current session self-reference locations: ${sessionPaths.join(", ")}.` : "";
   return "\n\nEvidence rule: quoted ticket strings appear in this session’s context and generated transcripts. A match in the parent or helper session transcript, subagent transcript, or task-output files is self-reference, not evidence: report it as such. Do not search session, transcript, or task-output directories for evidence. Cite only the directly reachable artifact under investigation; if it is outside the parent worktree or otherwise unavailable, report a visibility block rather than a finding." + knownLocations;
 }
@@ -577,35 +806,48 @@ function isDiagnosticProbe(type, toolInput) {
 function diagnosticProbeDenyReason() {
   return `sidequest: ${DIAGNOSTIC_PROBE_NAME} is reserved for a foreground dispatch self-test. Use description "Sidequest dispatch self-test." and prompt "Diagnose Sidequest dispatch machinery. Read package.json, then report whether the Agent spawn can use a read-only tool." Omit model, ticket refs, isolation, and background mode. Ordinary work needs a ticket.`;
 }
-function agentDenyReason(input, type, classification) {
-  if (type.startsWith("sidequest-")) {
-    if (classification.kind === "ticket" || classification.kind === "legacy_ticket") {
-      return `sidequest: ${type} looks like a Sidequest executor name but is invalid or retired. Re-run dispatch and spawn the returned executor.`;
-    }
-    return `sidequest: ${type} is an unknown Sidequest agent type. Use the executor returned by dispatch.`;
+function sidequestTypeDenyReason(type, classification) {
+  if (classification.kind === "ticket" || classification.kind === "legacy_ticket") {
+    return `sidequest: ${type} looks like a Sidequest executor name but is invalid or retired. Re-run dispatch and spawn the returned executor.`;
   }
-  if (!boardMcpAvailable(input)) {
-    return "sidequest: the Board MCP server for this session is not running. Stop and report this to the user instead of retrying. The user must run /mcp and reconnect plugin:sidequest:board, or restart Claude Code. Do not use a raw Agent or Sidequest CLI fallback.";
-  }
+  return `sidequest: ${type} is an unknown Sidequest agent type. Use the executor returned by dispatch.`;
+}
+function genericAgentDenyReason(type) {
   return `sidequest: ${type || "custom"} is a generic Agent, not a Sidequest ticket executor. For a tiny lookup, use Read, Glob, Grep, or WebFetch inline, not WebSearch. A usable route needs a fresh Board MCP dispatch and its exact returned executor. Board MCP is the lifecycle authority: reload or reconnect Sidequest, then re-dispatch. Do not use a raw Agent or Sidequest CLI fallback. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor. The blocked work still gates any dependent action: do not proceed to a PR, merge, publish, or ship until its ticket is filed, dispatched, and closed; rerouting around this block is a violation.`;
+}
+function missingInstallDenyReason(input, type) {
+  const project = registeredProjectPath(input);
+  if (!project) return null;
+  const check = checkSidequestInstall(project);
+  return check.ok ? null : `sidequest: ${type || "custom"} is a generic Agent, and this project cannot dispatch a ticket executor either. ${installRefusalMessage(check, project)}`;
+}
+var BOARD_MCP_RECONNECT = "Stop and report this to the user instead of retrying. The user must run /mcp and reconnect plugin:sidequest:board, or restart Claude Code. Do not use a raw Agent or Sidequest CLI fallback.";
+function boardMcpDownReason(input) {
+  const sessionId = stringField(input, "session_id", "sessionId").trim();
+  if (!sessionId) return null;
+  return boardMcpDownDescription(observeBoardMcp(sessionId, process.env.CLAUDE_PROJECT_DIR || stringField(input, "cwd")));
+}
+function boardMcpDownDescription(observed) {
+  if (observed.state === "exited") {
+    return `sidequest: the Board MCP server last recorded for this session or project (pid ${observed.marker.pid}, ${observed.marker.file}) has exited. ${BOARD_MCP_RECONNECT}`;
+  }
+  if (observed.state === "absent") {
+    return `sidequest: no Board MCP server has recorded itself for this session or project in ${observed.directory}. ${BOARD_MCP_RECONNECT}`;
+  }
+  if (observed.state === "unreadable") {
+    return `sidequest: could not read Board MCP liveness markers in ${observed.directory} (${observed.detail}), so the board server state is unknown. If board tools answer, dispatch through them; otherwise the user must run /mcp and reconnect plugin:sidequest:board. Do not use a raw Agent or Sidequest CLI fallback.`;
+  }
+  return null;
+}
+function agentDenyReason(input, type, classification) {
+  if (type.startsWith("sidequest-")) return sidequestTypeDenyReason(type, classification);
+  return missingInstallDenyReason(input, type) || boardMcpDownReason(input) || genericAgentDenyReason(type);
 }
 var EXPLORE_FREE_SPAWNS = 2;
 var DENIED_WORK_PROMPT_PREFIX_CHARS = 160;
 var DENIED_WORK_MAX_RECORDS = 20;
 function guardSessionId(input) {
   return (stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "").trim();
-}
-function boardMcpAvailable(input) {
-  const sessionId = stringField(input, "session_id", "sessionId").trim();
-  if (!sessionId) return true;
-  try {
-    const mcp = require(runtimeModule("mcp"));
-    if (mcp === null || typeof mcp !== "object") return false;
-    const isLive = Reflect.get(mcp, "isBoardMcpLive");
-    return typeof isLive === "function" && Boolean(Reflect.apply(isLive, mcp, [sessionId]));
-  } catch (_) {
-    return false;
-  }
 }
 function normalizedWork(value) {
   return String(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -794,9 +1036,21 @@ function resolveStampedModel(input) {
   if (models.size !== 1) return { status: "conflicting", refs, models: [...models] };
   return { status: "ok", refs, model: [...models][0] };
 }
+function requestedProject(input) {
+  return extractProjectArg(toolInputOf(input)?.prompt) || stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR || "";
+}
+function registeredProjectPath(input) {
+  const project = requestedProject(input);
+  if (!project) return "";
+  try {
+    const found = require(runtimeModule("store")).findProject(project);
+    return found.ok ? found.meta?.path || project : "";
+  } catch (_) {
+    return "";
+  }
+}
 function dispatchAdmission(input) {
-  const toolInput = toolInputOf(input);
-  const project = extractProjectArg(toolInput?.prompt) || stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR;
+  const project = requestedProject(input);
   if (!project) return { status: "no-project" };
   try {
     const store = require(runtimeModule("store"));
@@ -1042,7 +1296,7 @@ function writeTarget(input) {
   const raw = writeTargetValue(input);
   if (!raw) return "";
   const cwd = stringField(input, "cwd") || process.cwd();
-  return import_node_path5.default.resolve(cwd, raw);
+  return import_node_path8.default.resolve(cwd, raw);
 }
 function restoresCommittedContent(input, target) {
   try {
@@ -1052,20 +1306,20 @@ function restoresCommittedContent(input, target) {
     if (toolName === "Write" && typeof toolInput?.content === "string") {
       restored = toolInput.content;
     } else if (toolName === "Edit" && typeof toolInput?.old_string === "string" && typeof toolInput.new_string === "string") {
-      const current = import_node_fs5.default.readFileSync(target, "utf8");
+      const current = import_node_fs8.default.readFileSync(target, "utf8");
       const first = current.indexOf(toolInput.old_string);
       if (first < 0 || !toolInput.replace_all && current.indexOf(toolInput.old_string, first + toolInput.old_string.length) >= 0) return false;
       restored = toolInput.replace_all ? current.split(toolInput.old_string).join(toolInput.new_string) : `${current.slice(0, first)}${toolInput.new_string}${current.slice(first + toolInput.old_string.length)}`;
     } else {
       return false;
     }
-    const repository = canonicalPath2(execFileSync("git", ["rev-parse", "--show-toplevel"], {
-      cwd: import_node_path5.default.dirname(target),
+    const repository = canonicalPath3(execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: import_node_path8.default.dirname(target),
       encoding: "utf8",
       windowsHide: true
     }).trim());
-    const relative = import_node_path5.default.relative(repository, canonicalPath2(target)).replace(/\\/g, "/");
-    if (!relative || relative === ".." || relative.startsWith("../") || import_node_path5.default.isAbsolute(relative)) return false;
+    const relative = import_node_path8.default.relative(repository, canonicalPath3(target)).replace(/\\/g, "/");
+    if (!relative || relative === ".." || relative.startsWith("../") || import_node_path8.default.isAbsolute(relative)) return false;
     const committed = execFileSync("git", ["show", `HEAD:${relative}`], {
       cwd: repository,
       windowsHide: true
@@ -1076,18 +1330,18 @@ function restoresCommittedContent(input, target) {
   }
 }
 function relativeInside(root, target) {
-  const relative = import_node_path5.default.relative(root, target).replace(/\\/g, "/");
-  return relative && relative !== ".." && !relative.startsWith("../") && !import_node_path5.default.isAbsolute(relative) ? relative : null;
+  const relative = import_node_path8.default.relative(root, target).replace(/\\/g, "/");
+  return relative && relative !== ".." && !relative.startsWith("../") && !import_node_path8.default.isAbsolute(relative) ? relative : null;
 }
 function linkedWorktreeRelative(target, projectPath) {
-  let existing = import_node_path5.default.dirname(target);
-  while (!import_node_fs5.default.existsSync(existing)) {
-    const parent = import_node_path5.default.dirname(existing);
+  let existing = import_node_path8.default.dirname(target);
+  while (!import_node_fs8.default.existsSync(existing)) {
+    const parent = import_node_path8.default.dirname(existing);
     if (parent === existing) return null;
     existing = parent;
   }
   try {
-    const checkout = canonicalPath2(execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    const checkout = canonicalPath3(execFileSync("git", ["rev-parse", "--show-toplevel"], {
       cwd: existing,
       encoding: "utf8",
       windowsHide: true
@@ -1097,8 +1351,8 @@ function linkedWorktreeRelative(target, projectPath) {
       encoding: "utf8",
       windowsHide: true
     }).trim();
-    const common = canonicalPath2(import_node_path5.default.isAbsolute(commonOutput) ? commonOutput : import_node_path5.default.resolve(checkout, commonOutput));
-    if (common !== canonicalPath2(import_node_path5.default.join(projectPath, ".git"))) return null;
+    const common = canonicalPath3(import_node_path8.default.isAbsolute(commonOutput) ? commonOutput : import_node_path8.default.resolve(checkout, commonOutput));
+    if (common !== canonicalPath3(import_node_path8.default.join(projectPath, ".git"))) return null;
     return relativeInside(checkout, target);
   } catch (_) {
     return null;
@@ -1113,14 +1367,14 @@ function projectRelative(target, projectPath) {
   return linkedWorktreeRelative(target, projectPath);
 }
 function inScope(target, scope) {
-  const canonicalTarget = canonicalPath2(target);
-  const relative = projectRelative(canonicalTarget, canonicalPath2(scope.projectPath));
+  const canonicalTarget = canonicalPath3(target);
+  const relative = projectRelative(canonicalTarget, canonicalPath3(scope.projectPath));
   if (relative != null) return scopeMatch(relative, scope.files);
-  return scopeMatch(canonicalTarget, scope.files.filter((file) => import_node_path5.default.isAbsolute(file)).map(canonicalPath2));
+  return scopeMatch(canonicalTarget, scope.files.filter((file) => import_node_path8.default.isAbsolute(file)).map(canonicalPath3));
 }
 function evidencePathRelation(target, scope) {
-  const evidenceDirectory = canonicalPath2(scope.evidenceDirectory);
-  const canonicalTarget = canonicalPath2(target);
+  const evidenceDirectory = canonicalPath3(scope.evidenceDirectory);
+  const canonicalTarget = canonicalPath3(target);
   if (relativeInside(evidenceDirectory, canonicalTarget) != null) return "inside";
   if (evidenceDirectory === canonicalTarget || relativeInside(canonicalTarget, evidenceDirectory) != null) return "related";
   return null;
@@ -1129,8 +1383,8 @@ function evidenceTraversalAttempt(input, scope) {
   const rawTarget = writeTargetValue(input);
   if (!rawTarget) return false;
   const cwd = stringField(input, "cwd") || process.cwd();
-  const candidate = (import_node_path5.default.isAbsolute(rawTarget) ? rawTarget : import_node_path5.default.join(cwd, rawTarget)).replace(/\\/g, "/");
-  const evidenceDirectory = import_node_path5.default.resolve(scope.evidenceDirectory).replace(/\\/g, "/").replace(/\/+$/, "");
+  const candidate = (import_node_path8.default.isAbsolute(rawTarget) ? rawTarget : import_node_path8.default.join(cwd, rawTarget)).replace(/\\/g, "/");
+  const evidenceDirectory = import_node_path8.default.resolve(scope.evidenceDirectory).replace(/\\/g, "/").replace(/\/+$/, "");
   const comparableCandidate = process.platform === "win32" ? candidate.toLowerCase() : candidate;
   const comparableDirectory = process.platform === "win32" ? evidenceDirectory.toLowerCase() : evidenceDirectory;
   if (!comparableCandidate.startsWith(`${comparableDirectory}/`)) return false;
@@ -1144,10 +1398,10 @@ function denyEvidenceWrite(target) {
 }
 function isScratchpadPath(target) {
   const configuredRoot = process.env.CLAUDE_SCRATCHPAD_DIR || process.env.CLAUDE_CODE_SCRATCHPAD_DIR;
-  const roots = [configuredRoot, import_node_path5.default.join(import_node_os3.default.tmpdir(), "claude")].filter((root) => Boolean(root));
+  const roots = [configuredRoot, import_node_path8.default.join(import_node_os5.default.tmpdir(), "claude")].filter((root) => Boolean(root));
   return roots.some((root) => {
-    const relative = import_node_path5.default.relative(import_node_path5.default.resolve(root), target);
-    return Boolean(relative) && relative !== ".." && !relative.startsWith(`..${import_node_path5.default.sep}`) && !import_node_path5.default.isAbsolute(relative);
+    const relative = import_node_path8.default.relative(import_node_path8.default.resolve(root), target);
+    return Boolean(relative) && relative !== ".." && !relative.startsWith(`..${import_node_path8.default.sep}`) && !import_node_path8.default.isAbsolute(relative);
   });
 }
 function guardHelperWrite(input) {
