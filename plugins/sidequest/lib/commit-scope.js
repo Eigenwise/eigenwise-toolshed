@@ -757,6 +757,12 @@ async function commitWithinScope(root, message, scopes, stageableScopes, committ
 function outsideScopeCommitState(result) {
   return result.rolledBack ? "Nothing was committed: the commit was undone, HEAD is back where it was and the declared paths stay staged. A commit hook usually stages the extra paths." : `Commit ${result.commit} is still on HEAD because undoing it failed: ${result.message}.`;
 }
+function unmatchedPathspecRecovery(message) {
+  const unmatched = [...new Set(Array.from(message.matchAll(/pathspec '([^']+)' did not match any file/g), (match) => match[1]))];
+  if (!unmatched.length) return message;
+  return `${message.trimEnd()}
+Nothing was committed. Git cannot match declared path ${unmatched.join(", ")}: it holds no tracked, staged, or unignored file, as with an empty directory or one holding only ignored files. Put the file the ticket should change there, or remove the path if it should not exist, then call commit again.`;
+}
 async function commitScoped(cwd, message, files) {
   const scopes = (0, import_scope_match.scopedPaths)(files);
   if (!scopes.length) return { ok: false, reason: "missing_scope" };
@@ -773,14 +779,14 @@ async function commitScoped(cwd, message, files) {
     }
     const concreteGlobPaths = globScopedWorkingPaths(root, commitScopes);
     const directScopes = commitScopes.filter((scope) => !(0, import_scope_match.hasGlob)(scope));
-    const stageableScopes = [.../* @__PURE__ */ new Set([...stageableScopedPaths(root, directScopes), ...concreteGlobPaths])];
+    const stageableScopes = stageableScopedPaths(root, [.../* @__PURE__ */ new Set([...directScopes, ...concreteGlobPaths])]);
     const committableScopes = [.../* @__PURE__ */ new Set([
       ...directScopes.filter((scope) => !ignoredUntrackedScope(root, scope)),
       ...concreteGlobPaths.filter((scope) => !ignoredUntrackedScope(root, scope))
     ])];
     return Object.assign({ missingScopes, unscopedPaths }, await commitWithinScope(root, message, scopes, stageableScopes, committableScopes));
   } catch (error) {
-    return { ok: false, reason: "git_error", message: errorMessage(error) };
+    return { ok: false, reason: "git_error", message: unmatchedPathspecRecovery(errorMessage(error)) };
   }
 }
 // Annotate the CommonJS export names for ESM import in node:

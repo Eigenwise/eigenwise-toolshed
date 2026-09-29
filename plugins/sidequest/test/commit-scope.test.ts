@@ -372,6 +372,47 @@ test('exact declared rename paths commit staged renames atomically', async () =>
   assert.deepEqual(commitScope.commitPaths(root, committed.commit).sort(), ['new.txt', 'old.txt']);
 });
 
+test('a glob scope commits a staged git mv rename without staging the removed path (GH-350)', async () => {
+  const root = repo();
+  fs.mkdirSync(path.join(root, 'db', 'migrations'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'db', 'migrations', '001_old.sql'), 'old\n');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'add migration']);
+  git(root, ['mv', 'db/migrations/001_old.sql', 'db/migrations/001_new.sql']);
+
+  const committed = await commitScope.commitScoped(root, 'rename migration', ['db/migrations/*.sql']);
+  assert.equal(committed.ok, true, committed.message as string);
+  assert.equal(git(root, ['diff', '--cached', '--name-only']), '');
+  assert.deepEqual(commitScope.commitPaths(root, committed.commit).sort(), ['db/migrations/001_new.sql', 'db/migrations/001_old.sql']);
+});
+
+test('a glob scope commits a staged deletion (GH-350)', async () => {
+  const root = repo();
+  fs.mkdirSync(path.join(root, 'db'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'db', 'gone.sql'), 'gone\n');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'add gone']);
+  git(root, ['rm', '-q', 'db/gone.sql']);
+
+  const committed = await commitScope.commitScoped(root, 'remove gone', ['db/**']);
+  assert.equal(committed.ok, true, committed.message as string);
+  assert.deepEqual(commitScope.commitPaths(root, committed.commit), ['db/gone.sql']);
+});
+
+test('a declared path git cannot match refuses with the recovery named (GH-350)', async () => {
+  const root = repo();
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
+  fs.mkdirSync(path.join(root, 'plugins', 'sidequest', 'empty'));
+  const head = git(root, ['rev-parse', 'HEAD']);
+
+  const committed = await commitScope.commitScoped(root, 'worker a', ['plugins/sidequest/worker-a.js', 'plugins/sidequest/empty']);
+  assert.equal(committed.ok, false);
+  assert.equal(committed.reason, 'git_error');
+  assert.match(committed.message as string, /Nothing was committed\. Git cannot match declared path plugins\/sidequest\/empty/);
+  assert.match(committed.message as string, /then call commit again/);
+  assert.equal(git(root, ['rev-parse', 'HEAD']), head);
+});
+
 
 test('scoped commit leaves another executor’s staged file in the shared index', async () => {
   const root = repo();

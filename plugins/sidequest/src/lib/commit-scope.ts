@@ -892,6 +892,16 @@ export function outsideScopeCommitState(result: { commit?: string; rolledBack?: 
     : `Commit ${result.commit} is still on HEAD because undoing it failed: ${result.message}.`;
 }
 
+// Git names the unmatched path but not why the board passed it, and a bare "did not match" reads as
+// "stage it yourself", which only fights the board's own staging (GH-350).
+function unmatchedPathspecRecovery(message: string): string {
+  const unmatched = [...new Set(Array.from(message.matchAll(/pathspec '([^']+)' did not match any file/g), (match) => match[1]!))];
+  if (!unmatched.length) return message;
+  return `${message.trimEnd()}\nNothing was committed. Git cannot match declared path ${unmatched.join(', ')}: `
+    + 'it holds no tracked, staged, or unignored file, as with an empty directory or one holding only ignored files. '
+    + 'Put the file the ticket should change there, or remove the path if it should not exist, then call commit again.';
+}
+
 export async function commitScoped(cwd: string, message: unknown, files: unknown) {
   const scopes = scopedPaths(files);
   if (!scopes.length) return { ok: false, reason: 'missing_scope' };
@@ -908,13 +918,15 @@ export async function commitScoped(cwd: string, message: unknown, files: unknown
     }
     const concreteGlobPaths = globScopedWorkingPaths(root, commitScopes);
     const directScopes = commitScopes.filter((scope) => !hasGlob(scope));
-    const stageableScopes = [...new Set([...stageableScopedPaths(root, directScopes), ...concreteGlobPaths])];
+    // A glob's concrete paths come from git status, which lists a staged deletion or the old side of a
+    // staged rename; that path is in neither the tree nor the index, so git add refuses it (GH-350).
+    const stageableScopes = stageableScopedPaths(root, [...new Set([...directScopes, ...concreteGlobPaths])]);
     const committableScopes = [...new Set([
       ...directScopes.filter((scope) => !ignoredUntrackedScope(root, scope)),
       ...concreteGlobPaths.filter((scope) => !ignoredUntrackedScope(root, scope)),
     ])];
     return Object.assign({ missingScopes, unscopedPaths }, await commitWithinScope(root, message, scopes, stageableScopes, committableScopes));
   } catch (error) {
-    return { ok: false, reason: 'git_error', message: errorMessage(error) };
+    return { ok: false, reason: 'git_error', message: unmatchedPathspecRecovery(errorMessage(error)) };
   }
 }
