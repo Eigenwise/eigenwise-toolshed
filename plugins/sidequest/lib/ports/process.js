@@ -51,13 +51,17 @@ function shellDefinition(platform = process.platform) {
   const posixShell = process.env.SHELL || "/bin/sh";
   return Object.freeze({ executable: posixShell, label: `POSIX shell (${posixShell})`, scriptExtension: ".sh" });
 }
-const WINDOWS_BACKSLASH_PATH = /(?:^|[\s\x22\x27=(])(?:[A-Za-z]:|\.{1,2}|[\w.-]+)\\[\w.-]/;
+const WINDOWS_BACKSLASH_PATH = /(?:^|[\s=(])(?:[A-Za-z]:|\.{1,2}|[\w.-]+)\\[\w.-]/;
+const QUOTED_SEGMENT = /"(?:\\.|[^"\\])*"|'[^']*'/g;
+function unquotedText(command) {
+  return command.replace(QUOTED_SEGMENT, " ");
+}
 function commandPromptShell() {
   const commandPrompt = process.env.ComSpec || "cmd.exe";
   return Object.freeze({ executable: commandPrompt, label: `Command Prompt (${commandPrompt})`, scriptExtension: ".cmd" });
 }
 function verifierShell(command, platform = process.platform) {
-  return platform === "win32" && WINDOWS_BACKSLASH_PATH.test(command) ? commandPromptShell() : shellDefinition(platform);
+  return platform === "win32" && WINDOWS_BACKSLASH_PATH.test(unquotedText(command)) ? commandPromptShell() : shellDefinition(platform);
 }
 function commandForShell(scriptPath, shell) {
   const arguments_ = shell.scriptExtension === ".cmd" ? Object.freeze(["/d", "/s", "/c", scriptPath]) : Object.freeze([scriptPath]);

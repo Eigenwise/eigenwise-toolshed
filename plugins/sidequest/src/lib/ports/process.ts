@@ -57,9 +57,16 @@ function shellDefinition(platform = process.platform): ShellDefinition {
   return Object.freeze({ executable: posixShell, label: `POSIX shell (${posixShell})`, scriptExtension: '.sh' });
 }
 
-// GH-290: Git for Windows sh.exe reads a backslash as an escape, so `cd C:\repo\app` arrives as
-// `C:repoapp`. A command that names a backslash path runs through Command Prompt, which takes it verbatim.
-const WINDOWS_BACKSLASH_PATH = /(?:^|[\s\x22\x27=(])(?:[A-Za-z]:|\.{1,2}|[\w.-]+)\\[\w.-]/;
+// GH-290: Git for Windows sh.exe reads an unquoted backslash as an escape, so `cd C:\repo\app` arrives as
+// `C:repoapp`. A command that names an unquoted backslash path runs through Command Prompt, which takes it
+// verbatim. Backslashes inside quotes (`"C:\tools\node.exe" -e "...'a\n'..."`) survive sh.exe and stay there:
+// Command Prompt would read the script's `\"` as quote toggles and run its `||` and `&&` as operators (SQ-3117).
+const WINDOWS_BACKSLASH_PATH = /(?:^|[\s=(])(?:[A-Za-z]:|\.{1,2}|[\w.-]+)\\[\w.-]/;
+const QUOTED_SEGMENT = /"(?:\\.|[^"\\])*"|'[^']*'/g;
+
+function unquotedText(command: string): string {
+  return command.replace(QUOTED_SEGMENT, ' ');
+}
 
 function commandPromptShell(): ShellDefinition {
   const commandPrompt = process.env.ComSpec || 'cmd.exe';
@@ -67,7 +74,7 @@ function commandPromptShell(): ShellDefinition {
 }
 
 function verifierShell(command: string, platform = process.platform): ShellDefinition {
-  return platform === 'win32' && WINDOWS_BACKSLASH_PATH.test(command) ? commandPromptShell() : shellDefinition(platform);
+  return platform === 'win32' && WINDOWS_BACKSLASH_PATH.test(unquotedText(command)) ? commandPromptShell() : shellDefinition(platform);
 }
 
 function commandForShell(scriptPath: string, shell: ShellDefinition): ShellCommand {

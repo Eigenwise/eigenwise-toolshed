@@ -749,6 +749,19 @@ test('verify capture runs a backslash path through Command Prompt on Windows and
   }
 });
 
+// Backslashes inside quotes survive sh.exe; Command Prompt would read this script's `\"` as quote toggles and run
+// its `||` as an operator. The `\n` inside the script is a JS escape, not a path, and must not route to Command Prompt.
+test('verify capture keeps a quoted backslash executable with an escaped inline script on the POSIX shell', { skip: process.platform !== 'win32' }, async () => {
+  const command = `"${process.execPath}" -e "const fs=require('node:fs'); const home=process.env.NO_SUCH_HOME||null; process.exit(fs.existsSync(\\"package.json\\")&&'x\\n'.length===2&&home===null?0:7)"`;
+  const capture = await runVerifyCapture(command, SIDEQUEST_DIR);
+  try {
+    assert.deepStrictEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 }, capture.reason);
+    assert.match(capture.shell || '', /^POSIX shell/);
+  } finally {
+    deleteLog(capture);
+  }
+});
+
 // GitHub #259: a nested workspace's gate only resolves from its own directory.
 test('a ticket verifyCwd runs the captured command from that directory of the checkout', async () => {
   const project = initGitRepo('sq-verify-capture-verify-cwd-');

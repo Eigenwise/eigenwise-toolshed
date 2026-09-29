@@ -4447,7 +4447,7 @@ test('subagent-start keys the receiving agent\'s own worktree on its bound agent
     agent_id: executor.agentId,
     cwd: repository,
   });
-  const ownException = (executor: typeof first) => `Your own worktree is ${path.basename(executor.worktree)}; nothing else under`;
+  const ownException = (executor: typeof first) => `Your own worktree is ${path.basename(executor.worktree)}.`;
 
   // SubagentStart delivers only the first 512 bytes, so the count and the ownership sentence have to lead.
   const delivered = runHook(SUBAGENT_START, input(first));
@@ -5644,8 +5644,8 @@ const GUARD_DENIED_TOOLS = path.join(HOOKS, 'guard-denied-tools.js');
 
 function readOnlyShellCheckout(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-readonly-shell-'));
-  gitFixture(['init', '-q'], root);
-  gitFixture(['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'init'], root);
+  gitFixture(['init', '-q', '-b', 'main'], root);
+  gitFixture(['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'initial commit'], root);
   fs.mkdirSync(path.join(root, 'sub'));
   return root;
 }

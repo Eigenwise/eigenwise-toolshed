@@ -205,6 +205,7 @@ test('sidequest\'s own worktree root is covered, and the receiving agent\'s chec
   fs.mkdirSync(path.join(harnessRoot, 'agent-harness'), { recursive: true });
   const warning = diagnosticWorktreeWarning({ cwd: receiver });
   assert.match(warning, /2 foreign agent worktrees in play/);
-  assert.ok(warning.includes(`Your own worktree is agent-receiver; nothing else under ${ownRoot} or ${harnessRoot} is yours.`), 'both roots are named, and so is the receiver\'s own checkout under one of them');
+  assert.ok(warning.includes('Your own worktree is agent-receiver.'), 'the receiver\'s own checkout is named');
+  assert.ok(warning.endsWith(`Nothing else under ${ownRoot} or ${harnessRoot} is yours.`), 'both roots are named, last, so the SubagentStart cut drops them before the advice');
   assert.equal(store.listTickets(slug).length, 0, 'neither directory is on the board, and both still leak');
 });

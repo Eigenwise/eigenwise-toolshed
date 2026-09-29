@@ -522,7 +522,13 @@ test('GH-217: a Codex category whose sign-in is missing dispatches its Claude fa
     models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra', provider: 'codex' }],
   }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = unready;
-  t.after(() => { process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY; });
+  const previousRuntimeSessionId = process.env.CLAUDE_CODE_SESSION_ID;
+  process.env.CLAUDE_CODE_SESSION_ID = 'quota-signed-out-runtime-session';
+  t.after(() => {
+    process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY;
+    if (previousRuntimeSessionId == null) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = previousRuntimeSessionId;
+  });
   store.setCategory({
     id: 'codex.signed-out',
     name: 'Codex signed out',

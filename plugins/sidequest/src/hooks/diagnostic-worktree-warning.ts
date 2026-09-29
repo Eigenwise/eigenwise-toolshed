@@ -170,10 +170,33 @@ function boundAgentWorktree(input: HookInput): string {
   }
 }
 
-// SubagentStart delivers only the head of this warning, so an agent's own worktree is named before the long roots.
-function ownershipSentence(roots: string[], ownWorktree: string): string {
-  const nothingElse = `under ${roots.join(' or ')} is yours.`;
-  return ownWorktree ? `Your own worktree is ${path.basename(ownWorktree)}; nothing else ${nothingElse}` : `Nothing ${nothingElse}`;
+// SubagentStart delivers only the first 512 bytes of this warning, so an agent's own worktree is named right after
+// the count, and the roots (the longest, least actionable part) come last.
+function ownWorktreeSentence(ownWorktree: string): string {
+  return ownWorktree ? `Your own worktree is ${path.basename(ownWorktree)}.` : '';
+}
+
+function rootsSentence(roots: string[], ownWorktree: string): string {
+  return `${ownWorktree ? 'Nothing else' : 'Nothing'} under ${roots.join(' or ')} is yours.`;
+}
+
+function plural(count: number, singular: string, pluralForm: string): string {
+  return count === 1 ? singular : pluralForm;
+}
+
+function goneSentence(gone: ForeignWorktree[]): string {
+  if (!gone.length) return '';
+  return `${gone.length} of those ${plural(gone.length, 'paths is', 'paths are')} already gone from disk, and a diagnostic naming a path that no longer exists is always false.`;
+}
+
+function liveClaimSentence(live: ForeignWorktree[]): string {
+  if (!live.length) return '';
+  return `${live.length} ${plural(live.length, 'holds', 'hold')} a live claim (${refList(live)}): errors there are expected mid-refactor state and never outrank that executor's own verify.`;
+}
+
+function candidateSentence(candidates: ForeignWorktree[]): string {
+  if (!candidates.length) return '';
+  return `Actionable exception: ${refList(candidates)} ${plural(candidates.length, 'holds', 'hold')} a candidate awaiting integration, so a diagnostic in that worktree outweighs an executor's \`verify passed\` and is worth reading before you integrate.`;
 }
 
 function refList(worktrees: ForeignWorktree[]): string {
@@ -185,15 +208,15 @@ function warningFor(worktrees: ForeignWorktree[], roots: string[], ownWorktree: 
   const live = worktrees.filter((entry) => entry.lifecycle === 'live');
   const candidates = worktrees.filter((entry) => entry.lifecycle === 'candidate');
   const gone = worktrees.filter((entry) => !entry.onDisk);
-  const sentences = [
-    `sidequest: ${worktrees.length} foreign agent worktree${worktrees.length === 1 ? '' : 's'} in play, and Claude Code delivers their LSP diagnostics into YOUR context because that registry is keyed per session, not per agent.`,
-    ownershipSentence(roots, ownWorktree),
-  ];
-  if (gone.length) sentences.push(`${gone.length} of those ${gone.length === 1 ? 'paths is' : 'paths are'} already gone from disk, and a diagnostic naming a path that no longer exists is always false.`);
-  if (live.length) sentences.push(`${live.length} hold${live.length === 1 ? 's' : ''} a live claim (${refList(live)}): errors there are expected mid-refactor state and never outrank that executor's own verify.`);
-  if (candidates.length) sentences.push(`Actionable exception: ${refList(candidates)} hold${candidates.length === 1 ? 's' : ''} a candidate awaiting integration, so a diagnostic in that worktree outweighs an executor's \`verify passed\` and is worth reading before you integrate.`);
-  sentences.push('Keep error-severity diagnostics in your own files actionable.');
-  return sentences.join(' ');
+  return [
+    `sidequest: ${worktrees.length} foreign agent ${plural(worktrees.length, 'worktree', 'worktrees')} in play, and Claude Code delivers their LSP diagnostics into YOUR context because that registry is keyed per session, not per agent.`,
+    ownWorktreeSentence(ownWorktree),
+    'Keep error-severity diagnostics in your own files actionable.',
+    goneSentence(gone),
+    liveClaimSentence(live),
+    candidateSentence(candidates),
+    rootsSentence(roots, ownWorktree),
+  ].filter(Boolean).join(' ');
 }
 
 function receivingCheckout(input: HookInput): CheckoutLocation | null {
