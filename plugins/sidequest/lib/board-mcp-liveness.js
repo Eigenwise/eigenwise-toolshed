@@ -61,9 +61,16 @@ function clearBoardMcpLiveness() {
   } catch (_) {
   }
 }
-function stringProperty(value, key) {
-  const property = Reflect.get(value, key);
-  return typeof property === "string" ? property : null;
+function markerField(value, key) {
+  return value !== null && typeof value === "object" ? Reflect.get(value, key) : void 0;
+}
+function markerText(value, key, fallback) {
+  const text = markerField(value, key);
+  return typeof text === "string" ? text : fallback;
+}
+function markerPid(value) {
+  const pid = markerField(value, "pid");
+  return typeof pid === "number" && Number.isInteger(pid) && pid > 0 ? pid : 0;
 }
 function legacySessionId(name) {
   return decodeURIComponent(name.slice(MARKER_PREFIX.length, -MARKER_SUFFIX.length));
@@ -72,15 +79,14 @@ function readMarker(directory, name) {
   const file = import_node_path.default.join(directory, name);
   try {
     const value = JSON.parse(import_node_fs.default.readFileSync(file, "utf8"));
-    if (value === null || typeof value !== "object" || !Number.isInteger(Reflect.get(value, "pid"))) return [];
-    const sessionId = stringProperty(value, "sessionId") ?? legacySessionId(name);
-    return [{ pid: Number(Reflect.get(value, "pid")), sessionId, project: stringProperty(value, "project") ?? "", file }];
+    const pid = markerPid(value);
+    if (!pid) return [];
+    return [{ pid, sessionId: markerText(value, "sessionId", legacySessionId(name)), project: markerText(value, "project", ""), file }];
   } catch (_) {
     return [];
   }
 }
 function processAlive(pid) {
-  if (pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -95,14 +101,20 @@ function observeMarkers(markers, sessionId, projectKey, directory) {
   const exited = candidates.find((marker) => marker.sessionId === sessionId) || candidates[0];
   return exited ? { state: "exited", marker: exited } : { state: "absent", directory };
 }
+function isMarkerName(name) {
+  return name.startsWith(MARKER_PREFIX) && name.endsWith(MARKER_SUFFIX);
+}
+function unlistableMarkers(error, directory) {
+  const code = error instanceof Error && "code" in error ? error.code : "";
+  return code === "ENOENT" ? { state: "absent", directory } : { state: "unreadable", directory, detail: String(error) };
+}
 function observeBoardMcp(sessionId, project) {
   const directory = boardMcpMarkerDirectory();
   let names;
   try {
-    names = import_node_fs.default.readdirSync(directory).filter((name) => name.startsWith(MARKER_PREFIX) && name.endsWith(MARKER_SUFFIX));
+    names = import_node_fs.default.readdirSync(directory).filter(isMarkerName);
   } catch (error) {
-    const code = error instanceof Error && "code" in error ? error.code : "";
-    return code === "ENOENT" ? { state: "absent", directory } : { state: "unreadable", directory, detail: String(error) };
+    return unlistableMarkers(error, directory);
   }
   const markers = names.flatMap((name) => readMarker(directory, name));
   return observeMarkers(markers, sessionId, project ? (0, import_worktree.canonicalPath)(project) : "", directory);

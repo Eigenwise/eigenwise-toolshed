@@ -42,7 +42,7 @@ const { WORKTREE_CREATE_HOOK_TIMEOUT_SECONDS } = require('../src/lib/hook-timeou
 const db = require('../lib/db.js');
 const { EFFORTS, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('../lib/exec-names.js');
 const agentsync = require('../lib/agentsync.js');
-const { writeBoardMcpLiveness, clearBoardMcpLiveness } = require('../lib/board-mcp-liveness.js');
+const { writeBoardMcpLiveness, clearBoardMcpLiveness, observeBoardMcp } = require('../lib/board-mcp-liveness.js');
 const BOARD_PATH = path.join(os.tmpdir(), 'sq-hooks-fixtures', 'board');
 const { slug } = store.ensureProject(BOARD_PATH);
 // SessionStart briefs only a session whose project has a board (GH-225). Session runs that name no project of their
@@ -967,6 +967,52 @@ test('pre-tool hook: a live Board MCP server keeps the generic Agent refusal acr
   withBoardMcpMarker('', BOARD_PATH, () => {
     assert.equal(genericAgentDenial(`${session_id}-unnamed`), GENERIC_AGENT_DENY_REASON, 'a server started without a session id still records its project');
   });
+});
+
+test('board mcp liveness: observes live, rotated, exited, absent, and unreadable markers by pid and project', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-liveness-observe-'));
+  const markers = path.join(home, 'tmp', 'state');
+  const project = path.join(home, 'project');
+  const otherProject = path.join(home, 'other');
+  const exitedPid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }));
+  const writeMarker = (name: string, body: string) => fs.writeFileSync(path.join(markers, name), body);
+  const previousHome = process.env.SIDEQUEST_HOME;
+  process.env.SIDEQUEST_HOME = home;
+  try {
+    assert.deepEqual(observeBoardMcp('s1', project), { state: 'absent', directory: markers }, 'no marker directory yet');
+    fs.mkdirSync(markers, { recursive: true });
+    writeMarker('board-mcp-garbage.json', 'not json');
+    writeMarker('board-mcp-nopid.json', JSON.stringify({ sessionId: 's1' }));
+    writeMarker('board-mcp-zero.json', JSON.stringify({ pid: 0, sessionId: 's1' }));
+    writeMarker('unrelated.json', JSON.stringify({ pid: process.pid, sessionId: 's1' }));
+    assert.equal(observeBoardMcp('s1', project).state, 'absent', 'malformed markers and other files are ignored');
+
+    writeMarker('board-mcp-' + encodeURIComponent('old session') + '.json', JSON.stringify({ pid: exitedPid }));
+    const exited = observeBoardMcp('old session', project);
+    assert.equal(exited.state, 'exited', 'a legacy marker takes its session id from the file name');
+    assert.equal(exited.marker.pid, exitedPid);
+
+    writeBoardMcpLiveness('s1', project);
+    try {
+      assert.equal(observeBoardMcp('s1', project).state, 'live');
+      assert.equal(observeBoardMcp('s1', '').state, 'live', 'no project still matches by session id');
+      assert.equal(observeBoardMcp('s2', project).state, 'rotated', 'same project after a session id change');
+      assert.equal(observeBoardMcp('s2', otherProject).state, 'absent', 'another project is not this board');
+      assert.equal(observeBoardMcp('s2', '').state, 'absent');
+    } finally {
+      clearBoardMcpLiveness();
+    }
+
+    fs.rmSync(path.join(home, 'tmp'), { recursive: true, force: true });
+    fs.mkdirSync(path.join(home, 'tmp'));
+    fs.writeFileSync(markers, 'not a directory');
+    const unreadable = observeBoardMcp('s1', project);
+    assert.equal(unreadable.state, 'unreadable');
+    assert.match(unreadable.detail, /ENOTDIR/);
+  } finally {
+    if (previousHome === undefined) delete process.env.SIDEQUEST_HOME;
+    else process.env.SIDEQUEST_HOME = previousHome;
+  }
 });
 
 test('pre-tool hook: unreadable Board MCP liveness says the state is unknown instead of down', () => {

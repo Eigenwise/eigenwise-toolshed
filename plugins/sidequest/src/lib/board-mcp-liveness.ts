@@ -44,9 +44,19 @@ export function clearBoardMcpLiveness(): void {
   } catch (_) {}
 }
 
-function stringProperty(value: object, key: string): string | null {
-  const property: unknown = Reflect.get(value, key);
-  return typeof property === 'string' ? property : null;
+function markerField(value: unknown, key: string): unknown {
+  return value !== null && typeof value === 'object' ? Reflect.get(value, key) : undefined;
+}
+
+function markerText(value: unknown, key: string, fallback: string): string {
+  const text = markerField(value, key);
+  return typeof text === 'string' ? text : fallback;
+}
+
+// Pid 0 probes as alive on Windows, so only a positive pid counts.
+function markerPid(value: unknown): number {
+  const pid = markerField(value, 'pid');
+  return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : 0;
 }
 
 // Servers before the pid-keyed format named the marker by session id and recorded only the pid.
@@ -58,16 +68,15 @@ function readMarker(directory: string, name: string): BoardMcpMarker[] {
   const file = path.join(directory, name);
   try {
     const value: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (value === null || typeof value !== 'object' || !Number.isInteger(Reflect.get(value, 'pid'))) return [];
-    const sessionId = stringProperty(value, 'sessionId') ?? legacySessionId(name);
-    return [{ pid: Number(Reflect.get(value, 'pid')), sessionId, project: stringProperty(value, 'project') ?? '', file }];
+    const pid = markerPid(value);
+    if (!pid) return [];
+    return [{ pid, sessionId: markerText(value, 'sessionId', legacySessionId(name)), project: markerText(value, 'project', ''), file }];
   } catch (_) {
     return [];
   }
 }
 
 function processAlive(pid: number): boolean {
-  if (pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -84,14 +93,22 @@ function observeMarkers(markers: BoardMcpMarker[], sessionId: string, projectKey
   return exited ? { state: 'exited', marker: exited } : { state: 'absent', directory };
 }
 
+function isMarkerName(name: string): boolean {
+  return name.startsWith(MARKER_PREFIX) && name.endsWith(MARKER_SUFFIX);
+}
+
+function unlistableMarkers(error: unknown, directory: string): BoardMcpObservation {
+  const code = error instanceof Error && 'code' in error ? error.code : '';
+  return code === 'ENOENT' ? { state: 'absent', directory } : { state: 'unreadable', directory, detail: String(error) };
+}
+
 export function observeBoardMcp(sessionId: string, project: string): BoardMcpObservation {
   const directory = boardMcpMarkerDirectory();
   let names: string[];
   try {
-    names = fs.readdirSync(directory).filter((name) => name.startsWith(MARKER_PREFIX) && name.endsWith(MARKER_SUFFIX));
+    names = fs.readdirSync(directory).filter(isMarkerName);
   } catch (error: unknown) {
-    const code = error instanceof Error && 'code' in error ? error.code : '';
-    return code === 'ENOENT' ? { state: 'absent', directory } : { state: 'unreadable', directory, detail: String(error) };
+    return unlistableMarkers(error, directory);
   }
   const markers = names.flatMap((name) => readMarker(directory, name));
   return observeMarkers(markers, sessionId, project ? canonicalPath(project) : '', directory);
