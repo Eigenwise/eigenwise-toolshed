@@ -10,11 +10,12 @@ const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, rev
 const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require('../kernel/wave');
 const { isInScope, scopedPaths } = require('../scope-match');
 const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyDeliveryContentCommitGuidance, landedWithoutSubmissionGuidance } = require('../refusal-guidance.js');
+const worktrees = require('../worktrees.js');
 import type { VerificationResult } from '../kernel/verification.js';
 import type { CandidateInvalidation } from '../kernel/wave.js';
 
 function createSubmissions(dependencies: any) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
 
 const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
@@ -776,7 +777,7 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
   // that worktree never held.
   const project = String(opts?.cwd || '').trim() || readMeta(slug)?.path;
   const verify = (environment: NodeJS.ProcessEnv) => runProcessVerification(requirement, {
-    cwd: project,
+    cwd: ticket.executorVerifyCwd ? path.resolve(project, ticket.executorVerifyCwd) : project,
     timeoutMilliseconds,
     logPath: integrationVerifyLogPath(slug, ticket),
     outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
@@ -1402,6 +1403,219 @@ function workingTreeContainsSubmittedContent(repo: string, submission: any, cand
   return missing.length ? { ok: false, missing } : { ok: true, evidence: 'working_tree_matches_candidate' };
 }
 
+function committedBlob(repo: string, commit: string, file: string) {
+  try {
+    return execFileSync('git', ['show', `${commit}:${file}`], {
+      cwd: repo,
+      encoding: 'buffer',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }) as Buffer;
+  } catch (error: any) {
+    // git answers 128 for a path absent from that tree, which is an answer here:
+    // a candidate deletion the landed revision also carries is preserved content.
+    if (error?.status !== 128) throw error;
+    return null;
+  }
+}
+
+// Proves one submitted path against a landed tree without touching the integration
+// working tree: a temporary index holds the revision's tree, and `apply --cached -R`
+// asks git whether the candidate's own hunks are already in it. Rebased, squash-merged
+// and conflict-resolved landings all differ from the candidate blob byte for byte.
+function candidatePatchReverseApplies(repo: string, base: string, candidate: string, revision: string, file: string) {
+  const patch = execFileSync('git', ['diff', '--no-ext-diff', '--binary', base, candidate, '--', file], {
+    cwd: repo,
+    encoding: 'buffer',
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }) as Buffer;
+  if (!patch.length) return false;
+  const indexDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-delivery-index-'));
+  const env = Object.assign({}, process.env, { GIT_INDEX_FILE: path.join(indexDirectory, 'index') });
+  try {
+    const readTree = spawnSync('git', ['read-tree', revision], {
+      cwd: repo,
+      env,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (readTree?.status !== 0) {
+      throw new Error(String(readTree?.stderr || readTree?.error?.message || `could not read the tree at ${revision}`).trim());
+    }
+    const reverseApply = spawnSync('git', ['apply', '--cached', '--check', '--reverse', '-'], {
+      cwd: repo,
+      env,
+      encoding: 'utf8',
+      input: patch,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return reverseApply?.status === 0;
+  } finally {
+    fs.rmSync(indexDirectory, { recursive: true, force: true });
+  }
+}
+
+type PathProofKind = 'identical' | 'deleted' | 'reverse-applied' | 'diverging';
+
+function sameBlob(left: Buffer | null, right: Buffer | null) {
+  return left !== null && right !== null && left.equals(right);
+}
+
+function bothAbsent(candidateContents: Buffer | null, revisionContents: Buffer | null) {
+  return candidateContents === null && revisionContents === null;
+}
+
+// A byte-identical blob can still be a divergence: `git show <rev>:<file>` answers
+// content only, so a candidate that flips a file's mode (e.g. chmod +x) against a
+// landing that kept the old mode would otherwise read as identical. `ls-tree` carries
+// the mode alongside the blob, so this reads both tree entries directly.
+function treeEntryMode(repo: string, revision: string, file: string) {
+  const entry = execFileSync('git', ['ls-tree', revision, '--', file], {
+    cwd: repo,
+    encoding: 'utf8',
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+  return entry ? entry.split(/\s+/, 1)[0] : null;
+}
+
+function divergentTreeModes(repo: string, candidate: string, revision: string, file: string) {
+  const candidateMode = treeEntryMode(repo, candidate, file);
+  const revisionMode = treeEntryMode(repo, revision, file);
+  return candidateMode !== null && revisionMode !== null && candidateMode !== revisionMode;
+}
+
+function pathProofKind(repo: string, base: string, candidate: string, revision: string, file: string): PathProofKind {
+  // A mode divergence between two present entries is decided before content: a
+  // reverse-apply or a same-content compare would otherwise call a chmod-only
+  // change identical or resolvable, neither of which is true.
+  if (divergentTreeModes(repo, candidate, revision, file)) return 'diverging';
+  const candidateContents = committedBlob(repo, candidate, file);
+  const revisionContents = committedBlob(repo, revision, file);
+  if (sameBlob(candidateContents, revisionContents)) return 'identical';
+  // No patch can prove an absence, so a deletion both trees carry answers before
+  // reverse-apply rather than through it.
+  if (bothAbsent(candidateContents, revisionContents)) return 'deleted';
+  return candidatePatchReverseApplies(repo, base, candidate, revision, file) ? 'reverse-applied' : 'diverging';
+}
+
+function revisionPathProofs(repo: string, base: string, candidate: string, revision: string, submittedPaths: string[]) {
+  const buckets: Record<PathProofKind, string[]> = { identical: [], deleted: [], 'reverse-applied': [], diverging: [] };
+  for (const file of submittedPaths) {
+    buckets[pathProofKind(repo, base, candidate, revision, file)].push(file);
+  }
+  return {
+    identical: buckets.identical,
+    reverseApplied: buckets['reverse-applied'],
+    deleted: buckets.deleted,
+    diverging: buckets.diverging,
+  };
+}
+
+function normalizedResolvedPaths(value: any) {
+  const entries = Array.isArray(value) ? value : value == null ? [] : [value];
+  return Array.from(new Set(entries.map((entry: any) => String(entry || '').trim().replace(/\\/g, '/')).filter(Boolean)));
+}
+
+function commitIsAncestor(repo: string, ancestor: string, descendant: string) {
+  try {
+    integrationGit(repo, ['merge-base', '--is-ancestor', ancestor, descendant]);
+    return true;
+  } catch (error: any) {
+    if (error?.status !== 1) throw error;
+    return false;
+  }
+}
+
+function reachableDeliveryRevision(repo: string, requested: string, resultingHead: string) {
+  if (!SUBMISSION_COMMIT_RE.test(requested)) return null;
+  let revision: string;
+  try {
+    revision = integrationGit(repo, ['rev-parse', '--verify', `${requested}^{commit}`]).toLowerCase();
+  } catch (error: any) {
+    if (error?.status !== 128) throw error;
+    return null;
+  }
+  return commitIsAncestor(repo, revision, resultingHead) ? revision : null;
+}
+
+function resolvedPathsRefusal(ticket: any, revision: string, diverging: string[], resolvedPaths: string[]) {
+  const divergingPaths = new Set(diverging);
+  const invalid = resolvedPaths.filter((file) => !divergingPaths.has(file));
+  if (invalid.length) {
+    return {
+      ok: false,
+      reason: 'resolved_paths_invalid',
+      invalidPaths: invalid,
+      message: `${ticket.ref} reconciliation refused: resolvedPaths may only attest submitted paths the ${revision} proof found diverging, not ${invalid.join(', ')}.`,
+    };
+  }
+  const unresolved = diverging.filter((file) => !resolvedPaths.includes(file));
+  if (unresolved.length) {
+    return {
+      ok: false,
+      reason: 'delivery_content_diverged',
+      divergingPaths: unresolved,
+      message: `${ticket.ref} reconciliation refused: ${revision} neither carries the submitted candidate content nor reverse-applies the candidate change for ${unresolved.join(', ')}. Name every path you resolved by hand in resolvedPaths, with the evidence reason describing that resolution, or record a revision that contains the candidate change.`,
+    };
+  }
+  return null;
+}
+
+function deliveryRevisionProof(repo: string, ticket: any, candidate: string, opts: {
+  requested: string;
+  resolvedPaths: string[];
+  targetBranch: string;
+  resultingHead: string;
+  by: string;
+  reason: string;
+}) {
+  const revision = reachableDeliveryRevision(repo, opts.requested, opts.resultingHead);
+  if (!revision) {
+    return {
+      ok: false,
+      reason: 'delivery_revision_not_reachable',
+      message: `${ticket.ref} reconciliation refused: deliveryRevision ${opts.requested} must be a commit hash that resolves in the integration checkout and is reachable from ${opts.targetBranch}.`,
+    };
+  }
+  // The candidate was written on top of submission.base, so a revision at or below
+  // that base holds none of it, and attesting every path would otherwise let such a
+  // revision stand in for the landing.
+  if (commitIsAncestor(repo, revision, ticket.submission.base)) {
+    return {
+      ok: false,
+      reason: 'delivery_revision_predates_candidate',
+      message: `${ticket.ref} reconciliation refused: deliveryRevision ${revision} is an ancestor of the candidate base ${ticket.submission.base}, so it cannot contain the landing. Name the revision the candidate actually landed in.`,
+    };
+  }
+  const submittedPaths = changedIntegrationPaths(repo, ticket.submission);
+  const proofs = revisionPathProofs(repo, ticket.submission.base, candidate, revision, submittedPaths);
+  const refusal = resolvedPathsRefusal(ticket, revision, proofs.diverging, opts.resolvedPaths);
+  if (refusal) return refusal;
+  const at = new Date().toISOString();
+  return {
+    ok: true,
+    revision,
+    content: {
+      ok: true,
+      evidence: opts.resolvedPaths.length
+        ? 'delivery_revision_contains_candidate:operator_resolved'
+        : 'delivery_revision_contains_candidate',
+    },
+    contentProof: {
+      revision,
+      identical: proofs.identical,
+      reverseApplied: proofs.reverseApplied,
+      deleted: proofs.deleted,
+      resolved: proofs.diverging.map((file) => ({ path: file, by: opts.by || null, reason: opts.reason, at })),
+    },
+    deliveredFiles: submittedPaths,
+  };
+}
+
 function workingTreeDeliveryPaths(repo: string) {
   const tracked = integrationGit(repo, ['diff', '--name-only', 'HEAD']).split(/\r?\n/).filter(Boolean);
   const untracked = integrationGit(repo, ['ls-files', '--others', '--exclude-standard']).split(/\r?\n/).filter(Boolean);
@@ -1510,8 +1724,10 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
     // reachability set recordAbandonedSubmission already reads to decide whether a
     // candidate landed. Forcing every manual delivery onto one shared checkout serialised
     // every close in a batch on that single branch move; the branch's own tip already had
-    // the commit without it (SQ-58).
-    let deliveryRevisionSource = `git:${target.branch}`;
+    // the commit without it (SQ-58). Labelling a plain local checkout `git:origin/<branch>`
+    // would claim a remote reachability nothing here checked, and origin routinely lacks the
+    // revision until the operator pushes, so it stays `git:<branch>` unless matched otherwise.
+    let observedIntegrationRevisionSource = `git:${target.branch}`;
     if (currentBranch !== target.branch) {
       const matchedRef = commitScope.integrationTargetRefs(target).find((ref: string) => {
         try {
@@ -1528,10 +1744,10 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
           message: `${target.branch} must be checked out, or a detached worktree at the target tip must be given via worktree:"<path>" (CLI: --worktree <path>), before recording an external delivery; currently on ${currentBranch || 'detached HEAD'}${requestedWorktree ? ` in ${repo}` : ''}.`,
         };
       }
-      deliveryRevisionSource = `git:${commitScope.integrationRefLabel(matchedRef)}`;
+      observedIntegrationRevisionSource = `git:${commitScope.integrationRefLabel(matchedRef)}`;
     }
-    const deliveryRevision = {
-      source: deliveryRevisionSource,
+    const observedIntegrationRevision = {
+      source: observedIntegrationRevisionSource,
       value: resultingHead,
       observedAt: new Date().toISOString(),
     };
@@ -1543,6 +1759,16 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
       else throw error;
     }
     // deliveryMethod was already validated ahead of the preflight above.
+    const requestedDeliveryRevision = String(opts.deliveryRevision || '').trim();
+    const resolvedPaths = normalizedResolvedPaths(opts.resolvedPaths);
+    if (resolvedPaths.length && !requestedDeliveryRevision) {
+      return {
+        ok: false,
+        reason: 'resolved_paths_invalid',
+        ticket,
+        message: `${ticket.ref} reconciliation refused: resolvedPaths attests paths a deliveryRevision content proof found diverging, so it requires deliveryRevision.`,
+      };
+    }
     const workingTreeDelivery = deliveryMethod !== null && !reachable;
     if (!reachable && !workingTreeDelivery) {
       const remoteRef = commitScope.integrationTargetRefs(target).find((ref: string) => commitScope.isRemoteIntegrationRef(ref)
@@ -1559,7 +1785,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
         ok: false,
         reason: 'delivery_not_reachable',
         ticket,
-        message: `${ticket.ref} reconciliation refused: delivery commit ${deliveryCommit} is not reachable from ${target.branch}. Record a reset, working-tree, or manual delivery with this pinned candidate, deliveryMethod, and the candidate content present in the integration working tree.`,
+        message: `${ticket.ref} reconciliation refused: delivery commit ${deliveryCommit} is not reachable from ${target.branch}. Record a reset, working-tree, or manual delivery with this pinned candidate and deliveryMethod, proving its content either in the integration working tree or, for a candidate rebased or squash-merged before it landed, at a deliveryRevision reachable from ${target.branch} (with resolvedPaths for every path resolved by hand).`,
       };
     }
     if (workingTreeDelivery && !pinnedCandidateMatches(repo, ticket, deliveryCommit)) {
@@ -1570,16 +1796,43 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
         message: `${ticket.ref} reconciliation refused: non-reachable delivery must name its immutable ${submissionGitRef(ticket)} candidate, not ${deliveryCommit}.`,
       };
     }
+    // A reachable candidate proves itself by ancestry or equivalent patch, so no path
+    // there can be diverging and an attestation about one can only be a mistake. It
+    // refuses rather than dropping silently, which left the operator no signal.
+    if (resolvedPaths.length && !workingTreeDelivery) {
+      return {
+        ok: false,
+        reason: 'resolved_paths_invalid',
+        ticket,
+        message: `${ticket.ref} reconciliation refused: ${deliveryCommit} is already reachable from ${target.branch}, so its own content answers for it and resolvedPaths attests nothing. Record this delivery without resolvedPaths and deliveryRevision.`,
+      };
+    }
     // apply squashes the whole range into the working tree, so the commit of that
     // tree carries no patch identity from any candidate commit. What it can prove is
     // the thing the delivery actually is: the same bytes as the reviewed candidate on
     // every submitted path, checked by the same comparison supersession lineage uses.
     const completingApplyDelivery = opts.completingApplyDelivery === true && !workingTreeDelivery;
+    // deliveryRevision answers only the non-reachable pinned question. A reachable
+    // candidate already proves itself by ancestry or equivalent patch, so naming a
+    // revision there is ignored rather than turned into a second, weaker proof.
+    const revisionProof: any = workingTreeDelivery && requestedDeliveryRevision
+      ? deliveryRevisionProof(repo, ticket, deliveryCommit, {
+        requested: requestedDeliveryRevision,
+        resolvedPaths,
+        targetBranch: target.branch,
+        resultingHead,
+        by: String(opts.by || '').trim(),
+        reason,
+      })
+      : null;
+    if (revisionProof && !revisionProof.ok) return Object.assign({ ticket }, revisionProof);
     const content = completingApplyDelivery
       ? applyDeliveryTreeMatchesCandidate(repo, ticket.submission, deliveryCommit)
-      : workingTreeDelivery && !reachable
-        ? workingTreeContainsSubmittedContent(repo, ticket.submission, deliveryCommit)
-        : deliveryContainsSubmittedContent(repo, ticket.submission, deliveryCommit);
+      : revisionProof
+        ? revisionProof.content
+        : workingTreeDelivery && !reachable
+          ? workingTreeContainsSubmittedContent(repo, ticket.submission, deliveryCommit)
+          : deliveryContainsSubmittedContent(repo, ticket.submission, deliveryCommit);
     if (!content.ok) {
       const missing = content.missing ?? [];
       return {
@@ -1589,7 +1842,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
         ...(completingApplyDelivery ? { divergentPaths: missing } : { missingCommits: missing }),
         message: completingApplyDelivery
           ? `${ticket.ref} reconciliation refused: ${deliveryCommit} is not the tree its apply delivery materialized; it differs from candidate ${ticket.submission.commit} for ${missing.join(', ')}. Commit the applied tree unchanged and record that commit.`
-          : `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${missing.join(', ')}.`,
+          : `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${missing.join(', ')}. When the candidate was rebased, squash-merged, or conflict-resolved before it landed, name that landed revision with deliveryRevision so the proof reads its tree instead of the working tree, plus resolvedPaths for every path you resolved by hand.`,
       };
     }
     const interaction = workingTreeDelivery
@@ -1628,18 +1881,21 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
       }
       return integrationFailure(slug, ticket, { reason: failureReason, verify, message: failureMessage });
     }
-    const deliveredFiles = workingTreeDelivery
-      ? workingTreeDeliveryPaths(repo)
-      : interaction.interaction
-        ? Array.from(new Set([...deliveredCommitPaths(repo, deliveryCommit), ...interaction.interaction.paths]))
-        : deliveredCommitPaths(repo, deliveryCommit);
+    const deliveredFiles = revisionProof
+      ? revisionProof.deliveredFiles
+      : workingTreeDelivery
+        ? workingTreeDeliveryPaths(repo)
+        : interaction.interaction
+          ? Array.from(new Set([...deliveredCommitPaths(repo, deliveryCommit), ...interaction.interaction.paths]))
+          : deliveredCommitPaths(repo, deliveryCommit);
     const deliveryIdentity = {
       kind: interaction.interaction ? 'reviewed-merged-tree-interaction' : workingTreeDelivery ? 'pinned-working-tree' : 'reachable-commit',
       pinnedRef: submissionGitRef(ticket),
       candidate: ticket.submission.commit,
-      sourceRevision: deliveryRevision,
+      sourceRevision: observedIntegrationRevision,
       ...(interaction.interaction ? { sourceCommit: deliveryCommit, interaction: interaction.interaction } : {}),
       ...(workingTreeDelivery ? { method: deliveryMethod } : {}),
+      ...(revisionProof ? { revision: revisionProof.revision } : {}),
     };
     const recorded = updateSubmissionIntegration(slug, ticket.id, {
       mode: interaction.interaction ? 'recorded-reviewed-interaction' : workingTreeDelivery ? 'recorded-working-tree' : completingApplyDelivery ? 'recorded-apply-content-commit' : replacementRequirement ? 'recorded-verify-superseded' : 'recorded',
@@ -1651,7 +1907,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
       // is the commit its content was checked against, so lineage reads it rather than
       // whatever the branch head has moved on to.
       contentCommit: workingTreeDelivery || completingApplyDelivery ? deliveryCommit : resultingHead,
-      deliveryRevision,
+      deliveryRevision: observedIntegrationRevision,
       deliveryIdentity,
       targetBranch: target.branch,
       targetUpstream: target.upstream,
@@ -1673,11 +1929,12 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
       } : {}),
       evidence: reason,
       contentEvidence: interaction.interaction ? `${content.evidence}:reviewed_merged_tree_interaction` : content.evidence,
+      ...(revisionProof ? { contentProof: revisionProof.contentProof } : {}),
       outcome: 'verified',
       recordedAt: new Date().toISOString(),
       deliveredAt: new Date().toISOString(),
       verifiedAt: new Date().toISOString(),
-    }, { wave: reconciledDeliveryWave(slug, ticket, deliveryRevision, verify) });
+    }, { wave: reconciledDeliveryWave(slug, ticket, observedIntegrationRevision, verify) });
     return recorded.ok ? { ok: true, ticket: recorded.ticket, integration: recorded.ticket.submission.integration } : recorded;
   } catch (error: any) {
     return { ok: false, reason: 'delivery_evidence_unavailable', ticket, message: `${ticket.ref} reconciliation refused because delivery evidence could not be inspected: ${integrationGitError(error)}` };
@@ -3113,11 +3370,6 @@ function waveVerificationRequirement(tickets: any[]) {
   return { ok: true, requirement: first };
 }
 
-function pathIsInside(root: string, candidate: string) {
-  const relative = path.relative(root, candidate);
-  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
-}
-
 function provisionWaveGateWorktree(slug: any, candidateWorktree: string) {
   if (!candidateWorktree) {
     return { ok: true, evidence: 'The gate used the project root, so isolated-worktree provisioning was skipped.' };
@@ -3128,36 +3380,9 @@ function provisionWaveGateWorktree(slug: any, candidateWorktree: string) {
   const repository = String(readMeta(slug)?.path || '').trim();
   if (!repository) return { ok: false, message: 'The board repository is unavailable for gate provisioning.' };
   const config = boardConfig(slug) || {};
-  const dependencies = Array.isArray(config.worktreeDependencyPaths) ? config.worktreeDependencyPaths : [];
-  let created = 0;
-  let existing = 0;
-  try {
-    for (const dependency of dependencies) {
-      const dependencyPath = String(dependency?.path || '').trim();
-      const source = path.resolve(repository, dependencyPath);
-      const target = path.resolve(candidateWorktree, dependencyPath);
-      if (!dependencyPath || !pathIsInside(repository, source) || !pathIsInside(candidateWorktree, target)) {
-        return { ok: false, message: `Configured worktree dependency path ${JSON.stringify(dependencyPath)} is outside the gate worktree.` };
-      }
-      if (fs.existsSync(target)) {
-        existing += 1;
-        continue;
-      }
-      if (!fs.existsSync(source) || !fs.statSync(source).isDirectory()) {
-        return { ok: false, message: `Configured worktree dependency path ${JSON.stringify(dependencyPath)} is unavailable in the board repository.` };
-      }
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      if (dependency.mode === 'copy') fs.cpSync(source, target, { recursive: true });
-      else if (dependency.mode === 'link') fs.symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
-      else return { ok: false, message: `Configured worktree dependency path ${JSON.stringify(dependencyPath)} has an unsupported mode.` };
-      created += 1;
-    }
-  } catch (error: any) {
-    return { ok: false, message: `Could not provision gate worktree dependencies: ${error.message || String(error)}` };
-  }
-  const dependenciesEvidence = dependencies.length
-    ? `Worktree dependency provisioning created ${created} path${created === 1 ? '' : 's'} and retained ${existing} existing path${existing === 1 ? '' : 's'}.`
-    : 'Worktree dependency provisioning was skipped because no paths are configured.';
+  const dependencies = worktrees.provisionGateDependencies(repository, candidateWorktree, config.worktreeDependencyPaths || []);
+  if (!dependencies.ok) return dependencies;
+  const dependenciesEvidence = dependencies.evidence;
   const setup = String(config.worktreeSetup || '').trim();
   if (!setup) return { ok: true, evidence: `${dependenciesEvidence} Worktree setup was skipped because none is configured.` };
   const setupResult = spawnSync(setup, {

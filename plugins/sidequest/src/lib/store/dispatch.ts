@@ -1362,6 +1362,29 @@ function continuationFallback(reason?: any, worktree?: any, details?: any) {
   };
 }
 
+// Selection runs before the dispatch base is known, and an explicitly named older base passes the
+// ancestry check against a checkout built on a newer one, so the override never reached the executor (GH-125).
+function explicitBaseContinuation(released: any, explicit: boolean, target: any, baseCommit: string) {
+  if (!explicit || !released?.continuation) return released;
+  return retainedAgainstExplicitBase(released.continuation, `the dispatch explicitly names integration base ${target.branch} at ${baseCommit}`, baseCommit);
+}
+
+// Committed checkpoints replay onto the named base in a fresh checkout. Uncommitted work exists only in
+// its checkout, so that one stays retained and is told to move.
+function retainedAgainstExplicitBase(continuation: any, named: string, baseCommit: string) {
+  if (continuation.baseCommit === baseCommit) return { continuation: { ...continuation, retainReason: `${named}, which is the retained checkout's own base` } };
+  const differs = `${named} while retained checkout ${continuation.sourceWorktree} is built on ${continuation.baseCommit}`;
+  if (continuation.mode === 'dirty_worktree_resume') {
+    return { continuation: { ...continuation, retainReason: `${differs}; its uncommitted changes exist nowhere else, so it is still retained and they move onto ${baseCommit} before any work` } };
+  }
+  const { sourceBranch, commit, commits } = continuation;
+  return {
+    fallback: continuationFallback('released_worktree_base_differs_from_explicit_integration_base', continuation.sourceWorktree, {
+      sourceBranch, commit, commits, cause: `${differs}, so its checkpoint commits replay onto the named base in a fresh checkout`,
+    }),
+  };
+}
+
 function gitDirectory(repository?: any, directory?: any) {
   const value = nativeGitPath(directory);
   return canonicalPath(path.isAbsolute(value) ? value : path.resolve(String(repository || ''), value));
@@ -1599,6 +1622,16 @@ function reusablePreparedRecovery(ticket: any, current: any) {
   return Boolean(current && current.recovery && current.outcome === 'prepared' && ticket.dispatchNonce && canonicalPreparedDispatchExecutor(ticket));
 }
 
+// Only live-claim recovery reads `worktree`. A fresh attempt used to drop it silently, so a workingTreeDelivery
+// ticket got a lease on the registered checkout and its executor then refused to write anywhere else (GH-162).
+function dispatchWorktreeOverrideRefusal(ticket: any, worktree: unknown, projectPath: string): string | null {
+  if (worktree == null || String(worktree).trim() === '') return null;
+  const placement = ticket.workingTreeDelivery === true
+    ? `${ticket.ref} declares workingTreeDelivery, so it runs and delivers in the board's registered checkout ${projectPath}; to deliver from a linked worktree instead, clear workingTreeDelivery so the ticket runs in an isolated worktree and submits a commit.`
+    : 'sharedTree:true runs in the board\'s registered checkout and sharedTree:false in a board-provisioned worktree.';
+  return `prepare dispatch: worktree only names a resumed executor's checkout for live-claim recovery with claimHolder; it cannot choose where a new attempt runs. ${placement}`;
+}
+
 function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   if (opts.retireOnly === true) {
@@ -1618,6 +1651,8 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   const projectPath = readMeta(slug)?.path;
   const found = getTicket(slug, idOrRef);
   if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+  const worktreeOverrideRefusal = dispatchWorktreeOverrideRefusal(found, opts.worktree, projectPath);
+  if (worktreeOverrideRefusal) throw new Error(worktreeOverrideRefusal);
   const executorClaimRefusal = executorClaimDispatchRefusal(slug, opts.sessionId);
   if (executorClaimRefusal) throw new Error(executorClaimRefusal);
   const initialNoDeclaredFileScope = unscopedWriteCannotAutoApprove(found, {
@@ -1725,7 +1760,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const repeatFailure = repeatNoCommitDispatchError(t, current);
     const unboundAttemptsSkipped = skippedUnboundNoCommitAttempts(current);
     if (repeatFailure && opts.allowRepeatFailure !== true) throw new Error(repeatFailure);
-    const releasedContinuation = retainedWorktreeContinuationState(slug, t, current);
+    const retainedContinuation = retainedWorktreeContinuationState(slug, t, current);
     if (t.claim && t.claim.by && !claimReclaimable(t)) {
       throw new Error(`prepare dispatch: ${t.ref} has a live claim by ${t.claim.by}. Release it (\`sidequest release ${t.ref} --by ${t.claim.by}\`) before dispatching again.`);
     }
@@ -1926,6 +1961,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       : integrationTargetState
         ? integrationTargetCommit(readMeta(slug)?.path || '', integrationTargetState)
         : commitScope.headCommit(readMeta(slug)?.path || '');
+    const releasedContinuation = explicitBaseContinuation(retainedContinuation, explicitIntegrationTarget, integrationTargetState, baseCommit);
     // A direct cut (cut.mjs --push without --prepare) tags its release commit
     // before it runs the release suites and only pushes once they pass, so between
     // those two moments local main sits on a tip that may still be rewound.
@@ -3406,6 +3442,27 @@ function stopMatchingDispatches(candidates: any[], normalizedSessionId: string, 
   return { ok: true, ticket: tickets[0], tickets, stopped };
 }
 
+function isolatedDispatchOfAgent(state: any, sessionId: string, agentId: string): boolean {
+  return state?.sessionId === sessionId && state.agentId === agentId && state.sharedTree === false && Boolean(state.worktree);
+}
+
+// Native subagents share their parent's session id, so anything keyed on the session alone answers the same for
+// the orchestrator and every sibling executor. The agent id SubagentStart bound to a dispatch tells them apart
+// (GH-155, GH-150).
+function agentDispatchWorktrees(sessionId: string, agentId: string) {
+  if (!sessionId || !agentId) return [];
+  const owned: { ref: string; worktree: string; outcome: string | null; terminalAt: string | null }[] = [];
+  for (const { ticket } of ticketsMentioningSession(sessionId)) {
+    const state = dispatchState(ticket);
+    if (isolatedDispatchOfAgent(state, sessionId, agentId)) owned.push(agentDispatchWorktree(ticket.ref, state));
+  }
+  return owned;
+}
+
+function agentDispatchWorktree(ref: string, state: any) {
+  return { ref, worktree: String(state.worktree), outcome: state.outcome || null, terminalAt: state.terminalAt || null };
+}
+
 function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
   const reconciled: any[] = [];
   if (!sessionId) return { ok: true, reconciled };
@@ -3506,6 +3563,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     bindDispatchAgent,
     dispatchMatchesStopIdentity,
     markDispatchStopped,
+    agentDispatchWorktrees,
     reconcileLaunchedDispatches,
   };
 }

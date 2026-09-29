@@ -296,6 +296,7 @@ const tools: ToolDefinition[] = [
         artifactRoots: { type: 'array', items: { type: 'string' }, description: 'Replace shared-tree artifact roots. Empty disables.' },
         routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS },
         fallbackModel: { type: ['string', 'null'], description: 'Set null to clear the fallback route.' }, fallbackEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' }, readonly: { type: 'boolean', description: 'Comment closeout.' },
+        deniedTools: { type: 'array', items: { type: 'string' } },
       },
       required: ['id'],
     },
@@ -317,7 +318,7 @@ const tools: ToolDefinition[] = [
       const existing: any = args.project != null ? store.getCategory(id, { project: slug }) : store.routingProfileCategory(args.profile, id);
       if (!existing) throw new Error(`category_edit: no effective category "${args.id}".`);
       const patch: Record<string, unknown> = {};
-      for (const key of ['name', 'description', 'contract', 'artifactRoots', 'readonly']) if (args[key] !== undefined) patch[key] = args[key];
+      for (const key of ['name', 'description', 'contract', 'artifactRoots', 'readonly', 'deniedTools']) if (args[key] !== undefined) patch[key] = args[key];
       if (args.routeModel !== undefined || args.routeEffort !== undefined) patch.route = { model: args.routeModel === undefined ? existing.route.model : args.routeModel, effort: args.routeEffort === undefined ? existing.route.effort : args.routeEffort };
       if (args.fallbackModel === null) patch.fallback = null;
       else if (args.fallbackModel !== undefined || args.fallbackEffort !== undefined) patch.fallback = { model: args.fallbackModel === undefined ? existing.fallback && existing.fallback.model : args.fallbackModel, effort: args.fallbackEffort === undefined ? existing.fallback && existing.fallback.effort : args.fallbackEffort };
@@ -420,6 +421,7 @@ const tools: ToolDefinition[] = [
         name: { type: 'string' },
         alwaysInScope: { type: 'array', items: { type: 'string' }, description: 'When supplied, replaces the board paths merged into every ticket scope.' },
         readOnlyDeniedTools: { type: 'array', items: { type: 'string' } },
+        deniedTools: { type: 'array', items: { type: 'string' } },
         generatedPairs: {},
         integrationMode: { type: 'string', description: 'auto (default) picks remote whenever an origin remote exists, local otherwise. remote mode still DELIVERS by merging into the local branch and verifying there; it only adds the frozen origin/<branch> ref as landed proof. The board never fetches and never pushes in any mode.' },
         integrationBranch: { type: 'string', minLength: 1, description: 'Branch used as the integration baseline. Defaults to main. Remote mode requires origin/<branch>.' },
@@ -434,7 +436,7 @@ const tools: ToolDefinition[] = [
         worktreeSetup: { type: ['string', 'null'], description: 'One-line command Sidequest runs after creating an isolated worktree; null clears it.' },
         worktreeDependencyPaths: {
           type: 'array',
-          description: 'Dependency directories to provision from the primary checkout before dispatch. Each entry is { path: repo-relative directory, mode: "link" | "copy" }.',
+          description: 'Copied or linked from the primary checkout into each isolated worktree. copy: repo file or directory, tracked too, working-tree version. link: untracked directory; "../<name>" links a sibling checkout beside the worktree.',
           items: {
             type: 'object',
             properties: {
@@ -452,6 +454,7 @@ const tools: ToolDefinition[] = [
       if (args.name !== undefined) patch.name = args.name;
       if (args.alwaysInScope != null) patch.alwaysInScope = args.alwaysInScope;
       if (args.readOnlyDeniedTools !== undefined) patch.readOnlyDeniedTools = args.readOnlyDeniedTools;
+      if (args.deniedTools !== undefined) patch.deniedTools = args.deniedTools;
       if (args.generatedPairs !== undefined) patch.generatedPairs = args.generatedPairs;
       if (args.integrationMode != null) patch.integrationMode = args.integrationMode;
       if (args.integrationBranch != null) patch.integrationBranch = args.integrationBranch;

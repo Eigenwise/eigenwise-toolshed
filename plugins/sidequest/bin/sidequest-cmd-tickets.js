@@ -149,6 +149,7 @@ async function addPreview(opts, category, complexity) {
     executorVerifyKind: opts["verify-kind"],
     executorAttestationArtifact: opts["attestation-artifact"],
     executorVerify: opts.verify || "",
+    executorVerifyCwd: opts["verify-cwd"],
     storyId: opts.story || null,
     category,
     reviewTarget: reviewTargetFromOpts(opts),
@@ -194,6 +195,7 @@ async function cmdAdd(opts) {
     executorVerifyKind: opts["verify-kind"],
     executorAttestationArtifact: opts["attestation-artifact"],
     executorVerify: opts.verify,
+    executorVerifyCwd: opts["verify-cwd"],
     storyId: opts.story,
     complexity: opts.complexity,
     complexityWhy: opts.why,
@@ -308,6 +310,7 @@ async function cmdUpdate(opts, positional) {
   if (opts["external-deliverable"] !== void 0) patch.externalDeliverable = externalDeliverableFromOpts(opts);
   if (opts.anchors != null) patch.executorAnchors = opts.anchors;
   if (opts.verify != null) patch.executorVerify = opts.verify;
+  if (opts["verify-cwd"] != null) patch.executorVerifyCwd = opts["verify-cwd"];
   if (opts["verify-kind"] != null) patch.executorVerifyKind = opts["verify-kind"];
   if (opts["attestation-artifact"] != null) patch.executorAttestationArtifact = opts["attestation-artifact"];
   if (opts.assignee != null) patch.assignee = opts.assignee;

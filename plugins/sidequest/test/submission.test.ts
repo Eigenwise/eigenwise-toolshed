@@ -6406,3 +6406,22 @@ test('GH-277: a repair that renames its rejected source release fragment deliver
 });
 
 export {};
+
+// GitHub #259: the integrate gate runs the recorded verifier from the ticket's verifyCwd, like the capture does.
+test('integration verification runs the recorded verifier from the ticket verifyCwd', () => {
+  const workspace = path.join(PROJECT_DIR, 'plugins', 'verify-cwd-fixture');
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.writeFileSync(path.join(workspace, 'workspace.marker'), 'nested\n');
+  const command = 'node -e "require(\'fs\').accessSync(\'workspace.marker\')"';
+  const t = addTicket('integration verify cwd', { files: ['plugins/verify-cwd-fixture/src/changed.js'] });
+  t.executorVerifyKind = 'command';
+  t.executorVerify = command;
+  t.executorVerifyCwd = 'plugins/verify-cwd-fixture';
+  t.submission = { commit: COMMIT, verify: command, integration: { outcome: 'delivered' } };
+  persist(t);
+
+  const result = store.verifyIntegration(slug, t.ref);
+
+  assert.strictEqual(result.ok, true, JSON.stringify(result.verify));
+  assert.strictEqual(result.verify.status, 'passed');
+});

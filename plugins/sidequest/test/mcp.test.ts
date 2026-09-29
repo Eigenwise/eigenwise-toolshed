@@ -1248,7 +1248,7 @@ test('MCP category_edit rejects guessed fields and reports applied routing chang
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-category-edit-'))).slug;
   const rejectedEffort = await callToolRaw('category_edit', { project, id: 'coding.normal', effort: 'medium' });
   assert.equal(rejectedEffort.isError, true);
-  assert.match(rejectedEffort.content[0].text, /category_edit: unknown argument "effort" — category_edit accepts: id, project, profile, name, description, contract, artifactRoots, routeModel, routeEffort, fallbackModel, fallbackEffort, enabled, readonly\./);
+  assert.match(rejectedEffort.content[0].text, /category_edit: unknown argument "effort" — category_edit accepts: id, project, profile, name, description, contract, artifactRoots, routeModel, routeEffort, fallbackModel, fallbackEffort, enabled, readonly, deniedTools\./);
 
   const rejectedRoute = await callToolRaw('category_edit', { project, id: 'coding.normal', route: { model: 'codex-gpt-5-6-luna', effort: 'medium' } });
   assert.equal(rejectedRoute.isError, true);
@@ -7438,3 +7438,14 @@ test('SQ-2939: a same-board isolated wrong-ref commit keeps its base refusal wor
 });
 
 export {};
+
+test('add and update carry verifyCwd to the ticket and refuse one outside the project', async () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-verify-cwd-'));
+  fs.mkdirSync(path.join(projectPath, 'plugins', 'app'), { recursive: true });
+  const project = store.ensureProject(projectPath).slug;
+  const added = await callTool('add', { project, title: 'Nested gate', unclassified: true, verify: 'node --version', verifyCwd: 'plugins/app' });
+  assert.equal(store.getTicket(project, added.ref).executorVerifyCwd, 'plugins/app');
+  await callTool('update', { project, ref: added.ref, verifyCwd: '' });
+  assert.equal(store.getTicket(project, added.ref).executorVerifyCwd, '');
+  await assert.rejects(callTool('update', { project, ref: added.ref, verifyCwd: '../outside' }), /verifyCwd must be a directory relative to the project root/);
+});

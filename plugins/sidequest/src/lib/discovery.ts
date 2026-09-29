@@ -131,14 +131,15 @@ function newestGatewayCatalogCommand(): string | null {
   return newest?.command ?? null;
 }
 
-function gatewayRefreshSucceeded(command: string): boolean {
-  try {
-    return spawnSync(process.execPath, [command, 'catalog', '--refresh', '--json'], {
-      encoding: 'utf8', timeout: 5000, windowsHide: true,
-    }).status === 0;
-  } catch {
-    return false;
-  }
+// The gateway prints why it declined to write on stderr; keeping its last line is what lets a dispatch
+// refusal say why the catalog is stale instead of only that it is (GH-227).
+function gatewayRefreshFailure(command: string): string | null {
+  const result = spawnSync(process.execPath, [command, 'catalog', '--refresh', '--json'], {
+    encoding: 'utf8', timeout: 5000, windowsHide: true,
+  });
+  if (result.status === 0) return null;
+  const reason = String(result.stderr || result.error?.message || '').trim().split(/\r?\n/).pop();
+  return reason || `the refresh command exited with status ${result.status}`;
 }
 
 export const CATALOG_STALE_MS = 5 * 60 * 1000;
@@ -146,7 +147,26 @@ export const CATALOG_STALE_MS = 5 * 60 * 1000;
 // a gateway that is down would otherwise spawn a child process per route resolution.
 const REFRESH_RETRY_MS = 30 * 1000;
 
-const gatewayRefreshAttempts = new Map<string, { at: number; refreshed: boolean }>();
+interface GatewayRefreshAttempt {
+  at: number;
+  refreshed: boolean;
+  failure: string | null;
+}
+
+const gatewayRefreshAttempts = new Map<string, GatewayRefreshAttempt>();
+
+function gatewayRefreshDue(attempt: GatewayRefreshAttempt | undefined): boolean {
+  if (!attempt) return true;
+  return Date.now() - attempt.at > (attempt.refreshed ? CATALOG_STALE_MS : REFRESH_RETRY_MS);
+}
+
+function runGatewayRefresh(catalogPath: string): unknown {
+  const command = newestGatewayCatalogCommand();
+  const failure = command === null ? 'no installed model-gateway command was found' : gatewayRefreshFailure(command);
+  const written = failure === null ? readCatalogSafe(catalogPath) : null;
+  gatewayRefreshAttempts.set(catalogPath, { at: Date.now(), refreshed: refreshedCatalogStaysCurrent(written), failure });
+  return written;
+}
 
 // Run the refresh for its side effect and re-read the file to get the written catalog. Parsing the gateway
 // CLI's stdout made this return null the moment that CLI printed a diagnostic line ahead of the JSON, so the
@@ -157,15 +177,21 @@ const gatewayRefreshAttempts = new Map<string, { at: number; refreshed: boolean 
 function refreshGatewayCatalog(catalogPath: string): CatalogData | null {
   if (!installedGatewayCatalog(catalogPath)) return null;
   const attempt = gatewayRefreshAttempts.get(catalogPath);
-  const window = attempt?.refreshed ? CATALOG_STALE_MS : REFRESH_RETRY_MS;
-  if (!attempt || Date.now() - attempt.at > window) {
-    const command = newestGatewayCatalogCommand();
-    const written = command !== null && gatewayRefreshSucceeded(command) ? readCatalogSafe(catalogPath) : null;
-    gatewayRefreshAttempts.set(catalogPath, { at: Date.now(), refreshed: catalogWithinFreshnessWindow(written) });
-    return isRecord(written) ? written as CatalogData : null;
-  }
-  const catalog = attempt.refreshed ? readCatalogSafe(catalogPath) : null;
+  let catalog: unknown = null;
+  if (gatewayRefreshDue(attempt)) catalog = runGatewayRefresh(catalogPath);
+  else if (attempt?.refreshed) catalog = readCatalogSafe(catalogPath);
   return isRecord(catalog) ? catalog as CatalogData : null;
+}
+
+// A refreshed catalog that still reports Codex unready is asked again after the short retry window, not the
+// whole catalog window: a transient upstream failure lifts within seconds, and pinning that refusal for five
+// minutes held dispatch long after the gateway had recovered (GH-175).
+function refreshedCatalogStaysCurrent(written: unknown): boolean {
+  return catalogWithinFreshnessWindow(written) && catalogProviderReadiness(written as CatalogData, 'codex')?.ready === true;
+}
+
+export function gatewayCatalogRefreshFailure(): string | null {
+  return gatewayRefreshAttempts.get(path.join(claudeHome(), 'model-gateway', 'catalog.json'))?.failure ?? null;
 }
 
 function catalogWithinFreshnessWindow(data: unknown): boolean {

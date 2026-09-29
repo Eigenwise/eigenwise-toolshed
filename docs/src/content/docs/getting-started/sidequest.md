@@ -132,11 +132,29 @@ If you run one session from a parent directory holding several independent repos
 
 The parent directory doesn't have to be a git repo. An isolated dispatch's worktree is cut from the ticket's own repository even when the session is rooted in a plain folder. The one case Sidequest can't resolve is a session that holds live isolated dispatches on two boards at once, because the worktree hook is told a session and not a ticket; dispatch refuses that up front and names the other board, so let those finish first.
 
+### Making isolated worktrees buildable
+
+A fresh worktree only has what git checks out. Anything gitignored, like `node_modules`, a `.venv`, or real env files next to their committed `*.example` twins, is missing. The board setting `worktreeDependencyPaths` fills that gap when each worktree is created, and `worktreeSetup` runs one command afterwards. Each entry is `{ path, mode }`, with `path` relative to the repo:
+
+- `copy` copies a file or a directory from your checkout into the worktree. It works on tracked paths too: a copied directory merges into the one git checked out, and any file in it takes the version in your working tree, not the committed one. So `{ "path": "env", "mode": "copy" }` brings in the gitignored `env/api.env` beside the tracked `env/api.env.example`, and `{ "path": "env/api.env", "mode": "copy" }` copies just that file. If you have uncommitted edits to a tracked file under a copied path, the worktree starts with them too.
+- `link` points the worktree at your checkout's directory instead of copying it. It only fills a path git leaves absent, so use it for untracked directories like `node_modules`; a tracked path or a single file is refused with a pointer to `copy`.
+- A sibling checkout outside the repo, like a Cargo or npm `path` dependency on `../store_rust`, is written `{ "path": "../store_rust", "mode": "link" }`. The link lands beside the worktree, in the worktree root every worktree of this board shares, so the same relative path resolves from inside any of them. It can leave the repo by one level only, and it's never removed with a worktree. `copy` is refused outside the repo, since that copy would be shared and never cleaned up, and absolute paths are refused because every worktree has to find the dependency at the same relative spot.
+
+The wave gate applies the same entries to the checkout it verifies in, except a copy there never overwrites a file the candidates carry.
+
+### Reaping services an executor started
+
+Executors run inside your Claude Code process, so a dev stack or watcher an executor starts in its worktree sees your session's pid as its owner and outlives the executor. When an executor stops, Sidequest writes `sidequest-dispatch.json` into that worktree's private git directory (find it with `git rev-parse --git-path sidequest-dispatch.json` inside the worktree; git never shows it as a change). It holds `ref`, `sessionId`, the executor's own `agentId`, the dispatch `outcome`, `terminalAt`, and `stoppedAt`. A project reaper can tear down a worktree's stack once `terminalAt` is set. A `stoppedAt` with a null `terminalAt` means the executor paused while still holding its claim and may resume, and a stack started after `stoppedAt` belongs to a later run in the same worktree.
+
+A ticket with `workingTreeDelivery` runs in the board's registered checkout, never in a linked worktree. Dispatch's `worktree` argument only names a resumed executor's checkout during live-claim recovery, so passing it anywhere else is refused up front instead of producing a lease the executor can't write through. To deliver from a worktree, drop `workingTreeDelivery` and let the ticket run isolated and submit a commit.
+
 ## Read-only reports
 
 Use Sidequest for independent candidate reviews, repository audits, and shortcut debt scans. They use the existing read-only review route and only report findings.
 
-An explicit per-ticket route can use a different provider when the ticket is effectively readonly. It leaves the category route alone; writable tickets and automatic fallbacks stay with their provider.
+An explicit per-ticket route can use a different provider when the ticket is effectively readonly. It leaves the category route alone; writable tickets stay with their category's provider.
+
+When a category's route can't run right now (ChatGPT sign-in missing, gateway readiness unavailable, the model gone from the catalog), dispatch uses the category's own `fallback`, even when that's a Claude model. The dispatch result's `fallbackReason` and the executor briefing both say which fallback ran and why the primary couldn't, including the gateway's login or setup command. The global fallback never crosses providers, so a Codex category with no fallback of its own is refused with that same reason. A discovered model whose provider isn't served by Model Gateway (anything but Codex or Grok) dispatches with its own id as the executor's model.
 
 - A candidate review starts from the submitted ticket and its immutable candidate, never a working tree. Ask Claude to bind the review to that submission.
 - A repository audit names the directory or subsystem to inspect. It reports concrete delete, reuse, standard-library, native-platform, YAGNI, and shrinking opportunities with source locations. It does not edit code.
@@ -144,11 +162,21 @@ An explicit per-ticket route can use a different provider when the ticket is eff
 
 These read-only reports work independently. If Sidequest is not installed in the host, Claude reports that the routed capability is unavailable. Observability can show absolute measurements, though gain stays unmeasured without a matched baseline. Static headline figures and private workflow data do not prove a gain.
 
+Read-only executors run in your session's own permission mode. They don't ask for `bypassPermissions`, and Claude Code ignores `permissionMode` in plugin agent files anyway. They keep Bash so a review can run the suite, but Sidequest refuses the shell write forms inside the checkout they run in: redirects like `echo x > file`, `rm`, `mv`, `touch`, `tee`, `sed -i`, and git commands that change the repository. Scratch files and evidence go outside the checkout. That guard reads the command text, so a script can still write; if you need a hard boundary, keep your session out of bypass mode.
+
+### Denying tools to executors
+
+Ask Claude to set `deniedTools` on the board (`board_config`) or on one category (`category_edit`). It takes tool names like `Agent` or `WebFetch`, or an MCP server prefix like `mcp__claude-in-chrome` for every tool on that server. Any executor on that board, or working a ticket in that category, gets refused those tools when it calls them, write executors included. `readOnlyDeniedTools` still applies to read-only executors only. The Sidequest board tools can't be denied, since executors need them to claim and close. The denial happens at call time, so the tool's schema still sits in the executor's context.
+
 ## If something stops working
 
 **The board does not open.** Reload Claude Code after installing Sidequest, then ask Claude to open the board again. If the browser still does not open, ask Claude to start the Sidequest dashboard and report its local URL.
 
 **Claude reports an older loaded Sidequest after an upgrade.** Reload plugins or start a new session to pick up the current connection and packaged executor roster. Unknown versions, schema changes, and incompatible older loaded versions refuse dispatch until reload.
+
+**A plain Agent spawn is refused.** Sidequest denies generic Agents in favor of ticket executors, and the refusal says what it found. If it says the project has no install, dispatch would refuse too: run `claude plugin install sidequest@eigenwise-toolshed --scope project` from that project, then reload plugins. "No Board MCP server has recorded itself" or "has exited" (with its pid) means the board server really is gone for this session: run `/mcp` and reconnect `plugin:sidequest:board`, or restart Claude Code. A new session id from `/clear`, a resume, or compaction does not count, because the server records itself by process and project. If the liveness markers can't be read, the refusal says the state is unknown rather than down.
+
+**A session gets no Sidequest briefing at start.** Only an orchestrator gets one: a session whose project has a registered board. A project with no board, or a session launched as a Sidequest executor (`--agent sidequest-exec-*` or `SIDEQUEST_AGENT`), gets no orchestrator block, though sweep and reload notices still show. The first board call registers the project, so the next session is briefed. `SIDEQUEST_NUDGE=off` still silences it everywhere.
 
 **Claude says an executor is missing.** Update Sidequest, reload plugins in the affected session, and ask Claude to dispatch again. Do not create replacement agents or disable the dispatch guard.
 
@@ -160,7 +188,7 @@ These read-only reports work independently. If Sidequest is not installed in the
 
 **Work landed but the ticket won't close.** When an executor released (for example as a technical blocker) and you committed its change yourself, there's no submission for `integrate` or `done` to consume. Close it with `groomClose` and the landed commit as the delivery commit, delivery method manual, once that commit is on the recorded integration branch.
 
-**A legitimate recursive delete gets refused.** Sidequest blocks a Bash or PowerShell command that recursively deletes the user profile or the `.claude` root, even inside a real cleanup. Point the delete at a specific project or scratchpad path instead.
+**A legitimate recursive delete gets refused.** Sidequest blocks a Bash or PowerShell command that recursively deletes the user profile or the `.claude` root, even inside a real cleanup. A home-relative target such as `~/repos/app/build` or `$HOME/repos/app/build` is judged by where it resolves, the same as its absolute spelling, so only the profile, `.claude`, or a parent of either is refused. Point the delete at a specific project or scratchpad path instead.
 
 **A read-only ticket cannot start in a new repository.** Claude reports the checkout choice and keeps the ticket read-only. You do not need to commit notes or change board settings.
 
@@ -182,7 +210,11 @@ These read-only reports work independently. If Sidequest is not installed in the
 
 **A ticket contract forbids commits.** Ask Claude to declare working-tree delivery before dispatch. Command and suite requirements close after the matching final capture. Commandless document, link, schema, custom, manual, and attestation requirements close with explicit typed evidence. The declared edits stay uncommitted and unpushed in the shared checkout for your normal team handoff. Ticket closure records that handoff; it does not replace your project's commit, review, or push process. A sibling's active allocation is ignored only when both dispatches record the same nonempty preparing session, their claims overlap, and their scopes are disjoint. Before dirty-path classification, Sidequest validates every eligible completed sibling's recorded candidate against its recorded paths and current content. A mismatch stops closeout, so preserve the shared-tree work and hand it back to the existing parent for verification or grooming. Do not revert it or expand scope to absorb it.
 
-**A POSIX verify command fails on Windows.** Ask Claude to inspect the recorded verification result and the shell it used.
+**A POSIX verify command fails on Windows.** Ask Claude to inspect the recorded verification result and the shell it used. On Windows a verify command runs through Git for Windows `sh.exe` when it's installed, unless it names an unquoted backslash path like `cd C:\repo\app` or `cd plugins\app`: `sh.exe` would strip those backslashes, so that command runs through Command Prompt instead, verbatim. The capture records which shell ran. Forward-slash paths and quoted backslash paths (`"C:\tools\node.exe" -e "..."`) stay on `sh.exe`, which keeps backslashes inside quotes. Command Prompt's `cd` doesn't switch drives, so a verifier on another drive should use `verifyCwd` instead of a `cd`.
+
+**A verify command needs to run from a subdirectory.** A nested workspace (its own `Cargo.toml`, `package.json`, or Nx root) only checks the right code when its gate runs from that directory. Set `verifyCwd` on the ticket (`--verify-cwd` on the CLI) to a path relative to the project root, like `plugins/app`. The verify-capture wrapper runs the command from that directory of the checkout, the integrate gate does the same, and the board checks npm scripts and paths in the command against it. Unset, the command runs from the project root as before. A `verifyCwd` that's absolute or climbs out with `..` is refused.
+
+**A verify command that can't run never counts as passed.** A command the shell can't find (exit 127) records `toolchain_missing`, and a shell that never started records `could_not_run` with the spawn error. When you add or update a ticket, the board refuses a verify whose first word isn't a known tool, a shell builtin, a path, or something on `PATH`.
 
 **Verification fails before any edit.** The active claim holder can record `[sidequest:verify-complete] failed: <evidence>` or `[sidequest:verify-complete] could_not_run: <evidence>` before touching the repository. That preserves the failure report only. A passing completion, submit, or done still needs the declared scoped work and required verification.
 
@@ -197,6 +229,8 @@ These read-only reports work independently. If Sidequest is not installed in the
 **Overlapping candidates use different pinned checks.** Claude keeps the checks and candidate identities frozen, composes the exact accepted candidates in the registered target, runs every pinned check and the full composed gate, then records each verified delivery manually. This is a control-plane `groomClose` with the immutable candidate as `deliveryCommit` and `deliveryMethod: "manual"`, without `integration: true`, which is only for a matching delivered wave. Missing candidate content, a skipped review or check, and substituting current `HEAD` all refuse.
 
 **A repair was delivered with `apply`, and closing the rejected submission it replaces keeps refusing.** `apply` puts the delivered changes in your working tree instead of a commit, so the board has no committed tree to prove the replaced paths against. Commit that tree unchanged on the recorded target branch, then ask Claude to bind it: a `groomClose` on the already-closed repair with that commit as `deliveryCommit`. Sidequest re-runs the merged-tree check and refuses a commit that is unreachable from the target or whose tree differs from the reviewed candidate on any submitted path. A refusal, including a failing check, leaves the recorded delivery alone, so the same commit can be bound again once the cause is fixed. After that, superseding the rejected submission needs replacement evidence only for the paths the repair really changed. Do not claim untouched paths as replacements to get past the refusal.
+
+**A candidate was rebased or squash-merged before it landed.** Its files no longer match the candidate byte for byte, and later merges keep moving them, so a plain manual delivery refuses for missing content. Ask Claude to record the delivery against the landed revision it can name — a merge commit, or whatever the upstream flow produced — and Sidequest proves every submitted path at that revision instead of your working tree: the same content, a deletion the revision also carries, or the candidate's own change reverse-applying onto it. Anything left over still refuses, and closes only once Claude names those paths as resolved by hand and the closure reason carries that evidence. A revision older than the candidate's own starting point is refused outright, because it cannot hold the landing, and naming resolved paths on a candidate the branch already contains is refused too rather than quietly ignored. The record keeps the per-path proof.
 
 **Integration stops on a merge conflict.** Sidequest never resolves a conflict itself. It aborts, puts the target back, and names the recovery: merge the candidate into the target branch by hand, resolve the conflict, commit the merge, re-run the checks, then ask Claude to record it. That is a `groomClose` with the merge commit as `deliveryCommit` and `deliveryMethod: "manual"`. Keep the candidate as a parent of that merge, because that ancestry is what proves the candidate's content landed. A squash or cherry-pick of the resolution drops it and is refused.
 
