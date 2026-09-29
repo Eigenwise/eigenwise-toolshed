@@ -533,6 +533,94 @@ test('pre-tool hook: terminal guard leaves live and submitted executors alone', 
   assert.equal(submittedResult, null);
 });
 
+test('pre-tool hook: a closed sibling never refuses the executor still holding its own claim', () => {
+  const closed = addStopTicket('closed sibling of a live executor');
+  const live = addStopTicket('live executor beside a closed sibling');
+  const sessionId = `cross-ticket-terminal-${++sqSeq}`;
+  // The incident shape: one runtime identity recorded on two sibling dispatches of one
+  // session, reachable because a bind takes any sibling whose own agent id is still unset.
+  const agentId = `cross-ticket-agent-${sqSeq}`;
+  const bindSibling = (ticket?: any, by?: any, agentName?: any) => {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
+    const executor = prepared.ticket.dispatchExecutor;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId, token: prepared.token, executor, agentName,
+    }).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentName).ok, true);
+    const worktree = store.getTicket(slug, ticket.ref).dispatch?.worktree;
+    if (worktree) fs.mkdirSync(worktree, { recursive: true });
+    assert.equal(store.claimTicket(slug, ticket.ref, by, { sessionId, token: prepared.token, executor }).ok, true);
+    return executor;
+  };
+  const executor = bindSibling(closed, 'closed-sibling-worker', `closed-sibling-${sqSeq}`);
+  assert.equal(bindSibling(live, 'live-sibling-worker', `live-sibling-${sqSeq}`), executor);
+  assert.equal(store.getTicket(slug, closed.ref).dispatch.agentId, agentId);
+  assert.equal(store.getTicket(slug, live.ref).dispatch.agentId, agentId);
+
+  assert.equal(store.completeTicket(slug, closed.ref, 'closed-sibling-worker', {
+    model: 'sonnet',
+    effort: 'high',
+    cleanDeclaredScope: true,
+  }).ok, true);
+
+  const stillLive = store.getTicket(slug, live.ref);
+  assert.equal(stillLive.status, 'doing');
+  assert.equal(stillLive.claim.by, 'live-sibling-worker');
+
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    agent_type: executor,
+    agent_id: agentId,
+    cwd: BOARD_PATH,
+    tool_name: 'Bash',
+    tool_input: { command: 'echo diag-probe' },
+  }), null, `${closed.ref} must not deny Bash while ${live.ref} is claimed by the same identity`);
+});
+
+test('pre-tool hook: the name-prefix fallback stands down for an unclaimed live sibling', () => {
+  const closed = addStopTicket('closed sibling reached only through the name-prefix fallback');
+  const live = addStopTicket('live sibling reached only through the name-prefix fallback');
+  const sessionId = `name-prefix-terminal-${++sqSeq}`;
+  // No agent id is ever bound on either dispatch record here; the incoming call's agent_id
+  // reaches the closed sibling through dispatchIdentityMatches' prefix fallback (foo-2
+  // starts with foo-) and the live sibling through its exact-name fallback, the other
+  // route into that function, with no id shared between the two records.
+  const launchWithName = (ticket: any, agentName: string) => {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
+    const executor = prepared.ticket.dispatchExecutor;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId, token: prepared.token, executor, agentName,
+    }).ok, true);
+    return { executor, token: prepared.token };
+  };
+  const { executor, token: closedToken } = launchWithName(closed, 'foo');
+  launchWithName(live, 'foo-2');
+
+  const worktree = store.getTicket(slug, closed.ref).dispatch?.worktree;
+  if (worktree) fs.mkdirSync(worktree, { recursive: true });
+  assert.equal(store.claimTicket(slug, closed.ref, 'name-prefix-closed-worker', {
+    sessionId, token: closedToken, executor,
+  }).ok, true);
+  assert.equal(store.completeTicket(slug, closed.ref, 'name-prefix-closed-worker', {
+    model: 'sonnet',
+    effort: 'high',
+    cleanDeclaredScope: true,
+  }).ok, true);
+
+  const liveTicket = store.getTicket(slug, live.ref);
+  assert.equal(liveTicket.status, 'todo', 'the live sibling stands in unclaimed, through its dispatch record alone');
+  assert.equal(liveTicket.dispatch?.agentId, undefined, 'no agent id is ever bound on the live sibling');
+
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    agent_type: executor,
+    agent_id: 'foo-2',
+    cwd: BOARD_PATH,
+    tool_name: 'Bash',
+    tool_input: { command: 'echo diag-probe' },
+  }), null, `${closed.ref} must not deny Bash while ${live.ref} matches only through the unclaimed name-prefix fallback`);
+});
+
 test('pre-tool hook: an executor cannot redispatch its own active ticket', () => {
   const ticket = store.createTicket(slug, {
     title: 'own dispatch refusal fixture',
@@ -1018,6 +1106,34 @@ test('pre-tool hook: an unbound helper inherits the sole active ticket', () => {
   });
   assert.equal(outside.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(outside.hookSpecificOutput.permissionDecisionReason, /effective scope/);
+});
+
+test('pre-tool hook: a declared path outside the repo is writable because it is declared (GH-300)', () => {
+  // add accepts an out-of-repo path for non-repo output, so the guard refusing that same
+  // declared path left the executor no way to deliver.
+  const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-outside-declared-'));
+  const declared = path.join(outsideRoot, 'handoffs', 'stories.md');
+  const ticket = addStopTicket('outside declared output', { files: [declared], readonlyOverride: true });
+  const acting = {
+    ...claimStopTicket(ticket, `outside-declared-${++sqSeq}`, 'outside-declared-claim'),
+    agent_type: 'general-purpose',
+    agent_id: `outside-declared-helper-${++sqSeq}`,
+    cwd: BOARD_PATH,
+  };
+
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    ...acting,
+    tool_name: 'Write',
+    tool_input: { file_path: declared },
+  }), null);
+
+  const undeclared = runHookOutput(FORCE_BYPASS, {
+    ...acting,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(outsideRoot, 'handoffs', 'other.md') },
+  });
+  assert.equal(undeclared.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(undeclared.hookSpecificOutput.permissionDecisionReason, /effective scope/);
 });
 
 test('pre-tool hook: a steer between turns is delivered, but a terminal failure is recorded', () => {
@@ -3510,7 +3626,12 @@ test('session-start reclaims a clean old worktree without lease identity', async
     assert.equal(fs.existsSync(old), false, 'SessionStart must reclaim a clean old worktree without lease identity');
   } finally {
     if (fs.existsSync(old)) gitFixture(['worktree', 'remove', '--force', old], repo);
-    fs.rmSync(repo, { recursive: true, force: true });
+    // Ending the session, like the sibling live-worktree test above, runs the sweep
+    // one more time in the foreground and only returns once that child process has
+    // exited — giving Windows a chance to release any handle the detached sweep
+    // worker still held on `repo` before cleanup deletes it (SQ-2907).
+    runHook(SESSION_END, { session_id: 'session-sweep', cwd: repo }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
+    fs.rmSync(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -3776,6 +3897,68 @@ test('worktree-create binds a linked checkout to its registered main board', () 
     if (fs.existsSync(linkedCheckout)) gitFixture(['worktree', 'remove', '--force', linkedCheckout], repository);
     try { gitFixture(['branch', '-D', `worktree-${name}`], repository); } catch (_) {}
   }
+});
+
+// GH-274, GH-269, GH-84. The orchestrating session may be rooted in a plain folder that holds the
+// registered repositories, or in a different registered repository. Either way the checkout is cut
+// from the dispatched ticket's own project. Each spawning shape runs as its own dispatch and catch.
+test('worktree-create cuts the ticket project whatever repository the session cwd is in', () => {
+  const hub = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-non-git-hub-'));
+  assert.throws(() => gitFixture(['rev-parse', '--show-toplevel'], hub), 'the hub fixture must not sit inside a repository');
+  const child = path.join(hub, 'child');
+  const spawning = path.join(hub, 'spawning');
+  for (const repository of [child, spawning]) {
+    fs.mkdirSync(repository);
+    gitFixture(['init', '--quiet', '-b', 'main'], repository);
+    gitFixture(['config', 'user.email', 'test@example.invalid'], repository);
+    gitFixture(['config', 'user.name', 'Hub Worktree Hook Test'], repository);
+    fs.writeFileSync(path.join(repository, 'tracked.txt'), `${path.basename(repository)}\n`);
+    gitFixture(['add', 'tracked.txt'], repository);
+    gitFixture(['commit', '--quiet', '-m', 'seed'], repository);
+  }
+  const project = store.ensureProject(child, 'hub child').slug;
+  store.ensureProject(spawning, 'hub spawning');
+  const category = `hub-worktree-hook-${++sqSeq}`;
+  store.setCategory({ id: category, name: category, route: { model: 'sonnet', effort: 'medium' }, fallback: null, enabled: true });
+  const outcomes = [{ shape: 'non-git hub folder', cwd: hub }, { shape: 'another registered repository', cwd: spawning }].map(({ shape, cwd }) => {
+    const ticket = store.createTicket(project, { title: `hub creation from ${shape}`, category, files: ['tracked.txt'] });
+    const sessionId = `hub-worktree-hook-${++sqSeq}`;
+    const prepared = store.prepareDispatch(project, ticket.ref, { sessionId, runtimeCwd: cwd });
+    assert.equal(store.recordDispatchLaunch(project, ticket.ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId }).ok, true);
+    try {
+      const output = execFileSync(process.execPath, [WORKTREE_CREATE], {
+        input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: sessionId, cwd, name: `agent-hub-${sqSeq}` }),
+        encoding: 'utf8',
+        env: process.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+      const common = gitFixture(['rev-parse', '--path-format=absolute', '--git-common-dir'], output);
+      const cutFromChild = worktrees.canonicalPath(common) === worktrees.canonicalPath(path.join(child, '.git'));
+      const bound = worktrees.canonicalPath(store.getTicket(project, ticket.ref).dispatch.worktree) === worktrees.canonicalPath(output);
+      return `${shape}: ${cutFromChild && bound ? 'cut from the ticket project' : `wrong checkout ${output}`}`;
+    } catch (error: any) {
+      return `${shape}: failed ${String(error?.stderr || error?.message || error).trim()}`;
+    }
+  });
+  assert.deepEqual(outcomes, [
+    'non-git hub folder: cut from the ticket project',
+    'another registered repository: cut from the ticket project',
+  ]);
+});
+
+test('worktree-create names the missing reservation when a non-git cwd has nothing to follow', () => {
+  const hub = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-non-git-unreserved-'));
+  let stderr = '';
+  assert.throws(() => execFileSync(process.execPath, [WORKTREE_CREATE], {
+    input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: `unreserved-${++sqSeq}`, cwd: hub, name: `agent-unreserved-${sqSeq}` }),
+    encoding: 'utf8',
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  }), (error: any) => {
+    stderr = String(error.stderr || '');
+    return true;
+  });
+  assert.match(stderr, /is not inside a git repository, and this session holds no launched isolated dispatch on exactly one board/);
 });
 
 test('worktree-create refuses a pre-existing same-repository checkout without creation proof', () => {
@@ -4408,7 +4591,7 @@ test('subagent-stop: a terminal Agent failure preserves recovery evidence then n
   assert.equal(recordTerminalAgentFailure(t, stop).ok, true);
   const context = runHookForBudget(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED after terminal died: ${t.ref}\\. Preserve recovery evidence before a replacement\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
   assert.equal(store.getTicket(slug, t.ref).claim, null);
   assert.equal(store.getTicket(slug, t.ref).dispatch.outcome, 'died');
   assert.ok(store.getTicket(slug, t.ref).dispatch.terminalAt);
@@ -4479,9 +4662,7 @@ test('subagent-stop: a terminal release preserves board closeout then names the 
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-released', { status: 'todo' }).ok, true);
   const context = runHook(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED after terminal release: ${t.ref}\\. The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
-  assert.match(context, /TaskStop is a Claude Code host action, not a Sidequest tool\./);
-  assert.equal((context.match(/TaskStop\(/g) || []).length, 1, 'a terminal teammate is named for retirement once');
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: a failed-before-claim attempt names its exact native teammate for retirement', () => {
@@ -4503,8 +4684,7 @@ test('subagent-stop: a failed-before-claim attempt names its exact native teamma
     agent_name: agentName,
   });
   assert.match(context, new RegExp(`^exec FINISHED after terminal failed: ${ticket.ref}\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${agentName}" \\}\\)`));
-  assert.equal((context.match(/TaskStop\(/g) || []).length, 1);
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: a superseded unclaimed attempt names its exact native teammate for retirement', () => {
@@ -4544,8 +4724,7 @@ test('subagent-stop: a superseded unclaimed attempt names its exact native teamm
     agent_name: agentName,
   });
   assert.match(context, new RegExp(`^exec FINISHED after superseded terminal failed: ${ticket.ref}\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${agentName}" \\}\\)`));
-  assert.equal((context.match(/TaskStop\(/g) || []).length, 1);
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: completed board closeout overrides a contradictory task notification', () => {
@@ -4557,7 +4736,7 @@ test('subagent-stop: completed board closeout overrides a contradictory task not
   assert.strictEqual(store.closeTicketForGrooming(slug, t.ref, { by: 'hook-test-groomer', reason: 'Shipped abc1234.' }).ok, true);
   const context = runHook(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED: ${t.ref} done \\(abc1234\\); review the recorded board result\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: completed board closeout without a hash still overrides task state', () => {
@@ -4569,7 +4748,7 @@ test('subagent-stop: completed board closeout without a hash still overrides tas
   assert.strictEqual(store.closeTicketForGrooming(slug, t.ref, { by: 'hook-test-groomer', reason: 'Done and verified.' }).ok, true);
   const context = runHook(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED: ${t.ref} done WITHOUT commit hash; review the recorded board result\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: a legacy partial submission is not reported ready for integration', () => {
@@ -4585,7 +4764,7 @@ test('subagent-stop: a legacy partial submission is not reported ready for integ
   });
   const context = runHook(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED with PARTIAL_SUBMISSION: ${t.ref} has scope-gated paths \\(plugins/model-gateway/bin/model-gateway\\.js\\); do not integrate it`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: submitted board state overrides a contradictory task notification', () => {
@@ -4595,7 +4774,7 @@ test('subagent-stop: submitted board state overrides a contradictory task notifi
   assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-submitted', { commit: 'abc1234def5678abc1234def5678abc1234def56' }).ok, true);
   const context = runHook(SUBAGENT_STOP, stop);
   assert.match(context, new RegExp(`^exec FINISHED: ${t.ref} READY_FOR_INTEGRATION \\(abc1234def56\\); run the publish transaction \\(references/publishing\\.md\\)\\.`));
-  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
 });
 
 test('subagent-stop: a prior owner is silent after another worker reclaims the ticket', () => {
@@ -5188,7 +5367,7 @@ test('subagent stop terminalizes an unclaimed launch so the next dispatch can re
     agent_name: 'stop-before-claim',
   });
   assert.match(context, new RegExp(`^exec FINISHED after terminal failed: ${ticket.ref}\\. Preserve recovery evidence before a replacement\\.`));
-  assert.match(context, /TaskStop\(\{ task_id: "stop-before-claim" \}\)/);
+  assert.doesNotMatch(context, /TaskStop/, 'GH-203: the teammate already exited when SubagentStop fires');
   const after = store.getTicket(slug, ticket.ref);
   assert.equal(after.dispatch.outcome, 'failed');
   assert.ok(after.dispatch.terminalAt);

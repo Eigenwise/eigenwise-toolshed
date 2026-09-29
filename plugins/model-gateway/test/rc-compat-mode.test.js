@@ -276,6 +276,13 @@ test('remote-control enable adopts unmarked loopback mappings and distinguishes 
   assert.match(output.join('\n'), /plugin block: absent \(unmarked loopback mapping present, enable will adopt it\)/);
   assert.match(output.join('\n'), /Remote Control transport: this bind check covers the local HTTP listener only; it does not verify end-to-end Remote Control\./);
 
+  const gatewaySkill = fs.readFileSync(path.join(__dirname, '..', 'skills', 'model-gateway', 'SKILL.md'), 'utf8');
+  const guide = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'docs', 'src', 'content', 'docs', 'getting-started', 'model-gateway.md'), 'utf8');
+  assert.match(gatewaySkill, /After the user directly confirms `remote-control enable --confirm`, the plugin creates a backup and writes its marked hosts block/);
+  assert.match(gatewaySkill, /local HTTP transport configuration, not a verified end-to-end Remote Control solution/);
+  assert.match(guide, /After you directly confirm `remote-control enable --confirm`, Model Gateway creates a backup and writes its marked hosts block/);
+  assert.match(guide, /local HTTP transport only/);
+
   output.length = 0;
   configure(['enable']);
   await remoteControl.remoteControlCommand();

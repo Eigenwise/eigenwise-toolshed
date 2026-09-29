@@ -15,7 +15,15 @@ const snapshotPath = path.join(__dirname, 'fixtures', 'category-defaults.json');
 test('seeded categories match the checked-in global category snapshot', () => {
   const snapshot: unknown = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
   assert.deepEqual(DEFAULT_CATEGORIES, snapshot);
-  assert.equal(ROUTING_PROFILE_SEED_REVISION, 7);
+  assert.equal(ROUTING_PROFILE_SEED_REVISION, 8);
+});
+
+test('no starter seed route uses fable as the primary model', () => {
+  for (const profile of STARTER_ROUTING_PROFILES) {
+    for (const category of profile.categories) {
+      assert.notEqual(category.route.model, 'fable', `${profile.id}/${category.id} route must not be fable`);
+    }
+  }
 });
 
 test('starter profile routes use only exact ready gateway capabilities', () => {

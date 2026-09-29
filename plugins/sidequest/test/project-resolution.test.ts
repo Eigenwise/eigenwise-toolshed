@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_sidequest-install-fixture.js';
 'use strict';
 /**
  * Tests for --project resolution (SQ-86).
@@ -350,6 +351,86 @@ test('CLI: plain list/ready with no --project still auto-registers the default (
   const list = runCli(['list'], { cwd: projAbs });
   assert.strictEqual(list.status, 0);
   assert.match(list.stdout, /default-flow-project/);
+});
+
+/* ------------------------------------------------------------------ *
+ *  A dispatched ticket's board, whatever board the session sits on
+ * ------------------------------------------------------------------ */
+
+function committedRepository(prefix: string) {
+  const repository = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  const git = (args: string[]) => execFileSync('git', args, { cwd: repository, windowsHide: true, stdio: 'ignore' });
+  git(['init', '--quiet', '-b', 'main']);
+  fs.writeFileSync(path.join(repository, 'tracked.txt'), 'seed\n');
+  git(['add', 'tracked.txt']);
+  git(['-c', 'user.email=test@example.invalid', '-c', 'user.name=Project Resolution', 'commit', '--quiet', '-m', 'seed']);
+  return repository;
+}
+
+async function mcpCall(name: string, args: Record<string, unknown>) {
+  const { handleRequest } = require('../lib/mcp.js');
+  const response = await handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
+  const text = response.result.content[0].text;
+  return response.result.isError ? { error: text } : JSON.parse(text);
+}
+
+// GH-161. An isolated executor's comment carries no checkout, and the MCP server's cwd is the
+// orchestrating session's, so its claim is the only thing that can follow it to its own board.
+// Both fresh boards number their first ticket the same, so a wrong board is observable.
+test('MCP: an isolated executor\'s unqualified comment lands on its claimed board, not the session board', async () => {
+  const sessionRepository = committedRepository('sq-resolution-session-');
+  const executorRepository = committedRepository('sq-resolution-executor-');
+  const sessionSlug = store.ensureProject(sessionRepository).slug;
+  const executorSlug = store.ensureProject(executorRepository).slug;
+  const previousProjectDir = process.env.CLAUDE_PROJECT_DIR;
+  process.env.CLAUDE_PROJECT_DIR = sessionRepository;
+  try {
+    const category = 'project-resolution-lifecycle';
+    store.setCategory({ id: category, name: category, route: { model: 'sonnet', effort: 'medium' }, fallback: null, enabled: true });
+    const sessionTicket = store.createTicket(sessionSlug, { title: 'session board same-ref fixture', category, files: ['tracked.txt'] });
+    const executorTicket = store.createTicket(executorSlug, { title: 'executor board fixture', category, files: ['tracked.txt'] });
+    assert.strictEqual(sessionTicket.ref, executorTicket.ref, 'the fixture needs one ref on both boards');
+    const sessionId = `project-resolution-${process.pid}`;
+    const prepared = store.prepareDispatch(executorSlug, executorTicket.ref, { sessionId, sharedTree: false });
+    assert.strictEqual(store.recordDispatchLaunch(executorSlug, executorTicket.ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId }).ok, true);
+    assert.strictEqual(store.bindDispatchWorktreeCreation(executorSlug, sessionId, path.join(SIDEQUEST_HOME, 'worktrees', 'resolution-executor')).ok, true);
+    const by = `resolution-executor-${process.pid}`;
+    const claimed = store.claimTicket(executorSlug, executorTicket.ref, by, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId });
+    assert.strictEqual(claimed.ok, true, JSON.stringify(claimed));
+
+    const cases: Record<string, unknown> = {};
+    for (const [name, args] of [
+      ['claim holder', { ref: executorTicket.ref, by, body: 'executor progress' }],
+      ['another label', { ref: executorTicket.ref, by: 'not-the-claim-holder', body: 'stray progress' }],
+      ['no label', { ref: executorTicket.ref, body: 'unlabelled progress' }],
+    ] as const) {
+      try {
+        const result = await mcpCall('comment', args);
+        cases[name] = result.error ? `refused ${result.error}` : result.project === executorSlug ? 'executor board' : 'session board';
+      } catch (error: any) {
+        cases[name] = `threw ${error?.message || error}`;
+      }
+    }
+    assert.deepStrictEqual(cases, {
+      'claim holder': 'executor board',
+      'another label': 'session board',
+      'no label': 'session board',
+    });
+    assert.ok(store.getTicket(executorSlug, executorTicket.ref).comments.some((comment: any) => comment.body === 'executor progress'));
+    assert.ok(!store.getTicket(sessionSlug, sessionTicket.ref).comments.some((comment: any) => comment.body === 'executor progress'));
+  } finally {
+    if (previousProjectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = previousProjectDir;
+  }
+});
+
+// GH-237. A registered hub directory over the snapshot cap cannot take the git-init advice,
+// because that nests every child repository inside an outer one.
+test('snapshot cap refusal is honest that the cap is fixed and names the hub-folder way out', () => {
+  const { filesystemSnapshotLimitGuidance } = require('../lib/refusal-guidance.js');
+  const guidance = filesystemSnapshotLimitGuidance('/hub', { bound: 'path cap', observed: 501, cap: 500 });
+  assert.match(guidance, /The cap is fixed and no board setting raises it/);
+  assert.match(guidance, /register each repository as its own board/);
 });
 
 export {};

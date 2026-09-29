@@ -1,5 +1,83 @@
 # Changelog
 
+## 0.11.6 (2026-09-28)
+
+Released in v3.581.0, up from 0.11.5.
+
+### Fixes
+
+- Auto-allowlist vetoes loop keywords, shell fragments, variable-only cd, and version-pinned paths (GH-165) [`e222dd0`](https://github.com/Eigenwise/eigenwise-toolshed/commit/e222dd0e6676e9cbf9ca5e1f7fffffdc8b7a3e08)
+- CRAP ratchet pairs each function one-to-one with its baseline copy by source text, so an inserted anonymous function no longer shifts its neighbours onto the wrong row (GH-167)
+- CRAP gate measures the worktree it runs in and isolates coverage output per run (GH-169)
+- CRAP ratchet pairs a function to its baseline by source text, so an insertion cannot flag its untouched neighbours (GH-182)
+  Inserting one function shifted the position of every later function sharing its name, so the ratchet compared untouched namesakes against the wrong baseline row: one came back as a regression and the one pushed past the baseline's ordinals came back as a new function over the ceiling. Every function now pairs with its baseline copy by exact source text first, then by name and position among its namesakes, and pairing is one-to-one: a baseline function is claimed by at most one of today's functions, and a function that claims nothing answers to the ceiling on its own. A byte-identical copy of an over-ceiling function is therefore new code over the ceiling, and so is a third `run` in a file that already had two.
+- CRAP gate's unmeasured-files check now honours the config's exclude patterns (GH-270)
+  The CRAP gate's unmeasured-files check now skips files covered by the configured `exclude`
+  patterns instead of treating every excluded, function-bearing file as an unverified measurement.
+  A changed file that matches an exclude pattern no longer forces the gate to exit with a spurious
+  "lizard reported zero functions" error.
+- status, doctor and ensure agree on the shim's state, and ensure stops fighting its own shim (SQ-3124)
+  `status`, `doctor` and `ensure` now read the shim through one shared probe and print the same state:
+  `running-ours`, `running-foreign`, `starting` or `stopped` (#275). `ensure` against a shim that is ours
+  and already at the installed version is a no-op success instead of a second supervisor failing on
+  `EADDRINUSE` (#230), and a supervisor that is still starting gets the startup window to answer before
+  anything replaces it.
+
+  The supervisor no longer starts a second proxy while the first is still warming up: a proxy it started
+  gets 30 seconds to answer `/v1/models` before recovery replaces it, and a replacement stops the old
+  child first (#251).
+
+  On Windows, port-owner detection reads `netstat`'s foreign-address and PID columns instead of the
+  localized `LISTENING` text, so a German or French UI no longer hides the owner and upgrades replace the
+  running shim (#296). The advised command path already falls back to the CLI until SessionStart writes
+  the stable launcher (#77).
+
+  Quartermaster's session-start gateway audit reads the new shim line: `running-ours` counts as a running
+  shim, and a `running-foreign` listener no longer passes for one.
+- Model Gateway keeps its built-in fallback model list out of Claude Code's discovery cache, and updating Toolshed no longer wires the directory the updater runs from (SQ-3126)
+  GH-297: the discovery cache is written only from a list the proxy answered. While the proxy is
+  unreachable the shim serves `models.json` or its built-in list from memory, keeps the previous cache,
+  retries the proxy on its next refresh tick, and `status` reports `fallback catalog (proxy unreachable)`.
+
+  GH-292: the stable updater runs `setup --preserve-wiring`. It refreshes Claude alias pins only in
+  projects already recorded as wired, and only when a pin changed, so an update that changes no version
+  touches no settings file. Wiring a project stays a deliberate `setup` or `env --write-project` inside it.
+- Quartermaster: fix crap base/ratchet docs, add decisions update/remove, name real doctor failures, and stop counting hook blocks as denials (SQ-3128)
+  Four small fixes: the crap gate's config key is documented and read as base, with ratchet kept as a deprecated alias (GH-267). decisions gained update and remove verbs so a status change no longer needs a stale duplicate row (GH-265). The model-gateway health notice now names doctor's own first failing check instead of always blaming Grok auth (GH-141). mine/verify now detect a PreToolUse hook's own stderr wrapper, classify it as hook_block, and exclude it from denial friction and allowlist candidates while still showing its count separately (GH-302 item 2).
+
+## 0.11.5 (2026-09-28)
+
+Released in v3.580.0, up from 0.11.4.
+
+### Fixes
+
+- Quartermaster CLI loads again from the plugin cache: the CRAP module now ships inside the plugin (GH-261, GH-262, GH-301, GH-302, GH-309) (SQ-3095)
+
+## 0.11.4 (2026-09-22)
+
+Released in v3.575.0, up from 0.11.3.
+
+### Fixes
+
+- Align CRAP gates with the strict six-point standard (SQ-3047)
+  Makes CRAP measurement fail closed, checks only functions a change writes, and uses the shared quality parser for Quartermaster and plugin sources.
+
+## 0.11.3 (2026-09-22)
+
+Released in v3.574.0, up from 0.11.2.
+
+### Fixes
+
+- Repair complete inventoried privacy and signal routing documentation (SQ-3019)
+  Correct privacy storage wording and document the consent-filtered log outbox with separate trace and metric Collector sink pipelines.
+- Restore lost privacy matrix assertions (SQ-3024)
+  Restore two SQ-3013 privacy-matrix test protections dropped in SQ-3019: exact
+  Windows/fallback `observability.json` path checks and the setup-reference
+  "private config" / "current-user-only permissions" prohibitions. Test-only
+  fix, no runtime or documentation prose changes.
+- Clarify Gateway recovery and RC hosts handling (SQ-3026)
+  Clarifies Gateway recovery after attributed OpenAI rejections and the confirmation-gated RC hosts update. The `env` RC-compatibility line now points users at `remote-control enable --confirm`, the command that actually backs up and writes the hosts entry, instead of telling them to add it themselves.
+
 ## 0.11.2 (2026-09-19)
 
 Released in v3.572.0, up from 0.11.1.

@@ -11,8 +11,13 @@ Eigenwise Toolshed is a marketplace of independent Claude Code plugins. Each plu
 flowchart LR
   CC[Claude Code] --> H[Plugin hooks]
   H --> O[Observability observer]
-  O --> C[Loopback collector]
-  C --> D[Local dashboard]
+  CC --> C[Loopback Collector]
+  C --> O
+  O --> D[Local SQLite and dashboard]
+  O --> L[Observer outbox log path]
+  C --> T[Trace and metric sink path]
+  L --> R[Optional opt-in remote sink]
+  T --> R
   CC --> S[Sidequest board and dispatch]
   S --> E[Executors]
   CC --> W[Model Gateway shim]
@@ -22,7 +27,7 @@ flowchart LR
 
 - Quartermaster owns the cross-plugin setup plan for new and existing projects, updates Toolshed plugins, and checks workspace health.
 - Codebase Mapper and Live Rules add project context without requiring the other plugins.
-- Observability records selected metadata locally. Its observer, collector, and dashboard stay on loopback.
+- Observability records selected metadata locally. Its observer and Collector listeners stay on loopback, while an optional opt-in remote sink receives logs through the observer outbox and traces or metrics through the Collector path.
 - Sidequest owns tickets, stories, routing, dispatch, and executor evidence.
 - Model Gateway owns the optional model-proxy boundary. Claude models can keep their normal API path.
 

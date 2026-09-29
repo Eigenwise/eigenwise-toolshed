@@ -49,6 +49,7 @@ const { spawnDescription } = store;
 const { compileContextProjection } = require('./context-packet.js');
 const { canonicalPreparedDispatchExecutor } = require('./prepared-dispatch.js');
 const { verificationRequirement } = require('./kernel/verification.js');
+const { scopeKey } = require('./scope-match.js');
 
 type SyncOptions = { dir?: string; readOnlyDeniedTools?: any };
 type SyncResult = { written: number; removed: number; unchanged: number };
@@ -522,6 +523,15 @@ function retainedWorktreeAccess(worktree: string): string[] {
 
 function ticketContinuationPacket(ticket?: any) {
   const continuation = ticket?.dispatch?.continuation;
+  if (continuation?.mode === 'live_claim_resume' && continuation.sourceWorktree && continuation.commit) {
+    return [
+      'Live-claim recovery:',
+      `The prior executor died after claiming this ticket. Continue in its rebound linked worktree ${continuation.sourceWorktree}.`,
+      ...retainedWorktreeAccess(continuation.sourceWorktree),
+      `Before any other work, verify \`git -C ${continuation.sourceWorktree} rev-parse HEAD\` equals \`${continuation.commit}\`.`,
+      'Preserve any retained uncommitted work. The board kept the live claim and binds this ticket to that worktree.',
+    ].join('\n');
+  }
   const resume = continuationResumeDecision(continuation);
   if (continuation?.mode === 'retained_worktree_resume' && continuation.sourceWorktree && continuation.commit && resume.allowed) {
     const branch = continuation.sourceBranch || '(detached HEAD)';
@@ -585,6 +595,12 @@ function ticketWorktreeSync(ticket?: any, projectPath?: any) {
   if (!branch) return null;
   const continuation = dispatch?.continuation;
   const checkpointBase = String(continuation?.baseCommit || '').trim();
+  if (continuation?.mode === 'live_claim_resume' && continuation.sourceWorktree && continuation.commit) {
+    return [
+      `Worktree synchronization (run before work): check \`git -C ${continuation.sourceWorktree} rev-parse HEAD\` equals \`${continuation.commit}\` and \`git -C ${continuation.sourceWorktree} merge-base --is-ancestor ${commit} HEAD\`.`,
+      'If either check fails, stop and report it. Do not reset, rebase, or discard retained work.',
+    ].join(' ');
+  }
   const checkpoint = continuation?.mode === 'retained_worktree_resume' && checkpointBase && continuation.commit;
   if (checkpoint) {
     return [
@@ -718,6 +734,13 @@ function ticketIsolationContract(ticket?: any, projectPath?: any) {
   const dispatch = ticket.dispatch;
   const continuationWorktree = String(dispatch.continuation?.sourceWorktree || '').trim();
   const expected = continuationWorktree || String(dispatch.worktree || '').trim() || '(immutable worktree binding unavailable; writes will be refused)';
+  if (dispatch.continuation?.mode === 'live_claim_resume') {
+    return [[
+      'Live-claim worktree contract: continue in the rebound linked worktree. The prepared spawn intentionally carries no isolation field, so the harness does not create another worktree.',
+      `Expected worktree root: ${expected}`,
+      'Use absolute paths under that worktree. If its Git directory is unavailable, stop and report the lost binding without writing in the shared checkout.',
+    ].join('\n')];
+  }
   return [[
     'Worktree isolation contract: this dispatch runs in its own linked worktree, never in the shared checkout.',
     'The harness refuses heredocs in isolated worktrees; Write scripts to your scratchpad and run them by path.',
@@ -873,7 +896,7 @@ function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?
       ? 'Run it through ' + capturedVerifyCommand(verifierCommand, ticket?.ref, project, dispatchBoundWorktree(ticket)) + ' in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. Run it only over a clean worktree: a successful wrapper run records its completed capture identity against this ticket and the checked Git revision, and submit refuses prose or a retyped command without that matching record. A backgrounded verify\'s completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. When the pinned verifier needs paths outside declared scope, call scopeRequest with those paths and wait; do not release a verified candidate instead. Executors may report evidence only; they cannot replace, skip, or weaken this verifier.'
       : 'Record evidence for the pinned verifier. Executors may not replace, skip, or weaken it; skipping requires an authorized bounded waiver recorded as a Diagnostic.',
     evidenceGuidance || '',
-    'Execution survival: Budget tool calls and run the declared verify command early, rather than only at the end. If the budget nears exhaustion after partly completing the contract, commit and submit the verified portion with evidence and plainly name what remains: a partial submission with proof beats a dead run. Never leave verified work uncommitted. Board MCP is the executor lifecycle authority. If the Board MCP server is unavailable, stop and report it to the user instead of retrying. The user must run /mcp and reconnect plugin:sidequest:board, or restart Claude Code. Do not use the Sidequest CLI or raw Agent as a fallback.',
+    'Execution survival: Budget tool calls and preserve progress early. If the budget nears exhaustion before completing the ticket contract, use the existing Continuation checkpoint path: make a scoped checkpoint commit, write a `Continuation checkpoint` comment with the exact remaining work and verification status, release the ticket to `todo`, and end for a fresh continuation dispatch. Do not submit incomplete ticket work as ready. Never leave verified work uncommitted. Board MCP is the executor lifecycle authority. If the Board MCP server is unavailable, stop and report it to the user instead of retrying. The user must run /mcp and reconnect plugin:sidequest:board, or restart Claude Code. Do not use the Sidequest CLI or raw Agent as a fallback.',
     'If Sidequest itself misbehaves, such as a refusal that contradicts observed state, a dead retrieval handle, a guard loop, or a reproducible tool error, report it to the user with the reproducing evidence and treat it as an upstream defect. Executors also put that evidence in a ticket comment so the orchestrator sees it. Do not encode a workaround in project rules, hooks, or memory; any unavoidable stopgap must be marked temporary and name the defect it awaits.',
     ...(highStakes.length ? [highStakes.join('\n')] : []),
     boundReview || '',
@@ -968,21 +991,23 @@ ${category.contract || '(No category-specific executor instructions were recorde
   ].join('\n\n');
 }
 
+function scopeListing(heading: string, files: string[]) {
+  return files.length ? `\n\n${heading}:\n${files.map((file) => `- ${file}`).join('\n')}` : '';
+}
+
+function scopeAddedBeyondDeclared(ticket: any, slug: string, declared: string[]) {
+  const declaredKeys = new Set(declared.map(scopeKey));
+  const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map(scopeKey));
+  const added = store.effectiveScope(slug, ticket).filter((file: string) => !declaredKeys.has(scopeKey(file)));
+  return scopeListing('Auto-paired tracked generated files (regenerate before verifying)', added.filter((file: string) => !alwaysKeys.has(scopeKey(file))))
+    + scopeListing('Board-added scope (board config alwaysInScope, not declared on this ticket; a dirty path here still blocks submit)', added.filter((file: string) => alwaysKeys.has(scopeKey(file))));
+}
+
 function taskAndScopeBody(ticket?: any, slug?: any) {
-  const category = ticket?.category || {};
   const declared = Array.isArray(ticket?.files) ? ticket.files : [];
   const declaredFiles = declared.length ? declared.map((file: any) => `- ${file}`).join('\n') : '(No files were declared.)';
-  const effectiveFiles = store.effectiveScope(slug, ticket);
-  const declaredKeys = new Set(declared.map((file: any) => process.platform === 'win32' ? String(file).toLowerCase() : String(file)));
-  const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map((file: any) => process.platform === 'win32' ? String(file).toLowerCase() : String(file)));
-  const generatedFiles = effectiveFiles.filter((file: any) => {
-    const key = process.platform === 'win32' ? String(file).toLowerCase() : String(file);
-    return !declaredKeys.has(key) && !alwaysKeys.has(key);
-  });
-  const scopedFiles = generatedFiles.length
-    ? `${declaredFiles}\n\nAuto-paired tracked generated files (regenerate before verifying):\n${generatedFiles.map((file: any) => `- ${file}`).join('\n')}`
-    : declaredFiles;
-  return executorTaskBody(ticket, category, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket), ticketContinuationPacket(ticket));
+  const scopedFiles = declaredFiles + scopeAddedBeyondDeclared(ticket, slug, declared);
+  return executorTaskBody(ticket, ticket?.category || {}, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket), ticketContinuationPacket(ticket));
 }
 
 function executorHandlesBody(ticket?: any, slug?: any) {
@@ -1062,7 +1087,7 @@ function renderTicketBriefing(ticket?: any, nonce?: any, slug?: any, projectPath
 
 function ticketIsolation(ticket?: any, sharedTree?: any) {
   const continuationMode = ticket?.dispatch?.continuation?.mode;
-  return sharedTree === true || continuationMode === 'retained_worktree_resume' || continuationMode === 'dirty_worktree_resume'
+  return sharedTree === true || ['retained_worktree_resume', 'dirty_worktree_resume', 'live_claim_resume'].includes(continuationMode)
     ? null
     : 'worktree';
 }
@@ -1072,7 +1097,7 @@ function withProjectIdentity(prompt?: any, projectPath?: any) {
   if (!text) throw new Error('Agent spawn prompt is required.');
   const project = String(projectPath || '').trim();
   if (!project) return text;
-  return `${text}\n\nDispatch board identity: --project "${project.replace(/"/g, '\\"')}"`;
+  return `${text}\n\nDispatch board identity: --project "${project.replace(/"/g, '\\"')}". Pass it as project on every board call: an unqualified ref resolves on the orchestrating session's board, and only calls naming your claim or worktree follow you to this one.`;
 }
 
 function quotedShellArgument(value?: any) {

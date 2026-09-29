@@ -202,48 +202,84 @@ function createStories(dependencies) {
   function storyLogClaimRefusal(story, ticketRef, by) {
     return `story log: ${ticketRef} is not claimed by "${by}", or it is not a member of ${story.ref}. Append from a ticket you hold, or use story_contract.`;
   }
-  function appendStoryLogEntry(slug, storyRef, value) {
+  function storyLogAuthor(value) {
+    if (value == null) return "orchestrator";
+    if (typeof value !== "object") return "orchestrator";
+    if (value.by == null) return "orchestrator";
+    const supplied = String(value.by).trim();
+    if (!supplied) return "orchestrator";
+    return supplied;
+  }
+  function requestedStoryLogTicketRef(value) {
+    if (value == null || typeof value !== "object" || value.ref == null) return "";
+    return String(value.ref).trim();
+  }
+  function isClaimedStoryLogTicket(ticket, story, by) {
+    if (!ticket) return false;
+    if (ticket.storyId !== story.id) return false;
+    if (!ticket.claim) return false;
+    if (ticket.claim.by !== by) return false;
+    return !claimReclaimable(ticket);
+  }
+  function storyLogTicketRef(slug, story, value, by) {
+    const requestedRef = requestedStoryLogTicketRef(value);
+    if (!requestedRef) return null;
+    const ticket = getTicket(slug, requestedRef);
+    const ticketRef = ticket ? ticket.ref : requestedRef;
+    if (!isClaimedStoryLogTicket(ticket, story, by)) {
+      throw new Error(storyLogClaimRefusal(story, ticketRef, by));
+    }
+    return ticketRef;
+  }
+  function compactStoryDecisionLog(story, entry) {
+    const entries = storyDecisionLogEntries(story);
+    const liveEntries = recentStoryDecisionLogEntries({ ...story, logRevision: entry.seq }, [...entries, entry]);
+    const liveSequences = new Set(liveEntries.map((item) => item.seq));
+    const archivedEntries = entries.filter((item) => !liveSequences.has(item.seq));
+    return { archivedEntries, liveEntries };
+  }
+  function appendStoryLogEntryResult(slug, storyRef, value) {
     const normalized = normalizeStoryLogEntry(value);
     return transaction(() => {
       const story = getStory(slug, storyRef);
       if (!story) throw new Error(`story log: ${storyRef} was not found.`);
-      const by = String(value && typeof value === "object" ? value.by || "orchestrator" : "orchestrator").trim() || "orchestrator";
-      const requestedRef = value && typeof value === "object" && value.ref != null ? String(value.ref).trim() : "";
-      let ticketRef = null;
-      if (requestedRef) {
-        const ticket = getTicket(slug, requestedRef);
-        ticketRef = ticket ? ticket.ref : requestedRef;
-        if (!ticket || ticket.storyId !== story.id || !ticket.claim || ticket.claim.by !== by || claimReclaimable(ticket)) {
-          throw new Error(storyLogClaimRefusal(story, ticketRef, by));
-        }
-      }
-      const entries = storyDecisionLogEntries(story);
-      const seq = (Number(story.logRevision) || 0) + 1;
+      const by = storyLogAuthor(value);
+      const ticketRef = storyLogTicketRef(slug, story, value, by);
       const entry = {
-        seq,
+        seq: (Number(story.logRevision) || 0) + 1,
         at: (/* @__PURE__ */ new Date()).toISOString(),
         by,
         ref: ticketRef,
         kind: normalized.kind,
         text: normalized.text
       };
-      story.decisionLog = [...entries, entry];
-      story.logRevision = seq;
+      const { archivedEntries, liveEntries } = compactStoryDecisionLog(story, entry);
+      story.archivedDecisionLog = [...archivedStoryDecisionLogEntries(story), ...archivedEntries];
+      story.decisionLog = liveEntries;
+      story.logRevision = entry.seq;
       story.updatedAt = entry.at;
       putStory(slug, story);
-      return story;
+      return { story, rotated: archivedEntries.length > 0, movedEntries: archivedEntries.length };
     });
   }
-  function rotateStoryLog(slug, storyRef) {
+  function appendStoryLogEntry(slug, storyRef, value) {
+    return appendStoryLogEntryResult(slug, storyRef, value).story;
+  }
+  function rotateStoryLogResult(slug, storyRef) {
     return transaction(() => {
       const story = getStory(slug, storyRef);
-      if (!story) return null;
-      story.archivedDecisionLog = [...archivedStoryDecisionLogEntries(story), ...storyDecisionLogEntries(story)];
+      if (!story) return { story: null, rotated: false, movedEntries: 0 };
+      const entries = storyDecisionLogEntries(story);
+      if (!entries.length) return { story, rotated: false, movedEntries: 0 };
+      story.archivedDecisionLog = [...archivedStoryDecisionLogEntries(story), ...entries];
       story.decisionLog = [];
       story.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
       putStory(slug, story);
-      return story;
+      return { story, rotated: true, movedEntries: entries.length };
     });
+  }
+  function rotateStoryLog(slug, storyRef) {
+    return rotateStoryLogResult(slug, storyRef).story;
   }
   function storyDecisionLogWarnings(ticket, slug) {
     if (!ticket || !ticket.storyId || !slug) return [];
@@ -350,6 +386,7 @@ function createStories(dependencies) {
     STORY_LOG_ENTRY_ADVISORY_BYTES,
     STORY_LOG_ENTRY_TEXT_MAX_BYTES,
     appendStoryLogEntry,
+    appendStoryLogEntryResult,
     coerceStoryId,
     createStory,
     deleteStory,
@@ -357,6 +394,7 @@ function createStories(dependencies) {
     listStories,
     normalizeStoryLogEntry,
     rotateStoryLog,
+    rotateStoryLogResult,
     storyLogEntryAdvisory,
     storyDecisionLog,
     storyDecisionLogWarnings,

@@ -23,7 +23,7 @@ Then ask separately:
 
 Never install the shared service without a clear yes, and never treat service consent as approval for every repository. If `%LOCALAPPDATA%\Eigenwise\Workbench\observability.json` already exists, run the check pass first and show its current enabled state, sink, dashboard choice, and ports. Let the user keep it, switch sink, toggle the dashboard, change ports, or disable it. Disabling must ask whether to keep or delete observability data.
 
-Do not ask for content-capture settings, Docker credentials, tokens, or remote endpoints during the normal interview. Docker is optional. SQLite capture and reports work without it. The intended repository opt-in policy currently has a bounded enforcement limitation: hook events can enter the shared spool and ingest path before the opt-in check. State that limitation plainly and do not claim this setup fixes it.
+Do not ask for content-capture settings, Docker credentials, tokens, or remote endpoints during the normal interview. Docker is optional. SQLite capture and reports work without it. Repository consent gates hook-spool admission, observer ingest, and log export through the observer outbox. The Collector's trace and metric sink paths remain outside that repository gate.
 
 ## Check, then apply
 
@@ -55,15 +55,15 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/setup-observability.js" --project "<absolute-pro
 node "${CLAUDE_PLUGIN_ROOT}/bin/setup-observability.js" --project "<absolute-project-dir>" --disable --delete-data
 ```
 
-`--lgtm` remains a compatibility alias for `--dashboard`; use dashboard language with users. The private config also supports `otlp` and reserves `posthog`. A user who explicitly asks for generic OTLP must set the HTTPS base endpoint and any headers under `observability.sinks.otlp`; secrets do not belong in project settings or command arguments.
+`--lgtm` remains a compatibility alias for `--dashboard`; use dashboard language with users. The local config file `%LOCALAPPDATA%\Eigenwise\Workbench\observability.json` on Windows, or `~/.local/share/Eigenwise/Workbench/observability.json` when `LOCALAPPDATA` is not set, also supports `otlp` and reserves `posthog`. A user who explicitly asks for generic OTLP must set the HTTPS base endpoint and any headers under `observability.sinks.otlp`; secrets do not belong in project settings or command arguments.
 
-The helper checksum-verifies the pinned Collector, writes loopback-only config, stores consent plus sink/dashboard/ports in the single private `observability.json`, and preserves existing project or user status-line settings. When no status line exists, it installs a stable `~/.claude/workbench-statusline.js` shim that resolves the current plugin cache entry at runtime, preferring this plugin and falling back to a pre-split Workbench install. This plugin's hooks already capture metadata-only lifecycle events, so never hand-write duplicate hook entries.
+The helper checksum-verifies the pinned Collector, writes local service config, stores consent plus sink/dashboard/ports in `observability.json`, and preserves existing project or user status-line settings. When no status line exists, it installs a stable `~/.claude/workbench-statusline.js` shim that resolves the current plugin cache entry at runtime, preferring this plugin and falling back to a pre-split Workbench install. This plugin's hooks already capture metadata-only lifecycle events, so never hand-write duplicate hook entries.
 
 After consent, every startup/resume launches a fail-open background ensure pass. It restores the observer and Collector when their configured ports are quiet, adopts or heals the configured dashboard container when Docker is present, and refreshes managed runtime files after a plugin update. The newest running observer records its own PID and plugin version as soon as it binds. Treat that record as the runtime authority even when `/health` reports a downstream failure: an older open session must leave the newer observer and its dashboard files alone. The observer drains its spool and downstream outbox continuously. Users do not start these processes manually.
 
 The helper enables only local OTLP/HTTP and the pseudonymous telemetry path. Leave these content settings unset: `OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_ASSISTANT_RESPONSES`, `OTEL_LOG_TOOL_DETAILS`, `OTEL_LOG_TOOL_CONTENT`, and `OTEL_LOG_RAW_API_BODIES`.
 
-It stores the SQLite database, queues, cursors, salts, logs, and pid files in user application data (`%LOCALAPPDATA%\Eigenwise\Workbench` on Windows) with current-user-only permissions. Never print secret values or add plugin-registry entries yourself.
+It stores the SQLite database, queues, cursors, salts, logs, and pid files in user application data (`%LOCALAPPDATA%\Eigenwise\Workbench` on Windows). Never print secret values or add plugin-registry entries yourself.
 
 ## Reload and verify
 

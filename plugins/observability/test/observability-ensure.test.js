@@ -912,6 +912,38 @@ test('SessionStart keeps a managed observer whose record mtime is a fraction of 
   assert.deepEqual(notices, []);
 });
 
+test('SessionStart keeps a managed observer whose record mtime is a whole millisecond ahead', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const observerScript = path.join(path.resolve(__dirname, '..'), 'bin', 'observer.js');
+  const recordFile = path.join(dataDir, 'observer.pid.json');
+  fs.writeFileSync(recordFile, `${JSON.stringify({
+    pid: 202,
+    pluginVersion: setup.pluginVersion(),
+    scriptPath: observerScript,
+  })}
+`);
+  writeObservabilityConfig(path.join(dataDir, 'observability.json'), enabledConfig());
+
+  // Windows reads a just-written file a full millisecond ahead of Date.now() in about a third of
+  // writes (1152 of 3000 measured), which flooring cannot hide. Pin the pair so this run is one of them.
+  const pinnedNow = Date.now();
+  const mtimeSeconds = (pinnedNow + 1) / 1000;
+  fs.utimesSync(recordFile, mtimeSeconds, mtimeSeconds);
+
+  const notices = [];
+  await launchEnsure({
+    dataDir,
+    now: pinnedNow,
+    checkPort: async () => true,
+    observerIdentity: async () => null,
+    portOwner: () => 202,
+    reportNotice(message) { notices.push(message); },
+    spawn() { return { unref() {} }; },
+  });
+
+  assert.deepEqual(notices, []);
+});
+
 test('SessionStart warns when it replaces an observer from an older plugin version', async (t) => {
   const dataDir = temporaryDirectory(t);
   writeObservabilityConfig(path.join(dataDir, 'observability.json'), enabledConfig());

@@ -74,6 +74,16 @@ type ToolDefinition = {
   handler: (args: any) => any | Promise<any>;
 };
 
+type StoryLogArgs = {
+  project?: unknown;
+  story?: unknown;
+  entry?: unknown;
+  ref?: unknown;
+  by?: unknown;
+  full?: boolean;
+  rotate?: boolean;
+};
+
 function readySummary(payload?: any) {
   const tickets = payload.tickets.map((ticket: any) => ({ ref: ticket.ref, title: ticket.title }));
   return {
@@ -81,6 +91,55 @@ function readySummary(payload?: any) {
     tickets,
     waves: payload.waves,
     waveDependencies: payload.waveDependencies,
+  };
+}
+
+function rotatedStoryLog(slug: string, args: StoryLogArgs) {
+  if (args.by !== 'orchestrator') throw new Error('story_log: rotate:true requires by:"orchestrator".');
+  const rotation = store.rotateStoryLogResult(slug, args.story);
+  if (!rotation.story || args.entry === undefined) return { ...rotation, advisory: null };
+  const appended = store.appendStoryLogEntryResult(slug, args.story, { entry: args.entry, ref: args.ref, by: args.by });
+  return {
+    story: appended.story,
+    advisory: store.storyLogEntryAdvisory(args.entry),
+    rotated: rotation.rotated || appended.rotated,
+    movedEntries: rotation.movedEntries + appended.movedEntries,
+  };
+}
+
+function appendedStoryLog(slug: string, args: StoryLogArgs) {
+  const appended = store.appendStoryLogEntryResult(slug, args.story, { entry: args.entry, ref: args.ref, by: args.by });
+  return { ...appended, advisory: store.storyLogEntryAdvisory(args.entry) };
+}
+
+function storyLogResult(slug: string, args: StoryLogArgs) {
+  if (args.rotate) return rotatedStoryLog(slug, args);
+  if (args.entry === undefined) return { story: store.getStory(slug, args.story), advisory: null, rotated: false, movedEntries: 0 };
+  return appendedStoryLog(slug, args);
+}
+
+function storyLogHandler(args: StoryLogArgs) {
+  const { slug, meta } = resolveProject(args.project);
+  const result = storyLogResult(slug, args);
+  if (!result.story) throw new Error(`story_log: no story "${args.story}" in ${meta.name}`);
+  const log = store.storyDecisionLog(result.story, { full: args.full });
+  return {
+    ok: true,
+    project: slug,
+    projectName: meta.name,
+    rotated: result.rotated,
+    movedEntries: result.movedEntries,
+    story: {
+      ref: result.story.ref,
+      logBytes: log.bytes,
+      logCapacity: log.capacity,
+      logRevision: log.revision,
+      entries: log.entries,
+      totalEntries: log.totalEntries,
+      omittedEntries: log.omittedEntries,
+      archivedEntries: log.archivedEntries,
+    },
+    ...(result.advisory ? { advisory: result.advisory } : {}),
   };
 }
 
@@ -277,7 +336,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'story_log',
-    description: 'Read, append, or rotate a story decision log.',
+    description: 'Story log reads, appends, or archives entries. Appends automatically archive older entries when the live log exceeds its briefing window; full:true returns archived history first.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -285,44 +344,13 @@ const tools: ToolDefinition[] = [
         story: { type: 'string', description: 'Story ref or id.' },
         entry: { type: 'string', pattern: '^(DECISION|CONSTRAINT|DISCOVERY)\\s*:', description: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:. Text after the prefix is at most 16,000 UTF-8 bytes.' },
         ref: { type: 'string', description: 'Claimed member ticket ref for an append.' },
-        by: { type: 'string', description: 'Claim owner for an append, or orchestrator to clear.' },
-        rotate: { type: 'boolean', description: 'Archive current entries before starting a new log.' },
+        by: { type: 'string', description: 'Claim owner for an append, or orchestrator to rotate.' },
+        full: { type: 'boolean', description: 'Return archived entries followed by the live log.' },
+        rotate: { type: 'boolean', description: 'Archive current live entries early; an empty log reports a no-op.' },
       },
       required: ['story'],
     },
-    handler(args) {
-      const { slug, meta } = resolveProject(args.project);
-      if (args.rotate && args.entry !== undefined) throw new Error('story_log: pass an entry or rotate:true, not both.');
-      let story;
-      let advisory = null;
-      if (args.rotate) {
-        if (args.by !== 'orchestrator') throw new Error('story_log: rotate:true requires by:"orchestrator".');
-        story = store.rotateStoryLog(slug, args.story);
-      } else if (args.entry === undefined) {
-        story = store.getStory(slug, args.story);
-      } else {
-        story = store.appendStoryLogEntry(slug, args.story, { entry: args.entry, ref: args.ref, by: args.by });
-        advisory = store.storyLogEntryAdvisory(args.entry);
-      }
-      if (!story) throw new Error(`story_log: no story "${args.story}" in ${meta.name}`);
-      const log = store.storyDecisionLog(story);
-      return {
-        ok: true,
-        project: slug,
-        projectName: meta.name,
-        story: {
-          ref: story.ref,
-          logBytes: log.bytes,
-          logCapacity: log.capacity,
-          logRevision: log.revision,
-          entries: log.entries,
-          totalEntries: log.totalEntries,
-          omittedEntries: log.omittedEntries,
-          archivedEntries: log.archivedEntries,
-        },
-        ...(advisory ? { advisory } : {}),
-      };
-    },
+    handler: storyLogHandler,
   },
   {
     name: 'ready',

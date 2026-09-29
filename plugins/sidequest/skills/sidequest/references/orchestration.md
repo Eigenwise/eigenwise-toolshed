@@ -51,9 +51,7 @@ mid-run tickets.
 Wave mode files its complete backlog under a story. A planning investigation can pin shared decisions and
 anchors before a wave starts. Put frozen orchestrator decisions, invariants, acceptance evidence, and
 durable artifact links in the story execution contract once (`story contract US-n --body-file path` or
-MCP `story_contract`) rather than repeating them in steering messages. Durable contract storage is capped at 256 KiB UTF-8; MCP reads retrieve it in 16 KiB UTF-8-safe pages with revision, SHA-256, total bytes, and a cursor. The contract arrives before ticket scope in every member briefing. The `story log` is the executor-to-executor
-channel for live cross-ticket discoveries; at integration, the orchestrator promotes durable entries into
-the contract, then clears the log. If the contract changes after a member is claimed, `pulse`/`changes` and the next dispatch warn
+MCP `story_contract`) rather than repeating them in steering messages. Durable contract storage is capped at 256 KiB UTF-8; MCP reads retrieve it in 16 KiB UTF-8-safe pages with revision, SHA-256, total bytes, and a cursor. The contract arrives before ticket scope in every member briefing. The story log holds orchestrator planning history outside those briefings. It automatically archives older entries when the live briefing window fills; `full: true` reads archive then live entries. At integration, the orchestrator promotes durable entries into the contract. If the contract changes after a member is claimed, `pulse`/`changes` and the next dispatch warn
 about revision drift. This keeps context completeness cheap without the orchestrator rediscovering the
 codebase inline.
 
@@ -139,9 +137,9 @@ dispatch. Only the continuation flow releases during a healthy handoff.
 
 ### Scope expansion without a bounce
 
-When an executor needs an undeclared path, it calls `scope-request <ref> --file <path>` and gets an immediate ruling — there is no pending state to poll. A concrete path in the same declared package surface, such as `src` or `lib`, is added immediately and recorded as an audited auto-approval. Test roots and mechanically derived build outputs use the same no-pause path. A sibling package surface, another package or plugin, wildcards, read-only work, CI and Claude control files, credentials, and release machinery are refused outright, and the ticket's comment names exactly which paths. Verification evidence never needs repository scope: the dispatch briefing names its board-owned evidence directory for screenshots, HTML dumps, and probe output. Reference that directory from the ticket record instead of writing evidence into a worktree or integration target.
+When an executor needs an undeclared path, it calls `scope-request <ref> --file <path>` and gets an immediate ruling — there is no pending state to poll. A concrete path in a package surface, such as `src` or `lib`, that the ticket or any ticket in its story declares is added immediately and recorded as an audited auto-approval, so identical same-story requests get identical answers. Test roots and mechanically derived build outputs use the same no-pause path. A sibling package surface, another package or plugin, wildcards, read-only work, CI and Claude control files, credentials, and release machinery are refused outright, and the ticket's comment names exactly which paths. Verification evidence never needs repository scope: the dispatch briefing names its board-owned evidence directory for screenshots, HTML dumps, and probe output. Reference that directory from the ticket record instead of writing evidence into a worktree or integration target.
 
-A refusal does not have to bounce the claim, but only two routes work while the claim is live, and both run from an identity that is not the claim holder, and both are MCP-only, callable from the orchestrator's main thread — neither has a CLI surface a subagent can reach from Bash. The MCP `update` tool with `addFiles` widens the declared list in place — unlike `files`, it keeps every path already declared, so the orchestrator never has to `list` the ticket first to avoid dropping them. MCP `scopeRequest` with `grant: true` grants every path this claim still has refused. `grantScope` refuses the claim holder's own `by`, a ticket nobody holds, and a refusal an earlier claim recorded, so a released attempt's request cannot land in the next executor's scope.
+A refusal does not have to bounce the claim, but only two routes work while the claim is live, and both run from an identity that is not the claim holder, and both are MCP-only, callable from the orchestrator's main thread — neither has a CLI surface a subagent can reach from Bash. The MCP `update` tool with `addFiles` widens the declared list in place — unlike `files`, it keeps every path already declared, so the orchestrator never has to `list` the ticket first to avoid dropping them. MCP `scopeRequest` with `grant: true` grants every path this claim still has refused. `grantScope` refuses the claim holder's own `by`, a ticket nobody holds, and a refusal an earlier claim recorded, so a released attempt's request cannot land in the next executor's scope. Because a grant appends the granted paths to `ticket.files`, it also widens what any story sibling's own scope request auto-approves under the same-story package-surface rule above.
 
 The CLI's `sidequest update <ref> --add-file <path>` and `--remove-file <path>` are for a ticket with **no** live claim: on a live claim the CLI refuses the declared list as a closeout field, and only MCP `update` (which carries the orchestrator's main-thread authority) or the grant gets through. `--add-file` applies before `--remove-file`, so a path named by both is removed, and a removal naming a path the ticket does not declare refuses instead of reporting a no-op. A removal reaches an isolated live dispatch immediately, which can revoke a path the executor has already written; a shared-tree dispatch unions its scope, so the removal does not reach that gate until a redispatch.
 
@@ -184,7 +182,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 - **Read bounded briefing comments from the newest end.** A brief can carry a compact newest-first comment packet instead of the full thread. Read compact `comments` pages first, following their cursor only when needed. Read the full chronological thread only when the brief flags a decision or constraint in omitted history; otherwise the latest packet and compact pages carry the current handoff.
 - **Resume Continuation checkpoints with a fresh dispatch.** Executors create a Continuation checkpoint around 100 tool rounds by committing verified declared-scope work, writing a `Continuation checkpoint` comment with the commit, files touched, next steps, and verification state, then releasing to `todo`. On a natural wakeup, use `pulse` and the latest comment to confirm that header, commit, and no live claim. Read the checkpoint before `dispatch <ref>`, then spawn its returned continuation unchanged so it gets a fresh token and context. The dispatch validates the registered retained worktree against the repository before carrying it forward, replays a retained checkpoint onto an advanced integration target, and reports its exact Git validation evidence if it must fall back. A rebase conflict stops the executor for escalation, without resetting the retained checkpoint or resolving toward either side. A live claim means the checkpoint has not completed, so do not launch beside it; use the normal salvage path if that worker stopped.
 - **Record wave links from board results.** Never write an `SQ-n` ref you did not read back from a board response. File related tickets first, collect their returned refs, then use `update` or, preferably, `link` (`blocks`, `depends-on`, or `related`) to record relationships. Links are board data, so they stay correct without prose cross-references.
-- **Read liveness from the board, not notifications.** Notifications wake the orchestrator but do not prove executor state. An idle notification can describe a working, dead, or already-finished executor, so read board truth before acting: use `pulse <ref>` for the ticket's `{claim:{by,at,ageMs}|null, comments, lastComment, git:{commit,dirty}|null}` state. Until `pulse` is available, read claim age, comments, and `git log`. If several tickets need checking, use `changes --since <iso>` for the `{tickets:[...]}` delta, sorted oldest first.
+- **Read liveness from the board, not notifications.** Notifications wake the orchestrator but do not prove executor state. An idle notification can describe a working, dead, or already-finished executor, so read board truth before acting, only on a notification or user prompt, never right after spawning: use `pulse <ref>` for the ticket's `{claim:{by,at,ageMs}|null, comments, lastComment, git:{commit,dirty}|null}` state, or `changes --since <iso>` for the `{tickets:[...]}` delta across several tickets, sorted oldest first. A process list (`tasklist`/`ps`) is never evidence about a dispatch.
 - **Read completion from the board.** An executor stop notification wakes the orchestrator; its terminal
   submit or done state is the completion signal. Do not expect or request a routine
   `SendMessage` report. Read a submission's canonical report body or a done completion comment for what changed, verification evidence, commit hash or
@@ -208,10 +206,16 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   then release before replacing it. A dispatch failure needs verbatim ticket evidence and user-visible
   escalation; never pull substantial work inline by default. Other `SendMessage` calls
   carry new information such as a scope change or unblock, never a "wake up" poke.
-- **Retire an attempt no runtime will finish.** Use `recoveryEvidence` only when `pulse` reports an
-  unclaimed attempt as `stalled`: it has no readable runtime signal, or its deadline has passed. Retire it in one
+- **Retire an attempt no runtime will finish.** An attempt that died before its first claim (an API error at
+  launch, a refused claim, a failed or cancelled WorktreeCreate, the Agent call returning with no claim) has no
+  claim to release and no TaskStop to make: the one recovery is `recoveryEvidence`. **The session that prepared
+  the dispatch is the authority:** it spawned the runtime, so the host's failure text or the returned Agent call is
+  proof the board never receives, and its evidence retires the attempt at once, grace or idle backstop
+  notwithstanding (SQ-3110). Any other session uses it only when `pulse` reports the unclaimed attempt as
+  `stalled`: it has no readable runtime signal, or its deadline has passed. Retire it in one
   call with `sidequest dispatch <ref> --recovery-evidence "<observed failure evidence>"` (MCP
-  `recoveryEvidence`). Add `--retire-only` (MCP `retireOnly:true`) when the attempt should be retired without
+  `recoveryEvidence`). If a stop hook already made the attempt terminal, the same call just prepares the
+  replacement, and `retireOnly` reports it retired. Add `--retire-only` (MCP `retireOnly:true`) when the attempt should be retired without
   preparing a replacement. `pulse` reports `starting` while the same attempt remains inside that deadline. A tokened claim refused as
   `prepared_compatibility_stale` is already terminal: that refusal retires its own stale attempt, so the executor
   stops without claiming and the orchestrator dispatches a fresh token. That records the evidence on the failed
@@ -241,7 +245,8 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   `sidequest groom-close --recovery-evidence` is that same authority rather than a second implementation: both surfaces
   print the same refusal inside the deadline and retire-and-close together past it. Retiring an attempt whose runtime is still
   starting strands it: its claim is then refused and a second runtime can start on the same ticket. When the
-  refusal names a deadline, wait for it rather than looking for another route.
+  refusal names a deadline and you are not the preparing session it names, wait for it rather than looking for
+  another route. The preparing session attests only what it saw: a runtime that is merely quiet is not dead.
   **Which WorktreeCreate callbacks are generation-scoped.** Five are: creation completed, finished provisioning,
   provisioning failure, dependency link, and recovery. Each must present the attempt generation its binding handed
   out, and a missing or retired one is refused as `missing_attempt` or `stale_attempt` having stamped nothing. The
@@ -250,14 +255,24 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   session and the checkout. It refuses `stale_attempt` when a retired attempt still holds the checkout rather than
   handing a late hook some other live attempt, and refuses `missing_attempt` rather than letting a generation-less
   second caller acquire the live generation of a checkout that is still being created.
+  **A WorktreeCreate that fails before its checkout exists** (lease refusal, an occupied destination, a failed
+  `git worktree add`) records the attempt `failed` with `worktree_create_failed` and the hook error, and clears its
+  binding to that path. Its stderr says so; dispatch again plainly, without `recoveryEvidence`.
+  **A retired attempt never removes a checkout another ticket is running in.** Creation order and the runtime bind
+  can both cross, so a stranded record can name a sibling's checkout down to the sibling's agent id. Before the
+  retry reclaims that checkout, the board looks for another ticket whose live claim or live dispatch records the
+  same path, or whose agent id names it. When one does, nothing is removed, only the retired attempt's binding is
+  cleared, and the dispatch prepares with a `Dispatch warning` naming the sibling and saying the binding was a
+  cross-bind, not a tree this ticket created. Leave that checkout alone; it belongs to the sibling.
   TaskStop output and host task notifications do not include the dispatch token, attempt generation, and immutable
   ticket binding, so they cannot record a terminal dispatch, but they are the evidence `--recovery-evidence`
   wants: you spawned the runtime, so you are the authority that can attest the host reported it gone. Attest what
   you observed, not what you assume. The host is
   not documented to fire SubagentStop for an agent that ends with `status: failed`, and SubagentStop carries no
   terminal status field, so do not wait for a stop hook that may never arrive. A ticket whose bound attempt never
-  claimed closes through that same one call: past the deadline, `groomClose --deliveryCommit <sha> --recoveryEvidence
-  "<evidence>"` retires the attempt and closes the ticket together, and inside the deadline it refuses with the countdown.
+  claimed closes through that same one call: from the preparing session, or past the deadline, `groomClose
+  --deliveryCommit <sha> --recoveryEvidence "<evidence>"` retires the attempt and closes the ticket together, and
+  any other session inside the deadline gets the countdown.
   A claimed executor that is provably
   dead goes through claim release first; `groomClose --recoveryEvidence` refuses a live claim as
   `active_dispatch` on both the CLI and MCP surfaces and only retires an attempt that never claimed. The exception is a live claimed executor
@@ -285,13 +300,15 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   process failure, not caution. The costs to keep honest:
   idle notifications wake the lead at full context, and teams-style flows can run several times the
   token spend of plain subagents, so answer executor questions promptly and retire terminal teammates
-  only after consuming board evidence. After spawning, end the
-  turn. Its stop notification is the only wakeup. On the next natural wakeup, whether a stop notification,
-  user message, or other task notification, make opportunistic liveness checks for work that has run about
-  5–8 minutes or longer. Never hold a session open with foreground or background `sleep`, blocking
-  `TaskOutput` as a delay, or busy-wait loops. A turn with nothing to do ends. At every wakeup, diff board
-  state with `changes --since <iso>` before deciding what to do next. Use synchronous execution only for a
-  tight wave where blindness is acceptable.
+  only after consuming board evidence. After spawning, end the turn naming what is in flight in one
+  line — never a "waiting" paragraph. Its stop notification is the only wakeup. On the next natural
+  wakeup, whether a stop notification, user message, or other task notification, make opportunistic
+  liveness checks for work that has run about 5–8 minutes or longer. Never hold a session open with
+  foreground or background `sleep`, blocking `TaskOutput` as a delay, or busy-wait loops. A host
+  check-in or idle-nudge prompt is not an evidence request: answer it in one line, or continue the
+  pending work, without re-summarizing the wave. At every wakeup, diff board state with `changes
+  --since <iso>` before deciding what to do next. Use synchronous execution only for a tight wave
+  where blindness is acceptable.
 - **No proxy waiters.** The polling ban covers indirect waits too. Never create a Bash, PowerShell,
   `Monitor`, or cron task whose only purpose is to wait for a Sidequest executor or poll for its expected
   report or artifact file (`until [ -f <report> ]; do ...; done`), and never block `TaskOutput` on such a
@@ -299,16 +316,12 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   lifecycle. Native Agent completion arrives on its own; at natural wakeups use `changes --since` / `pulse`,
   and read the artifact only after terminal board evidence. A genuine one-shot readiness watch for a local
   server or build is fine; waiting on an executor through a side channel is not.
-- **Retire terminal teammates.** Once terminal board evidence has been consumed and its submission report,
-  done comment, or recovery handoff has been preserved, call `TaskStop({ task_id: "<agent name>" })` once for
-  that exact native teammate, but only while it is still registered as a running task. This is a Claude Code host action, not a Sidequest tool.
-  It applies to submitted, done, released, failed-before-claim, and superseded attempts. A background native
-  Agent can already have exited on its own before you call this: a `No task found with ID` or `Task <name> is
-  not running (status: completed)` reply means it already exited, needs no retry, and is not a failure to
-  investigate. Never stop a live claim, retained continuation, or candidate awaiting integration. Do not wake a completed executor, poll FleetView, or create a cleanup loop.
-  A `READY_FOR_INTEGRATION` verdict additionally queues the ticket for the publish transaction
-  ([publishing.md](publishing.md)) — publish the wave's submissions in one batch; never respawn an executor for a
-  submitted ticket. Sweep ALL finished executors, not just the one that notified, so session exit only stops live work.
+- **No TaskStop after terminal evidence.** Consume the submission report, done comment, or recovery handoff;
+  the executor already ended its own run, so the host lists it completed and a TaskStop only fails (GH-203).
+  The TaskStop rule is authoritative in `SKILL.md`'s "Work a ticket" section, not restated here: it is host
+  cleanup for an executor `pulse` still shows alive after its ticket went terminal. A `READY_FOR_INTEGRATION`
+  verdict additionally queues the ticket for the publish transaction ([publishing.md](publishing.md)) — publish
+  the wave's submissions in one batch; never respawn an executor for a submitted ticket.
 
 - **Reports stay terse:** a submission body carries the canonical full report and its automatic terminal marker stays short; a `done` completion comment carries its report directly. A repo-changing executor records a SUBMITTED commit, never a push — the orchestrator's publish transaction is what makes it reachable from `origin/main`, and the ticket goes done only after that reachability check passes.
 
@@ -347,7 +360,9 @@ are both refused. A review also ENDS on its candidate: a terminal `done` reads t
 revision and is refused as `review_tree_mismatch` when it sits on anything else, naming the observed
 revision, the candidate, and the `git -C <worktree> checkout --detach <candidate>` repair, and as
 `review_tree_unobservable` when the checkout cannot be read at all, which releases as a technical blocker
-and dispatches again. Integration waits for the bound review to reach a terminal `done`, including an accepted oracle closeout for a readonly review. Close that case with exactly `verdict({ ref, outcome: "accepted", text, why })`; it stores `text` as the completion comment and changes the review to `done`. Integration reads both identities from immutable terminal dispatch attempts rather than the live dispatch record: the source's `submitted` attempt for that exact commit and the review's `done` attempt, or the terminal `released` attempt accepted by that oracle closeout. A missing identity on either side, the same agent id on both, or a later prepared dispatch leaves integration blocked with `candidate_review_required`.
+and dispatches again. A write-scoped review (`readonly: false`) that ends on its candidate with no dirty or
+committed path in its declared scope closes with `done` too; only scope it actually changed still needs
+commit and submit. Integration waits for the bound review to reach a terminal `done`, including an accepted oracle closeout for a readonly review. Close that case with exactly `verdict({ ref, outcome: "accepted", text, why })`; it stores `text` as the completion comment and changes the review to `done`. Integration reads both identities from immutable terminal dispatch attempts rather than the live dispatch record: the source's `submitted` attempt for that exact commit and the review's `done` attempt, or the terminal `released` attempt accepted by that oracle closeout. A missing identity on either side, the same agent id on both, or a later prepared dispatch leaves integration blocked with `candidate_review_required`.
 
 No caller-controlled route rejects a bound candidate. `rework`, `recordSubmissionRejection`, raw MCP `rework`, CLI `rework`, and
 reconciliation of a matching pending rejection all return one pre-write `candidate_review_locked` refusal,

@@ -85,36 +85,36 @@ Protocol for each ticket:
    cross-ticket findings to the story log with `story_log`, one line prefixed `DECISION:`, `CONSTRAINT:`,
    or `DISCOVERY:`, rather than leaving them only in a ticket comment. Record decisions, constraints,
    risks, verification evidence, or concise findings with `mcp__plugin_sidequest_board__comment`.
-4. **Verify** with the ticket's exact repo-relative command.
-   Use focused checks while editing, then run the ticket's exact verifier after the related edits are current. The
-   orchestrator owns one combined final full gate after integration; do not run or schedule a broad suite unless the
-   ticket's contract specifically requires it. A nontrivial behavior change needs the smallest meaningful runnable
-   regression. A passing check is evidence only when you state the changed behavior it exercised and how you know:
-   name the assertion in the test that ran and was not skipped; for acquisition, install, download, or cache work,
-   state that the state directory started empty. Do not claim broader coverage ran when it did not. Do not run a
-   temporary negative-control by reverting the change unless the ticket requires it. When required, post
+4. **Use focused checks while editing, then commit the final scoped candidate.** Use the smallest meaningful runnable
+   regression for a nontrivial behavior change. The orchestrator owns one combined final full gate after integration;
+   do not run or schedule a broad suite unless the ticket's contract specifically requires it.
+   Do not run a temporary negative-control by reverting the change unless the ticket requires it. When required, post
    `[sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=<assertion|import|collection>`:
    both names must cover the changed behavior, not an unrelated test. Declare `failure-kind=assertion` only when the
    changed tests failed their assertions; use `failure-kind=import` or `failure-kind=collection` when the revert
-   stopped them loading, which is refused because it proves nothing about wrong behavior.
-   High-stakes tickets keep their routed model and effort. Check the changed surface's consumers and suites relevant
-   to the stated risk. Require a review-audit only when a safety-sensitive contract names an untested seam that needs
-   independent scrutiny.
-   On Windows with Node 22, use explicit test-file globs such as `plugins/<plugin>/test/*.test.js`, never a
-   bare test directory. Keep the useful result count and a short
-   relevant excerpt for the closing evidence. Post `[sidequest:verify-start] <command>` before verification only when it will run in the background or the declared scope is expected to be a no-op. Always post
-   `[sidequest:verify-complete] <passed|failed_suite|toolchain_missing|could_not_run|timeout|manual|attestation|skipped|failed_check|no-op>: <evidence>` after it exits:
-   put the status first and the evidence after the colon. A bare
-   `[sidequest:verify-complete]` remains valid; use `no-op` only for an intentionally clean declared scope.
-5. **Commit and submit, never publish.** For repo changes without the `[sidequest-artifact-mode]` briefing marker, call
-   `mcp__plugin_sidequest_board__commit` with `ref`, `by`, `message`, and this worktree's absolute root.
+   stopped them loading, which is refused because it proves nothing about wrong behavior. High-stakes tickets keep
+   their routed model and effort. Check the changed surface's consumers and suites relevant to the stated risk.
+   Require a review-audit only when a safety-sensitive contract names an untested seam that needs independent scrutiny.
+   On Windows with Node 22, use explicit test-file globs such as `plugins/<plugin>/test/*.test.js`, never a bare test
+   directory.
+5. **Capture verification and submit, never publish.** For repo changes without the `[sidequest-artifact-mode]` briefing
+   marker, call `mcp__plugin_sidequest_board__commit` with `ref`, `by`, `message`, and this worktree's absolute root.
    It commits only the declared scope and returns the hash. Pin it locally with
-   `git update-ref refs/sidequest/<ref> <hash>`. Then call `mcp__plugin_sidequest_board__submit` with
-   `ref`, `by`, `commit`, the same absolute `worktree`, optional `gitRef`, repo-relative `verify`, and
-   an evidence `body` carrying the canonical full final report: changed paths, verification execution evidence (the changed behavior, named assertion, and any required clean state directory), commit hash,
-   and anything deliberately skipped. Do not post a separate pre-submit final-report comment. Closeout reports should stay under ~2KB; reference paths and commit hashes instead of inlining diffs/logs. Submit validates the full range, atomically releases the claim,
-   parks the work for the orchestrator, and writes the short terminal submission marker. Do not add another comment that repeats the report. Do not
-   call done for ordinary repo-changing work. If declared output is outside the repo worktree, don't retry commit: a prepared non-repo/read-only dispatch may close with done after verification; otherwise release it for reclassification as non-repo/artifact work.
+   `git update-ref refs/sidequest/<ref> <hash>`. Run the ticket's exact verifier on that clean committed candidate,
+   then post `[sidequest:verify-complete] <passed|failed_suite|toolchain_missing|could_not_run|timeout|manual|attestation|skipped|failed_check|no-op>: <evidence>` after it exits. Put the status first and the evidence after the colon. A bare
+   `[sidequest:verify-complete]` remains valid; use `no-op` only for an intentionally clean declared scope. A passing
+   check is evidence only when you state the changed behavior it exercised and how you know: name the assertion in the test that ran and was not skipped; for acquisition, install, download, or cache work, state that the state directory started empty. Do not claim broader coverage ran when it did not. Keep the useful result count and a
+   short relevant excerpt for the closing evidence. Post `[sidequest:verify-start] <command>` before verification
+   only when it will run in the background or the declared scope is expected to be a no-op. Then call
+   `mcp__plugin_sidequest_board__submit` with `ref`, `by`, `commit`, the same absolute `worktree`, optional `gitRef`,
+   repo-relative `verify`, and an evidence `body` carrying the canonical full final report: changed paths,
+   verification execution evidence (the changed behavior, named assertion, and any required clean state directory),
+   commit hash, and anything deliberately skipped. Do not post a separate pre-submit final-report comment. Closeout
+   reports should stay under ~2KB; reference paths and commit hashes instead of inlining diffs/logs. Submit validates
+   the full range, atomically releases the claim, parks the work for the orchestrator, and writes the short terminal
+   submission marker. Do not add another comment that repeats the report. Do not call done for ordinary repo-changing
+   work. If declared output is outside the repo worktree, don't retry commit: a prepared non-repo/read-only dispatch
+   may close with done after verification; otherwise release it for reclassification as non-repo/artifact work.
 6. **Close non-repo and active artifact work** through `mcp__plugin_sidequest_board__done` with `ref`, `by`, actual
    model, and effort. An active commandless working-tree delivery also requires explicit `verify` evidence;
    command and suite working-tree delivery still require the matching final verify-capture. Keep its completion comment to ~2KB: a short pointer plus verification evidence, close

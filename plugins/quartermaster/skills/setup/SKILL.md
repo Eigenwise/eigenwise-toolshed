@@ -95,12 +95,16 @@ handing off implementation. Draw from three sources, in this order:
     `model-gateway`, and without it routing still works across Claude models.
   - `observability` is local, metadata-only telemetry: a bundled observer records session, tool,
     and subagent lifecycle events into SQLite on the machine, an optional statusline shows live
-    context and usage, and an OpenTelemetry Collector can forward redacted signals to Grafana or
-    another sink. Prompts, responses, code, tool inputs and results, credentials, and
-    environment values are never stored, and every sink beyond local SQLite is opt-in. Propose
-    it only when the user wants to see where their tokens and time go; its
-    `enable-project-telemetry` skill owns that whole flow from consent through verification, so
-    hand off rather than wiring it yourself.
+    context and usage, and an OpenTelemetry Collector forwards redacted signals to the observer.
+    Logs reach configured sinks, including PostHog, through the observer's consent-filtered outbox;
+    traces and metrics use separate Collector sink pipelines for Grafana or generic OTLP. Telemetry
+    payloads exclude prompts, responses, code, tool inputs and results, credentials, and environment
+    values. Exporter settings the user provides, including OTLP headers or tokens, are stored locally
+    in `%LOCALAPPDATA%\Eigenwise\Workbench\observability.json` on Windows, or
+    `~/.local/share/Eigenwise/Workbench/observability.json` when `LOCALAPPDATA` is not set, so an
+    exporter can authenticate. Every sink beyond local SQLite is opt-in. Propose it only when the
+    user wants to see where their tokens and time go; its `enable-project-telemetry` skill owns
+    that whole flow from consent through verification, so hand off rather than wiring it yourself.
   - `model-gateway` puts the user's existing ChatGPT/Codex and Grok subscription models in
     Claude Code's `/model` picker through a local gateway, no API keys. It is what makes
     sidequest's non-Claude routes possible. Project-scoped with the rest of the workspace plugins.
@@ -196,8 +200,8 @@ After the reload or restart: `claude plugin list --json` confirms every selected
 enabled at its requested scope. Then verify each piece is actually usable, not just present:
 build the codebase map via `map-codebase` (skip for not-a-codebase), confirm live-rules content
 is visibly injected in your context, bring up the sidequest board if selected, and check each
-LSP responds. For an approved CRAP gate, run `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" crap
---project "${CLAUDE_PROJECT_DIR}"` once and report the real result: pass, fail with its offender
+LSP responds. For an approved CRAP gate, run `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" crap`
+from `${CLAUDE_PROJECT_DIR}` once and report the real result: pass, fail with its offender
 count, or exit 2 with the missing prerequisite. Do not say the gate is live before that command ran.
 If model-gateway is installed but unwired, point at its skill rather than wiring it yourself. Fix what
 fails and re-verify; report what you confirmed, concretely.

@@ -1576,9 +1576,262 @@ test('SQ-2355: integration reports a diverged expected upstream without an empty
     assert.strictEqual(refused.reason, 'expected_upstream_diverged');
     assert.match(refused.message, new RegExp(`recorded expected upstream ${expectedUpstream}`));
     assert.match(refused.message, new RegExp(`no longer reachable from target branch ${divergenceBranch}`));
-    assert.match(refused.message, /manually merge the verified candidate onto the current target, re-gate it/);
-    assert.match(refused.message, /groomClose using deliveryCommit/);
+    assert.match(refused.message, /re-apply the verified candidate onto the current target, re-gate it/);
+    assert.match(refused.message, /groomClose passing deliveryCommit/);
+    assert.match(refused.message, /deliveryMethod/);
     assert.doesNotMatch(refused.message, /outside its admitted scope:/);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+// The refusal above prescribes a recovery — re-apply the candidate by hand, re-gate it,
+// then record delivery with groomClose passing deliveryCommit and deliveryMethod
+// "manual" — and the same expected upstream check then refused that recovery, so a
+// candidate whose integration branch was squash-merged and deleted before it submitted
+// had no closing move but abandonSubmission, which records shipped work as discarded
+// (SQ-23, GH-233). The ancestry assertion guards the merge integrate performs; a
+// recorded manual delivery proves its own landing from the pinned candidate's content,
+// so it no longer inherits that guard — but only once that candidate is itself
+// unreachable from the target, not merely because a method was named (GH-233 review).
+test('SQ-23: groomClose records the manual recovery its own expected_upstream_diverged refusal prescribes', async () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const stamp = `${process.pid}-${Date.now()}`;
+  const targetBranch = `squash-recovery-${stamp}`;
+  const mainBranch = `squash-recovery-main-${stamp}`;
+  const recoveryFile = path.join(PROJECT_DIR, 'lib', 'squash-recovery.js');
+  try {
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+
+    // The integration branch the dispatch froze, at the tip it recorded as the expected upstream.
+    git(['checkout', '-f', '-B', targetBranch, 'origin/main']);
+    fs.writeFileSync(recoveryFile, 'shared\nbranch-work\n');
+    git(['add', 'lib/squash-recovery.js']);
+    git(['commit', '-m', 'branch work the MR later squash-merges']);
+    const expectedUpstream = git(['rev-parse', 'HEAD']);
+
+    // The executor's candidate: two commits on that frozen tip.
+    const ticket = addTicket('squash-merged upstream recovery', { files: ['lib/squash-recovery.js'] });
+    fs.writeFileSync(recoveryFile, 'shared\nbranch-work\ncandidate\n');
+    git(['commit', '-am', 'candidate work']);
+    fs.writeFileSync(recoveryFile, 'shared\nbranch-work\ncandidate\ncandidate-follow-up\n');
+    git(['commit', '-am', 'candidate follow-up']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    const candidateCommits = git(['rev-list', '--reverse', `${expectedUpstream}..${candidate}`]).split('\n');
+    pin(ticket, candidate);
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'squash-recovery-source', {
+      direct: true,
+      reason: 'The squash-recovery fixture requires a local direct claim.',
+    }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'squash-recovery-source', {
+      commit: candidate,
+      verify: 'node -e "process.exit(0)"',
+    }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    Object.assign(submitted.submission, {
+      base: expectedUpstream,
+      upstream: targetBranch,
+      upstreamCommit: expectedUpstream,
+      integrationMode: 'local',
+      integrationBranch: targetBranch,
+      commits: candidateCommits,
+      changedPaths: ['lib/squash-recovery.js'],
+    });
+    submitted.dispatch = {
+      outcome: 'submitted',
+      terminalAt: new Date(Date.now() - 60_000).toISOString(),
+      attempts: [{ outcome: 'submitted', commit: candidate, agentId: 'squash-recovery-source', terminalAt: new Date(Date.now() - 60_000).toISOString() }],
+    };
+    persist(submitted);
+
+    // The MR squash-merged the branch and removed the source branch, so neither the
+    // recorded expected upstream nor either candidate commit survives on the target,
+    // and the collapsed patch carries no candidate patch id to reconcile against.
+    git(['checkout', '-f', '-B', mainBranch, 'origin/main']);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(recoveryFile, 'shared\nbranch-work\ncandidate\ncandidate-follow-up\n');
+    git(['add', 'lib/squash-recovery.js']);
+    git(['commit', '-m', 'squash merge of the re-gated branch']);
+    const deliveredSquash = git(['rev-parse', 'HEAD']);
+    git(['checkout', '-f', '-B', targetBranch, deliveredSquash]);
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: targetBranch });
+    assert.notStrictEqual(git(['merge-base', expectedUpstream, deliveredSquash]), expectedUpstream, 'the recorded expected upstream is unreachable from the recreated target');
+    assert.notStrictEqual(git(['merge-base', candidate, deliveredSquash]), candidate, 'the candidate itself is unreachable from the recreated target');
+
+    const refusedIntegration = store.integrateSubmission(slug, ticket.ref, {
+      mode: 'merge',
+      target: { branch: targetBranch, upstream: `refs/heads/${targetBranch}` },
+    });
+    assert.strictEqual(refusedIntegration.ok, false);
+    assert.strictEqual(refusedIntegration.reason, 'expected_upstream_diverged');
+    assert.match(refusedIntegration.message, /record it with groomClose passing deliveryCommit/);
+    assert.match(refusedIntegration.message, /deliveryMethod/);
+
+    // The waiver belongs to the recorded reset, working-tree or manual delivery, which
+    // names the pinned candidate and proves its content. A delivery that claims the
+    // ordinary reachable route still answers to the recorded expected upstream.
+    const refusedWithoutMethod = await callMcp('groomClose', {
+      project: PROJECT_DIR,
+      ref: ticket.ref,
+      by: 'squash-recovery-integrator',
+      deliveryCommit: candidate,
+      reason: 'A reachable delivery claim over a diverged expected upstream stays refused.',
+    });
+    assert.strictEqual(refusedWithoutMethod.ok, false);
+    assert.strictEqual(refusedWithoutMethod.reason, 'expected_upstream_diverged');
+
+    const delivered = await callMcp('groomClose', {
+      project: PROJECT_DIR,
+      ref: ticket.ref,
+      by: 'squash-recovery-integrator',
+      deliveryCommit: candidate,
+      deliveryMethod: 'manual',
+      reason: 'The candidate was cherry-picked onto the recreated target, re-gated, and squash-merged; the target retains its content.',
+    });
+    assert.strictEqual(delivered.ok, true, delivered.message);
+
+    const recorded = store.getTicket(slug, ticket.ref);
+    assert.strictEqual(recorded.status, 'done');
+    assert.strictEqual(recorded.submission.integration.mode, 'recorded-working-tree');
+    assert.strictEqual(recorded.submission.integration.deliveryCommit, candidate);
+    assert.strictEqual(recorded.submission.integration.deliveryIdentity.kind, 'pinned-working-tree');
+    assert.strictEqual(recorded.submission.integration.deliveryIdentity.method, 'manual');
+    assert.strictEqual(recorded.submission.integration.contentCommit, candidate);
+
+    // GH-233 review item 3: MCP `integrate`'s admission pre-gate forwarded deliveryCommit
+    // and deliveryInteractionCommit to validateIntegrationSubmission but dropped
+    // deliveryMethod, so integrate refused this exact recovery even though groomClose
+    // (which calls recordDeliveredSubmission directly) already accepted it above.
+    // Reproduce the same squash-and-delete shape for a second ticket and exercise the
+    // integrate surface instead of groomClose.
+    const recoveryFile2 = path.join(PROJECT_DIR, 'lib', 'squash-recovery-mcp.js');
+    const ticket2 = addTicket('squash-merged upstream recovery via MCP integrate', { files: ['lib/squash-recovery-mcp.js'] });
+    fs.writeFileSync(recoveryFile2, 'candidate-mcp\n');
+    git(['add', 'lib/squash-recovery-mcp.js']);
+    git(['commit', '-m', 'mcp candidate work']);
+    fs.writeFileSync(recoveryFile2, 'candidate-mcp\ncandidate-mcp-follow-up\n');
+    git(['commit', '-am', 'mcp candidate follow-up']);
+    const candidate2 = git(['rev-parse', 'HEAD']);
+    const candidateCommits2 = git(['rev-list', '--reverse', `${deliveredSquash}..${candidate2}`]).split('\n');
+    pin(ticket2, candidate2);
+    assert.strictEqual(store.claimTicket(slug, ticket2.ref, 'squash-recovery-mcp-source', {
+      direct: true,
+      reason: 'The squash-recovery MCP fixture requires a local direct claim.',
+    }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, ticket2.ref, 'squash-recovery-mcp-source', {
+      commit: candidate2,
+      verify: 'node -e "process.exit(0)"',
+    }).ok, true);
+    const submitted2 = store.getTicket(slug, ticket2.ref);
+    Object.assign(submitted2.submission, {
+      base: deliveredSquash,
+      upstream: targetBranch,
+      upstreamCommit: deliveredSquash,
+      integrationMode: 'local',
+      integrationBranch: targetBranch,
+      commits: candidateCommits2,
+      changedPaths: ['lib/squash-recovery-mcp.js'],
+    });
+    submitted2.dispatch = {
+      outcome: 'submitted',
+      terminalAt: new Date(Date.now() - 60_000).toISOString(),
+      attempts: [{ outcome: 'submitted', commit: candidate2, agentId: 'squash-recovery-mcp-source', terminalAt: new Date(Date.now() - 60_000).toISOString() }],
+    };
+    persist(submitted2);
+
+    // Land the mcp candidate's content on a branch built fresh from origin/main, disjoint
+    // from deliveredSquash, so the recorded expected upstream (deliveredSquash) is itself
+    // unreachable from the recreated target too — the same squash-and-delete shape as the
+    // groomClose case above, exercised through integrate instead.
+    git(['checkout', '-f', '-B', `${mainBranch}-mcp`, 'origin/main']);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(recoveryFile2, 'candidate-mcp\ncandidate-mcp-follow-up\n');
+    git(['add', 'lib/squash-recovery-mcp.js']);
+    git(['commit', '-m', 'squash merge of the mcp re-gated branch']);
+    const deliveredSquash2 = git(['rev-parse', 'HEAD']);
+    git(['checkout', '-f', '-B', targetBranch, deliveredSquash2]);
+    assert.notStrictEqual(git(['merge-base', deliveredSquash, deliveredSquash2]), deliveredSquash, 'the recorded expected upstream is unreachable from the recreated target');
+    assert.notStrictEqual(git(['merge-base', candidate2, deliveredSquash2]), candidate2, 'the candidate itself is unreachable from the recreated target');
+
+    const deliveredViaIntegrate = await callMcp('integrate', {
+      project: PROJECT_DIR,
+      ref: ticket2.ref,
+      by: 'squash-recovery-integrator',
+      deliveryCommit: candidate2,
+      deliveryMethod: 'manual',
+      reason: 'The candidate was cherry-picked onto the recreated target, re-gated, and squash-merged; the target retains its content.',
+    });
+    assert.strictEqual(deliveredViaIntegrate.ok, true, deliveredViaIntegrate.message);
+
+    const recorded2 = store.getTicket(slug, ticket2.ref);
+    assert.strictEqual(recorded2.status, 'done');
+    assert.strictEqual(recorded2.submission.integration.mode, 'recorded-working-tree');
+    assert.strictEqual(recorded2.submission.integration.deliveryCommit, candidate2);
+    assert.strictEqual(recorded2.submission.integration.deliveryIdentity.kind, 'pinned-working-tree');
+    assert.strictEqual(recorded2.submission.integration.deliveryIdentity.method, 'manual');
+    assert.strictEqual(recorded2.submission.integration.contentCommit, candidate2);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+// GH-233 review item 5: a mistyped deliveryMethod used to run into
+// recordDeliveredSubmission's own diverged-upstream preflight before its
+// deliveryMethod validation ran, so the refusal named expected_upstream_diverged
+// instead of the actual mistake. Validating deliveryMethod first names it correctly
+// even against the exact diverged-upstream shape that used to mask it.
+test('groomClose: a mistyped deliveryMethod names itself instead of the diverged-upstream preflight it would otherwise trip', async () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const divergenceBranch = `invalid-method-diverged-${process.pid}-${Date.now()}`;
+  try {
+    const ticket = addTicket('invalid delivery method upstream recovery', { files: ['lib/invalid-method.js'] });
+    const expectedUpstream = git(['rev-parse', 'HEAD']);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'invalid-method.js'), 'candidate\n');
+    git(['add', 'lib/invalid-method.js']);
+    git(['commit', '-m', 'invalid-method candidate']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'invalid-method-worker', {
+      direct: true,
+      reason: 'The invalid-deliveryMethod fixture requires a local direct claim.',
+    }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'invalid-method-worker', {
+      commit: candidate,
+      verify: 'node -e "process.exit(0)"',
+    }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    Object.assign(submitted.submission, {
+      base: expectedUpstream,
+      upstream: divergenceBranch,
+      upstreamCommit: expectedUpstream,
+      integrationBranch: divergenceBranch,
+      commits: [candidate],
+      changedPaths: ['lib/invalid-method.js'],
+    });
+    persist(submitted);
+
+    git(['checkout', '--orphan', divergenceBranch]);
+    git(['rm', '-rf', '.']);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'replacement integration history\n');
+    git(['add', 'README.md']);
+    git(['commit', '-m', 'replacement integration history']);
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: divergenceBranch });
+
+    const refused = await callMcp('groomClose', {
+      project: PROJECT_DIR,
+      ref: ticket.ref,
+      by: 'invalid-method-integrator',
+      deliveryCommit: candidate,
+      deliveryMethod: 'Manual',
+      reason: 'A mistyped deliveryMethod must name itself, not the diverged upstream it would otherwise trip.',
+    });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'invalid_delivery_method');
   } finally {
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
     cleanBranch();
@@ -2517,9 +2770,14 @@ test('CLI: board config stores a worktree setup command', () => {
   const setup = 'cd plugins/sidequest && npm ci';
   const pairs = JSON.stringify([{ from: 'plugins/*/src/lib/*.ts', to: 'plugins/*/lib/*.js' }]);
   const configured = cliJson(['board-config', '--worktree-setup', setup, '--generated-pairs', pairs, '--json']);
-  assert.strictEqual(configured.worktreeSetup, setup);
-  assert.deepStrictEqual(configured.generatedPairs, JSON.parse(pairs));
-  assert.strictEqual(cliJson(['board-config', '--json']).worktreeSetup, setup);
+  try {
+    assert.strictEqual(configured.worktreeSetup, setup);
+    assert.deepStrictEqual(configured.generatedPairs, JSON.parse(pairs));
+    assert.strictEqual(cliJson(['board-config', '--json']).worktreeSetup, setup);
+  } finally {
+    // Later wave gates provision their composed checkout with this board's setup; `npm ci` has no lockfile here.
+    store.setBoardConfig(slug, { worktreeSetup: null });
+  }
 });
 
 test('CLI: board config renames only the display name', () => {
@@ -2930,6 +3188,59 @@ test('SQ-2399: shared-tree siblings select submitted boundaries while isolated c
   const storedIsolatedSubmission = store.getTicket(slug, isolated.ref).submission;
   assert.strictEqual(storedIsolatedSubmission.base, integratedSiblingHead);
   assert.deepStrictEqual(storedIsolatedSubmission.commits, [isolatedCommit]);
+});
+
+test('GH-139: an isolated submit is bounded by its recorded dispatch baseline when upstream replayed that history under new hashes', async (t?: any) => {
+  cleanBranch();
+  const start = git(['rev-parse', 'HEAD']);
+  const upstreamBranch = `gh139-upstream-${++branchSeq}`;
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh139-sibling.js'), 'sibling\n');
+  git(['add', 'lib/gh139-sibling.js']);
+  git(['commit', '-m', 'sibling delivered locally']);
+  const sibling = git(['rev-parse', 'HEAD']);
+  git(['branch', upstreamBranch, sibling]);
+  const priorBoardConfig = store.boardConfig(slug);
+  assert.strictEqual(store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: upstreamBranch }).ok, true);
+  t.after(() => {
+    store.setBoardConfig(slug, {
+      integrationMode: priorBoardConfig.integrationMode,
+      integrationBranch: priorBoardConfig.integrationBranch,
+    });
+  });
+
+  const ticket = addTicket('isolated candidate over a replayed upstream', { files: ['lib/gh139-ticket.js'], category: 'submission.fixture' });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'gh139-isolated', sharedTree: false });
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, 'gh139-worker', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId: 'gh139-isolated',
+  }).ok, true);
+  assert.strictEqual(store.getTicket(slug, ticket.ref).dispatch.baseCommit, sibling);
+
+  git(['checkout', '-f', '-B', upstreamBranch, start]);
+  git(['cherry-pick', '-x', sibling]);
+  assert.notStrictEqual(git(['rev-parse', 'HEAD']), sibling);
+  git(['checkout', '-f', '-B', `submission-${++branchSeq}`, sibling]);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh139-ticket.js'), 'ticket\n');
+  git(['add', 'lib/gh139-ticket.js']);
+  git(['commit', '-m', 'isolated ticket work']);
+  const tip = git(['rev-parse', 'HEAD']);
+  pin(ticket, tip);
+
+  const submitted = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: ticket.ref,
+    by: 'gh139-worker',
+    commit: tip,
+    worktree: PROJECT_DIR,
+    body: 'Isolated replayed-upstream fixture.',
+  });
+  assert.strictEqual(submitted.ok, true, submitted.message);
+  const stored = store.getTicket(slug, ticket.ref).submission;
+  assert.strictEqual(stored.base, sibling);
+  assert.deepStrictEqual(stored.commits, [tip]);
+  assert.deepStrictEqual(stored.changedPaths, ['lib/gh139-ticket.js']);
 });
 
 test('a submit after a terminal dispatch is gated on current ticket scope, not the dead binding', () => {
@@ -4391,14 +4702,14 @@ test('SQ-2429: pending candidates block a singleton without invalidation while a
   try {
     const docsPath = path.join(PROJECT_DIR, 'docs', 'guide.md');
     fs.mkdirSync(path.dirname(docsPath), { recursive: true });
-    fs.writeFileSync(docsPath, 'base\n');
+    fs.writeFileSync(docsPath, 'top\nkeep\nkeep\nkeep\nbottom\n');
     git(['add', 'docs/guide.md']);
     git(['commit', '-m', 'same-file wave baseline']);
     const baseline = git(['rev-parse', 'HEAD']);
 
     const primary = addTicket('primary prose candidate', { files: ['docs'] });
     assert.strictEqual(store.claimTicket(slug, primary.ref, 'primary-prose-worker', { direct: true, reason: 'The same-file wave fixture requires a local direct claim.' }).ok, true);
-    fs.writeFileSync(docsPath, 'base\nprimary\n');
+    fs.writeFileSync(docsPath, 'top primary\nkeep\nkeep\nkeep\nbottom\n');
     git(['add', 'docs/guide.md']);
     git(['commit', '-m', 'primary prose candidate']);
     const primaryCandidate = git(['rev-parse', 'HEAD']);
@@ -4419,7 +4730,7 @@ test('SQ-2429: pending candidates block a singleton without invalidation while a
     git(['reset', '--hard', baseline]);
     const sibling = addTicket('submitted prose sibling', { files: ['docs'] });
     assert.strictEqual(store.claimTicket(slug, sibling.ref, 'submitted-prose-worker', { direct: true, reason: 'The same-file wave fixture requires a local direct claim.' }).ok, true);
-    fs.writeFileSync(docsPath, 'base\n\nsibling\n');
+    fs.writeFileSync(docsPath, 'top\nkeep\nkeep\nkeep\nbottom sibling\n');
     git(['add', 'docs/guide.md']);
     git(['commit', '-m', 'submitted prose sibling']);
     const siblingCandidate = git(['rev-parse', 'HEAD']);
@@ -4799,7 +5110,7 @@ test('SQ-2463: wave assembly replaces a stale wave baseline with the current tar
   try {
     const docsPath = path.join(PROJECT_DIR, 'docs', 'wave-baseline.md');
     fs.mkdirSync(path.dirname(docsPath), { recursive: true });
-    fs.writeFileSync(docsPath, 'base\n');
+    fs.writeFileSync(docsPath, 'top\nkeep\nkeep\nkeep\nbottom\n');
     git(['add', 'docs/wave-baseline.md']);
     git(['commit', '-m', 'wave baseline fixture']);
     const candidateBaseline = git(['rev-parse', 'HEAD']);
@@ -4813,7 +5124,7 @@ test('SQ-2463: wave assembly replaces a stale wave baseline with the current tar
 
     const primary = addTicket('primary stale-wave candidate', { files: ['docs'] });
     assert.strictEqual(store.claimTicket(slug, primary.ref, 'primary-wave-worker', { direct: true, reason: 'The stale wave fixture requires a local direct claim.' }).ok, true);
-    fs.writeFileSync(docsPath, 'base\nprimary\n');
+    fs.writeFileSync(docsPath, 'top primary\nkeep\nkeep\nkeep\nbottom\n');
     git(['add', 'docs/wave-baseline.md']);
     git(['commit', '-m', 'primary stale-wave candidate']);
     const primaryCandidate = git(['rev-parse', 'HEAD']);
@@ -4830,7 +5141,7 @@ test('SQ-2463: wave assembly replaces a stale wave baseline with the current tar
     git(['reset', '--hard', candidateBaseline]);
     const sibling = addTicket('sibling stale-wave candidate', { files: ['docs'] });
     assert.strictEqual(store.claimTicket(slug, sibling.ref, 'sibling-wave-worker', { direct: true, reason: 'The stale wave fixture requires a local direct claim.' }).ok, true);
-    fs.writeFileSync(docsPath, 'base\nsibling\n');
+    fs.writeFileSync(docsPath, 'top\nkeep\nkeep\nkeep\nbottom sibling\n');
     git(['add', 'docs/wave-baseline.md']);
     git(['commit', '-m', 'sibling stale-wave candidate']);
     const siblingCandidate = git(['rev-parse', 'HEAD']);
@@ -4922,6 +5233,191 @@ test('SQ-2463: a wave invalidation preserves submitted candidate status', () => 
     assert.strictEqual(store.pendingSubmission(store.getTicket(slug, invalid.ref)), true);
   } finally {
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+// GitHub #180 (SQ-16): the commit gate admits the ticket's own release fragment
+// implicitly, and so does the stored-range validator, but wave assembly re-derived its
+// surfaces from ticket.files alone — so a candidate that wrote its own fragment without
+// declaring it was refused as surface_overlap after passing both.
+test('SQ-16: a candidate that changed its implicitly admitted release fragment assembles', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  try {
+    const ticket = addTicket('release-fragment wave candidate', { files: ['docs'] });
+    const fragment = `.release/unreleased/${ticket.ref}.md`;
+    const baselineCommit = git(['rev-parse', 'HEAD']);
+    const observedAt = new Date().toISOString();
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'fragment-wave-worker', { direct: true, reason: 'The release-fragment wave fixture requires a local direct claim.' }).ok, true);
+    const docsPath = path.join(PROJECT_DIR, 'docs', 'wave-fragment.md');
+    fs.mkdirSync(path.dirname(docsPath), { recursive: true });
+    fs.writeFileSync(docsPath, 'fragment fixture\n');
+    fs.mkdirSync(path.join(PROJECT_DIR, '.release', 'unreleased'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, fragment), '- release note fixture\n');
+    git(['add', 'docs/wave-fragment.md', fragment]);
+    git(['commit', '-m', 'candidate that writes its own release fragment']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    const submitted = store.submitTicket(slug, ticket.ref, 'fragment-wave-worker', { commit: candidate, verify: 'node -e "process.exit(0)"' });
+    assert.strictEqual(submitted.ok, true, submitted.message);
+    const stored = store.getTicket(slug, ticket.ref);
+    assert.ok(!store.effectiveScope(slug, stored).includes(fragment), 'the fragment is admitted implicitly, never declared');
+    assert.ok(!(stored.submission.admittedScope || []).includes(fragment), 'the recorded snapshot carries the declared scope, not the implicit fragment');
+    // A dispatched submit records the range; a direct fixture claim supplies it here.
+    Object.assign(stored.submission, {
+      baseline: { revision: { source: 'git', value: baselineCommit, observedAt }, purpose: 'dispatch' },
+      changedPaths: [fragment, 'docs/wave-fragment.md'],
+    });
+    stored.executorVerify = 'node -e "process.exit(0)"';
+    persist(stored);
+    git(['reset', '--hard', baselineCommit]);
+
+    const assembled = store.assembleSubmissionWave(slug, [ticket.ref], { waveId: 'release-fragment-wave' });
+    assert.strictEqual(assembled.ok, true, assembled.message);
+    assert.ok(store.getTicket(slug, ticket.ref).submission.wave.declaredSurfaces.includes(fragment));
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+// The refusal has to name the path and the reason where the caller reads it: four
+// integration attempts chased a baseline mismatch the message printed while every
+// baseline matched (GitHub #180).
+test('SQ-16: a surface_overlap refusal names the offending path instead of matching baselines', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  try {
+    const ticket = addTicket('surface overlap message candidate', { files: ['docs'] });
+    const baselineCommit = git(['rev-parse', 'HEAD']);
+    const observedAt = new Date().toISOString();
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'overlap-message-worker', { direct: true, reason: 'The overlap message fixture requires a local direct claim.' }).ok, true);
+    const docsPath = path.join(PROJECT_DIR, 'docs', 'wave-overlap.md');
+    fs.mkdirSync(path.dirname(docsPath), { recursive: true });
+    fs.writeFileSync(docsPath, 'overlap fixture\n');
+    git(['add', 'docs/wave-overlap.md']);
+    git(['commit', '-m', 'overlap message candidate']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'overlap-message-worker', { commit: candidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const stored = store.getTicket(slug, ticket.ref);
+    Object.assign(stored.submission, {
+      baseline: { revision: { source: 'git', value: baselineCommit, observedAt }, purpose: 'dispatch' },
+      changedPaths: ['docs/wave-overlap.md', 'lib/never-admitted.js'],
+      admittedScope: ['docs'],
+    });
+    persist(stored);
+    git(['reset', '--hard', baselineCommit]);
+
+    const refused = store.assembleSubmissionWave(slug, [ticket.ref], { waveId: 'overlap-message-wave' });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'wave_invalidated');
+    assert.strictEqual(refused.invalidated[0].reason, 'surface_overlap');
+    assert.deepStrictEqual(refused.invalidated[0].outside, ['lib/never-admitted.js']);
+    assert.match(refused.message, /surface_overlap: .*lib\/never-admitted\.js/);
+    assert.doesNotMatch(refused.message, /candidate baselines/);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+// Should (owner review on GitHub #180): the prior fixtures were shaped so the recorded
+// snapshot never added anything the live scope did not already cover, so the half of
+// the derivation that actually matters — the snapshot outliving a narrower ticket.files
+// — never ran. Narrow ticket.files after submit, the way `update --files` would, so
+// only the recorded admittedScope still covers the committed path, and confirm the
+// wave still assembles from that snapshot.
+test('SQ-16: a wave still assembles when ticket.files is narrowed after submit and only the recorded snapshot covers the committed range', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  try {
+    const ticket = addTicket('narrowed after submit candidate', { files: ['docs', 'lib'] });
+    const baselineCommit = git(['rev-parse', 'HEAD']);
+    const observedAt = new Date().toISOString();
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'narrowed-worker', { direct: true, reason: 'The narrowed-scope fixture requires a local direct claim.' }).ok, true);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'narrowed.js'), 'narrowed fixture\n');
+    git(['add', 'lib/narrowed.js']);
+    git(['commit', '-m', 'candidate committed under the original wider scope']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'narrowed-worker', { commit: candidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const stored = store.getTicket(slug, ticket.ref);
+    assert.ok((stored.submission.admittedScope || []).includes('lib'), 'the recorded snapshot covers the committed path while it is still declared');
+    Object.assign(stored.submission, {
+      baseline: { revision: { source: 'git', value: baselineCommit, observedAt }, purpose: 'dispatch' },
+      changedPaths: ['lib/narrowed.js'],
+    });
+    // Narrow the live declaration after submit; the recorded snapshot does not move.
+    stored.files = ['docs'];
+    persist(stored);
+    git(['reset', '--hard', baselineCommit]);
+
+    assert.ok(!store.effectiveScope(slug, store.getTicket(slug, ticket.ref)).includes('lib'), 'the live scope no longer covers the committed path');
+    const assembled = store.assembleSubmissionWave(slug, [ticket.ref], { waveId: 'narrowed-after-submit-wave' });
+    assert.strictEqual(assembled.ok, true, assembled.message);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+// GitHub #180's reported shape: a real dispatch (not a direct claim) that picked up a
+// post-dispatch scope grant, then integrated. `Fixes #180` closing on a reinterpretation
+// of the root cause rather than on a test risked the issue being reopened; this pins the
+// actual reported sequence end to end.
+test('SQ-16: a dispatched candidate with a post-dispatch scope grant integrates', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, {
+    integrationMode: 'local',
+    integrationBranch,
+    autoApproveScope: ['lib/reported-180-grant.js'],
+  });
+  try {
+    const ticket = addTicket('reported #180 shape candidate', { files: ['docs'], category: 'submission.fixture' });
+    const sessionId = 'reported-180-dispatch';
+    const worker = 'reported-180-worker';
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, worker, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+    }).ok, true);
+
+    const granted = store.requestScope(slug, ticket.ref, worker, ['lib/reported-180-grant.js']);
+    assert.strictEqual(granted.state, 'granted', granted.message);
+
+    const fragment = `.release/unreleased/${ticket.ref}.md`;
+    fs.mkdirSync(path.join(PROJECT_DIR, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'docs', 'reported-180.md'), 'declared scope fixture\n');
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'reported-180-grant.js'), 'granted fixture\n');
+    fs.mkdirSync(path.join(PROJECT_DIR, '.release', 'unreleased'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, fragment), '- release note fixture\n');
+    git(['add', 'docs/reported-180.md', 'lib/reported-180-grant.js', fragment]);
+    git(['commit', '-m', 'candidate covering declared scope, a post-dispatch grant, and its own release fragment']);
+    const commit = git(['rev-parse', 'HEAD']);
+    pin(ticket, commit);
+    assert.strictEqual(runCli(['submit', ticket.ref, '--by', worker, '--commit', commit]).status, 0);
+
+    const delivered = integrateOnCurrentTestBranch(ticket.ref);
+    assert.strictEqual(delivered.ok, true, delivered.message);
+  } finally {
+    store.setBoardConfig(slug, {
+      integrationMode: originalConfig.integrationMode,
+      integrationBranch: originalConfig.integrationBranch,
+      autoApproveScope: originalConfig.autoApproveScope,
+    });
     cleanBranch();
   }
 });
@@ -5668,6 +6164,103 @@ test('SQ-2983: a failing verifier leaves the delivered apply record bindable, an
     assert.strictEqual(rebind.delivery, undefined, 'a non-apply record is never re-recorded as an apply binding');
     assert.deepStrictEqual(store.getTicket(slug, fixture.repair.ref).submission, beforeBinding.submission, 'a completed non-apply delivery record is untouched');
   });
+});
+
+// GH-220. integrate cannot resolve a conflict, so a hand-resolved merge has to be recordable, and the refusal has to
+// name how: groomClose with that merge as deliveryCommit, proved by the candidate being one of its parents.
+test('GH-220: a hand-resolved conflict merge records through groomClose manual with the merge commit', async () => {
+  cleanBranch();
+  const t = addTicket('hand-resolved conflict merge', { files: ['lib/gh220-conflict.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'gh220-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh220-conflict.js'), 'candidate\n');
+  git(['add', 'lib/gh220-conflict.js']);
+  git(['commit', '-m', 'gh220 candidate']);
+  const candidate = git(['rev-parse', 'HEAD']);
+  pin(t, candidate);
+  assert.strictEqual(runCli(['submit', t.ref, '--by', 'gh220-worker', '--commit', candidate]).status, 0);
+
+  const targetBranch = `gh220-target-${++branchSeq}`;
+  git(['checkout', '-f', '-B', targetBranch, 'origin/main']);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh220-conflict.js'), 'target\n');
+  git(['add', 'lib/gh220-conflict.js']);
+  git(['commit', '-m', 'gh220 conflicting target']);
+  const original = store.boardConfig(slug);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: targetBranch });
+  try {
+    const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge', target: store.integrationTarget(slug) });
+    assert.strictEqual(refused.reason, 'merge_failed');
+    assert.match(refused.message, /groomClose passing deliveryCommit <the resolved merge commit>/);
+    assert.match(refused.message, /deliveryMethod "manual"/);
+
+    assert.throws(() => execFileSync('git', ['merge', '--no-ff', '--no-edit', candidate], { cwd: PROJECT_DIR, stdio: 'ignore' }));
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh220-conflict.js'), 'target\ncandidate\n');
+    git(['add', 'lib/gh220-conflict.js']);
+    git(['commit', '--no-edit']);
+    const merge = git(['rev-parse', 'HEAD']);
+
+    const delivered = await callMcp('groomClose', {
+      project: PROJECT_DIR,
+      ref: t.ref,
+      by: 'gh220-integrator',
+      deliveryCommit: merge,
+      deliveryMethod: 'manual',
+      reason: 'Resolved the conflict by hand in a merge whose second parent is the candidate, then re-gated it.',
+    });
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    const recorded = store.getTicket(slug, t.ref);
+    assert.strictEqual(recorded.status, 'done');
+    assert.strictEqual(recorded.submission.integration.deliveryCommit, merge);
+    assert.strictEqual(recorded.submission.integration.contentEvidence, 'candidate_ancestor');
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: original.integrationMode, integrationBranch: original.integrationBranch });
+  }
+});
+
+// GH-277. Submit admits a related rejected source's release fragment, so the scope snapshot integrate re-checks the
+// range against has to carry it too, or the inherited commit that added it reads as outside scope.
+test('GH-277: a repair that renames its rejected source release fragment delivers', async () => {
+  const original = store.boardConfig(slug);
+  const branch = `gh277-${++branchSeq}`;
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: branch });
+  try {
+    git(['checkout', '-f', '-B', branch, 'origin/main']);
+    git(['clean', '-fd']);
+    sq2972Write(SQ2972_COMMON, 'base common\n');
+    git(['add', SQ2972_COMMON]);
+    git(['commit', '-m', 'gh277 integration base']);
+    const integrationHead = git(['rev-parse', 'HEAD']);
+    const source = addTicket('gh277 rejected source', { files: [SQ2972_COMMON] });
+    const repair = addTicket('gh277 repair', { files: [SQ2972_COMMON, SQ2972_REPAIR] });
+    for (const owned of [{ ticket: source, by: 'gh277-source' }, { ticket: repair, by: 'gh277-repair' }]) {
+      assert.strictEqual(store.claimTicket(slug, owned.ticket.ref, owned.by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+    }
+    const sourceFragment = `.release/unreleased/${source.ref}.md`;
+    const repairFragment = `.release/unreleased/${repair.ref}.md`;
+    git(['checkout', '-B', `${branch}-work`, integrationHead]);
+    sq2972Write(SQ2972_COMMON, 'original common\n');
+    sq2972Write(sourceFragment, `---\nref: ${source.ref}\ntitle: rejected source\nbump: patch\nplugins: [sidequest]\n---\n\nRejected.\n`);
+    git(['add', '-A', 'lib', '.release']);
+    git(['commit', '-m', 'gh277 rejected candidate']);
+    const sourceCommit = git(['rev-parse', 'HEAD']);
+    git(['mv', sourceFragment, repairFragment]);
+    sq2972Write(SQ2972_COMMON, 'repaired common\n');
+    sq2972Write(SQ2972_REPAIR, 'repair addition\n');
+    git(['add', '-A', 'lib', '.release']);
+    git(['commit', '-m', 'gh277 repair']);
+    const repairCommit = git(['rev-parse', 'HEAD']);
+    pin(source, sourceCommit);
+    pin(repair, repairCommit);
+
+    const { delivered } = await deliverInheritedRepair({ label: 'gh277', branch, integrationHead, sourceCommit, repairCommit, source, repair }, 'merge');
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.ok(store.getTicket(slug, repair.ref).submission.admittedScope.includes(sourceFragment));
+    assert.strictEqual(fs.existsSync(path.join(PROJECT_DIR, sourceFragment)), false);
+    assert.strictEqual(fs.existsSync(path.join(PROJECT_DIR, repairFragment)), true);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: original.integrationMode, integrationBranch: original.integrationBranch });
+  }
 });
 
 export {};

@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync } from '../lib/git-process.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -687,7 +687,20 @@ function terminalExecutorTicket(input: HookInput): TerminalExecutorTicket | null
     const matches: TerminalExecutorTicket[] = [];
     for (const project of store.listProjects({ all: true })) {
       for (const ticket of store.listTickets(project.slug)) {
-        if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId || !ticket.dispatch?.terminalAt || ticket.claim?.by || !dispatchIdentityMatches(ticket, agentId, executor)) continue;
+        if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId || !dispatchIdentityMatches(ticket, agentId, executor)) continue;
+        // One runtime identity reaches more than one sibling dispatch of the same
+        // session: a bind records an agent id on any sibling whose own id is still unset,
+        // and the name fallbacks above match by prefix. So a terminal sibling alone never
+        // proves this agent is finished, while a non-terminal one proves the identity is
+        // still in play, whether or not that sibling has been claimed yet: the caller's own
+        // dispatch may itself be unclaimed on its first tool call, which is the claim call
+        // that would otherwise create the claim this guard is looking for. Standing down for
+        // an unclaimed non-terminal sibling too means a finished agent goes unrefused
+        // somewhat more often, the same trade this guard already makes for a claimed one; an
+        // unrefused finished agent burns a few calls, a wrongly refused live agent loses its
+        // ticket.
+        if (!ticket.dispatch?.terminalAt) return null;
+        if (ticket.claim?.by) continue;
         if (ticket.submission?.supersededBy?.ref || ticket.completion?.supersededBy?.ref) {
           const by = String(ticket.completion?.by || 'the control plane').trim();
           matches.push({ ref: ticket.ref, closedBy: `superseded by ${ticket.submission?.supersededBy?.ref || ticket.completion?.supersededBy?.ref} through ${by}`, outcome: 'superseded' });
@@ -873,9 +886,13 @@ function projectRelative(target: string, projectPath: string): string | null {
   return linkedWorktreeRelative(target, projectPath);
 }
 
+// add accepts a declared path outside the repo as non-repo output, so that path
+// is matched as declared instead of refused for having no repo-relative form (GH-300).
 function inScope(target: string, scope: HelperScope): boolean {
-  const relative = projectRelative(canonicalPath(target), canonicalPath(scope.projectPath));
-  return relative != null && scopeMatch(relative, scope.files);
+  const canonicalTarget = canonicalPath(target);
+  const relative = projectRelative(canonicalTarget, canonicalPath(scope.projectPath));
+  if (relative != null) return scopeMatch(relative, scope.files);
+  return scopeMatch(canonicalTarget, scope.files.filter((file) => path.isAbsolute(file)).map(canonicalPath));
 }
 
 function evidencePathRelation(target: string, scope: EvidenceScope): 'inside' | 'related' | null {
