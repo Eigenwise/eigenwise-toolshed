@@ -641,8 +641,9 @@ async function cmdIntegrate(opts, positional) {
       } else {
         target = store.ticketIntegrationTarget(slug, ticket);
       }
+      target = store.deliveryIntegrationTarget(slug, target, opts["integration-branch"]);
     } catch (error) {
-      fail(`integrate: ${error && error.message || error}`);
+      fail(`integrate:${error && error.message || error}`);
       return;
     }
   }
@@ -680,11 +681,13 @@ async function cmdIntegrate(opts, positional) {
   const delivery = refs.length > 1 ? store.integrateSubmissionWave(slug, refs, {
     mode,
     target,
+    integrationBranch: opts["integration-branch"],
     skipVerify: !!opts["skip-verify"],
     verificationWaiver
   }) : store.integrateSubmission(slug, idOrRef, {
     mode,
     target,
+    integrationBranch: opts["integration-branch"],
     skipVerify: !!opts["skip-verify"],
     verificationWaiver
   });

@@ -262,6 +262,11 @@ test('a shim that starts before its proxy serves the fallback catalog without pe
   });
   await new Promise((resolve) => proxy.listen(proxyPort, '127.0.0.1', resolve));
   testContext.after(() => new Promise((resolve) => proxy.close(resolve)));
+  testContext.after(() => assert.equal(
+    fs.existsSync(environment.HOME),
+    false,
+    'a copied environment still has its supervisor stopped before the home is removed',
+  ));
 
   await getJson(`${baseUrl}/v1/models`);
   await waitUntil(() => fs.existsSync(cache), 'the first refresh tick after the proxy answered did not write the discovery cache');

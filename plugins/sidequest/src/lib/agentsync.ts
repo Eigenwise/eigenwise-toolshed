@@ -23,16 +23,24 @@
  * codex-gateway shim resolves per request (SQ-347/SQ-348), overwriting
  * output_config.effort, so per-effort dispatch defs carried dead frontmatter.
  * The Claude ladder stays per-effort: the Agent tool has no effort parameter,
- * leaving frontmatter as the only carrier. The def set is therefore fixed —
- * route edits never write or register agent files.
+ * leaving frontmatter as the only carrier. The bundled def set is therefore
+ * fixed — route edits never write or register agent files.
+ *
+ * A discovered model the shim does not serve (GH-263) cannot ride the Agent
+ * `model` parameter either: it only accepts sonnet/opus/haiku/fable (GH-361).
+ * syncDiscoveredModelAgents() writes a user-scope ladder per current catalog
+ * entry instead, `model: <full id>` and `effort:` both in frontmatter (verified
+ * on the wire 2026-09-29 against Claude Code 2.1.284: the subagent request
+ * carried the pinned id and output_config.effort). It runs at SessionStart and
+ * again at dispatch, and prunes definitions for entries the catalog dropped.
  *
  * syncExecAgents() renders through scripts/_exec-template.md via
  * renderExecAgent() below, so the ticket-execution protocol body stays in one
  * place for every generated file.
  *
  * Lifecycle safety: every stable executor file this module writes starts with
- * the generation-two MARKER on its own line. A file WITHOUT either recognized
- * marker — whether or not its name collides with one we'd generate — is NEVER
+ * the generation-two MARKER on its own line, and every discovered-model file
+ * with DISCOVERED_MODEL_MARKER. A file WITHOUT its recognized marker — whether or not its name collides with one we'd generate — is NEVER
  * written, overwritten, or deleted; it isn't ours.
  */
 
@@ -40,7 +48,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('node:child_process');
-const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require('./exec-names.js');
+const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, discoveredModelExecutorName, readOnlyDiscoveredModelExecutorName, isDiscoveredModelExecutor, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require('./exec-names.js');
 const { createWorktreeLease, canonicalPath } = require('./kernel/worktree.js');
 const crypto = require('crypto');
 const store = require('./store.js');
@@ -62,6 +70,8 @@ const TEMPLATE_PATH = path.join(__dirname, '..', 'scripts', '_exec-template.md')
 // treats gen2 files as user-authored and leaves them alone during version skew.
 const LEGACY_MARKER = '<!-- generated-by: sidequest-agentsync -->';
 const MARKER = '<!-- generated-by: sidequest-agentsync gen2 -->';
+// Distinct from MARKER so the bundled-ladder migration never deletes these, and this sync never touches that.
+const DISCOVERED_MODEL_MARKER = '<!-- generated-by: sidequest-agentsync discovered-model -->';
 // No generational marker change is needed for temporary definitions: they are
 // nonce-named and short-lived, so stale version sessions cannot disrupt the
 // stable ladder through this cleanup path.
@@ -113,34 +123,34 @@ function routeMarker(dispatchModel?: any, effort?: any, ticketRef?: any) {
   return marker;
 }
 
+function recipeAgentWiring(exec?: any, effort?: any) {
+  if (exec.backend === 'codex') {
+    return {
+      agent: { model: DISPATCH_MODEL_ID, promptPrefix: `${routeMarker(exec.dispatchModel, effort)}\n\n` },
+      effortCarrier: 'marker',
+    };
+  }
+  if (isDiscoveredModelExecutor(exec.agent)) {
+    ensureDiscoveredModelAgents(exec.agent);
+    return { agent: { model: null, subagentType: exec.agent, promptPrefix: '' }, effortCarrier: 'definition' };
+  }
+  return { agent: { model: exec.model, promptPrefix: '' }, effortCarrier: 'none' };
+}
+
 function workflowRecipe(category?: any, resolved?: any) {
   const exec = resolved && resolved.exec;
   if (!category || !exec) throw new Error('A resolved category route is required.');
 
-  const recipe: any = {
+  return {
     project: category.project,
     category: category.id,
     categoryName: category.name,
     backend: exec.backend,
     route: { model: resolved.model, effort: resolved.effort },
     runsLabel: exec.runsLabel,
-    agent: null,
-    effortCarrier: null,
+    ...recipeAgentWiring(exec, resolved.effort),
     warnings: Array.isArray(resolved.warnings) ? resolved.warnings.slice() : [],
   };
-
-  if (exec.backend === 'codex') {
-    recipe.agent = {
-      model: DISPATCH_MODEL_ID,
-      promptPrefix: `${routeMarker(exec.dispatchModel, resolved.effort)}\n\n`,
-    };
-    recipe.effortCarrier = 'marker';
-  } else {
-    recipe.agent = { model: exec.model, promptPrefix: '' };
-    recipe.effortCarrier = 'none';
-  }
-
-  return recipe;
 }
 
 // Render one agent file's full source from the shared template. `name` and
@@ -764,8 +774,10 @@ function ticketIsolationContract(ticket?: any, projectPath?: any) {
     'Worktree isolation contract: this dispatch runs in its own linked worktree, never in the shared checkout.',
     'The harness refuses heredocs in isolated worktrees; Write scripts to your scratchpad and run them by path.',
     `Expected worktree root: ${expected}`,
+    'If the claim result carries `worktreeCorrection`, its `worktree` replaces this root: siblings launched together can be recorded against each other\'s checkouts until they claim.',
     'Confirm it before your first write, and again after any resume from a coordinator message: `git rev-parse --git-dir` must differ from `git rev-parse --git-common-dir`.',
     `If they match you are in the shared checkout ${root}. Stop. Write nothing, tell the orchestrator this ticket lost its worktree and needs re-dispatch, and name any work you already have staged there so it can be committed out of the shared tree rather than lost.`,
+    `If it is a DIFFERENT linked worktree, the binding is crossed: commit, submit and verify-capture refuse and name the other live claim, because anything the board diffs in ${expected} would be that executor's work, test names included. Do not enter the bound tree or work around the refusal. Follow the refusal's remedy and ask the orchestrator to rebind this live claim to that checkout (\`dispatch\` with \`claimHolder\`, \`worktree\` and \`recoveryEvidence\`). When both claims were launched together and hold exactly each other's checkouts with neither carrying another ticket's commits, the board swaps the two records onto their own checkouts at once. Otherwise it allows the rebind only once the checkout's HEAD is this claim's own commit: commit your work with git in the checkout you run in, pin that hash at \`refs/sidequest/${ticket.ref}\`, and comment it as the crossing evidence before asking for the rebind. If you have no exact crossing to swap and no commit to pin, or the rebind is refused, release this ticket with kind \`technical_blocker\` and status \`todo\`, quoting the refusal as its command and output evidence, so the orchestrator redispatches it onto a checkout of its own and salvages your commit by hash.`,
   ].join('\n')];
 }
 
@@ -1268,6 +1280,7 @@ function agentSpawn(name?: any, isolation?: any, model?: any, agentType?: any, p
   const taskLabel = suppliedLabel || 'Sidequest ticket executor.';
   const reducedAgentSchema = options?.reducedAgentSchema === true;
   const subagentType = bundledAgentType(agentType || name);
+  ensureDiscoveredModelAgents(subagentType);
   return Object.assign({ subagent_type: subagentType, description: taskLabel },
     reducedAgentSchema ? {} : { name, ...unattendedSpawnMode(subagentType) },
     isolation ? { isolation } : {}, model ? { model } : {}, prompt ? { prompt } : {});
@@ -1414,12 +1427,95 @@ function migrateExecAgents(_prefs?: any, opts?: SyncOptions): SyncResult {
   return { written: 0, removed, unchanged };
 }
 
+function renderDiscoveredModelAgent(name: string, effort: string, modelId: string): string {
+  return renderExecAgent({ name, effort, modelId, marker: DISCOVERED_MODEL_MARKER });
+}
+
+function renderReadOnlyDiscoveredModelAgent(name: string, effort: string, modelId: string, readOnlyDeniedTools?: any): string {
+  const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
+  return withoutPermissionMode(renderExecAgent({
+    name,
+    effort,
+    modelId,
+    marker: DISCOVERED_MODEL_MARKER,
+    extraNote: readOnlyNote(),
+    tools: readOnlyTools.tools,
+    disallowedTools: readOnlyTools.disallowedTools,
+  }));
+}
+
+function discoveredModelAgentSources(readOnlyDeniedTools?: any): Map<string, string> {
+  const sources = new Map<string, string>();
+  for (const backend of store.discoveredModelBackends()) {
+    for (const effort of EXEC_EFFORTS) {
+      const name = discoveredModelExecutorName(backend.agentSlug, effort);
+      const readOnlyName = readOnlyDiscoveredModelExecutorName(backend.agentSlug, effort);
+      sources.set(`${name}.md`, renderDiscoveredModelAgent(name, effort, backend.id));
+      sources.set(`${readOnlyName}.md`, renderReadOnlyDiscoveredModelAgent(readOnlyName, effort, backend.id, readOnlyDeniedTools));
+    }
+  }
+  return sources;
+}
+
+function readTextOrNull(filePath: string): string | null {
+  try { return fs.readFileSync(filePath, 'utf8'); } catch (_) { return null; }
+}
+
+function agentFileNames(dir: string): string[] {
+  try { return fs.readdirSync(dir); } catch (_) { return []; }
+}
+
+function pruneDiscoveredModelAgents(dir: string, wanted: Map<string, string>): number {
+  let removed = 0;
+  for (const filename of agentFileNames(dir)) {
+    if (wanted.has(filename) || !isDiscoveredModelExecutor(filename.replace(/\.md$/, ''))) continue;
+    if (!readTextOrNull(path.join(dir, filename))?.includes(DISCOVERED_MODEL_MARKER)) continue;
+    fs.rmSync(path.join(dir, filename), { force: true });
+    removed++;
+  }
+  return removed;
+}
+
+// A same-named file without DISCOVERED_MODEL_MARKER is the user's, so it is left alone.
+function writeOwnedDiscoveredModelAgent(filePath: string, source: string): boolean {
+  const previous = readTextOrNull(filePath);
+  if (previous === source || (previous !== null && !previous.includes(DISCOVERED_MODEL_MARKER))) return false;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, source);
+  return true;
+}
+
+// Writes one executor ladder per discovered model the shim does not serve and removes the ladder of any
+// model the catalog no longer lists.
+function syncDiscoveredModelAgents(opts?: SyncOptions): SyncResult {
+  const dir = opts?.dir || defaultAgentsDir();
+  const wanted = discoveredModelAgentSources(opts?.readOnlyDeniedTools);
+  const removed = pruneDiscoveredModelAgents(dir, wanted);
+  let written = 0;
+  for (const [filename, source] of wanted) {
+    if (writeOwnedDiscoveredModelAgent(path.join(dir, filename), source)) written++;
+  }
+  return { written, removed, unchanged: wanted.size - written };
+}
+
+// Every spawn and recipe that names a discovered-model executor re-syncs first, so a catalog refreshed
+// after SessionStart still has its definition registered by the time the caller runs Agent.
+function ensureDiscoveredModelAgents(executor?: any, opts?: SyncOptions & { waitMs?: number }) {
+  if (!isDiscoveredModelExecutor(executor)) return;
+  if (syncDiscoveredModelAgents(opts).written > 0) waitForNativeAgentReload(opts?.waitMs);
+}
+
 function syncExecAgentsIfChanged(_prefs?: any, opts?: SyncOptions): FastSyncResult {
-  const result = migrateExecAgents(_prefs, opts);
-  return Object.assign({}, result, {
-    skipped: result.removed === 0,
+  const migrated = migrateExecAgents(_prefs, opts);
+  const discovered = syncDiscoveredModelAgents(opts);
+  const removed = migrated.removed + discovered.removed;
+  return {
+    written: discovered.written,
+    removed,
+    unchanged: migrated.unchanged + discovered.unchanged,
+    skipped: removed === 0 && discovered.written === 0,
     installHash: stableInstallHash(EXECUTOR_SKILLS, opts?.readOnlyDeniedTools),
-  });
+  };
 }
 
 // An explicit directory is a build and test seam. SessionStart and every CLI
@@ -1522,6 +1618,9 @@ module.exports = {
   ticketIsolation,
   syncExecAgents,
   syncExecAgentsIfChanged,
+  syncDiscoveredModelAgents,
+  ensureDiscoveredModelAgents,
+  DISCOVERED_MODEL_MARKER,
   migrateExecAgents,
   stableInstallHash,
   EXECUTOR_CONTRADICTION_RULE,

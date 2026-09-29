@@ -37,6 +37,11 @@ server-side queue:
 - **Per-project mute** — a muted board queues nothing, regardless of per-kind settings; its rail row
   shows a muted-bell mark.
 - **Desktop toasts** are a separate opt-in (settings popover), alongside the inbox.
+- **Bounded inbox** — unread notifications older than `SIDEQUEST_NOTIFICATIONS_MAX_AGE_DAYS`
+  (default 30) are dropped, and only the newest `SIDEQUEST_NOTIFICATIONS_MAX_UNREAD` (default 200)
+  unread are kept; a reminder that has not fired yet counts as newest. Read ones keep the newest
+  100. A ticket event's notification is written after the ticket change commits, so a failed
+  notification write never loses the ticket change.
 
 ## Reminders
 
