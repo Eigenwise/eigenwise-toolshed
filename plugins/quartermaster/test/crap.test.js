@@ -1069,6 +1069,21 @@ test('a dropped function that starts on the line of another function\'s lizard r
   assert.deepEqual(scannedRows(source, [{ name: 'outer', complexity: 1, start: 1, end: 1 }]), ['inner@1-4 cc=4 ordinal=0']);
 });
 
+test('a definition lizard reports as (anonymous) on its line has that row and gets no second one from the source', () => {
+  // The owner's review input (arrowType): lizard names a function with an arrow-typed parameter "(anonymous)".
+  const source = [
+    'function f<T>(work: () => T, t = 5) {',
+    '  if (t > 1 && t < 9) return work();',
+    '  return t ? work() : work();',
+    '}',
+    '',
+  ].join('\n');
+  const rows = [{ file: 'src/dropped.ts', ordinal: 0, name: '(anonymous)', complexity: 4, start: 1, end: 4 }];
+
+  assert.deepEqual(scannedRows(source, rows), []);
+  assert.equal(withBodySpans(rows, () => source).length, 1);
+});
+
 test('a regex whose character class holds a slash is one literal, so the function around it still gets its row', () => {
   // The owner's review input: `[\\/]` is the usual path-separator class. `/\\+/g` is the control without a class.
   const source = [

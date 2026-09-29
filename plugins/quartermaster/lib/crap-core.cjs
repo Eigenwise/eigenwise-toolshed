@@ -445,10 +445,15 @@ function rowStart(line, name) {
   return `${line}\u0000${name}`;
 }
 
+/** lizard names a function whose parameter list holds an arrow type (`work: () => T`) "(anonymous)", so that row stands for whatever is defined on its line. */
+function hasRowFor(rowStarts, line, name) {
+  return rowStarts.has(rowStart(line, name)) || rowStarts.has(rowStart(line, ANONYMOUS));
+}
+
 /** Arrows are left out: lizard keeps a row for an arrow whose parameter list holds a call. */
 function scannedEntry(tokens, file, open, { rowStarts, signatureOf }) {
   const head = definitionHead(tokens, open);
-  if (!head || rowStarts.has(rowStart(tokens[head.first].line, head.name))) return null;
+  if (!head || hasRowFor(rowStarts, tokens[head.first].line, head.name)) return null;
   const signature = signatureOf(tokens, open);
   if (!signature || tokens[signature.start].value !== '{') return null;
   const { close, start, end } = signature;
@@ -456,7 +461,7 @@ function scannedEntry(tokens, file, open, { rowStarts, signatureOf }) {
   return { file, name: head.name, complexity, start: tokens[head.first].line, end: tokens[end].line, source: SCANNED_SOURCE };
 }
 
-/** A row already stands for a definition when it starts on the definition's line under the same name; another function there does not. */
+/** A row already stands for a definition when it starts on the definition's line under the same name or as (anonymous); another named function there does not. */
 function definitionsWithoutRow(tokens, file, rows, signatureOf) {
   const scan = { rowStarts: new Set(rows.map((entry) => rowStart(entry.start, ownName(entry.name)))), signatureOf };
   const found = [];
@@ -487,7 +492,7 @@ function withOrdinals(scanned, present) {
 /**
  * lizard reports no row at all for a `function`, method or constructor whose parameter list holds a call
  * (`a = f(), b`), so that function is never scored. A definition with such a parameter list, unless a row
- * of the same name starts on its line, is read from the source instead. It has no lizard complexity to
+ * of the same name (or an "(anonymous)" one) starts on its line, is read from the source instead. It has no lizard complexity to
  * compare, so its own branch count stands alone. lizard is also left unable to read some plain functions
  * after it, so once a dropped function is found, every other definition in the file without a row is read
  * the same way.
