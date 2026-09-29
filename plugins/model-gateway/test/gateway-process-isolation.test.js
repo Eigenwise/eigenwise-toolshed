@@ -653,6 +653,20 @@ test('sync gateway fixture cleanup removes helper-owned homes and preserves supp
   assert.equal(fs.existsSync(suppliedHome), true);
 });
 
+test('gateway fixture home teardown stops a supervisor even after later commands reused its home', async (t) => {
+  const environment = gatewayTestEnvironment(t, { CODEX_GATEWAY_REQUEST_LOG: '0' });
+  let supervisorPid = null;
+  // Runs after the home teardown and before startGateway's own stop hook, so it sees what
+  // the home teardown alone left behind.
+  t.after(() => {
+    assert.equal(processIsRunning(supervisorPid), false, 'home teardown stopped the supervisor before removing its home');
+    assert.equal(fs.existsSync(environment.HOME), false);
+  });
+  supervisorPid = (await startGateway(t, 'serve-shim', environment)).child.pid;
+  const status = spawnGatewayProcess(t, process.execPath, [CLI, 'status'], { env: environment, stdio: 'ignore' });
+  await waitForExit(status);
+});
+
 test('isolated ensure preserves a foreign serve-shim process and cleans its own supervisor', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-ensure-isolation-'));
   const foreignScript = path.join(home, 'foreign-install', 'model-gateway', 'bin', 'model-gateway.js');
