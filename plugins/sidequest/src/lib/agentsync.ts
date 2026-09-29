@@ -960,10 +960,30 @@ function rejectedSubmissionRows(ticket?: any) {
   }));
 }
 
+// A later submit stamps supersededAt on the rejection it replaces, so an
+// unsuperseded newest rework is the repair this dispatch exists to make.
+function pendingReworkBody(ticket?: any) {
+  const rejections = Array.isArray(ticket?.rejectedSubmissions)
+    ? ticket.rejectedSubmissions.filter((entry: any) => entry)
+    : [];
+  const latest = rejections[rejections.length - 1];
+  if (!latest || latest.rejectionKind !== 'rework' || latest.supersededAt || ticket?.submission) return null;
+  const candidate = latest.commit || latest.sourceRevision?.value || '(unknown candidate)';
+  return [
+    '## Pending rework',
+    `This dispatch repairs a rejected candidate. ${latest.rejectedBy || 'The orchestrator'} sent candidate ${candidate} back for rework${latest.rejectedAt ? ` at ${latest.rejectedAt}` : ''} and returned the ticket to todo. This rejection overrides any earlier comment that accepted, approved, or queued that candidate, so this launch is not a duplicate: do the repair below and submit a fresh candidate. Do not release over that earlier acceptance as a contradiction or oracle question.`,
+    `Rejected candidate: ${candidate}${latest.quarantineRef ? ` (preserved at ${latest.quarantineRef})` : ''}`,
+    `Rework reason:\n${latest.reason || '(No reason recorded.)'}`,
+    `Review:\n${latest.review || '(No review evidence recorded.)'}`,
+  ].join('\n\n');
+}
+
 function rejectedSubmissionHistoryBody(ticket?: any) {
   const rows = rejectedSubmissionRows(ticket);
   if (!rows.length) return null;
+  const pendingRework = pendingReworkBody(ticket);
   return [
+    ...(pendingRework ? [pendingRework] : []),
     '## Rejected submission history',
     `${rows.length} prior candidate${rows.length === 1 ? ' was' : 's were'} rejected. Do not resubmit any rejected commit or include one in an admitted range.`,
     ...rows.map((rejected: any) => [

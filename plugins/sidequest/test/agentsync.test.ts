@@ -99,6 +99,12 @@ test('repair briefings include the complete rejection history', () => {
   assert.match(briefing, /SQ-1646: the audit reproduced the rejected-commit bypass\./);
   assert.match(briefing, /SQ-1659: the audit found the repeated-rework gap\./);
   assert.doesNotMatch(briefing, /fetch the complete oldest-first history|context_page retrieval/);
+  assert.doesNotMatch(briefing, /## Pending rework/, 'rows without a rework rejection are history only');
+  const superseded = agentsync.renderTicketBriefing({
+    ...ticket,
+    rejectedSubmissions: [{ ...ticket.rejectedSubmissions[1], rejectionKind: 'rework', supersededAt: '2026-08-10T00:00:00.000Z' }],
+  }, 'repair-briefing-token');
+  assert.doesNotMatch(superseded, /## Pending rework/, 'a rework a later submit superseded is no longer pending');
   assert.deepStrictEqual(agentsync.rejectedSubmissionRows(ticket).map((entry: any) => entry.commit), [
     'abcdef1234567',
     'fedcba7654321',

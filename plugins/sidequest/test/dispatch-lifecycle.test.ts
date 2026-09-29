@@ -3911,6 +3911,37 @@ test('SQ-2117: a pending submission refuses preparation instead of minting an un
   assert.equal(store.releaseTicket(slug, ticket.ref, 'pending-submission-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
+test('GH-349: a reworked ticket\'s fresh dispatch briefing states the pending rework above the comment thread', () => {
+  const ticket = createFixture('pending rework briefing fixture');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `pending-rework-${Date.now()}` });
+  const owner = `pending-rework-owner-${ticket.id}`;
+  assert.equal(store.claimTicket(slug, ticket.ref, owner, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  commitFixtureChange();
+  const candidateCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  assert.equal(store.submitTicket(slug, ticket.ref, owner, { commit: candidateCommit, source: 'test' }).ok, true);
+  // The executor that reads only the thread sees this acceptance and treats the relaunch as a duplicate.
+  assert.equal(store.addComment(slug, ticket.ref, { by: 'orchestrator', body: 'Candidate accepted; queued for integration.' }).ok, true);
+  const review = 'SQ-9001 review: the parser still drops trailing fields.';
+  const reason = 'Repair trailing-field parsing and resubmit.';
+  assert.equal(store.reworkSubmission(slug, ticket.ref, { by: owner, review, reason, source: 'test' }).ok, true);
+
+  const replacement = store.prepareDispatch(slug, ticket.ref, { sessionId: `pending-rework-replacement-${Date.now()}` });
+  const briefing = agentsync.renderTicketBriefing(store.getTicket(slug, ticket.ref), replacement.token, slug, PROJECT);
+  const pending = briefing.indexOf('## Pending rework');
+  const thread = briefing.indexOf('## Newest ticket evidence and comments');
+  assert.ok(pending >= 0, 'the briefing names the pending rework');
+  assert.ok(thread > pending, 'the pending rework precedes the comment thread');
+  const section = briefing.slice(pending, briefing.indexOf('\n## ', pending + 1));
+  assert.ok(section.includes(candidateCommit), 'the pending rework names the rejected candidate');
+  assert.ok(section.includes(reason), 'the pending rework carries the rework reason');
+  assert.ok(section.includes(review), 'the pending rework carries the review');
+  assert.match(section, /not a duplicate/);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'pending-rework-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+});
+
 test('claim holders can release routed write scope without submitting first', () => {
   const ticket = createFixture('claim-holder release fixture');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `claim-holder-release-${Date.now()}` });
