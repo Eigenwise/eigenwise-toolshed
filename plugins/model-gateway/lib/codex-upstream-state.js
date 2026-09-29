@@ -6,7 +6,7 @@ const { writeFileAtomically } = require('./atomic-file.js');
 const { CODEX_UPSTREAM_BLOCK_PATH, STATE } = require('./runtime.js');
 
 const CODEX_UPSTREAM_UNAVAILABLE_PATH = path.join(STATE, 'codex-upstream-unavailable.json');
-const UPSTREAM_UNAVAILABLE_TTL_MS = 60_000;
+const UPSTREAM_UNAVAILABLE_TTL_MS = 30_000;
 // A 429 names its own end: Retry-After, or the reset instant claude-code-proxy copies from a
 // ChatGPT usage limit. Without either the block still has to lift by itself (issue #190).
 const RATE_LIMIT_BLOCK_DEFAULT_MS = 60_000;
@@ -78,6 +78,7 @@ function setUpstreamUnavailable({ statusCode, now = Date.now() }) {
     state: 'upstream-unavailable',
     observedAt: new Date(now).toISOString(),
     observedAtMs: now,
+    expiresAt: new Date(now + UPSTREAM_UNAVAILABLE_TTL_MS).toISOString(),
     statusCode,
   });
 }

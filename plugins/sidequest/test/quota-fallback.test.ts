@@ -510,3 +510,42 @@ test('dispatch failures have closed shapes and terminal attempts stay bounded', 
   }
   assert.equal(store.getTicket(slug, bounded.ref).dispatch.attempts.length, 8);
 });
+
+test('GH-217: a Codex category whose sign-in is missing dispatches its Claude fallback and names it', async (t: import('node:test').TestContext) => {
+  const signInRequired = 'Codex dispatch refused: ChatGPT sign-in is required. Run `node "gw" login`, finish browser OAuth, then run `node "gw" setup` and retry.';
+  const unready = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-quota-fallback-unready-'));
+  fs.mkdirSync(path.join(unready, 'model-gateway'));
+  fs.writeFileSync(path.join(unready, 'model-gateway', 'catalog.json'), JSON.stringify({
+    schemaVersion: 4,
+    updatedAt: new Date().toISOString(),
+    providers: { codex: { ready: false, state: 'auth-missing', message: signInRequired } },
+    models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra', provider: 'codex' }],
+  }));
+  process.env.SIDEQUEST_DISCOVERY_DIRS = unready;
+  t.after(() => { process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY; });
+  store.setCategory({
+    id: 'codex.signed-out',
+    name: 'Codex signed out',
+    route: { model: 'codex-gpt-5-6-terra', effort: 'high' },
+    fallback: { model: 'sonnet', effort: 'high' },
+    enabled: true,
+  });
+  const ticket = store.createTicket(slug, {
+    title: 'Signed-out Codex route',
+    description: 'Where: fallback fixture. Contract: run on the named category fallback. Verify: inspect the dispatch result.',
+    verify: 'node --version',
+    category: 'codex.signed-out',
+    source: 'test',
+  });
+
+  const dispatched = await callTool('dispatch', { allowUnscoped: true, project: slug, ref: ticket.ref, full: true });
+
+  assert.equal(dispatched.exec.backend, 'claude');
+  assert.equal(dispatched.exec.runsModel, 'sonnet');
+  const expectedReason = `category fallback sonnet replaced unavailable codex-gpt-5-6-terra. ${signInRequired}`;
+  assert.equal(dispatched.fallbackReason, expectedReason, 'the dispatch result names the fallback and the login command');
+  assert.ok(
+    store.dispatchUncertaintyWarnings(store.getTicket(slug, ticket.ref), slug).includes(`Dispatch warning: Route fallback: ${expectedReason}`),
+    'the executor briefing carries the same fallback line',
+  );
+});

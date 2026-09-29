@@ -922,14 +922,17 @@ function dispatchUncertaintyWarnings(ticket?: any, slug?: any) {
   const projectPath = slug ? readMeta(slug)?.path : null;
   const verifyPath = verifyPathWarning(ticket, projectPath);
   if (verifyPath) warnings.push(verifyPath);
-  const dispatch = dispatchState(ticket);
-  if (dispatch) {
-    const setupIncomplete = worktreeSetupIncompleteWarning(dispatch);
-    if (setupIncomplete) warnings.push(setupIncomplete);
-    const staleWorktreeWarning = staleWorktreeCwdWarning(process.cwd(), projectPath, dispatch.sharedTree === true);
-    if (staleWorktreeWarning) warnings.push(staleWorktreeWarning);
-  }
+  warnings.push(...preparedDispatchWarnings(dispatchState(ticket), projectPath));
   return warnings.map((warning) => `Dispatch warning: ${warning}`);
+}
+
+function preparedDispatchWarnings(dispatch?: any, projectPath?: any): string[] {
+  if (!dispatch) return [];
+  return [
+    dispatch.fallbackReason ? `Route fallback: ${dispatch.fallbackReason}` : null,
+    worktreeSetupIncompleteWarning(dispatch),
+    staleWorktreeCwdWarning(process.cwd(), projectPath, dispatch.sharedTree === true),
+  ].filter((warning): warning is string => Boolean(warning));
 }
 
 function worktreeVisibilityPaths(ticket?: any, projectPath?: any) {
