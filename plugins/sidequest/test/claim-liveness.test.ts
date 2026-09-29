@@ -876,6 +876,28 @@ test('SQ-83: the failed= parse anchors on the first match, not a later one the r
   git(['commit', '-m', 'negative control failed anchor fixture']);
 });
 
+test('SQ-95: a failed= inside the assertion prose does not end the parse before the command\'s failed=<n>', () => {
+  const by = 'negative-control-failed-in-assertion';
+  const ticket = addNegativeControlTicket('negative control accepts failed= inside assertion prose', by);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=x; assertion=returns failed=0 on empty input; npm test failed=2 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const result = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.notEqual(result.reason, 'negative_control_evidence_required');
+  assert.notEqual(result.reason, 'negative_control_zero_failures');
+  assert.equal(result.ok, true, result.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control failed in assertion prose fixture']);
+});
+
 test('SQ-83: a malformed newest marker without a real failed count is skipped in favor of an older valid one', () => {
   const by = 'negative-control-skip-to-older';
   const ticket = addNegativeControlTicket('negative control skips to an older valid marker', by);

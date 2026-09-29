@@ -953,6 +953,21 @@ type NegativeControlMarker =
   | { ok: true; target: string; assertion: string; command: string; failed: number }
   | { ok: false; detail: string };
 
+// A `failed=<n>` that sits inside the assertion prose itself (e.g. "assertion=returns
+// failed=0 on empty input; npm test failed=2") has no ';' before it within the
+// assertion text, because the ';' that ends assertion= prose has not been reached yet.
+// That rules it out as the field's real failed=<n>: skip forward to the next match
+// instead of refusing outright. The first match whose prefix DOES contain a ';' is the
+// one recovery guidance's own ';'-separated context permits (see SQ-83).
+function firstFailedMatchAfterSemicolon(assertionText: string): RegExpExecArray | null {
+  const failedPattern = /\s+failed=(\d+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = failedPattern.exec(assertionText))) {
+    if (assertionText.slice(0, match.index).includes(';')) return match;
+  }
+  return null;
+}
+
 // Each field ends where the next one begins, not at the first ';' in the line: a
 // target= value legitimately holds semicolon-joined paths or prose, and reading it
 // with [^;]+ ended the whole parse there, so a marker that named its evidence was
@@ -964,18 +979,13 @@ function parseNegativeControlMarker(markerLine: string): NegativeControlMarker {
   const assertionAt = targetText.search(/;\s*assertion=/);
   if (assertionAt < 0) return { ok: false, detail: 'no "; assertion=" follows its target= value' };
   const assertionText = targetText.slice(assertionAt).replace(/^;\s*assertion=/, '');
-  // Anchored on the FIRST "failed=<n>", not a greedy `(.*)` that backs off from the end
-  // of the whole line: recovery guidance explicitly allows a ';' in the context that
-  // follows failed=<n> (e.g. "npm test failed=2 failure-kind=assertion; base run
-  // failed=0"), and a greedy match would back off onto that later ';' and read the
-  // wrong, later failed=<n> instead of the command that actually names the evidence.
-  const failedMatch = assertionText.match(/\s+failed=(\d+)/);
+  const failedMatch = firstFailedMatchAfterSemicolon(assertionText);
   if (!failedMatch) return { ok: false, detail: 'no "<command> failed=<n>" follows its assertion= value' };
   const beforeFailed = assertionText.slice(0, failedMatch.index);
-  // The command starts after the LAST ';' before that first failed=<n>, the same way
-  // target= tolerates semicolons: a ';' inside assertion= is data, not a delimiter.
+  // The command starts after the LAST ';' before that failed=<n>, the same way target=
+  // tolerates semicolons: a ';' inside assertion= is data, not a delimiter. The helper
+  // above already guarantees this prefix contains a ';'.
   const semiIndex = beforeFailed.lastIndexOf(';');
-  if (semiIndex < 0) return { ok: false, detail: 'no "<command> failed=<n>" follows its assertion= value' };
   return {
     ok: true,
     target: targetText.slice(0, assertionAt).trim(),

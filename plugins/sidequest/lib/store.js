@@ -956,6 +956,14 @@ function negativeControlTestReport(comments, expectedTestNames = []) {
   return { markerLines, unreported };
 }
 const NEGATIVE_CONTROL_MARKER_TAG = "[sidequest:negative-control]";
+function firstFailedMatchAfterSemicolon(assertionText) {
+  const failedPattern = /\s+failed=(\d+)/g;
+  let match;
+  while (match = failedPattern.exec(assertionText)) {
+    if (assertionText.slice(0, match.index).includes(";")) return match;
+  }
+  return null;
+}
 function parseNegativeControlMarker(markerLine) {
   const afterTag = markerLine.slice(NEGATIVE_CONTROL_MARKER_TAG.length).replace(/^\s+/, "");
   if (!afterTag.startsWith("target=")) return { ok: false, detail: "it does not begin with target=" };
@@ -963,11 +971,10 @@ function parseNegativeControlMarker(markerLine) {
   const assertionAt = targetText.search(/;\s*assertion=/);
   if (assertionAt < 0) return { ok: false, detail: 'no "; assertion=" follows its target= value' };
   const assertionText = targetText.slice(assertionAt).replace(/^;\s*assertion=/, "");
-  const failedMatch = assertionText.match(/\s+failed=(\d+)/);
+  const failedMatch = firstFailedMatchAfterSemicolon(assertionText);
   if (!failedMatch) return { ok: false, detail: 'no "<command> failed=<n>" follows its assertion= value' };
   const beforeFailed = assertionText.slice(0, failedMatch.index);
   const semiIndex = beforeFailed.lastIndexOf(";");
-  if (semiIndex < 0) return { ok: false, detail: 'no "<command> failed=<n>" follows its assertion= value' };
   return {
     ok: true,
     target: targetText.slice(0, assertionAt).trim(),
