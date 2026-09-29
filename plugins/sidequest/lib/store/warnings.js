@@ -26,8 +26,11 @@ function createWarnings({ boardConfig, categoryReadOnly, claimReclaimable, coerc
     "dart",
     "deno",
     "dotnet",
+    "echo",
     "elixir",
     "eslint",
+    "exit",
+    "false",
     "flutter",
     "git",
     "go",
@@ -53,12 +56,39 @@ function createWarnings({ boardConfig, categoryReadOnly, claimReclaimable, coerc
     "rake",
     "ruby",
     "sh",
+    "test",
     "tox",
+    "true",
     "tsc",
     "uv",
     "vitest",
     "yarn"
   ]);
+  function executableSuffixes() {
+    return process.platform === "win32" ? ["", ...String(process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";")] : [""];
+  }
+  function resolvableOnPath(name) {
+    for (const directory of String(process.env.PATH || "").split(path.delimiter)) {
+      for (const suffix of executableSuffixes()) {
+        if (isFile(path.join(directory, name + suffix))) return true;
+      }
+    }
+    return false;
+  }
+  function isFile(candidate) {
+    return Boolean(fs.statSync(candidate, { throwIfNoEntry: false })?.isFile());
+  }
+  const VERIFY_CWD_OUTSIDE_PROJECT = /^(?:[A-Za-z]:|\/)|(?:^|\/)\.\.(?:\/|$)/;
+  function normalizeVerifyCwd(value) {
+    const directory = String(value || "").trim().split(path.win32.sep).join("/").replace(/^(?:\.\/)+|\/+$/g, "");
+    if (VERIFY_CWD_OUTSIDE_PROJECT.test(directory)) {
+      throw new Error(`verifyCwd must be a directory relative to the project root that stays inside it; received ${JSON.stringify(String(value))}. Use a path such as plugins/app, or leave verifyCwd unset to run the verify command from the project root.`);
+    }
+    return directory === "." ? "" : directory;
+  }
+  function verifyBaseDirectory(ticket, projectPath) {
+    return path.resolve(String(projectPath || ""), String(ticket?.executorVerifyCwd || ""));
+  }
   function manualVerify(value) {
     return classifyVerificationKind(value, "command") === "manual";
   }
@@ -139,7 +169,7 @@ function createWarnings({ boardConfig, categoryReadOnly, claimReclaimable, coerc
       return ["Manual verification must use the exact prefix `manual: <what you checked>`. Otherwise provide a runnable command such as `npm run test` or `cd <repo-relative-dir> && <command>`."];
     }
     const first = command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[1] || command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[2] || "";
-    const likelyExecutable = VERIFY_BUILTINS.has(first.toLowerCase()) || /^\(cd\s/.test(command) || /[\\/]|\.(?:bat|cmd|com|exe|ps1|sh)$/i.test(first);
+    const likelyExecutable = VERIFY_BUILTINS.has(first.toLowerCase()) || /^\(cd\s/.test(command) || /[\\/]|\.(?:bat|cmd|com|exe|ps1|sh)$/i.test(first) || resolvableOnPath(first);
     const proseStarter = /^(?:check|confirm|ensure|inspect|look|open|read|review|verify)\s/i.test(command);
     const errors = [];
     if (/\r|\n/.test(command)) {
@@ -660,14 +690,14 @@ ${String(ticket?.description || "")}`;
     const verify = String(ticket?.executorVerify || "").trim();
     if (!verify || manualVerify(verify)) return null;
     const match = /^cd\s+(?:["']([^"']+)["']|([^&;\s]+))\s*&&/.exec(verify);
-    let directory = match ? path.resolve(String(projectPath || ""), match[1] || match[2]) : String(projectPath || "");
+    let directory = match ? path.resolve(verifyBaseDirectory(ticket, projectPath), match[1] || match[2]) : verifyBaseDirectory(ticket, projectPath);
     const outsideRepo = "the recorded verify command changes to a directory outside this repo. Run the exact string you record before submitting.";
     if (!projectPath || !relativePathWithin(projectPath, directory)) {
       return match ? outsideRepo : "the recorded verify command must run from the repository root or change to a directory that exists in this repo. Run the exact string you record before submitting.";
     }
     const commands = splitVerifyCommands(match ? verify.slice(match[0].length) : verify).segments;
     let deferredWarning = null;
-    let changedDirectory = Boolean(match);
+    let changedDirectory = Boolean(match || ticket?.executorVerifyCwd);
     for (const command of commands) {
       const step = /^cd\s+(?:["']([^"']+)["']|([^&;|\s]+))\s*$/.exec(command);
       if (step) {
@@ -726,7 +756,7 @@ ${String(ticket?.description || "")}`;
     const verify = String(ticket?.executorVerify || "").trim();
     if (!projectPath || !verify || manualVerify(verify)) return null;
     const absent = /* @__PURE__ */ new Set();
-    let directory = String(projectPath);
+    let directory = verifyBaseDirectory(ticket, projectPath);
     for (const segment of splitVerifyCommands(verify).segments) {
       const changeDirectory = /^cd\s+(?:["']([^"']+)["']|([^&;|\s]+))\s*$/.exec(segment);
       if (changeDirectory) {
@@ -881,14 +911,16 @@ ${String(ticket?.description || "")}`;
     if (verifyPath) warnings.push(verifyPath);
     const unquotedGlob = verifyUnquotedGlobIssue(ticket);
     if (unquotedGlob) warnings.push(unquotedGlob);
-    const dispatch = dispatchState(ticket);
-    if (dispatch) {
-      const setupIncomplete = worktreeSetupIncompleteWarning(dispatch);
-      if (setupIncomplete) warnings.push(setupIncomplete);
-      const staleWorktreeWarning = staleWorktreeCwdWarning(process.cwd(), projectPath, dispatch.sharedTree === true);
-      if (staleWorktreeWarning) warnings.push(staleWorktreeWarning);
-    }
+    warnings.push(...preparedDispatchWarnings(dispatchState(ticket), projectPath));
     return warnings.map((warning) => `Dispatch warning: ${warning}`);
+  }
+  function preparedDispatchWarnings(dispatch, projectPath) {
+    if (!dispatch) return [];
+    return [
+      dispatch.fallbackReason ? `Route fallback: ${dispatch.fallbackReason}` : null,
+      worktreeSetupIncompleteWarning(dispatch),
+      staleWorktreeCwdWarning(process.cwd(), projectPath, dispatch.sharedTree === true)
+    ].filter((warning) => Boolean(warning));
   }
   function worktreeVisibilityPaths(ticket, projectPath) {
     if (!projectPath || !Array.isArray(ticket?.files)) return [];
@@ -954,6 +986,9 @@ ${String(ticket?.description || "")}`;
     if (!files.length) return null;
     return `Worktree compatibility warning: ${files.join(", ")} bind-mounts the repository root, so a linked worktree is not the running app. Set worktreeIsolation: false for this board before dispatching.`;
   }
+  function retainReasonNote(continuation) {
+    return continuation.retainReason ? ` Retain reason: ${continuation.retainReason}.` : "";
+  }
   function dispatchWarnings(ticket, slug) {
     const warnings = dispatchUncertaintyWarnings(ticket, slug);
     if (dispatchState(ticket)?.unboundAttemptsSkipped) {
@@ -1002,10 +1037,10 @@ ${String(ticket?.description || "")}`;
     }
     const continuation = dispatchState(ticket)?.continuation;
     if (continuation?.mode === "retained_worktree_resume") {
-      warnings.push(`Continuation retains ${continuation.sourceBranch || continuation.sourceWorktree} at ${continuation.commit}. The executor briefing enters it before work.`);
+      warnings.push(`Continuation retains ${continuation.sourceBranch || continuation.sourceWorktree} at ${continuation.commit}. The executor briefing enters it before work.${retainReasonNote(continuation)}`);
     }
     if (continuation?.mode === "dirty_worktree_resume") {
-      warnings.push(`Continuation retains uncommitted work in ${continuation.sourceBranch || continuation.sourceWorktree} at ${continuation.commit}. The executor briefing enters it before work.`);
+      warnings.push(`Continuation retains uncommitted work in ${continuation.sourceBranch || continuation.sourceWorktree} at ${continuation.commit}. The executor briefing enters it before work.${retainReasonNote(continuation)}`);
     }
     const continuationFallback = dispatchState(ticket)?.continuationFallback;
     if (continuationFallback?.reason) {
@@ -1174,6 +1209,6 @@ ${String(ticket?.description || "")}`;
     if (ranked.length <= WARNING_RETURN_LIMIT) return visible;
     return [...visible, `Warning summary: ${ranked.length - WARNING_RETURN_LIMIT + 1} lower-priority warnings suppressed for this call.`];
   }
-  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, VERIFY_ORACLE_KINDS, normalizeVerifyOracleKind, attestationErrors, verifyOracleErrors, requireVerifyOracle, verifyCommandErrors, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, quantitativePremiseWarning, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityPaths, ignoredWorktreePaths, worktreeVisibilityWarning, composeFilesBindingProjectRoot, composeWorktreeWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, scopeConsumerWarningDetails, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride, presentWarnings };
+  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, normalizeVerifyCwd, VERIFY_ORACLE_KINDS, normalizeVerifyOracleKind, attestationErrors, verifyOracleErrors, requireVerifyOracle, verifyCommandErrors, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, quantitativePremiseWarning, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityPaths, ignoredWorktreePaths, worktreeVisibilityWarning, composeFilesBindingProjectRoot, composeWorktreeWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, scopeConsumerWarningDetails, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride, presentWarnings };
 }
 module.exports = { createWarnings };

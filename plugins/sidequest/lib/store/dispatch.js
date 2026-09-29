@@ -1058,6 +1058,26 @@ function createDispatch(dependencies) {
       ...details && typeof details === "object" ? details : {}
     };
   }
+  function explicitBaseContinuation(released, explicit, target, baseCommit) {
+    if (!explicit || !released?.continuation) return released;
+    return retainedAgainstExplicitBase(released.continuation, `the dispatch explicitly names integration base ${target.branch} at ${baseCommit}`, baseCommit);
+  }
+  function retainedAgainstExplicitBase(continuation, named, baseCommit) {
+    if (continuation.baseCommit === baseCommit) return { continuation: { ...continuation, retainReason: `${named}, which is the retained checkout's own base` } };
+    const differs = `${named} while retained checkout ${continuation.sourceWorktree} is built on ${continuation.baseCommit}`;
+    if (continuation.mode === "dirty_worktree_resume") {
+      return { continuation: { ...continuation, retainReason: `${differs}; its uncommitted changes exist nowhere else, so it is still retained and they move onto ${baseCommit} before any work` } };
+    }
+    const { sourceBranch, commit, commits } = continuation;
+    return {
+      fallback: continuationFallback("released_worktree_base_differs_from_explicit_integration_base", continuation.sourceWorktree, {
+        sourceBranch,
+        commit,
+        commits,
+        cause: `${differs}, so its checkpoint commits replay onto the named base in a fresh checkout`
+      })
+    };
+  }
   function gitDirectory(repository, directory) {
     const value = nativeGitPath(directory);
     return canonicalPath(path.isAbsolute(value) ? value : path.resolve(String(repository || ""), value));
@@ -1286,6 +1306,11 @@ function createDispatch(dependencies) {
   function reusablePreparedRecovery(ticket, current) {
     return Boolean(current && current.recovery && current.outcome === "prepared" && ticket.dispatchNonce && canonicalPreparedDispatchExecutor(ticket));
   }
+  function dispatchWorktreeOverrideRefusal(ticket, worktree, projectPath) {
+    if (worktree == null || String(worktree).trim() === "") return null;
+    const placement = ticket.workingTreeDelivery === true ? `${ticket.ref} declares workingTreeDelivery, so it runs and delivers in the board's registered checkout ${projectPath}; to deliver from a linked worktree instead, clear workingTreeDelivery so the ticket runs in an isolated worktree and submits a commit.` : "sharedTree:true runs in the board's registered checkout and sharedTree:false in a board-provisioned worktree.";
+    return `prepare dispatch: worktree only names a resumed executor's checkout for live-claim recovery with claimHolder; it cannot choose where a new attempt runs. ${placement}`;
+  }
   function prepareDispatch(slug, idOrRef, opts) {
     opts = opts || {};
     if (opts.retireOnly === true) {
@@ -1301,6 +1326,8 @@ function createDispatch(dependencies) {
     const projectPath = readMeta(slug)?.path;
     const found = getTicket(slug, idOrRef);
     if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+    const worktreeOverrideRefusal = dispatchWorktreeOverrideRefusal(found, opts.worktree, projectPath);
+    if (worktreeOverrideRefusal) throw new Error(worktreeOverrideRefusal);
     const executorClaimRefusal = executorClaimDispatchRefusal(slug, opts.sessionId);
     if (executorClaimRefusal) throw new Error(executorClaimRefusal);
     const initialNoDeclaredFileScope = unscopedWriteCannotAutoApprove(found, {
@@ -1367,8 +1394,8 @@ function createDispatch(dependencies) {
             releaseCrossedCreationBinding(current, recovery2.sibling, (/* @__PURE__ */ new Date()).toISOString(), "cross_bound_supersede");
             crossBoundWorktree = { sibling: recovery2.sibling, worktree: recovery2.worktree, message: recovery2.message };
           } else if (recovery2 && recovery2.reclaimed === false && recovery2.discardable !== true && recovery2.retainedCheckout !== true) {
-            const retainedContinuation = retainedWorktreeContinuationState(slug, t, current);
-            if (!retainedContinuation?.continuation) {
+            const retainedContinuation2 = retainedWorktreeContinuationState(slug, t, current);
+            if (!retainedContinuation2?.continuation) {
               const checkpointCommit = String(t.checkpoint?.commit || "").trim();
               const checkpointRecovery = checkpointCommit ? ` Restore ${current.worktree} to checkpoint ${checkpointCommit}, then dispatch again; the board will resume that retained checkout without creating another.` : "";
               throw new Error(`prepare dispatch: ${t.ref} cannot retry because ${recovery2.message || `immutable recovery fact ${recovery2.reason || "is unreadable"}`}${checkpointRecovery}`);
@@ -1387,7 +1414,7 @@ function createDispatch(dependencies) {
         const repeatFailure = repeatNoCommitDispatchError(t, current);
         const unboundAttemptsSkipped = skippedUnboundNoCommitAttempts(current);
         if (repeatFailure && opts.allowRepeatFailure !== true) throw new Error(repeatFailure);
-        const releasedContinuation = retainedWorktreeContinuationState(slug, t, current);
+        const retainedContinuation = retainedWorktreeContinuationState(slug, t, current);
         if (t.claim && t.claim.by && !claimReclaimable(t)) {
           throw new Error(`prepare dispatch: ${t.ref} has a live claim by ${t.claim.by}. Release it (\`sidequest release ${t.ref} --by ${t.claim.by}\`) before dispatching again.`);
         }
@@ -1544,6 +1571,7 @@ function createDispatch(dependencies) {
         const evidenceDirectory = ticketEvidenceDirectory(slug, t.ref, projectPath);
         fs.mkdirSync(evidenceDirectory, { recursive: true, mode: 448 });
         const baseCommit = reviewTargetState?.candidate.source === "git" ? reviewTargetState.candidate.value : integrationTargetState ? integrationTargetCommit(readMeta(slug)?.path || "", integrationTargetState) : commitScope.headCommit(readMeta(slug)?.path || "");
+        const releasedContinuation = explicitBaseContinuation(retainedContinuation, explicitIntegrationTarget, integrationTargetState, baseCommit);
         const releaseTip = projectPath ? commitScope.unpublishedReleaseTip(
           projectPath,
           baseCommit,
@@ -2774,6 +2802,21 @@ function createDispatch(dependencies) {
     }
     return { ok: true, ticket: tickets[0], tickets, stopped };
   }
+  function isolatedDispatchOfAgent(state, sessionId, agentId) {
+    return state?.sessionId === sessionId && state.agentId === agentId && state.sharedTree === false && Boolean(state.worktree);
+  }
+  function agentDispatchWorktrees(sessionId, agentId) {
+    if (!sessionId || !agentId) return [];
+    const owned = [];
+    for (const { ticket } of ticketsMentioningSession(sessionId)) {
+      const state = dispatchState(ticket);
+      if (isolatedDispatchOfAgent(state, sessionId, agentId)) owned.push(agentDispatchWorktree(ticket.ref, state));
+    }
+    return owned;
+  }
+  function agentDispatchWorktree(ref, state) {
+    return { ref, worktree: String(state.worktree), outcome: state.outcome || null, terminalAt: state.terminalAt || null };
+  }
   function reconcileLaunchedDispatches(sessionId, opts) {
     const reconciled = [];
     if (!sessionId) return { ok: true, reconciled };
@@ -2872,6 +2915,7 @@ function createDispatch(dependencies) {
     bindDispatchAgent,
     dispatchMatchesStopIdentity,
     markDispatchStopped,
+    agentDispatchWorktrees,
     reconcileLaunchedDispatches
   };
 }

@@ -791,3 +791,82 @@ test('(d) a working-tree-delivery ticket keeps its shared-checkout override unch
     fs.rmSync(project, { recursive: true, force: true });
   }
 });
+
+// GitHub #189: a command the shell could not find, or a shell that never started, must never read as passed.
+test('verify capture reports exit 127 and a shell that never started as failures, with the error text', async () => {
+  const notFound = await runVerifyCapture(`"${process.execPath}" -e "process.exit(127)"`);
+  try {
+    assert.deepStrictEqual({ status: notFound.status, exitCode: notFound.exitCode }, { status: 'toolchain_missing', exitCode: 127 });
+  } finally {
+    deleteLog(notFound);
+  }
+  const missingDirectory = path.join(os.tmpdir(), `sidequest-missing-verify-cwd-${process.pid}-${Date.now()}`);
+  const neverStarted = runProcessVerification({ kind: 'command', command: 'echo unreachable', evidenceContract: 'output' }, { cwd: missingDirectory });
+  try {
+    assert.equal(neverStarted.status, 'could_not_run');
+    assert.match(neverStarted.evidence, /before reporting the suite exit code\. .*ENOENT/);
+  } finally {
+    fs.rmSync(neverStarted.logPath, { force: true });
+  }
+});
+
+// GitHub #290: Git for Windows sh.exe strips the backslashes out of `cd C:\repo\app`.
+test('verify capture runs a backslash path through Command Prompt on Windows and keeps forward slashes on the POSIX shell', { skip: process.platform !== 'win32' }, async () => {
+  const probe = 'node -e "require(\'fs\').accessSync(\'cli-goldens.json\')"';
+  const relative = await runVerifyCapture(`cd test\\fixtures && ${probe}`, SIDEQUEST_DIR);
+  // Command Prompt's `cd` never changes drive, so the absolute case starts elsewhere on the repository's drive (CI keeps the checkout on D: and the temp dir on C:).
+  const elsewhereOnRepositoryDrive = path.parse(SIDEQUEST_DIR).root;
+  const absolute = await runVerifyCapture(`cd ${path.join(SIDEQUEST_DIR, 'test', 'fixtures')} && ${probe}`, elsewhereOnRepositoryDrive);
+  const forward = await runVerifyCapture(`cd ${path.join(SIDEQUEST_DIR, 'test', 'fixtures').replace(/\\/g, '/')} && ${probe}`, os.tmpdir());
+  try {
+    for (const capture of [relative, absolute]) {
+      assert.deepStrictEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 }, capture.reason);
+      assert.match(capture.shell || '', /^Command Prompt/);
+    }
+    assert.deepStrictEqual({ status: forward.status, exitCode: forward.exitCode }, { status: 'passed', exitCode: 0 }, forward.reason);
+    assert.match(forward.shell || '', /^POSIX shell/);
+  } finally {
+    for (const capture of [relative, absolute, forward]) deleteLog(capture);
+  }
+});
+
+// Backslashes inside quotes survive sh.exe; Command Prompt would read this script's `\"` as quote toggles and run
+// its `||` as an operator. The `\n` inside the script is a JS escape, not a path, and must not route to Command Prompt.
+test('verify capture keeps a quoted backslash executable with an escaped inline script on the POSIX shell', { skip: process.platform !== 'win32' }, async () => {
+  const command = `"${process.execPath}" -e "const fs=require('node:fs'); const home=process.env.NO_SUCH_HOME||null; process.exit(fs.existsSync(\\"package.json\\")&&'x\\n'.length===2&&home===null?0:7)"`;
+  const capture = await runVerifyCapture(command, SIDEQUEST_DIR);
+  try {
+    assert.deepStrictEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 }, capture.reason);
+    assert.match(capture.shell || '', /^POSIX shell/);
+  } finally {
+    deleteLog(capture);
+  }
+});
+
+// GitHub #259: a nested workspace's gate only resolves from its own directory.
+test('a ticket verifyCwd runs the captured command from that directory of the checkout', async () => {
+  const project = initGitRepo('sq-verify-capture-verify-cwd-');
+  fs.mkdirSync(path.join(project, 'packages', 'app'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'packages', 'app', 'workspace.marker'), 'nested\n');
+  execFileSync('git', ['add', '--all'], { cwd: project, windowsHide: true });
+  execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'nested workspace'], { cwd: project, windowsHide: true });
+  const command = 'node -e "require(\'fs\').accessSync(\'workspace.marker\')"';
+  const boardProject = store.ensureProject(project);
+  const rooted = store.createTicket(boardProject.slug, { title: 'root verify', executorVerifyKind: 'command', executorVerify: command });
+  const nested = store.createTicket(boardProject.slug, { title: 'nested verify', executorVerifyKind: 'command', executorVerify: command, executorVerifyCwd: 'packages/app' });
+  try {
+    const fromRoot = await runCapturedVerification(command, { project, ticket: rooted.ref }, project);
+    const fromNested = await runCapturedVerification(command, { project, ticket: nested.ref }, project);
+    try {
+      assert.equal(fromRoot.capture.status, 'failed_suite');
+      assert.equal(fromNested.capture.status, 'passed', fromNested.capture.reason);
+      assert.ok(fromNested.recorded?.ok, fromNested.recorded?.reason);
+      assert.equal(worktreeLease.canonicalPath(readRecordedCaptures(project, nested.ref).at(-1).worktree), worktreeLease.canonicalPath(project));
+    } finally {
+      deleteLog(fromRoot.capture);
+      deleteLog(fromNested.capture);
+    }
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
+});

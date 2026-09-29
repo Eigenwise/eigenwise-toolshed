@@ -117,7 +117,8 @@ const {
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinLagNotice, pinProvenance, readPinOverrides, refreshDetectedPins, writePinOverrides,
+  isValidPin, ourBaseUrls, ownedPinValues, pinLagNotice, pinProvenance, readPinOverrides, refreshDetectedPins, stalePinUpdates,
+  writePinOverrides,
 } = require('./pins.js');
 
 // Versions through 0.4.1 wrote this unsafe global override. Remove it during
@@ -903,6 +904,50 @@ async function syncGatewayWiring() {
   if (Object.entries(expected).some(([key, value]) => env[key] !== value)) {
     writeEnv(current.scope, false, { mode: current.mode, quiet: true });
   }
+}
+
+// Turning the gateway off for Remote Control removes only ANTHROPIC_BASE_URL and
+// keeps the other gateway keys, pins included. syncGatewayWiring never runs for
+// that project again, so without this each alias stayed on the model it meant
+// the day the gateway was turned off, and /model never offered a newer one.
+// Only a file with no ANTHROPIC_BASE_URL that still carries the gateway's
+// discovery flag is touched, and only pins holding a value this plugin wrote.
+// A file naming any base URL belongs to syncGatewayWiring or to someone else.
+async function syncUnwiredPins() {
+  for (const scope of ['project', 'user']) await syncUnwiredPinsIn(settingsPath(scope));
+}
+
+function readSettingsIfPresent(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+function isUnwiredGatewayEnv(env) {
+  return Boolean(env)
+    && env.ANTHROPIC_BASE_URL === undefined
+    && env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY === STATIC_ENV_BLOCK.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY
+    && Object.values(PIN_ALIASES).some((key) => typeof env[key] === 'string');
+}
+
+function readUnwiredGatewaySettings(file) {
+  const settings = readSettingsIfPresent(file);
+  return isUnwiredGatewayEnv(settings?.env) ? settings : null;
+}
+
+function writePinUpdates(file, settings, updates) {
+  if (!updates.length) return;
+  for (const { key, to } of updates) settings.env[key] = to;
+  writeSettings(file, settings);
+  const changes = updates.map(({ key, from, to }) => `${key} ${from} -> ${to}`).join(', ');
+  log(`model-gateway: updated stale Claude alias pins in ${file} (${changes}). Start a new Claude Code session to use them.`);
+}
+
+async function syncUnwiredPinsIn(file) {
+  if (!readUnwiredGatewaySettings(file)) return;
+  await refreshDetectedPinsAndWiring();
+  // The alias probes take seconds and anything may write this file meanwhile,
+  // so decide and write from what is on disk after them, not the first read.
+  const settings = readUnwiredGatewaySettings(file);
+  if (settings) writePinUpdates(file, settings, stalePinUpdates(settings.env));
 }
 
 async function envCommand() {
@@ -1739,6 +1784,16 @@ function readCatalog() {
   return readJsonFile(CATALOG_PATH);
 }
 
+// "Not answering" was the only reason a refresh ever gave, even when /healthz answered with an error or
+// answered too slowly, which sent people hunting for a dead port that was alive (issue #227).
+async function requireShimHealth() {
+  const where = `/healthz on 127.0.0.1:${SHIM_PORT}`;
+  const response = await fetchUrl(`http://127.0.0.1:${SHIM_PORT}/healthz`, { timeout: 3000 }).catch((error) => {
+    throw new Error(`shim is not answering ${where} (${error.message})`);
+  });
+  if (response.status !== 200) throw new Error(`shim ${where} returned ${response.status}`);
+}
+
 async function catalogCommand() {
   const jsonOut = flag('--json');
   const refresh = flag('--refresh');
@@ -1747,7 +1802,7 @@ async function catalogCommand() {
   let refusal = null;
   if (refresh || stale) {
     try {
-      if (!(await shimHealthy())) throw new Error(`shim is not answering /healthz on 127.0.0.1:${SHIM_PORT}`);
+      await requireShimHealth();
       catalog = await writeCatalog();
     } catch (error) {
       refusal = error.message;
@@ -2590,6 +2645,7 @@ const commands = {
         effectiveWiring,
         projectWirings: registeredProjectWirings(),
       }));
+      await syncUnwiredPins();
     } else {
       // isWired() accepts a base URL exported by the shell, which is how a machine ends up routed only in the
       // terminal that exported it: background sessions and executor worktrees start unwired, and the only place
@@ -2635,6 +2691,7 @@ module.exports = {
   isWired,
   wiredMode,
   writeEnv,
+  syncUnwiredPins,
   finishUpdateWithoutWiring,
   migrateLegacyProjectSettings,
   effectiveBaseUrl,

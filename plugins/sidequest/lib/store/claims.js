@@ -288,6 +288,10 @@ ${evidence.outputTail}`;
   function claimReclaimable(ticket, now) {
     return Boolean(claimReleaseVerdict(ticket, now));
   }
+  function claimStaleness(ticket, now) {
+    const dispatched = Boolean(dispatchState(ticket) || claimVerification(ticket));
+    return { stale: claimReclaimable(ticket, now), staleAfterMs: dispatched ? claimAbandonMs() : claimIdleMs() };
+  }
   function autoReleasedClaimMessage(ref, release) {
     const when = release && release.at ? ` at ${release.at}` : "";
     const why = release && (release.reason || release.kind) || "the claim sweep released it";
@@ -352,6 +356,7 @@ ${evidence.outputTail}`;
     claimReleaseBlocker,
     claimReleaseNote,
     claimReleaseVerdict,
+    claimStaleness,
     claimVerification,
     hasNoOpReleaseProof,
     observedStop,

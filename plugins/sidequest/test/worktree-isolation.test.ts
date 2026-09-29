@@ -2632,3 +2632,61 @@ test('resume refuses a retained checkout stuck in a conflicted cherry-pick', () 
   fs.writeFileSync(path.join(repo, 'manifest.json'), '{"generated":"C"}\nretained edit\n');
   assert.equal(worktrees.retainedWorktreeResumeDecision(lease).allowed, true);
 });
+
+test('GH-157 GH-258: board_config pins which worktreeDependencyPaths a worktree can apply', () => {
+  const project = store.ensureProject(initRepo('sq-dependency-config-')).slug;
+  const configured = (entry: { path: string; mode: string }) => {
+    store.setBoardConfig(project, { worktreeDependencyPaths: [entry] });
+    return store.boardConfig(project).worktreeDependencyPaths;
+  };
+
+  assert.deepStrictEqual(configured({ path: './env/api.env', mode: 'copy' }), [{ path: 'env/api.env', mode: 'copy' }]);
+  assert.deepStrictEqual(configured({ path: '..\\store_rust\\', mode: 'LINK' }), [{ path: '../store_rust', mode: 'link' }]);
+  assert.deepStrictEqual(configured({ path: 'crates/../../store_rust/store', mode: 'link' }), [{ path: '../store_rust/store', mode: 'link' }]);
+  assert.throws(() => configured({ path: '../store_rust', mode: 'copy' }), /copy mode must stay inside the board repo, because a copy outside it would be shared by every worktree and never cleaned up; use mode link/);
+  assert.throws(() => configured({ path: '../../store_rust', mode: 'link' }), /may leave the board repo by one level only/);
+  assert.throws(() => configured({ path: '..', mode: 'link' }), /may leave the board repo by one level only/);
+  assert.throws(() => configured({ path: path.join(os.tmpdir(), 'store_rust'), mode: 'link' }), /must be relative to the board repo[^:]*"\.\.\/<name>" with mode link/);
+  assert.throws(() => configured({ path: './', mode: 'copy' }), /must name a file or directory inside the board repo/);
+  assert.throws(() => configured({ path: 'env', mode: 'move' }), /mode must be "link" or "copy": move/);
+  assert.throws(() => store.setBoardConfig(project, { worktreeDependencyPaths: [null] }), /entries must be \{ path, mode \}/);
+  assert.throws(() => store.setBoardConfig(project, { worktreeDependencyPaths: 'env' }), /must be an array/);
+  assert.throws(
+    () => store.setBoardConfig(project, { worktreeDependencyPaths: [{ path: 'env', mode: 'copy' }, { path: 'env/', mode: 'link' }] }),
+    /cannot configure the same path twice: env/,
+  );
+});
+
+test('GH-162: dispatch refuses a worktree argument outside live-claim recovery instead of dropping it', () => {
+  const projectPath = initRepo('sq-worktree-override-');
+  const project = store.ensureProject(projectPath).slug;
+  const linked = path.join(os.tmpdir(), `sq-worktree-override-linked-${Date.now()}`);
+  const workingTree = store.createTicket(project, {
+    title: 'working-tree delivery',
+    category: 'codebase-exploration',
+    description: 'A working-tree delivery fixture that must not run in a linked worktree.',
+    files: ['README.md'],
+    workingTreeDelivery: true,
+  });
+  const plain = store.createTicket(project, {
+    title: 'plain dispatch',
+    category: 'codebase-exploration',
+    description: 'A plain fixture dispatch that names a worktree it cannot use.',
+    files: ['README.md'],
+  });
+
+  for (const sharedTree of [true, false]) {
+    assert.throws(
+      () => store.prepareDispatch(project, workingTree.ref, { sessionId: `gh-162-${sharedTree}`, sharedTree, worktree: linked }),
+      (error: Error) => error.message.includes('worktree only names a resumed executor\'s checkout for live-claim recovery with claimHolder')
+        && error.message.includes(`${workingTree.ref} declares workingTreeDelivery, so it runs and delivers in the board's registered checkout ${projectPath}`)
+        && error.message.includes('clear workingTreeDelivery'),
+    );
+  }
+  assert.throws(
+    () => store.prepareDispatch(project, plain.ref, { sessionId: 'gh-162-plain', worktree: linked }),
+    /cannot choose where a new attempt runs\. sharedTree:true runs in the board's registered checkout and sharedTree:false in a board-provisioned worktree\./,
+  );
+  assert.equal(store.getTicket(project, workingTree.ref).dispatch, undefined, 'the refusal prepares nothing');
+  assert.ok(store.prepareDispatch(project, plain.ref, { sessionId: 'gh-162-plain', worktree: '  ' }).token, 'a blank worktree is no override');
+});

@@ -8,6 +8,196 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.581.0 (2026-09-28)
+
+### live-rules 2.11.0 → 2.11.1
+
+#### Fixes
+
+- live-rules sync reports the real filesystem error instead of misreporting it as lock contention (GH-307) (SQ-3129)
+
+### model-gateway 0.51.6 → 0.51.7
+
+#### Fixes
+
+- status, doctor and ensure agree on the shim's state, and ensure stops fighting its own shim (SQ-3124)
+  `status`, `doctor` and `ensure` now read the shim through one shared probe and print the same state:
+  `running-ours`, `running-foreign`, `starting` or `stopped` (#275). `ensure` against a shim that is ours
+  and already at the installed version is a no-op success instead of a second supervisor failing on
+  `EADDRINUSE` (#230), and a supervisor that is still starting gets the startup window to answer before
+  anything replaces it.
+
+  The supervisor no longer starts a second proxy while the first is still warming up: a proxy it started
+  gets 30 seconds to answer `/v1/models` before recovery replaces it, and a replacement stops the old
+  child first (#251).
+
+  On Windows, port-owner detection reads `netstat`'s foreign-address and PID columns instead of the
+  localized `LISTENING` text, so a German or French UI no longer hides the owner and upgrades replace the
+  running shim (#296). The advised command path already falls back to the CLI until SessionStart writes
+  the stable launcher (#77).
+
+  Quartermaster's session-start gateway audit reads the new shim line: `running-ours` counts as a running
+  shim, and a `running-foreign` listener no longer passes for one.
+- model-gateway: a Codex 429 block expires at its Retry-After instead of lasting until setup (#190), an empty Codex turn ends cleanly instead of a retried 503 (#192), and /v1/models no longer stalls behind the auth-status check in /healthz (#238) (SQ-3125)
+  The 429 expiry falls back to claude-code-proxy's usage-limit reset header, then 60 seconds, and readiness shows it as `upstreamBlocked.expiresAt`; 401 and 403 still wait for `setup` or a successful request. An empty Codex turn is the proxy's 503 "Codex completed without producing output", now answered as an empty `end_turn`. The /v1/models stall came from a synchronous `claude-code-proxy codex auth status` spawn inside the worker on every /healthz, which froze all in-flight requests; the model list also refreshes on a timer now instead of once per stale request.
+- Model Gateway keeps its built-in fallback model list out of Claude Code's discovery cache, and updating Toolshed no longer wires the directory the updater runs from (SQ-3126)
+  GH-297: the discovery cache is written only from a list the proxy answered. While the proxy is
+  unreachable the shim serves `models.json` or its built-in list from memory, keeps the previous cache,
+  retries the proxy on its next refresh tick, and `status` reports `fallback catalog (proxy unreachable)`.
+
+  GH-292: the stable updater runs `setup --preserve-wiring`. It refreshes Claude alias pins only in
+  projects already recorded as wired, and only when a pin changed, so an update that changes no version
+  touches no settings file. Wiring a project stays a deliberate `setup` or `env --write-project` inside it.
+
+### quartermaster 0.11.5 → 0.11.6
+
+#### Fixes
+
+- Auto-allowlist vetoes loop keywords, shell fragments, variable-only cd, and version-pinned paths (GH-165) [`e222dd0`](https://github.com/Eigenwise/eigenwise-toolshed/commit/e222dd0e6676e9cbf9ca5e1f7fffffdc8b7a3e08)
+- CRAP ratchet pairs each function one-to-one with its baseline copy by source text, so an inserted anonymous function no longer shifts its neighbours onto the wrong row (GH-167)
+- CRAP gate measures the worktree it runs in and isolates coverage output per run (GH-169)
+- CRAP ratchet pairs a function to its baseline by source text, so an insertion cannot flag its untouched neighbours (GH-182)
+  Inserting one function shifted the position of every later function sharing its name, so the ratchet compared untouched namesakes against the wrong baseline row: one came back as a regression and the one pushed past the baseline's ordinals came back as a new function over the ceiling. Every function now pairs with its baseline copy by exact source text first, then by name and position among its namesakes, and pairing is one-to-one: a baseline function is claimed by at most one of today's functions, and a function that claims nothing answers to the ceiling on its own. A byte-identical copy of an over-ceiling function is therefore new code over the ceiling, and so is a third `run` in a file that already had two.
+- CRAP gate's unmeasured-files check now honours the config's exclude patterns (GH-270)
+  The CRAP gate's unmeasured-files check now skips files covered by the configured `exclude`
+  patterns instead of treating every excluded, function-bearing file as an unverified measurement.
+  A changed file that matches an exclude pattern no longer forces the gate to exit with a spurious
+  "lizard reported zero functions" error.
+- status, doctor and ensure agree on the shim's state, and ensure stops fighting its own shim (SQ-3124)
+  `status`, `doctor` and `ensure` now read the shim through one shared probe and print the same state:
+  `running-ours`, `running-foreign`, `starting` or `stopped` (#275). `ensure` against a shim that is ours
+  and already at the installed version is a no-op success instead of a second supervisor failing on
+  `EADDRINUSE` (#230), and a supervisor that is still starting gets the startup window to answer before
+  anything replaces it.
+
+  The supervisor no longer starts a second proxy while the first is still warming up: a proxy it started
+  gets 30 seconds to answer `/v1/models` before recovery replaces it, and a replacement stops the old
+  child first (#251).
+
+  On Windows, port-owner detection reads `netstat`'s foreign-address and PID columns instead of the
+  localized `LISTENING` text, so a German or French UI no longer hides the owner and upgrades replace the
+  running shim (#296). The advised command path already falls back to the CLI until SessionStart writes
+  the stable launcher (#77).
+
+  Quartermaster's session-start gateway audit reads the new shim line: `running-ours` counts as a running
+  shim, and a `running-foreign` listener no longer passes for one.
+- Model Gateway keeps its built-in fallback model list out of Claude Code's discovery cache, and updating Toolshed no longer wires the directory the updater runs from (SQ-3126)
+  GH-297: the discovery cache is written only from a list the proxy answered. While the proxy is
+  unreachable the shim serves `models.json` or its built-in list from memory, keeps the previous cache,
+  retries the proxy on its next refresh tick, and `status` reports `fallback catalog (proxy unreachable)`.
+
+  GH-292: the stable updater runs `setup --preserve-wiring`. It refreshes Claude alias pins only in
+  projects already recorded as wired, and only when a pin changed, so an update that changes no version
+  touches no settings file. Wiring a project stays a deliberate `setup` or `env --write-project` inside it.
+- Quartermaster: fix crap base/ratchet docs, add decisions update/remove, name real doctor failures, and stop counting hook blocks as denials (SQ-3128)
+  Four small fixes: the crap gate's config key is documented and read as base, with ratchet kept as a deprecated alias (GH-267). decisions gained update and remove verbs so a status change no longer needs a stale duplicate row (GH-265). The model-gateway health notice now names doctor's own first failing check instead of always blaming Grok auth (GH-141). mine/verify now detect a PreToolUse hook's own stderr wrapper, classify it as hook_block, and exclude it from denial friction and allowlist candidates while still showing its count separately (GH-302 item 2).
+
+### sidequest 5.3.3 → 5.3.4
+
+#### Fixes
+
+- Write tool no longer refuses the board-owned verification evidence directory when the Sidequest home sits inside a git checkout (GH-163)
+  An executor told to leave screenshots and probe output in its board-owned verification evidence directory was refused by the worktree isolation guard with "no write lease for the observed worktree" whenever the Sidequest home sat inside an unrelated Git checkout, such as a dotfiles repository holding ~/.claude. The guard resolved the checkout enclosing the target and asked a repository write lease about it, and no dispatch holds a lease for that repository. Bash writes to the same path were never gated, so the refusal only pushed executors toward shell workarounds. The guard now recognises the caller's own board-owned verification directory and lets that write through, whichever checkout encloses it. Every other path keeps its lease semantics, including the rest of the Sidequest home, whose database and dispatch tokens stay guarded.
+- integrate no longer refuses a candidate that changed its implicitly admitted release fragment (GH-180)
+  Wave assembly derived its declared surfaces from a fresh read of ticket.files, so the release fragment the commit gate and the stored-range validator both admit implicitly read as surface_overlap at integrate time. The wave surface now comes from the scope snapshot recorded at submit time, falling back to the same ticketCommitScope derivation when no snapshot exists, and a wave_invalidated refusal names each candidate's reason and offending paths instead of printing baselines that match.
+- A closed sibling's terminal guard no longer refuses an executor whose own dispatch is still open (GH-183)
+  The terminal-executor guard denied every tool call, including Bash, to a live executor whenever a sibling dispatch of the same session closed and that sibling's dispatch record carried the live agent's runtime identity. One runtime identity can reach two sibling dispatches: a bind records an agent id on any sibling whose own id is still unset, and the identity fallbacks also match a recorded agent name by prefix. The guard now stands down while the same identity holds a live claim on a non-terminal dispatch, so a read-only executor keeps the Bash write path it needs and is no longer told to abandon an open ticket. A finished executor with no live claim is refused exactly as before.
+- groomClose records the manual recovery its own expected_upstream_diverged refusal prescribes (GH-233)
+  When a ticket's integration branch was squash-merged and deleted before its executor submitted, `integrate` refused with `expected_upstream_diverged` and prescribed a recovery — merge the verified candidate onto the current target by hand, re-gate it, then record delivery with `groomClose` and `deliveryCommit` — that the same check then refused, leaving a shipped candidate closable only through `abandonSubmission`, which records delivered work as discarded. The expected-upstream ancestry assertion guards the merge `integrate` performs; a recorded reset, working-tree or manual delivery proves its own landing by naming the immutable pinned candidate and matching its content, so it no longer inherits that assertion. The stored range is re-validated rather than waived, so the recorded commits, changed paths, no-op state and admitted scope all still have to hold, and a delivery that claims the ordinary reachable route still answers to the recorded expected upstream. MCP `integrate` forwards `deliveryMethod` at both of its internal admission checks, the waiver opens only for a pinned candidate that is unreachable from the current upstream, a mistyped `deliveryMethod` is refused by name before the diverged-upstream check runs, and the refusal names the recovery that works.
+- Fix temp-cleanup test failure on Node 24 (ERR_FS_EISDIR) (GH-240)
+  The temp-cleanup test suite's junction-removal cleanup used `fs.rmSync` on a
+  symlink-to-directory, which Node >= 24 refuses without `recursive`. Switched
+  to `fs.unlinkSync`, which removes the link entry on every supported Node
+  version and platform, matching how the shipped cleanup code already handles
+  the same case.
+- pulse names the submitter of a pending submission (GH-313)
+  `submitTicket` clears the claim once a candidate is submitted, so the only
+  identity `rework --by` can check against is `ticket.submission.by`, but
+  neither the default (compact) nor the `full:true` `pulse` MCP response
+  carried it. Recovering the submitter after a rejected submission meant
+  reading the executor's own comments (GH-313). `pulse`'s `dispatch` object
+  now includes `submittedBy` in both its compact and full projections,
+  sourced from the existing submission record.
+- A dispatch that dies before its first claim now has one recovery that works, from the session that spawned it (SQ-3110)
+  An executor that died before its first claim (an API error at launch, a refused claim, a failed or cancelled
+  WorktreeCreate, an Agent call that returned with no claim) left the ticket locked for 15 minutes or an hour, and
+  the refusals pointed at a `release` with no claim holder, a TaskStop for a runtime that was already gone, or a
+  `recoveryEvidence` call that refused inside the deadline. Now the session that prepared the dispatch is the
+  authority: its `recoveryEvidence` on `dispatch` (with or without `retireOnly`) or `groomClose` retires the unclaimed
+  attempt at once, because it holds the host's failure report. Any other session still waits for the printed
+  deadline, and that refusal now names the preparing session. Every refusal that meets an unclaimed attempt
+  (`groomClose`, hand delivery, `release`, `update --status done`) names that one recovery instead of a release.
+  (GH-69, GH-191, GH-285, GH-289, SQ-3071)
+
+  The same evidence call on an attempt a stop hook already made terminal no longer refuses as "not an active
+  attempt": it prepares the replacement, and `retireOnly` reports it retired. A terminal reduced-schema attempt no
+  longer blocks a direct claim with `reduced_runtime_unverified`. (GH-69, GH-191)
+
+  `integrate` and `done` refusals for work that landed without a submission (an executor released as
+  technical_blocker and the orchestrator committed its change) now name `groomClose --deliveryCommit <sha>
+  --deliveryMethod manual`. (GH-295)
+
+  SubagentStop and SessionStart no longer tell the orchestrator to TaskStop an executor that already ended its own
+  run. TaskStop stays host cleanup for an executor `pulse` still shows alive after its ticket went terminal. (GH-203)
+- Dispatch from a session rooted in a plain parent folder, and executor comments without `project`, now reach the ticket's own board (SQ-3111)
+  Several paths took the project from the orchestrating session's cwd instead of the dispatched ticket's registered project (GH-84, GH-161, GH-274, GH-269, GH-237).
+
+  - The WorktreeCreate hook ran `git rev-parse --show-toplevel` in the session cwd before anything else, so a session rooted in a plain folder holding the registered repos crashed with "not a git repository" after the launch was already recorded (GH-274, GH-269). It now follows the session's reservation to the ticket's repository when the cwd is not inside one, and names the missing reservation when there is none.
+  - Prepare now refuses an isolated dispatch from a non-git runtime while the session holds launched isolated dispatches on another board, the one case the hook cannot resolve, instead of letting it crash at WorktreeCreate. A git runtime already got this refusal; its remedy (let the other board's dispatches finish) was checked against the fixture (GH-84).
+  - An isolated executor's `comment`, `release`, `done`, `plan` or `scopeRequest` without `project` was matched against the MCP server's cwd, which is the orchestrating session's checkout, so it landed on the session board's same-numbered ticket. A call that names no `worktree` is now matched to the live claim named by `by`; a call that names a worktree is still held to it (GH-161). The executor briefing also tells executors to pass `project` on every board call, since reads like `pulse` carry nothing that can prove a binding.
+  - The filesystem-snapshot cap refusal for a registered non-git board now says the cap is fixed with no board setting, and that a folder holding git repos one level down should have each repo registered as its own board rather than be `git init`ed (GH-237). The cap itself is unchanged.
+- Board commit works in large repositories, and a slow commit hook no longer stalls the board MCP server (SQ-3112)
+  The board `commit` tool failed with `spawnSync git ENOBUFS` in any repository whose `git ls-files` output passed Node's 1 MiB default capture limit, about 17k tracked paths, while plain git in the same checkout worked (GH-179, GH-216, GH-218). The board's git reads now go through one runner with a 256 MiB cap, so the store, the scoped commit, worktree cleanup, verify capture, and the destructive-git guard all read large listings. The guard used to read an overflowing `git status` as a clean tree.
+
+  A board `commit` also ran `git commit` synchronously on the MCP server's only thread, so a pre-commit hook that took minutes held every other call from the orchestrator and its executors for that long, reads included (GH-314). `git add` and `git commit` now run asynchronously, and a commit queues per ticket instead of board-wide, so other tickets' writes don't wait behind it. On a fixture with a 3 s pre-commit hook, a `pulse` issued during the commit answered in 4.7 s before this change and 1.1 s after. What's left is the scope reads the commit makes before its hooks start, and that part doesn't depend on hook time.
+- groomClose and integrate record squash-merged, renamed, and conflict-resolved deliveries that really landed (SQ-3113)
+  Four delivery records that refused work which had landed now go through.
+
+  - A squash-merged candidate (GH-226): a `deliveryCommit` naming the squash commit records when its patch equals the candidate's whole submitted range, so a multi-commit candidate squashed into one commit no longer refuses `delivery_content_missing`. A plain `groomClose` on a squash-merged candidate now names that route next to `--abandon-submission`, instead of offering abandonment as the only way out. A squash that also carries another ticket's changes still refuses.
+  - A pinned multi-commit candidate whose release fragment is not in its tip commit (GH-244): the delivery-time fragment check reads the whole submitted range, the same range `submit` accepted, rather than the tip commit's own diff.
+  - A reviewed interaction that renames a submitted path (GH-159): `deliveryInteractionCommit` compares with rename detection, and a renamed submitted path counts as inside the candidate under both names. Paths the candidate never submitted still refuse `delivery_interaction_outside_candidate`.
+  - The replay and merge conflict hint (GH-178): it now names the hand delivery that records, merging the pinned candidate commit itself (never a cherry-pick) and then `integrate --delivery-commit <candidate>`, instead of pointing at a cherry-pick route the content check always refused.
+- Four integrate dead ends now have a way out (GH-220, GH-277, GH-308, GH-215) (SQ-3114)
+  A failed post-merge suite rolled the target back but left any candidate submitted during that suite recording the rolled-back merge as its expected upstream, so every later integrate of it was refused as diverged (GH-308). The rollback now rewrites those records to the pre-merge head in the same step, for single and wave delivery.
+
+  A repair of a review-rejected candidate that renamed the rejected ticket's release fragment passed submit and then failed integrate with `outside_scope` on that fragment, because the scope snapshot integrate re-checks against left it out (GH-277). Submit now records the rejected source's fragment in the snapshot, so both checks agree. This is separate from the rework eligibility chain in SQ-3092.
+
+  A conflict integrate can't merge now names the one recording route: merge the candidate by hand, resolve, commit, re-gate, then `groomClose` with the merge commit as `deliveryCommit` and `deliveryMethod: "manual"`. The candidate being a parent of that merge is the content proof (GH-220). That route already worked; the refusal pointed somewhere else.
+
+  A write-scoped bound review that ends on its candidate without touching its declared scope now closes with `done` instead of looping between `done` asking for a submission and `submit` refusing the candidate's range (GH-215). A review that did change scoped files still commits and submits.
+- submit and commit judge scope against the ticket's own baseline, and a refused commit is undone (SQ-3115)
+  Fixes GH-139, GH-195 and GH-229.
+
+  Submit now bounds every candidate's range by the dispatch baseline the board recorded, isolated worktrees included. The merge-base only takes over when upstream work was synced into the candidate after dispatch. Before this, an isolated candidate always used the merge-base, so a sibling that upstream had replayed under a new hash (cherry-pick integration) or a stale remote showed up as outside_scope. A shared-tree candidate kept its older dispatch baseline even after another session pushed, so that pushed work counted against it too.
+
+  Paths whose bytes at the candidate already match the integration branch no longer count as the candidate's work, at submit and when integrate revalidates the stored range. A candidate that is already on the integration branch folds nothing.
+
+  Submitting the recorded dispatch baseline itself is a no-op now. It used to fall back to the baseline's parent and flag whatever the pre-dispatch commit touched.
+
+  The board `commit` tool undoes a commit that ends up with paths outside the ticket's scope, usually because a commit hook staged extra files, and the refusal says nothing was committed. It used to leave the commit on HEAD while reporting outside_scope, plus index residue.
+- Dispatch lists the scope it adds, scope requests answer the same way across a story, and a declared file outside the repo is writable (SQ-3116)
+  Three scope defects, one per report (GH-194, GH-286, GH-300).
+
+  A dispatch enforces more than the ticket's files: its release fragment, tracked build outputs, and the board's `alwaysInScope` paths (`docs/` by default). Those extra paths were invisible, so a dirty file under `docs/` blocked an unrelated submit with nothing saying the board had added `docs/`. The dispatch result and the stored dispatch now carry `boardAddedFiles`, and the executor briefing lists board-wide paths under their own heading. An `alwaysInScope` path that already holds a declared file is no longer added, so a ticket declaring `docs/tools.md` gets that file instead of all of `docs/`.
+
+  Package-surface auto-approval for `scopeRequest` read only the requesting ticket's own files, so two tickets in one story asking for the same file got opposite answers: in the reported case the tickets' declared files put them in different surfaces (`lib` and `app` of the same package). The surfaces now come from every ticket in the story, so identical same-story requests get identical answers, and a refusal comment says why each path missed (protected path, test directory, no package root, or which surface matched nothing).
+
+  A ticket could declare an absolute path outside the repo for non-repo output, and then the write guard refused a helper writing that exact path, because it only matched repo-relative paths. The guard now matches a declared out-of-repo path as declared. `scopeRequest` still refuses paths outside the repo.
+- The assembled-wave gate verifies the composed candidates in a clean plugin environment (SQ-3117)
+  A multi-ticket assembled-wave gate ran the pinned verify command in the registered project checkout, which still sat at the wave baseline with none of the candidates merged (GH-246, GH-273). A wave whose composed tree broke the suite gated green as long as the baseline passed, and a suite that needed the candidates' files died. Every verifier spawned by the board also inherited the MCP server's `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA`, so a project test resolving its own paths through them read the Sidequest plugin install instead (GH-247).
+
+  The gate now builds a temporary detached checkout of the wave baseline, merges every candidate into it, provisions it like any gate worktree, runs the pinned command with cwd at its root, and records the verified tree as `verification.verifiedTree` before removing the checkout. Candidates that don't merge cleanly refuse with `assembled_wave_compose_failed` and reject nobody. Verifiers get the board's environment with `CLAUDE_PLUGIN_*` removed; `PATH`, `HOME` and `SIDEQUEST_*` stay. Singleton waves still verify in the candidate's own worktree or reuse its clean capture.
+- Recovery dispatch no longer removes a sibling's live worktree, and a failed WorktreeCreate no longer strands its attempt as bound (SQ-3132)
+  `dispatch --recovery-evidence` on a stranded attempt used to run `git worktree remove` on whatever path the
+  attempt recorded. In a wave that path could be a sibling's checkout, cross-bound down to the sibling's agent id,
+  and the remove deleted the tree under the sibling's live claim. The retry now checks for another ticket whose live
+  claim or dispatch records that path or whose agent id names it. When one does, the checkout stays, only the retired
+  attempt's binding is cleared, and dispatch warns with the sibling's ref and says the binding was a cross-bind.
+
+  A WorktreeCreate hook that fails after binding but before creating its checkout (lease refusal, an occupied
+  destination, a failed `git worktree add`) now records the attempt `failed` with the hook error and drops its binding,
+  so a plain `dispatch` prepares the replacement without recovery evidence.
+
 ## v3.580.0 (2026-09-28)
 
 ### observability 0.7.34 → 0.7.35
