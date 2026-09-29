@@ -68,7 +68,7 @@ The toolbar searches refs, titles, and labels, then combines that query with pri
 
 *Synthetic demo data showing six mobile tickets narrowed to normal priority.*
 
-The inbox collects comments, reminders, ticket creation, and status activity across projects. Its tabs separate work that needs you from the wider activity stream.
+The inbox collects comments, reminders, ticket creation, and status activity across projects. Its tabs separate work that needs you from the wider activity stream. The inbox keeps the 200 newest unread notifications and drops unread ones older than 14 days, so a board nobody opens for weeks does not grow without limit; pending reminders are never dropped. Set `SIDEQUEST_NOTIFICATIONS_MAX_UNREAD` and `SIDEQUEST_NOTIFICATIONS_UNREAD_MAX_AGE_DAYS` to change either limit.
 
 ![Sidequest notification inbox open over a populated synthetic board](../../../assets/screenshots/sidequest-notifications.png)
 

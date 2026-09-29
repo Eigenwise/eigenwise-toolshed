@@ -795,14 +795,34 @@ function sessionProjectRoot() {
 }
 const dbByHome = /* @__PURE__ */ new Map();
 const transactionDepth = /* @__PURE__ */ new WeakMap();
+const afterCommitQueues = /* @__PURE__ */ new WeakMap();
 function withinTransaction(handle, fn) {
   if (transactionDepth.get(handle)) return fn();
   transactionDepth.set(handle, 1);
+  const deferred = [];
+  afterCommitQueues.set(handle, deferred);
+  let result;
   try {
-    return db.txn(handle, fn);
+    result = db.txn(handle, () => {
+      deferred.length = 0;
+      return fn();
+    });
   } finally {
     transactionDepth.delete(handle);
+    afterCommitQueues.delete(handle);
   }
+  for (const run of deferred) {
+    try {
+      run();
+    } catch {
+    }
+  }
+  return result;
+}
+function afterCommit(run) {
+  const queue = afterCommitQueues.get(database());
+  if (queue) queue.push(run);
+  else run();
 }
 cacheLayer = createCache({ database, db, fs });
 const {
@@ -837,6 +857,7 @@ const {
   setReminder
 } = createNotifications({
   acquireLock,
+  afterCommit,
   crypto,
   getTicket,
   path,
@@ -1489,6 +1510,7 @@ function database() {
     migrateIfNeeded(handle, root);
     dbByHome.set(root, handle);
     refreshReadonlyCategorySeeds(handle);
+    pruneOversizedNotifications(handle);
   }
   if (!refreshingRoutingProfileSeeds) {
     refreshingRoutingProfileSeeds = true;
@@ -1502,6 +1524,15 @@ function database() {
 }
 function transaction(fn) {
   return withinTransaction(database(), fn);
+}
+const OVERSIZED_NOTIFICATIONS_ROW_BYTES = 2 * 1024 * 1024;
+function pruneOversizedNotifications(handle) {
+  const row = handle.prepare("SELECT length(CAST(data AS BLOB)) AS bytes FROM globals WHERE key = 'notifications'").get();
+  if (!row || Number(row.bytes) <= OVERSIZED_NOTIFICATIONS_ROW_BYTES) return;
+  try {
+    pruneRead();
+  } catch {
+  }
 }
 function putProject(slug, meta) {
   putCachedRow(database(), "projects", { slug, data: meta });

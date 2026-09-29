@@ -731,6 +731,7 @@ function sessionProjectRoot() {
 
 const dbByHome = new Map<string, any>();
 const transactionDepth = new WeakMap<object, number>();
+const afterCommitQueues = new WeakMap<object, Array<() => void>>();
 
 // SQLite has no nested transactions, so anything that begins one has to know whether one is already open on
 // that handle. Every writer must come through here rather than calling db.txn itself: the seed refreshers
@@ -740,11 +741,35 @@ const transactionDepth = new WeakMap<object, number>();
 function withinTransaction(handle: object, fn: () => any) {
   if (transactionDepth.get(handle)) return fn();
   transactionDepth.set(handle, 1);
+  const deferred: Array<() => void> = [];
+  afterCommitQueues.set(handle, deferred);
+  let result;
   try {
-    return db.txn(handle, fn);
+    // db.txn re-runs the callback when BEGIN is busy, so a failed attempt must not leave work queued.
+    result = db.txn(handle, () => {
+      deferred.length = 0;
+      return fn();
+    });
   } finally {
     transactionDepth.delete(handle);
+    afterCommitQueues.delete(handle);
   }
+  for (const run of deferred) {
+    try {
+      run();
+    } catch {
+      // The committed write this follows must not be reported as failed because a follow-up did not land.
+    }
+  }
+  return result;
+}
+
+// Runs `run` once the outermost open transaction commits, or at once when none is open. Work queued inside a
+// transaction that rolls back is dropped with it.
+function afterCommit(run: () => void) {
+  const queue = afterCommitQueues.get(database());
+  if (queue) queue.push(run);
+  else run();
 }
 
 cacheLayer = createCache({ database, db, fs });
@@ -783,6 +808,7 @@ const {
   setReminder,
 } = createNotifications({
   acquireLock,
+  afterCommit,
   crypto,
   getTicket,
   path,
@@ -1480,6 +1506,7 @@ function database() {
     migrateIfNeeded(handle, root);
     dbByHome.set(root, handle);
     refreshReadonlyCategorySeeds(handle);
+    pruneOversizedNotifications(handle);
   }
   if (!refreshingRoutingProfileSeeds) {
     refreshingRoutingProfileSeeds = true;
@@ -1494,6 +1521,20 @@ function database() {
 
 function transaction(fn?: any) {
   return withinTransaction(database(), fn);
+}
+
+// Boards that predate the unread cap can carry a multi-megabyte notifications row that every dashboard poll and
+// event parses. Ordinary writes prune it too, but the first open should not wait for one. The size probe reads the
+// row header only, so a healthy store pays no parse on open.
+const OVERSIZED_NOTIFICATIONS_ROW_BYTES = 2 * 1024 * 1024;
+function pruneOversizedNotifications(handle: any) {
+  const row = handle.prepare("SELECT length(CAST(data AS BLOB)) AS bytes FROM globals WHERE key = 'notifications'").get();
+  if (!row || Number(row.bytes) <= OVERSIZED_NOTIFICATIONS_ROW_BYTES) return;
+  try {
+    pruneRead();
+  } catch {
+    // A store written by a newer schema is read-only here, and that must not stop it opening for reads.
+  }
 }
 
 function putProject(slug?: any, meta?: any) {

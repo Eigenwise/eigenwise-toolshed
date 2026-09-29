@@ -2,6 +2,7 @@
 function createNotifications(dependencies) {
   const {
     acquireLock,
+    afterCommit,
     crypto,
     getTicket,
     path,
@@ -15,6 +16,18 @@ function createNotifications(dependencies) {
   const NOTIFICATION_KINDS = ["comment", "created", "status", "reminder"];
   const NOTIFY_PREF_DEFAULTS = { comment: true, created: true, status: true };
   const MAX_READ_KEPT = 100;
+  const DEFAULT_MAX_UNREAD = 200;
+  const DEFAULT_UNREAD_MAX_AGE_DAYS = 14;
+  function envPositiveInt(name, fallback) {
+    const value = Number(process.env[name]);
+    return Number.isInteger(value) && value > 0 ? value : fallback;
+  }
+  function maxUnread() {
+    return envPositiveInt("SIDEQUEST_NOTIFICATIONS_MAX_UNREAD", DEFAULT_MAX_UNREAD);
+  }
+  function unreadMaxAgeMs() {
+    return envPositiveInt("SIDEQUEST_NOTIFICATIONS_UNREAD_MAX_AGE_DAYS", DEFAULT_UNREAD_MAX_AGE_DAYS) * 24 * 60 * 60 * 1e3;
+  }
   function notificationsLockPath() {
     return path.join(projectsRoot(), ".notifications.lock");
   }
@@ -44,6 +57,24 @@ function createNotifications(dependencies) {
     const dropIds = new Set(read.slice(MAX_READ_KEPT).map((n) => n.id));
     return list.filter((n) => !dropIds.has(n.id));
   }
+  function isPendingReminder(n, now) {
+    return n.kind === "reminder" && !n.firedAt && n.fireAt && Number.isFinite(Date.parse(n.fireAt)) && Date.parse(n.fireAt) > now;
+  }
+  function pruneUnreadList(list) {
+    const now = Date.now();
+    const cutoff = now - unreadMaxAgeMs();
+    const prunable = (n) => !n.readAt && !isPendingReminder(n, now);
+    const fresh = list.filter((n) => !prunable(n) || !(Date.parse(n.createdAt) < cutoff));
+    const unread = fresh.filter(prunable);
+    const cap = maxUnread();
+    if (unread.length <= cap) return fresh.length === list.length ? list : fresh;
+    unread.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    const dropIds = new Set(unread.slice(cap).map((n) => n.id));
+    return fresh.filter((n) => !dropIds.has(n.id));
+  }
+  function pruneList(list) {
+    return pruneReadList(pruneUnreadList(list));
+  }
   function listNotifications(opts) {
     opts = opts || {};
     const now = Date.now();
@@ -59,6 +90,9 @@ function createNotifications(dependencies) {
     return list;
   }
   function addNotification(fields) {
+    return insertNotification(fields, false);
+  }
+  function insertNotification(fields, skipDuplicateEvent) {
     fields = fields || {};
     const kind = NOTIFICATION_KINDS.indexOf(String(fields.kind)) !== -1 ? String(fields.kind) : "comment";
     const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -78,8 +112,9 @@ function createNotifications(dependencies) {
     };
     return withNotificationsLock(() => {
       const list = readNotifications();
+      if (skipDuplicateEvent && list.some((n) => n.ticketId === notification.ticketId && n.kind === kind && n.ticketEventAt === notification.ticketEventAt)) return null;
       list.push(notification);
-      writeNotifications(pruneReadList(list));
+      writeNotifications(pruneList(list));
       return notification;
     });
   }
@@ -112,19 +147,18 @@ function createNotifications(dependencies) {
     if (!getNotifyPrefs()[kind]) return null;
     const pmeta = readMeta(slug);
     if (pmeta && pmeta.notify === false) return null;
-    const eventAt = ticket.updatedAt;
-    const dup = readNotifications().some((n) => n.ticketId === ticket.id && n.kind === kind && n.ticketEventAt === eventAt);
-    if (dup) return null;
     const copy = eventNotificationCopy(ticket, kind, extra);
-    return addNotification({
+    const fields = {
       kind,
       title: copy.title,
       body: copy.body,
       projectSlug: slug,
       ticketRef: ticket.ref,
       ticketId: ticket.id,
-      ticketEventAt: eventAt
-    });
+      ticketEventAt: ticket.updatedAt
+    };
+    afterCommit(() => insertNotification(fields, true));
+    return null;
   }
   function markRead(id) {
     return withNotificationsLock(() => {
@@ -168,7 +202,7 @@ function createNotifications(dependencies) {
   function pruneRead() {
     return withNotificationsLock(() => {
       const list = readNotifications();
-      const pruned = pruneReadList(list);
+      const pruned = pruneList(list);
       const removed = list.length - pruned.length;
       if (removed) writeNotifications(pruned);
       return removed;

@@ -3,6 +3,7 @@
 function createNotifications(dependencies: any) {
   const {
     acquireLock,
+    afterCommit,
     crypto,
     getTicket,
     path,
@@ -16,6 +17,21 @@ function createNotifications(dependencies: any) {
   const NOTIFICATION_KINDS = ['comment', 'created', 'status', 'reminder'];
   const NOTIFY_PREF_DEFAULTS: Record<string, boolean> = { comment: true, created: true, status: true };
   const MAX_READ_KEPT = 100;
+  // The whole list is one store row that every event rewrites, so an unread backlog that only grows
+  // makes each write slower (a 9 MB row with 6,062 unread entries held the write lock for hundreds of ms).
+  const DEFAULT_MAX_UNREAD = 200;
+  const DEFAULT_UNREAD_MAX_AGE_DAYS = 14;
+
+  function envPositiveInt(name: string, fallback: number) {
+    const value = Number(process.env[name]);
+    return Number.isInteger(value) && value > 0 ? value : fallback;
+  }
+  function maxUnread() {
+    return envPositiveInt('SIDEQUEST_NOTIFICATIONS_MAX_UNREAD', DEFAULT_MAX_UNREAD);
+  }
+  function unreadMaxAgeMs() {
+    return envPositiveInt('SIDEQUEST_NOTIFICATIONS_UNREAD_MAX_AGE_DAYS', DEFAULT_UNREAD_MAX_AGE_DAYS) * 24 * 60 * 60 * 1000;
+  }
 
   function notificationsLockPath() {
     return path.join(projectsRoot(), '.notifications.lock');
@@ -51,6 +67,28 @@ function createNotifications(dependencies: any) {
     return list.filter((n?: any) => !dropIds.has(n.id));
   }
 
+  function isPendingReminder(n?: any, now?: any) {
+    return n.kind === 'reminder' && !n.firedAt && n.fireAt && Number.isFinite(Date.parse(n.fireAt)) && Date.parse(n.fireAt) > now;
+  }
+
+  // A pending reminder is the user's own future intent, so neither the age limit nor the count cap may drop it.
+  function pruneUnreadList(list?: any) {
+    const now = Date.now();
+    const cutoff = now - unreadMaxAgeMs();
+    const prunable = (n?: any) => !n.readAt && !isPendingReminder(n, now);
+    const fresh = list.filter((n?: any) => !prunable(n) || !(Date.parse(n.createdAt) < cutoff));
+    const unread = fresh.filter(prunable);
+    const cap = maxUnread();
+    if (unread.length <= cap) return fresh.length === list.length ? list : fresh;
+    unread.sort((a?: any, b?: any) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    const dropIds = new Set(unread.slice(cap).map((n?: any) => n.id));
+    return fresh.filter((n?: any) => !dropIds.has(n.id));
+  }
+
+  function pruneList(list?: any) {
+    return pruneReadList(pruneUnreadList(list));
+  }
+
   function listNotifications(opts?: any) {
     opts = opts || {};
     const now = Date.now();
@@ -67,6 +105,10 @@ function createNotifications(dependencies: any) {
   }
 
   function addNotification(fields?: any) {
+    return insertNotification(fields, false);
+  }
+
+  function insertNotification(fields?: any, skipDuplicateEvent?: any) {
     fields = fields || {};
     const kind = NOTIFICATION_KINDS.indexOf(String(fields.kind)) !== -1 ? String(fields.kind) : 'comment';
     const now = new Date().toISOString();
@@ -86,8 +128,9 @@ function createNotifications(dependencies: any) {
     };
     return withNotificationsLock(() => {
       const list = readNotifications();
+      if (skipDuplicateEvent && list.some((n?: any) => n.ticketId === notification.ticketId && n.kind === kind && n.ticketEventAt === notification.ticketEventAt)) return null;
       list.push(notification);
-      writeNotifications(pruneReadList(list));
+      writeNotifications(pruneList(list));
       return notification;
     });
   }
@@ -124,19 +167,21 @@ function createNotifications(dependencies: any) {
     if (!getNotifyPrefs()[kind]) return null;
     const pmeta = readMeta(slug);
     if (pmeta && pmeta.notify === false) return null;
-    const eventAt = ticket.updatedAt;
-    const dup = readNotifications().some((n?: any) => n.ticketId === ticket.id && n.kind === kind && n.ticketEventAt === eventAt);
-    if (dup) return null;
+    // The copy is captured now because the caller keeps mutating its ticket until the transaction closes.
     const copy = eventNotificationCopy(ticket, kind, extra);
-    return addNotification({
+    const fields = {
       kind,
       title: copy.title,
       body: copy.body,
       projectSlug: slug,
       ticketRef: ticket.ref,
       ticketId: ticket.id,
-      ticketEventAt: eventAt,
-    });
+      ticketEventAt: ticket.updatedAt,
+    };
+    // The event write must commit first and never wait on the notifications row, which is far larger than a ticket.
+    // A crash between the two loses only the notification.
+    afterCommit(() => insertNotification(fields, true));
+    return null;
   }
 
   function markRead(id?: any) {
@@ -184,7 +229,7 @@ function createNotifications(dependencies: any) {
   function pruneRead() {
     return withNotificationsLock(() => {
       const list = readNotifications();
-      const pruned = pruneReadList(list);
+      const pruned = pruneList(list);
       const removed = list.length - pruned.length;
       if (removed) writeNotifications(pruned);
       return removed;
