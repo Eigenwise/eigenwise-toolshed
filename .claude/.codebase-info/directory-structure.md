@@ -1,6 +1,6 @@
 # Directory structure
 
-Last Updated: 2026-09-28
+Last Updated: 2026-09-29
 
 - `.claude/`: project settings, live rules, and generated codebase map.
 - `.claude-plugin/`: marketplace manifest and published plugin entries.
@@ -14,7 +14,7 @@ Last Updated: 2026-09-28
 - `docs/`: Astro/Starlight prose, generated reference source, scripts, and synthetic screenshots.
 - `sandbox/windows/`: maintainer-only, gitignored Windows Sandbox launcher, guest bootstrap, and PowerShell contract test — never committed, no public docs page.
 - `scripts/release/`: release note, plan, cut, finalize, guard, manifest, promotion/publication helpers, and release tests. Protected publication prepares an unprotected release branch, promotes it to `main` through a reviewed PR, then tags the exact merged commit and prints a `main`-to-`develop` sync PR.
-- `scripts/quality/`: the CRAP delta gate. `crap.mjs` runs the Sidequest suite under V8 coverage, scores only `src/` TypeScript, merges direct `tsx` coverage with the compiled child-process counterpart, and fails a changed function whose complexity rose against the merge base with `develop`. Run it as `npm run quality:crap` from `plugins/sidequest`; it is a local gate, not wired into CI. `crap.test.mjs` covers the scorer and the gate through an injectable baseline reader. The scorer and lizard CSV parser it shares with Quartermaster live in the plugin (`plugins/quartermaster/lib/crap.js`, `crap-core.cjs`); `scripts/quality/quartermaster-crap.cjs` and `crap-core.cjs` are one-line re-exports of them, because the installed plugin cache copies only `plugins/quartermaster/` and cannot load a file outside it (the 0.11.4 outage). `plugins/quartermaster/test/packaging.test.js` runs the CLI from a cache-shaped copy and refuses any relative `require` that climbs out of the plugin.
+- `scripts/quality/`: the CRAP delta gate. `crap.mjs` runs the Sidequest suite under V8 coverage, scores only `src/` TypeScript, merges direct `tsx` coverage with the compiled child-process counterpart, and fails a changed function whose complexity rose against the merge base with `develop`. Function boundaries and identity now come from TypeScript's own AST (`collectFunctions`, via `typescript/unstable/ast`/`sync`/`fs` over a virtual file) instead of lizard's brace tracking, which lost function boundaries in TypeScript source (SQ-3091); lizard is still spawned and its CSV output still supplies the complexity number, matched back to an AST-found function by start line and name. Run it as `npm run quality:crap` from `plugins/sidequest`; it is a local gate, not wired into CI. `crap.test.mjs` covers the scorer and the gate through an injectable baseline reader. The scorer and lizard CSV parser it shares with Quartermaster live in the plugin (`plugins/quartermaster/lib/crap.js`, `crap-core.cjs`); `scripts/quality/quartermaster-crap.cjs` and `crap-core.cjs` are one-line re-exports of them, because the installed plugin cache copies only `plugins/quartermaster/` and cannot load a file outside it (the 0.11.4 outage). `plugins/quartermaster/test/packaging.test.js` runs the CLI from a cache-shaped copy and refuses any relative `require` that climbs out of the plugin.
 - `.github/workflows/`: test, release guard, release cut, and docs deployment automation.
 - `examples/`: small example projects, not production plugin runtime.
 

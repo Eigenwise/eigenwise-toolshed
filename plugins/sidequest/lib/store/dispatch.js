@@ -1358,15 +1358,49 @@ function createDispatch(dependencies) {
   function crossBoundCheckoutRefusal(ref, siblingRef, worktree) {
     return `${ref} did not remove ${worktree}: its retired attempt's binding was a cross-bind onto ${siblingRef}'s live checkout, not a tree ${ref} created. The checkout stays with ${siblingRef}, and only ${ref}'s binding was cleared.`;
   }
+  function unsettledSiblingCheckoutRefusal(ref, siblingRef, worktree) {
+    return `${ref} did not remove ${worktree}: ${siblingRef} from the same dispatch session has not claimed yet, and creation order can hand one sibling's checkout to the other's reservation, so this may be the tree ${siblingRef}'s executor runs in. The checkout stays, and only ${ref}'s binding was cleared.`;
+  }
+  function guessedSessionSibling(entry, slug, ticket, sessionId) {
+    const state = dispatchState(entry.ticket);
+    return entry.slug === slug && entry.ticket.id !== ticket.id && state?.sharedTree === false && guessedReservation(entry.ticket, state, sessionId);
+  }
+  function unsettledSessionSibling(slug, ticket, state) {
+    const sessionId = normalizedText(state?.sessionId);
+    const sibling = sessionId && ticketsMentioningSession(sessionId).find((entry) => guessedSessionSibling(entry, slug, ticket, sessionId));
+    return sibling ? sibling.ticket : null;
+  }
+  function holdUncreatedFailureForSibling(slug, ticket, state, sessionId) {
+    const sibling = guessedReservation(ticket, state, sessionId) ? unsettledSessionSibling(slug, ticket, state) : null;
+    if (!sibling) return null;
+    releaseCrossedCreationBinding(state, sibling.ref, (/* @__PURE__ */ new Date()).toISOString(), "worktree_create_failed");
+    stampDispatchEvent(ticket, "worktree-create-failure-held");
+    putTicket(slug, ticket);
+    return { ok: true, ticket, heldFor: sibling.ref };
+  }
+  function siblingKeepingCheckout(slug, projectPath, ticket, state) {
+    if (!state?.worktree) return null;
+    const holder = liveSiblingHoldingCheckout(slug, projectPath, ticket, state);
+    if (holder) return { sibling: holder, message: crossBoundCheckoutRefusal(ticket.ref, holder.ref, state.worktree) };
+    const unsettled = unsettledSessionSibling(slug, ticket, state);
+    if (!unsettled) return null;
+    return { sibling: unsettled, message: unsettledSiblingCheckoutRefusal(ticket.ref, unsettled.ref, state.worktree), parkedCheckout: parkedCreationRecord(state) };
+  }
+  function parkedCreationRecord(state) {
+    const record = { sessionId: state.sessionId, baseCommit: state.baseCommit };
+    for (const field of CHECKOUT_BINDING_FIELDS) record[field] = state[field] === void 0 ? null : state[field];
+    return record;
+  }
   function reclaimRetiredAttemptCheckout(slug, projectPath, ticket, state, facts) {
-    const sibling = liveSiblingHoldingCheckout(slug, projectPath, ticket, state);
-    if (!sibling) return reclaimUnclaimedDispatchWorktree(projectPath, state, facts);
+    const kept = siblingKeepingCheckout(slug, projectPath, ticket, state);
+    if (!kept) return reclaimUnclaimedDispatchWorktree(projectPath, state, facts);
     return {
       worktree: state.worktree,
       reclaimed: false,
       reason: "cross_bound_worktree",
-      sibling: sibling.ref,
-      message: crossBoundCheckoutRefusal(ticket.ref, sibling.ref, state.worktree)
+      sibling: kept.sibling.ref,
+      message: kept.message,
+      parkedCheckout: kept.parkedCheckout
     };
   }
   function unclaimedWorktreeRecoveryFacts(projectPath, ticket, state) {
@@ -1475,7 +1509,7 @@ function createDispatch(dependencies) {
           });
           if (recovery2?.reason === "cross_bound_worktree") {
             releaseCrossedCreationBinding(current, recovery2.sibling, (/* @__PURE__ */ new Date()).toISOString(), "cross_bound_supersede");
-            crossBoundWorktree = { sibling: recovery2.sibling, worktree: recovery2.worktree, message: recovery2.message };
+            crossBoundWorktree = { sibling: recovery2.sibling, worktree: recovery2.worktree, message: recovery2.message, parkedCheckout: recovery2.parkedCheckout };
           } else if (recovery2 && recovery2.reclaimed === false && recovery2.discardable !== true && recovery2.retainedCheckout !== true) {
             const retainedContinuation2 = retainedWorktreeContinuationState(slug, t, current);
             if (!retainedContinuation2?.continuation) {
@@ -2395,7 +2429,11 @@ function createDispatch(dependencies) {
         state.worktreeObservedRevision = facts.revision;
         state.worktreeCreationCompletedAt = (/* @__PURE__ */ new Date()).toISOString();
       }
-      if (options?.created === false) releaseCrossedCreationBinding(state, null, (/* @__PURE__ */ new Date()).toISOString(), "worktree_create_failed");
+      if (options?.created === false) {
+        const held = holdUncreatedFailureForSibling(slug, ticket, state, normalizedSessionId);
+        if (held) return held;
+        releaseCrossedCreationBinding(state, null, (/* @__PURE__ */ new Date()).toISOString(), "worktree_create_failed");
+      }
       setDispatchTerminal(ticket, "failed", "worktree-create-recovery", {
         slug,
         error,
@@ -2407,7 +2445,7 @@ function createDispatch(dependencies) {
       putTicket(slug, ticket);
       return { ok: true, ticket };
     });
-    if (!terminal?.ok) return terminal;
+    if (!terminal?.ok || terminal.heldFor) return terminal;
     const cleanup = reclaimRetiredAttemptCheckout(slug, meta.path, terminal.ticket, dispatchState(terminal.ticket));
     return { ok: true, ticket: terminal.ticket, cleanup };
   }
@@ -2886,7 +2924,8 @@ function createDispatch(dependencies) {
     "worktreeCreationCompletedAt",
     "worktreeProvisionedAt",
     "ownedDependencyLinks",
-    "worktreeProvisioningFailure"
+    "worktreeProvisioningFailure",
+    "worktreeBindingSource"
   ];
   const CHECKOUT_IDENTITY_FIELDS = ["worktree", "gitDirectory", "commonGitDirectory", "checkoutInstance"];
   const TOKEN_BIND_SOURCES = ["claim_token", "claim_runtime_identity"];
@@ -2918,10 +2957,27 @@ function createDispatch(dependencies) {
     const claim = { sessionId: normalizedText(sessionId), observed: normalizedText(observedWorktree) };
     return claim.sessionId && claim.observed ? { sessionId: claim.sessionId, observed: canonicalPath(claim.observed) } : null;
   }
-  function crossedCheckoutTarget(slug, ticketId, claim) {
+  function checkoutlessReservation(ticket, state, sessionId) {
+    return unclaimedLaunchedReservation(ticket, state, sessionId) && !state.claimedAt && state.sharedTree === false && !state.worktree && !state.continuation?.sourceWorktree;
+  }
+  function releasedCheckoutReservation(ticket, state, sessionId) {
+    return checkoutlessReservation(ticket, state, sessionId) && state.worktreeBindingExchange?.reason === "worktree_create_failed";
+  }
+  function leasesAnotherCheckout(ticket, state, claim) {
+    return crossedClaimCheckoutReservation(ticket, state, claim.sessionId) && canonicalPath(state.worktree) !== claim.observed;
+  }
+  function claimExchangesObservedCheckout(ticket, state, claim) {
+    return leasesAnotherCheckout(ticket, state, claim) || releasedCheckoutReservation(ticket, state, claim.sessionId);
+  }
+  function claimAdoptsObservedCheckout(ticket, state, claim) {
+    return leasesAnotherCheckout(ticket, state, claim) || checkoutlessReservation(ticket, state, claim.sessionId);
+  }
+  function crossedCheckoutTarget(slug, ticketId, claim, takesCheckout) {
     const target = getTicket(slug, ticketId);
-    const state = dispatchState(target);
-    return crossedClaimCheckoutReservation(target, state, claim.sessionId) && canonicalPath(state.worktree) !== claim.observed ? target : null;
+    return takesCheckout(target, dispatchState(target), claim) ? target : null;
+  }
+  function recordedCheckout(state) {
+    return state?.worktree ? canonicalPath(state.worktree) : null;
   }
   function recordsObservedCheckout(candidate, target, claim) {
     return candidate.id !== target.id && guessedSiblingCheckout(candidate, dispatchState(candidate), claim.sessionId) && canonicalPath(dispatchState(candidate).worktree) === claim.observed;
@@ -2933,13 +2989,13 @@ function createDispatch(dependencies) {
   }
   function crossedCheckoutExchange(slug, ticketId, sessionId, observedWorktree) {
     const claim = observedClaimCheckout(sessionId, observedWorktree);
-    const target = claim ? crossedCheckoutTarget(slug, ticketId, claim) : null;
+    const target = claim ? crossedCheckoutTarget(slug, ticketId, claim, claimExchangesObservedCheckout) : null;
     const holder = target ? crossedCheckoutHolder(slug, target, claim) : null;
     const facts = holder ? immutableWorktreeFacts(slug, claim.observed) : null;
     return observedCheckoutMatchesRecord(dispatchState(holder), facts) ? { slug, target, holder, facts, ...claim } : null;
   }
   function crossedCheckoutStillHolds(exchange, current, currentHolder) {
-    return crossedClaimCheckoutReservation(current, dispatchState(current), exchange.sessionId) && canonicalPath(dispatchState(current).worktree) === canonicalPath(dispatchState(exchange.target).worktree) && guessedSiblingCheckout(currentHolder, dispatchState(currentHolder), exchange.sessionId) && observedCheckoutMatchesRecord(dispatchState(currentHolder), exchange.facts);
+    return claimExchangesObservedCheckout(current, dispatchState(current), exchange) && recordedCheckout(dispatchState(current)) === recordedCheckout(dispatchState(exchange.target)) && guessedSiblingCheckout(currentHolder, dispatchState(currentHolder), exchange.sessionId) && observedCheckoutMatchesRecord(dispatchState(currentHolder), exchange.facts);
   }
   function applyCrossedCheckoutExchange(exchange, admitted) {
     const current = getTicket(exchange.slug, exchange.target.id);
@@ -2948,7 +3004,7 @@ function createDispatch(dependencies) {
     const currentState = dispatchState(current);
     const holderState = dispatchState(currentHolder);
     const now = (/* @__PURE__ */ new Date()).toISOString();
-    const from = canonicalPath(currentState.worktree);
+    const from = recordedCheckout(currentState);
     exchangeCheckoutRecords(currentState, holderState);
     currentState.worktreeBindingExchange = { at: now, from, with: currentHolder.ref, reason: "claim_token" };
     holderState.worktreeBindingExchange = { at: now, from: exchange.observed, with: current.ref, reason: "claim_token" };
@@ -2960,8 +3016,58 @@ function createDispatch(dependencies) {
   }
   function exchangeCrossedClaimCheckout(slug, ticketId, sessionId, observedWorktree, admitted) {
     const exchange = crossedCheckoutExchange(slug, ticketId, sessionId, observedWorktree);
-    if (!exchange) return null;
+    if (!exchange) return adoptParkedClaimCheckout(slug, ticketId, sessionId, observedWorktree, admitted);
     return withLockedTickets([{ slug, id: exchange.target.id }, { slug, id: exchange.holder.id }], () => applyCrossedCheckoutExchange(exchange, admitted));
+  }
+  function parkedCheckoutOf(ticket) {
+    return dispatchState(ticket)?.crossBoundWorktree?.parkedCheckout || null;
+  }
+  function parksObservedCheckout(entry, slug, target, claim) {
+    const parked = entry.slug === slug && entry.ticket.id !== target.id ? parkedCheckoutOf(entry.ticket) : null;
+    return parked?.sessionId === claim.sessionId && recordedCheckout(parked) === claim.observed;
+  }
+  function parkedCheckoutHolder(slug, target, claim) {
+    const parkers = ticketsMentioningSession(claim.sessionId).filter((entry) => parksObservedCheckout(entry, slug, target, claim));
+    const parker = parkers.length === 1 ? parkers[0]?.ticket : null;
+    return parker && sameBaseline(dispatchState(target), parkedCheckoutOf(parker)) ? parker : null;
+  }
+  function parkedCheckoutAdoption(slug, ticketId, sessionId, observedWorktree) {
+    const claim = observedClaimCheckout(sessionId, observedWorktree);
+    const target = claim ? crossedCheckoutTarget(slug, ticketId, claim, claimAdoptsObservedCheckout) : null;
+    const parker = target ? parkedCheckoutHolder(slug, target, claim) : null;
+    const facts = parker ? immutableWorktreeFacts(slug, claim.observed) : null;
+    return observedCheckoutMatchesRecord(parkedCheckoutOf(parker), facts) ? { slug, target, parker, facts, ...claim } : null;
+  }
+  function parkedCheckoutStillHolds(adoption, current, parker) {
+    return claimAdoptsObservedCheckout(current, dispatchState(current), adoption) && recordedCheckout(dispatchState(current)) === recordedCheckout(dispatchState(adoption.target)) && observedCheckoutMatchesRecord(parkedCheckoutOf(parker), adoption.facts);
+  }
+  function reparkDisplacedCheckout(slug, claimant, parker, displaced) {
+    const crossBound = dispatchState(parker).crossBoundWorktree;
+    if (displaced.worktree && unsettledSessionSibling(slug, claimant, dispatchState(claimant))) crossBound.parkedCheckout = displaced;
+    else delete crossBound.parkedCheckout;
+  }
+  function applyParkedCheckoutAdoption(adoption, admitted) {
+    const current = getTicket(adoption.slug, adoption.target.id);
+    const parker = getTicket(adoption.slug, adoption.parker.id);
+    if (!parkedCheckoutStillHolds(adoption, current, parker) || !admitted?.()) return null;
+    const state = dispatchState(current);
+    const parked = parkedCheckoutOf(parker);
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const from = recordedCheckout(state);
+    const displaced = parkedCreationRecord(state);
+    for (const field of CHECKOUT_BINDING_FIELDS) state[field] = parked[field];
+    state.worktreeBindingExchange = { at: now, from, with: parker.ref, reason: "claim_parked_checkout" };
+    reparkDisplacedCheckout(adoption.slug, current, parker, displaced);
+    stampDispatchEvent(current, "claim-worktree-adopted", now);
+    stampDispatchEvent(parker, "claim-worktree-adopted", now);
+    putTicket(adoption.slug, current);
+    putTicket(adoption.slug, parker);
+    return { ok: true, adoptedFrom: parker.ref, worktree: state.worktree, from };
+  }
+  function adoptParkedClaimCheckout(slug, ticketId, sessionId, observedWorktree, admitted) {
+    const adoption = parkedCheckoutAdoption(slug, ticketId, sessionId, observedWorktree);
+    if (!adoption) return null;
+    return withLockedTickets([{ slug, id: adoption.target.id }, { slug, id: adoption.parker.id }], () => applyParkedCheckoutAdoption(adoption, admitted));
   }
   function guessedReservation(ticket, state, sessionId) {
     return unclaimedLaunchedReservation(ticket, state, sessionId) && !TOKEN_BIND_SOURCES.includes(state.bindSource);

@@ -1613,6 +1613,37 @@ function deliveryRevisionProof(repo: string, ticket: any, candidate: string, opt
   };
 }
 
+function deliveryRevisionPreflight(repo: string, ticket: any, deliveryCommit: string, request: {
+  requested: string;
+  resolvedPaths: string[];
+  workingTreeDelivery: boolean;
+  targetBranch: string;
+  resultingHead: string;
+  by: string;
+  reason: string;
+}) {
+  // A reachable candidate proves itself by ancestry or equivalent patch, so no path
+  // there can be diverging and an attestation about one can only be a mistake. It
+  // refuses rather than dropping silently, which left the operator no signal. A
+  // deliveryRevision named there is ignored rather than turned into a second, weaker proof.
+  if (!request.workingTreeDelivery) {
+    return {
+      refusal: request.resolvedPaths.length ? {
+        ok: false,
+        reason: 'resolved_paths_invalid',
+        ticket,
+        message: `${ticket.ref} reconciliation refused: ${deliveryCommit} is already reachable from ${request.targetBranch}, so its own content answers for it and resolvedPaths attests nothing. Record this delivery without resolvedPaths and deliveryRevision.`,
+      } : null,
+      revisionProof: null,
+    };
+  }
+  if (!request.requested) return { refusal: null, revisionProof: null };
+  const revisionProof = deliveryRevisionProof(repo, ticket, deliveryCommit, request);
+  return revisionProof.ok
+    ? { refusal: null, revisionProof }
+    : { refusal: Object.assign({ ticket }, revisionProof), revisionProof: null };
+}
+
 function workingTreeDeliveryPaths(repo: string) {
   const tracked = integrationGit(repo, ['diff', '--name-only', 'HEAD']).split(/\r?\n/).filter(Boolean);
   const untracked = integrationGit(repo, ['ls-files', '--others', '--exclude-standard']).split(/\r?\n/).filter(Boolean);
@@ -1728,36 +1759,22 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
         message: `${ticket.ref} reconciliation refused: non-reachable delivery must name its immutable ${submissionGitRef(ticket)} candidate, not ${deliveryCommit}.`,
       };
     }
-    // A reachable candidate proves itself by ancestry or equivalent patch, so no path
-    // there can be diverging and an attestation about one can only be a mistake. It
-    // refuses rather than dropping silently, which left the operator no signal.
-    if (resolvedPaths.length && !workingTreeDelivery) {
-      return {
-        ok: false,
-        reason: 'resolved_paths_invalid',
-        ticket,
-        message: `${ticket.ref} reconciliation refused: ${deliveryCommit} is already reachable from ${target.branch}, so its own content answers for it and resolvedPaths attests nothing. Record this delivery without resolvedPaths and deliveryRevision.`,
-      };
-    }
+    const revisionPreflight = deliveryRevisionPreflight(repo, ticket, deliveryCommit, {
+      requested: requestedDeliveryRevision,
+      resolvedPaths,
+      workingTreeDelivery,
+      targetBranch: target.branch,
+      resultingHead,
+      by: String(opts.by || '').trim(),
+      reason,
+    });
+    if (revisionPreflight.refusal) return revisionPreflight.refusal;
+    const revisionProof: any = revisionPreflight.revisionProof;
     // apply squashes the whole range into the working tree, so the commit of that
     // tree carries no patch identity from any candidate commit. What it can prove is
     // the thing the delivery actually is: the same bytes as the reviewed candidate on
     // every submitted path, checked by the same comparison supersession lineage uses.
     const completingApplyDelivery = opts.completingApplyDelivery === true && !workingTreeDelivery;
-    // deliveryRevision answers only the non-reachable pinned question. A reachable
-    // candidate already proves itself by ancestry or equivalent patch, so naming a
-    // revision there is ignored rather than turned into a second, weaker proof.
-    const revisionProof: any = workingTreeDelivery && requestedDeliveryRevision
-      ? deliveryRevisionProof(repo, ticket, deliveryCommit, {
-        requested: requestedDeliveryRevision,
-        resolvedPaths,
-        targetBranch: target.branch,
-        resultingHead,
-        by: String(opts.by || '').trim(),
-        reason,
-      })
-      : null;
-    if (revisionProof && !revisionProof.ok) return Object.assign({ ticket }, revisionProof);
     const content = completingApplyDelivery
       ? applyDeliveryTreeMatchesCandidate(repo, ticket.submission, deliveryCommit)
       : revisionProof
