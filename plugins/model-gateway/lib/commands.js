@@ -928,19 +928,26 @@ function isUnwiredGatewayEnv(env) {
     && Object.values(PIN_ALIASES).some((key) => typeof env[key] === 'string');
 }
 
-async function syncUnwiredPinsIn(file) {
-  if (!isUnwiredGatewayEnv(readSettingsIfPresent(file)?.env)) return;
-  await refreshDetectedPinsAndWiring();
-  // The alias probes take seconds and anything may write this file meanwhile,
-  // so decide and write from what is on disk after them, not the first read.
+function readUnwiredGatewaySettings(file) {
   const settings = readSettingsIfPresent(file);
-  if (!isUnwiredGatewayEnv(settings?.env)) return;
-  const updates = stalePinUpdates(settings.env);
+  return isUnwiredGatewayEnv(settings?.env) ? settings : null;
+}
+
+function writePinUpdates(file, settings, updates) {
   if (!updates.length) return;
   for (const { key, to } of updates) settings.env[key] = to;
   writeSettings(file, settings);
   const changes = updates.map(({ key, from, to }) => `${key} ${from} -> ${to}`).join(', ');
   log(`model-gateway: updated stale Claude alias pins in ${file} (${changes}). Start a new Claude Code session to use them.`);
+}
+
+async function syncUnwiredPinsIn(file) {
+  if (!readUnwiredGatewaySettings(file)) return;
+  await refreshDetectedPinsAndWiring();
+  // The alias probes take seconds and anything may write this file meanwhile,
+  // so decide and write from what is on disk after them, not the first read.
+  const settings = readUnwiredGatewaySettings(file);
+  if (settings) writePinUpdates(file, settings, stalePinUpdates(settings.env));
 }
 
 async function envCommand() {
