@@ -1774,7 +1774,7 @@ test('pre-tool repeated-command hook ignores main-thread and unrelated subagent 
 });
 
 test('pre-tool repeated-command hook warns on the third repeat and every fifth after', () => {
-  const agentId = `repeated-command-${Date.now()}`;
+  const agentId = `repeated-command-${process.pid}-${Date.now()}`;
   const payload = { tool_name: 'Bash', agent_type: 'sidequest-exec-high', agent_id: agentId, tool_input: { command: 'npm   run\n test' } };
   assert.equal(runHookOutput(REPEATED_COMMAND_WARN, payload), null);
   assert.equal(runHookOutput(REPEATED_COMMAND_WARN, { ...payload, tool_input: { command: 'npm run test' } }), null);
@@ -1788,7 +1788,7 @@ test('pre-tool repeated-command hook warns on the third repeat and every fifth a
 });
 
 test('pre-tool repeated-command hook warns for PowerShell commands', () => {
-  const agentId = `repeated-command-powershell-${Date.now()}`;
+  const agentId = `repeated-command-powershell-${process.pid}-${Date.now()}`;
   const payload = { tool_name: 'PowerShell', agent_type: 'sidequest-exec-high', agent_id: agentId, tool_input: { command: 'npm test' } };
   assert.equal(runHookOutput(REPEATED_COMMAND_WARN, payload), null);
   assert.equal(runHookOutput(REPEATED_COMMAND_WARN, payload), null);
@@ -3960,7 +3960,8 @@ test('worktree-create refuses an unbound request before Git or target mutation',
 
 test('worktree-create binds a linked checkout to its registered main board', () => {
   const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-linked-worktree-hook-repo-'));
-  const linkedCheckout = path.join(os.tmpdir(), `sq-linked-worktree-hook-${++sqSeq}`);
+  // force-exec-bypass.test.ts runs this file again in a parallel process with the same sqSeq sequence.
+  const linkedCheckout = `${repository}-linked-${++sqSeq}`;
   gitFixture(['init', '--quiet', '-b', 'main'], repository);
   gitFixture(['config', 'user.email', 'test@example.invalid'], repository);
   gitFixture(['config', 'user.name', 'Linked Worktree Hook Test'], repository);
