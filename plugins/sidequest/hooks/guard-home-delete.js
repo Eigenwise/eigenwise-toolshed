@@ -152,11 +152,18 @@ function hasProtectedRecursiveDelete(command) {
 function normalizePath(value) {
   return value.toLowerCase().replace(/[\\/]+$/, "");
 }
+var LEADING_HOME_REFERENCE = /^(?:~|\$home|\$env:userprofile|%userprofile%)(?=[\\/]|$)/i;
+var HOME_REFERENCE = /\$home\b|\$env:userprofile\b|%userprofile%|(?<!\w)~(?=[\\/\s]|$)/i;
+function deleteTargets(command) {
+  const home = import_node_os.default.homedir();
+  return command.replace(/["']/g, "").split(/\s+/).map((target) => target.replace(LEADING_HOME_REFERENCE, () => home));
+}
 function isProtectedPath(command) {
-  if (/\$home\b|\$env:userprofile\b|%userprofile%|(?<!\w)~(?=[\\/\s"']|$)/i.test(command)) return true;
+  const targets = deleteTargets(command);
+  if (HOME_REFERENCE.test(targets.join(" "))) return true;
   const home = import_node_path.default.resolve(import_node_os.default.homedir());
   const protectedRoots = [home, import_node_path.default.join(home, ".claude"), import_node_path.default.dirname(home), import_node_path.default.parse(home).root].map(normalizePath);
-  return command.replace(/["']/g, "").split(/\s+/).filter((target) => target !== "\\" && import_node_path.default.isAbsolute(target)).some((target) => {
+  return targets.filter((target) => target !== "\\" && import_node_path.default.isAbsolute(target)).some((target) => {
     const resolved = import_node_path.default.resolve(target);
     if (import_node_path.default.parse(resolved).root === resolved) return true;
     const normalized = normalizePath(resolved);

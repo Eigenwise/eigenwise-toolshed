@@ -1316,6 +1316,19 @@ test('a composed wave gate provisions linked dependencies and its cleanup leaves
   assert.equal(fs.readFileSync(path.join(fixture.repo, dependencyName, 'sentinel'), 'utf8'), 'ready\n', 'removing the composed checkout must not empty the linked source');
 });
 
+test('GH-157: a composed wave gate copies ignored dependency files but never overwrites what the candidates carry', () => {
+  const { fixture, slug, refs } = twoCandidateWave('wave-gate-copied-dependency', gateProbeVerify("fs.readFileSync('.claude/gate-env/api.env','utf8')==='KEY=secret\\n'&&fs.readFileSync('README.md','utf8')==='advance fixture\\n'"));
+  fs.mkdirSync(path.join(fixture.repo, '.claude', 'gate-env'), { recursive: true });
+  fs.writeFileSync(path.join(fixture.repo, '.claude', 'gate-env', 'api.env'), 'KEY=secret\n');
+  fs.writeFileSync(path.join(fixture.repo, 'README.md'), 'uncommitted local edit\n');
+  store.setBoardConfig(slug, { worktreeDependencyPaths: [{ path: '.claude/gate-env', mode: 'copy' }, { path: 'README.md', mode: 'copy' }] });
+
+  const wave = store.assembleSubmissionWave(slug, refs);
+
+  assert.equal(wave.ok, true, JSON.stringify(wave));
+  assert.equal(wave.gate.state, 'gate_passed');
+});
+
 test('GH-247: the gate verifier does not inherit the board process plugin-host variables', () => {
   const saved = { root: process.env.CLAUDE_PLUGIN_ROOT, data: process.env.CLAUDE_PLUGIN_DATA };
   process.env.CLAUDE_PLUGIN_ROOT = path.join(__dirname, '..');

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 "use strict";
 const mcp = require("../lib/mcp.js");
-const boardMcpSessionId = mcp.boardMcpSessionId();
-mcp.writeBoardMcpLiveness(boardMcpSessionId);
-process.once("exit", () => mcp.clearBoardMcpLiveness(boardMcpSessionId));
+const { writeBoardMcpLiveness, clearBoardMcpLiveness } = require("../lib/board-mcp-liveness.js");
+writeBoardMcpLiveness(mcp.boardMcpSessionId(), process.env.CLAUDE_PROJECT_DIR || process.cwd());
+process.once("exit", clearBoardMcpLiveness);
 const CLIENT_HEARTBEAT_INTERVAL_MILLISECONDS = 6e4;
 const CLIENT_HEARTBEAT_TIMEOUT_MILLISECONDS = 1e4;
 const CLIENT_INITIALIZATION_DEADLINE_MILLISECONDS = 7e4;

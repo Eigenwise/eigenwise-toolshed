@@ -200,6 +200,71 @@ test('SQ-2937: a stale installed gateway catalog with no refresh command is stil
   assert.equal(discovery.providerReadiness('codex'), null);
 });
 
+function seedGatewayCommand(t: { after(fn: () => void): void }, stored: unknown, script: (catalogPath: string) => string) {
+  seedGatewayHome(t, stored, {});
+  const claudeHome = String(process.env.SIDEQUEST_CLAUDE_HOME);
+  const installPath = path.join(claudeHome, 'gateway-install');
+  fs.mkdirSync(path.join(installPath, 'bin'), { recursive: true });
+  const catalogPath = path.join(claudeHome, 'model-gateway', 'catalog.json');
+  fs.writeFileSync(path.join(installPath, 'bin', 'model-gateway.js'), script(catalogPath));
+  fs.writeFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    plugins: { 'model-gateway@eigenwise-toolshed': [{ installPath, version: '0.51.7' }] },
+  }));
+  return catalogPath;
+}
+
+test('GH-227: a gateway refresh that declines to write puts its own reason in the dispatch refusal', (t) => {
+  const agedOut = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+  seedGatewayCommand(t, readyCatalog(agedOut), () => [
+    "process.stderr.write('model-gateway: catalog refresh did not write (shim /healthz on 127.0.0.1:18764 returned 503); kept the stored catalog\\n');",
+    'process.exit(1);',
+  ].join('\n'));
+  const dispatchRouteRefusal = (store as unknown as { dispatchRouteRefusal(route: { model: string; effort: string }): string | null }).dispatchRouteRefusal;
+
+  const refusal = dispatchRouteRefusal({ model: 'codex-gpt-test', effort: 'high' });
+
+  assert.match(String(refusal), /^Codex dispatch refused: model-gateway readiness is unavailable\./);
+  assert.match(String(refusal), /Last gateway catalog refresh: model-gateway: catalog refresh did not write \(shim \/healthz on 127\.0\.0\.1:18764 returned 503\)/);
+});
+
+test('GH-175: a refreshed catalog that is still unready is asked again after 30 s, not held for the catalog window', (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 1000 });
+  const catalogPath = seedGatewayCommand(t, unreadyCatalog(), (writtenPath) => [
+    "const fs = require('fs');",
+    `const catalogPath = ${JSON.stringify(writtenPath)};`,
+    "const recovered = fs.existsSync(catalogPath + '.recovered');",
+    `const ready = ${JSON.stringify(readyCatalog())};`,
+    `const unready = ${JSON.stringify(unreadyCatalog())};`,
+    "fs.writeFileSync(catalogPath, JSON.stringify({ ...(recovered ? ready : unready), updatedAt: new Date().toISOString() }));",
+  ].join('\n'));
+
+  assert.equal(discovery.providerReadiness('codex')?.ready, false, 'the refresh right after the failure still reports it');
+  fs.writeFileSync(`${catalogPath}.recovered`, '');
+  t.mock.timers.tick(20 * 1000);
+  assert.equal(discovery.providerReadiness('codex')?.ready, false, 'inside the 30 s retry window the refusal holds');
+  t.mock.timers.tick(15 * 1000);
+  assert.equal(discovery.providerReadiness('codex')?.ready, true, 'the next refresh after the window clears it');
+});
+
+test('GH-263: a discovered provider the gateway shim does not serve dispatches its own id, not through the Codex marker', () => {
+  writeCatalog([
+    { slug: 'oc-flash', id: 'claude-opencode-flash', label: 'Flash', provider: 'opencode' },
+    { slug: 'grok-build', id: 'claude-grok-build', label: 'Grok Build', provider: 'grok' },
+  ], {
+    schemaVersion: 4,
+    source: 'model-gateway',
+    providers: { opencode: { ready: true, state: 'ready', message: 'ready' }, grok: { ready: true, state: 'ready', message: 'ready' } },
+  });
+  const resolveExec = store.resolveExec as (model: string, effort: string) => (ResolvedExec & { backend: string; apiModel: string; dispatchModel?: string }) | null;
+
+  const direct = resolveExec('oc-flash', 'high');
+  assert.equal(direct?.backend, 'opencode');
+  assert.equal(direct?.model, 'claude-opencode-flash');
+  assert.equal(direct?.agent, 'sidequest-exec-high');
+  assert.equal(direct?.dispatchModel, undefined);
+  assert.equal(resolveExec('grok-build', 'high')?.backend, 'codex', 'the shim still serves grok through the marker');
+});
+
 test('discovery validates concrete catalog identity and drops routing hints', () => {
   writeCatalog([
     { slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', suggestedTier: 'ignored' },

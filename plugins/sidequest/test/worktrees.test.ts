@@ -313,6 +313,124 @@ test('provisionWorktree reports every created link before a setup failure', asyn
   }
 });
 
+// GH-157: env/ is tracked for its *.example files while the real env files are gitignored.
+function trackedEnvFixture() {
+  const fixture = repositoryFixture();
+  const { repository } = fixture;
+  fs.mkdirSync(path.join(repository, 'env'));
+  fs.writeFileSync(path.join(repository, 'env', 'api.env.example'), 'KEY=\n');
+  fs.appendFileSync(path.join(repository, '.gitignore'), 'env/*.env\n');
+  git(repository, ['add', '.']);
+  git(repository, ['commit', '-m', 'tracked env examples']);
+  fs.writeFileSync(path.join(repository, 'env', 'api.env'), 'KEY=secret\n');
+  fs.writeFileSync(path.join(repository, 'env', 'api.env.example'), 'KEY=local edit\n');
+  const worktree = createAgentWorktree(repository, fixture.worktreeRoot, 'env-fixture');
+  return { ...fixture, worktree };
+}
+
+test('GH-157: copy mode fills a tracked directory from the working tree, including its gitignored files', async () => {
+  const { repository, worktree } = trackedEnvFixture();
+  try {
+    const failure = await worktrees.provisionWorktree(repository, worktree, { worktreeDependencyPaths: [{ path: 'env', mode: 'copy' }] });
+
+    assert.equal(failure, null);
+    assert.equal(fs.readFileSync(path.join(worktree, 'env', 'api.env'), 'utf8'), 'KEY=secret\n');
+    assert.equal(fs.readFileSync(path.join(worktree, 'env', 'api.env.example'), 'utf8'), 'KEY=local edit\n', 'a tracked file takes the working-tree version, not the index');
+  } finally {
+    git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('GH-157: copy mode accepts a single gitignored file inside a tracked directory', async () => {
+  const { repository, worktree } = trackedEnvFixture();
+  try {
+    await worktrees.provisionWorktree(repository, worktree, { worktreeDependencyPaths: [{ path: 'env/api.env', mode: 'copy' }] });
+
+    assert.equal(fs.readFileSync(path.join(worktree, 'env', 'api.env'), 'utf8'), 'KEY=secret\n');
+    assert.equal(fs.readFileSync(path.join(worktree, 'env', 'api.env.example'), 'utf8'), 'KEY=\n', 'a file entry copies only that file');
+  } finally {
+    git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('link mode refuses a tracked path and a file, naming copy mode as the fix', async () => {
+  const { repository, worktree } = trackedEnvFixture();
+  try {
+    await assert.rejects(
+      worktrees.provisionWorktree(repository, worktree, { worktreeDependencyPaths: [{ path: 'env', mode: 'link' }] }),
+      /already exists after checkout: env\. link mode fills only a path the checkout leaves absent; use copy mode for a tracked path/,
+    );
+    await assert.rejects(
+      worktrees.provisionWorktree(repository, worktree, { worktreeDependencyPaths: [{ path: 'env/api.env', mode: 'link' }] }),
+      /link mode needs a directory, use copy mode for a file: env\/api\.env/,
+    );
+    await assert.rejects(
+      worktrees.provisionWorktree(repository, worktree, { worktreeDependencyPaths: [{ path: 'missing-cache', mode: 'copy' }] }),
+      /configured worktree dependency path does not exist: missing-cache/,
+    );
+  } finally {
+    git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('provisionGateDependencies fills a gate checkout without overwriting and reports a missing source', () => {
+  const { repository, worktree } = trackedEnvFixture();
+  try {
+    assert.deepEqual(worktrees.provisionGateDependencies(repository, worktree, []), { ok: true, evidence: 'Worktree dependency provisioning was skipped because no paths are configured.' });
+    const provisioned = worktrees.provisionGateDependencies(repository, worktree, [{ path: 'env', mode: 'copy' }, { path: 'env/api.env', mode: 'copy' }]);
+
+    assert.deepEqual(provisioned, { ok: true, evidence: 'Worktree dependency provisioning created 0 and retained 2 of 2 configured paths.' });
+    assert.equal(fs.readFileSync(path.join(worktree, 'env', 'api.env'), 'utf8'), 'KEY=secret\n');
+    assert.equal(fs.readFileSync(path.join(worktree, 'env', 'api.env.example'), 'utf8'), 'KEY=\n', 'the gate keeps the committed file');
+    assert.deepEqual(
+      worktrees.provisionGateDependencies(repository, worktree, [{ path: 'missing-cache', mode: 'link' }]),
+      { ok: false, message: 'Could not provision gate worktree dependencies: configured worktree dependency path does not exist: missing-cache' },
+    );
+  } finally {
+    git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('GH-258: a "../<name>" link lands beside the worktree, is shared, and is never recorded as an owned link', async () => {
+  const { repository, worktreeRoot } = repositoryFixture();
+  const sibling = fs.mkdtempSync(path.join(path.dirname(repository), 'sq-sibling-checkout-'));
+  fs.writeFileSync(path.join(sibling, 'Cargo.toml'), '[package]\n');
+  const dependencyPath = `../${path.basename(sibling)}`;
+  const first = createAgentWorktree(repository, worktreeRoot, 'sibling-one');
+  const second = createAgentWorktree(repository, worktreeRoot, 'sibling-two');
+  const recorded: unknown[] = [];
+  const config = { worktreeDependencyPaths: [{ path: dependencyPath, mode: 'link' }] };
+  const shared = path.join(worktreeRoot, path.basename(sibling));
+  try {
+    await worktrees.provisionWorktree(repository, first, config, { onDependencyLink: (link: unknown) => recorded.push(link) });
+    await worktrees.provisionWorktree(repository, second, config, { onDependencyLink: (link: unknown) => recorded.push(link) });
+
+    assert.equal(fs.lstatSync(shared).isSymbolicLink(), true);
+    assert.equal(fs.readFileSync(path.resolve(second, dependencyPath, 'Cargo.toml'), 'utf8'), '[package]\n');
+    assert.deepEqual(recorded, []);
+
+    fs.unlinkSync(shared);
+    fs.mkdirSync(shared);
+    await assert.rejects(
+      worktrees.provisionWorktree(repository, first, config),
+      /worktree dependency link \.\.\/sq-sibling-checkout-\w+ cannot be created at .*something other than a link to/,
+    );
+    await assert.rejects(
+      worktrees.provisionWorktree(repository, first, { worktreeDependencyPaths: [{ path: dependencyPath, mode: 'copy' }] }),
+      /worktree dependency path would land outside/,
+    );
+  } finally {
+    for (const worktree of [first, second]) git(repository, ['worktree', 'remove', '--force', worktree]);
+    if (fs.lstatSync(shared, { throwIfNoEntry: false })?.isSymbolicLink()) fs.unlinkSync(shared);
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(sibling, { recursive: true, force: true });
+  }
+});
+
 // Was 'sweep reclaims clean legacy worktrees and reports facts for retained legacy
 // worktrees', which pinned legacy_no_lease / legacy_unreclaimed. Legacy status no
 // longer decides anything: an old worktree with no lease is classified by the same

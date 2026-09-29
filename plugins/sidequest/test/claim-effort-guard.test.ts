@@ -689,17 +689,18 @@ test('prepare dispatch rejects unknown ticket refs loudly', () => {
   assert.throws(() => store.prepareDispatch(slug, 'SQ-999999'), /no ticket/);
 });
 
-test('an unavailable primary retains its configured effort guard', () => {
+// GH-217: an undiscovered Codex primary runs on its category fallback, so the effort guard is the fallback's.
+test('an unavailable primary runs on its category fallback and keeps that fallback\'s effort guard', () => {
   const ref = seed('guard.codex');
   process.env.SIDEQUEST_DISCOVERY_DIRS = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-claim-effort-empty-'));
   const derived = ticket(ref);
-  assert.equal(derived.model, 'codex-gpt-test');
-  assert.equal(derived.effort, 'high');
-  const wrong = runCli(['claim', ref, '--by', 'w1', '--effort', 'medium']);
+  assert.equal(derived.model, 'opus');
+  assert.equal(derived.effort, 'medium');
+  const wrong = runCli(['claim', ref, '--by', 'w1', '--effort', 'high']);
   assert.notEqual(wrong.status, 0);
-  assert.match(wrong.stdout + wrong.stderr, /sidequest-exec-high/);
+  assert.match(wrong.stdout + wrong.stderr, /sidequest-exec-medium/);
   store.updateTicket(store.ensureProject(PROJ).slug, ref, { labels: ['direct-ok'] });
-  assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', 'high', '--direct', '--reason', 'The fixture validates direct effort handling.']).ok, true);
+  assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', 'medium', '--direct', '--reason', 'The fixture validates direct effort handling.']).ok, true);
 });
 
 test('a concrete Haiku category keeps its configured effort guard', () => {

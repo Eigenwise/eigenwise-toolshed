@@ -3167,6 +3167,7 @@ test('dirty released worktrees without commits resume in place for a continuatio
       integrationBranch: 'main',
     });
     assert.equal(continued.ticket.dispatch.continuation.mode, 'dirty_worktree_resume');
+    assert.match(continued.ticket.dispatch.continuation.retainReason, /explicitly names integration base main at [0-9a-f]{40}, which is the retained checkout's own base/);
     const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
     const spawn = agentsync.agentSpawn(
       continued.ticket.dispatch.launchName,
@@ -3316,6 +3317,105 @@ test('a retained checkout with unmerged entries is refused as a continuation eve
     project(['reset', '--hard', baselineA]);
     project(['branch', '-D', candidateBranch, recoveryBaseBranch]);
   }
+});
+
+// GH-125. The retained checkout was built on newer main C, and the redispatch explicitly named the original
+// base A. Ancestry of A passes against C, so the retain decision handed out the C-based checkout and the
+// named base never reached the executor. Each case releases a clean checkout on C and redispatches on A.
+function redispatchOnOlderExplicitBase(title: string, leaveWork: (worktree: string) => { releaseKind?: string }, run: (context: any) => void) {
+  const ticket = createFixture(title);
+  const marker = `gh125-${Date.now()}`;
+  const sessionId = `explicit-base-${marker}`;
+  const agentId = `explicit-base-${marker}`;
+  const branch = `worktree-agent-${agentId}`;
+  const recoveryBaseBranch = `${marker}-recovery-base`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, agentId);
+  const project = (args: string[]) => execFileSync('git', args, { cwd: PROJECT, encoding: 'utf8', windowsHide: true }).trim();
+  const baselineA = project(['rev-parse', 'HEAD']);
+  project(['branch', recoveryBaseBranch, baselineA]);
+  fs.writeFileSync(path.join(PROJECT, `${marker}-newer.txt`), 'newer main\n');
+  project(['add', `${marker}-newer.txt`]);
+  project(['commit', '--quiet', '-m', 'newer main C']);
+  const newerC = project(['rev-parse', 'HEAD']);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  try {
+    assert.equal(prepared.ticket.dispatch.baseCommit, newerC);
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { sessionId, token: prepared.token, executor, agentName: agentId }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+    markCheckoutInstance(worktree);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, 'explicit-base-worker', { sessionId, token: prepared.token, executor }).ok, true);
+    const release = leaveWork(worktree);
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'explicit-base-worker', {
+      status: 'todo', source: 'test', ...(release.releaseKind ? { releaseKind: release.releaseKind, releaseReason: 'Continue on the original base.' } : {}),
+    }).ok, true);
+    const continued = store.prepareDispatch(slug, ticket.ref, {
+      sessionId: `${sessionId}-next`,
+      integrationMode: 'local',
+      integrationBranch: recoveryBaseBranch,
+    });
+    assert.equal(continued.ticket.dispatch.baseCommit, baselineA);
+    run({ continued, worktree, baselineA, newerC, recoveryBaseBranch });
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'explicit-base-cleanup', { status: 'todo', source: 'test', force: true });
+    execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+    execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT });
+    project(['reset', '--hard', baselineA]);
+    project(['branch', '-D', recoveryBaseBranch]);
+  }
+}
+
+test('GH-125: a committed checkpoint on a newer base replays onto an explicitly named older base in a fresh checkout', () => {
+  let checkpoint = '';
+  redispatchOnOlderExplicitBase('explicit base committed checkpoint fixture', (worktree) => {
+    fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 125;\n');
+    execFileSync('git', ['commit', '--quiet', '-am', 'checkpoint on C'], { cwd: worktree, windowsHide: true });
+    checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
+    return { releaseKind: 'handback' };
+  }, ({ continued, worktree, baselineA, newerC, recoveryBaseBranch }) => {
+    assert.equal(continued.ticket.dispatch.continuation, undefined, 'the C-based checkout is not handed out');
+    const fallback = continued.ticket.dispatch.continuationFallback;
+    assert.equal(fallback.reason, 'released_worktree_base_differs_from_explicit_integration_base');
+    assert.deepEqual(fallback.commits, [checkpoint]);
+    assert.ok(fallback.cause.includes(`integration base ${recoveryBaseBranch} at ${baselineA}`), fallback.cause);
+    assert.ok(fallback.cause.includes(`is built on ${newerC}`), fallback.cause);
+    const spawn = agentsync.agentSpawn(
+      continued.ticket.dispatch.launchName,
+      agentsync.ticketIsolation(continued.ticket, continued.ticket.dispatch.sharedTree),
+      null,
+      continued.ticket.dispatchExecutor,
+      agentsync.renderDispatchStub(continued.ticket, PROJECT),
+      'explicit base committed checkpoint fixture',
+    );
+    assert.equal(spawn.isolation, 'worktree');
+    const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
+    assert.ok(briefing.includes(`git cherry-pick ${checkpoint}`));
+    assert.match(briefing, /Validation evidence: the dispatch explicitly names integration base/);
+    assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim(), checkpoint, 'the retained checkout is left as it was');
+  });
+});
+
+test('GH-125: uncommitted work on a newer base stays retained, names the explicit base, and moves onto it', () => {
+  redispatchOnOlderExplicitBase('explicit base dirty checkout fixture', (worktree) => {
+    fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 126;\n');
+    return {};
+  }, ({ continued, baselineA, newerC, recoveryBaseBranch }) => {
+    const continuation = continued.ticket.dispatch.continuation;
+    assert.equal(continuation.mode, 'dirty_worktree_resume', 'the only copy of the work is still retained');
+    assert.equal(continuation.baseCommit, newerC);
+    assert.ok(continuation.retainReason.includes(`integration base ${recoveryBaseBranch} at ${baselineA}`), continuation.retainReason);
+    assert.match(continuation.retainReason, /exist nowhere else, so it is still retained/);
+    const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
+    assert.ok(briefing.includes(continuation.retainReason));
+    assert.ok(briefing.includes(`git rebase --onto ${baselineA} ${newerC}`));
+    assert.doesNotMatch(briefing, /change nothing if it passes/);
+    assert.match(briefing, /never use `git stash`/);
+    assert.ok(store.dispatchWarnings(continued.ticket).join('\n').includes(`Retain reason: ${continuation.retainReason}.`));
+  });
 });
 
 test('dirty released worktrees with checkpoints fall back to cherry-picking the commit range', () => {
