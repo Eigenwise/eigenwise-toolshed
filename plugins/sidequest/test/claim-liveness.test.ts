@@ -1205,6 +1205,37 @@ test('the idle backstop only applies when no executor is associated', () => {
   assert.strictEqual(store.claimReleaseVerdict(store.getTicket(slug, routed.ref)), null, 'a bound executor is not idle just because it is quiet');
 });
 
+// GH-228. A dispatched claim quiet for 72 minutes read `stale: false` in list, printed beside
+// `claimIdleMs: 3600000`, while pulse showed the same claim board-quiet well past that. A dispatched
+// claim is judged against the abandon backstop, not the idle one, so each view has to say which.
+test('GH-228: list and pulse report the same stale flag and the threshold it was judged against', () => {
+  const dispatched = addRouted('GH-228 quiet dispatched claim');
+  claimRouted(dispatched, 'gh228-wedged-executor');
+  backdateClaim(dispatched.ref, 72 * 60 * 1000);
+  const hand = store.createTicket(slug, {
+    title: 'GH-228 idle hand claim',
+    complexity: 2,
+    complexityWhy: 'fixture for list and pulse staleness, no implementation work',
+    labels: ['direct-ok'],
+    files: ['lib/fixture.js'],
+    source: 'cli',
+  });
+  assert.strictEqual(store.claimTicket(slug, hand.ref, 'human', { direct: true, reason: 'A hand claim needs no executor association.' }).ok, true);
+  backdateClaim(hand.ref, 2 * HOUR);
+
+  const rows = store.listPayload(slug, { brief: true, status: 'doing', all: true }).tickets;
+  const cases = [
+    { ref: dispatched.ref, stale: false, staleAfterMs: store.claimAbandonMs() },
+    { ref: hand.ref, stale: true, staleAfterMs: store.claimIdleMs() },
+  ];
+  for (const expected of cases) {
+    const row = rows.find((candidate: any) => candidate.ref === expected.ref);
+    const pulse = store.pulsePayload(slug, expected.ref);
+    assert.deepStrictEqual({ stale: row.claim.stale, staleAfterMs: row.claim.staleAfterMs }, { stale: expected.stale, staleAfterMs: expected.staleAfterMs }, expected.ref);
+    assert.deepStrictEqual({ stale: pulse.claim.stale, staleAfterMs: pulse.claim.staleAfterMs }, { stale: row.claim.stale, staleAfterMs: row.claim.staleAfterMs }, `${expected.ref} pulse agrees with list`);
+  }
+});
+
 test('a launched unbound dispatch becomes supersedable on evidence after its latest signal grace, while freshly bound or claimed attempts cannot', () => {
   const ticket = addRouted('supersedable unclaimed launch');
   const first = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'session-supersedable-launch' });

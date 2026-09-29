@@ -568,6 +568,18 @@ function ticketContinuationPacket(ticket?: any) {
   return `Continuation fallback: the previous released worktree was not carried (${String(fallback.reason).replace(/_/g, ' ')}). This dispatch uses a fresh worktree.${fallback.sourceWorktree ? ` Previous worktree: ${fallback.sourceWorktree}.` : ''}${evidence}${replay}`.trim();
 }
 
+// Base ancestry passes when the named base is older than the retained one, so the dirty-resume check
+// would leave the retained changes on a base the dispatch explicitly declined (GH-125).
+function explicitBaseMoveSync(continuation: any, checkpointBase: string, commit: string, root: string, branch: string): string | null {
+  if (!continuation.retainReason || !checkpointBase || checkpointBase === commit) return null;
+  return [
+    `Worktree synchronization (run before work): ${continuation.retainReason}.`,
+    `Confirm the candidate first: \`git rev-parse HEAD\` must be ${continuation.commit} and \`git status --porcelain\` must still list the retained changes with no unmerged entries. If not, stop and report that this checkout is not the retained candidate.`,
+    `Then preserve before moving: commit every retained change on this worktree's own branch with \`git add -A && git commit\`, confirm \`git status --porcelain\` is empty, then run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` and \`git rebase --onto ${commit} ${checkpointBase}\`.`,
+    'Never check out or discard over the retained changes, and never use `git stash`. If the commit or the rebase fails, stop and report it rather than resolving toward either side.',
+  ].join(' ');
+}
+
 function ticketWorktreeSync(ticket?: any, projectPath?: any) {
   const dispatch = ticket?.dispatch;
   const root = String(projectPath || '').trim();
@@ -614,6 +626,8 @@ function ticketWorktreeSync(ticket?: any, projectPath?: any) {
   // continuation was created to resume. An executor followed the discard wording as far as reading it and
   // stopped to ask rather than lose 11 uncommitted files (SQ-2180).
   if (continuation?.mode === 'dirty_worktree_resume') {
+    const explicitMove = explicitBaseMoveSync(continuation, checkpointBase, commit, root, branch);
+    if (explicitMove) return explicitMove;
     // Ancestry of the dispatch base is not a recovery proof. A recovery dispatch that names an older base
     // through integrationBranch makes `--is-ancestor` pass against a checkout that never held the candidate,
     // and this line then told the executor to change nothing (SQ-2938, GH-125). The candidate here is the

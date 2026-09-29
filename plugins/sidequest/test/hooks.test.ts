@@ -2596,6 +2596,23 @@ test('home-delete guard: preserves protected recursive deletes', () => {
   }
 });
 
+// GH-86. `rm -r ~/repos/project/build` was blocked while the same target spelled as an absolute path was
+// allowed: any `~/` path counted as the profile. A leading home reference now resolves before the root check.
+test('home-delete guard: judges a home-relative target by where it resolves', () => {
+  for (const command of [
+    'rm -r ~/repos/project/build',
+    'rm -rf "$HOME/repos/project/build"',
+    'Remove-Item -Recurse -Force $env:USERPROFILE\\repos\\project\\build',
+    'rd /s %USERPROFILE%\\repos\\project\\build',
+    `rm -r ${path.join(os.homedir(), 'repos', 'project', 'build')}`,
+  ]) {
+    assert.strictEqual(runHomeDeleteGuard('Bash', command), null, command);
+  }
+  for (const command of ['rm -rf ~/', 'rm -rf ~/.claude/', 'rm -rf ~/..', 'rm -rf $HOME/.claude', 'rm -rf --dir=$HOME']) {
+    assert.equal(runHomeDeleteGuard('Bash', command).hookSpecificOutput.permissionDecision, 'deny', command);
+  }
+});
+
 test('home-delete guard: allows forced non-recursive and continued scoped deletes', () => {
   for (const command of [
     'rm -f C:/Users/x/AppData/Local/Temp/observability/file',

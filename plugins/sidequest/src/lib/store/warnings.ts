@@ -1004,6 +1004,10 @@ function composeWorktreeWarning(ticket?: any, projectPath?: any) {
   return `Worktree compatibility warning: ${files.join(', ')} bind-mounts the repository root, so a linked worktree is not the running app. Set worktreeIsolation: false for this board before dispatching.`;
 }
 
+function retainReasonNote(continuation: any) {
+  return continuation.retainReason ? ` Retain reason: ${continuation.retainReason}.` : '';
+}
+
 function dispatchWarnings(ticket?: any, slug?: any) {
   const warnings: any[] = dispatchUncertaintyWarnings(ticket, slug);
   if (dispatchState(ticket)?.unboundAttemptsSkipped) {
@@ -1054,10 +1058,10 @@ function dispatchWarnings(ticket?: any, slug?: any) {
   }
   const continuation = dispatchState(ticket)?.continuation;
   if (continuation?.mode === 'retained_worktree_resume') {
-    warnings.push(`Continuation retains ${continuation.sourceBranch || continuation.sourceWorktree} at ${continuation.commit}. The executor briefing enters it before work.`);
+    warnings.push(`Continuation retains ${continuation.sourceBranch || continuation.sourceWorktree} at ${continuation.commit}. The executor briefing enters it before work.${retainReasonNote(continuation)}`);
   }
   if (continuation?.mode === 'dirty_worktree_resume') {
-    warnings.push(`Continuation retains uncommitted work in ${continuation.sourceBranch || continuation.sourceWorktree} at ${continuation.commit}. The executor briefing enters it before work.`);
+    warnings.push(`Continuation retains uncommitted work in ${continuation.sourceBranch || continuation.sourceWorktree} at ${continuation.commit}. The executor briefing enters it before work.${retainReasonNote(continuation)}`);
   }
   const continuationFallback = dispatchState(ticket)?.continuationFallback;
   if (continuationFallback?.reason) {
