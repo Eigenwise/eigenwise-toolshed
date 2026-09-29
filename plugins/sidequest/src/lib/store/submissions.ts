@@ -774,7 +774,7 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
   const timeoutMilliseconds = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
   const project = readMeta(slug)?.path;
   const verify = (environment: NodeJS.ProcessEnv) => runProcessVerification(requirement, {
-    cwd: project,
+    cwd: ticket.executorVerifyCwd ? path.resolve(project, ticket.executorVerifyCwd) : project,
     timeoutMilliseconds,
     logPath: integrationVerifyLogPath(slug, ticket),
     outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,

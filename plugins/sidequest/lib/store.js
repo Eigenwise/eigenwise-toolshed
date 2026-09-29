@@ -345,6 +345,9 @@ function verifyOracleErrors(...args) {
 function requireVerifyOracle(...args) {
   return warningsLayer.requireVerifyOracle(...args);
 }
+function normalizeVerifyCwd(...args) {
+  return warningsLayer.normalizeVerifyCwd(...args);
+}
 function verifyCommandErrors(...args) {
   return warningsLayer.verifyCommandErrors(...args);
 }
@@ -1211,6 +1214,7 @@ const {
   requestedReadonlyOverride,
   requireStatus,
   requireVerifyOracle,
+  normalizeVerifyCwd,
   transaction: (...args) => transaction(...args),
   normalizeVerifyOracleKind,
   saveAssetData,
@@ -3379,6 +3383,7 @@ module.exports = {
   verifyOracleErrors,
   verifyCommandErrors,
   verifyCommandError,
+  normalizeVerifyCwd,
   completionTreeCheck,
   listProjects,
   findProject,

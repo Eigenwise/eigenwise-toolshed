@@ -7438,3 +7438,14 @@ test('SQ-2939: a same-board isolated wrong-ref commit keeps its base refusal wor
 });
 
 export {};
+
+test('add and update carry verifyCwd to the ticket and refuse one outside the project', async () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-verify-cwd-'));
+  fs.mkdirSync(path.join(projectPath, 'plugins', 'app'), { recursive: true });
+  const project = store.ensureProject(projectPath).slug;
+  const added = await callTool('add', { project, title: 'Nested gate', unclassified: true, verify: 'node --version', verifyCwd: 'plugins/app' });
+  assert.equal(store.getTicket(project, added.ref).executorVerifyCwd, 'plugins/app');
+  await callTool('update', { project, ref: added.ref, verifyCwd: '' });
+  assert.equal(store.getTicket(project, added.ref).executorVerifyCwd, '');
+  await assert.rejects(callTool('update', { project, ref: added.ref, verifyCwd: '../outside' }), /verifyCwd must be a directory relative to the project root/);
+});
