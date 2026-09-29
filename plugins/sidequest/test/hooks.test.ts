@@ -42,9 +42,14 @@ const { WORKTREE_CREATE_HOOK_TIMEOUT_SECONDS } = require('../src/lib/hook-timeou
 const db = require('../lib/db.js');
 const { EFFORTS, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('../lib/exec-names.js');
 const agentsync = require('../lib/agentsync.js');
-const { writeBoardMcpLiveness, clearBoardMcpLiveness } = require('../lib/mcp.js');
+const { writeBoardMcpLiveness, clearBoardMcpLiveness } = require('../lib/board-mcp-liveness.js');
 const BOARD_PATH = path.join(os.tmpdir(), 'sq-hooks-fixtures', 'board');
 const { slug } = store.ensureProject(BOARD_PATH);
+// SessionStart briefs only a session whose project has a board (GH-225). Session runs that name no project of their
+// own start in this registered, unrouted fixture, which keeps the default briefing on its no-usable-route text.
+const SESSION_PROJECT = path.join(os.tmpdir(), 'sq-hooks-fixtures', 'session-project');
+fs.mkdirSync(SESSION_PROJECT, { recursive: true });
+store.setProjectRouting(store.ensureProject(SESSION_PROJECT).slug, 'disabled');
 const database = db.openDb(SIDEQUEST_HOME);
 
 const HOOKS = path.join(__dirname, '..', 'hooks');
@@ -123,11 +128,15 @@ const GENERIC_AGENT_DENY_REASON = 'sidequest: implementation-agent is a generic 
 
 // Run a hook with the given stdin payload and return the injected
 // additionalContext string (or '' when the hook stays silent).
+function sessionProjectDefault(script: string): Record<string, string> {
+  return script === SESSION ? { CLAUDE_PROJECT_DIR: SESSION_PROJECT } : {};
+}
+
 function runHookOutput(script?: any, payload?: any, envOverrides?: any) {
   const out = execFileSync(process.execPath, [script], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
-    env: { ...process.env, ...(envOverrides || {}) },
+    env: { ...process.env, ...sessionProjectDefault(script), ...(envOverrides || {}) },
   });
   return out.trim() ? JSON.parse(out) : null;
 }
@@ -164,6 +173,7 @@ function runHookProcessForBudget(script?: any, payload?: any, envOverrides?: any
     const child = spawn(process.execPath, [script], {
       env: {
         ...process.env,
+        ...sessionProjectDefault(script),
         CLAUDE_PLUGIN_ROOT: FIXED_PLUGIN_ROOT,
         SIDEQUEST_SWEEP_DEADLINE_MS: BUDGET_SWEEP_DEADLINE_MS,
         ...(envOverrides || {}),
@@ -289,11 +299,13 @@ function windowsShortPath(pathname: string): string {
 }
 
 function runSessionWithHome(home?: any, envOverrides?: any) {
+  registerProject(home, SESSION_PROJECT);
   return execFileSync(process.execPath, [SESSION], {
     input: JSON.stringify({ session_id: 'bootstrap-test' }),
     encoding: 'utf8',
     env: {
       ...process.env,
+      CLAUDE_PROJECT_DIR: SESSION_PROJECT,
       SIDEQUEST_HOME: home,
       SIDEQUEST_SWEEP_DEADLINE_MS: '60000',
       ...(envOverrides || {}),
@@ -893,33 +905,90 @@ test('pre-tool hook: arbitrary implementation agents are denied and directed to 
   assert.doesNotMatch(mismatch.hookSpecificOutput.permissionDecisionReason, new RegExp(RETIRED_SCOUT));
 });
 
-test('pre-tool hook: an unavailable Board MCP server tells the agent to report it to the user', () => {
-  const session_id = `board-mcp-unavailable-${Date.now()}`;
+function genericAgentDenial(session_id: string, envOverrides: Record<string, string> = {}): string {
   const out = runHookOutput(FORCE_BYPASS, {
     session_id, cwd: BOARD_PATH, tool_name: 'Agent',
     tool_input: { subagent_type: 'implementation-agent', isolation: 'worktree', prompt: 'Implement the new flow.' },
-  });
-  const reason = out.hookSpecificOutput.permissionDecisionReason;
+  }, { CLAUDE_PROJECT_DIR: BOARD_PATH, ...envOverrides });
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(reason, /Board MCP server for this session is not running/);
-  assert.match(reason, /Stop and report this to the user instead of retrying/);
-  assert.match(reason, /The user must run \/mcp and reconnect plugin:sidequest:board, or restart Claude Code/);
-  assert.doesNotMatch(reason, /reload or reconnect Sidequest/);
+  return out.hookSpecificOutput.permissionDecisionReason;
+}
+
+function withBoardMcpMarker(sessionId: string, project: string, run: () => void): void {
+  writeBoardMcpLiveness(sessionId, project);
+  try {
+    run();
+  } finally {
+    clearBoardMcpLiveness();
+  }
+}
+
+const BOARD_MCP_RECONNECT = /Stop and report this to the user instead of retrying\. The user must run \/mcp and reconnect plugin:sidequest:board, or restart Claude Code/;
+
+test('pre-tool hook: no Board MCP marker for the session or project names that absence and the reconnect', () => {
+  const reason = genericAgentDenial(`board-mcp-absent-${Date.now()}`);
+  assert.match(reason, /no Board MCP server has recorded itself for this session or project in /);
+  assert.match(reason, BOARD_MCP_RECONNECT);
+  assert.doesNotMatch(reason, /is not running|generic Agent, not a Sidequest ticket executor/);
+
+  const otherProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-other-board-'));
+  withBoardMcpMarker('another-session', otherProject, () => {
+    assert.match(genericAgentDenial(`board-mcp-foreign-${Date.now()}`), /no Board MCP server has recorded itself/, 'another project\'s live server is not this board');
+  });
 });
 
-test('pre-tool hook: a live Board MCP server keeps the generic Agent refusal unchanged', () => {
-  const session_id = `board-mcp-live-${Date.now()}`;
-  writeBoardMcpLiveness(session_id);
+test('pre-tool hook: a Board MCP marker whose server exited names the pid and the reconnect', () => {
+  const session_id = `board-mcp-exited-${Date.now()}`;
+  const exitedPid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }));
+  // The session-keyed name is the pre-pid marker format a still-running older server writes.
+  const legacyMarker = path.join(SIDEQUEST_HOME, 'tmp', 'state', `board-mcp-${encodeURIComponent(session_id)}.json`);
+  fs.mkdirSync(path.dirname(legacyMarker), { recursive: true });
+  fs.writeFileSync(legacyMarker, JSON.stringify({ pid: exitedPid }));
   try {
-    const out = runHookOutput(FORCE_BYPASS, {
-      session_id, cwd: BOARD_PATH, tool_name: 'Agent',
-      tool_input: { subagent_type: 'implementation-agent', isolation: 'worktree', prompt: 'Implement the new flow.' },
-    });
-    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-    assert.equal(out.hookSpecificOutput.permissionDecisionReason, GENERIC_AGENT_DENY_REASON);
+    const reason = genericAgentDenial(session_id);
+    assert.match(reason, new RegExp(`\\(pid ${exitedPid}, [^)]*board-mcp-[^)]*\\) has exited`));
+    assert.match(reason, BOARD_MCP_RECONNECT);
   } finally {
-    clearBoardMcpLiveness(session_id);
+    fs.rmSync(legacyMarker, { force: true });
   }
+});
+
+test('pre-tool hook: a live Board MCP server keeps the generic Agent refusal across session id rotation', () => {
+  const session_id = `board-mcp-live-${Date.now()}`;
+  withBoardMcpMarker(session_id, BOARD_PATH, () => {
+    assert.equal(genericAgentDenial(session_id), GENERIC_AGENT_DENY_REASON, 'marker under this session id');
+    assert.equal(genericAgentDenial(`${session_id}-resumed`), GENERIC_AGENT_DENY_REASON, 'resume after compaction reads the old session marker (GH-257)');
+    assert.equal(
+      genericAgentDenial(`${session_id}-cleared`, { CLAUDE_CODE_SESSION_ID: `${session_id}-cleared` }),
+      GENERIC_AGENT_DENY_REASON,
+      '/clear hands the hook a new session id while the same server pid keeps serving (GH-310)',
+    );
+  });
+  withBoardMcpMarker('', BOARD_PATH, () => {
+    assert.equal(genericAgentDenial(`${session_id}-unnamed`), GENERIC_AGENT_DENY_REASON, 'a server started without a session id still records its project');
+  });
+});
+
+test('pre-tool hook: unreadable Board MCP liveness says the state is unknown instead of down', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-liveness-unreadable-'));
+  fs.mkdirSync(path.join(home, 'tmp'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'tmp', 'state'), 'not a directory');
+  const reason = genericAgentDenial(`board-mcp-unreadable-${Date.now()}`, { SIDEQUEST_HOME: home });
+  assert.match(reason, /could not read Board MCP liveness markers in .*state \(.*ENOTDIR/);
+  assert.match(reason, /so the board server state is unknown\. If board tools answer, dispatch through them/);
+  assert.doesNotMatch(reason, /Stop and report this to the user|is not running/);
+});
+
+test('pre-tool hook: a project with no Sidequest install names the install instead of the board server (GH-158)', () => {
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-no-install-'));
+  const session_id = `board-mcp-no-install-${Date.now()}`;
+  withBoardMcpMarker(session_id, BOARD_PATH, () => {
+    const reason = genericAgentDenial(session_id, { SIDEQUEST_CLAUDE_HOME: claudeHome });
+    assert.match(reason, /implementation-agent is a generic Agent, and this project cannot dispatch a ticket executor either\./);
+    assert.match(reason, /has no install with a lifecycle-compatible runtime registered for /);
+    assert.match(reason, /Run `claude plugin install sidequest@eigenwise-toolshed --scope project`/);
+    assert.doesNotMatch(reason, /reconnect plugin:sidequest:board|is not running/);
+  });
 });
 
 test('pre-tool hook: executor helpers allow mechanical sweeps with parent-tree safeguards', () => {
@@ -3247,7 +3316,8 @@ test('session-start force-loads the Sidequest skill only for orchestrator mid-wa
     source: 'startup',
     cwd: midWaveProject,
   }, { SIDEQUEST_HOME: midWaveHome, CLAUDE_PROJECT_DIR: midWaveProject, SIDEQUEST_AGENT: 'fixture-executor' });
-  assert.equal(midWaveExecutor.hookSpecificOutput.initialUserMessage, undefined);
+  assert.equal(midWaveExecutor?.hookSpecificOutput?.initialUserMessage, undefined);
+  assert.doesNotMatch(midWaveExecutor?.hookSpecificOutput?.additionalContext || '', /ROLE: ORCHESTRATOR/);
 
   const midWaveCompact = runHookOutput(SESSION, {
     session_id: 'mid-wave-skill-compact',
@@ -3313,7 +3383,6 @@ test('session-start: states usable-route admission while preserving the specific
   for (const source of ['', 'compact', 'resume']) {
     const context = runHookForBudget(SESSION, { session_id: `authorization-${source || 'startup'}`, source });
     assert.match(context, /no usable project route here, so substantive work may stay inline/i);
-    assert.match(context, /the first Board MCP call auto-registers this project/i);
     assert.match(context, /use board_config to enable a category with an available executor before asking for board dispatch/i);
     assert.match(context, /one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch/i);
     assert.match(context, /ask before work beyond the approved scope unless explicit standing permission covers it/i);
@@ -3435,6 +3504,7 @@ test('session-start: names the upstream-defect filing destination for the local 
   assert.match(maintainerContext, commonClause);
 
   const nonMaintainerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-toolshed-non-maintainer-'));
+  registerProject(nonMaintainerHome, SESSION_PROJECT);
   const nonMaintainerContext = runHookForBudget(SESSION, { session_id: 'upstream-defect-non-maintainer' }, {
     SIDEQUEST_HOME: nonMaintainerHome,
     SIDEQUEST_SWEEP_DEADLINE_MS: '60000',
@@ -3772,6 +3842,40 @@ test('session-start source excludes the retired lifecycle CLI fallback', () => {
   assert.doesNotMatch(source, /list --status=doing only if MCP is absent/);
   assert.match(source, /If Board MCP is unavailable, stop and tell the user to run \/mcp/);
   assert.match(source, /reconnect plugin:sidequest:board, or restart Claude Code; do not retry/);
+});
+
+test('session-start: briefs only an orchestrator; plain users and executors get no orchestrator block (GH-225)', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-session-role-'));
+  const plainProject = path.join(home, 'plain');
+  const boardProject = path.join(home, 'board');
+  fs.mkdirSync(plainProject, { recursive: true });
+  registerProject(home, boardProject);
+  const briefing = (cwd: string, payload: Record<string, string> = {}, env: Record<string, string> = {}) => runHook(
+    SESSION,
+    { session_id: 'session-role', source: 'startup', cwd, ...payload },
+    { SIDEQUEST_HOME: home, SIDEQUEST_SWEEP_DEADLINE_MS: '60000', SIDEQUEST_NUDGE: '', SIDEQUEST_AGENT: '', ...env },
+  );
+  for (const nudge of ['', 'on', 'off']) {
+    assert.doesNotMatch(briefing(plainProject, {}, { SIDEQUEST_NUDGE: nudge }), /ROLE: ORCHESTRATOR/, `plain user, SIDEQUEST_NUDGE=${nudge || 'unset'}`);
+  }
+  assert.doesNotMatch(briefing(boardProject, { agent_type: 'sidequest:sidequest-exec-high' }), /ROLE: ORCHESTRATOR/, 'headless executor session');
+  assert.doesNotMatch(briefing(boardProject, {}, { SIDEQUEST_AGENT: 'fixture-executor' }), /ROLE: ORCHESTRATOR/, 'executor-launched session');
+  assert.match(briefing(boardProject), /ROLE: ORCHESTRATOR/, 'a session on a registered board is the orchestrator');
+});
+
+test('pre-tool hooks: a plain user Bash call gets no output from any Sidequest guard (GH-225)', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-plain-pretool-'));
+  const project = path.join(home, 'plain');
+  fs.mkdirSync(project, { recursive: true });
+  const groups: Array<{ matcher: string; hooks: Array<{ command: string }> }> = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8')).hooks.PreToolUse;
+  const bashHooks = groups
+    .filter((group) => new RegExp(`^(?:${group.matcher === '*' ? '.*' : group.matcher})$`).test('Bash'))
+    .flatMap((group) => group.hooks.map((hook) => path.join(HOOKS, /hooks\/([\w-]+\.js)/.exec(hook.command)?.[1] || '')));
+  assert.ok(bashHooks.length >= 5, `expected the Bash guard set, got ${bashHooks.length}`);
+  for (const hook of bashHooks) {
+    const out = runHookOutput(hook, { session_id: 'plain-user', cwd: project, tool_name: 'Bash', tool_input: { command: 'ls' } }, { SIDEQUEST_HOME: home });
+    assert.equal(out, null, path.basename(hook));
+  }
 });
 
 test('session-start: SIDEQUEST_NUDGE=off silences it', () => {

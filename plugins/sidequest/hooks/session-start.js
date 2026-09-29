@@ -33,8 +33,15 @@ var import_node_fs = __toESM(require("node:fs"));
 // src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
+var DISPATCH_PREFIX = "sidequest-exec-dispatch-";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
+var READ_ONLY_DISPATCH_PREFIX = "sidequest-exec-dispatch-readonly-";
+var TICKET_PREFIX = "sidequest-sq-";
+var LEGACY_TICKET_PREFIX = "sidequest-ticket-";
 var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
+function isEffort(value) {
+  return typeof value === "string" && EFFORTS.includes(value);
+}
 var DISPATCH_NAME = "sidequest-exec-dispatch";
 var READ_ONLY_DISPATCH_NAME = "sidequest-exec-dispatch-readonly";
 function stableClaudeName(effort) {
@@ -55,6 +62,36 @@ function canonicalExecutorName(name) {
   if (!name.startsWith(PLUGIN_NAMESPACE)) return name;
   const unqualifiedName = name.slice(PLUGIN_NAMESPACE.length);
   return BUNDLED_AGENT_NAMES.has(unqualifiedName) ? unqualifiedName : name;
+}
+function classify(value) {
+  if (typeof value !== "string" || !value) return { kind: "unknown", effort: null };
+  const name = canonicalExecutorName(value);
+  if (name === READ_ONLY_DISPATCH_NAME) return { kind: "read_only_codex_dispatch", effort: null };
+  if (name === DISPATCH_NAME) return { kind: "codex_dispatch", effort: null };
+  if (name === DIAGNOSTIC_PROBE_NAME) return { kind: "unknown", effort: null };
+  if (name.startsWith(READ_ONLY_DISPATCH_PREFIX)) {
+    const effort = name.slice(READ_ONLY_DISPATCH_PREFIX.length);
+    if (isEffort(effort)) return { kind: "read_only_codex_dispatch", effort };
+    return { kind: "ticket", effort: null };
+  }
+  if (name.startsWith(READ_ONLY_CLAUDE_PREFIX)) {
+    const effort = name.slice(READ_ONLY_CLAUDE_PREFIX.length);
+    if (isEffort(effort)) return { kind: "read_only_claude_builtin", effort };
+    return { kind: "ticket", effort: null };
+  }
+  if (name.startsWith(DISPATCH_PREFIX)) {
+    const effort = name.slice(DISPATCH_PREFIX.length);
+    if (isEffort(effort)) return { kind: "codex_dispatch", effort };
+    return { kind: "ticket", effort: null };
+  }
+  if (name.startsWith(CLAUDE_PREFIX)) {
+    const effort = name.slice(CLAUDE_PREFIX.length);
+    if (isEffort(effort)) return { kind: "claude_builtin", effort };
+    return { kind: "ticket", effort: null };
+  }
+  if (name.startsWith(TICKET_PREFIX)) return { kind: "ticket", effort: null };
+  if (name.startsWith(LEGACY_TICKET_PREFIX)) return { kind: "legacy_ticket", effort: null };
+  return { kind: "unknown", effort: null };
 }
 
 // src/hooks/shared/input.ts
@@ -705,6 +742,21 @@ function nudgeOff() {
   const value = String(process.env.SIDEQUEST_NUDGE || "").trim().toLowerCase();
   return value === "off" || value === "0" || value === "false" || value === "no";
 }
+function sessionRole(data) {
+  if (process.env.SIDEQUEST_AGENT || classify(stringField(data, "agent_type", "agentType")).kind !== "unknown") return "executor";
+  return projectHasBoard(data) ? "orchestrator" : "plain";
+}
+function projectHasBoard(data) {
+  try {
+    const store = require(runtimeModule("store"));
+    return store.findProject(store.nearestRepoRoot(sessionProjectStart(data))).ok;
+  } catch (_) {
+    return true;
+  }
+}
+function sessionProjectStart(data) {
+  return stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+}
 function checkpointingGuidance(data) {
   const model = stringField(data, "model").toLowerCase();
   const tier = model.includes("haiku") ? "Haiku" : model.includes("sonnet") ? "Sonnet" : "";
@@ -757,6 +809,12 @@ function hasMidWaveBoard(data) {
     return false;
   }
 }
+function briefingWithheld(data, notice) {
+  if (nudgeOff()) return true;
+  if (sessionRole(data) === "orchestrator") return false;
+  if (notice) writeContext("SessionStart", notice);
+  return true;
+}
 function emit(context, notice, initialUserMessage = "") {
   const output = notice ? `${notice}
 ${context}` : context;
@@ -785,11 +843,11 @@ async function main() {
     source === "compact" || source === "resume" ? "" : diagnosticWorktreeWarning(data),
     ...sweepNotices
   ].filter(Boolean).join("\n");
-  if (nudgeOff()) return;
+  if (briefingWithheld(data, restartNotice)) return;
   const cli = `node "${pluginRoot()}/bin/sidequest.js"`;
   const watch = `Arm a persistent Monitor running ${cli} watch --project <path>; ticket alerts default to dispatches prepared by this session plus unowned and terminal tickets, while failed GitHub CI runs stay project-wide. Use --all for project-wide ticket alerts. Skip it if Monitor is unavailable.`;
   const dispatchAdmission = dispatchAdmissionStatus(data);
-  const boardAuthorization = dispatchAdmission === "routed" ? "Quick edits at a named or known location, one-line fixes, operational requests, and direct questions stay inline and do not load user-story. For work beyond a small task, load the user-story skill before ticketing or dispatching; do not plan it inline. A usable Sidequest project route is standing authorization to file tickets and dispatch returned executors without offering it or asking for a further user request when work is a multi-file change, at an unknown location that needs discovery, or an investigation. For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together. Ask before work beyond the approved scope unless explicit standing permission covers it." : "Sidequest has no usable project route here, so substantive work may stay inline. The first Board MCP call auto-registers this project; then use board_config to enable a category with an available executor before asking for board dispatch.";
+  const boardAuthorization = dispatchAdmission === "routed" ? "Quick edits at a named or known location, one-line fixes, operational requests, and direct questions stay inline and do not load user-story. For work beyond a small task, load the user-story skill before ticketing or dispatching; do not plan it inline. A usable Sidequest project route is standing authorization to file tickets and dispatch returned executors without offering it or asking for a further user request when work is a multi-file change, at an unknown location that needs discovery, or an investigation. For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together. Ask before work beyond the approved scope unless explicit standing permission covers it." : "Sidequest has no usable project route here, so substantive work may stay inline. Use board_config to enable a category with an available executor before asking for board dispatch.";
   const inlineBoundary = dispatchAdmission === "routed" ? "" : "Specific one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch; say why. Ask before work beyond the approved scope unless explicit standing permission covers it.";
   const fanoutGuidance = dispatchAdmission === "routed" ? "" : "For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together.";
   const upstreamDefects = `If Sidequest itself misbehaves (a refusal contradicting observed state, a dead retrieval handle, a guard loop, a reproducible tool error), report it to the user with the reproducing evidence as an upstream defect; never encode a workaround into project rules, hooks, or memory, and mark any unavoidable stopgap temporary, naming the defect it awaits. ${upstreamDefectDestination()}`;
