@@ -1362,6 +1362,29 @@ function continuationFallback(reason?: any, worktree?: any, details?: any) {
   };
 }
 
+// Selection runs before the dispatch base is known, and an explicitly named older base passes the
+// ancestry check against a checkout built on a newer one, so the override never reached the executor (GH-125).
+function explicitBaseContinuation(released: any, explicit: boolean, target: any, baseCommit: string) {
+  if (!explicit || !released?.continuation) return released;
+  return retainedAgainstExplicitBase(released.continuation, `the dispatch explicitly names integration base ${target.branch} at ${baseCommit}`, baseCommit);
+}
+
+// Committed checkpoints replay onto the named base in a fresh checkout. Uncommitted work exists only in
+// its checkout, so that one stays retained and is told to move.
+function retainedAgainstExplicitBase(continuation: any, named: string, baseCommit: string) {
+  if (continuation.baseCommit === baseCommit) return { continuation: { ...continuation, retainReason: `${named}, which is the retained checkout's own base` } };
+  const differs = `${named} while retained checkout ${continuation.sourceWorktree} is built on ${continuation.baseCommit}`;
+  if (continuation.mode === 'dirty_worktree_resume') {
+    return { continuation: { ...continuation, retainReason: `${differs}; its uncommitted changes exist nowhere else, so it is still retained and they move onto ${baseCommit} before any work` } };
+  }
+  const { sourceBranch, commit, commits } = continuation;
+  return {
+    fallback: continuationFallback('released_worktree_base_differs_from_explicit_integration_base', continuation.sourceWorktree, {
+      sourceBranch, commit, commits, cause: `${differs}, so its checkpoint commits replay onto the named base in a fresh checkout`,
+    }),
+  };
+}
+
 function gitDirectory(repository?: any, directory?: any) {
   const value = nativeGitPath(directory);
   return canonicalPath(path.isAbsolute(value) ? value : path.resolve(String(repository || ''), value));
@@ -1737,7 +1760,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const repeatFailure = repeatNoCommitDispatchError(t, current);
     const unboundAttemptsSkipped = skippedUnboundNoCommitAttempts(current);
     if (repeatFailure && opts.allowRepeatFailure !== true) throw new Error(repeatFailure);
-    const releasedContinuation = retainedWorktreeContinuationState(slug, t, current);
+    const retainedContinuation = retainedWorktreeContinuationState(slug, t, current);
     if (t.claim && t.claim.by && !claimReclaimable(t)) {
       throw new Error(`prepare dispatch: ${t.ref} has a live claim by ${t.claim.by}. Release it (\`sidequest release ${t.ref} --by ${t.claim.by}\`) before dispatching again.`);
     }
@@ -1938,6 +1961,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       : integrationTargetState
         ? integrationTargetCommit(readMeta(slug)?.path || '', integrationTargetState)
         : commitScope.headCommit(readMeta(slug)?.path || '');
+    const releasedContinuation = explicitBaseContinuation(retainedContinuation, explicitIntegrationTarget, integrationTargetState, baseCommit);
     // A direct cut (cut.mjs --push without --prepare) tags its release commit
     // before it runs the release suites and only pushes once they pass, so between
     // those two moments local main sits on a tip that may still be rewound.

@@ -417,12 +417,14 @@ function listContextRows(project, args) {
   });
   return brief ? payload.tickets.map(compactListRow) : payload.tickets.map((ticket) => ticketWithContextHandles(project, ticket));
 }
+const CLAIM_LIVENESS_FIELDS = /* @__PURE__ */ new Set(["stale", "staleAfterMs"]);
+function rowWithoutClaimLiveness(row) {
+  if (!row?.claim || typeof row.claim !== "object" || !Object.prototype.hasOwnProperty.call(row.claim, "stale")) return row;
+  const claim = Object.fromEntries(Object.entries(row.claim).filter(([key]) => !CLAIM_LIVENESS_FIELDS.has(key)));
+  return Object.assign({}, row, { claim });
+}
 function listContextRevision(rows) {
-  return contextRevision(rows.map((row) => {
-    if (!row?.claim || typeof row.claim !== "object" || !Object.prototype.hasOwnProperty.call(row.claim, "stale")) return row;
-    const claim = Object.fromEntries(Object.entries(row.claim).filter(([key]) => key !== "stale"));
-    return Object.assign({}, row, { claim });
-  }));
+  return contextRevision(rows.map(rowWithoutClaimLiveness));
 }
 function listRowsContextRetrieval(project, args, position) {
   const sourceArguments = listContextArguments(args);

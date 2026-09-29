@@ -532,12 +532,16 @@ function listContextRows(project: string, args: any) {
     : payload.tickets.map((ticket: any) => ticketWithContextHandles(project, ticket));
 }
 
+const CLAIM_LIVENESS_FIELDS = new Set(['stale', 'staleAfterMs']);
+
+function rowWithoutClaimLiveness(row: any) {
+  if (!row?.claim || typeof row.claim !== 'object' || !Object.prototype.hasOwnProperty.call(row.claim, 'stale')) return row;
+  const claim = Object.fromEntries(Object.entries(row.claim).filter(([key]) => !CLAIM_LIVENESS_FIELDS.has(key)));
+  return Object.assign({}, row, { claim });
+}
+
 function listContextRevision(rows: any[]) {
-  return contextRevision(rows.map((row: any) => {
-    if (!row?.claim || typeof row.claim !== 'object' || !Object.prototype.hasOwnProperty.call(row.claim, 'stale')) return row;
-    const claim = Object.fromEntries(Object.entries(row.claim).filter(([key]) => key !== 'stale'));
-    return Object.assign({}, row, { claim });
-  }));
+  return contextRevision(rows.map(rowWithoutClaimLiveness));
 }
 
 function listRowsContextRetrieval(project: string, args: any, position: number) {

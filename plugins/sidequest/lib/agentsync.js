@@ -399,6 +399,15 @@ function ticketContinuationPacket(ticket) {
   const evidence = cause ? ` Validation evidence: ${cause}.` : "";
   return `Continuation fallback: the previous released worktree was not carried (${String(fallback.reason).replace(/_/g, " ")}). This dispatch uses a fresh worktree.${fallback.sourceWorktree ? ` Previous worktree: ${fallback.sourceWorktree}.` : ""}${evidence}${replay}`.trim();
 }
+function explicitBaseMoveSync(continuation, checkpointBase, commit, root, branch) {
+  if (!continuation.retainReason || !checkpointBase || checkpointBase === commit) return null;
+  return [
+    `Worktree synchronization (run before work): ${continuation.retainReason}.`,
+    `Confirm the candidate first: \`git rev-parse HEAD\` must be ${continuation.commit} and \`git status --porcelain\` must still list the retained changes with no unmerged entries. If not, stop and report that this checkout is not the retained candidate.`,
+    `Then preserve before moving: commit every retained change on this worktree's own branch with \`git add -A && git commit\`, confirm \`git status --porcelain\` is empty, then run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` and \`git rebase --onto ${commit} ${checkpointBase}\`.`,
+    "Never check out or discard over the retained changes, and never use `git stash`. If the commit or the rebase fails, stop and report it rather than resolving toward either side."
+  ].join(" ");
+}
 function ticketWorktreeSync(ticket, projectPath) {
   const dispatch = ticket?.dispatch;
   const root = String(projectPath || "").trim();
@@ -435,6 +444,8 @@ function ticketWorktreeSync(ticket, projectPath) {
     ].join(" ");
   }
   if (continuation?.mode === "dirty_worktree_resume") {
+    const explicitMove = explicitBaseMoveSync(continuation, checkpointBase, commit, root, branch);
+    if (explicitMove) return explicitMove;
     const candidateCheck = `Worktree synchronization (run before work): this worktree holds uncommitted work retained from the previous attempt. Base ancestry alone never proves the retained candidate is here, so confirm the candidate first: \`git rev-parse HEAD\` must be ${continuation.commit} and \`git status --porcelain\` must still list the retained changes with no unmerged (\`UU\`, \`AA\`, \`DU\`, \`UD\`, \`AU\`, \`UA\`, \`DD\`) entries. If any of that fails, stop and report that this checkout is not the retained candidate. Only then check \`git merge-base --is-ancestor ${commit} HEAD\`, and change nothing if it passes.`;
     if (!checkpointBase) {
       return [
