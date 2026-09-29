@@ -424,7 +424,7 @@ test('the fallback a crossing refusal prints runs as printed', async () => {
   assert.match(submitted.message, new RegExp(`^submit: refused ${mine.ref};`));
 
   const { release } = printedRemedy(committed.message);
-  assert.match(release, new RegExp(`^sidequest release ${mine.ref} --by "${holder}" -s todo --release-kind technical_blocker `));
+  assert.match(release, new RegExp(`^sidequest release ${mine.ref} --by "${holder}" -s todo --release-kind handback `));
   const evidence = `commit ${mine.ref} --worktree ${sibling.worktree}`;
   const argv = release.match(/"[^"]*"|\S+/g)!.slice(1)
     .map((token) => token.replace(/^"|"$/g, ''))
