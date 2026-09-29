@@ -730,7 +730,7 @@ function sessionProjectRoot() {
  * ------------------------------------------------------------------ */
 
 const dbByHome = new Map<string, any>();
-const transactionDepth = new WeakMap<object, number>();
+const openTransactionCommitTasks = new WeakMap<object, Array<() => void>>();
 
 // SQLite has no nested transactions, so anything that begins one has to know whether one is already open on
 // that handle. Every writer must come through here rather than calling db.txn itself: the seed refreshers
@@ -738,13 +738,28 @@ const transactionDepth = new WeakMap<object, number>();
 // seed turned into `cannot start a transaction within a transaction` from whichever unrelated test happened
 // to leave a routing profile entry mismatched (SQ-2196).
 function withinTransaction(handle: object, fn: () => any) {
-  if (transactionDepth.get(handle)) return fn();
-  transactionDepth.set(handle, 1);
+  if (openTransactionCommitTasks.has(handle)) return fn();
+  const commitTasks: Array<() => void> = [];
+  openTransactionCommitTasks.set(handle, commitTasks);
+  let result;
   try {
-    return db.txn(handle, fn);
+    result = db.txn(handle, () => {
+      // A busy retry reruns fn, so only the attempt that commits may leave tasks behind.
+      commitTasks.length = 0;
+      return fn();
+    });
   } finally {
-    transactionDepth.delete(handle);
+    openTransactionCommitTasks.delete(handle);
   }
+  for (const task of commitTasks) task();
+  return result;
+}
+
+// Side writes that must not hold the write lock or roll back the transaction that caused them (GH-351).
+function afterCommit(task: () => void) {
+  const commitTasks = openTransactionCommitTasks.get(database());
+  if (commitTasks) commitTasks.push(task);
+  else task();
 }
 
 cacheLayer = createCache({ database, db, fs });
@@ -777,12 +792,14 @@ const {
   markAllRead,
   markRead,
   pendingReminders,
+  pruneOversizedNotificationsOnce,
   pruneRead,
   queueEventNotification,
   setNotifyPrefs,
   setReminder,
 } = createNotifications({
   acquireLock,
+  afterCommit,
   crypto,
   getTicket,
   path,
@@ -1480,6 +1497,7 @@ function database() {
     migrateIfNeeded(handle, root);
     dbByHome.set(root, handle);
     refreshReadonlyCategorySeeds(handle);
+    pruneOversizedNotificationsOnce();
   }
   if (!refreshingRoutingProfileSeeds) {
     refreshingRoutingProfileSeeds = true;

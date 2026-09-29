@@ -794,15 +794,27 @@ function sessionProjectRoot() {
   return nearestRepoRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 }
 const dbByHome = /* @__PURE__ */ new Map();
-const transactionDepth = /* @__PURE__ */ new WeakMap();
+const openTransactionCommitTasks = /* @__PURE__ */ new WeakMap();
 function withinTransaction(handle, fn) {
-  if (transactionDepth.get(handle)) return fn();
-  transactionDepth.set(handle, 1);
+  if (openTransactionCommitTasks.has(handle)) return fn();
+  const commitTasks = [];
+  openTransactionCommitTasks.set(handle, commitTasks);
+  let result;
   try {
-    return db.txn(handle, fn);
+    result = db.txn(handle, () => {
+      commitTasks.length = 0;
+      return fn();
+    });
   } finally {
-    transactionDepth.delete(handle);
+    openTransactionCommitTasks.delete(handle);
   }
+  for (const task of commitTasks) task();
+  return result;
+}
+function afterCommit(task) {
+  const commitTasks = openTransactionCommitTasks.get(database());
+  if (commitTasks) commitTasks.push(task);
+  else task();
 }
 cacheLayer = createCache({ database, db, fs });
 const {
@@ -831,12 +843,14 @@ const {
   markAllRead,
   markRead,
   pendingReminders,
+  pruneOversizedNotificationsOnce,
   pruneRead,
   queueEventNotification,
   setNotifyPrefs,
   setReminder
 } = createNotifications({
   acquireLock,
+  afterCommit,
   crypto,
   getTicket,
   path,
@@ -1489,6 +1503,7 @@ function database() {
     migrateIfNeeded(handle, root);
     dbByHome.set(root, handle);
     refreshReadonlyCategorySeeds(handle);
+    pruneOversizedNotificationsOnce();
   }
   if (!refreshingRoutingProfileSeeds) {
     refreshingRoutingProfileSeeds = true;
