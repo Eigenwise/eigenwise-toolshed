@@ -4817,6 +4817,11 @@ test('SQ-3143: non-executable verifier kinds assemble one wave by kind agreement
     });
     const refs = participants.map((ticket) => ticket.ref);
 
+    pinVerifiers([['document', 'docs/sq-3143-note-a.md describes a'], ['document', 'docs/sq-3143-note-b.md describes b'], ['document', 'docs/sq-3143-note-c.md describes c']]);
+    const documents = store.assembleSubmissionWave(slug, refs, { verification: { kind: 'document', status: 'passed', evidence: 'each note was checked at submission' } });
+    assert.strictEqual(documents.ok, true, documents.message);
+    assert.deepStrictEqual(documents.wave.participants, refs);
+
     pinVerifiers([['document', 'docs/sq-3143-note-a.md describes a'], ['suite', 'npm test'], ['document', 'docs/sq-3143-note-c.md describes c']]);
     const mixed = store.assembleSubmissionWave(slug, refs);
     assert.strictEqual(mixed.reason, 'wave_verifier_mismatch');
@@ -4828,11 +4833,6 @@ test('SQ-3143: non-executable verifier kinds assemble one wave by kind agreement
     assert.strictEqual(suites.reason, 'wave_verifier_mismatch');
     assert.match(suites.message, /all pin kind suite but with different commands or evidence/);
     assert.match(suites.message, /executable kinds must pin the same command/);
-
-    pinVerifiers([['document', 'docs/sq-3143-note-a.md describes a'], ['document', 'docs/sq-3143-note-b.md describes b'], ['document', 'docs/sq-3143-note-c.md describes c']]);
-    const documents = store.assembleSubmissionWave(slug, refs, { verification: { kind: 'document', status: 'passed', evidence: 'each note was checked at submission' } });
-    assert.strictEqual(documents.ok, true, documents.message);
-    assert.deepStrictEqual(documents.wave.participants, refs);
   } finally {
     for (const ticket of participants) {
       persist(Object.assign(store.getTicket(slug, ticket.ref), { archived: true }));
