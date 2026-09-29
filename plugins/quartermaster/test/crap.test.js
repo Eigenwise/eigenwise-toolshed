@@ -1040,7 +1040,7 @@ test('a dropped function counts the branches of its own parameter defaults and l
   assert.deepEqual(scannedRows(source, [], ['src/dropped.ts']), ['pick@1-5 cc=4 ordinal=0']);
 });
 
-test('a dropped function on a line where lizard already has a row keeps that row, and a same-named one takes the next ordinal', () => {
+test('a dropped function whose line holds a lizard row of its own name keeps that row, and a same-named one takes the next ordinal', () => {
   const source = [
     'function twice(a = f()) {',
     '  if (a) return 1;',
@@ -1054,6 +1054,74 @@ test('a dropped function on a line where lizard already has a row keeps that row
   ].join('\n');
 
   assert.deepEqual(scannedRows(source, [{ name: 'twice', complexity: 2, start: 1, end: 4 }]), ['twice@5-8 cc=2 ordinal=1']);
+});
+
+test('a dropped function that starts on the line of another function\'s lizard row still gets a row of its own', () => {
+  // The owner's review input (sameLine): lizard 1.24.0 reports only `outer`, at line 1 with cc 1.
+  const source = [
+    'export function outer(q) { return function inner(a = f()) {',
+    '  if (!a) return 0;',
+    '  return q && a ? 2 : 3;',
+    '}; }',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [{ name: 'outer', complexity: 1, start: 1, end: 1 }]), ['inner@1-4 cc=4 ordinal=0']);
+});
+
+test('a regex whose character class holds a slash is one literal, so the function around it still gets its row', () => {
+  // The owner's review input: `[\\/]` is the usual path-separator class. `/\\+/g` is the control without a class.
+  const source = [
+    'export function normalize(p = cwd()) {',
+    '  if (!p) return null;',
+    "  return p.split(/[\\\\/]+/).join('/') || '.';",
+    '}',
+    'export function control(p = cwd()) {',
+    '  if (!p) return null;',
+    "  return p.split(/\\\\+/g).join('/') || '.';",
+    '}',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [], ['src/dropped.ts']), ['normalize@1-4 cc=3 ordinal=0', 'control@5-8 cc=3 ordinal=0']);
+});
+
+test('a dropped function expression is named after the variable or property it is assigned to, as lizard names it', () => {
+  const source = [
+    'const load = function (path = resolve()) {',
+    '  return path ? 1 : 0;',
+    '};',
+    'const handlers = {',
+    '  save: async function (data = serialize()) {',
+    '    return data || null;',
+    '  },',
+    '};',
+    'register(function* (steps = plan()) {',
+    '  yield steps && steps.next;',
+    '});',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [], ['src/dropped.ts']), ['load@1-3 cc=2 ordinal=0', 'save@5-7 cc=2 ordinal=0', '(anonymous)@9-11 cc=2 ordinal=0']);
+});
+
+test('a dropped generator or generic method is read from its source, and a getter lizard names `get size` keeps its own row', () => {
+  const source = [
+    'class Box {',
+    '  get size() {',
+    '    return this.items ? this.items.length : 0;',
+    '  }',
+    '  *entries<T>(pick = (value: T) => value) {',
+    '    return pick > (this.limit || 0) ? 1 : 0;',
+    '  }',
+    '}',
+    'function* walk(root = tree()) {',
+    '  if (root) yield root;',
+    '}',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [{ name: 'get size', complexity: 2, start: 2, end: 4 }]), ['entries@5-7 cc=3 ordinal=0', 'walk@9-11 cc=2 ordinal=0']);
 });
 
 test('a file lizard gave no row at all is scanned when it is named, and only then', () => {
@@ -1116,6 +1184,49 @@ test('an edit to a function lizard dropped counts as a change against the base r
 
   assert.equal(report.checked, 1, 'only load changed; other is the same function it was in the base revision');
   assert.deepEqual(report.failures.map((entry) => entry.function), ['load']);
+});
+
+// The owner's review inputs (pathSep, paysFor). lizard 1.24.0 reports no row for either file, and the
+// `name(...) {` token pattern cannot see `root`, whose parameter list holds a call.
+const PATH_SEP_SOURCE = [
+  'export class Paths {',
+  '  root(dir = process.cwd()) {',
+  '    return dir;',
+  '  }',
+  '}',
+  'export function normalize(p = cwd()) {',
+  '  if (!p) return null;',
+  "  return p.split(/[\\\\/]+/).join('/') || '.';",
+  '}',
+  '',
+].join('\n');
+
+test('an uncovered function holding a path-separator regex is scored, not passed unseen beside a scanned method', () => {
+  const projectDir = droppedProject(PATH_SEP_SOURCE, [[2, 0], [3, 0], [4, 0], [6, 0], [7, 0], [8, 0], [9, 0]]);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => '' });
+
+  assert.deepEqual(report.failures.map((entry) => [entry.function, entry.cc, entry.crap]), [['normalize', 3, 12]]);
+});
+
+// `1)` in the JSX text closes a group the source scan never saw open, so it cannot find where `Steps` ends.
+const PAYS_FOR_SOURCE = PATH_SEP_SOURCE.split('export function')[0] + [
+  'export function Steps(items = load()) {',
+  '  if (!items) return null;',
+  '  if (items.length && items.ready) return <ol><li>1) Open</li></ol>;',
+  '  return null;',
+  '}',
+  '',
+].join('\n');
+
+test('a scanned method cannot stand in for a function the source scan could not read elsewhere in the file', () => {
+  assert.deepEqual(scannedRows(PAYS_FOR_SOURCE, [], ['src/dropped.ts']), ['root@2-4 cc=1 ordinal=0']);
+  const projectDir = droppedProject(PAYS_FOR_SOURCE, [[2, 0], [3, 0], [4, 0], [6, 0], [7, 0], [8, 0], [9, 0], [10, 0]]);
+
+  assert.throws(
+    () => crapReport({ projectDir, ratchet: 'main', runLizard: () => '' }),
+    (error) => error instanceof PrerequisiteError && /lizard reported zero functions for src\/load\.js/.test(error.message),
+  );
 });
 
 test('the real lizard backend does not let a default-call parameter hide an uncovered function from the gate', (t) => {

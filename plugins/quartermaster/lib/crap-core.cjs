@@ -42,8 +42,23 @@ function crapScore(complexity, coverage) {
   return complexity ** 2 * (1 - coverage) ** 3 + complexity;
 }
 
-function functionTokenCount(text) {
-  return text.match(/\bfunction\b|=>|\b[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{/g)?.length ?? 0;
+// The pattern the gate has always counted definitions by (`function`, `=>`, `name(...) {`), so a file lizard gave no row is held to no less than before.
+const DEFINITION = /\bfunction\b|=>|\b[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{/g;
+
+function lineAt(text, offset) {
+  return text.slice(0, offset).split('\n').length;
+}
+
+function spansLine(row, line) {
+  return row.start <= line && line <= row.end;
+}
+
+/**
+ * Whether some definition in `text` starts on a line none of `rows` spans. Each definition is checked on
+ * its own, so a row the source scan did read cannot stand in for one it could not read elsewhere in the file.
+ */
+function definitionOutsideRows(text, rows) {
+  return Array.from(text.matchAll(DEFINITION), (match) => lineAt(text, match.index)).some((line) => !rows.some((row) => spansLine(row, line)));
 }
 
 const SCRIPT_SOURCE = /\.[cm]?[jt]sx?$/i;
@@ -61,6 +76,8 @@ const TOKEN_PATTERNS = [[OPERATOR, 'punct'], [WORD, 'word']];
 const BRACE_STEP = new Map([['{', 1], ['}', -1]]);
 const ANGLE_STEP = new Map([['<', 1], ['>', -1]]);
 const RETURN_TYPE_STOP = new Set([';', ')', ']', '}']);
+// A `<...>` type-parameter list never reaches back past one of these.
+const TYPE_PARAMETERS_FENCE = new Set([...RETURN_TYPE_STOP, '(']);
 const EXPRESSION_STOP = new Set([',', ';', ')', ']', '}']);
 const OPERAND_CLOSERS = new Set([')', ']', '}']);
 // lizard's JavaScript-family conditions, except that `??` is one branch where lizard reads two ternaries.
@@ -79,10 +96,21 @@ const CALL_PREFIX = new Set(['.', '?.', 'new', 'extends']);
 const NO_TOKEN ={ value: undefined, kind: undefined, line: 0 };
 const NESTED_BODY_END = new Map([['=>', arrowBodyEnd], ['function', functionKeywordBodyEnd]]);
 
+/** A regex's character class may hold an unescaped `/`, so it is stepped over whole; one left open ends the search for a close. */
+function characterClassEnd(text, index) {
+  const close = closingOnLine(text, index, ']');
+  return close < 0 ? text.length : close;
+}
+
+/** The last index of what starts at `cursor` inside a literal: an escape pair, a regex's character class, or the character alone. */
+function literalUnitEnd(text, cursor, quote) {
+  if (text[cursor] === '\\') return cursor + 1;
+  return quote === '/' && text[cursor] === '[' ? characterClassEnd(text, cursor) : cursor;
+}
+
 function closingOnLine(text, index, quote) {
-  for (let cursor = index + 1; cursor < text.length && text[cursor] !== '\n'; cursor += 1) {
-    if (text[cursor] === '\\') cursor += 1;
-    else if (text[cursor] === quote) return cursor;
+  for (let cursor = index + 1; cursor < text.length && text[cursor] !== '\n'; cursor = literalUnitEnd(text, cursor, quote) + 1) {
+    if (text[cursor] === quote) return cursor;
   }
   return -1;
 }
@@ -338,7 +366,7 @@ function signatureAt(tokens, open, name) {
  * The parameter list and body of such a function, when its parameter list opens on the row's start line.
  */
 function truncatedSignature(tokens, entry) {
-  const name = entry.name.replace(/^.*(?:::|\.)/, '');
+  const name = ownName(entry.name);
   const [first, last] = tokenRangeOnLine(tokens, entry.start);
   for (let open = nameIndexOnLine(tokens, first, last, name); open < last; open += 1) {
     const signature = signatureAt(tokens, open, name);
@@ -364,15 +392,20 @@ function fileTokens(cache, file, readText) {
   return cache.get(file);
 }
 
+/** The `<` opening the type-parameter list that closes at the `>` at `close`, or -1 when a fence comes first. */
+function typeParametersOpen(tokens, close) {
+  let depth = 0;
+  for (let cursor = close; cursor >= 0 && !TYPE_PARAMETERS_FENCE.has(tokens[cursor].value); cursor -= 1) {
+    depth -= ANGLE_STEP.get(tokens[cursor].value) || 0;
+    if (depth === 0) return cursor;
+  }
+  return -1;
+}
+
 /** `index` when it is no `>`, else the index before the `<...>` type-parameter list that ends there. */
 function beforeTypeParameters(tokens, index) {
-  if (tokenAt(tokens, index).value !== '>') return index;
-  let depth = 0;
-  for (let cursor = index; cursor >= 0 && !RETURN_TYPE_STOP.has(tokens[cursor].value) && tokens[cursor].value !== '('; cursor -= 1) {
-    depth -= ANGLE_STEP.get(tokens[cursor].value) || 0;
-    if (depth === 0) return cursor - 1;
-  }
-  return index;
+  const open = tokenAt(tokens, index).value === '>' ? typeParametersOpen(tokens, index) : -1;
+  return open < 0 ? index : open - 1;
 }
 
 /** lizard names a function expression after the variable or property it is assigned to. */
@@ -382,25 +415,40 @@ function assignedName(tokens, keyword) {
   return ASSIGNMENT_MARKS.has(tokenAt(tokens, target).value) && owner.kind === 'word' ? owner.value : ANONYMOUS;
 }
 
-function functionKeywordStart(tokens, nameIndex) {
-  if (tokenAt(tokens, nameIndex - 1).value === 'function') return nameIndex - 1;
-  return tokenAt(tokens, nameIndex - 1).value === '*' && tokenAt(tokens, nameIndex - 2).value === 'function' ? nameIndex - 2 : nameIndex;
+/** The `function` keyword just before `index`, past a generator's `*`, or `index` itself when there is none. */
+function functionKeywordStart(tokens, index) {
+  if (tokenAt(tokens, index - 1).value === 'function') return index - 1;
+  return tokenAt(tokens, index - 1).value === '*' && tokenAt(tokens, index - 2).value === 'function' ? index - 2 : index;
+}
+
+/** A word naming the function whose parameter list follows it, rather than a keyword or a callee. */
+function definitionName(tokens, at) {
+  const token = tokenAt(tokens, at);
+  return token.kind === 'word' && !NOT_A_NAME.has(token.value) && !CALL_PREFIX.has(tokenAt(tokens, at - 1).value);
 }
 
 /** The token a function's row starts on and its name, for the paren at `open`; null when that paren is a call or a condition. */
 function definitionHead(tokens, open) {
   const at = beforeTypeParameters(tokens, open - 1);
-  const token = tokenAt(tokens, at);
-  if (token.value === 'function') return { first: at, name: assignedName(tokens, at) };
-  if (token.value === '*' && tokenAt(tokens, at - 1).value === 'function') return { first: at - 1, name: assignedName(tokens, at - 1) };
-  if (token.kind !== 'word' || NOT_A_NAME.has(token.value) || CALL_PREFIX.has(tokenAt(tokens, at - 1).value)) return null;
-  return { first: functionKeywordStart(tokens, at), name: token.value };
+  // `function (` and `function* (` have no name of their own, so the keyword sits right before where one would be.
+  const keyword = functionKeywordStart(tokens, at + 1);
+  if (keyword <= at) return { first: keyword, name: assignedName(tokens, keyword) };
+  return definitionName(tokens, at) ? { first: functionKeywordStart(tokens, at), name: tokenAt(tokens, at).value } : null;
+}
+
+/** lizard's name for a function can carry its owner (`exports.load`, `Store::fetch`) or accessor (`get size`); the source names it by the last word. */
+function ownName(name) {
+  return name.replace(/^.*(?:::|\.|\s)/, '');
+}
+
+function rowStart(line, name) {
+  return `${line}\u0000${name}`;
 }
 
 /** Arrows are left out: lizard keeps a row for an arrow whose parameter list holds a call. */
-function scannedEntry(tokens, file, open, { startLines, signatureOf }) {
+function scannedEntry(tokens, file, open, { rowStarts, signatureOf }) {
   const head = definitionHead(tokens, open);
-  if (!head || startLines.has(tokens[head.first].line)) return null;
+  if (!head || rowStarts.has(rowStart(tokens[head.first].line, head.name))) return null;
   const signature = signatureOf(tokens, open);
   if (!signature || tokens[signature.start].value !== '{') return null;
   const { close, start, end } = signature;
@@ -408,8 +456,9 @@ function scannedEntry(tokens, file, open, { startLines, signatureOf }) {
   return { file, name: head.name, complexity, start: tokens[head.first].line, end: tokens[end].line, source: SCANNED_SOURCE };
 }
 
+/** A row already stands for a definition when it starts on the definition's line under the same name; another function there does not. */
 function definitionsWithoutRow(tokens, file, rows, signatureOf) {
-  const scan = { startLines: new Set(rows.map((entry) => entry.start)), signatureOf };
+  const scan = { rowStarts: new Set(rows.map((entry) => rowStart(entry.start, ownName(entry.name)))), signatureOf };
   const found = [];
   for (let open = 0; open < tokens.length; open += 1) {
     const entry = tokens[open].value === '(' ? scannedEntry(tokens, file, open, scan) : null;
@@ -418,12 +467,18 @@ function definitionsWithoutRow(tokens, file, rows, signatureOf) {
   return found;
 }
 
+/** One past the highest ordinal lizard gave each name. */
+function nextOrdinals(present) {
+  const next = new Map();
+  for (const entry of present) next.set(entry.name, Math.max(next.get(entry.name) || 0, entry.ordinal + 1));
+  return next;
+}
+
 /** Numbered after the rows lizard did give the same name, so no scanned row takes a lizard row's identity. */
 function withOrdinals(scanned, present) {
-  const nextOrdinal = new Map();
-  for (const entry of present) nextOrdinal.set(entry.name, Math.max(nextOrdinal.get(entry.name) ?? 0, (entry.ordinal ?? 0) + 1));
+  const nextOrdinal = nextOrdinals(present);
   return scanned.map((entry) => {
-    const ordinal = nextOrdinal.get(entry.name) ?? 0;
+    const ordinal = nextOrdinal.get(entry.name) || 0;
     nextOrdinal.set(entry.name, ordinal + 1);
     return { ...entry, ordinal };
   });
@@ -431,10 +486,11 @@ function withOrdinals(scanned, present) {
 
 /**
  * lizard reports no row at all for a `function`, method or constructor whose parameter list holds a call
- * (`a = f(), b`), so that function is never scored. A definition with such a parameter list, on a line
- * no row starts on, is read from the source instead. It has no lizard complexity to compare, so its
- * own branch count stands alone. lizard is also left unable to read some plain functions after it, so
- * once a dropped function is found, every other definition in the file without a row is read the same way.
+ * (`a = f(), b`), so that function is never scored. A definition with such a parameter list, unless a row
+ * of the same name starts on its line, is read from the source instead. It has no lizard complexity to
+ * compare, so its own branch count stands alone. lizard is also left unable to read some plain functions
+ * after it, so once a dropped function is found, every other definition in the file without a row is read
+ * the same way.
  */
 function scannedEntries(tokens, file, present) {
   const dropped = definitionsWithoutRow(tokens, file, present, nestedParenSignature);
@@ -476,4 +532,4 @@ function withBodySpans(entries, readText, extraFiles = []) {
   return [...widened, ...scanned];
 }
 
-module.exports = { SCANNED_SOURCE, crapScore, functionTokenCount, parseLizardCsv, splitCsvRow, withBodySpans };
+module.exports = { SCANNED_SOURCE, crapScore, definitionOutsideRows, parseLizardCsv, splitCsvRow, withBodySpans };

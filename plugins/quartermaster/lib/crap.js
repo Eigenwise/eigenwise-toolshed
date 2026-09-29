@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { SCANNED_SOURCE, crapScore, functionTokenCount, parseLizardCsv, withBodySpans } = require('./crap-core.cjs');
+const { SCANNED_SOURCE, crapScore, definitionOutsideRows, parseLizardCsv, withBodySpans } = require('./crap-core.cjs');
 
 const DEFAULT_MAX = 6;
 const DEFAULT_LCOV = 'coverage/lcov.info';
@@ -424,18 +424,20 @@ function configuredSourceFiles(projectDir, sources, exclude) {
   return sources.flatMap((source) => sourceFiles(path.resolve(projectDir, source))).filter((file) => !isExcluded(file));
 }
 
-/** A file whose only rows were read from its source counts as measured once they account for every function keyword in it. */
+function rowsOfFile(projectDir, entries, file) {
+  const key = comparablePath(projectDir, file);
+  return entries.filter((entry) => comparablePath(projectDir, entry.file) === key);
+}
+
+/** Any lizard row makes a file measured; without one, every definition in it has to lie inside a row read from its source. */
+function unmeasuredFile(file, rows) {
+  return !rows.some((entry) => entry.source !== SCANNED_SOURCE) && definitionOutsideRows(fs.readFileSync(file, 'utf8'), rows);
+}
+
 function unmeasuredLizardFiles(projectDir, sources, entries, changed, exclude) {
-  const rowKey = (entry) => comparablePath(projectDir, entry.file);
-  const measured = new Set(entries.filter((entry) => entry.source !== SCANNED_SOURCE).map(rowKey));
-  const scanned = new Map();
-  for (const entry of entries) if (entry.source === SCANNED_SOURCE) scanned.set(rowKey(entry), (scanned.get(rowKey(entry)) ?? 0) + 1);
   return configuredSourceFiles(projectDir, sources, exclude)
     .filter((file) => changed.has(displayPath(projectDir, file)))
-    .filter((file) => {
-      const tokens = functionTokenCount(fs.readFileSync(file, 'utf8'));
-      return tokens && !measured.has(comparablePath(projectDir, file)) && (scanned.get(comparablePath(projectDir, file)) ?? 0) < tokens;
-    })
+    .filter((file) => unmeasuredFile(file, rowsOfFile(projectDir, entries, file)))
     .map((file) => displayPath(projectDir, file));
 }
 
