@@ -728,7 +728,7 @@ const tools = [
     handler(args) {
       const { slug } = resolveLifecycleProject(args.project, args, "scopeRequest");
       const by = requireBy(args, "scopeRequest");
-      if (args.grant) {
+      if (args.grant === true) {
         if (args.files !== void 0) throw new Error("scopeRequest: grant cannot be combined with files — it grants the refusal the ticket already recorded.");
         const granted = store.grantScope(slug, args.ref, by, { source: "mcp" });
         return mutationAck(slug, granted, scopeGrantChanged(granted));
