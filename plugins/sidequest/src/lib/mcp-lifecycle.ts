@@ -1106,6 +1106,7 @@ const tools: ToolDefinition[] = [
         deliveryRevision: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'Landed revision, reachable from the target and never an ancestor of the candidate base: proves each submitted path at its tree instead of the working tree, for a candidate rebased or squash-merged before landing. Ignored on a reachable delivery.' },
         resolvedPaths: { type: 'array', items: { type: 'string' }, description: 'Submitted paths the deliveryRevision proof found diverging, attested as resolved by hand; reason records the evidence. Requires deliveryRevision, and is refused on a reachable delivery rather than ignored.' },
         reason: { type: 'string' },
+        integrationBranch: { type: 'string', description: 'Deliver onto this checked-out branch instead of the dispatch-recorded one. Without it, delivery follows the checkout only when it is, or fast-forwarded past, the recorded branch.' },
         skipVerify: { type: 'boolean', description: 'Skip the pinned verifier only when verificationWaiver carries an authorized bounded waiver.' },
         verificationWaiver: VERIFICATION_WAIVER_PROP,
         session: { type: 'string' },
@@ -1144,6 +1145,7 @@ const tools: ToolDefinition[] = [
         const mode = args.mode == null ? store.boardConfig(slug).delivery : args.mode;
         const delivery = store.integrateSubmissionWave(slug, refs, {
           mode,
+          integrationBranch: args.integrationBranch,
           skipVerify: args.skipVerify === true,
           verificationWaiver,
         });
@@ -1185,7 +1187,7 @@ const tools: ToolDefinition[] = [
       let target: any = null;
       if (usesGit) {
         try {
-          target = store.ticketIntegrationTarget(slug, ticket);
+          target = store.deliveryIntegrationTarget(slug, store.ticketIntegrationTarget(slug, ticket), args.integrationBranch);
         } catch (error: any) {
           failures.push({
             reason: 'integration_target_unavailable',
@@ -1196,6 +1198,7 @@ const tools: ToolDefinition[] = [
       const admitted = store.validateIntegrationSubmission(slug, args.ref, {
         deliveryInteractionCommit: args.deliveryInteractionCommit,
         deliveryMethod: args.deliveryMethod,
+        integrationBranch: args.integrationBranch,
       });
       if (!admitted.ok) failures.push({
         reason: admitted.reason,
@@ -1236,6 +1239,7 @@ const tools: ToolDefinition[] = [
       const delivery = store.integrateSubmission(slug, args.ref, {
         mode,
         target,
+        integrationBranch: args.integrationBranch,
         skipVerify: args.skipVerify === true,
         verificationWaiver,
       });

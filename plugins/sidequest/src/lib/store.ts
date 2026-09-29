@@ -1327,6 +1327,7 @@ const {
   integrationTargetCommit,
   ticketIntegrationTarget,
   ticketIntegrationTargets,
+  deliveryIntegrationTarget,
   listTickets,
   manualVerify,
   VERIFY_ORACLE_KINDS,
@@ -3047,6 +3048,36 @@ function ticketIntegrationTargets(slug?: any, tickets?: any) {
   return { ok: true, target: first, targets: resolved };
 }
 
+// The dispatch-time branch stays the default target, but an integrator that has since
+// fast-forwarded past it, or names integrationBranch, delivers onto the branch it has
+// checked out (SQ-3144). Any other checkout keeps the recorded target, so delivery
+// still refuses branch_not_checked_out. A local topic branch has no origin/<branch>
+// for remote mode to read, and delivery only ever moves the local branch, so that
+// target falls back to local mode rather than refusing.
+function deliveryIntegrationTarget(slug?: any, recorded?: any, integrationBranch?: any) {
+  const branch = integrationBranch == null
+    ? checkedOutBranchDescendingFrom(readMeta(slug)?.path, commitScope.integrationTargetRef(recorded))
+    : normalizeIntegrationBranch(integrationBranch);
+  if (!branch || branch === recorded.branch) return recorded;
+  return integrationTarget(slug, { mode: deliveryBranchMode(slug, recorded.mode, branch), branch });
+}
+
+function deliveryBranchMode(slug: any, recordedMode: string, branch: string) {
+  return recordedMode === 'remote' && integrationBranchExists(readMeta(slug)?.path, `refs/remotes/origin/${branch}`) ? 'remote' : 'local';
+}
+
+function checkedOutBranchDescendingFrom(repo: string, ref: string) {
+  const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true, stdio: 'pipe' }).trim();
+  const currentBranch = git(['branch', '--show-current']);
+  try {
+    git(['merge-base', '--is-ancestor', ref, 'HEAD']);
+    return currentBranch;
+  } catch (error: any) {
+    if (error?.status === 1) return '';
+    throw error;
+  }
+}
+
 function recordedDelivery(slug?: any, ticket?: any, commit?: any, evidence?: any) {
   const requestedCommit = String(commit || '').trim();
   const recordedEvidence = String(evidence || '').trim();
@@ -3372,7 +3403,11 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
     // already re-validated under its own deliveryMethod waiver) before this control-plane
     // closure re-checks admission. Dropping deliveryMethod here re-ran that same check
     // unwaived and refused the closure MCP `integrate` had just recorded.
-    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireDeliveredWave: true, deliveryMethod: opts.deliveryMethod });
+    const admitted = validateIntegrationSubmission(slug, idOrRef, {
+      requireDeliveredWave: true,
+      deliveryMethod: opts.deliveryMethod,
+      integrationBranch: ticket.submission?.integration?.targetBranch,
+    });
     if (!admitted.ok) return admitted;
   }
   const recorded = delivery;
@@ -3758,6 +3793,7 @@ module.exports = {
   integrationTarget,
   ticketIntegrationTarget,
   ticketIntegrationTargets,
+  deliveryIntegrationTarget,
   normalizeDeliveryMode,
   validateIntegrationSubmission,
   recordDeliveredSubmission,
