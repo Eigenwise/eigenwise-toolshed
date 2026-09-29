@@ -142,15 +142,29 @@ function createInstalledBinaryLinks(worktree: string, names: readonly string[]):
 
 // A Windows junction can only hold an absolute target, so a shim `createInstalledBinaryLinks` writes
 // there resolves under whatever tree it was created in -- always absolute, on every platform, so the
-// fixture reproduces the same shape without depending on junction support.
-function createAbsoluteInTreeDependencyLink(root: string, relativePath: string, targetRelativePath: string): string {
+// fixture reproduces the same shape without depending on junction support. A junction dangles after
+// the rename and git lists nothing through it, so the shapes that parked a finished tree (GH-352) were
+// absolute `dir` symlinks; a caller guarding that passes `'dir'` to get one on Windows too.
+function createAbsoluteInTreeDependencyLink(
+  root: string,
+  relativePath: string,
+  targetRelativePath: string,
+  linkType: 'dir' | 'junction' = process.platform === 'win32' ? 'junction' : 'dir',
+): string {
   const target = path.join(root, ...targetRelativePath.split('/'));
   fs.mkdirSync(target, { recursive: true });
   fs.writeFileSync(path.join(target, 'sentinel.txt'), 'installed by npm ci');
   const link = path.join(root, ...relativePath.split('/'));
   fs.mkdirSync(path.dirname(link), { recursive: true });
-  fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+  fs.symlinkSync(target, link, linkType);
   return link;
+}
+
+// Creating a Windows symlink needs Developer Mode or an elevated runner; without it there is no
+// absolute `dir` symlink to test, and pretending a junction stands in for one is what let the sweep
+// test pass against pre-fold source there.
+function symlinkPrivilegeMissing(error: unknown): boolean {
+  return ['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException)?.code ?? '');
 }
 
 function matchingWorktreeLease(worktree: string, ticket: any) {
@@ -1132,20 +1146,26 @@ test('sweep removes a finished tree whose only ignored link is a directory symli
 });
 
 // SQ-80: the delete-time re-read judges the tree at its quarantine destination, where an absolute
-// in-tree link (the shape `npm ci` writes for a Windows junction) resolves under the path the tree was
-// renamed from. Without that vacated source, the re-read counted `node_modules/.bin/tsx` as escaping
+// in-tree symlink resolves under the path the tree was renamed from. The link is a `dir` symlink on
+// every platform: a Windows junction dangles after the rename and passes against pre-fold source. Without that vacated source, the re-read counted `node_modules/.bin/tsx` as escaping
 // and parked every finished tree as late_content_quarantined. Passing `destination` where the
 // vacated source belongs (the swap at the `releaseQuarantinedDependencyLinks` call) leaves the same
 // link escaping, so this test also fails for that.
-test('an executing sweep removes a finished tree whose unrecorded absolute in-tree link resolves under the path it was renamed from', async () => {
+test('an executing sweep removes a finished tree whose unrecorded absolute in-tree link resolves under the path it was renamed from', async (t) => {
   const { repository, baseCommit, worktreeRoot } = repositoryFixture();
   const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-vacated-source-sweep-'));
   const worktree = createAgentWorktree(repository, worktreeRoot, 'vacated-source-link');
   const ticket = integratedTicket('SQ-VACATED-SOURCE-LINK', 'vacated-source-link', worktree, baseCommit);
-  createAbsoluteInTreeDependencyLink(worktree, 'node_modules/.bin/tsx', 'node_modules/tsx/dist');
   const oldTimestamp = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
   fs.utimesSync(worktree, oldTimestamp, oldTimestamp);
   try {
+    try {
+      createAbsoluteInTreeDependencyLink(worktree, 'node_modules/.bin/tsx', 'node_modules/tsx/dist', 'dir');
+    } catch (error) {
+      if (!symlinkPrivilegeMissing(error)) throw error;
+      t.skip('creating a directory symlink needs privileges this runner lacks');
+      return;
+    }
     assert.match(
       git(worktree, ['status', '--porcelain', '--ignored', '--untracked-files=all']),
       /^!! node_modules\/\.bin\/tsx(\/sentinel\.txt)?$/m,

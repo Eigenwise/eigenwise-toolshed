@@ -52,25 +52,31 @@ function parseWorktreeStatus(stdout: string): WorktreeStatusEntry[] {
 
 // `vacatedSource` is the path a quarantined tree was renamed from: an absolute in-tree link written
 // before the rename still names it, and reading such a link has to land back inside the tree (SQ-80).
+// It is canonicalized once here so the per-entry, per-component walk below never repeats that work.
 function atRiskStatusEntries(stdout: string, worktree: string, recordedLinks: readonly string[], vacatedSource: string | null = null): WorktreeStatusEntry[] {
+  const canonicalVacatedSource = vacatedSource ? canonicalPath(vacatedSource) : null;
   return parseWorktreeStatus(stdout)
     .filter((entry) => !recordedLinks.some((link) => entry.path === link || entry.path.startsWith(`${link}/`)))
-    .filter((entry) => !installedDependencyCacheFile(worktree, entry, vacatedSource));
+    .filter((entry) => !installedDependencyCacheFile(worktree, entry, canonicalVacatedSource));
+}
+
+// A target under the vacated source no longer exists there, so it is read at the same place in the
+// tree it moved into instead.
+function rebasedOntoMovedTree(canonicalWorktree: string, canonicalVacatedSource: string | null, target: string): string {
+  return canonicalVacatedSource && pathIsInside(canonicalVacatedSource, target)
+    ? path.join(canonicalWorktree, path.relative(canonicalVacatedSource, target))
+    : target;
 }
 
 // A path component that is itself a link is resolved once here, so the segment loop below only
 // ever judges a real file or directory. `null` means the component could not be trusted: it escaped
 // the worktree, or `linkTargetPath` left a link behind (a chain the platform could not resolve, such
 // as a cycle).
-// A target under the vacated source no longer exists there, so it is read at the same place in the
-// tree it moved into instead.
 function resolvedInTreePathComponent(canonicalWorktree: string, current: string, canonicalVacatedSource: string | null): { stats: import('node:fs').Stats; current: string; followedLink: boolean } | null {
   const stats = nativeFs.lstatSync(current);
   if (!stats.isSymbolicLink()) return { stats, current, followedLink: false };
   const target = linkTargetPath(current, nativeFs.readlinkSync(current));
-  const resolved = canonicalVacatedSource && pathIsInside(canonicalVacatedSource, target)
-    ? path.join(canonicalWorktree, path.relative(canonicalVacatedSource, target))
-    : target;
+  const resolved = rebasedOntoMovedTree(canonicalWorktree, canonicalVacatedSource, target);
   if (!pathIsInside(canonicalWorktree, resolved)) return null;
   const resolvedStats = nativeFs.lstatSync(resolved);
   if (resolvedStats.isSymbolicLink()) return null;
@@ -95,17 +101,16 @@ function acceptedDependencyCacheLeaf(resolved: { stats: import('node:fs').Stats;
 // and not just the leaf, but a plain POSIX directory symlink is never walked -- git reports it as the
 // leaf itself, so pnpm's `node_modules/<dep> -> .pnpm/...` and a workspace's
 // `node_modules/<pkg> -> ../packages/<pkg>` need `acceptedDependencyCacheLeaf` above (#224 review item 1).
-function installedDependencyCacheFile(worktree: string, entry: WorktreeStatusEntry, vacatedSource: string | null): boolean {
+function installedDependencyCacheFile(worktree: string, entry: WorktreeStatusEntry, canonicalVacatedSource: string | null): boolean {
   if (entry.code !== '!!' || !dependencyCachePath(entry.path)) return false;
-  return dependencyCacheEntryResolvesToAcceptedLeaf(worktree, entry.path, vacatedSource);
+  return dependencyCacheEntryResolvesToAcceptedLeaf(worktree, entry.path, canonicalVacatedSource);
 }
 
 // Split from the entry-shape guard above so that check stays a single early return; this is the part
 // that walks every path component and judges the leaf (#224 review item 3).
-function dependencyCacheEntryResolvesToAcceptedLeaf(worktree: string, relativePath: string, vacatedSource: string | null): boolean {
+function dependencyCacheEntryResolvesToAcceptedLeaf(worktree: string, relativePath: string, canonicalVacatedSource: string | null): boolean {
   const segments = relativePath.split(/[\\/]+/).filter(Boolean);
   const canonicalWorktree = canonicalPath(worktree);
-  const canonicalVacatedSource = vacatedSource ? canonicalPath(vacatedSource) : null;
   let current = worktree;
   try {
     for (let depth = 0; depth < segments.length; depth += 1) {

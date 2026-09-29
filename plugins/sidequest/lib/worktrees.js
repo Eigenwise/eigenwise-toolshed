@@ -32,13 +32,17 @@ function parseWorktreeStatus(stdout) {
   return entries;
 }
 function atRiskStatusEntries(stdout, worktree, recordedLinks, vacatedSource = null) {
-  return parseWorktreeStatus(stdout).filter((entry) => !recordedLinks.some((link) => entry.path === link || entry.path.startsWith(`${link}/`))).filter((entry) => !installedDependencyCacheFile(worktree, entry, vacatedSource));
+  const canonicalVacatedSource = vacatedSource ? canonicalPath(vacatedSource) : null;
+  return parseWorktreeStatus(stdout).filter((entry) => !recordedLinks.some((link) => entry.path === link || entry.path.startsWith(`${link}/`))).filter((entry) => !installedDependencyCacheFile(worktree, entry, canonicalVacatedSource));
+}
+function rebasedOntoMovedTree(canonicalWorktree, canonicalVacatedSource, target) {
+  return canonicalVacatedSource && pathIsInside(canonicalVacatedSource, target) ? path.join(canonicalWorktree, path.relative(canonicalVacatedSource, target)) : target;
 }
 function resolvedInTreePathComponent(canonicalWorktree, current, canonicalVacatedSource) {
   const stats = nativeFs.lstatSync(current);
   if (!stats.isSymbolicLink()) return { stats, current, followedLink: false };
   const target = linkTargetPath(current, nativeFs.readlinkSync(current));
-  const resolved = canonicalVacatedSource && pathIsInside(canonicalVacatedSource, target) ? path.join(canonicalWorktree, path.relative(canonicalVacatedSource, target)) : target;
+  const resolved = rebasedOntoMovedTree(canonicalWorktree, canonicalVacatedSource, target);
   if (!pathIsInside(canonicalWorktree, resolved)) return null;
   const resolvedStats = nativeFs.lstatSync(resolved);
   if (resolvedStats.isSymbolicLink()) return null;
@@ -47,14 +51,13 @@ function resolvedInTreePathComponent(canonicalWorktree, current, canonicalVacate
 function acceptedDependencyCacheLeaf(resolved) {
   return resolved.stats.isFile() || resolved.followedLink && resolved.stats.isDirectory();
 }
-function installedDependencyCacheFile(worktree, entry, vacatedSource) {
+function installedDependencyCacheFile(worktree, entry, canonicalVacatedSource) {
   if (entry.code !== "!!" || !dependencyCachePath(entry.path)) return false;
-  return dependencyCacheEntryResolvesToAcceptedLeaf(worktree, entry.path, vacatedSource);
+  return dependencyCacheEntryResolvesToAcceptedLeaf(worktree, entry.path, canonicalVacatedSource);
 }
-function dependencyCacheEntryResolvesToAcceptedLeaf(worktree, relativePath, vacatedSource) {
+function dependencyCacheEntryResolvesToAcceptedLeaf(worktree, relativePath, canonicalVacatedSource) {
   const segments = relativePath.split(/[\\/]+/).filter(Boolean);
   const canonicalWorktree = canonicalPath(worktree);
-  const canonicalVacatedSource = vacatedSource ? canonicalPath(vacatedSource) : null;
   let current = worktree;
   try {
     for (let depth = 0; depth < segments.length; depth += 1) {
