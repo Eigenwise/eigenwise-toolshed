@@ -863,156 +863,152 @@ function testDefinitionName(line, modifiers = false) {
   const call = modifiers ? /\b(?:test|it|specify)(?:\.(?:only|skip|todo))?\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/ : /\b(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/;
   return capturedTestName(line.match(call) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/));
 }
-function addDiffTestNames(names, source, diff) {
-  const definitions = source.split(/\r?\n/).map((line, index) => {
-    const name = testDefinitionName(line);
-    return name ? { line: index + 1, name } : null;
-  }).filter(Boolean);
-  let width = 0;
-  let newLine = 0;
-  let changedInHunk = false;
-  const addNearestDefinition = (line) => {
-    const definition = definitions.filter((entry) => entry.line <= line).at(-1);
-    if (definition) names.add(definition.name);
-  };
+function testDefinitions(source, modifiers = false) {
+  return source.split(/\r?\n/).map((line, index) => ({ line: index + 1, name: testDefinitionName(line, modifiers) })).filter((entry) => Boolean(entry.name));
+}
+function diffHunks(diff) {
+  const hunks = [];
   for (const line of diff.split(/\r?\n/)) {
-    const hunk = line.match(/^(@{2,}) (?:-\d+(?:,\d+)? )+\+(\d+)(?:,\d+)? \1/);
-    if (hunk) {
-      if (changedInHunk) addNearestDefinition(newLine);
-      width = hunk[1].length - 1;
-      newLine = Number(hunk[2]);
-      changedInHunk = false;
-      continue;
-    }
-    if (!width) continue;
-    const marks = line.slice(0, width);
-    if (marks.includes("-")) {
-      changedInHunk = true;
-      continue;
-    }
-    if (marks.includes("+")) {
-      changedInHunk = true;
-      const addedName = testDefinitionName(line.slice(width), true);
-      if (addedName) names.add(addedName);
-      addNearestDefinition(newLine);
-      newLine += 1;
-      continue;
-    }
-    if (marks.length === width && !marks.trim()) newLine += 1;
+    const header = line.match(/^(@{2,}) (?:-\d+(?:,\d+)? )+\+(\d+)(?:,\d+)? \1/);
+    if (header) hunks.push({ width: header[1].length - 1, start: Number(header[2]), lines: [] });
+    else hunks.at(-1)?.lines.push(line);
   }
-  if (changedInHunk) addNearestDefinition(newLine);
+  return hunks;
+}
+function unifiedChangedLines(hunk) {
+  const changed = [];
+  let next = hunk.start;
+  for (const line of hunk.lines) {
+    if (!line.startsWith("+")) continue;
+    changed.push({ line: next, text: line.slice(1) });
+    next += 1;
+  }
+  changed.push({ line: next, text: "" });
+  return changed;
+}
+function combinedChangedLines(hunk) {
+  const own = /* @__PURE__ */ new Set(["+".repeat(hunk.width), "-".repeat(hunk.width)]);
+  const changed = [];
+  let next = hunk.start;
+  for (const line of hunk.lines) {
+    const marks = line.slice(0, hunk.width);
+    if (own.has(marks) && line.slice(hunk.width).trim()) changed.push({ line: next, text: line.slice(hunk.width) });
+    if (!marks.includes("-")) next += 1;
+  }
+  return changed;
+}
+function changedLines(hunk) {
+  return hunk.width > 1 ? combinedChangedLines(hunk) : unifiedChangedLines(hunk);
+}
+function diffTestNames(source, diff) {
+  const definitions = testDefinitions(source);
+  const nearest = (line) => definitions.filter((entry) => entry.line <= line).at(-1)?.name;
+  return diffHunks(diff).flatMap(changedLines).flatMap((changed) => [testDefinitionName(changed.text, true), nearest(changed.line)]);
 }
 function gitOutput(root, args) {
   return execFileSync("git", args, { cwd: root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
 }
-function attributionBase(workspace, requested) {
-  const dispatchBase = String(workspace?.base || "");
-  const candidate = String(requested || "").trim();
-  if (!candidate) return dispatchBase;
+function listedPaths(root, args) {
+  return gitOutput(root, args).split("\0").filter(Boolean).map((file) => file.replace(/\\/g, "/"));
+}
+function sourceAt(root, revision, file) {
   try {
-    const resolved = gitOutput(workspace.root, ["rev-parse", "--verify", `${candidate}^{commit}`]).trim();
-    if (resolved === gitOutput(workspace.root, ["rev-parse", "--verify", `${dispatchBase}^{commit}`]).trim()) return dispatchBase;
-    gitOutput(workspace.root, ["merge-base", "--is-ancestor", dispatchBase, resolved]);
-    gitOutput(workspace.root, ["merge-base", "--is-ancestor", resolved, "HEAD"]);
-    return resolved;
+    return revision ? gitOutput(root, ["cat-file", "blob", `${revision}:${file}`]) : fs.readFileSync(path.join(root, file), "utf8");
   } catch (_) {
-    return dispatchBase;
+    return "";
   }
 }
-function attributionSegments(root, base) {
-  let merges = [];
+function revisionHasFile(root, revision, file) {
   try {
-    merges = gitOutput(root, ["rev-list", "--first-parent", "--merges", "--reverse", `${base}..HEAD`]).split(/\r?\n/).filter(Boolean);
+    gitOutput(root, ["cat-file", "-e", `${revision}:${file}`]);
+    return true;
   } catch (_) {
-    merges = [];
+    return false;
   }
-  const segments = [];
-  let from = base;
-  for (const merge of merges) {
-    segments.push({ from, to: `${merge}^1` }, { merge });
-    from = merge;
-  }
-  segments.push({ from, to: null });
-  return segments;
 }
-function segmentPaths(root, segment, working) {
-  const listed = (args) => gitOutput(root, args).split("\0").filter(Boolean).map((file) => file.replace(/\\/g, "/"));
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+function fileTestNames(root, change, file) {
+  let diff = "";
   try {
-    if ("merge" in segment) {
-      return listed(["diff-tree", "--cc", "-r", "--name-only", "-z", "--no-commit-id", segment.merge]).filter((file) => segmentDiff(root, segment, file).trim());
-    }
-    if (segment.to) return listed(["diff", "--name-only", "--no-renames", "-z", segment.from, segment.to]);
-    return [...listed(["diff", "--name-only", "--no-renames", "-z", segment.from, "HEAD"]), ...working];
+    diff = gitOutput(root, ["diff", "--no-ext-diff", "--unified=0", ...[change.from, change.to].filter(Boolean), "--", file]);
   } catch (_) {
     return [];
   }
+  const source = sourceAt(root, change.to, file);
+  return revisionHasFile(root, change.from, file) ? diffTestNames(source, diff) : testDefinitions(source).map((entry) => entry.name);
 }
-function segmentDiff(root, segment, file) {
-  if ("merge" in segment) return gitOutput(root, ["diff-tree", "--cc", "--unified=0", "--no-commit-id", segment.merge, "--", file]);
-  return gitOutput(root, ["diff", "--no-ext-diff", "--unified=0", segment.from, ...segment.to ? [segment.to] : [], "--", file]);
+function mergeDiff(root, merge, file) {
+  return gitOutput(root, ["diff-tree", "--cc", "--unified=0", "--no-commit-id", merge, "--", file]);
 }
-function segmentSource(root, segment, file) {
-  const revision = "merge" in segment ? segment.merge : segment.to;
-  return revision ? gitOutput(root, ["cat-file", "blob", `${revision}:${file}`]) : fs.readFileSync(path.join(root, file), "utf8");
+function mergeOwnedPaths(root, merge) {
+  return listedPaths(root, ["diff-tree", "--cc", "-r", "--name-only", "-z", "--no-commit-id", merge]).filter((file) => diffHunks(mergeDiff(root, merge, file)).some((hunk) => combinedChangedLines(hunk).length));
 }
-function segmentTestNames(root, segment, files) {
-  const names = /* @__PURE__ */ new Set();
-  for (const file of files) {
-    if (!isTestSidePath(file)) continue;
-    let source = "";
-    let diff = "";
-    try {
-      source = segmentSource(root, segment, file);
-      diff = segmentDiff(root, segment, file);
-    } catch (_) {
-      continue;
-    }
-    if (!("merge" in segment) && !segment.to) {
-      try {
-        execFileSync("git", ["cat-file", "-e", `${segment.from}:${file}`], { cwd: root, stdio: "ignore", windowsHide: true });
-      } catch (_) {
-        for (const line of source.split(/\r?\n/)) {
-          const name = testDefinitionName(line);
-          if (name) names.add(name);
-        }
-        continue;
-      }
-    }
-    addDiffTestNames(names, source, diff);
-  }
-  return names;
+function changePaths(root, change, working) {
+  if ("merge" in change) return mergeOwnedPaths(root, change.merge);
+  return change.to ? listedPaths(root, ["diff", "--name-only", "--no-renames", "-z", change.from, change.to]) : working;
 }
-function negativeControlChanges(delta, changedPaths, requestedBase) {
-  const workspace = delta?.workspace;
-  if (!workspace?.base) return { paths: changedPaths, testNames: [] };
-  const base = attributionBase(workspace, requestedBase);
-  const segments = attributionSegments(workspace.root, base);
+function changeTestNames(root, change, files) {
+  const namesIn = "merge" in change ? (file) => diffTestNames(sourceAt(root, change.merge, file), mergeDiff(root, change.merge, file)) : (file) => fileTestNames(root, change, file);
+  return files.filter(isTestSidePath).flatMap(namesIn).filter((name) => Boolean(name));
+}
+function foreignTips(slug, ticket, root) {
+  const refs = commitScope.integrationTargetRefs(ticketIntegrationTarget(slug, ticket));
+  if (!refs.length) return [];
+  return gitOutput(root, ["for-each-ref", "--no-contains", "HEAD", "--format=%(objectname) %(refname)", ...refs]).split(/\r?\n/).map((line) => line.split(" ")).filter(([, ref]) => refs.includes(String(ref))).map(([tip]) => String(tip));
+}
+function commitChange(line) {
+  const [commit = "", ...parents] = line.split(" ");
+  return parents.length > 1 ? { merge: commit } : { from: parents[0] || EMPTY_TREE, to: commit };
+}
+function ownChanges(slug, ticket, root, base) {
+  const tips = foreignTips(slug, ticket, root);
+  if (!tips.length) return null;
+  const own = gitOutput(root, ["rev-list", "--reverse", "--parents", `${base}..HEAD`, "--not", ...tips]).split(/\r?\n/).filter(Boolean);
+  if (own.length === Number(gitOutput(root, ["rev-list", "--count", `${base}..HEAD`]))) return null;
+  return [...own.map(commitChange), { from: "HEAD", to: null }];
+}
+function ownChangeAttribution(root, changes, working, changedPaths) {
   const changed = new Set(changedPaths);
-  const working = Array.isArray(delta.working) ? delta.working : [];
   const owned = /* @__PURE__ */ new Set();
-  const names = /* @__PURE__ */ new Set();
-  for (const segment of segments) {
-    const files = segmentPaths(workspace.root, segment, working).filter((file) => changed.has(file));
-    for (const file of files) owned.add(file);
-    for (const name of segmentTestNames(workspace.root, segment, files)) names.add(name);
+  const names = [];
+  for (const change of changes) {
+    const files = changePaths(root, change, working).filter((file) => changed.has(file));
+    files.forEach((file) => owned.add(file));
+    names.push(...changeTestNames(root, change, files));
   }
-  const linear = segments.length === 1 && base === workspace.base;
-  if (linear) return { paths: changedPaths, testNames: Array.from(names) };
-  const current = /* @__PURE__ */ new Set();
-  for (const file of owned) {
-    if (!isTestSidePath(file)) continue;
-    try {
-      for (const line of fs.readFileSync(path.join(workspace.root, file), "utf8").split(/\r?\n/)) {
-        const name = testDefinitionName(line, true);
-        if (name) current.add(name);
-      }
-    } catch (_) {
-    }
-  }
+  const current = new Set([...owned].filter(isTestSidePath).flatMap((file) => testDefinitions(sourceAt(root, null, file), true).map((entry) => entry.name)));
   return {
     paths: changedPaths.filter((file) => owned.has(file)),
-    testNames: Array.from(names).filter((name) => current.has(name))
+    testNames: [...new Set(names)].filter((name) => current.has(name))
   };
+}
+function negativeControlChanges(slug, ticket, delta, changedPaths) {
+  const workspace = delta?.workspace;
+  if (!workspace?.base) return { paths: changedPaths, testNames: [] };
+  try {
+    const changes = ownChanges(slug, ticket, workspace.root, workspace.base);
+    if (changes) return ownChangeAttribution(workspace.root, changes, delta.working, changedPaths);
+  } catch (_) {
+  }
+  return { paths: changedPaths, testNames: [...new Set(changeTestNames(workspace.root, { from: workspace.base, to: null }, changedPaths))] };
+}
+function mixedChange(paths) {
+  return paths.some(isTestSidePath) && paths.some((file) => !isTestSidePath(file));
+}
+function negativeControlCheck(slug, ticket, delta, changedPaths) {
+  if (!mixedChange(changedPaths)) return null;
+  const own = negativeControlChanges(slug, ticket, delta, changedPaths);
+  if (!mixedChange(own.paths)) return null;
+  const negativeControl = negativeControlResult(ticket, own.testNames);
+  return ["failed", "waived"].includes(negativeControl.kind) ? null : negativeControlRefusal(ticket, negativeControl);
+}
+function mergeResolvedPaths(workspace) {
+  if (!workspace?.base) return [];
+  try {
+    return listedPaths(workspace.root, ["log", "--merges", "--format=", "--cc", "--name-only", "-z", `${workspace.base}..HEAD`]);
+  } catch (_) {
+    return [];
+  }
 }
 function normalizedNegativeControlTestName(name) {
   return String(name || "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -1141,7 +1137,7 @@ function completionTreeCheck(slug, ticket, opts) {
   if (!declaredFiles.length) return { ok: true, applicable: false };
   const delta = dispatchDelta(slug, ticket);
   if (!delta.ok) return { ok: true, applicable: false, unavailable: true };
-  const changedPaths = Array.from(/* @__PURE__ */ new Set([...delta.working, ...delta.committed])).filter((file) => commitScope.isInScope(file, declaredFiles)).sort();
+  const changedPaths = Array.from(/* @__PURE__ */ new Set([...delta.working, ...delta.committed, ...mergeResolvedPaths(delta.workspace)])).filter((file) => commitScope.isInScope(file, declaredFiles)).sort();
   if (!changedPaths.length && opts?.explicitNoOp !== true) {
     return {
       ok: false,
@@ -1150,14 +1146,8 @@ function completionTreeCheck(slug, ticket, opts) {
       message: `${ticket.ref} completion refused: its declared write scope has an empty diff since dispatch base. Declared files: ${declaredFiles.join(", ")}. A claim holder may record factual failed_suite or could_not_run verification evidence before editing, but a successful completion, submit, or done still needs scoped work. If this run intentionally made no repository change, report [sidequest:verify-complete] no-op: <evidence>; verification outcomes use [sidequest:verify-complete] <passed|failed_suite|toolchain_missing|could_not_run|timeout|manual|attestation|skipped|failed_check>: <evidence>.`
     };
   }
-  const mixedChange = (paths) => paths.some(isTestSidePath) && paths.some((file) => !isTestSidePath(file));
-  if (mixedChange(changedPaths)) {
-    const own = negativeControlChanges(delta, changedPaths, opts?.attributionBase);
-    if (mixedChange(own.paths)) {
-      const negativeControl = negativeControlResult(ticket, own.testNames);
-      if (negativeControl.kind !== "failed" && negativeControl.kind !== "waived") return negativeControlRefusal(ticket, negativeControl);
-    }
-  }
+  const negativeControl = negativeControlCheck(slug, ticket, delta, changedPaths);
+  if (negativeControl) return negativeControl;
   return { ok: true, applicable: true, changedPaths, noOp: !changedPaths.length };
 }
 const {
