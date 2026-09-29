@@ -88,19 +88,29 @@ function callerWorktreePath(args?: any): string | null {
   }
 }
 
+function worktreeBindsCaller(dispatch: any, callerWorktree: () => string | null) {
+  const recorded = String(dispatch.worktree || '').trim();
+  if (!recorded) return false;
+  const caller = callerWorktree();
+  return Boolean(caller) && worktrees.canonicalPath(recorded) === caller;
+}
+
+function claimNamesCaller(ticket: any, args: any) {
+  const by = String(args?.by || '').trim();
+  return Boolean(by) && ticket.claim?.by === by;
+}
+
+// A shared-tree dispatch records no worktree of its own, so the claim owner named by
+// "by" binds it. An isolated caller that names a worktree is held to that worktree. One
+// that names none (comment, plan, comments) is measured against the MCP server's cwd,
+// which is the orchestrating session's checkout and never the executor's, so there the
+// live claim it holds is the binding (GH-161).
 function boardBindsCaller(ticket: any, args: any, callerWorktree: () => string | null) {
   const dispatch = ticket?.dispatch;
   if (!dispatch) return false;
-  if (dispatch.sharedTree === false) {
-    const recorded = String(dispatch.worktree || '').trim();
-    if (!recorded) return false;
-    const caller = callerWorktree();
-    return Boolean(caller) && worktrees.canonicalPath(recorded) === caller;
-  }
-  // A shared-tree dispatch records no worktree of its own, so the claim owner named
-  // by "by" is what binds it to its board.
-  const by = String(args?.by || '').trim();
-  return Boolean(by) && ticket.claim?.by === by;
+  if (dispatch.sharedTree !== false) return claimNamesCaller(ticket, args);
+  if (args?.worktree) return worktreeBindsCaller(dispatch, callerWorktree);
+  return claimNamesCaller(ticket, args) || worktreeBindsCaller(dispatch, callerWorktree);
 }
 
 function resolveLifecycleProject(projectArg?: any, args?: any, action?: any) {
@@ -266,7 +276,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   claim: 'Claim before work; proceed only on ok:true.',
   dispatch: 'Tree. token and spawn spec; retireOnly.',
   done: 'Finish; external/working-tree: pinned command needs capture; commandless needs verify.',
-  release: 'reason required; oracle handoff.',
+  release: 'reason/kind required; oracle handoff.',
   groomClose: 'Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; verifier replacement; reviewed interaction.',
   native_agent: 'Agent spawn.',
   verdict: '',
@@ -919,6 +929,7 @@ function compactPulse(pulse?: any) {
       executor: pulse.dispatch.executor,
       agentName: pulse.dispatch.agentName,
       outcome: pulse.dispatch.outcome,
+      ...(pulse.dispatch.submittedBy ? { submittedBy: pulse.dispatch.submittedBy } : {}),
     },
     ...(pulse.scope ? { scope: compactScope(pulse.scope) } : {}),
   };

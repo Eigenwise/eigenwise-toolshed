@@ -7,6 +7,7 @@ export type DispatchPhase = 'prepared' | 'created' | 'bound' | 'claimed' | 'work
 
 export interface IsolationExpectation {
   ref: string;
+  project: string;
   projectPath: string | null;
   expectedWorktree: string | null;
   expectedGitDirectory: string | null;
@@ -31,6 +32,33 @@ export interface CheckoutLocation {
 export function canonicalPath(value: string): string {
   const kernel = require(runtimeModule('kernel/worktree')) as { canonicalPath: (value: string) => string };
   return kernel.canonicalPath(value);
+}
+
+// The board owns its verification evidence directories, so a write there is never a statement about a
+// repository and must not be answered by a repository write lease (GH-163). The store owns the rule
+// because the store is what creates those directories and what recorded this dispatch's own
+// evidenceDirectory, which is the root the exemption is checked against.
+export function boardVerificationEvidencePath(target: string, evidenceDirectory: string | null): boolean {
+  try {
+    const store = require(runtimeModule('store')) as { boardVerificationEvidencePath: (target: string, evidenceDirectory: string | null) => boolean };
+    return store.boardVerificationEvidencePath(target, evidenceDirectory);
+  } catch (_) {
+    return false;
+  }
+}
+
+// The one fact the exemption above needs from the matched dispatch: where the store actually put its
+// evidence, not the whole worktree/lease shape isolationExpectation resolves. Takes the already-resolved
+// expectation, or null when the caller has none, and folds that case into the same fail-soft catch as an
+// unresolvable require or store call: reading `.project` off null throws, so no separate branch is
+// needed to keep the guard's own call site an unconditional lookup.
+export function dispatchEvidenceDirectory(found: IsolationExpectation | null): string | null {
+  try {
+    const store = require(runtimeModule('store')) as { dispatchEvidenceDirectory: (project: string, ref: string) => string | null };
+    return store.dispatchEvidenceDirectory(found!.project, found!.ref);
+  } catch (_) {
+    return null;
+  }
 }
 
 export function executorAgent(type: string): boolean {

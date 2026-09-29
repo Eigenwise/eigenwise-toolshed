@@ -413,7 +413,7 @@ test('tools/list advertises the board tools with input schemas', async () => {
   const dispatch = resp.result.tools.find((tool: any) => tool.name === 'dispatch');
   assert.match(dispatch.inputSchema.properties.recoveryEvidence.description, /latest signal grace/);
   // The one fact a caller cannot recover from the schema shape: its own comments do not hold an attempt open.
-  assert.match(dispatch.inputSchema.properties.recoveryEvidence.description, /only the bound runtime name counts/);
+  assert.match(dispatch.inputSchema.properties.recoveryEvidence.description, /bound name only/);
   assert.match(dispatch.inputSchema.properties.recoveryEvidence.description, /Unverified/);
   const groomCloseTool = resp.result.tools.find((tool: any) => tool.name === 'groomClose');
   assert.match(groomCloseTool.inputSchema.properties.recoveryEvidence.description, /CLI too/);
@@ -1014,6 +1014,10 @@ test('story_log reads, appends from a claimed member, and rotates after promotio
   assert.equal(empty.story.logRevision, 0);
   assert.deepEqual(empty.story.entries, []);
 
+  const emptyRotation = await callTool('story_log', { project, story: story.ref, rotate: true, by: 'orchestrator' });
+  assert.equal(emptyRotation.rotated, false);
+  assert.equal(emptyRotation.movedEntries, 0);
+
   const appended = await callTool('story_log', {
     project, story: story.ref, ref: ticket.ref, by: 'log-worker', entry: 'DISCOVERY: CLI and MCP share the same store API.',
   });
@@ -1030,6 +1034,8 @@ test('story_log reads, appends from a claimed member, and rotates after promotio
   assert.match(malformed.content[0].text, /story log entry must begin with DECISION:, CONSTRAINT:, or DISCOVERY:/);
 
   const rotated = await callTool('story_log', { project, story: story.ref, rotate: true, by: 'orchestrator' });
+  assert.equal(rotated.rotated, true);
+  assert.equal(rotated.movedEntries, 1);
   assert.equal(rotated.story.logBytes, 0);
   assert.equal(rotated.story.logCapacity, 16 * 1024);
   assert.equal(rotated.story.logRevision, 1);
@@ -1038,6 +1044,29 @@ test('story_log reads, appends from a claimed member, and rotates after promotio
   const denied = await callToolRaw('story_log', { project, story: story.ref, rotate: true, by: 'log-worker' });
   assert.equal(denied.isError, true);
   assert.match(denied.content[0].text, /rotate:true requires by:"orchestrator"/);
+
+  await callTool('story_log', {
+    project, story: story.ref, entry: `DECISION: ${'x'.repeat(16_000)}`,
+  });
+  const automaticallyRotated = await callTool('story_log', {
+    project, story: story.ref, entry: `DECISION: ${'y'.repeat(400)}`,
+  });
+  assert.equal(automaticallyRotated.rotated, true);
+  assert.equal(automaticallyRotated.movedEntries, 1);
+  assert.deepEqual(automaticallyRotated.story.entries.map((entry: any) => entry.text), ['y'.repeat(400)]);
+  assert.equal(automaticallyRotated.story.archivedEntries, 2);
+
+  const full = await callTool('story_log', { project, story: story.ref, full: true });
+  assert.deepEqual(full.story.entries.map((entry: any) => entry.seq), [1, 2, 3]);
+  assert.equal(full.story.omittedEntries, 0);
+
+  const rotatedAndAppended = await callTool('story_log', {
+    project, story: story.ref, rotate: true, by: 'orchestrator', entry: 'DECISION: Rotation retains the new entry.',
+  });
+  assert.equal(rotatedAndAppended.rotated, true);
+  assert.equal(rotatedAndAppended.movedEntries, 1);
+  assert.deepEqual(rotatedAndAppended.story.entries.map((entry: any) => entry.text), ['Rotation retains the new entry.']);
+  assert.equal(rotatedAndAppended.story.archivedEntries, 3);
 });
 
 // The orchestrator, every teammate and every resumed executor reach this server on the one
@@ -2304,6 +2333,28 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   assert.ok(store.getTicket(project, malformed.ref).claim, 'malformed submission keeps the claim');
 });
 
+test('SQ-59: default pulse names the submitter of a pending submission without full:true', async (context: any) => {
+  const primary = createGitWorktree();
+  const project = store.ensureProject(primary).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main', worktreeBase: 'local-main' });
+  const ticket = store.createTicket(project, {
+    title: 'submitter identity fixture', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'exercise pulse exposing the submitter identity rework needs',
+  });
+  const by = 'submitter-identity-worker';
+  const worktree = prepareIsolatedWorktreeDispatch(project, primary, ticket, by);
+  context.after(() => removeTestWorktree(primary, worktree));
+  await submitIsolatedDeliveryCandidate(project, ticket, by, worktree);
+
+  // Submit clears the claim (submitTicket sets t.claim = null), so the compact default pulse —
+  // not full:true, not a comment-thread round trip — is the only cheap read left that can name
+  // who owns the pending candidate for `rework --by`.
+  const pulse = await callTool('pulse', { project, ref: ticket.ref });
+  assert.equal(pulse.claim, null);
+  assert.equal(pulse.dispatch.state, 'submitted');
+  assert.equal(pulse.dispatch.submittedBy, by);
+});
+
 test('MCP delivery reclaims a terminal isolated worktree immediately', async (context: any) => {
   const primary = createGitWorktree();
   const project = store.ensureProject(primary).slug;
@@ -2429,7 +2480,7 @@ test('MCP groomClose abandons an unconsumed prepared dispatch without waiting fo
   store.prepareDispatch(project, preparedTicket.ref, { sharedTree: true });
 
   const closed = await callTool('groomClose', {
-    project, ref: preparedTicket.ref, by: 'groomer', reason: 'The prepared ticket is obsolete.',
+    project, ref: preparedTicket.ref, reason: 'The prepared ticket is obsolete.',
   });
   assert.equal(closed.ok, true, closed.message || closed.reason);
   const completed = store.getTicket(project, preparedTicket.ref);
@@ -2799,6 +2850,185 @@ test('SQ-2429: MCP groomClose records a delivered candidate despite a live overl
   assert.equal(closed.ok, true, closed.message || closed.reason);
   assert.equal(store.getTicket(project, delivered.ref).status, 'done');
   assert.equal(store.getTicket(project, liveSibling.ref).claim.by, 'live-prose-worker');
+});
+
+function landedDeliveryFixture(title: string, files: string[], prepareRepository?: (worktree: string) => void) {
+  const worktree = createGitWorktree();
+  prepareRepository?.(worktree);
+  const project = store.ensureProject(worktree).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main' });
+  const ticket = store.createTicket(project, {
+    title, files, complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'reproduce a landed delivery that groomClose must record',
+  });
+  assert.equal(store.claimTicket(project, ticket.ref, 'landed-delivery-worker', {
+    direct: true, reason: 'The landed delivery fixture requires a local direct claim.',
+  }).ok, true);
+  return { worktree, project, ticket, base: gitAt(worktree, ['rev-parse', 'HEAD']) };
+}
+
+function commitFiles(worktree: string, files: Record<string, string>, message: string) {
+  for (const [file, contents] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(worktree, file)), { recursive: true });
+    fs.writeFileSync(path.join(worktree, file), contents);
+    gitAt(worktree, ['add', file]);
+  }
+  gitAt(worktree, ['commit', '-m', message]);
+  return gitAt(worktree, ['rev-parse', 'HEAD']);
+}
+
+function submitLandedDeliveryFixture(fixture: ReturnType<typeof landedDeliveryFixture>, commits: string[]) {
+  const { worktree, project, ticket, base } = fixture;
+  const candidate = commits[commits.length - 1];
+  gitAt(worktree, ['update-ref', `refs/sidequest/${ticket.ref}`, candidate]);
+  assert.equal(store.submitTicket(project, ticket.ref, 'landed-delivery-worker', {
+    commit: candidate, verify: 'node -e "process.exit(0)"',
+  }).ok, true);
+  const submitted = store.getTicket(project, ticket.ref);
+  Object.assign(submitted.submission, {
+    base, upstream: 'origin/main', upstreamCommit: base, integrationBranch: 'main', commits,
+    changedPaths: gitAt(worktree, ['diff', '--name-only', base, candidate]).split('\n').filter(Boolean),
+  });
+  persistTicket(project, submitted);
+  return candidate;
+}
+
+test('GH-226: groomClose records a squash-merged multi-commit candidate and names the landed-commit route', async () => {
+  const fixture = landedDeliveryFixture('squash-merged candidate', ['lib']);
+  const { worktree, project, ticket } = fixture;
+  gitAt(worktree, ['checkout', '-b', 'candidate-branch']);
+  const first = commitFiles(worktree, { 'lib/first.txt': 'first\n' }, 'first candidate commit');
+  const second = commitFiles(worktree, { 'lib/second.txt': 'second\n' }, 'second candidate commit');
+  const candidate = submitLandedDeliveryFixture(fixture, [first, second]);
+  gitAt(worktree, ['checkout', 'main']);
+  gitAt(worktree, ['merge', '--squash', 'candidate-branch']);
+  gitAt(worktree, ['commit', '-m', 'squash merge of the candidate']);
+  const squash = gitAt(worktree, ['rev-parse', 'HEAD']);
+
+  const ancestryOnly = await callTool('groomClose', {
+    project: worktree, ref: ticket.ref, by: 'delivery-integrator', reason: 'already integrated',
+  });
+  assert.equal(ancestryOnly.ok, false);
+  assert.match(ancestryOnly.message, /squash or rebase merge/);
+  assert.match(ancestryOnly.message, new RegExp(`groom-close ${ticket.ref} --delivery-commit <landed commit>`));
+
+  const closed = await callTool('groomClose', {
+    project: worktree, ref: ticket.ref, by: 'delivery-integrator', deliveryCommit: squash,
+    reason: `delivered in main as ${squash}; ancestry severed by squash merge of ${candidate}`,
+  });
+  assert.equal(closed.ok, true, closed.message || closed.reason);
+  const integration = store.getTicket(project, ticket.ref).submission.integration;
+  assert.equal(integration.deliveryCommit, squash);
+  assert.equal(integration.contentEvidence, 'equivalent_squashed_range');
+});
+
+test('GH-244: groomClose reads the release fragment from the submitted range, not the tip commit alone', async () => {
+  const fixture = landedDeliveryFixture('fragment before the tip', ['plugins/fixture-plugin'], addMarketplaceFixture);
+  const { worktree, project, ticket } = fixture;
+  const change = commitFiles(worktree, { 'plugins/fixture-plugin/index.js': 'changed\n' }, 'plugin change');
+  const fragment = commitFiles(worktree, {
+    [`.release/unreleased/${ticket.ref}.md`]: `---\nref: ${ticket.ref}\ntitle: fixture\nbump: patch\nplugins:\n  - fixture-plugin\n---\n\nFixture.\n`,
+  }, 'release fragment');
+  const followUp = commitFiles(worktree, { 'plugins/fixture-plugin/index.test.js': 'test\n' }, 'test follow-up');
+  submitLandedDeliveryFixture(fixture, [change, fragment, followUp]);
+
+  const closed = await callTool('groomClose', {
+    project: worktree, ref: ticket.ref, by: 'delivery-integrator', deliveryCommit: followUp,
+    reason: 'The pinned candidate is on main with its fragment one commit before the tip.',
+  });
+  assert.equal(closed.ok, true, closed.message || closed.reason);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'done');
+
+  const unfragmented = landedDeliveryFixture('no fragment anywhere', ['plugins/fixture-plugin'], addMarketplaceFixture);
+  const unfragmentedChange = commitFiles(unfragmented.worktree, { 'plugins/fixture-plugin/index.js': 'changed\n' }, 'plugin change');
+  submitLandedDeliveryFixture(unfragmented, [unfragmentedChange]);
+  const refused = await callTool('groomClose', {
+    project: unfragmented.worktree, ref: unfragmented.ticket.ref, by: 'delivery-integrator', deliveryCommit: unfragmentedChange,
+    reason: 'A range without its fragment still cannot close.',
+  });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'missing_release_fragment');
+});
+
+test('GH-159: a reviewed interaction that renames a submitted path stays inside the candidate scope', async () => {
+  const fixture = landedDeliveryFixture('renamed ADR', ['docs']);
+  const { worktree, project, ticket } = fixture;
+  const candidate = commitFiles(worktree, { 'docs/adr/0094-landed.md': '# 94. Landed decision\n\nThe decision body stays the same.\n' }, 'add ADR 0094');
+  submitLandedDeliveryFixture(fixture, [candidate]);
+  gitAt(worktree, ['mv', 'docs/adr/0094-landed.md', 'docs/adr/0095-landed.md']);
+  fs.writeFileSync(path.join(worktree, 'docs', 'adr', '0095-landed.md'), '# 95. Landed decision\n\nThe decision body stays the same.\n');
+  gitAt(worktree, ['add', 'docs/adr/0095-landed.md']);
+  gitAt(worktree, ['commit', '-m', 'renumber ADR after a collision']);
+  const interaction = gitAt(worktree, ['rev-parse', 'HEAD']);
+
+  const closed = await callTool('groomClose', {
+    project: worktree, ref: ticket.ref, by: 'delivery-integrator', deliveryCommit: candidate,
+    deliveryInteractionCommit: interaction, reason: 'The reviewed interaction only renumbers the submitted ADR.',
+  });
+  assert.equal(closed.ok, true, closed.message || closed.reason);
+  assert.deepEqual(
+    store.getTicket(project, ticket.ref).submission.integration.deliveryIdentity.interaction.paths.sort(),
+    ['docs/adr/0094-landed.md', 'docs/adr/0095-landed.md'],
+  );
+});
+
+test('a reviewed interaction still refuses a malformed, repeated, unreachable, or unrelated lineage, and an unsubmitted rename', () => {
+  const fixture = landedDeliveryFixture('interaction lineage', ['docs']);
+  const { worktree, project, ticket, base } = fixture;
+  const candidate = commitFiles(worktree, { 'docs/landed.md': 'landed\n' }, 'landed candidate');
+  submitLandedDeliveryFixture(fixture, [candidate]);
+  gitAt(worktree, ['checkout', '-b', 'unmerged-interaction']);
+  const unmerged = commitFiles(worktree, { 'docs/landed.md': 'unmerged follow-up\n' }, 'unmerged follow-up');
+  gitAt(worktree, ['checkout', 'main']);
+  const record = (deliveryInteractionCommit: string) => store.recordDeliveredSubmission(project, ticket.ref, {
+    target: store.ticketIntegrationTarget(project, store.getTicket(project, ticket.ref)),
+    deliveryCommit: candidate, deliveryInteractionCommit, reason: 'interaction lineage fixture',
+  });
+
+  const refusals = [['not-a-commit', 'delivery_interaction_required', /requires a commit hash/],
+    [candidate, 'delivery_interaction_required', /requires a commit after source/],
+    [unmerged, 'delivery_interaction_not_reachable', new RegExp(`interaction commit ${unmerged} to be reachable`)],
+    [base, 'delivery_interaction_not_descendant', new RegExp(`must descend from delivered source ${candidate}`)]] as const;
+  for (const [interaction, reason, message] of refusals) {
+    const refused = record(interaction);
+    assert.equal(refused.reason, reason, interaction);
+    assert.match(refused.message, message);
+  }
+
+  gitAt(worktree, ['mv', 'README.md', 'docs/README.md']);
+  gitAt(worktree, ['commit', '-m', 'move a file the candidate never submitted']);
+  const unsubmittedRename = record(gitAt(worktree, ['rev-parse', 'HEAD']));
+  assert.equal(unsubmittedRename.reason, 'delivery_interaction_outside_candidate');
+  assert.deepEqual(unsubmittedRename.unrelatedPaths, ['README.md', 'docs/README.md']);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'doing');
+});
+
+test('GH-178: the replay-conflict hint names the hand delivery that integrate deliveryCommit then records', async () => {
+  const fixture = landedDeliveryFixture('replay conflict', ['docs', 'scripts']);
+  const { worktree, project, ticket } = fixture;
+  gitAt(worktree, ['checkout', '-b', 'candidate-branch']);
+  const candidate = commitFiles(worktree, { 'docs/operations.md': '# Operations\n\ncandidate section\n', 'scripts/headroom.js': 'headroom\n' }, 'candidate section');
+  submitLandedDeliveryFixture(fixture, [candidate]);
+  gitAt(worktree, ['checkout', 'main']);
+  commitFiles(worktree, { 'docs/operations.md': '# Operations\n\ntarget section\n' }, 'sibling section landed first');
+
+  const conflicted = await callTool('integrate', { project: worktree, ref: ticket.ref, by: 'delivery-integrator', mode: 'replay' });
+  assert.equal(conflicted.ok, false);
+  assert.equal(conflicted.reason, 'replay_failed');
+  assert.match(conflicted.message, new RegExp(`git merge --no-ff ${candidate}`));
+  assert.match(conflicted.message, new RegExp(`integrate deliveryCommit ${candidate}`));
+
+  assert.throws(() => gitAt(worktree, ['merge', '--no-ff', '--no-edit', candidate]));
+  fs.writeFileSync(path.join(worktree, 'docs', 'operations.md'), '# Operations\n\ntarget section\n\ncandidate section\n');
+  gitAt(worktree, ['add', 'docs/operations.md']);
+  gitAt(worktree, ['commit', '--no-edit']);
+
+  const recorded = await callTool('integrate', {
+    project: worktree, ref: ticket.ref, by: 'delivery-integrator', deliveryCommit: candidate,
+    reason: 'Merged the pinned candidate by hand and resolved docs/operations.md.',
+  });
+  assert.equal(recorded.ok, true, recorded.message || recorded.reason);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'done');
 });
 
 test('MCP submit requires release fragments for marketplace plugin changes', async () => {
@@ -5291,12 +5521,16 @@ test('MCP done requires a final report and release records its reason', async ()
 
   const released = await callTool('add', { title: 'required release reason', complexity: 2, why: 'exercise durable release-reason validation', labels: ['direct-ok'] });
   await callTool('claim', { ref: released.ref, by: 'mcp-release-worker', direct: true, reason: 'The release-reason fixture needs a direct claim.' });
-  const missingReason = await callToolRaw('release', { ref: released.ref, by: 'mcp-release-worker' });
-  assert.ok(missingReason.isError, 'release refuses a missing reason');
-  assert.match(missingReason.content[0].text, /"reason" is required.*why.*released/i);
-  const unclassified = await callTool('release', { ref: released.ref, by: 'mcp-release-worker', reason: 'Scope path was refused.', status: 'todo' });
-  assert.equal(unclassified.ok, false, 'release refuses an unclassified reasoned handback');
-  assert.equal(unclassified.reason, 'release_kind_required');
+  const missingFields = await callTool('release', { ref: released.ref, by: 'mcp-release-worker' });
+  assert.equal(missingFields.ok, false, 'release refuses missing reason and kind together');
+  assert.equal(missingFields.reason, 'release_arguments_required');
+  assert.match(missingFields.message, /reason: non-empty text/);
+  assert.match(missingFields.message, /kind: technical_blocker \| contradiction \| oracle \| handback/);
+  assert.ok(store.getTicket(released.project, released.ref).claim, 'argument validation keeps the claim');
+  const missingKind = await callTool('release', { ref: released.ref, by: 'mcp-release-worker', reason: 'Scope path was refused.', status: 'todo' });
+  assert.equal(missingKind.ok, false, 'release requires a classification with a reason');
+  assert.equal(missingKind.reason, 'release_arguments_required');
+  assert.match(missingKind.message, /kind: technical_blocker \| contradiction \| oracle \| handback/);
   await callTool('release', { ref: released.ref, by: 'mcp-release-worker', reason: 'Scope path was refused.', kind: 'handback', status: 'todo' });
   const afterRelease = store.getTicket(released.project, released.ref);
   assert.equal(afterRelease.claim, null);

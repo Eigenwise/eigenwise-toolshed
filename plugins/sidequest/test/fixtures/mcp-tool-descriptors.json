@@ -202,6 +202,9 @@
         "by": {
           "type": "string"
         },
+        "full": {
+          "type": "boolean"
+        },
         "rotate": {
           "type": "boolean"
         }
@@ -917,19 +920,18 @@
         },
         "recoveryEvidence": {
           "type": "string",
-          "description": "Unverified; retires unclaimed attempts past deadline; CLI too."
+          "description": "Unclaimed: preparing session retires now; others past deadline; CLI too."
         }
       },
       "required": [
         "ref",
-        "by",
         "reason"
       ]
     }
   },
   {
     "name": "release",
-    "description": "reason required; oracle handoff.",
+    "description": "reason/kind required; oracle handoff.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1539,7 +1541,7 @@
         },
         "recoveryEvidence": {
           "type": "string",
-          "description": "Unverified; latest signal grace; only the bound runtime name counts."
+          "description": "Unverified; preparer retires now, else latest signal grace; bound name only."
         },
         "retireOnly": {
           "type": "boolean"

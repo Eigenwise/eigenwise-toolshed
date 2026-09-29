@@ -65,17 +65,22 @@ function callerWorktreePath(args) {
     return null;
   }
 }
+function worktreeBindsCaller(dispatch, callerWorktree) {
+  const recorded = String(dispatch.worktree || "").trim();
+  if (!recorded) return false;
+  const caller = callerWorktree();
+  return Boolean(caller) && worktrees.canonicalPath(recorded) === caller;
+}
+function claimNamesCaller(ticket, args) {
+  const by = String(args?.by || "").trim();
+  return Boolean(by) && ticket.claim?.by === by;
+}
 function boardBindsCaller(ticket, args, callerWorktree) {
   const dispatch = ticket?.dispatch;
   if (!dispatch) return false;
-  if (dispatch.sharedTree === false) {
-    const recorded = String(dispatch.worktree || "").trim();
-    if (!recorded) return false;
-    const caller = callerWorktree();
-    return Boolean(caller) && worktrees.canonicalPath(recorded) === caller;
-  }
-  const by = String(args?.by || "").trim();
-  return Boolean(by) && ticket.claim?.by === by;
+  if (dispatch.sharedTree !== false) return claimNamesCaller(ticket, args);
+  if (args?.worktree) return worktreeBindsCaller(dispatch, callerWorktree);
+  return claimNamesCaller(ticket, args) || worktreeBindsCaller(dispatch, callerWorktree);
 }
 function resolveLifecycleProject(projectArg, args, action) {
   const explicit = projectArg == null ? "" : String(projectArg).trim();
@@ -199,7 +204,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   claim: "Claim before work; proceed only on ok:true.",
   dispatch: "Tree. token and spawn spec; retireOnly.",
   done: "Finish; external/working-tree: pinned command needs capture; commandless needs verify.",
-  release: "reason required; oracle handoff.",
+  release: "reason/kind required; oracle handoff.",
   groomClose: "Frozen ticket target; abandonSubmission:true; reset/working-tree/manual: pinned candidate; verifier replacement; reviewed interaction.",
   native_agent: "Agent spawn.",
   verdict: "",
@@ -808,7 +813,8 @@ function compactPulse(pulse) {
       state: pulse.dispatch.state,
       executor: pulse.dispatch.executor,
       agentName: pulse.dispatch.agentName,
-      outcome: pulse.dispatch.outcome
+      outcome: pulse.dispatch.outcome,
+      ...pulse.dispatch.submittedBy ? { submittedBy: pulse.dispatch.submittedBy } : {}
     },
     ...pulse.scope ? { scope: compactScope(pulse.scope) } : {}
   };

@@ -135,14 +135,14 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.sharedTree?.description, undefined);
   assert.match(byName.get('dispatch')?.inputSchema.properties?.reducedAgentSchema?.description ?? '', /Only when name\/mode missing/);
   assert.match(byName.get('dispatch')?.inputSchema.properties?.reducedAgentSchema?.description ?? '', /hook needs agent_id/);
-  assert.match(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /latest signal grace/);
+  assert.match(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /preparer retires now, else latest signal grace/);
   // SQ-2961: and which board writes reach that grace, since a caller cannot see the trust boundary in the schema.
-  assert.match(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /only the bound runtime name counts/);
+  assert.match(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /bound name only/);
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.retireOnly?.type, 'boolean');
   assert.equal(byName.get('dispatch')?.inputSchema.properties?.worktree?.description, undefined);
   // The served groomClose said nothing about retirement while the source description still claimed evidence
   // only applies before runtime binding (SQ-2953 finding 4).
-  assert.match(byName.get('groomClose')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /retires unclaimed attempts past deadline/);
+  assert.match(byName.get('groomClose')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /preparing session retires now; others past deadline/);
   // SQ-2961: and the CLI flag of the same name reaches the same terminal state, because both run one authority.
   assert.match(byName.get('groomClose')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /CLI too/);
   const addVerify = byName.get('add')?.inputSchema.properties?.verify?.description ?? '';
@@ -150,7 +150,7 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(byName.get('update')?.inputSchema.properties?.verify?.description, addVerify);
   assert.match(byName.get('add')?.inputSchema.properties?.complexity?.description ?? '', /why required/);
   assert.match(byName.get('supersede_submission')?.inputSchema.properties?.supersededBy?.description ?? '', /ticket ref, not a commit/);
-  assert.match(byName.get('release')?.description ?? '', /reason required/);
+  assert.match(byName.get('release')?.description ?? '', /reason\/kind required/);
   assert.match(byName.get('groomClose')?.description ?? '', /Frozen ticket target/);
   assert.match(byName.get('groomClose')?.description ?? '', /abandonSubmission:true/);
   assert.match(byName.get('groomClose')?.description ?? '', /reset\/working-tree\/manual/);
