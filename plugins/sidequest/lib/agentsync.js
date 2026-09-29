@@ -3,7 +3,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("node:child_process");
-const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require("./exec-names.js");
+const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, discoveredModelExecutorName, readOnlyDiscoveredModelExecutorName, isDiscoveredModelExecutor, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require("./exec-names.js");
 const { createWorktreeLease, canonicalPath } = require("./kernel/worktree.js");
 const crypto = require("crypto");
 const store = require("./store.js");
@@ -16,6 +16,7 @@ const { scopeKey } = require("./scope-match.js");
 const TEMPLATE_PATH = path.join(__dirname, "..", "scripts", "_exec-template.md");
 const LEGACY_MARKER = "<!-- generated-by: sidequest-agentsync -->";
 const MARKER = "<!-- generated-by: sidequest-agentsync gen2 -->";
+const DISCOVERED_MODEL_MARKER = "<!-- generated-by: sidequest-agentsync discovered-model -->";
 const TEMP_MARKER = "<!-- generated-by: sidequest-native-agent -->";
 const TEMP_PREFIX = "sidequest-native-";
 const TICKET_PREFIX = "sidequest-ticket-";
@@ -49,33 +50,34 @@ function routeMarker(dispatchModel, effort, ticketRef) {
   if (!EMITTED_ROUTE_MARKER_RE.test(marker)) throw new Error("dispatch route marker does not match the gateway grammar.");
   return marker;
 }
+function recipeAgentWiring(exec, effort) {
+  if (exec.backend === "codex") {
+    return {
+      agent: { model: DISPATCH_MODEL_ID, promptPrefix: `${routeMarker(exec.dispatchModel, effort)}
+
+` },
+      effortCarrier: "marker"
+    };
+  }
+  if (isDiscoveredModelExecutor(exec.agent)) {
+    ensureDiscoveredModelAgents(exec.agent);
+    return { agent: { model: null, subagentType: exec.agent, promptPrefix: "" }, effortCarrier: "definition" };
+  }
+  return { agent: { model: exec.model, promptPrefix: "" }, effortCarrier: "none" };
+}
 function workflowRecipe(category, resolved) {
   const exec = resolved && resolved.exec;
   if (!category || !exec) throw new Error("A resolved category route is required.");
-  const recipe = {
+  return {
     project: category.project,
     category: category.id,
     categoryName: category.name,
     backend: exec.backend,
     route: { model: resolved.model, effort: resolved.effort },
     runsLabel: exec.runsLabel,
-    agent: null,
-    effortCarrier: null,
+    ...recipeAgentWiring(exec, resolved.effort),
     warnings: Array.isArray(resolved.warnings) ? resolved.warnings.slice() : []
   };
-  if (exec.backend === "codex") {
-    recipe.agent = {
-      model: DISPATCH_MODEL_ID,
-      promptPrefix: `${routeMarker(exec.dispatchModel, resolved.effort)}
-
-`
-    };
-    recipe.effortCarrier = "marker";
-  } else {
-    recipe.agent = { model: exec.model, promptPrefix: "" };
-    recipe.effortCarrier = "none";
-  }
-  return recipe;
 }
 const EXECUTOR_SKILLS = ["sidequest:verify-discipline"];
 const READ_ONLY_DENIED_TOOLS = [
@@ -993,6 +995,7 @@ function agentSpawn(name, isolation, model, agentType, prompt, description, opti
   const taskLabel = suppliedLabel || "Sidequest ticket executor.";
   const reducedAgentSchema = options?.reducedAgentSchema === true;
   const subagentType = bundledAgentType(agentType || name);
+  ensureDiscoveredModelAgents(subagentType);
   return Object.assign(
     { subagent_type: subagentType, description: taskLabel },
     reducedAgentSchema ? {} : { name, ...unattendedSpawnMode(subagentType) },
@@ -1137,12 +1140,89 @@ function migrateExecAgents(_prefs, opts) {
   }
   return { written: 0, removed, unchanged };
 }
+function renderDiscoveredModelAgent(name, effort, modelId) {
+  return renderExecAgent({ name, effort, modelId, marker: DISCOVERED_MODEL_MARKER });
+}
+function renderReadOnlyDiscoveredModelAgent(name, effort, modelId, readOnlyDeniedTools) {
+  const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
+  return withoutPermissionMode(renderExecAgent({
+    name,
+    effort,
+    modelId,
+    marker: DISCOVERED_MODEL_MARKER,
+    extraNote: readOnlyNote(),
+    tools: readOnlyTools.tools,
+    disallowedTools: readOnlyTools.disallowedTools
+  }));
+}
+function discoveredModelAgentSources(readOnlyDeniedTools) {
+  const sources = /* @__PURE__ */ new Map();
+  for (const backend of store.discoveredModelBackends()) {
+    for (const effort of EXEC_EFFORTS) {
+      const name = discoveredModelExecutorName(backend.agentSlug, effort);
+      const readOnlyName = readOnlyDiscoveredModelExecutorName(backend.agentSlug, effort);
+      sources.set(`${name}.md`, renderDiscoveredModelAgent(name, effort, backend.id));
+      sources.set(`${readOnlyName}.md`, renderReadOnlyDiscoveredModelAgent(readOnlyName, effort, backend.id, readOnlyDeniedTools));
+    }
+  }
+  return sources;
+}
+function readTextOrNull(filePath) {
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch (_) {
+    return null;
+  }
+}
+function agentFileNames(dir) {
+  try {
+    return fs.readdirSync(dir);
+  } catch (_) {
+    return [];
+  }
+}
+function pruneDiscoveredModelAgents(dir, wanted) {
+  let removed = 0;
+  for (const filename of agentFileNames(dir)) {
+    if (wanted.has(filename) || !isDiscoveredModelExecutor(filename.replace(/\.md$/, ""))) continue;
+    if (!readTextOrNull(path.join(dir, filename))?.includes(DISCOVERED_MODEL_MARKER)) continue;
+    fs.rmSync(path.join(dir, filename), { force: true });
+    removed++;
+  }
+  return removed;
+}
+function writeOwnedDiscoveredModelAgent(filePath, source) {
+  const previous = readTextOrNull(filePath);
+  if (previous === source || previous !== null && !previous.includes(DISCOVERED_MODEL_MARKER)) return false;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, source);
+  return true;
+}
+function syncDiscoveredModelAgents(opts) {
+  const dir = opts?.dir || defaultAgentsDir();
+  const wanted = discoveredModelAgentSources(opts?.readOnlyDeniedTools);
+  const removed = pruneDiscoveredModelAgents(dir, wanted);
+  let written = 0;
+  for (const [filename, source] of wanted) {
+    if (writeOwnedDiscoveredModelAgent(path.join(dir, filename), source)) written++;
+  }
+  return { written, removed, unchanged: wanted.size - written };
+}
+function ensureDiscoveredModelAgents(executor, opts) {
+  if (!isDiscoveredModelExecutor(executor)) return;
+  if (syncDiscoveredModelAgents(opts).written > 0) waitForNativeAgentReload(opts?.waitMs);
+}
 function syncExecAgentsIfChanged(_prefs, opts) {
-  const result = migrateExecAgents(_prefs, opts);
-  return Object.assign({}, result, {
-    skipped: result.removed === 0,
+  const migrated = migrateExecAgents(_prefs, opts);
+  const discovered = syncDiscoveredModelAgents(opts);
+  const removed = migrated.removed + discovered.removed;
+  return {
+    written: discovered.written,
+    removed,
+    unchanged: migrated.unchanged + discovered.unchanged,
+    skipped: removed === 0 && discovered.written === 0,
     installHash: stableInstallHash(EXECUTOR_SKILLS, opts?.readOnlyDeniedTools)
-  });
+  };
 }
 function syncExecAgents(_prefs, opts) {
   if (!opts?.dir) return migrateExecAgents(_prefs, opts);
@@ -1239,6 +1319,9 @@ module.exports = {
   ticketIsolation,
   syncExecAgents,
   syncExecAgentsIfChanged,
+  syncDiscoveredModelAgents,
+  ensureDiscoveredModelAgents,
+  DISCOVERED_MODEL_MARKER,
   migrateExecAgents,
   stableInstallHash,
   EXECUTOR_CONTRADICTION_RULE,
