@@ -961,16 +961,23 @@ function rejectedSubmissionRows(ticket?: any) {
 }
 
 // A later submit stamps supersededAt on the rejection it replaces, so an
-// unsuperseded newest rework is the repair this dispatch exists to make.
-function pendingReworkBody(ticket?: any) {
-  const rejections = Array.isArray(ticket?.rejectedSubmissions)
-    ? ticket.rejectedSubmissions.filter((entry: any) => entry)
-    : [];
-  const latest = rejections[rejections.length - 1];
-  if (!latest || latest.rejectionKind !== 'rework' || latest.supersededAt || ticket?.submission) return null;
+// unsuperseded newest rework is the repair this dispatch exists to make. The
+// caller returns first when there are no rows, so the array is never empty here.
+function latestPendingRework(ticket: any) {
+  const latest = ticket.rejectedSubmissions.filter(Boolean).at(-1);
+  return latest.rejectionKind === 'rework' && !latest.supersededAt && !ticket.submission ? latest : null;
+}
+
+// A failed ref preservation leaves the row pending, so the ref may not exist yet.
+function preservedRefSuffix(rejected: any) {
+  return rejected.quarantineRef && rejected.preservationState !== 'pending' ? ` (preserved at ${rejected.quarantineRef})` : '';
+}
+
+function pendingReworkBody(ticket: any) {
+  const latest = latestPendingRework(ticket);
+  if (!latest) return null;
   const candidate = latest.commit || latest.sourceRevision.value;
-  // A failed ref preservation leaves the row pending, so the ref may not exist yet.
-  const preserved = latest.quarantineRef && latest.preservationState !== 'pending' ? ` (preserved at ${latest.quarantineRef})` : '';
+  const preserved = preservedRefSuffix(latest);
   return [
     '## Pending rework',
     `This dispatch repairs a rejected candidate. Candidate ${candidate} was sent back for rework at ${latest.rejectedAt} and the ticket returned to todo. This rejection overrides any earlier comment that accepted, approved, or queued that candidate, so this launch is not a duplicate: do the repair below and submit a fresh candidate. Do not release over that earlier acceptance as a contradiction or oracle question.`,
