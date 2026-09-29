@@ -645,6 +645,13 @@ function denyReason(result: ResolveResult, type: string): string {
   }
 }
 
+// A terminal record keeps whatever agent id a SubagentStart guess once gave it. When this runtime is bound to a live
+// dispatch, that stale guess names a sibling, not this executor (SQ-53, GitHub #298).
+function liveDispatchBinding(ticket: Ticket, sessionId: string, agentId: string): boolean {
+  const dispatch = ticket.dispatch;
+  return dispatch?.sessionId === sessionId && !dispatch.terminalAt && dispatch.agentId === agentId;
+}
+
 function dispatchIdentityMatches(ticket: Ticket, agentId: string, type: string): boolean {
   const dispatch = ticket.dispatch;
   if (dispatch?.agentId === agentId) return true;
@@ -700,8 +707,10 @@ function terminalExecutorTicket(input: HookInput): TerminalExecutorTicket | null
   try {
     const store = require(runtimeModule('store')) as Store;
     const matches: TerminalExecutorTicket[] = [];
+    let liveBinding = false;
     for (const project of store.listProjects({ all: true })) {
       for (const ticket of store.listTickets(project.slug)) {
+        liveBinding = liveBinding || liveDispatchBinding(ticket, sessionId, agentId);
         if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId || !dispatchIdentityMatches(ticket, agentId, executor)) continue;
         // One runtime identity reaches more than one sibling dispatch of the same
         // session: a bind records an agent id on any sibling whose own id is still unset,
@@ -726,7 +735,7 @@ function terminalExecutorTicket(input: HookInput): TerminalExecutorTicket | null
         }
       }
     }
-    return matches.length === 1 ? matches[0] || null : null;
+    return !liveBinding && matches.length === 1 ? matches[0] || null : null;
   } catch (_) {
     return null;
   }

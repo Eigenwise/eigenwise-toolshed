@@ -2990,6 +2990,8 @@ test('released handbacks carry registered native worktrees into continuation dis
     execFileSync('git', ['add', 'tracked.js'], { cwd: worktree });
     execFileSync('git', ['commit', '--quiet', '-m', 'continuation checkpoint'], { cwd: worktree });
     const checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8' }).trim();
+    // Only a checkout whose HEAD the board can attribute to this ticket is resumed (SQ-75): the board commit records it.
+    assert.equal(store.recordSanctionedCommit(slug, ticket.ref, { by: 'continuation-worker', commit: checkpoint }).ok, true);
     assert.equal(store.releaseTicket(slug, ticket.ref, 'continuation-worker', {
       status: 'todo',
       source: 'test',
