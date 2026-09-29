@@ -99,10 +99,50 @@ test('repair briefings include the complete rejection history', () => {
   assert.match(briefing, /SQ-1646: the audit reproduced the rejected-commit bypass\./);
   assert.match(briefing, /SQ-1659: the audit found the repeated-rework gap\./);
   assert.doesNotMatch(briefing, /fetch the complete oldest-first history|context_page retrieval/);
+  assert.doesNotMatch(briefing, /## Pending rework/, 'rows without a rework rejection are history only');
+  const superseded = agentsync.renderTicketBriefing({
+    ...ticket,
+    rejectedSubmissions: [{ ...ticket.rejectedSubmissions[1], rejectionKind: 'rework', supersededAt: '2026-08-10T00:00:00.000Z' }],
+  }, 'repair-briefing-token');
+  assert.doesNotMatch(superseded, /## Pending rework/, 'a rework a later submit superseded is no longer pending');
   assert.deepStrictEqual(agentsync.rejectedSubmissionRows(ticket).map((entry: any) => entry.commit), [
     'abcdef1234567',
     'fedcba7654321',
   ]);
+});
+
+test('the pending rework section names no actor and claims a preserved ref only once preservation finished', () => {
+  const rework = {
+    commit: 'fedcba7654321',
+    quarantineRef: 'refs/sidequest/SQ-1643-rejected',
+    rejectedAt: '2026-09-29T00:00:00.000Z',
+    rejectedBy: 'the-candidate-owner',
+    reason: 'Repair the trailing-field parser.',
+    review: 'SQ-9001: the parser still drops trailing fields.',
+    rejectionKind: 'rework',
+  };
+  const briefingFor = (row: any) => agentsync.renderTicketBriefing({
+    ref: 'SQ-1643',
+    title: 'Repair pending rework',
+    model: 'sonnet',
+    effort: 'high',
+    dispatchExecutor: 'sidequest-exec-high',
+    category: { id: 'debugging', route: { model: 'sonnet', effort: 'high' } },
+    rejectedSubmissions: [row],
+  }, 'pending-rework-token');
+  const section = (briefing: string) => briefing.slice(briefing.indexOf('## Pending rework'), briefing.indexOf('## Rejected submission history'));
+
+  const preserved = section(briefingFor({ ...rework, preservationState: 'preserved' }));
+  assert.match(preserved, /Candidate fedcba7654321 was sent back for rework at 2026-09-29T00:00:00\.000Z/);
+  assert.doesNotMatch(preserved, /the-candidate-owner|The orchestrator/, 'the rework caller is the candidate owner, not the rejecting reviewer');
+  assert.match(preserved, /Rejected candidate: fedcba7654321 \(preserved at refs\/sidequest\/SQ-1643-rejected\)/);
+
+  const pending = section(briefingFor({ ...rework, preservationState: 'pending', preservationError: 'update-ref failed' }));
+  assert.match(pending, /Rejected candidate: fedcba7654321$/m, 'a pending preservation has not created the ref yet');
+  assert.doesNotMatch(pending, /preserved at/);
+
+  const sourceRevision = section(briefingFor({ ...rework, commit: undefined, quarantineRef: undefined, sourceRevision: { source: 'tree', value: 'rev-77' } }));
+  assert.match(sourceRevision, /Rejected candidate: rev-77$/m);
 });
 
 test('executor briefings tell the agent how to report an unavailable Board MCP server', () => {
