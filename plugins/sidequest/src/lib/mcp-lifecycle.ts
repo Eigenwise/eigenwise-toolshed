@@ -60,7 +60,7 @@ const {
 } = require('./mcp-shared');
 const { sourceRevisionBaseline } = require('./source-revision-capability');
 const { reviewCandidateFromSubmission, sameReviewCandidate } = require('./kernel/review-binding.js');
-const { inheritedRejectedDuplicateGuidance } = require('./refusal-guidance.js');
+const { inheritedRejectedDuplicateGuidance, crossedWorktreeRefusalMessage } = require('./refusal-guidance.js');
 
 type ToolDefinition = {
   name: string;
@@ -85,6 +85,18 @@ const VERIFICATION_WAIVER_PROP = {
     expiresAt: { type: 'string', description: 'Future ISO timestamp after which the waiver is invalid.' },
   },
 };
+
+// The briefing is read before the claim, so an executor whose crossed checkout lease the claim settled (SQ-55) may
+// already be holding the sibling's path. The claim result is the first answer it reads afterwards.
+function claimWorktreeCorrection(ticket: any) {
+  const dispatch = ticket?.dispatch;
+  const exchange = dispatch?.worktreeBindingExchange;
+  if (exchange?.reason !== 'claim_token' || dispatch.sharedTree !== false || !dispatch.worktree) return null;
+  return {
+    worktree: dispatch.worktree,
+    worktreeCorrection: `${ticket.ref} is leased to ${dispatch.worktree}, the checkout this executor runs in. A briefing path of ${exchange.from || 'another checkout'} belongs to ${exchange.with || 'a sibling dispatch'}; ignore it and work only in ${dispatch.worktree}.`,
+  };
+}
 
 function compactIntegrationDelivery(integration: any) {
   const { verify: _verify, ...delivery } = integration;
@@ -337,6 +349,37 @@ function submissionRoot(meta: any, worktree: any, commit: string, gitRef: string
   }
 }
 
+// Everything commit can check about where this executor is standing, before it looks at a single path: the
+// dispatch's isolation contract, and whether the checkout it ran from is crossed with another live claim.
+function unlinkedIsolatedCommit(ticket: any, root: string) {
+  if (ticket.dispatch?.sharedTree !== false) return false;
+  const location = commitScope.linkedWorktree(root);
+  return !location.ok || !location.linked;
+}
+
+function commitWorktreeRefusal(slug: string, ticket: any, root: string) {
+  if (unlinkedIsolatedCommit(ticket, root)) {
+    return {
+      reason: 'worktree_isolation',
+      message: `commit: refused ${ticket.ref}; this dispatch requires a linked worktree. Do not commit in the shared tree. Report that the executor lost its worktree to the orchestrator and re-dispatch.`,
+    };
+  }
+  const crossing = store.crossedWorktreeBinding(slug, ticket, root);
+  return crossing ? { reason: 'crossed_worktree_binding', message: crossedWorktreeRefusalMessage('commit', crossing) } : null;
+}
+
+// The same standing check for submit, with one deliberate asymmetry: the crossing half runs only when the
+// caller supplied a worktree, because `submissionRoot` otherwise falls back to process.cwd(), which is the
+// board server's directory rather than the executor's tree, and every worktree-less submit would read as a
+// crossing.
+function submitWorktreeRefusal(slug: string, ticket: any, root: string, args: any) {
+  if (verifyEmbedsWorktreeRoot(args.verify, root)) {
+    throw new Error(`submit: refused ${ticket.ref}; verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
+  }
+  const crossing = args.worktree == null ? null : store.crossedWorktreeBinding(slug, ticket, root);
+  return crossing ? { reason: 'crossed_worktree_binding', message: crossedWorktreeRefusalMessage('submit', crossing) } : null;
+}
+
 function collectGitSubmissionFacts(options: any) {
   const { slug, ticket, root, commit, gitRef, base } = options;
   const dispatchTarget = ticket.dispatch && ticket.dispatch.integrationTarget;
@@ -471,7 +514,7 @@ const tools: ToolDefinition[] = [
       if (!res.ok) res.message = res.reason === 'executor_mismatch'
         ? claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim, meta.path)
         : res.message || claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim, meta.path);
-      return mutationAck(slug, res);
+      return mutationAck(slug, res, res.ok ? claimWorktreeCorrection(res.ticket) : null);
     },
   },
   {
@@ -849,17 +892,8 @@ const tools: ToolDefinition[] = [
         return mutationAck(slug, { ok: false, ticket, reason: 'not_owner', message: `commit: ${ticket.ref} must be claimed by "${by}" before committing.${released}` });
       }
       const root = worktreeRoot(args.worktree, 'commit');
-      if (ticket.dispatch && ticket.dispatch.sharedTree === false) {
-        const location = commitScope.linkedWorktree(root);
-        if (!location.ok || !location.linked) {
-          return mutationAck(slug, {
-            ok: false,
-            ticket,
-            reason: 'worktree_isolation',
-            message: `commit: refused ${ticket.ref}; this dispatch requires a linked worktree. Do not commit in the shared tree. Report that the executor lost its worktree to the orchestrator and re-dispatch.`,
-          });
-        }
-      }
+      const standing = commitWorktreeRefusal(slug, ticket, root);
+      if (standing) return mutationAck(slug, { ok: false, ticket, ...standing });
       const scope = ticketCommitScope(slug, ticket);
       const outsideWorktree = commitScope.validateRelativeScopes(scope).outside;
       if (outsideWorktree.length) {
@@ -1030,9 +1064,8 @@ const tools: ToolDefinition[] = [
       }
       const gitRef = args.gitRef || `refs/sidequest/${ticket.ref}`;
       const root = submissionRoot(meta, args.worktree, commit, gitRef);
-      if (verifyEmbedsWorktreeRoot(args.verify, root)) {
-        throw new Error(`submit: refused ${ticket.ref}; verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
-      }
+      const standing = submitWorktreeRefusal(slug, ticket, root, args);
+      if (standing) return mutationAck(slug, { ok: false, ticket, ...standing });
       const verify = String(args.verify || '').trim();
       const collected = collectGitSubmissionFacts({ slug, ticket, root, commit, gitRef, base: args.base });
       const { target, range, scope } = collected;
@@ -1073,6 +1106,7 @@ const tools: ToolDefinition[] = [
         deliveryRevision: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'Landed revision, reachable from the target and never an ancestor of the candidate base: proves each submitted path at its tree instead of the working tree, for a candidate rebased or squash-merged before landing. Ignored on a reachable delivery.' },
         resolvedPaths: { type: 'array', items: { type: 'string' }, description: 'Submitted paths the deliveryRevision proof found diverging, attested as resolved by hand; reason records the evidence. Requires deliveryRevision, and is refused on a reachable delivery rather than ignored.' },
         reason: { type: 'string' },
+        integrationBranch: { type: 'string', description: 'Deliver onto this checked-out branch instead of the dispatch-recorded one. Without it, delivery follows the checkout only when it is, or fast-forwarded past, the recorded branch.' },
         skipVerify: { type: 'boolean', description: 'Skip the pinned verifier only when verificationWaiver carries an authorized bounded waiver.' },
         verificationWaiver: VERIFICATION_WAIVER_PROP,
         session: { type: 'string' },
@@ -1111,6 +1145,7 @@ const tools: ToolDefinition[] = [
         const mode = args.mode == null ? store.boardConfig(slug).delivery : args.mode;
         const delivery = store.integrateSubmissionWave(slug, refs, {
           mode,
+          integrationBranch: args.integrationBranch,
           skipVerify: args.skipVerify === true,
           verificationWaiver,
         });
@@ -1152,7 +1187,7 @@ const tools: ToolDefinition[] = [
       let target: any = null;
       if (usesGit) {
         try {
-          target = store.ticketIntegrationTarget(slug, ticket);
+          target = store.deliveryIntegrationTarget(slug, store.ticketIntegrationTarget(slug, ticket), args.integrationBranch);
         } catch (error: any) {
           failures.push({
             reason: 'integration_target_unavailable',
@@ -1163,6 +1198,7 @@ const tools: ToolDefinition[] = [
       const admitted = store.validateIntegrationSubmission(slug, args.ref, {
         deliveryInteractionCommit: args.deliveryInteractionCommit,
         deliveryMethod: args.deliveryMethod,
+        integrationBranch: args.integrationBranch,
       });
       if (!admitted.ok) failures.push({
         reason: admitted.reason,
@@ -1203,6 +1239,7 @@ const tools: ToolDefinition[] = [
       const delivery = store.integrateSubmission(slug, args.ref, {
         mode,
         target,
+        integrationBranch: args.integrationBranch,
         skipVerify: args.skipVerify === true,
         verificationWaiver,
       });

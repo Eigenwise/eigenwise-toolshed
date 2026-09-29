@@ -2990,6 +2990,8 @@ test('released handbacks carry registered native worktrees into continuation dis
     execFileSync('git', ['add', 'tracked.js'], { cwd: worktree });
     execFileSync('git', ['commit', '--quiet', '-m', 'continuation checkpoint'], { cwd: worktree });
     const checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8' }).trim();
+    // Only a checkout whose HEAD the board can attribute to this ticket is resumed (SQ-75): the board commit records it.
+    assert.equal(store.recordSanctionedCommit(slug, ticket.ref, { by: 'continuation-worker', commit: checkpoint }).ok, true);
     assert.equal(store.releaseTicket(slug, ticket.ref, 'continuation-worker', {
       status: 'todo',
       source: 'test',
@@ -3322,7 +3324,7 @@ test('a retained checkout with unmerged entries is refused as a continuation eve
 // GH-125. The retained checkout was built on newer main C, and the redispatch explicitly named the original
 // base A. Ancestry of A passes against C, so the retain decision handed out the C-based checkout and the
 // named base never reached the executor. Each case releases a clean checkout on C and redispatches on A.
-function redispatchOnOlderExplicitBase(title: string, leaveWork: (worktree: string) => { releaseKind?: string }, run: (context: any) => void) {
+function redispatchOnOlderExplicitBase(title: string, leaveWork: (worktree: string, ticket: any) => { releaseKind?: string }, run: (context: any) => void) {
   const ticket = createFixture(title);
   const marker = `gh125-${Date.now()}`;
   const sessionId = `explicit-base-${marker}`;
@@ -3349,7 +3351,7 @@ function redispatchOnOlderExplicitBase(title: string, leaveWork: (worktree: stri
     assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
     assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.claimTicket(slug, ticket.ref, 'explicit-base-worker', { sessionId, token: prepared.token, executor }).ok, true);
-    const release = leaveWork(worktree);
+    const release = leaveWork(worktree, ticket);
     assert.equal(store.releaseTicket(slug, ticket.ref, 'explicit-base-worker', {
       status: 'todo', source: 'test', ...(release.releaseKind ? { releaseKind: release.releaseKind, releaseReason: 'Continue on the original base.' } : {}),
     }).ok, true);
@@ -3371,10 +3373,12 @@ function redispatchOnOlderExplicitBase(title: string, leaveWork: (worktree: stri
 
 test('GH-125: a committed checkpoint on a newer base replays onto an explicitly named older base in a fresh checkout', () => {
   let checkpoint = '';
-  redispatchOnOlderExplicitBase('explicit base committed checkpoint fixture', (worktree) => {
+  redispatchOnOlderExplicitBase('explicit base committed checkpoint fixture', (worktree, ticket) => {
     fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 125;\n');
     execFileSync('git', ['commit', '--quiet', '-am', 'checkpoint on C'], { cwd: worktree, windowsHide: true });
     checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
+    // Only a checkout whose HEAD the board can attribute to this ticket is resumed (SQ-75): the board commit records it.
+    assert.equal(store.recordSanctionedCommit(slug, ticket.ref, { by: 'explicit-base-worker', commit: checkpoint }).ok, true);
     return { releaseKind: 'handback' };
   }, ({ continued, worktree, baselineA, newerC, recoveryBaseBranch }) => {
     assert.equal(continued.ticket.dispatch.continuation, undefined, 'the C-based checkout is not handed out');
@@ -4843,6 +4847,70 @@ test('SQ-3110 GH-295: work landed after a technical_blocker release names groomC
     assert.equal(closed.ok, true, `groomClose delivery: ${closed.reason} ${closed.message || ''}`);
   } finally {
     store.releaseTicket(slug, ticket.ref, 'sq3110-blocker-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+// Claude Code 2.1.282+ validates the Agent `model` against exactly these; anything else never starts an executor.
+const AGENT_MODEL_ALIASES = ['sonnet', 'opus', 'haiku', 'fable'];
+
+test('GH-361: no prepared dispatch spawn, before or after the launch hook, carries an Agent model outside the four aliases', () => {
+  const ready = { ready: true, state: 'ready', message: 'ready' };
+  const catalogRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-lifecycle-gh361-'));
+  fs.mkdirSync(path.join(catalogRoot, 'model-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(catalogRoot, 'model-gateway', 'catalog.json'), JSON.stringify({
+    schemaVersion: 4,
+    updatedAt: new Date().toISOString(),
+    source: 'model-gateway',
+    providers: { codex: ready, grok: ready, opencode: ready },
+    models: [
+      { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra', provider: 'codex' },
+      { slug: 'grok-build', id: 'claude-grok-build', label: 'Grok Build', provider: 'grok' },
+      { slug: 'oc-flash', id: 'claude-opencode-deepseek-v4.1-flash', label: 'DeepSeek Flash', provider: 'opencode' },
+    ],
+  }));
+  const previousDiscovery = process.env.SIDEQUEST_DISCOVERY_DIRS;
+  process.env.SIDEQUEST_DISCOVERY_DIRS = catalogRoot;
+  const shapes = [
+    { model: 'sonnet', readonly: false, executor: 'sidequest-exec-high' },
+    { model: 'codex-gpt-5-6-terra', readonly: false, executor: 'sidequest-exec-dispatch' },
+    { model: 'grok-build', readonly: false, executor: 'sidequest-exec-dispatch' },
+    { model: 'oc-flash', readonly: false, executor: 'sidequest-exec-model-oc-flash-high' },
+    { model: 'oc-flash', readonly: true, executor: 'sidequest-exec-readonly-model-oc-flash-high' },
+  ];
+  try {
+    for (const shape of shapes) {
+      const category = `gh361.${shape.model}${shape.readonly ? '.readonly' : ''}`;
+      store.setCategory({ id: category, name: category, route: { model: shape.model, effort: 'high' }, fallback: null, readonly: shape.readonly, enabled: true });
+      const ticket = createFixture(`GH-361 ${category}`, category);
+      try {
+        const sessionId = `gh361-${category}`;
+        const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+        assert.equal(prepared.ok, true, prepared.message);
+        const executor = store.canonicalPreparedDispatchExecutor(prepared.ticket);
+        assert.equal(executor, shape.executor, category);
+        const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
+        const spawn = agentsync.agentSpawn(prepared.ticket.dispatch.launchName, undefined, resolved.model, executor,
+          agentsync.renderDispatchStub(prepared.ticket, PROJECT), prepared.ticket.dispatch.description);
+        assert.ok(!Object.hasOwn(spawn, 'model') || AGENT_MODEL_ALIASES.includes(spawn.model), `${category} spawn model ${spawn.model}`);
+
+        const launch = runForceBypass({ session_id: sessionId, cwd: PROJECT, tool_name: 'Agent', tool_input: spawn });
+        assert.notEqual(launch?.hookSpecificOutput?.permissionDecision, 'deny', `${category}: ${launch?.hookSpecificOutput?.permissionDecisionReason}`);
+        const launched = launch?.hookSpecificOutput?.updatedInput || spawn;
+        assert.ok(!Object.hasOwn(launched, 'model') || AGENT_MODEL_ALIASES.includes(launched.model), `${category} launched model ${launched.model}`);
+        if (shape.model === 'oc-flash') {
+          const overridden = runForceBypass({ session_id: sessionId, cwd: PROJECT, tool_name: 'Agent', tool_input: { ...spawn, model: 'sonnet' } });
+          assert.equal(Object.hasOwn(overridden.hookSpecificOutput.updatedInput, 'model'), false, 'an Agent model would override the pinned id, so the hook strips it');
+        }
+      } finally {
+        store.releaseTicket(slug, ticket.ref, 'gh361-cleanup', { status: 'todo', source: 'test', force: true });
+      }
+    }
+    const definition = fs.readFileSync(path.join(SIDEQUEST_HOME, 'agents', 'sidequest-exec-model-oc-flash-high.md'), 'utf8');
+    assert.match(definition, /^model: claude-opencode-deepseek-v4\.1-flash$/m, 'the definition pins the discovered id the spawn left out');
+    assert.match(definition, /^effort: high$/m);
+    assert.equal(fs.existsSync(path.join(SIDEQUEST_HOME, 'agents', 'sidequest-exec-model-grok-build-high.md')), false, 'shim-served entries keep the shared dispatch executor');
+  } finally {
+    process.env.SIDEQUEST_DISCOVERY_DIRS = previousDiscovery;
   }
 });
 

@@ -1,5 +1,6 @@
 "use strict";
 const { normalizeDeniedTools } = require("../denied-tools.js");
+const { discoveredModelExecutorName, readOnlyDiscoveredModelExecutorName } = require("../exec-names.js");
 function createRouting(dependencies) {
   const {
     activeDispatchRoute,
@@ -74,6 +75,10 @@ function createRouting(dependencies) {
     return out;
   }
   const GATEWAY_SHIM_PROVIDERS = /* @__PURE__ */ new Set(["codex", "grok"]);
+  function discoveredModelBackends() {
+    const discovered = discoverExternalModels();
+    return discovered.map((entry) => resolvedBackend(entry, discovered)).filter((backend) => backend.backend !== "codex");
+  }
   function resolvedBackend(entry, discovered) {
     const agentSlug = discovered.filter((candidate) => candidate.slug === entry.slug).length > 1 ? `${entry.source}-${entry.slug}` : entry.slug;
     const backend = GATEWAY_SHIM_PROVIDERS.has(entry.provider) ? "codex" : entry.provider;
@@ -147,11 +152,11 @@ function createRouting(dependencies) {
   }
   function discoveredModelExec(backend, effort) {
     const resolvedEffort = effort || HAIKU_BACKEND_EFFORT;
-    return { agent: stableClaudeName(resolvedEffort), effort: resolvedEffort, model: backend.id, spawnId: backend.id, backend: backend.backend, source: backend.source, slug: backend.slug, runsModel: backend.slug, apiModel: backend.id, runsLabel: backend.label, dispatch: "native-agent" };
+    return { agent: discoveredModelExecutorName(backend.agentSlug, resolvedEffort), readOnlyAgent: readOnlyDiscoveredModelExecutorName(backend.agentSlug, resolvedEffort), effort: resolvedEffort, model: null, spawnId: backend.id, backend: backend.backend, source: backend.source, slug: backend.slug, runsModel: backend.slug, apiModel: backend.id, runsLabel: backend.label, dispatch: "native-agent" };
   }
   function execFromBackend(backend, effort) {
     if (backend.backend === "codex") return gatewayMarkerExec(backend, effort);
-    if (backend.backend !== "claude") return discoveredModelExec(backend, effort);
+    if (backend.backend !== "claude" || backend.source) return discoveredModelExec(backend, effort);
     const runtime = backend.slug;
     const agent = effort ? stableClaudeName(effort) : null;
     return { agent, model: runtime, spawnId: runtime, backend: "claude", slug: runtime, runsModel: runtime, apiModel: backend.id, runsLabel: backend.label, dispatch: "native-agent" };
@@ -1211,6 +1216,7 @@ function createRouting(dependencies) {
     dispatchRouteState,
     execFromBackend,
     resolveExec,
+    discoveredModelBackends,
     resolveReportedExec,
     resolveModelId,
     routingModels,

@@ -8,6 +8,131 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.582.0 (2026-09-29)
+
+### model-gateway 0.51.7 → 0.52.0
+
+#### Features
+
+- Codex categories fall back to their own Claude fallback when Codex can't run, discovered non-gateway models dispatch as themselves, a transient Codex failure holds dispatch for 30 s, and a refused catalog refresh says why (SQ-3123)
+  One fix per report (GH-217, GH-263, GH-175, GH-227). GH-132 already passed on this base: extra discovery dirs add sources and the installed gateway catalog keeps refreshing, as fixed in 5.2.1.
+
+  A category whose route can't run right now (ChatGPT sign-in missing, gateway readiness unavailable, the model gone from the catalog) now dispatches on the category's own `fallback`, even when that fallback is a Claude model. The dispatch result's `fallbackReason` and the executor briefing both name the fallback and the reason the primary couldn't run, including the gateway's login or setup command. The global fallback still never crosses providers, so a category with no fallback of its own is refused as before. A per-ticket route override that crosses providers is still refused.
+
+  A discovered catalog entry whose provider isn't one the model-gateway shim serves (anything other than `codex` or `grok`) now dispatches with its own id as the agent's model on the Claude executor ladder, instead of going through the shared `claude-codex-auto` executor and route marker that only the shim can resolve.
+
+  model-gateway now holds Codex for 30 s after a terminal upstream failure (was 60 s), and the refusal names the failure's status, when it happened, and when the hold ends. Sidequest re-asks an unready gateway catalog every 30 s instead of pinning a fresh-but-unready refresh for the whole 5-minute catalog window, so a transient failure no longer blocks dispatch for minutes after Codex recovered.
+
+  `model-gateway catalog --refresh` now says why it didn't write: `/healthz` answering with an error status is reported with that status, and a dropped or timed-out connection with its error, instead of always "not answering". Sidequest keeps the refresh's stderr reason and appends it to a Codex dispatch refusal as `Last gateway catalog refresh: ...`.
+
+#### Fixes
+
+- Model Gateway keeps Claude alias pins current in projects where the gateway was turned off (GH-253)
+- model-gateway tests: fixture teardown stops every process it spawned into a home, so Windows CI stops hanging for 300s after a teardown error (SQ-3075)
+  Test-only change, nothing shipped to users behaves differently.
+
+  The gateway test fixture tracked one process per test home, so a `status` or `catalog` run after `serve-shim` replaced the supervisor in that slot. Teardown then killed only the worker named in `shim.pid`, the untracked supervisor respawned it into the home being deleted, and on Windows the removal failed with `no tracked fixture PID survived ... ENOTEMPTY`. A throwing `after` hook skips the hooks after it, so the supervisor's own stop never ran and its IPC channel held the test file open until the 300s budget. The fixture now tracks and stops every process spawned against a home before removing it.
+
+  A fixture child with no IPC stop path used to sit through the full 5s cleanup wait before being killed, on every test that spawned one. It is now stopped right away (`taskkill /T /F` on Windows so the worker goes with its supervisor, SIGTERM elsewhere), which cut those tests from about 5.9s to 1.1s locally. The outer-environment isolation test kills its supervisors as a tree too, so an orphaned PowerShell ownership probe no longer holds its temp file when the home is removed (EBUSY on `__PSScriptPolicyTest_*.ps1`).
+- model-gateway tests: a copied test environment still gets its processes tracked, and a failed home removal no longer holds the test file open for 300s (SQ-3142)
+  Test-only change, nothing shipped to users behaves differently.
+
+  SQ-3075's fixture tracked processes by the environment object, so a test that spread it into a copy (`{ ...environment, CODEX_GATEWAY_MODELS_REFRESH_MS: '150' }`) spawned an untracked supervisor. Teardown removed the home while that supervisor was still running, and its exit writes recreated `logs/lifecycle.jsonl` or `shim-supervisor-failure.txt` between rmSync's delete pass and its rmdir retries. On Windows CI that showed up as `no tracked fixture PID survived ... ENOTEMPTY`. Locally the home just leaked on every run. The fixture now finds the environment by its owned home as well.
+
+  The environment's removal error is now thrown from an `after` hook appended at the end. node:test stops at the first `after` hook that throws, so the old in-place throw skipped the test's own stub-server `close`, and the server kept the file alive until the 300s `--test-timeout`.
+
+### quartermaster 0.11.6 → 0.11.7
+
+#### Fixes
+
+- Quartermaster CRAP gate reports phantom complexity in .tsx: lizard loses a self-closing JSX tag after brace attributes plus a hyphenated attribute and attributes later functions to that component (GH-239)
+  lizard 1.24.0's TSX reader abandons an opening tag as soon as an attribute is not `name="text"` or `name={expr}` — a hyphenated attribute like `data-testid`, a valueless one like `required`, a spread, even tag text holding `(`, `)`, `;` or `=` — and re-emits the `{` of every brace attribute it had already matched. Those unbalanced braces kept the enclosing component open to the end of the file, so a React component was charged with a complexity nothing in it branches on and the functions it swallowed were never gated at all. The gate now measures `.tsx` and `.jsx` through lizard's TypeScript reader, from a byte-for-byte copy of the file under a `.ts` or `.js` name, on both sides of the ratchet. Nothing in the source is rewritten, so line numbers, coverage ranges and baseline identity still come from the real file, and every offender line for those files names the measurement behind it.
+
+### sidequest 5.3.4 → 5.4.0
+
+#### Features
+
+- Verify commands with Windows backslash paths run verbatim, a ticket can name its verify directory, and an unresolvable verify is refused up front (SQ-3118)
+  Three verify-capture reports, one per case (GH-189, GH-290, GH-259).
+
+  On Windows, a verify command that named a backslash path (`cd C:\repo\app && ...`, `cd plugins\app && ...`) ran through Git for Windows `sh.exe`, which read each backslash as an escape and stripped it, so the `cd` failed and the capture recorded `failed_suite` for a suite that never ran. Those commands now run through Command Prompt, which takes them verbatim. Commands with forward-slash paths, and commands whose backslash paths are quoted (`"C:\tools\node.exe" -e "..."`, which `sh.exe` keeps intact), still run through `sh.exe`, and the capture records which shell ran.
+
+  A ticket can now set `verifyCwd` (MCP `add`/`update`, CLI `--verify-cwd`), a directory relative to the project root. The verify-capture wrapper runs the command from that directory of the checkout, the integrate gate does the same, the executor briefing names it, and dispatch's npm script and path checks resolve from it. Unset, the command runs from the project root as before. A `verifyCwd` that's absolute or climbs out with `..` is refused.
+
+  A verify whose command the shell can't find (exit 127) already recorded `toolchain_missing`, never `passed`; a shell that never started now includes the spawn error in its `could_not_run` reason. At `add`/`update`, a verify's first word also counts as runnable when it resolves on `PATH` or is a shell builtin like `test`, `echo`, `true`, or `exit`, and anything else is still refused with guidance.
+- Read-only executors stop claiming bypassPermissions and get a shell write guard, and boards can deny tools per category (SQ-3120)
+  Read-only executors (and the diagnostic probe) no longer declare `permissionMode: bypassPermissions`, and a read-only spawn no longer carries `mode: bypassPermissions`. Claude Code already ignored the frontmatter line in plugin agent files, so they run in the session's own permission mode; the declaration just made the read-only label look like a bypass (GH-282). Read-only executors keep Bash for running suites, but a new guard refuses the shell write forms inside the checkout they run in, or its main checkout: redirects such as `echo x > file`, file commands like `rm`, `mv`, `touch`, `tee`, `sed -i`, and mutating git. The refusal says to keep scratch files and evidence outside the checkout and to hand repository edits back through the ticket. It is a lexical guard, so an interpreter or script can still write.
+
+  `board_config` and `category_edit` take a `deniedTools` list (a tool name, or an `mcp__server` prefix for a whole server). Every executor on that board, or on tickets in that category, is refused those tools when it calls them, write executors included, which closes the gap where there was no way to keep write executors off the Agent tool (GH-222). Read-only executors also get the board's `readOnlyDeniedTools` this way; the packaged read-only definitions never received it. The denial is enforced at call time, so it does not remove the tool's schema from the executor's context.
+
+  The executor brief now says that Claude Code itself, not Sidequest, refuses a Bash command in an isolated worktree when it cannot show the command is not git, so executors split compound commands and hand nested `claude -p` work to the orchestrator instead of retrying (GH-287, GH-200).
+- Codex categories fall back to their own Claude fallback when Codex can't run, discovered non-gateway models dispatch as themselves, a transient Codex failure holds dispatch for 30 s, and a refused catalog refresh says why (SQ-3123)
+  One fix per report (GH-217, GH-263, GH-175, GH-227). GH-132 already passed on this base: extra discovery dirs add sources and the installed gateway catalog keeps refreshing, as fixed in 5.2.1.
+
+  A category whose route can't run right now (ChatGPT sign-in missing, gateway readiness unavailable, the model gone from the catalog) now dispatches on the category's own `fallback`, even when that fallback is a Claude model. The dispatch result's `fallbackReason` and the executor briefing both name the fallback and the reason the primary couldn't run, including the gateway's login or setup command. The global fallback still never crosses providers, so a category with no fallback of its own is refused as before. A per-ticket route override that crosses providers is still refused.
+
+  A discovered catalog entry whose provider isn't one the model-gateway shim serves (anything other than `codex` or `grok`) now dispatches with its own id as the agent's model on the Claude executor ladder, instead of going through the shared `claude-codex-auto` executor and route marker that only the shim can resolve.
+
+  model-gateway now holds Codex for 30 s after a terminal upstream failure (was 60 s), and the refusal names the failure's status, when it happened, and when the hold ends. Sidequest re-asks an unready gateway catalog every 30 s instead of pinning a fresh-but-unready refresh for the whole 5-minute catalog window, so a transient failure no longer blocks dispatch for minutes after Codex recovered.
+
+  `model-gateway catalog --refresh` now says why it didn't write: `/healthz` answering with an error status is reported with that status, and a dropped or timed-out connection with its error, instead of always "not answering". Sidequest keeps the refresh's stderr reason and appends it to a Codex dispatch refusal as `Last gateway catalog refresh: ...`.
+
+#### Fixes
+
+- Manual delivery records a rebased or squash-merged candidate through deliveryRevision (GH-144) [`6c9b8ad`](https://github.com/Eigenwise/eigenwise-toolshed/commit/6c9b8ad5f9f29a7e3a52289ac5681225c2183aa6)
+  A non-reachable pinned delivery can name the landed revision with deliveryRevision. Every submitted path is proven at that revision's tree instead of the integration working tree: identical content, a candidate deletion the revision also carries, or the candidate's own change reverse-applying onto it. A candidate that was rebased, squash-merged, or conflict-resolved before landing can therefore be recorded. Anything left over refuses delivery_content_diverged until resolvedPaths attests exactly those paths, and the record keeps the per-path proof. Without deliveryRevision the working-tree comparison is unchanged.
+- A dispatch binds to a sibling's live worktree when two WorktreeCreate callbacks from one session race, and every completion gate then reads the wrong tree (GH-235)
+  A crossed creation-order binding is exchanged even after the sibling has claimed its ticket: a claim names no checkout, so a holder that never bound an agent id is still exchangeable, and the first claim in a wave no longer freezes a crossing. A start callback for a checkout a live claim occupies is refused rather than re-attributed, with the checkout name (agent-<agentId>) as the only arrival the board can confirm as the owner re-entering. commit, submit and verify-capture share one refusal that names the mismatch and the other live claim instead of sending an executor into a tree another agent is working in.
+
+  Retiring or superseding a dispatch attempt never removes a checkout that another ticket's claimed holder references; that protection ships from develop's SQ-3132 fix (`cross_bound_worktree`), which this change merges past rather than duplicates. The crossing refusal now prescribes the live-claim rebind (commit and pin in your own checkout, then dispatch with claimHolder, worktree and recoveryEvidence) and prints the release fallback with --by and -s todo so it runs as printed.
+- Keep sibling executors launched together bound to their own tickets and checkouts (GH-298)
+  Closes GitHub #298. Executors spawned in one Agent message could be bound to each other's reservations. SubagentStart guesses which reservation a runtime belongs to, and WorktreeCreate attributes each new checkout in creation order, so a crossed executor was refused every write with "has no write lease for this linked worktree", was told to stop when its sibling closed, or lost its ticket when its sibling died.
+
+  - The claim settles the guess. The dispatch token and the hook-reported agent id exchange a guessed agent id between the claimed reservation and the sibling that holds the caller's id. When the checkout the claiming executor runs in is the exact instance an unclaimed sibling recorded, the two checkout records are exchanged, and the claim result names the corrected worktree. A claimed, token-confirmed, or terminal sibling record is never moved.
+  - A sibling that dies before it claims no longer ends the live executor's ticket. While a sibling launched in the same session is unclaimed and could still settle the guess, the stop is held on the stopped runtime's agent id. It moves with that id through the claim-time exchange. Once no unsettled sibling is left, the reservation that holds it ends `stopped_before_claim`.
+  - Live-claim recovery (`dispatch` with `recoveryEvidence`, `claimHolder`, and `worktree`) rebinds a crossed claim to the checkout it names. It is refused while another live ticket holds that checkout and the checkout's HEAD is not this claim's own commit, or while the checkout carries another ticket's commits. Two claims that crossed before anything settled them are swapped instead when both still hold WorktreeCreate records of one session and baseline and neither checkout carries another ticket's commits. A refusal names the fallback: release with kind `handback`, and the redispatch gets a fresh checkout.
+  - A release made from inside the executor's checkout keys the retained continuation to that checkout. A continuation resumes a retained checkout only when its HEAD is this ticket's own board commit, checkpoint, submission, or pinned candidate, and no commit in the range belongs to another ticket. Otherwise the next dispatch gets a fresh checkout and names the reason.
+- The Agent guard names what it actually found, survives a session id change, and SessionStart briefs only an orchestrator (SQ-3119)
+  Four misdiagnoses, one per report (GH-158, GH-310, GH-257, GH-225).
+
+  The generic-Agent denial told users the Board MCP server was not running whenever it found no liveness marker under the current session id. The server wrote that marker once, keyed by the session id it started with, and not at all when it started without one. So `/clear`, a resume, or compaction left a live server looking dead, and users were sent to `/mcp` for a server that was answering. The server now records itself by pid and project, and the guard treats a live server for this project as this session's board even after the session id changed. When it does refuse, it says which case it saw: the recorded server exited (with its pid and marker path), no server recorded itself for this session or project, or the marker directory couldn't be read, in which case it says the state is unknown instead of claiming the board is down.
+
+  A project with no Sidequest install now gets that as the reason, with the `claude plugin install sidequest@eigenwise-toolshed --scope project` fix, instead of a reconnect that can't help.
+
+  SessionStart used to inject the orchestrator block into every session unless the launcher set `SIDEQUEST_NUDGE=off`. It now decides the role itself: a session whose project has a registered board is the orchestrator, a session launched as a Sidequest executor (`agent_type` or `SIDEQUEST_AGENT`) is not, and a project with no board is a plain session. Only the orchestrator gets the block; the others still get drained sweep and reload notices. `SIDEQUEST_NUDGE=off` still silences everything. The Bash guards were already silent for a plain session, and a regression test now keeps them that way.
+- Executors are told their own worktree from their bound agent id, and an executor stop records its dispatch state for project reapers (SQ-3121)
+  The foreign-worktree diagnostics warning worked out "your own checkout" from the hook's cwd, and SubagentStart can report the parent session's checkout there. Native subagents share their parent's session id, so every executor in a fan-out got the same session-keyed answer: its own worktree counted as foreign, and "Nothing under <root> is yours" was false for it (GH-155). The warning now looks up the dispatch bound to the agent id, drops that worktree from the foreign count, and names it first ("Your own worktree is agent-...") so it survives SubagentStart's 512-byte cut. The orchestrator's warning is unchanged. Claude Code still delivers the diagnostics themselves per session; there is still no hook seam to stop that.
+
+  A dev stack an executor starts in its worktree records the orchestrator's pid as its owner, so a reaper keyed on that pid kept it up until the whole session exited (GH-150). A new SubagentStop hook writes `sidequest-dispatch.json` into the stopping executor's own worktree git directory (`git rev-parse --git-path sidequest-dispatch.json`) with its ref, session, agent id, outcome, `terminalAt` and `stoppedAt`. It's matched on session and agent id, so a sibling's stop never writes into another worktree. A project reaper can tear the stack down once `terminalAt` is set.
+- worktreeDependencyPaths now copies tracked paths and files, links sibling checkouts, and dispatch refuses a stray worktree argument (SQ-3122)
+  Copy mode used to fail on any path git had already checked out, so a tracked `env/` holding committed `*.example` files next to gitignored real ones could never be provisioned, and a single file was refused as "must be a directory" (GH-157). Copy now takes a file or a directory, merges into what the checkout created, and copies the working-tree version. Link mode still fills only a path the checkout leaves absent, and its refusal now points at copy for a tracked path or a file.
+
+  A relative dependency on a sibling checkout could not be configured at all, because every path leaving the repo was refused (GH-258). `{ "path": "../<name>", "mode": "link" }` is now accepted and lands beside the worktree in the shared worktree root; copy outside the repo, absolute paths, and anything deeper than one level out are refused with the reason. The wave gate applies the same rules to its checkout and never overwrites a file the candidates carry.
+
+  Dispatch's `worktree` argument only means something for live-claim recovery, yet a fresh dispatch silently dropped it, so a `workingTreeDelivery` ticket aimed at a linked worktree got a lease on the registered checkout and its executor could not write anywhere (GH-162). Prepare now refuses that argument outside recovery and says where the ticket will run instead.
+- Recovery honours an explicit base, list and pulse show the staleness threshold, and the delete guard resolves home paths (SQ-3127)
+  A recovery dispatch that named an older base through `integrationBranch` still got the retained checkout built on newer main. Selection ran before the base was known, and the old base's ancestry passed against the newer checkout, so the override never reached the executor (GH-125). Now a retained checkout with committed checkpoints on a different base falls back to a fresh checkout at the named base and replays the checkpoints there (`released_worktree_base_differs_from_explicit_integration_base`). A checkout holding uncommitted work is still retained, because that work exists nowhere else. Its continuation records a `retainReason` naming the explicit base, the dispatch warning shows it, and the briefing tells the executor to commit the work and rebase it onto the named base instead of changing nothing. When the named base is the checkout's own base, `retainReason` says so.
+
+  `list` printed `claim.stale: false` next to `claimIdleMs` for a claim quiet well past that threshold, while `pulse` showed the board-quiet time (GH-228). Both views already used the same verdict. The catch is that a dispatched or verifying claim is judged against the unobserved-death backstop (`claimAbandonMs`), not `claimIdleMs`. List rows and pulse claims now both come from one function and carry `stale` plus `staleAfterMs`, the threshold that claim is actually judged against.
+
+  The home-delete guard blocked every recursive delete of a `~/` path, so `rm -r ~/repos/project/build` was refused while the same target spelled as an absolute path was allowed (GH-86). A leading `~`, `$HOME`, `$env:USERPROFILE` or `%USERPROFILE%` now resolves to the home directory before the protected-root check, so only the profile, `.claude`, or a parent of either is refused. A home reference anywhere else in a target still blocks.
+- A crossed launch let a recovery-evidence supersede remove the live sibling's checkout, and a failed WorktreeCreate failed the live executor's ticket (SQ-3139)
+  When two executors launched from one session cross in creation order, each reservation can hold the other's checkout until a token claim settles it. Retiring an attempt while a sibling from that session is still unclaimed now keeps the checkout and clears only the retired binding. It no longer removes the tree the live sibling runs in. The dispatch warning names the unclaimed sibling.
+
+  A WorktreeCreate that fails before its checkout exists no longer marks a guessed reservation failed while a sibling is unclaimed. The reservation loses the binding and stays live, so the executor that actually runs under that ticket can still claim it. The hook's stderr names the sibling.
+
+  The claim also settles the checkout in both shapes. A ticket whose binding was released takes the guessed sibling's completed lease. A ticket whose sibling was superseded adopts the parked retired creation record, but only when the checkout instance it runs in is the exact one creation recorded. Before this, the claim stayed leased to the dead sibling's checkout.
+- The deliveryRevision preflight in recorded delivery moves into its own function (SQ-3141)
+  Internal change, no behavior difference. The reachable-candidate resolvedPaths refusal and the deliveryRevision per-path proof that recordDeliveredSubmission ran inline now live in deliveryRevisionPreflight, with the same refusals in the same order. recordDeliveredSubmission drops from cyclomatic complexity 75 to 70.
+- A claim into a crossed checkout emptied the record GH-305's cleanup guard reads, and a parked checkout adoption dropped the tree a third sibling runs in (SQ-3147)
+  A claim now trades checkouts with a live sibling's record only when its own ticket already holds a checkout, or lost its binding to a failed WorktreeCreate. A ticket that never held a binding keeps the old behavior, where the sibling's own agent report settles the crossing. Before this, the claim also emptied the stalled ticket's record, so a later failed WorktreeCreate for that path was refused `dispatch_binding_unavailable` instead of keeping the claimed sibling's tree.
+
+  When three or more executors from one session cross and one is retired, a claim that adopts the parked checkout now parks the checkout it gives up. The next sibling's claim takes it on the exact checkout-instance match. Before this, that record was dropped and the third claim stayed leased to the retired executor's tree.
+
+  A failed WorktreeCreate is held open only for an unclaimed worktree-isolated sibling on the same board. A shared-tree reservation or one on another board can never be the crossed one, and the lone attempt is recorded failed again.
+- The full-suite phase budget no longer caps 4-core CI runners at the 8-core budget (SQ-3150)
+  `npm run test:full` scales its phase budget by core count, but the cap sat at the 8-core value, so a 4-core `windows-latest` runner got the same 1200 s as an 8-core machine and blew it on runner variance with every test passing. The cap is now 2400 s, which is what the 4-core scale produces and still fits under the job's 60 minute timeout.
+
 ## v3.581.0 (2026-09-28)
 
 ### live-rules 2.11.0 → 2.11.1

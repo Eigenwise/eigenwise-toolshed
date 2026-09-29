@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const net = require('node:net');
@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { describeShimState, probeShimState } = require('../lib/shim-state.js');
-const { PLUGIN_VERSION, compatibilityPortOwnerIdentifiers, startAll, statusReport } = require('../lib/commands.js');
+const { PLUGIN_VERSION, compatibilityPortOwnerIdentifiers, processAlive, startAll, statusReport } = require('../lib/commands.js');
 const { createProxyRecovery, portListening, processOwningPort, proxyModelsAnswering } = require('../lib/process-supervision.js');
 const { spawnGatewayProcessSync } = require('./support.js');
 
@@ -165,6 +165,7 @@ function startHarness(states, overrides = {}) {
     reapOrphans: (pid) => calls.push(`reap:${pid}`),
     stopSupervisor: async () => { calls.push('stop'); return { ok: true }; },
     spawnSupervisor: () => calls.push('spawn'),
+    supervisorAlive: () => false,
     awaitReadiness: async (options) => { calls.push({ wait: options }); return { ok: true }; },
     refreshCatalog: async () => { calls.push('catalog'); },
     report: (line) => calls.push(`report:${line}`),
@@ -252,6 +253,63 @@ test('a refused stop and a failed start both report why', async () => {
 
   const missingProxy = startHarness([stopped], { proxyExists: () => false });
   assert.deepEqual(await missingProxy.run(), { ok: false, reason: 'proxy binary missing (run setup)' });
+});
+
+function timedOutStartHarness(states, { supervisorAlive, readiness = { ok: false, timedOut: true } }) {
+  const finished = [];
+  const harness = startHarness(states, {
+    spawnSupervisor: () => 4242,
+    supervisorAlive,
+    awaitReadiness: async () => readiness,
+    recordLifecycle: (event, fields) => { if (event.endsWith('-recovery-finished')) finished.push(fields); },
+  });
+  return { finished, run: harness.run };
+}
+
+test('a start that outlasts the wait with its supervisor alive is still starting, not failed (GH-360)', async () => {
+  const alive = timedOutStartHarness([stopped], { supervisorAlive: (pid) => pid === 4242 });
+  const result = await alive.run({ lifecycleOperation: 'setup' });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.stillStarting, true);
+  assert.equal(result.supervisorPid, 4242);
+  assert.match(result.reason, /^still starting after \d+s; supervisor pid 4242 is running$/);
+  assert.deepEqual(alive.finished.map(({ outcome, supervisorPid }) => [outcome, supervisorPid]), [['starting', 4242]]);
+});
+
+test('a timed-out start whose supervisor died is a failure (GH-360)', async () => {
+  const dead = timedOutStartHarness([stopped], { supervisorAlive: () => false });
+  const result = await dead.run({ lifecycleOperation: 'setup' });
+
+  assert.equal(result.stillStarting, undefined);
+  assert.match(result.reason, /^not healthy after \d+s/);
+  assert.deepEqual(dead.finished.map(({ outcome, supervisorPid }) => [outcome, supervisorPid]), [['failed', undefined]]);
+});
+
+test('a shim failure file fails the start with its reason even while the supervisor lives (GH-360)', async () => {
+  const crashed = timedOutStartHarness([stopped], {
+    supervisorAlive: () => true,
+    readiness: { ok: false, timedOut: false, reason: 'shim exited: EADDRINUSE' },
+  });
+  const result = await crashed.run({ lifecycleOperation: 'setup' });
+
+  assert.deepEqual(result, { ok: false, reason: 'shim exited: EADDRINUSE', recoveryAttempted: true });
+  assert.deepEqual(crashed.finished.map(({ outcome }) => outcome), ['failed']);
+});
+
+test('a preserved starting supervisor that outlasts the wait is judged by its own pid (GH-360)', async () => {
+  const preserved = timedOutStartHarness([starting, starting], { supervisorAlive: (pid) => pid === starting.pid });
+  const result = await preserved.run({ lifecycleOperation: 'setup', preserveRunningSupervisor: true });
+
+  assert.deepEqual([result.stillStarting, result.supervisorPid], [true, starting.pid]);
+});
+
+test('the supervisor liveness probe tells a live pid from an exited or missing one (GH-360)', () => {
+  const exited = spawnSync(process.execPath, ['-e', ''], { windowsHide: true });
+  assert.equal(processAlive(process.pid), true);
+  assert.equal(processAlive(exited.pid), false);
+  assert.equal(processAlive(0), false, 'pid 0 probes as live on Windows, so it must never reach process.kill');
+  assert.equal(processAlive(undefined), false);
 });
 
 test('ensure refuses a foreign or unidentified listener without touching it', async () => {
