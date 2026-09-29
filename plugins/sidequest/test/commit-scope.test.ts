@@ -372,6 +372,48 @@ test('exact declared rename paths commit staged renames atomically', async () =>
   assert.deepEqual(commitScope.commitPaths(root, committed.commit).sort(), ['new.txt', 'old.txt']);
 });
 
+function claimedCommitFixture(root: string, files: string[], by: string): string {
+  const slug = store.ensureProject(root, `${by} fixture`).slug;
+  const ticket = store.createTicket(slug, {
+    title: `${by} fixture`,
+    files,
+    complexity: 1,
+    complexityWhy: 'The commit tool stages and commits the declared scope.',
+  });
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'The lifecycle fixture claims its ticket directly.' }).ok, true);
+  return ticket.ref;
+}
+
+test('commit tool commits a staged git mv rename under a declared glob scope (GH-350)', async () => {
+  const root = repo();
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'export const worker = true;\n');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'add worker']);
+  const by = 'staged-rename-worker';
+  const ref = claimedCommitFixture(root, ['plugins/sidequest/*.js'], by);
+  git(root, ['mv', 'plugins/sidequest/worker-a.js', 'plugins/sidequest/worker-b.js']);
+
+  const committed = await lifecycleHandler('commit')({ project: root, ref, by, message: 'rename worker', worktree: root });
+
+  assert.equal(committed.ok, true, committed.message as string);
+  assert.equal(git(root, ['diff', '--name-status', '-M', 'HEAD~1', 'HEAD']), 'R100\tplugins/sidequest/worker-a.js\tplugins/sidequest/worker-b.js');
+  assert.equal(git(root, ['diff', '--cached', '--name-only']), '');
+});
+
+test('commit tool keeps refusing a declared path that never existed', async () => {
+  const root = repo();
+  const by = 'never-existed-worker';
+  const ref = claimedCommitFixture(root, ['plugins/sidequest/never-existed.js'], by);
+  const head = git(root, ['rev-parse', 'HEAD']);
+
+  const refused = await lifecycleHandler('commit')({ project: root, ref, by, message: 'typo', worktree: root });
+
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'no_existing_scope');
+  assert.match(refused.message as string, /Missing: plugins\/sidequest\/never-existed\.js/);
+  assert.equal(git(root, ['rev-parse', 'HEAD']), head);
+});
+
 
 test('scoped commit leaves another executor’s staged file in the shared index', async () => {
   const root = repo();

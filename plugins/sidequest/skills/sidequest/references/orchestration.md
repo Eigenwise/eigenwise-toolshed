@@ -494,9 +494,12 @@ and `spawn.prompt` ends with `[sidequest-route model=... effort=... ticket=...]`
 model, effort, and ticket ref to record, so pass the prompt verbatim, never write another such line, and never batch tickets
 stamped with different models into one spawn. The gateway route log records the route and ticket ref per dispatch; a marker effort that differs from the board stamp in an audit means the prompt was hand-edited. Claude builtins are provisioned at all five effort
 levels; Codex dispatch is one read-write def and one readonly def, because the route marker carries the
-effort. Route edits change only board data; the executor def set
-is fixed, so nothing is written or registered when a route changes. The executor claims with the
-returned token and exact stable executor name.
+effort. Route edits change only board data; the bundled executor def set
+is fixed, so nothing is written or registered when a route changes. A discovered provider the shim
+does not serve spawns `sidequest-exec-model-<slug>-<effort>` (or its `-readonly-model-` twin) with
+`model` omitted: that user-scope def pins the full catalog id, because the Agent `model` parameter
+takes only the four Claude aliases. Sidequest keeps those defs in step with the catalog at SessionStart
+and dispatch. The executor claims with the returned token and exact stable executor name.
 
 Cross-session adoption is a fresh `dispatch <ref>` in the adopting session. It rotates
 the token and returns the current spawn for the same stable route. A retained-worktree continuation
