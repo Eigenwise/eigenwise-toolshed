@@ -3097,6 +3097,122 @@ test('a WorktreeCreate that fails before its checkout exists records the attempt
   }
 });
 
+// SQ-3139. Two reservations from one session whose launches cross: the first executor's WorktreeCreate binds the
+// second reservation, so each record names the other ticket's executor until a token claim settles it.
+function sq3139CrossedWave(label: string) {
+  const sequence = `${label}${process.pid}${Date.now()}`;
+  const sessionId = `sq3139-${sequence}`;
+  const reserve = (role: string) => {
+    const ticket = store.createTicket(slug, { title: `sq3139 ${role} ${sequence}`, category: 'codebase-exploration', files: ['README.md'] });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId, agentName: `sq3139-${role}-${sequence}` }).ok, true);
+    const agentId = `a${role}${sequence}`.replace(/[^a-z0-9]/g, '');
+    const name = `agent-${agentId}`;
+    return { ref: ticket.ref, executor: prepared.ticket.dispatchExecutor, tokenFile: prepared.ticket.dispatch.tokenFile, agentId, name, path: worktrees.namedWorktreePath(PROJECT, name) };
+  };
+  const first = reserve('one');
+  const second = reserve('two');
+  const claim = async (runtime: typeof first) => {
+    const args = { ref: runtime.ref, project: PROJECT, by: `sq3139-${runtime.agentId}`, executor: runtime.executor, tokenFile: runtime.tokenFile };
+    runHook(BIND_RUNTIME_IDENTITY, { session_id: sessionId, agent_id: runtime.agentId, agent_type: runtime.executor, cwd: runtime.path, tool_name: 'mcp__plugin_sidequest_board__claim', tool_input: args });
+    const response = await mcp.handleRequest({ jsonrpc: '2.0', id: `sq3139-${runtime.ref}`, method: 'tools/call', params: { name: 'claim', arguments: { ...args, session: sessionId } } });
+    return JSON.parse(response.result.content[0].text);
+  };
+  const supersede = (runtime: typeof first, evidence: string) => withoutRetirementGrace(() => store.prepareDispatch(slug, runtime.ref, { sessionId, recoveryEvidence: evidence }));
+  const recorded = (runtime: typeof first) => store.getTicket(slug, runtime.ref).dispatch;
+  const cleanup = () => {
+    for (const runtime of [first, second]) {
+      store.releaseTicket(slug, runtime.ref, 'sq3139-cleanup', { status: 'todo', source: 'test', force: true });
+      if (fs.existsSync(runtime.path)) {
+        try { execFileSync('git', ['worktree', 'remove', '--force', runtime.path], { cwd: PROJECT, windowsHide: true, stdio: 'ignore' }); } catch (_) {}
+        fs.rmSync(runtime.path, { recursive: true, force: true });
+      }
+      try { execFileSync('git', ['branch', '-D', `worktree-${runtime.name}`], { cwd: PROJECT, windowsHide: true, stdio: 'ignore' }); } catch (_) {}
+    }
+  };
+  return { sessionId, first, second, claim, supersede, recorded, cleanup };
+}
+
+test('SQ-3139: a crossed WorktreeCreate that fails before creating leaves the live sibling claimable and its tree alive', async () => {
+  const wave = sq3139CrossedWave('fail');
+  const { first, second } = wave;
+  try {
+    assert.equal(createWorktree(wave.sessionId, first.name).ok, true);
+    assert.equal(wave.recorded(second).worktree, worktrees.canonicalPath(first.path), 'the fixture reproduces the creation-order crossing');
+    fs.mkdirSync(second.path, { recursive: true });
+    fs.writeFileSync(path.join(second.path, 'occupant.txt'), 'blocks creation\n');
+    const failed = createWorktree(wave.sessionId, second.name);
+    assert.equal(failed.ok, false);
+    const guessed = wave.recorded(first);
+    assert.equal(guessed.outcome, 'launched', "the failure is not recorded against the live executor's ticket");
+    assert.equal(guessed.worktree || null, null, 'the guessed reservation keeps no binding to the path that was never created');
+    assert.equal(fs.existsSync(path.join(second.path, 'occupant.txt')), true, 'recovery touched nothing at that path');
+
+    store.bindDispatchAgent(wave.sessionId, first.executor, first.agentId, null, first.path);
+    const ack = await wave.claim(first);
+    assert.equal(ack.ok, true, `the first executor claims its own ticket: ${ack.reason || ''} ${ack.message || ''}`);
+    assert.equal(wave.recorded(first).worktree, worktrees.canonicalPath(first.path), 'the claim leases the checkout its executor runs in');
+    assert.equal(wave.recorded(first).worktreeBindingSource, 'worktree-create', 'the moved lease keeps its creation source');
+    assert.equal(wave.recorded(second).worktree || null, null, 'the guessed sibling gives the checkout up');
+
+    wave.supersede(second, 'the Agent call for the second executor died in WorktreeCreate');
+    assert.equal(fs.existsSync(path.join(first.path, 'README.md')), true, 'the supersede leaves the live first tree alone');
+    assert.equal(store.getTicket(slug, first.ref).claim?.by, `sq3139-${first.agentId}`);
+  } finally {
+    wave.cleanup();
+  }
+});
+
+test('SQ-3139: superseding a crossed reservation before the live sibling claims keeps the sibling tree and lease', async () => {
+  const wave = sq3139CrossedWave('cross');
+  const { first, second } = wave;
+  try {
+    assert.equal(createWorktree(wave.sessionId, first.name).ok, true);
+    assert.equal(createWorktree(wave.sessionId, second.name).ok, true);
+    store.bindDispatchAgent(wave.sessionId, second.executor, second.agentId, null, second.path);
+    store.bindDispatchAgent(wave.sessionId, first.executor, first.agentId, null, first.path);
+    assert.equal(wave.recorded(second).worktree, worktrees.canonicalPath(first.path), 'the fixture reproduces the crossing');
+    assert.equal(wave.recorded(second).agentId, first.agentId);
+    store.markDispatchStopped(wave.sessionId, second.executor, second.agentId, null, null, '');
+
+    const replacement = wave.supersede(second, 'the second executor died before claiming');
+    assert.equal(fs.existsSync(path.join(first.path, 'README.md')), true, 'the supersede leaves the unclaimed live sibling tree alone');
+    assert.equal(replacement.ticket.dispatch.worktree || null, null, 'the replacement inherits no binding');
+    assert.match(replacement.ticket.dispatch.crossBoundWorktree.message, new RegExp(`${first.ref} from the same dispatch session has not claimed yet`));
+    assert.equal(replacement.ticket.dispatch.crossBoundWorktree.parkedCheckout.worktree, worktrees.canonicalPath(first.path), 'the retired creation record is parked');
+
+    const ack = await wave.claim(first);
+    assert.equal(ack.ok, true, `the first executor claims its own ticket: ${ack.reason || ''} ${ack.message || ''}`);
+    assert.equal(wave.recorded(first).worktree, worktrees.canonicalPath(first.path), 'the claim leases the checkout its executor runs in, not the dead sibling one');
+    assert.equal(wave.recorded(first).worktreeBindingExchange.reason, 'claim_parked_checkout');
+    assert.equal(wave.recorded(second).crossBoundWorktree.parkedCheckout, undefined, 'the parked record is consumed once');
+  } finally {
+    wave.cleanup();
+  }
+});
+
+test('SQ-3139: a claim adopts a parked checkout only when the checkout instance is the one creation recorded', async () => {
+  const wave = sq3139CrossedWave('recut');
+  const { first, second } = wave;
+  try {
+    assert.equal(createWorktree(wave.sessionId, first.name).ok, true);
+    assert.equal(createWorktree(wave.sessionId, second.name).ok, true);
+    store.bindDispatchAgent(wave.sessionId, second.executor, second.agentId, null, second.path);
+    store.bindDispatchAgent(wave.sessionId, first.executor, first.agentId, null, first.path);
+    wave.supersede(second, 'the second executor died before claiming');
+    const gitDirectoryValue = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: first.path, encoding: 'utf8', windowsHide: true }).trim();
+    const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(first.path, gitDirectoryValue);
+    fs.rmSync(path.join(gitDirectory, 'sidequest-checkout-instance'));
+    worktreeLease.createCheckoutInstanceMarker(gitDirectory);
+
+    await wave.claim(first);
+    assert.equal(wave.recorded(first).worktree, worktrees.canonicalPath(second.path), 'a different checkout instance at the parked path is not adopted');
+    assert.ok(wave.recorded(second).crossBoundWorktree.parkedCheckout, 'the parked record stays for a matching claim');
+  } finally {
+    wave.cleanup();
+  }
+});
+
 // SQ-2938 / GH-125. A recovery dispatch cherry-picked the preserved candidate into a fresh checkout, the
 // cherry-pick conflicted, and the executor released on the conflict. The lease then read that checkout as a
 // healthy retained one: identity matched, so resume was allowed and the replacement executor was bound to a
