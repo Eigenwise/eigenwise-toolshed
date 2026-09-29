@@ -13,6 +13,11 @@ const PROCESS_CLEANUP_TIMEOUT_MS = 5000;
 const PROCESS_CLEANUP_POLL_MS = 25;
 const gatewayFixtureProcesses = new Map();
 const gatewayTestEnvironments = new WeakMap();
+// A spread copy of a test environment (`{ ...environment, EXTRA: '1' }`) is an object the WeakMap
+// never saw, so its processes went untracked: teardown removed the home under a live supervisor, and
+// the supervisor's exit writes recreated logs/ mid-removal (ENOTEMPTY on Windows CI) or after it (a
+// leaked home everywhere else), SQ-3142. The owned home identifies the environment instead.
+const ownedGatewayTestEnvironments = new Map();
 
 function gatewayPidFile(home, name) {
   return path.join(home, '.claude', 'model-gateway', `${name}.pid`);
@@ -300,16 +305,25 @@ function createGatewayTestEnvironment(overrides = {}, isolatedOverrides = {}) {
 function gatewayTestEnvironment(t, overrides = {}, isolatedOverrides = {}) {
   const testEnvironment = createGatewayTestEnvironment(overrides, isolatedOverrides);
   gatewayTestEnvironments.set(testEnvironment.environment, testEnvironment);
+  if (testEnvironment.ownsHome) ownedGatewayTestEnvironments.set(testEnvironment.home, testEnvironment);
   if (testEnvironment.ownsHome && t) t.after(async () => {
     const pids = await stopTrackedGatewayProcesses(testEnvironment.home);
-    removeGatewayTestHome(testEnvironment.home, pids);
+    ownedGatewayTestEnvironments.delete(testEnvironment.home);
+    try {
+      removeGatewayTestHome(testEnvironment.home, pids);
+    } catch (error) {
+      // node:test stops at the first after hook that throws, so throwing here skipped every hook the
+      // test registered later, and a stub server one of them closes held the file open until
+      // --test-timeout. A hook appended while hooks run goes last, after its siblings.
+      t.after(() => { throw error; });
+    }
   });
   return testEnvironment.environment;
 }
 
 function spawnGatewayProcess(t, command, args, options = {}) {
   const { env: overrides, isolatedOverrides, ...spawnOptions } = options;
-  const existingTestEnvironment = gatewayTestEnvironments.get(overrides);
+  const existingTestEnvironment = gatewayTestEnvironments.get(overrides) || ownedGatewayTestEnvironments.get(overrides?.HOME);
   const environment = existingTestEnvironment
     ? { ...overrides, ...isolatedOverrides }
     : gatewayTestEnvironment(t, overrides, isolatedOverrides);
