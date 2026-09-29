@@ -2990,6 +2990,8 @@ test('released handbacks carry registered native worktrees into continuation dis
     execFileSync('git', ['add', 'tracked.js'], { cwd: worktree });
     execFileSync('git', ['commit', '--quiet', '-m', 'continuation checkpoint'], { cwd: worktree });
     const checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8' }).trim();
+    // Only a checkout whose HEAD the board can attribute to this ticket is resumed (SQ-75): the board commit records it.
+    assert.equal(store.recordSanctionedCommit(slug, ticket.ref, { by: 'continuation-worker', commit: checkpoint }).ok, true);
     assert.equal(store.releaseTicket(slug, ticket.ref, 'continuation-worker', {
       status: 'todo',
       source: 'test',
@@ -3322,7 +3324,7 @@ test('a retained checkout with unmerged entries is refused as a continuation eve
 // GH-125. The retained checkout was built on newer main C, and the redispatch explicitly named the original
 // base A. Ancestry of A passes against C, so the retain decision handed out the C-based checkout and the
 // named base never reached the executor. Each case releases a clean checkout on C and redispatches on A.
-function redispatchOnOlderExplicitBase(title: string, leaveWork: (worktree: string) => { releaseKind?: string }, run: (context: any) => void) {
+function redispatchOnOlderExplicitBase(title: string, leaveWork: (worktree: string, ticket: any) => { releaseKind?: string }, run: (context: any) => void) {
   const ticket = createFixture(title);
   const marker = `gh125-${Date.now()}`;
   const sessionId = `explicit-base-${marker}`;
@@ -3349,7 +3351,7 @@ function redispatchOnOlderExplicitBase(title: string, leaveWork: (worktree: stri
     assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree, creationGeneration(slug, sessionId, worktree)).ok, true);
     assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.claimTicket(slug, ticket.ref, 'explicit-base-worker', { sessionId, token: prepared.token, executor }).ok, true);
-    const release = leaveWork(worktree);
+    const release = leaveWork(worktree, ticket);
     assert.equal(store.releaseTicket(slug, ticket.ref, 'explicit-base-worker', {
       status: 'todo', source: 'test', ...(release.releaseKind ? { releaseKind: release.releaseKind, releaseReason: 'Continue on the original base.' } : {}),
     }).ok, true);
@@ -3371,10 +3373,12 @@ function redispatchOnOlderExplicitBase(title: string, leaveWork: (worktree: stri
 
 test('GH-125: a committed checkpoint on a newer base replays onto an explicitly named older base in a fresh checkout', () => {
   let checkpoint = '';
-  redispatchOnOlderExplicitBase('explicit base committed checkpoint fixture', (worktree) => {
+  redispatchOnOlderExplicitBase('explicit base committed checkpoint fixture', (worktree, ticket) => {
     fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 125;\n');
     execFileSync('git', ['commit', '--quiet', '-am', 'checkpoint on C'], { cwd: worktree, windowsHide: true });
     checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
+    // Only a checkout whose HEAD the board can attribute to this ticket is resumed (SQ-75): the board commit records it.
+    assert.equal(store.recordSanctionedCommit(slug, ticket.ref, { by: 'explicit-base-worker', commit: checkpoint }).ok, true);
     return { releaseKind: 'handback' };
   }, ({ continued, worktree, baselineA, newerC, recoveryBaseBranch }) => {
     assert.equal(continued.ticket.dispatch.continuation, undefined, 'the C-based checkout is not handed out');

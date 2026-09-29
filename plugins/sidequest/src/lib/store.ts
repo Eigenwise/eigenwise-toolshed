@@ -47,7 +47,7 @@ const {
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } = require('./category-defaults.js');
 const commitScope = require('./commit-scope.js');
 const { commitPaths } = commitScope;
-const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, retainedWorktreeResumeDecision } = require('./worktrees.js');
+const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, retainedWorktreeResumeDecision } = require('./worktrees.js');
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, isCanonicalRegisteredWorktree } = require('./kernel/worktree.js');
 const { reviewLockMessage } = require('./kernel/review-binding.js');
 const { migrateIfNeeded } = require('./migrate.js');
@@ -561,6 +561,8 @@ const {
   supersedeUnboundAttempt,
   readDispatchBriefing,
   recoverLiveClaimDispatch,
+  recordReleaseObservedCheckout,
+  rekeyReleasedCheckout,
   recordDispatchLaunch,
   recordDispatchAgentFailure,
   recoverDispatchQuotaFailure,
@@ -571,6 +573,7 @@ const {
   recordDispatchWorktreeDependencyLink,
   recoverDispatchWorktreeCreation,
   dispatchIdentityDiagnosis,
+  crossedWorktreeBinding,
   dispatchIsolationExpectation,
   dispatchUnboundClaim,
   boardVerificationEvidencePath,
@@ -583,6 +586,10 @@ const {
   dispatchCanBindRuntimeIdentity,
   recordDispatchRuntimeIdentity,
   bindDispatchClaimToken,
+  exchangeGuessedClaimIdentity,
+  exchangeCrossedClaimCheckout,
+  settleDeferredStops,
+  tokenAdmission,
   bindDispatchAgent,
   dispatchMatchesStopIdentity,
   markDispatchStopped,
@@ -644,6 +651,7 @@ const {
   pendingSubmission: pendingSubmissionForTickets,
   agentWorktreePath,
   agentWorktreeCandidates,
+  agentIdFromWorktreePath,
   resolvedAgentWorktree,
   reclaimUnclaimedDispatchWorktree,
   legacyCategoryForComplexity: (...args: any[]) => legacyCategoryForComplexity(...args),
@@ -1953,7 +1961,10 @@ function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
       message: `${found.ref} reduced Agent-schema dispatch requires hook-reported agent_id before the first claim. Stop without claiming; use a host that reports agent_id and permission_mode ("auto" or "bypassPermissions") to PreToolUse. Do not add unsupported Agent fields or change permissions.`,
     } : {}),
   };
-  return withTicketLock(slug, found.id, () => {
+  const tokenAdmitted = tokenAdmission(claimAdmission, slug, found.id, opts);
+  exchangeGuessedClaimIdentity(slug, found.id, opts?.sessionId, opts?.executor, agentId, tokenAdmitted);
+  exchangeCrossedClaimCheckout(slug, found.id, opts?.sessionId, opts?.observedWorktree, tokenAdmitted);
+  const bound = withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     if (!ticket) return { ok: false, reason: 'not_found' };
     const admission = claimAdmission(slug, ticket.id, opts);
@@ -2002,6 +2013,9 @@ function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
     }
     return { ok: true, ticket };
   });
+  // A stop held while this runtime's reservation was still a guess can be decided once the claim has vouched for it.
+  settleDeferredStops(opts?.sessionId);
+  return bound;
 }
 
 function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
@@ -2536,6 +2550,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     } : null;
     if (release) t.release = release;
     if (dispatch) delete dispatch.failedClaimSurrender;
+    if (liveClaim) rekeyReleasedCheckout(slug, t, heldOwner);
     if (!dispatch?.terminalAt || dispatch.outcome !== terminalOutcome) {
       setDispatchTerminal(t, terminalOutcome, opts.source || 'cli', {
         slug,
@@ -3801,6 +3816,7 @@ module.exports = {
   syncLiveDispatchVerification,
   readDispatchBriefing,
   recoverLiveClaimDispatch,
+  recordReleaseObservedCheckout,
   dispatchTokenForRequest,
   isSupersededDispatchToken,
   recordDispatchLaunch,
@@ -3814,6 +3830,7 @@ module.exports = {
   recoverDispatchWorktreeCreation,
   bindDispatchAgent,
   dispatchIdentityDiagnosis,
+  crossedWorktreeBinding,
   dispatchIsolationExpectation,
   dispatchUnboundClaim,
   boardVerificationEvidencePath,
