@@ -1927,6 +1927,12 @@
         },
         "readonly": {
           "type": "boolean"
+        },
+        "deniedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -2037,6 +2043,12 @@
           }
         },
         "readOnlyDeniedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deniedTools": {
           "type": "array",
           "items": {
             "type": "string"

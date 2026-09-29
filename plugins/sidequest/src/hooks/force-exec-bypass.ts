@@ -8,7 +8,8 @@ import { runtimeModule } from './shared/paths.js';
 import { readSessionState, sessionStateFile, writeSessionState } from './shared/session-state.js';
 // Dependency-free, so bundling it keeps launch naming identical in the hook and
 // in the store even when the installed lib is mid-upgrade.
-import { canonicalExecutorName, dispatchLaunchName, DIAGNOSTIC_PROBE_NAME } from '../lib/exec-names.js';
+import { canonicalExecutorName, dispatchLaunchName, DIAGNOSTIC_PROBE_NAME, isReadOnlyExecutor } from '../lib/exec-names.js';
+import { readOnlyShellRefusal } from './shared/read-only-shell.js';
 
 const { canonicalPath } = require(path.join(__dirname, '..', 'lib', 'worktrees.js')) as { canonicalPath: (value: unknown) => string };
 const { isInScope: scopeMatch } = require(path.join(__dirname, '..', 'lib', 'scope-match.js')) as { isInScope: (file: unknown, files: unknown) => boolean };
@@ -125,6 +126,7 @@ interface HelperScopeResolution {
 }
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 
 function fallbackClassify(type: string): ExecutorClassification {
   const readOnlyDispatch = /^sidequest-exec-dispatch-readonly(?:-(low|medium|high|xhigh|max))?$/.exec(type);
@@ -944,6 +946,18 @@ function guardHelperWrite(input: HookInput): void {
   );
 }
 
+function guardReadOnlyShell(input: HookInput): void {
+  if (!isReadOnlyExecutor(stringField(input, 'agent_type', 'agentType'))) return;
+  const refusal = readOnlyShellRefusal(String(toolInputOf(input)?.command ?? ''), stringField(input, 'cwd') || process.cwd());
+  if (refusal) writeDeny('PreToolUse', refusal);
+}
+
+// Claude Code ignores permissionMode in plugin agent files and the Agent mode field, but older hosts
+// honored the spawn field, so a read-only executor is never launched into bypassPermissions (GH-282).
+function spawnPermissionFields(reducedAgentSchema: boolean, type: string): { mode?: string } {
+  return reducedAgentSchema || isReadOnlyExecutor(type) ? {} : { mode: 'bypassPermissions' };
+}
+
 // A steer aimed at an executor with a recorded terminal Agent failure cannot be
 // delivered. The sender is the only party holding the text, so this is the one
 // place it can be saved.
@@ -993,6 +1007,10 @@ function main(): void {
   }
   if (WRITE_TOOLS.has(toolName)) {
     guardHelperWrite(input);
+    return;
+  }
+  if (SHELL_TOOLS.has(toolName)) {
+    guardReadOnlyShell(input);
     return;
   }
   if (toolName !== 'Agent') return;
@@ -1077,15 +1095,14 @@ function main(): void {
   }
 
   const reducedAgentSchema = preparedSpawn?.reducedAgentSchema === true;
+  const permissionFields = spawnPermissionFields(reducedAgentSchema, type);
   const updatedInput: Record<string, unknown> = {
     ...toolInput,
-    ...(reducedAgentSchema ? {} : { mode: 'bypassPermissions' }),
+    ...permissionFields,
     ...(!reducedAgentSchema && isSubagentCaller(input) ? { run_in_background: true } : {}),
   };
-  if (reducedAgentSchema) {
-    delete updatedInput.name;
-    delete updatedInput.mode;
-  }
+  if (reducedAgentSchema) delete updatedInput.name;
+  if (!permissionFields.mode) delete updatedInput.mode;
   if (isSubagentCaller(input)) delete updatedInput.isolation;
   const corrections: string[] = [];
   if (preparedSpawn?.description && toolInput.description !== preparedSpawn.description) {

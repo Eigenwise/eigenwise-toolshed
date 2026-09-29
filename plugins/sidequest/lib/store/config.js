@@ -1,4 +1,5 @@
 "use strict";
+const { normalizeDeniedTools } = require("../denied-tools.js");
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 const DEFAULT_WORKTREE_RECOVERY_RETENTION_AGE_HOURS = 14 * 24;
 function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, integrationTargetRef, isInScope, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }) {
@@ -292,6 +293,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       name: meta.name,
       alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
       readOnlyDeniedTools: normalizeReadOnlyDeniedTools(meta.readOnlyDeniedTools),
+      deniedTools: normalizeDeniedTools(meta.deniedTools),
       generatedPairs: normalizeGeneratedPairs(meta.generatedPairs),
       integrationMode: normalizeIntegrationMode(meta.integrationMode),
       integrationBranch: normalizeIntegrationBranch(meta.integrationBranch),
@@ -333,6 +335,9 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       }
       if (Object.prototype.hasOwnProperty.call(patch, "readOnlyDeniedTools")) {
         meta.readOnlyDeniedTools = normalizeReadOnlyDeniedTools(patch.readOnlyDeniedTools);
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, "deniedTools")) {
+        meta.deniedTools = normalizeDeniedTools(patch.deniedTools);
       }
       if (Object.prototype.hasOwnProperty.call(patch, "generatedPairs")) {
         meta.generatedPairs = normalizeGeneratedPairs(patch.generatedPairs);

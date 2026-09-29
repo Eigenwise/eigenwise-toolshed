@@ -32,9 +32,9 @@ function execFileSync(file, args, options = {}) {
 }
 
 // src/hooks/force-exec-bypass.ts
-var import_node_fs3 = __toESM(require("node:fs"));
-var import_node_os2 = __toESM(require("node:os"));
-var import_node_path3 = __toESM(require("node:path"));
+var import_node_fs5 = __toESM(require("node:fs"));
+var import_node_os3 = __toESM(require("node:os"));
+var import_node_path5 = __toESM(require("node:path"));
 
 // src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
@@ -42,7 +42,11 @@ var import_node_fs = __toESM(require("node:fs"));
 // src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 var CLAUDE_PREFIX = "sidequest-exec-";
+var DISPATCH_PREFIX = "sidequest-exec-dispatch-";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
+var READ_ONLY_DISPATCH_PREFIX = "sidequest-exec-dispatch-readonly-";
+var TICKET_PREFIX = "sidequest-sq-";
+var LEGACY_TICKET_PREFIX = "sidequest-ticket-";
 var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
 function isEffort(value) {
   return typeof value === "string" && EFFORTS.includes(value);
@@ -146,6 +150,40 @@ function canonicalExecutorName(name) {
   if (!name.startsWith(PLUGIN_NAMESPACE)) return name;
   const unqualifiedName = name.slice(PLUGIN_NAMESPACE.length);
   return BUNDLED_AGENT_NAMES.has(unqualifiedName) ? unqualifiedName : name;
+}
+function isReadOnlyExecutor(name) {
+  const kind = classify(name).kind;
+  return kind === "read_only_codex_dispatch" || kind === "read_only_claude_builtin";
+}
+function classify(value) {
+  if (typeof value !== "string" || !value) return { kind: "unknown", effort: null };
+  const name = canonicalExecutorName(value);
+  if (name === READ_ONLY_DISPATCH_NAME) return { kind: "read_only_codex_dispatch", effort: null };
+  if (name === DISPATCH_NAME) return { kind: "codex_dispatch", effort: null };
+  if (name === DIAGNOSTIC_PROBE_NAME) return { kind: "unknown", effort: null };
+  if (name.startsWith(READ_ONLY_DISPATCH_PREFIX)) {
+    const effort = name.slice(READ_ONLY_DISPATCH_PREFIX.length);
+    if (isEffort(effort)) return { kind: "read_only_codex_dispatch", effort };
+    return { kind: "ticket", effort: null };
+  }
+  if (name.startsWith(READ_ONLY_CLAUDE_PREFIX)) {
+    const effort = name.slice(READ_ONLY_CLAUDE_PREFIX.length);
+    if (isEffort(effort)) return { kind: "read_only_claude_builtin", effort };
+    return { kind: "ticket", effort: null };
+  }
+  if (name.startsWith(DISPATCH_PREFIX)) {
+    const effort = name.slice(DISPATCH_PREFIX.length);
+    if (isEffort(effort)) return { kind: "codex_dispatch", effort };
+    return { kind: "ticket", effort: null };
+  }
+  if (name.startsWith(CLAUDE_PREFIX)) {
+    const effort = name.slice(CLAUDE_PREFIX.length);
+    if (isEffort(effort)) return { kind: "claude_builtin", effort };
+    return { kind: "ticket", effort: null };
+  }
+  if (name.startsWith(TICKET_PREFIX)) return { kind: "ticket", effort: null };
+  if (name.startsWith(LEGACY_TICKET_PREFIX)) return { kind: "legacy_ticket", effort: null };
+  return { kind: "unknown", effort: null };
 }
 
 // src/hooks/shared/input.ts
@@ -281,13 +319,188 @@ function writeSessionState(file, state) {
   import_node_fs2.default.writeFileSync(file, JSON.stringify(state));
 }
 
+// src/hooks/shared/read-only-shell.ts
+var import_node_fs4 = __toESM(require("node:fs"));
+var import_node_os2 = __toESM(require("node:os"));
+var import_node_path4 = __toESM(require("node:path"));
+
+// src/hooks/shared/runtime-identity.ts
+var import_node_fs3 = __toESM(require("node:fs"));
+var import_node_path3 = __toESM(require("node:path"));
+function canonicalPath(value) {
+  const kernel = require(runtimeModule("kernel/worktree"));
+  return kernel.canonicalPath(value);
+}
+function enclosingCheckout(start) {
+  let directory = canonicalPath(start);
+  for (; ; ) {
+    const gitEntry = import_node_path3.default.join(directory, ".git");
+    let stats = null;
+    try {
+      stats = import_node_fs3.default.statSync(gitEntry);
+    } catch (_) {
+      stats = null;
+    }
+    if (stats) return { root: directory, linked: stats.isFile() };
+    const parent = import_node_path3.default.dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
+}
+
+// src/hooks/shared/read-only-shell.ts
+var SHELL_TOKEN_RE = /((?:\d|&)?>>?(?:&\d?)?|&&|\|\||[|;\n])|("(?:[^"\\]|\\.)*"|'[^']*'|[^\s|;&<>"']+)/g;
+var SEGMENT_OPERATORS = /* @__PURE__ */ new Set(["&&", "||", "|", ";", "\n"]);
+var NULL_SINKS = /* @__PURE__ */ new Set(["/dev/null", "nul", "$null"]);
+var MUTATING_GIT = /* @__PURE__ */ new Set([
+  "add",
+  "am",
+  "apply",
+  "checkout",
+  "cherry-pick",
+  "clean",
+  "commit",
+  "merge",
+  "mv",
+  "pull",
+  "push",
+  "rebase",
+  "reset",
+  "restore",
+  "revert",
+  "rm",
+  "stash",
+  "switch"
+]);
+function operands(words) {
+  return words.slice(1).filter((word) => !word.startsWith("-"));
+}
+function gitWriteTargets(words) {
+  const flagIndex = words.indexOf("-C");
+  const directory = flagIndex > 0 ? words[flagIndex + 1] : ".";
+  const subcommand = operands(words).find((word) => word !== directory);
+  return MUTATING_GIT.has(String(subcommand)) ? [directory || "."] : [];
+}
+function inPlaceEditTargets(words) {
+  return words.some((word) => /^-[a-z]*i/i.test(word)) ? operands(words).slice(1) : [];
+}
+var WRITE_TARGET_READERS = new Map([
+  ...[
+    "rm",
+    "rmdir",
+    "mv",
+    "touch",
+    "mkdir",
+    "tee",
+    "truncate",
+    "chmod",
+    "chown",
+    "unlink",
+    "remove-item",
+    "set-content",
+    "add-content",
+    "out-file",
+    "new-item",
+    "move-item",
+    "rename-item",
+    "clear-content",
+    "ri",
+    "ni",
+    "del",
+    "erase",
+    "rd",
+    "md",
+    "move",
+    "ren"
+  ].map((name) => [name, operands]),
+  ...["cp", "copy", "copy-item", "ln", "install", "rsync"].map((name) => [name, (words) => operands(words).slice(-1)]),
+  ["sed", inPlaceEditTargets],
+  ["perl", inPlaceEditTargets],
+  ["git", gitWriteTargets]
+]);
+function commandWriteTargets(words) {
+  const name = import_node_path4.default.basename(words[0] || "").toLowerCase().replace(/\.exe$/, "");
+  const reader = WRITE_TARGET_READERS.get(name);
+  return reader ? reader(words) : [];
+}
+function shellTokens(command) {
+  return [...command.matchAll(SHELL_TOKEN_RE)].map((match) => match[1] ? { operator: match[1] } : { word: match[2].replace(/^(["'])([\s\S]*)\1$/, "$2") });
+}
+function shellSegments(command) {
+  const segments = [{ words: [], redirects: [] }];
+  let pendingRedirect = false;
+  for (const token of shellTokens(command)) {
+    const segment = segments[segments.length - 1];
+    if ("word" in token) {
+      (pendingRedirect ? segment.redirects : segment.words).push(token.word);
+      pendingRedirect = false;
+    } else if (SEGMENT_OPERATORS.has(token.operator)) {
+      segments.push({ words: [], redirects: [] });
+    } else {
+      pendingRedirect = !token.operator.includes("&", 1);
+    }
+  }
+  return segments;
+}
+function ignoredTarget(word) {
+  return !word || word.startsWith("$") || NULL_SINKS.has(word.toLowerCase());
+}
+function nativePath(word) {
+  if (word === "~" || word.startsWith("~/")) return import_node_path4.default.join(import_node_os2.default.homedir(), word.slice(1));
+  return process.platform === "win32" ? word.replace(/^\/([a-z])(\/|$)/i, "$1:/") : word;
+}
+function resolvedTarget(base, word) {
+  return ignoredTarget(word) ? null : import_node_path4.default.resolve(base, nativePath(word));
+}
+function mainCheckoutOf(linkedRoot) {
+  const pointer = /^gitdir:\s*(.+)$/m.exec(import_node_fs4.default.readFileSync(import_node_path4.default.join(linkedRoot, ".git"), "utf8"));
+  return pointer ? import_node_path4.default.resolve(linkedRoot, pointer[1].trim(), "..", "..", "..") : null;
+}
+function checkoutRoots(cwd) {
+  const checkout = enclosingCheckout(cwd);
+  if (!checkout) return [];
+  const main2 = checkout.linked ? mainCheckoutOf(checkout.root) : null;
+  return main2 ? [checkout.root, main2] : [checkout.root];
+}
+function comparable(value) {
+  return process.platform === "win32" ? value.toLowerCase() : value;
+}
+function isWithin(root, target) {
+  const relative = import_node_path4.default.relative(comparable(root), comparable(target));
+  return !relative.startsWith("..") && !import_node_path4.default.isAbsolute(relative);
+}
+function insideAny(roots, target) {
+  return roots.some((root) => isWithin(root, target));
+}
+function nextBase(words, base) {
+  return words[0] === "cd" && words[1] ? resolvedTarget(base, words[1]) || base : base;
+}
+function segmentWriteTargets(segment, base) {
+  return [...segment.redirects, ...commandWriteTargets(segment.words)].map((word) => resolvedTarget(base, word)).filter((target) => target !== null);
+}
+function firstCheckoutWrite(command, cwd) {
+  const roots = checkoutRoots(cwd);
+  let base = import_node_path4.default.resolve(cwd);
+  for (const segment of shellSegments(command)) {
+    base = nextBase(segment.words, base);
+    const blocked = segmentWriteTargets(segment, base).find((target) => insideAny(roots, target));
+    if (blocked) return blocked;
+  }
+  return null;
+}
+function readOnlyShellRefusal(command, cwd) {
+  const blocked = firstCheckoutWrite(command, cwd);
+  return blocked ? `sidequest: read-only executor, refusing a shell write inside the repository checkout (${blocked}). Keep temporary files and evidence outside the checkout, in your scratchpad or the ticket's verification directory. If the ticket needs a repository change, comment the needed edit on the ticket and release it instead.` : null;
+}
+
 // src/hooks/force-exec-bypass.ts
-var { canonicalPath } = require(import_node_path3.default.join(__dirname, "..", "lib", "worktrees.js"));
-var { isInScope: scopeMatch } = require(import_node_path3.default.join(__dirname, "..", "lib", "scope-match.js"));
+var { canonicalPath: canonicalPath2 } = require(import_node_path5.default.join(__dirname, "..", "lib", "worktrees.js"));
+var { isInScope: scopeMatch } = require(import_node_path5.default.join(__dirname, "..", "lib", "scope-match.js"));
 var PASS_THROUGH_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "statusline-setup"]);
 var EXECUTOR_HELPER_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "web-researcher", "general-purpose"]);
 var HELPER_REVIEW_WORK_RE = /\b(?:audits?|auditors?|auditing|audited|reviews?|reviewers?|reviewing|reviewed|review-audit)\b/i;
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+var SHELL_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 function fallbackClassify(type) {
   const readOnlyDispatch = /^sidequest-exec-dispatch-readonly(?:-(low|medium|high|xhigh|max))?$/.exec(type);
   if (readOnlyDispatch) return { kind: "read_only_codex_dispatch", effort: readOnlyDispatch[1] || null };
@@ -331,7 +544,7 @@ function helperModelDenyReason(type) {
 }
 function helperEvidenceRule(input) {
   const transcriptPath = stringField(input, "transcript_path", "transcriptPath").trim();
-  const sessionPaths = transcriptPath ? [transcriptPath, import_node_path3.default.join(import_node_path3.default.dirname(transcriptPath), "subagents")] : [];
+  const sessionPaths = transcriptPath ? [transcriptPath, import_node_path5.default.join(import_node_path5.default.dirname(transcriptPath), "subagents")] : [];
   const knownLocations = sessionPaths.length ? ` Current session self-reference locations: ${sessionPaths.join(", ")}.` : "";
   return "\n\nEvidence rule: quoted ticket strings appear in this session’s context and generated transcripts. A match in the parent or helper session transcript, subagent transcript, or task-output files is self-reference, not evidence: report it as such. Do not search session, transcript, or task-output directories for evidence. Cite only the directly reachable artifact under investigation; if it is outside the parent worktree or otherwise unavailable, report a visibility block rather than a finding." + knownLocations;
 }
@@ -827,7 +1040,7 @@ function writeTarget(input) {
   const raw = writeTargetValue(input);
   if (!raw) return "";
   const cwd = stringField(input, "cwd") || process.cwd();
-  return import_node_path3.default.resolve(cwd, raw);
+  return import_node_path5.default.resolve(cwd, raw);
 }
 function restoresCommittedContent(input, target) {
   try {
@@ -837,20 +1050,20 @@ function restoresCommittedContent(input, target) {
     if (toolName === "Write" && typeof toolInput?.content === "string") {
       restored = toolInput.content;
     } else if (toolName === "Edit" && typeof toolInput?.old_string === "string" && typeof toolInput.new_string === "string") {
-      const current = import_node_fs3.default.readFileSync(target, "utf8");
+      const current = import_node_fs5.default.readFileSync(target, "utf8");
       const first = current.indexOf(toolInput.old_string);
       if (first < 0 || !toolInput.replace_all && current.indexOf(toolInput.old_string, first + toolInput.old_string.length) >= 0) return false;
       restored = toolInput.replace_all ? current.split(toolInput.old_string).join(toolInput.new_string) : `${current.slice(0, first)}${toolInput.new_string}${current.slice(first + toolInput.old_string.length)}`;
     } else {
       return false;
     }
-    const repository = canonicalPath(execFileSync("git", ["rev-parse", "--show-toplevel"], {
-      cwd: import_node_path3.default.dirname(target),
+    const repository = canonicalPath2(execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: import_node_path5.default.dirname(target),
       encoding: "utf8",
       windowsHide: true
     }).trim());
-    const relative = import_node_path3.default.relative(repository, canonicalPath(target)).replace(/\\/g, "/");
-    if (!relative || relative === ".." || relative.startsWith("../") || import_node_path3.default.isAbsolute(relative)) return false;
+    const relative = import_node_path5.default.relative(repository, canonicalPath2(target)).replace(/\\/g, "/");
+    if (!relative || relative === ".." || relative.startsWith("../") || import_node_path5.default.isAbsolute(relative)) return false;
     const committed = execFileSync("git", ["show", `HEAD:${relative}`], {
       cwd: repository,
       windowsHide: true
@@ -861,18 +1074,18 @@ function restoresCommittedContent(input, target) {
   }
 }
 function relativeInside(root, target) {
-  const relative = import_node_path3.default.relative(root, target).replace(/\\/g, "/");
-  return relative && relative !== ".." && !relative.startsWith("../") && !import_node_path3.default.isAbsolute(relative) ? relative : null;
+  const relative = import_node_path5.default.relative(root, target).replace(/\\/g, "/");
+  return relative && relative !== ".." && !relative.startsWith("../") && !import_node_path5.default.isAbsolute(relative) ? relative : null;
 }
 function linkedWorktreeRelative(target, projectPath) {
-  let existing = import_node_path3.default.dirname(target);
-  while (!import_node_fs3.default.existsSync(existing)) {
-    const parent = import_node_path3.default.dirname(existing);
+  let existing = import_node_path5.default.dirname(target);
+  while (!import_node_fs5.default.existsSync(existing)) {
+    const parent = import_node_path5.default.dirname(existing);
     if (parent === existing) return null;
     existing = parent;
   }
   try {
-    const checkout = canonicalPath(execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    const checkout = canonicalPath2(execFileSync("git", ["rev-parse", "--show-toplevel"], {
       cwd: existing,
       encoding: "utf8",
       windowsHide: true
@@ -882,8 +1095,8 @@ function linkedWorktreeRelative(target, projectPath) {
       encoding: "utf8",
       windowsHide: true
     }).trim();
-    const common = canonicalPath(import_node_path3.default.isAbsolute(commonOutput) ? commonOutput : import_node_path3.default.resolve(checkout, commonOutput));
-    if (common !== canonicalPath(import_node_path3.default.join(projectPath, ".git"))) return null;
+    const common = canonicalPath2(import_node_path5.default.isAbsolute(commonOutput) ? commonOutput : import_node_path5.default.resolve(checkout, commonOutput));
+    if (common !== canonicalPath2(import_node_path5.default.join(projectPath, ".git"))) return null;
     return relativeInside(checkout, target);
   } catch (_) {
     return null;
@@ -898,14 +1111,14 @@ function projectRelative(target, projectPath) {
   return linkedWorktreeRelative(target, projectPath);
 }
 function inScope(target, scope) {
-  const canonicalTarget = canonicalPath(target);
-  const relative = projectRelative(canonicalTarget, canonicalPath(scope.projectPath));
+  const canonicalTarget = canonicalPath2(target);
+  const relative = projectRelative(canonicalTarget, canonicalPath2(scope.projectPath));
   if (relative != null) return scopeMatch(relative, scope.files);
-  return scopeMatch(canonicalTarget, scope.files.filter((file) => import_node_path3.default.isAbsolute(file)).map(canonicalPath));
+  return scopeMatch(canonicalTarget, scope.files.filter((file) => import_node_path5.default.isAbsolute(file)).map(canonicalPath2));
 }
 function evidencePathRelation(target, scope) {
-  const evidenceDirectory = canonicalPath(scope.evidenceDirectory);
-  const canonicalTarget = canonicalPath(target);
+  const evidenceDirectory = canonicalPath2(scope.evidenceDirectory);
+  const canonicalTarget = canonicalPath2(target);
   if (relativeInside(evidenceDirectory, canonicalTarget) != null) return "inside";
   if (evidenceDirectory === canonicalTarget || relativeInside(canonicalTarget, evidenceDirectory) != null) return "related";
   return null;
@@ -914,8 +1127,8 @@ function evidenceTraversalAttempt(input, scope) {
   const rawTarget = writeTargetValue(input);
   if (!rawTarget) return false;
   const cwd = stringField(input, "cwd") || process.cwd();
-  const candidate = (import_node_path3.default.isAbsolute(rawTarget) ? rawTarget : import_node_path3.default.join(cwd, rawTarget)).replace(/\\/g, "/");
-  const evidenceDirectory = import_node_path3.default.resolve(scope.evidenceDirectory).replace(/\\/g, "/").replace(/\/+$/, "");
+  const candidate = (import_node_path5.default.isAbsolute(rawTarget) ? rawTarget : import_node_path5.default.join(cwd, rawTarget)).replace(/\\/g, "/");
+  const evidenceDirectory = import_node_path5.default.resolve(scope.evidenceDirectory).replace(/\\/g, "/").replace(/\/+$/, "");
   const comparableCandidate = process.platform === "win32" ? candidate.toLowerCase() : candidate;
   const comparableDirectory = process.platform === "win32" ? evidenceDirectory.toLowerCase() : evidenceDirectory;
   if (!comparableCandidate.startsWith(`${comparableDirectory}/`)) return false;
@@ -929,10 +1142,10 @@ function denyEvidenceWrite(target) {
 }
 function isScratchpadPath(target) {
   const configuredRoot = process.env.CLAUDE_SCRATCHPAD_DIR || process.env.CLAUDE_CODE_SCRATCHPAD_DIR;
-  const roots = [configuredRoot, import_node_path3.default.join(import_node_os2.default.tmpdir(), "claude")].filter((root) => Boolean(root));
+  const roots = [configuredRoot, import_node_path5.default.join(import_node_os3.default.tmpdir(), "claude")].filter((root) => Boolean(root));
   return roots.some((root) => {
-    const relative = import_node_path3.default.relative(import_node_path3.default.resolve(root), target);
-    return Boolean(relative) && relative !== ".." && !relative.startsWith(`..${import_node_path3.default.sep}`) && !import_node_path3.default.isAbsolute(relative);
+    const relative = import_node_path5.default.relative(import_node_path5.default.resolve(root), target);
+    return Boolean(relative) && relative !== ".." && !relative.startsWith(`..${import_node_path5.default.sep}`) && !import_node_path5.default.isAbsolute(relative);
   });
 }
 function guardHelperWrite(input) {
@@ -966,6 +1179,14 @@ function guardHelperWrite(input) {
     "PreToolUse",
     `sidequest: refusing helper write to ${display}. It is outside ${scope.ref}'s effective scope. Ask the parent executor to request scope; a granted ruling takes effect immediately. File a new ticket when this work belongs elsewhere.`
   );
+}
+function guardReadOnlyShell(input) {
+  if (!isReadOnlyExecutor(stringField(input, "agent_type", "agentType"))) return;
+  const refusal = readOnlyShellRefusal(String(toolInputOf(input)?.command ?? ""), stringField(input, "cwd") || process.cwd());
+  if (refusal) writeDeny("PreToolUse", refusal);
+}
+function spawnPermissionFields(reducedAgentSchema, type) {
+  return reducedAgentSchema || isReadOnlyExecutor(type) ? {} : { mode: "bypassPermissions" };
 }
 function guardLateSteer(input) {
   const toolInput = toolInputOf(input);
@@ -1010,6 +1231,10 @@ function main() {
   }
   if (WRITE_TOOLS.has(toolName)) {
     guardHelperWrite(input);
+    return;
+  }
+  if (SHELL_TOOLS.has(toolName)) {
+    guardReadOnlyShell(input);
     return;
   }
   if (toolName !== "Agent") return;
@@ -1084,15 +1309,14 @@ function main() {
     return;
   }
   const reducedAgentSchema = preparedSpawn?.reducedAgentSchema === true;
+  const permissionFields = spawnPermissionFields(reducedAgentSchema, type);
   const updatedInput = {
     ...toolInput,
-    ...reducedAgentSchema ? {} : { mode: "bypassPermissions" },
+    ...permissionFields,
     ...!reducedAgentSchema && isSubagentCaller(input) ? { run_in_background: true } : {}
   };
-  if (reducedAgentSchema) {
-    delete updatedInput.name;
-    delete updatedInput.mode;
-  }
+  if (reducedAgentSchema) delete updatedInput.name;
+  if (!permissionFields.mode) delete updatedInput.mode;
   if (isSubagentCaller(input)) delete updatedInput.isolation;
   const corrections = [];
   if (preparedSpawn?.description && toolInput.description !== preparedSpawn.description) {

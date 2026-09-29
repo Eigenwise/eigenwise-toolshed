@@ -1,4 +1,5 @@
 "use strict";
+const { normalizeDeniedTools } = require("../denied-tools.js");
 function createRouting(dependencies) {
   const {
     activeDispatchRoute,
@@ -573,8 +574,13 @@ function createRouting(dependencies) {
       contract: String(raw.contract || "").trim(),
       artifactRoots: normalizeArtifactRoots(raw.artifactRoots),
       readonly: raw.readonly === true,
-      enabled: raw.enabled !== false
+      enabled: raw.enabled !== false,
+      ...categoryDeniedTools(raw.deniedTools)
     };
+  }
+  function categoryDeniedTools(value) {
+    const deniedTools = normalizeDeniedTools(value, "Category deniedTools");
+    return deniedTools.length ? { deniedTools } : {};
   }
   function routingProfileCategory(profileId, id) {
     const normalizedId = normalizeCategoryId(id);

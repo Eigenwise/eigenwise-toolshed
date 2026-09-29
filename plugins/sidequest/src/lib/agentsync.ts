@@ -40,7 +40,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('node:child_process');
-const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME, bundledAgentType } = require('./exec-names.js');
+const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require('./exec-names.js');
 const { createWorktreeLease, canonicalPath } = require('./kernel/worktree.js');
 const crypto = require('crypto');
 const store = require('./store.js');
@@ -143,10 +143,10 @@ function workflowRecipe(category?: any, resolved?: any) {
   return recipe;
 }
 
-// Render one agent file's full source from the shared template. Every runtime
-// file is user-scoped rather than plugin-scoped so Claude Code honors its
-// permissionMode: bypassPermissions frontmatter. `name` and `effort` are
-// required; `modelId`, `marker`, and `extraNote` are optional.
+// Render one agent file's full source from the shared template. `name` and
+// `effort` are required; `modelId`, `marker`, and `extraNote` are optional.
+// Claude Code ignores permissionMode in plugin agent files ("ignored for plugin
+// agents", 2.1.284), so executors run in the session's inherited mode either way.
 const EXECUTOR_SKILLS = ['sidequest:verify-discipline'];
 
 // Never emit a `tools:` line. `default` is a --allowedTools CLI sentinel, not a valid
@@ -168,7 +168,9 @@ const EXECUTOR_SKILLS = ['sidequest:verify-discipline'];
 // visual-evaluation, a read-only category, could not reach Playwright.
 //
 // This is not a write-proof sandbox and should not be described as one. Bash stays,
-// because a reviewer has to be able to run the suite, and Bash can obviously write.
+// because a reviewer has to be able to run the suite; force-exec-bypass refuses the
+// shell write forms inside the checkout (hooks/shared/read-only-shell), and the
+// definition declares no permissionMode so it never claims bypassPermissions (GH-282).
 const READ_ONLY_DENIED_TOOLS = [
   'Edit', 'Write', 'NotebookEdit',
   // A read-only ticket reports findings; it does not fan out or publish outward. Both
@@ -207,7 +209,6 @@ function renderDiagnosticProbe() {
     'model: haiku',
     'maxTurns: 3',
     'tools: Read, Glob, Grep',
-    'permissionMode: bypassPermissions',
     '---',
     MARKER,
     'Diagnose only the Agent spawn path. Read repository files and report concise evidence. Do not edit, run commands, use network tools, delegate, mention tickets, or investigate ordinary work.',
@@ -259,9 +260,13 @@ function renderDispatchAgent(_effort?: any) {
   }));
 }
 
+function withoutPermissionMode(source: string): string {
+  return source.replace(/^permissionMode: bypassPermissions\n/m, '');
+}
+
 function renderReadOnlyDispatchAgent(_effort?: any, readOnlyDeniedTools?: any) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
-  return collapseEffortProse(renderExecAgent({
+  return withoutPermissionMode(collapseEffortProse(renderExecAgent({
     name: stableReadOnlyDispatchName(),
     effort: 'high',
     modelId: DISPATCH_MODEL_ID,
@@ -269,19 +274,19 @@ function renderReadOnlyDispatchAgent(_effort?: any, readOnlyDeniedTools?: any) {
     extraNote: `${dispatchNote()}${readOnlyNote()}`,
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools,
-  }));
+  })));
 }
 
 function renderReadOnlyClaudeAgent(effort?: any, readOnlyDeniedTools?: any) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
-  return renderExecAgent({
+  return withoutPermissionMode(renderExecAgent({
     name: stableReadOnlyClaudeName(effort),
     effort,
     marker: MARKER,
     extraNote: readOnlyNote(),
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools,
-  });
+  }));
 }
 
 function implementationExecutorSources(): Map<string, string> {
@@ -1236,14 +1241,20 @@ function renderDispatchStub(ticket?: any, projectPath?: any) {
   ].join('\n');
 }
 
+// A read-only executor inherits the session's permission mode instead of asking for bypass (GH-282).
+function unattendedSpawnMode(subagentType: string): { mode?: string } {
+  return isReadOnlyExecutor(subagentType) ? {} : { mode: 'bypassPermissions' };
+}
+
 function agentSpawn(name?: any, isolation?: any, model?: any, agentType?: any, prompt?: any, description?: any, options?: { reducedAgentSchema?: boolean }) {
   const suppliedLabel = typeof description === 'string'
     ? description.replace(EMBEDDED_ROUTE_MARKER_RE, '').replace(/\s+/g, ' ').trim()
     : '';
   const taskLabel = suppliedLabel || 'Sidequest ticket executor.';
   const reducedAgentSchema = options?.reducedAgentSchema === true;
-  return Object.assign({ subagent_type: bundledAgentType(agentType || name), description: taskLabel },
-    reducedAgentSchema ? {} : { name, mode: 'bypassPermissions' },
+  const subagentType = bundledAgentType(agentType || name);
+  return Object.assign({ subagent_type: subagentType, description: taskLabel },
+    reducedAgentSchema ? {} : { name, ...unattendedSpawnMode(subagentType) },
     isolation ? { isolation } : {}, model ? { model } : {}, prompt ? { prompt } : {});
 }
 
