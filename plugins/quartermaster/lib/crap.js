@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { crapScore, functionTokenCount, parseLizardCsv, withBodySpans } = require('./crap-core.cjs');
+const { SCANNED_SOURCE, crapScore, functionTokenCount, parseLizardCsv, withBodySpans } = require('./crap-core.cjs');
 
 const DEFAULT_MAX = 6;
 const DEFAULT_LCOV = 'coverage/lcov.info';
@@ -134,9 +134,16 @@ function measuredFunction(entry, coverage, projectDir) {
   };
 }
 
-/** Each row is widened against its own real source before scoring, so a truncated signature's counted branches raise cc the same way for every reader. */
-function measure(lizardFunctions, coverage, projectDir) {
-  return withBodySpans(lizardFunctions, (file) => readSource(projectDir, file)).map((entry) => measuredFunction(entry, coverage, projectDir));
+/**
+ * Each row is widened against its own real source before scoring, so a truncated signature's counted branches raise cc the same way for every reader.
+ * A function lizard left out of its rows altogether gets one read from that source too; `extraFiles` are files lizard gave no row.
+ */
+function spanRows(lizardFunctions, projectDir, extraFiles = []) {
+  return withBodySpans(lizardFunctions, (file) => readSource(projectDir, file), extraFiles);
+}
+
+function measure(lizardFunctions, coverage, projectDir, extraFiles = []) {
+  return spanRows(lizardFunctions, projectDir, extraFiles).map((entry) => measuredFunction(entry, coverage, projectDir));
 }
 
 /** lizard picks its reader by extension, case-insensitively; undefined for a file its default reader measures honestly. */
@@ -306,7 +313,7 @@ function baselineFunctions({ projectDir, baseReference, files, exclude, runLizar
       const target = path.join(temporaryDir, file);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, show.stdout, 'utf8');
-      for (const entry of measure(lizardRows(runLizard, { cwd: temporaryDir, sources: [file], exclude }), new Map(), temporaryDir)) {
+      for (const entry of measure(lizardRows(runLizard, { cwd: temporaryDir, sources: [file], exclude }), new Map(), temporaryDir, [file])) {
         indexBaselineEntry(index, entry);
       }
     }
@@ -412,13 +419,23 @@ function excludedByConfig(projectDir, exclude) {
   return (filePath) => patterns.some((pattern) => path.matchesGlob(displayPath(projectDir, filePath), pattern));
 }
 
-function unmeasuredLizardFiles(projectDir, sources, entries, changed, exclude) {
-  const measured = new Set(entries.map((entry) => comparablePath(projectDir, entry.file)));
+function configuredSourceFiles(projectDir, sources, exclude) {
   const isExcluded = excludedByConfig(projectDir, exclude);
-  return sources.flatMap((source) => sourceFiles(path.resolve(projectDir, source)))
+  return sources.flatMap((source) => sourceFiles(path.resolve(projectDir, source))).filter((file) => !isExcluded(file));
+}
+
+/** A file whose only rows were read from its source counts as measured once they account for every function keyword in it. */
+function unmeasuredLizardFiles(projectDir, sources, entries, changed, exclude) {
+  const rowKey = (entry) => comparablePath(projectDir, entry.file);
+  const measured = new Set(entries.filter((entry) => entry.source !== SCANNED_SOURCE).map(rowKey));
+  const scanned = new Map();
+  for (const entry of entries) if (entry.source === SCANNED_SOURCE) scanned.set(rowKey(entry), (scanned.get(rowKey(entry)) ?? 0) + 1);
+  return configuredSourceFiles(projectDir, sources, exclude)
     .filter((file) => changed.has(displayPath(projectDir, file)))
-    .filter((file) => !isExcluded(file))
-    .filter((file) => functionTokenCount(fs.readFileSync(file, 'utf8')) && !measured.has(comparablePath(projectDir, file)))
+    .filter((file) => {
+      const tokens = functionTokenCount(fs.readFileSync(file, 'utf8'));
+      return tokens && !measured.has(comparablePath(projectDir, file)) && (scanned.get(comparablePath(projectDir, file)) ?? 0) < tokens;
+    })
     .map((file) => displayPath(projectDir, file));
 }
 
@@ -516,8 +533,8 @@ function functionLabel(entry) {
   return `${entry.file}:${entry.line} ${entry.function}`;
 }
 
-function assertMeasured(workDir, settings, { lizardEntries, changed, candidates }) {
-  const lizardFailures = unmeasuredLizardFiles(workDir, settings.sources, lizardEntries, changed, settings.exclude);
+function assertMeasured(workDir, settings, { rows, changed, candidates }) {
+  const lizardFailures = unmeasuredLizardFiles(workDir, settings.sources, rows, changed, settings.exclude);
   if (lizardFailures.length) throw new PrerequisiteError(`lizard reported zero functions for ${lizardFailures.join(', ')}`, 'measurement is unverified; fix the parser input before passing the gate');
   const unmeasured = candidates.filter((entry) => entry.unmeasured);
   if (unmeasured.length) throw new PrerequisiteError(`coverage is unverified for ${unmeasured.map(functionLabel).join(', ')}`, 'run coverage that includes every changed function before passing the gate');
@@ -544,10 +561,12 @@ function crapReport(options) {
   const settings = gateSettings(options, readConfig(projectPathGiven ? projectDir : workDir));
   const lcovText = acquireLcovText(workDir, settings);
   const lizardEntries = complexityEntries(workDir, options, settings);
-  const functions = measure(lizardEntries, coverageByFile(lcovText, workDir), workDir);
+  const rows = spanRows(lizardEntries, workDir, configuredSourceFiles(workDir, settings.sources, settings.exclude).map((file) => displayPath(workDir, file)));
+  const coverage = coverageByFile(lcovText, workDir);
+  const functions = rows.map((entry) => measuredFunction(entry, coverage, workDir));
   const baseline = baselineFor(workDir, settings, functions);
   const candidates = changedFunctions(functions, baseline);
-  assertMeasured(workDir, settings, { lizardEntries, changed: changedFiles(baseline, functions), candidates });
+  assertMeasured(workDir, settings, { rows, changed: changedFiles(baseline, functions), candidates });
   return gateResult(workDir, functions, candidates, baseline, settings.usedDeprecatedRatchet);
 }
 
