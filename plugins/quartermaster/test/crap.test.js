@@ -806,6 +806,24 @@ test('a truncated function whose body this scan cannot close keeps lizard\'s row
   );
 });
 
+test('a widened body reads block comments and template text as no code, and counts the code inside a template expression', () => {
+  const source = [
+    'function describe(read = (v) => v, label) {',
+    '  /* holds { an open brace,',
+    '     an if (x) and a && */',
+    "  const tag = `row ${read({ id: label }) || 'none'} \\` if (x) { ${`inner ${label}`}`;",
+    '  if (label) return tag;',
+    '  return `${tag}`;',
+    '}',
+    '',
+  ].join('\n');
+
+  const [row] = withBodySpans([{ file: 'src/describe.js', name: 'describe', ordinal: 0, complexity: 1, start: 1, end: 1 }], () => source);
+
+  // One `||` inside the first `${...}` and the `if` on line 5; the comment's and the template text's `{`, `if` and `&&` count nothing.
+  assert.deepEqual([row.end, row.complexity], [7, 3]);
+});
+
 test('the real lizard backend measures a JSX component with a function-typed prop over its body', () => {
   const probe = spawnSync('lizard', ['--version'], { encoding: 'utf8' });
   if (probe.error || probe.status !== 0) return;
