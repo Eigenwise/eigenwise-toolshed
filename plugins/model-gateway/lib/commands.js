@@ -929,9 +929,12 @@ function isUnwiredGatewayEnv(env) {
 }
 
 async function syncUnwiredPinsIn(file) {
+  if (!isUnwiredGatewayEnv(readSettingsIfPresent(file)?.env)) return;
+  await refreshDetectedPinsAndWiring();
+  // The alias probes take seconds and anything may write this file meanwhile,
+  // so decide and write from what is on disk after them, not the first read.
   const settings = readSettingsIfPresent(file);
   if (!isUnwiredGatewayEnv(settings?.env)) return;
-  await refreshDetectedPinsAndWiring();
   const updates = stalePinUpdates(settings.env);
   if (!updates.length) return;
   for (const { key, to } of updates) settings.env[key] = to;

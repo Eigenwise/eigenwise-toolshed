@@ -1061,6 +1061,12 @@ function installFakeClaude(home) {
     "  }",
     "  fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ args, input, baseUrl: process.env.ANTHROPIC_BASE_URL, apiKey: process.env.ANTHROPIC_API_KEY, oauth: process.env.CLAUDE_CODE_OAUTH_TOKEN, proxies: { http: process.env.HTTP_PROXY, https: process.env.HTTPS_PROXY, all: process.env.ALL_PROXY }, trafficControls: { nonessential: process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, autoUpdater: process.env.DISABLE_AUTOUPDATER, telemetry: process.env.DISABLE_TELEMETRY, errorReporting: process.env.DISABLE_ERROR_REPORTING } }) + '\\n');",
     "  if (alias === 'fable' && attempt <= Number(process.env.FAKE_CLAUDE_FABLE_FAILURES || 0)) return;",
+    "  if (alias === 'opus' && process.env.FAKE_CLAUDE_EDIT_SETTINGS) {",
+    "    const file = process.env.FAKE_CLAUDE_EDIT_SETTINGS;",
+    "    const settings = JSON.parse(fs.readFileSync(file, 'utf8'));",
+    "    const edit = JSON.parse(process.env.FAKE_CLAUDE_EDIT_JSON);",
+    "    fs.writeFileSync(file, JSON.stringify({ ...settings, ...edit, env: { ...settings.env, ...edit.env } }));",
+    "  }",
     "  const printInit = () => console.log(JSON.stringify({ type: 'system', subtype: 'init', model: process.env[`FAKE_CLAUDE_${alias.toUpperCase()}`] || `claude-${alias}-9` }));",
     "  if (process.env.FAKE_CLAUDE_EGRESS === '1' && process.env.HTTPS_PROXY) {",
     "    const proxy = new URL(process.env.HTTPS_PROXY);",
@@ -1375,6 +1381,56 @@ test('a project with the gateway turned off keeps its pins current across Claude
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+function unwiredPinProject(prefix) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-home-`));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-project-`));
+  const claude = installFakeClaude(home);
+  const settingsFile = path.join(cwd, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({
+    env: { CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1', ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5[1m]' },
+  }));
+  const env = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    FAKE_CLAUDE_LOG: claude.logFile,
+    CODEX_GATEWAY_CLAUDE_BIN: claude.command,
+    FAKE_CLAUDE_EDIT_SETTINGS: settingsFile,
+  };
+  const cleanup = () => {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  };
+  return { cwd, env, settingsFile, cleanup };
+}
+
+// The alias probes run between deciding to sync and writing, so a write made
+// by anything else in that window has to survive the sync.
+test('unwired pin sync keeps a settings edit made while the alias probes run', () => {
+  const { cwd, env, settingsFile, cleanup } = unwiredPinProject('model-gateway-unwired-race');
+  try {
+    runSyncUnwiredPins(cwd, { ...env, FAKE_CLAUDE_EDIT_JSON: JSON.stringify({ permissions: { allow: ['Bash(ls)'] } }) });
+    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    assert.deepEqual(settings.permissions, { allow: ['Bash(ls)'] });
+    assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-9[1m]');
+  } finally {
+    cleanup();
+  }
+});
+
+test('unwired pin sync leaves a file that was wired while the alias probes ran', () => {
+  const { cwd, env, settingsFile, cleanup } = unwiredPinProject('model-gateway-unwired-rewired');
+  try {
+    runSyncUnwiredPins(cwd, { ...env, FAKE_CLAUDE_EDIT_JSON: JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:18764' } }) });
+    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    assert.equal(settings.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:18764');
+    assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]', 'a wired file is syncGatewayWiring\'s to update');
+  } finally {
+    cleanup();
   }
 });
 
