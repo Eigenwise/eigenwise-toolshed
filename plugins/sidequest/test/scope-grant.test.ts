@@ -222,6 +222,28 @@ test('MCP scopeRequest grants with grant:true and refuses files alongside it', a
   assert.equal(covered.instruction, undefined);
 });
 
+// GitHub #174 follow-up: the subagent hook only denies grant:true (boolean), and
+// validateToolArguments does not type-check the schema's `grant: boolean` property,
+// so a non-boolean grant (a string or number) reached the handler's `if (args.grant)`
+// truthiness check and granted. The handler must require `args.grant === true`.
+test('MCP scopeRequest does not grant on a non-boolean grant value', async () => {
+  const fixture = createClaimedDispatch();
+  const { makeMcpCaller } = require('./_helpers.js');
+  const { callToolRaw } = makeMcpCaller(require('../lib/mcp.js'));
+  assert.equal(fixture.store.requestScope(fixture.project, fixture.ticket.ref, fixture.worker, [REFUSED_PATH]).state, 'refused');
+
+  for (const looseGrant of ['true', 1]) {
+    const result = await callToolRaw('scopeRequest', { ref: fixture.ticket.ref, by: 'mcp-orchestrator', grant: looseGrant });
+    assert.equal(result?.isError, true, `grant:${JSON.stringify(looseGrant)} must not be treated as a grant`);
+    assert.match(String(result?.content?.[0]?.text), /pass files, or grant:true/);
+  }
+
+  // Nothing was granted: the refusal still stands and declaredFiles is untouched.
+  const ticket = fixture.store.getTicket(fixture.project, fixture.ticket.ref);
+  assert.equal(ticket.scopeResolution.state, 'refused');
+  assert.equal(ticket.dispatch.declaredFiles.some((f: string) => f.toLowerCase() === REFUSED_PATH.toLowerCase()), false);
+});
+
 test('MCP scopeRequest tells a refused executor to bounce only when nothing else can widen scope', async () => {
   const fixture = createClaimedDispatch();
   const { makeMcpCaller } = require('./_helpers.js');
@@ -311,4 +333,19 @@ test('scope-request --grant no longer exists', () => {
   // The refusal is untouched: no CLI path took it.
   const ticket = fixture.store.getTicket(fixture.project, fixture.ticket.ref);
   assert.equal(ticket.dispatch.declaredFiles.some((f: string) => f.toLowerCase() === REFUSED_PATH.toLowerCase()), false);
+});
+
+test('scope-request --json prints the ruling and exits nonzero only on failure', () => {
+  const fixture = createClaimedDispatch();
+  const refused = cli(cliEnv(fixture), ['scope-request', fixture.ticket.ref, '--file', REFUSED_PATH, '--by', fixture.worker, '--json']);
+  assert.equal(refused.status, 0, refused.stderr);
+  const refusedBody = JSON.parse(refused.stdout);
+  assert.equal(refusedBody.state, 'refused');
+  assert.deepEqual(refusedBody.refused, [REFUSED_PATH]);
+
+  const missing = cli(cliEnv(fixture), ['scope-request', 'SQ-does-not-exist', '--file', REFUSED_PATH, '--by', fixture.worker, '--json']);
+  assert.equal(missing.status, 1);
+  const missingBody = JSON.parse(missing.stdout);
+  assert.equal(missingBody.ok, false);
+  assert.equal(missingBody.reason, 'not_found');
 });

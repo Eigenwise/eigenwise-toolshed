@@ -1998,6 +1998,18 @@ test('pre-tool hook denies a subagent MCP scopeRequest carrying grant:true (GitH
   });
   assert.equal(noGrant, null, 'a non-grant scopeRequest reaches the handler');
 
+  // The hook's own grant check is `=== true`, so a truthy-but-not-boolean grant
+  // (a string or number an executor could pass) is not this hook's job to deny;
+  // the MCP handler's own `args.grant === true` check is what refuses it (GitHub #174 follow-up).
+  for (const looseGrant of ['true', 1]) {
+    const loose = runHookOutput(FORCE_BYPASS, {
+      ...subagent,
+      tool_name: 'mcp__plugin_sidequest_board__scopeRequest',
+      tool_input: { ref: 'SQ-2397', by: 'orchestrator', grant: looseGrant },
+    });
+    assert.equal(loose, null, `a non-boolean grant:${JSON.stringify(looseGrant)} is not denied by the hook`);
+  }
+
   // The main thread reaches the handler even with grant:true.
   const mainThread = runHookOutput(FORCE_BYPASS, {
     tool_name: 'mcp__plugin_sidequest_board__scopeRequest',

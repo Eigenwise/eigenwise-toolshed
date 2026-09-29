@@ -411,38 +411,50 @@ const CLOSEOUT_UPDATE_FIELDS = new Set([
   'executorVerify', 'executorVerifyKind', 'executorAttestationArtifact',
 ]);
 
+type LiveClaimMutationRule = {
+  toolName: string;
+  matches(toolInput: Record<string, unknown>): boolean;
+  message: string;
+};
+
+// One rule per MCP tool that can mutate a live claim's closeout state. Keyed
+// by tool name so the refusal check below is a lookup, not a branch chain.
+const LIVE_CLAIM_MUTATION_RULES: readonly LiveClaimMutationRule[] = [
+  {
+    toolName: 'mcp__plugin_sidequest_board__update',
+    matches: (toolInput) => Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(toolInput, field)),
+    message: 'sidequest: subagents cannot update closeout fields through MCP. Use scopeRequest for files, or ask the orchestrator to set other closeout flags from the main thread.',
+  },
+  {
+    toolName: 'mcp__plugin_sidequest_board__scopeRequest',
+    // scopeRequest with grant:true widens declaredFiles for a refusal the ticket
+    // already recorded, which is a live-claim mutation just like the update fields
+    // above. Without this, a subagent could pass by:'orchestrator' to mint the
+    // grant itself; the store's by-mismatch check only catches the claim holder's
+    // own by, not an impersonated one.
+    matches: (toolInput) => toolInput.grant === true,
+    message: 'sidequest: subagents cannot grant a refused scope request through MCP. Ask the orchestrator to grant it from the main thread.',
+  },
+  {
+    toolName: 'mcp__plugin_sidequest_board__remove',
+    // force:true is the only path that deletes a live-claimed ticket, so it is the
+    // executor's escape hatch (delete the ticket to shed the claim). The store
+    // refuses ungranted live-claim deletion, but deny it here too so a subagent
+    // can never mint the main-thread grant by riding the MCP remove handler.
+    matches: (toolInput) => toolInput.force === true,
+    message: 'sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.',
+  },
+];
+
 function executorLiveClaimMutationRefusal(input: HookInput): boolean {
   if (!isSubagentCaller(input)) return false;
   const toolName = stringField(input, 'tool_name');
   const toolInput = toolInputOf(input);
-  if (toolName === 'mcp__plugin_sidequest_board__update'
-    && toolInput
-    && Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(toolInput, field))) {
-    writeDeny('PreToolUse', 'sidequest: subagents cannot update closeout fields through MCP. Use scopeRequest for files, or ask the orchestrator to set other closeout flags from the main thread.');
-    return true;
-  }
-  // scopeRequest with grant:true widens declaredFiles for a refusal the ticket
-  // already recorded, which is a live-claim mutation just like the update fields
-  // above. Without this, a subagent could pass by:'orchestrator' to mint the
-  // grant itself; the store's by-mismatch check only catches the claim holder's
-  // own by, not an impersonated one.
-  if (toolName === 'mcp__plugin_sidequest_board__scopeRequest'
-    && toolInput
-    && toolInput.grant === true) {
-    writeDeny('PreToolUse', 'sidequest: subagents cannot grant a refused scope request through MCP. Ask the orchestrator to grant it from the main thread.');
-    return true;
-  }
-  // force:true is the only path that deletes a live-claimed ticket, so it is the
-  // executor's escape hatch (delete the ticket to shed the claim). The store
-  // refuses ungranted live-claim deletion, but deny it here too so a subagent
-  // can never mint the main-thread grant by riding the MCP remove handler.
-  if (toolName === 'mcp__plugin_sidequest_board__remove'
-    && toolInput
-    && toolInput.force === true) {
-    writeDeny('PreToolUse', 'sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.');
-    return true;
-  }
-  return false;
+  if (!toolInput) return false;
+  const rule = LIVE_CLAIM_MUTATION_RULES.find((candidate) => candidate.toolName === toolName && candidate.matches(toolInput));
+  if (!rule) return false;
+  writeDeny('PreToolUse', rule.message);
+  return true;
 }
 
 // Last resort for a single-ticket launch whose board record could not be read
