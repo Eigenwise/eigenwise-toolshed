@@ -762,6 +762,9 @@ test('sibling ensure retires dead records without deleting replacement worker an
   await waitForPidRecordDetails(path.join(state, 'shim.pid.json'), replacementWorkerPid);
   await waitForPidRecordDetails(path.join(state, 'proxy.pid.json'), replacementProxyPid);
   fs.writeFileSync(path.join(state, 'shim.pid.json'), JSON.stringify({ pid: replacementWorkerPid, command: 'replaced worker' }));
+  // The older supervisor's own exit can lag ensure's exit on a slow runner; give it
+  // a bounded window before asserting it is gone rather than checking instantly.
+  await waitForProcessesToExit([olderShim.pid], 5000);
   assert.equal(processIsRunning(olderShim.pid), false, 'ensure stopped the previous sibling supervisor');
   assert.equal(processIsRunning(replacementWorkerPid), true, 'ensure launched the replacement worker');
   assert.equal(processIsRunning(replacementProxyPid), true, 'ensure launched the replacement proxy');
