@@ -43,6 +43,7 @@ function bindClaimRuntimeIdentity(input: HookInput, agentId: string, executor: s
     const found = store.findProject(project);
     if (found.ok && found.slug) {
       const binding = store.bindClaimRuntimeIdentity(found.slug, ref, {
+        observedWorktree: observedLinkedCheckout(input),
         token: toolInput.token,
         tokenFile: toolInput.tokenFile,
         executor,
@@ -63,22 +64,72 @@ function bindClaimRuntimeIdentity(input: HookInput, agentId: string, executor: s
   return true;
 }
 
+// The harness confines an isolated executor to the linked checkout it created, so the call's cwd is the one fact that
+// can settle a crossed creation-order lease (SQ-55). The parent checkout proves nothing, so only a linked one is named.
+function observedLinkedCheckout(input: HookInput): string | null {
+  const cwd = stringField(input, 'cwd');
+  const checkout = cwd ? enclosingCheckout(cwd) : null;
+  return checkout?.linked ? checkout.root : null;
+}
+
+type ReleaseCheckoutStore = {
+  findProject(project: string): { ok?: boolean; slug?: string };
+  sessionProjectRoot(): string;
+  recordReleaseObservedCheckout(slug: string, ref: string, options: unknown): unknown;
+};
+
+function releaseToolInput(input: HookInput): HookInput | null {
+  return stringField(input, 'tool_name') === 'mcp__plugin_sidequest_board__release' && isRecord(input.tool_input) ? input.tool_input : null;
+}
+
+function releaseCall(input: HookInput) {
+  const toolInput = releaseToolInput(input);
+  if (!toolInput) return null;
+  const ref = stringField(toolInput, 'ref').trim();
+  const by = stringField(toolInput, 'by').trim();
+  return ref && by ? { ref, by, project: stringField(toolInput, 'project').trim() } : null;
+}
+
+// `project` is optional on release, as on claim, and the MCP handler resolves an omitted one the same way.
+function releaseProjectSlug(store: ReleaseCheckoutStore, project: string): string | null {
+  const found = store.findProject(project || store.sessionProjectRoot());
+  return found.ok && found.slug ? found.slug : null;
+}
+
+// A crossed executor's release is made from the checkout the harness confined it to, which can differ from the one its
+// ticket records (SQ-75, GitHub #298). Reporting it lets the release key the retained continuation to where the work
+// really is.
+function recordReleaseCheckout(input: HookInput, agentId: string, checkoutRoot: string): void {
+  const release = releaseCall(input);
+  if (!release) return;
+  try {
+    const store = require(runtimeModule('store')) as ReleaseCheckoutStore;
+    const slug = releaseProjectSlug(store, release.project);
+    if (slug) store.recordReleaseObservedCheckout(slug, release.ref, { by: release.by, agentId, observedWorktree: checkoutRoot });
+  } catch (_) {
+  }
+}
+
+function executorCheckoutRoot(input: HookInput, agentId: string, executor: string): string | null {
+  return agentId && executorAgent(executor) ? observedLinkedCheckout(input) : null;
+}
+
+function rebindObservedCheckout(input: HookInput, agentId: string, executor: string, checkoutRoot: string): void {
+  const found = isolationExpectation(input, agentId, executor, true, checkoutRoot);
+  if (found?.terminal || found?.identityBound) return;
+  bindObservedRuntimeIdentity(input, agentId, executor, checkoutRoot);
+}
+
 function main(): void {
   const input = readStdin();
   if (!input) return;
   const agentId = stringField(input, 'agent_id', 'agentId');
   const executor = stringField(input, 'agent_type', 'agentType', 'subagent_type');
   if (bindClaimRuntimeIdentity(input, agentId, executor)) return;
-  if (!agentId || !executorAgent(executor)) return;
-
-  const cwd = stringField(input, 'cwd');
-  if (!cwd) return;
-  const checkout = enclosingCheckout(cwd);
-  if (!checkout?.linked) return;
-
-  const found = isolationExpectation(input, agentId, executor, true, checkout.root);
-  if (found?.terminal || found?.identityBound) return;
-  bindObservedRuntimeIdentity(input, agentId, executor, checkout.root);
+  const checkoutRoot = executorCheckoutRoot(input, agentId, executor);
+  if (!checkoutRoot) return;
+  recordReleaseCheckout(input, agentId, checkoutRoot);
+  rebindObservedCheckout(input, agentId, executor, checkoutRoot);
 }
 
 try {

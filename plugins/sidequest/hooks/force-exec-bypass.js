@@ -1143,6 +1143,10 @@ function denyReason(result, type) {
       return `${base}. ${retry}`;
   }
 }
+function liveDispatchBinding(ticket, sessionId, agentId) {
+  const dispatch = ticket.dispatch;
+  return dispatch?.sessionId === sessionId && !dispatch.terminalAt && dispatch.agentId === agentId;
+}
 function dispatchIdentityMatches(ticket, agentId, type) {
   const dispatch = ticket.dispatch;
   if (dispatch?.agentId === agentId) return true;
@@ -1188,8 +1192,10 @@ function terminalExecutorTicket(input) {
   try {
     const store = require(runtimeModule("store"));
     const matches = [];
+    let liveBinding = false;
     for (const project of store.listProjects({ all: true })) {
       for (const ticket of store.listTickets(project.slug)) {
+        liveBinding = liveBinding || liveDispatchBinding(ticket, sessionId, agentId);
         if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId || !dispatchIdentityMatches(ticket, agentId, executor)) continue;
         if (!ticket.dispatch?.terminalAt) return null;
         if (ticket.claim?.by) continue;
@@ -1203,7 +1209,7 @@ function terminalExecutorTicket(input) {
         }
       }
     }
-    return matches.length === 1 ? matches[0] || null : null;
+    return !liveBinding && matches.length === 1 ? matches[0] || null : null;
   } catch (_) {
     return null;
   }
