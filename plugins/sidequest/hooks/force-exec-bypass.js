@@ -450,11 +450,11 @@ function nativePath(word) {
   return process.platform === "win32" ? word.replace(/^\/([a-z])(\/|$)/i, "$1:/") : word;
 }
 function resolvedTarget(base, word) {
-  return ignoredTarget(word) ? null : import_node_path4.default.resolve(base, nativePath(word));
+  return ignoredTarget(word) ? null : canonicalPath(import_node_path4.default.resolve(base, nativePath(word)));
 }
 function mainCheckoutOf(linkedRoot) {
   const pointer = /^gitdir:\s*(.+)$/m.exec(import_node_fs4.default.readFileSync(import_node_path4.default.join(linkedRoot, ".git"), "utf8"));
-  return pointer ? import_node_path4.default.resolve(linkedRoot, pointer[1].trim(), "..", "..", "..") : null;
+  return pointer ? canonicalPath(import_node_path4.default.resolve(linkedRoot, pointer[1].trim(), "..", "..", "..")) : null;
 }
 function checkoutRoots(cwd) {
   const checkout = enclosingCheckout(cwd);
@@ -480,7 +480,7 @@ function segmentWriteTargets(segment, base) {
 }
 function firstCheckoutWrite(command, cwd) {
   const roots = checkoutRoots(cwd);
-  let base = import_node_path4.default.resolve(cwd);
+  let base = canonicalPath(cwd);
   for (const segment of shellSegments(command)) {
     base = nextBase(segment.words, base);
     const blocked = segmentWriteTargets(segment, base).find((target) => insideAny(roots, target));

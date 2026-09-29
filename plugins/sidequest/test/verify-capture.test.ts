@@ -735,7 +735,9 @@ test('verify capture reports exit 127 and a shell that never started as failures
 test('verify capture runs a backslash path through Command Prompt on Windows and keeps forward slashes on the POSIX shell', { skip: process.platform !== 'win32' }, async () => {
   const probe = 'node -e "require(\'fs\').accessSync(\'cli-goldens.json\')"';
   const relative = await runVerifyCapture(`cd test\\fixtures && ${probe}`, SIDEQUEST_DIR);
-  const absolute = await runVerifyCapture(`cd ${path.join(SIDEQUEST_DIR, 'test', 'fixtures')} && ${probe}`, os.tmpdir());
+  // Command Prompt's `cd` never changes drive, so the absolute case starts elsewhere on the repository's drive (CI keeps the checkout on D: and the temp dir on C:).
+  const elsewhereOnRepositoryDrive = path.parse(SIDEQUEST_DIR).root;
+  const absolute = await runVerifyCapture(`cd ${path.join(SIDEQUEST_DIR, 'test', 'fixtures')} && ${probe}`, elsewhereOnRepositoryDrive);
   const forward = await runVerifyCapture(`cd ${path.join(SIDEQUEST_DIR, 'test', 'fixtures').replace(/\\/g, '/')} && ${probe}`, os.tmpdir());
   try {
     for (const capture of [relative, absolute]) {
