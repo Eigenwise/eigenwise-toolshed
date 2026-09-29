@@ -20,7 +20,7 @@ const PASS_THROUGH_AGENT_TYPES = new Set(['Explore', 'claude-code-guide', 'statu
 const EXECUTOR_HELPER_TYPES = new Set(['Explore', 'claude-code-guide', 'web-researcher', 'general-purpose']);
 const HELPER_REVIEW_WORK_RE = /\b(?:audits?|auditors?|auditing|audited|reviews?|reviewers?|reviewing|reviewed|review-audit)\b/i;
 
-type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'diagnostic' | 'legacy_ticket' | 'ticket' | 'unknown';
+type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'discovered_model' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'read_only_discovered_model' | 'diagnostic' | 'legacy_ticket' | 'ticket' | 'unknown';
 interface ExecutorClassification {
   kind: ExecutorKind;
   effort: string | null;
@@ -154,12 +154,19 @@ function classifyExecutor(type: string): ExecutorClassification {
   }
 }
 
+const CURRENT_EXECUTOR_KINDS: ReadonlySet<ExecutorKind> = new Set<ExecutorKind>([
+  'claude_builtin', 'codex_dispatch', 'discovered_model',
+  'read_only_claude_builtin', 'read_only_codex_dispatch', 'read_only_discovered_model',
+]);
+
 function isCurrentExecutor(classification: ExecutorClassification): boolean {
-  return classification.kind === 'claude_builtin'
-    || classification.kind === 'codex_dispatch'
-    || classification.kind === 'read_only_claude_builtin'
-    || classification.kind === 'read_only_codex_dispatch';
+  return CURRENT_EXECUTOR_KINDS.has(classification.kind);
 }
+
+// These definitions carry their model in frontmatter, and an Agent `model` value would override it.
+const FRONTMATTER_MODEL_KINDS: ReadonlySet<ExecutorKind> = new Set<ExecutorKind>([
+  'codex_dispatch', 'read_only_codex_dispatch', 'discovered_model', 'read_only_discovered_model',
+]);
 
 function isSubagentCaller(input: HookInput): boolean {
   return Boolean(stringField(input, 'agent_id'));
@@ -1163,7 +1170,7 @@ function main(): void {
   if (launchAgentName && !reducedAgentSchema) updatedInput.name = launchAgentName;
   const preparedCorrection = correctionMessage(corrections);
 
-  if (isDispatchExecutor) {
+  if (FRONTMATTER_MODEL_KINDS.has(classification.kind)) {
     const hadModel = Object.prototype.hasOwnProperty.call(toolInput, 'model');
     if (hadModel) delete updatedInput.model;
     recordAuthoritativeLaunch(input, type, launchAgentName);

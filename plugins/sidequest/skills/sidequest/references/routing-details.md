@@ -84,6 +84,13 @@ the exact executor and spawn object a fresh `dispatch <ref>` returned.
   substitute a generic `sidequest-exec-<effort>` agent for a Codex route — the board refuses its
   claim. Model provenance lives in the gateway route log, the subagent transcript, and
   `done --model`, never in the executor name.
+- **Other discovered providers (`exec.model` null, catalog provider not `codex`/`grok`):** spawn the
+  EXACT `spawn.subagent_type` the dispatch returned (`sidequest-exec-model-<slug>-<effort>`, or
+  `sidequest-exec-readonly-model-<slug>-<effort>` for a readonly category) with the `model` parameter
+  OMITTED. The Agent tool only accepts `sonnet|opus|haiku|fable`, so the full catalog id and the
+  effort ride that definition's frontmatter instead. Sidequest writes these user-scope definitions
+  at SessionStart and again at dispatch, one ladder per current catalog entry, and removes a ladder
+  once its entry leaves the catalog. Readiness refusals for these routes name the provider.
 - `<effort>` is the ticket's `effort` verbatim from the fresh read, never a level you judge fits
   better: the executor claims with `--effort <baked level>` and the board refuses the claim on a
   mismatch, bouncing the ticket back.
