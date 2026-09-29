@@ -506,9 +506,11 @@ var CLOSEOUT_UPDATE_FIELDS = /* @__PURE__ */ new Set([
   "verify",
   "verifyKind",
   "attestationArtifact",
+  "verifyCwd",
   "executorVerify",
   "executorVerifyKind",
-  "executorAttestationArtifact"
+  "executorAttestationArtifact",
+  "executorVerifyCwd"
 ]);
 function executorLiveClaimMutationRefusal(input) {
   if (!isSubagentCaller(input)) return false;

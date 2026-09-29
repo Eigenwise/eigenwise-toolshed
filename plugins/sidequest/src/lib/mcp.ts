@@ -110,7 +110,9 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 24000 for VERIFICATION_WAIVER_PROP's type: 'object' (SQ-2 / GitHub #109): an MCP host that
 // enforces the declared schema type refused a top-level verificationWaiver because the property listed
 // `properties` without `type: 'object'`. +91 bytes compacted, while preserving the 2.5KB reserve.
-const MCP_TOOLS_LIST_MAX_BYTES = 24100;
+// Raised from 24100 for add/update verifyCwd (SQ-3118 / GitHub #259): +60 bytes compacted, while preserving
+// the 2.5KB reserve. A nested workspace's gate had no other way to run from its own directory.
+const MCP_TOOLS_LIST_MAX_BYTES = 24200;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {

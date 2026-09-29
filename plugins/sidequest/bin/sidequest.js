@@ -23,12 +23,12 @@ const ARRAY_FLAG_ALIASES = { files: "file", labels: "label" };
 const BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "skip-verify", "contract-waiver", "full", "rotate", "worktree-isolation", "auto-approve-test-scope", "high-stakes", "working-tree-delivery", "external-deliverable", "unverified-transport", "reduced-agent-schema", "allow-repeat-failure", "allow-unscoped", "all-projects", "no-process", "no-worktree", "review", "abandon-submission"]);
 const COMMON_FLAGS = /* @__PURE__ */ new Set(["help", "json", "project", "source"]);
 const COMMAND_FLAGS = {
-  add: ["title", "desc", "description", "body", "body-file", "priority", "status", "category", "unclassified", "complexity", "why", "high-stakes", "label", "image", "file", "produces", "changes", "consumes", "contract-waiver", "readonly", "working-tree-delivery", "external-deliverable", "anchors", "verify-kind", "attestation-artifact", "verify", "story", "route-model", "route-effort", "route", "model", "effort", "review-ref", "review-commit", "review-source", "review-revision", "dry-run", "name"],
+  add: ["title", "desc", "description", "body", "body-file", "priority", "status", "category", "unclassified", "complexity", "why", "high-stakes", "label", "image", "file", "produces", "changes", "consumes", "contract-waiver", "readonly", "working-tree-delivery", "external-deliverable", "anchors", "verify-kind", "attestation-artifact", "verify", "verify-cwd", "story", "route-model", "route-effort", "route", "model", "effort", "review-ref", "review-commit", "review-source", "review-revision", "dry-run", "name"],
   list: ["status", "archived", "brief", "limit", "cursor", "all"],
   pulse: [],
   changes: ["since"],
   watch: ["interval", "all"],
-  update: ["title", "desc", "description", "body", "body-file", "priority", "status", "category", "complexity", "why", "high-stakes", "label", "image", "file", "produces", "changes", "consumes", "contract-waiver", "readonly", "working-tree-delivery", "external-deliverable", "anchors", "verify-kind", "attestation-artifact", "verify", "story", "route-model", "route-effort", "route", "model", "effort", "review-ref", "review-commit", "review-source", "review-revision", "by"],
+  update: ["title", "desc", "description", "body", "body-file", "priority", "status", "category", "complexity", "why", "high-stakes", "label", "image", "file", "produces", "changes", "consumes", "contract-waiver", "readonly", "working-tree-delivery", "external-deliverable", "anchors", "verify-kind", "attestation-artifact", "verify", "verify-cwd", "story", "route-model", "route-effort", "route", "model", "effort", "review-ref", "review-commit", "review-source", "review-revision", "by"],
   rm: ["force"],
   profile: ["retired", "name", "title", "description", "desc", "from", "project", "profile", "from-project", "by", "dry-run"],
   category: ["profile", "route-model", "route-effort", "fallback-model", "fallback-effort", "no-fallback", "name", "title", "description", "desc", "contract", "artifact-roots", "readonly", "enabled", "disabled"],
@@ -408,9 +408,10 @@ Working the board safely (multi-agent):
   sidequest add/update ... --produces name --changes name --consumes name   declare free-form contract edges;
     'ready --brief' reports a produce/consume or change/change collision in waveDependencies. --contract-waiver
     is a reviewed override and can be cleared with --contract-waiver=false.
-  sidequest add/update ... --anchors "file:line symbol" --verify "<exact command>"
+  sidequest add/update ... --anchors "file:line symbol" --verify "<exact command>" [--verify-cwd <repo-relative-dir>]
     seed a bounded executor with investigation findings and its exact check. Anchors (4k), verify (1k), and the
     final prompt (7.6k) stay below the Windows command-line ceiling; values are preserved verbatim.
+    --verify-cwd runs the verify command from that directory for the capture and the integrate gate.
 
 Complexity is legacy input. Category routing chooses the concrete model and effort:
   sidequest add ... --category <id>

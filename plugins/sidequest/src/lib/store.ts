@@ -321,6 +321,7 @@ function normalizeVerifyOracleKind(...args: any[]) { return warningsLayer.normal
 function attestationErrors(...args: any[]) { return warningsLayer.attestationErrors(...args); }
 function verifyOracleErrors(...args: any[]) { return warningsLayer.verifyOracleErrors(...args); }
 function requireVerifyOracle(...args: any[]) { return warningsLayer.requireVerifyOracle(...args); }
+function normalizeVerifyCwd(...args: any[]) { return warningsLayer.normalizeVerifyCwd(...args); }
 function verifyCommandErrors(...args: any[]) { return warningsLayer.verifyCommandErrors(...args); }
 function verifyCommandError(...args: any[]) { return warningsLayer.verifyCommandError(...args); }
 function requireVerifyCommand(...args: any[]) {
@@ -1185,6 +1186,7 @@ const {
   requestedReadonlyOverride,
   requireStatus,
   requireVerifyOracle,
+  normalizeVerifyCwd,
   transaction: (...args: any[]) => transaction(...args),
   normalizeVerifyOracleKind,
   saveAssetData,
@@ -3750,6 +3752,7 @@ module.exports = {
   verifyOracleErrors,
   verifyCommandErrors,
   verifyCommandError,
+  normalizeVerifyCwd,
   completionTreeCheck,
   listProjects,
   findProject,

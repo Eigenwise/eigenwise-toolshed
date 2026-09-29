@@ -407,8 +407,8 @@ function toolInputOf(input: HookInput): Record<string, unknown> | null {
 
 const CLOSEOUT_UPDATE_FIELDS = new Set([
   'files', 'status', 'readonly', 'readonlyOverride', 'workingTreeDelivery',
-  'externalDeliverable', 'verify', 'verifyKind', 'attestationArtifact',
-  'executorVerify', 'executorVerifyKind', 'executorAttestationArtifact',
+  'externalDeliverable', 'verify', 'verifyKind', 'attestationArtifact', 'verifyCwd',
+  'executorVerify', 'executorVerifyKind', 'executorAttestationArtifact', 'executorVerifyCwd',
 ]);
 
 function executorLiveClaimMutationRefusal(input: HookInput): boolean {

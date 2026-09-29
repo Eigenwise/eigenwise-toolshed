@@ -57,6 +57,19 @@ function shellDefinition(platform = process.platform): ShellDefinition {
   return Object.freeze({ executable: posixShell, label: `POSIX shell (${posixShell})`, scriptExtension: '.sh' });
 }
 
+// GH-290: Git for Windows sh.exe reads a backslash as an escape, so `cd C:\repo\app` arrives as
+// `C:repoapp`. A command that names a backslash path runs through Command Prompt, which takes it verbatim.
+const WINDOWS_BACKSLASH_PATH = /(?:^|[\s\x22\x27=(])(?:[A-Za-z]:|\.{1,2}|[\w.-]+)\\[\w.-]/;
+
+function commandPromptShell(): ShellDefinition {
+  const commandPrompt = process.env.ComSpec || 'cmd.exe';
+  return Object.freeze({ executable: commandPrompt, label: `Command Prompt (${commandPrompt})`, scriptExtension: '.cmd' });
+}
+
+function verifierShell(command: string, platform = process.platform): ShellDefinition {
+  return platform === 'win32' && WINDOWS_BACKSLASH_PATH.test(command) ? commandPromptShell() : shellDefinition(platform);
+}
+
 function commandForShell(scriptPath: string, shell: ShellDefinition): ShellCommand {
   const arguments_ = shell.scriptExtension === '.cmd'
     ? Object.freeze(['/d', '/s', '/c', scriptPath])
@@ -83,7 +96,7 @@ function shellScript(command: string, shell: ShellDefinition): string {
 }
 
 function temporaryScript(command: string): Readonly<{ scriptPath: string; shell: ShellCommand }> {
-  const shell = shellDefinition();
+  const shell = verifierShell(command);
   const scriptPath = path.join(os.tmpdir(), `sidequest-verify-${process.pid}-${randomUUID()}${shell.scriptExtension}`);
   fs.writeFileSync(scriptPath, shellScript(command, shell), { encoding: 'utf8', flag: 'wx', mode: 0o700 });
   return Object.freeze({ scriptPath, shell: commandForShell(scriptPath, shell) });
@@ -141,6 +154,12 @@ function shellCannotParsePosixSyntax(logPath: string, exitCode: number, shell: S
 // read the Sidequest install instead.
 export function verifierEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(environment).filter(([name]) => !/^CLAUDE_PLUGIN_/i.test(name)));
+}
+
+// GH-189: a shell that never started leaves no output, so the spawn error is the only text that says why.
+function shellExitReason(shell: ShellDefinition, shellExitCode: number | null, spawnError?: Error): string {
+  const reason = `The ${shell.label} exited ${shellExitCode ?? 'without a code'} before reporting the suite exit code.`;
+  return spawnError ? `${reason} ${spawnError.message}` : reason;
 }
 
 function processTimedOut(error: unknown): boolean {
@@ -206,7 +225,7 @@ export function runProcessVerification(requirement: VerificationRequirement, opt
   const exitCode = markerExitCode(logPath);
   if (exitCode === null) {
     const shellExitCode = outcome?.status ?? (outcome?.error ? 2 : null);
-    return failedResult(requirement, 'could_not_run', command, logPath, `The ${shell.label} exited ${shellExitCode ?? 'without a code'} before reporting the suite exit code.`, shellExitCode, tail, undefined, shell.label);
+    return failedResult(requirement, 'could_not_run', command, logPath, shellExitReason(shell, shellExitCode, outcome?.error), shellExitCode, tail, undefined, shell.label);
   }
   if (shellCannotParsePosixSyntax(logPath, exitCode, shell)) {
     return failedResult(requirement, 'could_not_run', command, logPath, `The ${shell.label} fallback could not parse POSIX syntax while running ${JSON.stringify(command)} (exit code ${exitCode}).`, exitCode, tail, undefined, shell.label);

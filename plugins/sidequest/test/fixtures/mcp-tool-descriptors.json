@@ -313,6 +313,9 @@
           "maxLength": 1000,
           "description": "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
         },
+        "verifyCwd": {
+          "type": "string"
+        },
         "verifyKind": {
           "type": "string",
           "enum": [
@@ -495,6 +498,9 @@
           "type": "string",
           "maxLength": 1000,
           "description": "For attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
+        },
+        "verifyCwd": {
+          "type": "string"
         },
         "verifyKind": {
           "type": "string",
