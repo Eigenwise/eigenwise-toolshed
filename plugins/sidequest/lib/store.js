@@ -229,6 +229,9 @@ function listProjectsFlaggingMissingPaths(...args) {
 function registerProject(...args) {
   return projectsLayer.registerProject(...args);
 }
+function boardRootRefusal(...args) {
+  return projectsLayer.boardRootRefusal(...args);
+}
 function findProject(...args) {
   return projectsLayer.findProject(...args);
 }
@@ -3486,6 +3489,7 @@ module.exports = {
   listProjects,
   listProjectsFlaggingMissingPaths,
   registerProject,
+  boardRootRefusal,
   explicitProjectRoot,
   findProject,
   archiveProject,

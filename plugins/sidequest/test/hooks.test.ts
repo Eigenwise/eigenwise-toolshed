@@ -1867,9 +1867,10 @@ test('pre-tool inline-work hook makes board dispatch the default for solo work',
   });
   assert.equal(output.hookSpecificOutput.hookEventName, 'PreToolUse');
   assert.equal(output.hookSpecificOutput.additionalContext, output.systemMessage, 'the nudge must reach the model, not only the terminal');
-  assert.match(output.systemMessage, /^sidequest: 0 reads \/ 1 commands this session, no board interaction\./);
-  assert.match(output.systemMessage, /Multi-file work defaults to board dispatch\./);
-  assert.match(output.systemMessage, /offer dispatch, or name why inline serves the user better than an executor/i);
+  assert.match(output.systemMessage, /^sidequest: 0 reads \/ 1 commands with no board call\./);
+  assert.match(output.systemMessage, /standing authorization: file the ticket\(s\) with add and dispatch now; do not offer\./);
+  assert.match(output.systemMessage, /Only a one-or-two-file edit at a known location stays inline\.$/);
+  assert.doesNotMatch(output.systemMessage, /offer dispatch|name why inline/i);
   assert.ok(Buffer.byteLength(output.systemMessage, 'utf8') <= 768, 'the PreToolUse nudge must fit its context budget');
   assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
     session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
@@ -1881,24 +1882,24 @@ test('pre-tool inline-work hook nudges prolonged investigations with live counts
   const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {} };
   for (let readActions = 1; readActions < 8; readActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
   const firstInvestigationNudge = runHookOutput(INLINE_WORK_NUDGE, payload);
-  assert.match(firstInvestigationNudge.systemMessage, /^sidequest: 8 reads \/ 0 commands this session, no board interaction\./);
+  assert.match(firstInvestigationNudge.systemMessage, /^sidequest: 8 reads \/ 0 commands with no board call\./);
   assert.ok(Buffer.byteLength(firstInvestigationNudge.systemMessage, 'utf8') <= 768, 'the PreToolUse investigation nudge must fit its context budget');
   for (let readActions = 9; readActions < 24; readActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
   const escalation = runHookOutput(INLINE_WORK_NUDGE, payload);
-  assert.match(escalation.systemMessage, /^sidequest: 24 reads \/ 0 commands this session, no board interaction\. You have continued after an earlier reminder\./);
+  assert.match(escalation.systemMessage, /^sidequest: 24 reads \/ 0 commands with no board call\. You have continued after an earlier reminder\./);
   assert.ok(Buffer.byteLength(escalation.systemMessage, 'utf8') <= 768, 'the repeated PreToolUse nudge must fit its context budget');
 });
 
 test('pre-tool inline-work hook escalates substantive work at widening intervals', () => {
   const session_id = `inline-escalation-${Date.now()}`;
   const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /1 commands this session/);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /1 commands with no board call/);
   for (let substantiveActions = 2; substantiveActions < 4; substantiveActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 4 commands this session/);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 4 commands with no board call/);
   for (let substantiveActions = 5; substantiveActions < 12; substantiveActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 12 commands this session/);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 12 commands with no board call/);
   for (let substantiveActions = 13; substantiveActions < 36; substantiveActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
-  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 36 commands this session/);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 36 commands with no board call/);
 });
 
 test('pre-tool inline-work hook nudges the second native Agent spawn at widening intervals', () => {
@@ -2049,6 +2050,65 @@ test('pre-tool inline-work nudge ignores automation prompts', () => {
   for (let i = 0; i < 12; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
 });
 
+test('pre-tool inline-work nudge counts PowerShell edits and skips test and build runs', () => {
+  const session_id = `inline-shells-${Date.now()}`;
+  const shell = (tool_name: string, command: string) => runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, tool_name, tool_input: { command } });
+  for (const [tool, command] of <Array<[string, string]>>[
+    ['Bash', 'npm test'],
+    ['Bash', 'cd plugins/demo && npm run build:check'],
+    ['Bash', 'node --import tsx --test test/hooks.test.ts'],
+    ['Bash', 'node -e "console.log(1)"'],
+    ['PowerShell', 'npm test'],
+    ['PowerShell', 'Get-ChildItem src'],
+  ]) assert.equal(shell(tool, command), null, `${tool}: ${command} must not count as an edit`);
+  assert.match(shell('PowerShell', 'Set-Content notes.txt hello').systemMessage, /^sidequest: 1 reads \/ 1 commands with no board call\./);
+});
+
+test('a new user prompt reopens the inline-work nudge after a board call, and keeps the Explore cap lifted', () => {
+  const session_id = `inline-reopen-${Date.now()}`;
+  const write = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, { session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__list', tool_input: {} }), null);
+  for (let i = 0; i < 5; i += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, write), null, 'a board call silences the nudge for the rest of that prompt');
+  runHookOutput(BOARD_FIRST_REMINDER, { session_id, cwd: BOARD_PATH, prompt: 'hi' });
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, write).systemMessage, /^sidequest: 0 reads \/ 1 commands with no board call\./);
+  for (let round = 1; round <= 3; round += 1) {
+    const spawn = runHookOutput(FORCE_BYPASS, {
+      session_id, cwd: BOARD_PATH, tool_name: 'Agent', tool_input: { subagent_type: 'Explore', prompt: `Sweep the docs tree, angle ${round}.` },
+    });
+    assert.notEqual(spawn?.hookSpecificOutput?.permissionDecision, 'deny', `Explore spawn ${round} after an earlier board call`);
+  }
+});
+
+test('user-prompt reminder waits for a work request instead of a greeting', () => {
+  const payload = { session_id: `board-first-greeting-${Date.now()}`, cwd: BOARD_PATH };
+  assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: 'hi' }), null);
+  assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: 'what is the status?' }), null);
+  const reminder = runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: 'Refactor the claim flow.' });
+  assert.match(reminder.hookSpecificOutput.additionalContext, /file precise tickets with add and dispatch them without offering\. Only a one-or-two-file edit at a known location stays inline\.$/);
+  assert.doesNotMatch(reminder.hookSpecificOutput.additionalContext, /informed inline judgment/);
+});
+
+test('user-prompt reminder tells a boardless git repo root that the first add creates its board', (testContext: TestContext) => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-boardless-'));
+  testContext.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
+  const repo = path.join(scratch, 'repo');
+  const plainFolder = path.join(scratch, 'plain');
+  fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  fs.mkdirSync(plainFolder);
+  const prompt = 'Add a settings page to the app.';
+
+  const hint = runHookOutput(BOARD_FIRST_REMINDER, { session_id: `boardless-repo-${Date.now()}`, cwd: repo, prompt });
+  assert.equal(hint.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  assert.match(hint.hookSpecificOutput.additionalContext, /^sidequest: no board here yet\. .*the first add creates this repo's board and dispatch is ready through the default profile/);
+  assert.equal(store.findProject(repo).ok, false, 'the hint must not create the board');
+  // The suite's throwaway SIDEQUEST_HOME lives under temp, which makes the store accept temp fixtures;
+  // pointing the hook's temp dir at the scratch folder restores the rule a real session sees.
+  const scratchAsTemp = { TEMP: scratch, TMP: scratch, TMPDIR: scratch };
+  for (const cwd of [repo, plainFolder]) {
+    assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { session_id: `boardless-temp-${Date.now()}`, cwd, prompt }, scratchAsTemp), null, `${cwd} under the temp dir stays silent`);
+  }
+});
+
 test('user-prompt reminder fires once for the first human prompt', () => {
   const payload = { session_id: `board-first-${Date.now()}`, cwd: BOARD_PATH, prompt: 'Fix the board hook.' };
   const reminder = runHookOutput(BOARD_FIRST_REMINDER, payload);
@@ -2088,7 +2148,7 @@ test('user-prompt reminder ignores automation without consuming the session flag
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<agent-message>Worker needs input.</agent-message>' }), null);
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<local-command>Command output.</local-command>' }), null);
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, { ...payload, prompt: '<local-command-caveat>Command output.</local-command-caveat>' }), null);
-  assert.match(runHook(BOARD_FIRST_REMINDER, { ...payload, prompt: 'Implement the ticket.' }), /Use informed inline judgment/);
+  assert.match(runHook(BOARD_FIRST_REMINDER, { ...payload, prompt: 'Implement the ticket.' }), /file precise tickets with add and dispatch them without offering/);
 });
 
 test('user-prompt reminder ignores subagent identity variants and routing-disabled boards', () => {
@@ -3541,8 +3601,10 @@ test('session-start: loads user-story for routed work beyond small tasks', () =>
     assert.match(context, new RegExp(userStoryDefault, 'i'));
     assert.match(context, new RegExp(dispatchDefault, 'i'));
     assert.match(context, /multi-file change, at an unknown location that needs discovery, or an investigation/i);
+    const heading = source ? '=== sidequest (active — context restored) ===' : '=== sidequest (active) ===';
+    assert.ok(context.includes(`${heading}\n${dispatchDefault}`), 'the standing authorization is the first line of the orchestrator block');
+    assert.ok(context.indexOf(dispatchDefault) < context.indexOf('ROLE: ORCHESTRATOR'));
     assert.ok(context.indexOf(inlineCarveOut) < context.indexOf(userStoryDefault));
-    assert.ok(context.indexOf(userStoryDefault) < context.indexOf(dispatchDefault));
     assert.doesNotMatch(context, /can ask to use it/i);
   }
 });

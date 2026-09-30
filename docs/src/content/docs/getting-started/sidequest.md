@@ -130,6 +130,12 @@ Sidequest keeps ticket activity visible in the board. Ask Claude to check active
 
 CI watch alerts exclude completed runs marked `skipped` or `neutral`. Neither conclusion proves that the required checks passed; release verification still needs successful checks on the exact commit.
 
+### When Sidequest speaks up
+
+You don't have to ask for the board. On a project with a working board, Claude is told at session start that it has standing authorization to file tickets and dispatch them for multi-file changes, work at an unknown location, and investigations, without offering first. The first prompt that looks like a work request (a change verb like fix, add, or refactor, or anything longer than a greeting) gets a one-time reminder to ticket and dispatch. If Claude then keeps editing inline, a short nudge tells it to file the ticket and dispatch now. Edits, Bash, and PowerShell commands count toward that nudge; test and build runs (`npm test`, `node --test`, `node -e`, `npm run build`) and plain reads don't. A board call quiets the nudge only until your next prompt. All of this is advice to Claude and never blocks a tool call. Quick one- or two-file edits at a known location, direct questions, and operational requests stay inline.
+
+In a git repository root with no board yet, that first work request gets one line instead: the first `add` creates the board and dispatch works right away through the default profile. Nothing is created until then, and temp folders, the Sidequest home, `~/.claude`, and folders that aren't a git root stay silent.
+
 ### Boards in sibling repositories
 
 If you run one session from a parent directory holding several independent repos, each registered as its own board, an executor working a sibling repo's ticket doesn't have to name the board on its lifecycle calls. Sidequest resolves the board from the executor's own binding: a call that carries a `worktree` (commit, submit, checkpoint) is matched to the worktree its dispatch reserved for it, and a call without one (comment, release, done, plan, scope requests) is matched to the claim owner named by `by`. Reads that carry neither, like `pulse`, stay on the session's own board, so the executor briefing tells executors to pass `project` on every call. Nothing else selects a board, so a caller without a claim stays on the session's own board and gets that board's usual refusal. Passing `project` explicitly still wins, and two boards that both fit the same binding are refused by name rather than picked for you.

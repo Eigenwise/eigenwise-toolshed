@@ -187,6 +187,7 @@ function deleteProjectExact(...args: any[]) { return projectsLayer.deleteProject
 function listProjects(...args: any[]) { return projectsLayer.listProjects(...args); }
 function listProjectsFlaggingMissingPaths(...args: any[]) { return projectsLayer.listProjectsFlaggingMissingPaths(...args); }
 function registerProject(...args: any[]) { return projectsLayer.registerProject(...args); }
+function boardRootRefusal(...args: any[]) { return projectsLayer.boardRootRefusal(...args); }
 function findProject(...args: any[]) { return projectsLayer.findProject(...args); }
 function mergeProject(...args: any[]) { return projectsLayer.mergeProject(...args); }
 
@@ -3872,6 +3873,7 @@ module.exports = {
   listProjects,
   listProjectsFlaggingMissingPaths,
   registerProject,
+  boardRootRefusal,
   explicitProjectRoot,
   findProject,
   archiveProject,
