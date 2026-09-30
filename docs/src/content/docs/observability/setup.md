@@ -28,7 +28,7 @@ From inside the repository you want to track, run:
 /observability:enable-project-telemetry
 ```
 
-Claude asks separately for the shared service consent and this repository's opt-in, then handles the local observer and any dashboard choice. A bare setup keeps SQLite reports only and does not request Docker. Use `--dashboard` only when the user explicitly wants the Docker-backed loopback dashboard. Remote sinks may require you to provide an endpoint or complete the provider's sign-in yourself.
+Claude asks separately for the shared service consent and this repository's opt-in, then handles the local observer and any dashboard choice. A bare setup keeps SQLite reports only and does not request Docker. Use `--dashboard` only when the user explicitly wants the Docker-backed loopback dashboard. Remote sinks may require you to provide an endpoint or complete the provider's sign-in yourself. On Claude Code 2.1.282 and later, Claude also asks a third question: whether to turn telemetry export on in your user settings. Project settings can't turn export on anymore, so without that step nothing exports. [Per-project opt-in](../project-opt-in/) explains which settings each Claude Code version reads.
 
 After setup, restart every Claude Code session that was already running in the repository or in a listed session-hosting directory. Restart before creating activity or running verification. This is required for project settings and hooks to apply; `/reload-plugins` alone does not apply the new environment. The restart does not let an older session replace a newer live observer. New sessions pick up the project settings and send metadata for that repository only under the intended policy.
 
