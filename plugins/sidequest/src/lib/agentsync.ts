@@ -796,16 +796,16 @@ function linkedPlanSuffix(link?: any, slug?: any) {
   return plan ? ` (plan: ${path.resolve(plan.path)})` : '';
 }
 
-function capturedVerifyCommand(verify?: any, ticketRef?: any, project?: any, boundWorktree?: any) {
-  const command = String(verify || '').trim();
-  if (!command) return '';
-  const encoded = Buffer.from(command, 'utf8').toString('base64');
+// GH-373: with a board target the wrapper loads the pinned command from the ticket, so the
+// briefing carries no base64 blob for an executor to retype, where one wrong character ran a
+// different command.
+function capturedVerifyCommand(verify: string, ticketRef?: string, project?: string, boundWorktree?: string | null) {
   const captureScript = path.join(__dirname, 'verify-capture.js');
-  const target = String(ticketRef || '').trim() && String(project || '').trim()
+  const commandSource = ticketRef && project
     ? ` --project ${JSON.stringify(String(project))} --ticket ${JSON.stringify(String(ticketRef))}`
-    : '';
-  const worktree = String(boundWorktree || '').trim() ? ` --worktree ${JSON.stringify(String(boundWorktree))}` : '';
-  return `node "${captureScript}" --base64 ${encoded}${target}${worktree}`;
+    : ` --base64 ${Buffer.from(verify.trim(), 'utf8').toString('base64')}`;
+  const worktree = boundWorktree ? ` --worktree ${JSON.stringify(boundWorktree)}` : '';
+  return `node "${captureScript}"${commandSource}${worktree}`;
 }
 
 function ticketEvidenceGuidance(ticket?: any) {

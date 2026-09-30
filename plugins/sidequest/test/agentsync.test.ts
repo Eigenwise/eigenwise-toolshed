@@ -1089,6 +1089,9 @@ test('the pinned verify-capture command carries the dispatch bound worktree, and
   const sharedCommand = commandLine(shared);
   assert.match(shared, /Run it only over a clean worktree/);
   assert.doesNotMatch(sharedCommand, /--worktree/);
+  // GH-373: the wrapper loads the pinned command from the ticket, so the briefing carries no blob to retype.
+  assert.match(sharedCommand, /verify-capture\.js" --project "[^"]+" --ticket "SQ-1200" in the FOREGROUND/);
+  assert.doesNotMatch(sharedCommand, /--base64/);
 
   const linked = agentsync.renderTicketBriefing(Object.assign({}, base, {
     dispatch: { sharedTree: false, worktree: linkedWorktree },
