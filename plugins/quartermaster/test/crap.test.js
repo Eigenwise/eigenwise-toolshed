@@ -1084,6 +1084,23 @@ test('a definition lizard reports as (anonymous) on its line has that row and ge
   assert.equal(withBodySpans(rows, () => source).length, 1);
 });
 
+for (const [label, callback] of [['function', 'function (x) { return x; }'], ['arrow', '(x) => x']]) {
+  test(`a named function lizard dropped is not hidden by a ${label} callback's (anonymous) row on its first line`, () => {
+    const source = [
+      `export function outer(a = f(), b) { const pick = list.find(${callback});`,
+      '  if (a) return 1;',
+      '  if (b) return 2;',
+      '  if (a && b) return 3;',
+      '  return a ? 4 : 5;',
+      '}',
+      '',
+    ].join('\n');
+    const rows = [{ name: '(anonymous)', complexity: 1, start: 1, end: 1 }];
+
+    assert.deepEqual(scannedRows(source, rows), ['outer@1-6 cc=6 ordinal=0']);
+  });
+}
+
 test('a regex whose character class holds a slash is one literal, so the function around it still gets its row', () => {
   // The owner's review input: `[\\/]` is the usual path-separator class. `/\\+/g` is the control without a class.
   const source = [

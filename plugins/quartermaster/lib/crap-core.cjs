@@ -445,23 +445,29 @@ function rowStart(line, name) {
   return `${line}\u0000${name}`;
 }
 
-/** lizard names a function whose parameter list holds an arrow type (`work: () => T`) "(anonymous)", so that row stands for whatever is defined on its line. */
-function hasRowFor(rowStarts, line, name) {
-  return rowStarts.has(rowStart(line, name)) || rowStarts.has(rowStart(line, ANONYMOUS));
+/** lizard names a function whose own parameter list holds an arrow type (`work: () => T`) "(anonymous)"; a callback elsewhere on the line does not stand in for it. */
+function arrowRowStandsIn(rowStarts, tokens, line, open, close) {
+  return rowStarts.has(rowStart(line, ANONYMOUS)) && tokens.slice(open, close).some((token) => token.value === '=>');
+}
+
+function bracedSignature(tokens, open, signatureOf) {
+  const signature = signatureOf(tokens, open);
+  return signature && tokens[signature.start].value === '{' ? signature : null;
 }
 
 /** Arrows are left out: lizard keeps a row for an arrow whose parameter list holds a call. */
 function scannedEntry(tokens, file, open, { rowStarts, signatureOf }) {
   const head = definitionHead(tokens, open);
-  if (!head || hasRowFor(rowStarts, tokens[head.first].line, head.name)) return null;
-  const signature = signatureOf(tokens, open);
-  if (!signature || tokens[signature.start].value !== '{') return null;
+  if (!head || rowStarts.has(rowStart(tokens[head.first].line, head.name))) return null;
+  const signature = bracedSignature(tokens, open, signatureOf);
+  if (!signature) return null;
   const { close, start, end } = signature;
+  if (arrowRowStandsIn(rowStarts, tokens, tokens[head.first].line, open, close)) return null;
   const complexity = 1 + branchCount(tokens, open, close) + branchCount(tokens, start + 1, end);
   return { file, name: head.name, complexity, start: tokens[head.first].line, end: tokens[end].line, source: SCANNED_SOURCE };
 }
 
-/** A row already stands for a definition when it starts on the definition's line under the same name or as (anonymous); another named function there does not. */
+/** A row already stands for a definition when it starts on the definition's line under the same name, or as (anonymous) when its parameter list holds an arrow; another named function there does not. */
 function definitionsWithoutRow(tokens, file, rows, signatureOf) {
   const scan = { rowStarts: new Set(rows.map((entry) => rowStart(entry.start, ownName(entry.name)))), signatureOf };
   const found = [];
