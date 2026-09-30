@@ -11,7 +11,7 @@ const { isInScope, scopedPaths } = require("../scope-match");
 const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyDeliveryContentCommitGuidance, landedWithoutSubmissionGuidance } = require("../refusal-guidance.js");
 const worktrees = require("../worktrees.js");
 function createSubmissions(dependencies) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, deliveryIntegrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
   const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
   const SUBMISSION_GITREF_MAX = 200;
@@ -194,7 +194,7 @@ function createSubmissions(dependencies) {
     for (let attempt = 0; attempt < 100; attempt += 1) {
       rejected.quarantineRef = rejectionQuarantineRef(ticket, firstRejectionNumber + attempt);
       putTicketTransaction(slug, ticket);
-      preserved = commitScope.preserveCommitRef(root, rejected.commit, rejected.quarantineRef, { noOverwrite: true });
+      preserved = commitScope.preserveCommitRef(root, rejected.commit, rejected.quarantineRef);
       if (preserved.ok || preserved.reason !== "git_ref_collision") break;
     }
     if (!preserved.ok) {
@@ -493,9 +493,21 @@ Expires: ${checkpoint.expiresAt}`;
     ensureDir(dir);
     return path.join(dir, `${Date.now()}-${crypto.randomBytes(4).toString("hex")}.log`);
   }
+  function directlyClaimed(ticket) {
+    return (ticket.dispatch?.lifecycleAttempt || ticket.lifecycleAttempt)?.execution === "direct";
+  }
+  function dispatchPinnedRequirement(ticket) {
+    if (directlyClaimed(ticket)) return null;
+    return ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
+  }
+  function directClaimCaptureInvocation(slug, ticket) {
+    if (!directlyClaimed(ticket)) return "";
+    const script = path.join(__dirname, "..", "verify-capture.js");
+    return `node "${script}" --project ${JSON.stringify(String(readMeta(slug)?.path || slug))} --ticket ${JSON.stringify(String(ticket.ref))}`;
+  }
   function pinnedVerificationRequirement(ticket) {
-    const pinned = ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
-    if (pinned && typeof pinned === "object") return pinned;
+    const pinned = dispatchPinnedRequirement(ticket);
+    if (pinned instanceof Object) return pinned;
     const legacyCommand = String(ticket.executorVerify || ticket.submission?.verify || "").trim();
     if (!legacyCommand) {
       return verificationRequirement({ kind: "custom", evidence: "legacy project verifier was not recorded" });
@@ -532,7 +544,7 @@ Checkpoint current work, release the claim, and re-dispatch; the recovery dispat
     return withTicketLock(slug, found.id, () => {
       const ticket = getTicket(slug, found.id);
       if (!ticket) return { ok: false, reason: "not_found" };
-      const pinnedAtDispatch = ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
+      const pinnedAtDispatch = dispatchPinnedRequirement(ticket);
       const requirement = pinnedVerificationRequirement(ticket);
       const capturedCommand = String(capture?.command || "");
       const command = capturedCommand.trim();
@@ -762,7 +774,7 @@ ${verify.outputTail}` : null
     let integrationRefs;
     if (submissionUsesGit(ticket)) {
       try {
-        target = ticketIntegrationTarget(slug, ticket);
+        target = deliveryIntegrationTarget(slug, ticketIntegrationTarget(slug, ticket), opts?.integrationBranch);
         integrationRefs = commitScope.integrationTargetRefs(target);
       } catch (error) {
         return {
@@ -870,6 +882,10 @@ ${verify.outputTail}` : null
       delivery,
       message: `Delivered ${delivery.commit} to ${delivery.targetBranch} at ${delivery.resultingHead}; board record failed: ${detail}`
     };
+  }
+  function branchNotCheckedOutMessage(targetBranch, currentBranch, action) {
+    const checkedOut = currentBranch || "detached HEAD";
+    return `${targetBranch} must be checked out before ${action}; currently on ${checkedOut}. Delivery follows the checked-out branch only when it is the recorded target or has fast-forwarded past it, and ${checkedOut} has not. Check out ${targetBranch}, or pass integrationBranch (CLI --integration-branch) naming the checked-out branch to deliver onto it instead.`;
   }
   function integrationTargetCheckoutState(repo) {
     return integrationGit(repo, ["status", "--porcelain=v2", "--untracked-files=all"]).split(/\r?\n/).filter(Boolean);
@@ -1329,6 +1345,22 @@ ${verify.outputTail}` : null
       deliveredFiles: submittedPaths
     };
   }
+  function deliveryRevisionPreflight(repo, ticket, deliveryCommit, request) {
+    if (!request.workingTreeDelivery) {
+      return {
+        refusal: request.resolvedPaths.length ? {
+          ok: false,
+          reason: "resolved_paths_invalid",
+          ticket,
+          message: `${ticket.ref} reconciliation refused: ${deliveryCommit} is already reachable from ${request.targetBranch}, so its own content answers for it and resolvedPaths attests nothing. Record this delivery without resolvedPaths and deliveryRevision.`
+        } : null,
+        revisionProof: null
+      };
+    }
+    if (!request.requested) return { refusal: null, revisionProof: null };
+    const revisionProof = deliveryRevisionProof(repo, ticket, deliveryCommit, request);
+    return revisionProof.ok ? { refusal: null, revisionProof } : { refusal: Object.assign({ ticket }, revisionProof), revisionProof: null };
+  }
   function workingTreeDeliveryPaths(repo) {
     const tracked = integrationGit(repo, ["diff", "--name-only", "HEAD"]).split(/\r?\n/).filter(Boolean);
     const untracked = integrationGit(repo, ["ls-files", "--others", "--exclude-standard"]).split(/\r?\n/).filter(Boolean);
@@ -1378,7 +1410,8 @@ ${verify.outputTail}` : null
     const preflight = validateIntegrationSubmission(slug, idOrRef, {
       deliveryInteractionCommit: opts.deliveryInteractionCommit,
       completingApplyDelivery: opts.completingApplyDelivery === true,
-      deliveryMethod: opts.deliveryMethod
+      deliveryMethod: opts.deliveryMethod,
+      integrationBranch: opts.target?.branch
     });
     if (!preflight.ok) return preflight;
     const preflightTicket = preflight.ticket;
@@ -1428,7 +1461,7 @@ ${verify.outputTail}` : null
             ok: false,
             reason: "branch_not_checked_out",
             ticket,
-            message: `${target.branch} must be checked out, or a detached worktree at the target tip must be given via worktree:"<path>" (CLI: --worktree <path>), before recording an external delivery; currently on ${currentBranch || "detached HEAD"}${requestedWorktree ? ` in ${repo}` : ""}.`
+            message: `${branchNotCheckedOutMessage(target.branch, currentBranch, "recording an external delivery")}${requestedWorktree ? ` The worktree given (${repo}) is not at the ${target.branch} tip either.` : ""} A worktree at the ${target.branch} tip is also admitted: give it via worktree:"<path>" (CLI: --worktree <path>).`
           };
         }
         observedIntegrationRevisionSource = `git:${commitScope.integrationRefLabel(matchedRef)}`;
@@ -1481,24 +1514,18 @@ ${verify.outputTail}` : null
           message: `${ticket.ref} reconciliation refused: non-reachable delivery must name its immutable ${submissionGitRef(ticket)} candidate, not ${deliveryCommit}.`
         };
       }
-      if (resolvedPaths.length && !workingTreeDelivery) {
-        return {
-          ok: false,
-          reason: "resolved_paths_invalid",
-          ticket,
-          message: `${ticket.ref} reconciliation refused: ${deliveryCommit} is already reachable from ${target.branch}, so its own content answers for it and resolvedPaths attests nothing. Record this delivery without resolvedPaths and deliveryRevision.`
-        };
-      }
-      const completingApplyDelivery = opts.completingApplyDelivery === true && !workingTreeDelivery;
-      const revisionProof = workingTreeDelivery && requestedDeliveryRevision ? deliveryRevisionProof(repo, ticket, deliveryCommit, {
+      const revisionPreflight = deliveryRevisionPreflight(repo, ticket, deliveryCommit, {
         requested: requestedDeliveryRevision,
         resolvedPaths,
+        workingTreeDelivery,
         targetBranch: target.branch,
         resultingHead,
         by: String(opts.by || "").trim(),
         reason
-      }) : null;
-      if (revisionProof && !revisionProof.ok) return Object.assign({ ticket }, revisionProof);
+      });
+      if (revisionPreflight.refusal) return revisionPreflight.refusal;
+      const revisionProof = revisionPreflight.revisionProof;
+      const completingApplyDelivery = opts.completingApplyDelivery === true && !workingTreeDelivery;
       const content = completingApplyDelivery ? applyDeliveryTreeMatchesCandidate(repo, ticket.submission, deliveryCommit) : revisionProof ? revisionProof.content : workingTreeDelivery && !reachable ? workingTreeContainsSubmittedContent(repo, ticket.submission, deliveryCommit) : deliveryContainsSubmittedContent(repo, ticket.submission, deliveryCommit);
       if (!content.ok) {
         const missing = content.missing ?? [];
@@ -1709,20 +1736,20 @@ ${verify.outputTail}` : null
   }
   function integrateSubmission(slug, idOrRef, opts) {
     opts = opts || {};
-    const preflight = validateIntegrationSubmission(slug, idOrRef);
+    const preflight = validateIntegrationSubmission(slug, idOrRef, { integrationBranch: opts.integrationBranch });
     if (!preflight.ok) return preflight;
     const ticket = preflight.ticket;
     if (!submissionUsesGit(ticket)) {
       const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
       if (!assembled.ok) return assembled;
-      const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true });
+      const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true, integrationBranch: opts.integrationBranch });
       return admitted.ok ? integrateArtifactSubmission(slug, admitted.ticket, opts) : admitted;
     }
     const project = readMeta(slug);
     const repo = project?.path;
     let target;
     try {
-      target = ticketIntegrationTarget(slug, ticket);
+      target = deliveryIntegrationTarget(slug, ticketIntegrationTarget(slug, ticket), opts.integrationBranch);
     } catch (error) {
       return { ok: false, reason: "integration_target_unavailable", ticket, message: integrationGitError(error) };
     }
@@ -1816,7 +1843,7 @@ ${verify.outputTail}` : null
     try {
       const resolvedTargets = ticketIntegrationTargets(slug, assembled.tickets);
       if (!resolvedTargets.ok) return Object.assign({ tickets: assembled.tickets }, resolvedTargets);
-      target = resolvedTargets.target;
+      target = deliveryIntegrationTarget(slug, resolvedTargets.target, opts?.integrationBranch);
     } catch (error) {
       return { ok: false, reason: "integration_target_unavailable", tickets: assembled.tickets, message: integrationGitError(error) };
     }
@@ -1844,7 +1871,7 @@ ${verify.outputTail}` : null
       const mode = normalizeDeliveryMode(opts.mode);
       const currentBranch = integrationGit(repo, ["branch", "--show-current"]);
       if (currentBranch !== target.branch) {
-        return { ok: false, reason: "branch_not_checked_out", tickets: assembled.tickets, message: `${target.branch} must be checked out before wave delivery; currently on ${currentBranch || "detached HEAD"}.` };
+        return { ok: false, reason: "branch_not_checked_out", tickets: assembled.tickets, message: branchNotCheckedOutMessage(target.branch, currentBranch, "wave delivery") };
       }
       const candidates = [];
       for (const ticket of assembled.tickets) {
@@ -1931,7 +1958,7 @@ ${verify.outputTail}` : null
   }
   function integrateSubmissionUnlocked(slug, idOrRef, opts) {
     opts = opts || {};
-    const preflight = validateIntegrationSubmission(slug, idOrRef);
+    const preflight = validateIntegrationSubmission(slug, idOrRef, { integrationBranch: opts.integrationBranch });
     if (!preflight.ok) return preflight;
     let ticket = preflight.ticket;
     const project = readMeta(slug);
@@ -1939,7 +1966,7 @@ ${verify.outputTail}` : null
     const mode = normalizeDeliveryMode(opts.mode);
     let target;
     try {
-      target = ticketIntegrationTarget(slug, ticket);
+      target = deliveryIntegrationTarget(slug, ticketIntegrationTarget(slug, ticket), opts.integrationBranch);
     } catch (error) {
       return { ok: false, reason: "integration_target_unavailable", ticket, message: integrationGitError(error) };
     }
@@ -1961,7 +1988,7 @@ ${verify.outputTail}` : null
     }
     const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
     if (!assembled.ok) return assembled;
-    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true });
+    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true, integrationBranch: opts.integrationBranch });
     if (!admitted.ok) return admitted;
     ticket = admitted.ticket;
     const submission = ticket.submission;
@@ -1992,7 +2019,7 @@ ${verify.outputTail}` : null
     try {
       const currentBranch = integrationGit(repo, ["branch", "--show-current"]);
       if (currentBranch !== target.branch) {
-        return integrationFailure(slug, ticket, { reason: "branch_not_checked_out", message: `${target.branch} must be checked out before integration; currently on ${currentBranch || "detached HEAD"}.` });
+        return integrationFailure(slug, ticket, { reason: "branch_not_checked_out", message: branchNotCheckedOutMessage(target.branch, currentBranch, "integration") });
       }
       if ("scopeValidation" in admitted && admitted.scopeValidation?.reconciled) {
         const resultingHead2 = integrationGit(repo, ["rev-parse", "HEAD"]);
@@ -2117,7 +2144,7 @@ ${verify.outputTail}` : null
       return { ok: false, message: error?.message || String(error) };
     }
   }
-  function submissionVerificationResult(ticket, sourceRevision, verify, candidateCommit) {
+  function submissionVerificationResult(ticket, sourceRevision, verify, candidateCommit, directCaptureInvocation) {
     const requirement = pinnedVerificationRequirement(ticket);
     const evidence = String(verify || "").trim();
     if (requirement.kind === "attestation" || sourceRevision != null) {
@@ -2146,7 +2173,7 @@ ${verify.outputTail}` : null
       return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
         source: "git",
         value: String(candidateCommit || "").trim().toLowerCase()
-      }, String(ticket.dispatchNonce || ""));
+      }, String(ticket.dispatchNonce || ""), directCaptureInvocation);
     }
     if (requirement.command) {
       const error2 = verifyCommandError(requirement.command);
@@ -2160,7 +2187,7 @@ ${verify.outputTail}` : null
       return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
         source: "git",
         value: String(candidateCommit || "").trim().toLowerCase()
-      }, String(ticket.dispatchNonce || ""));
+      }, String(ticket.dispatchNonce || ""), directCaptureInvocation);
     }
     if (requirement.kind === "custom" && requirement.evidenceContract === "legacy project verifier was not recorded" && !evidence) {
       return { result: { kind: "custom", status: "passed", evidence: requirement.evidenceContract }, expectedEvidence: null };
@@ -2173,7 +2200,7 @@ ${verify.outputTail}` : null
     const adapterFacts = opts.admissionFacts || {};
     const sourceRevisionFacts = sourceRevision && isSourceRevisionAdapterFacts(opts.admissionFacts) ? opts.admissionFacts : null;
     const sourceRevisionResolution = sourceRevisionFacts?.baseline || null;
-    const verification = submissionVerificationResult(ticket, sourceRevision, verify, opts.commit);
+    const verification = submissionVerificationResult(ticket, sourceRevision, verify, opts.commit, directClaimCaptureInvocation(slug, ticket));
     const completion = sourceRevision ? { ok: true } : completionTreeCheck(slug, ticket, { explicitNoOp: range?.noOp === true });
     const admitted = adapterFacts.admittedScope || executionScope(slug, ticket);
     const scope = adapterFacts.scope || commitScope.ticketCommitScope(admitted, ticket.files, ticket.ref);
@@ -2610,6 +2637,10 @@ ${verify.outputTail}` : null
       return { ok: true, ticket: source, supersededBy, comment };
     });
   }
+  function notOwnerSubmissionMessage(ref, submissionOwner, by, operation) {
+    if (operation === "rework") return `rework requires by = the submitter "${submissionOwner}" (pulse -> submittedBy); got "${by}".`;
+    return `${ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".`;
+  }
   function submissionOwnershipFailure(ticket, by, opts) {
     opts = opts || {};
     if (ticket.status === "done") return { ok: false, reason: "done", ticket };
@@ -2631,7 +2662,7 @@ ${verify.outputTail}` : null
         reason: "not_owner",
         ticket,
         ...held ? { claim: held } : {},
-        ...!claimOwner ? { message: `${ticket.ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".` } : {}
+        ...!claimOwner ? { message: notOwnerSubmissionMessage(ticket.ref, submissionOwner, by, opts.operation) } : {}
       };
     }
     if (!claimOwner && opts.allowSubmittedOwner !== true) {
@@ -2724,7 +2755,7 @@ ${verify.outputTail}` : null
       if (!pendingSubmission(ticket) && !retryCheckpoint) {
         return { ok: false, reason: "submission_required", ticket, message: `${ticket.ref} has no pending submission or retry candidate to reject for rework.` };
       }
-      const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true });
+      const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true, operation: "rework" });
       if (ownershipFailure) return ownershipFailure;
       const history = rejectionHistory(ticket);
       const source = opts.source || "cli";
@@ -2877,17 +2908,24 @@ ${verify.outputTail}` : null
       return surfaces.length ? { ref: sibling.ref, surfaces } : null;
     }).filter((overlap) => overlap !== null);
   }
+  const NON_EXECUTABLE_WAVE_VERIFICATION_KINDS = ["document", "link", "manual", "attestation", "review"];
+  function waveVerifierIdentity(requirement) {
+    return JSON.stringify({ kind: requirement.kind, command: requirement.command || null, evidenceContract: requirement.evidenceContract, artifact: requirement.artifact || null });
+  }
+  function waveVerifierMismatchMessage(tickets, requirements) {
+    const pinnedKinds = tickets.map((ticket, index) => `${ticket.ref} ${requirements[index].kind}`).join(", ");
+    const difference = new Set(requirements.map((requirement) => requirement.kind)).size > 1 ? `pin different verifier kinds (${pinnedKinds})` : `all pin kind ${requirements[0].kind} but with different commands or evidence (${pinnedKinds})`;
+    return `Wave assembly requires one project-defined verification gate. Its participants ${difference}, so this assembly cannot choose or rewrite one. Non-executable kinds (${NON_EXECUTABLE_WAVE_VERIFICATION_KINDS.join(", ")}) only need to agree on kind; executable kinds must pin the same command. ${manualCandidateDeliveryGuidance()}`;
+  }
   function waveVerificationRequirement(tickets) {
     const requirements = tickets.map(pinnedVerificationRequirement);
     const first = requirements[0];
     if (!first) return { ok: false, reason: "wave_verification_required", message: "Wave assembly requires a pinned project verification requirement." };
-    const identity = JSON.stringify({ kind: first.kind, command: first.command || null, evidenceContract: first.evidenceContract, artifact: first.artifact || null });
-    if (requirements.some((requirement) => JSON.stringify({ kind: requirement.kind, command: requirement.command || null, evidenceContract: requirement.evidenceContract, artifact: requirement.artifact || null }) !== identity)) {
-      return {
-        ok: false,
-        reason: "wave_verifier_mismatch",
-        message: `Wave assembly requires one project-defined verification gate. Its participants pin different verifier requirements, so this assembly cannot choose or rewrite one. ${manualCandidateDeliveryGuidance()}`
-      };
+    const sameKind = requirements.every((requirement) => requirement.kind === first.kind);
+    if (sameKind && NON_EXECUTABLE_WAVE_VERIFICATION_KINDS.includes(first.kind)) return { ok: true, requirement: first };
+    const identity = waveVerifierIdentity(first);
+    if (requirements.some((requirement) => waveVerifierIdentity(requirement) !== identity)) {
+      return { ok: false, reason: "wave_verifier_mismatch", message: waveVerifierMismatchMessage(tickets, requirements) };
     }
     return { ok: true, requirement: first };
   }
@@ -3308,6 +3346,6 @@ ${verify.outputTail}` : null
     }));
     return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || "merge" };
   }
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, pinnedVerificationRequirement, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
 }
 module.exports = { createSubmissions };

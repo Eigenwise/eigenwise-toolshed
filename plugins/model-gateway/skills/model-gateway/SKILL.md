@@ -117,8 +117,9 @@ bring auth back, or you kill the session that was about to use it.
   to return to auto-detection. Overrides always win. `pin` with no arguments and `doctor` show each
   effective pin, whether it is overridden, and when a CLI alias lags a newer shipped model. Overrides live in
   `~/.claude/model-gateway/pins.json`, outside
-  the plugin cache. A pin change updates every registered wired project's gateway-owned pins and
-  skips any project with a user-owned pin value. Restart every open Claude Code session in an
+  the plugin cache. A pin change, and every SessionStart pin refresh, updates every registered wired
+  project's gateway-owned pins (so a new shipped default reaches them too) and skips any project with a
+  user-owned pin value. Restart every open Claude Code session in an
   affected project; changing a saved value cannot alter an open session.
 - Do NOT set a
   global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to both providers and can make Codex

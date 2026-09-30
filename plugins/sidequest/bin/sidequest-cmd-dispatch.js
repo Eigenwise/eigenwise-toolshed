@@ -270,7 +270,7 @@ async function cmdBoardConfig(opts) {
   console.log(`worktree dependency paths: ${payload.worktreeDependencyPaths.length ? payload.worktreeDependencyPaths.map((dependency) => `${dependency.mode} ${dependency.path}`).join(", ") : "(none)"}`);
 }
 async function cmdProjects(opts) {
-  const projects = store.listProjects({ archived: !!opts.archived });
+  const projects = store.listProjectsFlaggingMissingPaths({ archived: !!opts.archived });
   if (opts.json) {
     process.stdout.write(JSON.stringify({ projects }, null, 2) + "\n");
     return;
@@ -304,6 +304,15 @@ function resolveExplicitBoard(opts, positional, action) {
   if (!found.ok) fail(`${action}: board "${ref}" ${describeFindFailure(found, ref)}`);
   return found;
 }
+function keptArchivedNote(candidateRefs) {
+  const kept = candidateRefs.keptArchived?.length || 0;
+  return kept ? `, ${kept} kept under refs/sidequest-archived/ because another board holds the live name` : "";
+}
+function candidateRefsNote(candidateRefs) {
+  if (!candidateRefs) return "";
+  if (candidateRefs.error) return `; candidate refs left in place: ${candidateRefs.error}`;
+  return `; moved ${candidateRefs.moved.length} candidate ref(s)${keptArchivedNote(candidateRefs)}`;
+}
 async function cmdArchiveBoard(opts, positional) {
   const board = resolveExplicitBoard(opts, positional, "archive-board");
   const res = store.archiveProject(board.slug);
@@ -312,7 +321,7 @@ async function cmdArchiveBoard(opts, positional) {
     process.stdout.write(JSON.stringify(Object.assign({ project: board.slug, projectName: board.meta.name }, res), null, 2) + "\n");
     return;
   }
-  console.log(`✓ ${res.alreadyArchived ? "already archived" : "archived"} board ${board.meta.name}`);
+  console.log(`✓ ${res.alreadyArchived ? "already archived" : "archived"} board ${board.meta.name}${candidateRefsNote(res.candidateRefs)}`);
 }
 async function cmdUnarchiveBoard(opts, positional) {
   const board = resolveExplicitBoard(opts, positional, "unarchive-board");
@@ -322,7 +331,7 @@ async function cmdUnarchiveBoard(opts, positional) {
     process.stdout.write(JSON.stringify(Object.assign({ project: board.slug, projectName: board.meta.name }, res), null, 2) + "\n");
     return;
   }
-  console.log(`✓ ${res.wasArchived ? "restored" : "already active"} board ${board.meta.name}`);
+  console.log(`✓ ${res.wasArchived ? "restored" : "already active"} board ${board.meta.name}${candidateRefsNote(res.candidateRefs)}`);
 }
 function describeFindFailure(res, ref) {
   if (res.reason === "ambiguous") {

@@ -187,31 +187,38 @@ function effectivePinValues() {
   return Object.fromEntries(Object.entries(effectivePins()).map(([alias, pin]) => [PIN_ALIASES[alias], pin.value]));
 }
 
+// Only a pin the project already holds is rewritten: adding missing pins is wiring, and a
+// refresh runs at every SessionStart, where it must not rewire a project nobody asked about.
+function stalePinsIn(env, expected) {
+  return Object.entries(expected).filter(([key, value]) => env[key] !== undefined && env[key] !== value);
+}
+
+function syncProjectPins(wiring, expected, ownedPins) {
+  let settings;
+  try {
+    settings = readSettingsForWrite(wiring.file);
+  } catch (error) {
+    return { skipped: { ...wiring, reason: error.message } };
+  }
+  const env = settings.env || {};
+  const unowned = pinValuesNotOwned(env, ownedPins);
+  if (unowned) return { skipped: { ...wiring, key: unowned[0], value: env[unowned[0]], reason: 'pin value is not gateway-owned' } };
+  const stalePins = stalePinsIn(env, expected);
+  if (stalePins.length === 0) return {};
+  settings.env = { ...env, ...Object.fromEntries(stalePins) };
+  writeSettings(wiring.file, settings);
+  return { changed: wiring };
+}
+
 function syncRegisteredProjectPins({ ownedPins = ownedPinValues() } = {}) {
   const { wirings, pruned } = registeredProjectWiringReport();
   const expected = effectivePinValues();
-  const changed = [];
-  const skipped = [];
-  for (const wiring of wirings) {
-    let settings;
-    try {
-      settings = readSettingsForWrite(wiring.file);
-    } catch (error) {
-      skipped.push({ ...wiring, reason: error.message });
-      continue;
-    }
-    const env = settings.env || {};
-    const unowned = pinValuesNotOwned(env, ownedPins);
-    if (unowned) {
-      skipped.push({ ...wiring, key: unowned[0], value: env[unowned[0]], reason: 'pin value is not gateway-owned' });
-      continue;
-    }
-    if (Object.entries(expected).every(([key, value]) => env[key] === value)) continue;
-    settings.env = { ...env, ...expected };
-    writeSettings(wiring.file, settings);
-    changed.push(wiring);
-  }
-  return { changed, pruned, skipped };
+  const results = wirings.map((wiring) => syncProjectPins(wiring, expected, ownedPins));
+  return {
+    changed: results.flatMap((result) => result.changed ? [result.changed] : []),
+    pruned,
+    skipped: results.flatMap((result) => result.skipped ? [result.skipped] : []),
+  };
 }
 
 function registeredProjectPinDisagreements() {

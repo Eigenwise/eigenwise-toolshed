@@ -489,7 +489,7 @@ const tools: ToolDefinition[] = [
     description: 'Every registered board with open/doing/done counts — the switcher across all projects. Pass archived:true to list archived boards only.',
     inputSchema: { type: 'object', properties: { archived: { type: 'boolean', description: 'List archived boards only.' } } },
     handler(args) {
-      return { projects: store.listProjects({ archived: !!args.archived }) };
+      return { projects: store.listProjectsFlaggingMissingPaths({ archived: !!args.archived }) };
     },
   },
   {

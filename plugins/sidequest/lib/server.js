@@ -280,6 +280,16 @@ function routingPreview(project, profileId) {
     preparedDispatches
   };
 }
+function namedBoardSlug(body) {
+  const named = body.project && String(body.project);
+  return named && named !== "all" ? named : null;
+}
+function boardForNewWork(body) {
+  const named = namedBoardSlug(body);
+  if (named || !body.projectPath) return { slug: named };
+  const registration = store.registerProject(store.explicitProjectRoot(String(body.projectPath)), body.projectName);
+  return registration.ok ? { slug: registration.slug } : { slug: null, error: registration.reason };
+}
 function storiesWithCounts(slug) {
   const counts = {};
   for (const t of store.listTickets(slug)) {
@@ -316,11 +326,11 @@ async function handle(req, res) {
     return;
   }
   if (req.method === "GET" && pathname === "/api/projects") {
-    sendJson(res, 200, { projects: store.listProjects() });
+    sendJson(res, 200, { projects: store.listProjectsFlaggingMissingPaths() });
     return;
   }
   if (req.method === "GET" && pathname === "/api/projects/archived") {
-    sendJson(res, 200, { projects: store.listProjects({ archived: true }) });
+    sendJson(res, 200, { projects: store.listProjectsFlaggingMissingPaths({ archived: true }) });
     return;
   }
   const projectAction = /^\/api\/projects\/([^/]+)\/(archive|unarchive)$/.exec(pathname);
@@ -488,10 +498,12 @@ async function handle(req, res) {
       sendJson(res, 400, { error: "bad JSON body" });
       return;
     }
-    let slug = body.project && String(body.project);
-    if ((!slug || slug === "all") && body.projectPath) {
-      slug = store.ensureProject(body.projectPath, body.projectName).slug;
+    const target = boardForNewWork(body);
+    if (target.error) {
+      sendJson(res, 400, { error: target.error });
+      return;
     }
+    const slug = target.slug;
     if (!slug || slug === "all") {
       sendJson(res, 400, { error: "a project is required to create a story" });
       return;
@@ -812,10 +824,12 @@ async function handle(req, res) {
       sendJson(res, 400, { error: "bad JSON body" });
       return;
     }
-    let slug = body.project && String(body.project);
-    if ((!slug || slug === "all") && body.projectPath) {
-      slug = store.ensureProject(body.projectPath, body.projectName).slug;
+    const target = boardForNewWork(body);
+    if (target.error) {
+      sendJson(res, 400, { error: target.error });
+      return;
     }
+    const slug = target.slug;
     if (!slug || slug === "all") {
       sendJson(res, 400, { error: "a project is required to create a ticket" });
       return;

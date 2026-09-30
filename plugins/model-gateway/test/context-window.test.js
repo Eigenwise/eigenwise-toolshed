@@ -1010,7 +1010,7 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
   const legacy = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.json'), 'utf8'));
   assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5-5[1m]');
-  assert.equal(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
+  assert.equal(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5-5[1m]');
   // Fable is a 1M Claude model too; pin it so a gateway session gets its full
   // window instead of Claude Code's 200k gateway default.
   assert.equal(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5-1[1m]');
@@ -1521,7 +1521,7 @@ test('rewiring without a Claude CLI wires the shipped pins and caches no detecti
     assert.equal(wired.status, 0, wired.stderr);
     const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).env;
     assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5-5[1m]');
-    assert.equal(settings.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
+    assert.equal(settings.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5-5[1m]');
     assert.equal(settings.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5-1[1m]');
     assert.equal(fs.existsSync(path.join(home, '.claude', 'model-gateway', 'detected-pins.json')), false);
 
@@ -1531,7 +1531,7 @@ test('rewiring without a Claude CLI wires the shipped pins and caches no detecti
     assert.equal(rewired.status, 0, rewired.stderr);
     const afterOverride = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).env;
     assert.equal(afterOverride.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
-    assert.equal(afterOverride.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
+    assert.equal(afterOverride.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5-5[1m]');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });

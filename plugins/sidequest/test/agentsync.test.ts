@@ -99,10 +99,50 @@ test('repair briefings include the complete rejection history', () => {
   assert.match(briefing, /SQ-1646: the audit reproduced the rejected-commit bypass\./);
   assert.match(briefing, /SQ-1659: the audit found the repeated-rework gap\./);
   assert.doesNotMatch(briefing, /fetch the complete oldest-first history|context_page retrieval/);
+  assert.doesNotMatch(briefing, /## Pending rework/, 'rows without a rework rejection are history only');
+  const superseded = agentsync.renderTicketBriefing({
+    ...ticket,
+    rejectedSubmissions: [{ ...ticket.rejectedSubmissions[1], rejectionKind: 'rework', supersededAt: '2026-08-10T00:00:00.000Z' }],
+  }, 'repair-briefing-token');
+  assert.doesNotMatch(superseded, /## Pending rework/, 'a rework a later submit superseded is no longer pending');
   assert.deepStrictEqual(agentsync.rejectedSubmissionRows(ticket).map((entry: any) => entry.commit), [
     'abcdef1234567',
     'fedcba7654321',
   ]);
+});
+
+test('the pending rework section names no actor and claims a preserved ref only once preservation finished', () => {
+  const rework = {
+    commit: 'fedcba7654321',
+    quarantineRef: 'refs/sidequest/SQ-1643-rejected',
+    rejectedAt: '2026-09-29T00:00:00.000Z',
+    rejectedBy: 'the-candidate-owner',
+    reason: 'Repair the trailing-field parser.',
+    review: 'SQ-9001: the parser still drops trailing fields.',
+    rejectionKind: 'rework',
+  };
+  const briefingFor = (row: any) => agentsync.renderTicketBriefing({
+    ref: 'SQ-1643',
+    title: 'Repair pending rework',
+    model: 'sonnet',
+    effort: 'high',
+    dispatchExecutor: 'sidequest-exec-high',
+    category: { id: 'debugging', route: { model: 'sonnet', effort: 'high' } },
+    rejectedSubmissions: [row],
+  }, 'pending-rework-token');
+  const section = (briefing: string) => briefing.slice(briefing.indexOf('## Pending rework'), briefing.indexOf('## Rejected submission history'));
+
+  const preserved = section(briefingFor({ ...rework, preservationState: 'preserved' }));
+  assert.match(preserved, /Candidate fedcba7654321 was sent back for rework at 2026-09-29T00:00:00\.000Z/);
+  assert.doesNotMatch(preserved, /the-candidate-owner|The orchestrator/, 'the rework caller is the candidate owner, not the rejecting reviewer');
+  assert.match(preserved, /Rejected candidate: fedcba7654321 \(preserved at refs\/sidequest\/SQ-1643-rejected\)/);
+
+  const pending = section(briefingFor({ ...rework, preservationState: 'pending', preservationError: 'update-ref failed' }));
+  assert.match(pending, /Rejected candidate: fedcba7654321$/m, 'a pending preservation has not created the ref yet');
+  assert.doesNotMatch(pending, /preserved at/);
+
+  const sourceRevision = section(briefingFor({ ...rework, commit: undefined, quarantineRef: undefined, sourceRevision: { source: 'tree', value: 'rev-77' } }));
+  assert.match(sourceRevision, /Rejected candidate: rev-77$/m);
 });
 
 test('executor briefings tell the agent how to report an unavailable Board MCP server', () => {
@@ -1049,6 +1089,9 @@ test('the pinned verify-capture command carries the dispatch bound worktree, and
   const sharedCommand = commandLine(shared);
   assert.match(shared, /Run it only over a clean worktree/);
   assert.doesNotMatch(sharedCommand, /--worktree/);
+  // GH-373: the wrapper loads the pinned command from the ticket, so the briefing carries no blob to retype.
+  assert.match(sharedCommand, /verify-capture\.js" --project "[^"]+" --ticket "SQ-1200" in the FOREGROUND/);
+  assert.doesNotMatch(sharedCommand, /--base64/);
 
   const linked = agentsync.renderTicketBriefing(Object.assign({}, base, {
     dispatch: { sharedTree: false, worktree: linkedWorktree },
@@ -1394,6 +1437,151 @@ test('workflow recipes use the Claude runtime alias without a prompt prefix', ()
     effortCarrier: 'none',
     warnings: [],
   });
+});
+
+const OPENCODE_FLASH = { slug: 'oc-flash', id: 'claude-opencode-deepseek-v4.1-flash', label: 'DeepSeek Flash', provider: 'opencode' };
+const GROK_BUILD = { slug: 'grok-build', id: 'claude-grok-build', label: 'Grok Build', provider: 'grok' };
+
+function seedProviderCatalog(models: any[]) {
+  const ready = { ready: true, state: 'ready', message: 'ready' };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-catalog-v4-'));
+  fs.mkdirSync(path.join(dir, 'model-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'model-gateway', 'catalog.json'), JSON.stringify({
+    schemaVersion: 4,
+    updatedAt: new Date().toISOString(),
+    source: 'model-gateway',
+    providers: { opencode: ready, grok: ready },
+    models,
+  }));
+  process.env.SIDEQUEST_DISCOVERY_DIRS = dir;
+}
+
+test('GH-361: a non-shim discovered route hands workflows its pinned definition, never a full id as the Agent model', () => {
+  seedProviderCatalog([OPENCODE_FLASH]);
+  const store = require('../lib/store.js');
+  configure(store, 'workflow-opencode', { model: OPENCODE_FLASH.slug, effort: 'high' });
+  const category = Object.assign(store.getCategory('workflow-opencode'), { project: 'recipe-project' });
+
+  const recipe = agentsync.workflowRecipe(category, store.resolveCategoryRoute(category));
+  assert.deepStrictEqual(recipe.agent, { model: null, subagentType: 'sidequest-exec-model-oc-flash-high', promptPrefix: '' });
+  assert.equal(recipe.effortCarrier, 'definition');
+  assert.equal(recipe.backend, 'opencode');
+  clearCatalog();
+});
+
+const KIT_MODELS = ['a', 'b', 'c', 'd'].map((letter) => ({ slug: `kit-${letter}`, id: `claude-kit-${letter}`, label: `Kit ${letter}`, provider: 'opencode' }));
+
+function routeKitCategory(store: any, id: string, route: any, readonly = false) {
+  store.setCategory({ id, name: id, route, fallback: null, readonly, enabled: true });
+}
+
+test('GH-369: discovered-model executors exist only for routed pairs, read-only twins only for read-only categories, and never touch a user file', () => {
+  const store = require('../lib/store.js');
+  const dir = tmpDir();
+  const userFile = path.join(dir, 'sidequest-exec-model-kit-b-low.md');
+  fs.writeFileSync(userFile, '---\nname: sidequest-exec-model-kit-b-low\nmodel: my-own-pin\n---\nmine\n');
+  fs.writeFileSync(path.join(dir, 'sidequest-exec-model-gone-high.md'), 'no marker, not ours\n');
+  seedProviderCatalog([...KIT_MODELS, GROK_BUILD]);
+  const project = store.ensureProject(path.join(process.env.SIDEQUEST_HOME, 'gh-369-board'), 'GH-369 board').slug;
+  try {
+    routeKitCategory(store, 'gh369-review', { model: 'kit-a', effort: 'high' }, true);
+    routeKitCategory(store, 'gh369-shim', { model: GROK_BUILD.slug, effort: 'high' });
+    store.setCategory({ id: 'gh369-disabled', name: 'gh369-disabled', route: { model: 'kit-d', effort: 'high' }, fallback: null, enabled: false });
+    store.setProjectCategory(project, 'gh369-local', 'ADD', {
+      name: 'GH-369 local', description: 'Board-local route', contract: 'Board-local route',
+      route: { model: 'kit-b', effort: 'low' }, fallback: { model: 'kit-b', effort: 'max' }, enabled: true,
+    });
+
+    const first = agentsync.syncDiscoveredModelAgents({ dir });
+    assert.deepStrictEqual(first, { written: 3, removed: 0, unchanged: 1 });
+    assert.deepStrictEqual(readDir(dir), [
+      'sidequest-exec-model-gone-high.md',
+      'sidequest-exec-model-kit-a-high.md',
+      'sidequest-exec-model-kit-b-low.md',
+      'sidequest-exec-model-kit-b-max.md',
+      'sidequest-exec-readonly-model-kit-a-high.md',
+    ], 'kit-c, the disabled kit-d, and every unrouted effort get no file; grok stays on the shared shim executor');
+    assert.equal(fs.readFileSync(userFile, 'utf8').includes('my-own-pin'), true, 'a same-named user file is left alone');
+
+    const fallback = parseExecutorFrontmatter(fs.readFileSync(path.join(dir, 'sidequest-exec-model-kit-b-max.md'), 'utf8'));
+    assert.equal(fallback.model, 'claude-kit-b');
+    assert.equal(fallback.effort, 'max');
+    const readOnlySource = fs.readFileSync(path.join(dir, 'sidequest-exec-readonly-model-kit-a-high.md'), 'utf8');
+    const readOnly = parseExecutorFrontmatter(readOnlySource);
+    assert.equal(readOnly.model, 'claude-kit-a');
+    assert.equal(readOnly.permissionMode, undefined, 'a read-only definition never claims bypass (GH-282)');
+    assert.match(readOnlySource, /^disallowedTools: Edit, Write, NotebookEdit/m);
+    assert.ok(readOnlySource.includes(agentsync.DISCOVERED_MODEL_MARKER));
+
+    assert.deepStrictEqual(agentsync.syncDiscoveredModelAgents({ dir }), { written: 0, removed: 0, unchanged: 4 });
+
+    routeKitCategory(store, 'gh369-review', { model: 'kit-c', effort: 'medium' }, true);
+    assert.deepStrictEqual(agentsync.syncDiscoveredModelAgents({ dir }), { written: 2, removed: 2, unchanged: 2 });
+    assert.deepStrictEqual(readDir(dir), [
+      'sidequest-exec-model-gone-high.md',
+      'sidequest-exec-model-kit-b-low.md',
+      'sidequest-exec-model-kit-b-max.md',
+      'sidequest-exec-model-kit-c-medium.md',
+      'sidequest-exec-readonly-model-kit-c-medium.md',
+    ], 'a route change prunes the old pair and writes the new one');
+
+    seedProviderCatalog([GROK_BUILD]);
+    assert.deepStrictEqual(agentsync.syncDiscoveredModelAgents({ dir }), { written: 0, removed: 3, unchanged: 0 });
+    assert.deepStrictEqual(readDir(dir), ['sidequest-exec-model-gone-high.md', 'sidequest-exec-model-kit-b-low.md'], 'only marked files are pruned');
+  } finally {
+    store.removeCategory('gh369-review');
+    store.removeCategory('gh369-shim');
+    store.removeCategory('gh369-disabled');
+    store.removeProjectCategory(project, 'gh369-local');
+    clearCatalog();
+  }
+});
+
+test('GH-369: dispatch to an unrouted pair writes it through the ensure, and SessionStart prunes it again', () => {
+  const store = require('../lib/store.js');
+  const dir = tmpDir();
+  seedProviderCatalog(KIT_MODELS);
+  routeKitCategory(store, 'gh369-session', { model: 'kit-a', effort: 'high' });
+  const previousAgentsDir = process.env.SIDEQUEST_AGENTS_DIR;
+  const ensured = tmpDir();
+  process.env.SIDEQUEST_AGENTS_DIR = ensured;
+  try {
+    const synced = agentsync.syncExecAgentsIfChanged(undefined, { dir });
+    assert.equal(synced.written, 1);
+    assert.equal(synced.skipped, false);
+    assert.equal(agentsync.migrateExecAgents(undefined, { dir }).removed, 0);
+    assert.equal(agentsync.syncExecAgentsIfChanged(undefined, { dir }).skipped, true);
+
+    agentsync.ensureDiscoveredModelAgents('sidequest-exec-high', { waitMs: 0 });
+    assert.deepStrictEqual(readDir(ensured), [], 'a Claude ladder dispatch writes nothing');
+    agentsync.ensureDiscoveredModelAgents('sidequest-exec-model-gone-max', { waitMs: 0 });
+    assert.deepStrictEqual(readDir(ensured), [], 'a model the catalog lacks gets no definition');
+    agentsync.ensureDiscoveredModelAgents('sidequest-exec-readonly-model-kit-d-max', { waitMs: 0 });
+    assert.deepStrictEqual(readDir(ensured), ['sidequest-exec-readonly-model-kit-d-max.md']);
+    const ensuredDefinition = parseExecutorFrontmatter(fs.readFileSync(path.join(ensured, 'sidequest-exec-readonly-model-kit-d-max.md'), 'utf8'));
+    assert.equal(ensuredDefinition.model, 'claude-kit-d');
+    assert.equal(ensuredDefinition.effort, 'max');
+    agentsync.ensureDiscoveredModelAgents('sidequest-exec-model-kit-c-low', { waitMs: 0 });
+    assert.deepStrictEqual(readDir(ensured), ['sidequest-exec-model-kit-c-low.md', 'sidequest-exec-readonly-model-kit-d-max.md'], 'a dispatch never prunes another dispatch\'s pending definition');
+
+    const sessionStart = agentsync.syncExecAgentsIfChanged(undefined, { dir: ensured });
+    assert.deepStrictEqual([sessionStart.written, sessionStart.removed], [1, 2]);
+    assert.deepStrictEqual(readDir(ensured), ['sidequest-exec-model-kit-a-high.md']);
+  } finally {
+    if (previousAgentsDir === undefined) delete process.env.SIDEQUEST_AGENTS_DIR;
+    else process.env.SIDEQUEST_AGENTS_DIR = previousAgentsDir;
+    store.removeCategory('gh369-session');
+    clearCatalog();
+  }
+});
+
+test('GH-361: discovered-model executor names classify with their effort and read-only role', () => {
+  const execNames = require('../lib/exec-names.js');
+  assert.deepStrictEqual(execNames.classify('sidequest-exec-model-oc-flash-high'), { kind: 'discovered_model', effort: 'high' });
+  assert.deepStrictEqual(execNames.classify('sidequest-exec-readonly-model-oc-flash-max'), { kind: 'read_only_discovered_model', effort: 'max' });
+  assert.equal(execNames.isReadOnlyExecutor('sidequest-exec-readonly-model-oc-flash-max'), true);
+  assert.equal(execNames.isDiscoveredModelExecutor('sidequest-exec-model-high'), false, 'a bare effort is the Claude ladder, not a model');
+  assert.deepStrictEqual(execNames.classify('sidequest-exec-readonly-high'), { kind: 'read_only_claude_builtin', effort: 'high' });
 });
 
 test('workflow recipes follow a category fallback across providers and name it (GH-217)', () => {

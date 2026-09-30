@@ -286,7 +286,7 @@ async function cmdBoardConfig(opts: any) {
 }
 
 async function cmdProjects(opts: any) {
-  const projects = store.listProjects({ archived: !!opts.archived });
+  const projects = store.listProjectsFlaggingMissingPaths({ archived: !!opts.archived });
   if (opts.json) {
     process.stdout.write(JSON.stringify({ projects }, null, 2) + '\n');
     return;
@@ -328,6 +328,18 @@ function resolveExplicitBoard(opts: any, positional: any, action: any) {
   return found;
 }
 
+function keptArchivedNote(candidateRefs: any): string {
+  const kept = candidateRefs.keptArchived?.length || 0;
+  return kept ? `, ${kept} kept under refs/sidequest-archived/ because another board holds the live name` : '';
+}
+
+// Archive and restore move the board's refs/sidequest/SQ-n candidates aside and back (GitHub #378).
+function candidateRefsNote(candidateRefs: any): string {
+  if (!candidateRefs) return '';
+  if (candidateRefs.error) return `; candidate refs left in place: ${candidateRefs.error}`;
+  return `; moved ${candidateRefs.moved.length} candidate ref(s)${keptArchivedNote(candidateRefs)}`;
+}
+
 async function cmdArchiveBoard(opts: any, positional: any) {
   const board = resolveExplicitBoard(opts, positional, 'archive-board');
   const res = store.archiveProject(board.slug);
@@ -336,7 +348,7 @@ async function cmdArchiveBoard(opts: any, positional: any) {
     process.stdout.write(JSON.stringify(Object.assign({ project: board.slug, projectName: board.meta.name }, res), null, 2) + '\n');
     return;
   }
-  console.log(`✓ ${res.alreadyArchived ? 'already archived' : 'archived'} board ${board.meta.name}`);
+  console.log(`✓ ${res.alreadyArchived ? 'already archived' : 'archived'} board ${board.meta.name}${candidateRefsNote(res.candidateRefs)}`);
 }
 
 async function cmdUnarchiveBoard(opts: any, positional: any) {
@@ -347,7 +359,7 @@ async function cmdUnarchiveBoard(opts: any, positional: any) {
     process.stdout.write(JSON.stringify(Object.assign({ project: board.slug, projectName: board.meta.name }, res), null, 2) + '\n');
     return;
   }
-  console.log(`✓ ${res.wasArchived ? 'restored' : 'already active'} board ${board.meta.name}`);
+  console.log(`✓ ${res.wasArchived ? 'restored' : 'already active'} board ${board.meta.name}${candidateRefsNote(res.candidateRefs)}`);
 }
 
 // Turn a findProject failure into a one-line reason for the merge error text.
