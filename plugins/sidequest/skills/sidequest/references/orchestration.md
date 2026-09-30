@@ -83,6 +83,8 @@ then add them to the spec or split the work further.
 
 Run this check before filing. Do the user-directed 1–2 named-file carve-out inline without creating a ticket; an exact one-line `.gitignore` entry is the canonical case. If a routed ticket already exists, direct work still records a 20+ character reason. Other inline work is limited to a failing integration gate that pinpoints a known small mechanical diff (strict-TS null guard, deliberate assertion-string sync, byte-checked golden regeneration, or merge-conflict resolution preserving both intents) or release bookkeeping (fragment, cut, or evidence closeout). `direct-ok` is optional user signal only, never a gate.
 
+A direct claim submits without a briefing: commit the candidate, `git update-ref refs/sidequest/<ref> <commit>`, run `node "<sidequest plugin>/lib/verify-capture.js" --project "<project path>" --ticket "<ref>"` from that clean checkout, then `submit`. The wrapper and submit use the ticket's current verify, not an earlier dispatch's pin, and a `verification_capture_required` refusal prints the exact wrapper line.
+
 Route a ticket to an executor for work needing investigation or other-file reading to be confident,
 new behavior or API surface, a failing test that does not pinpoint the location, or any rationale
 like "context already loaded", "small change", or "faster myself". The blocked-step and never-inline
