@@ -3017,6 +3017,14 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
   });
 }
 
+// Only `rework` gets its own wording: nothing is being released there, and the
+// generic "has no claim to release" phrasing names the wrong operation (GH-375).
+// The other two callers (reject-submission, clear-submission) keep it, unchanged.
+function notOwnerSubmissionMessage(ref: string, submissionOwner: string, by: string, operation?: string): string {
+  if (operation === 'rework') return `rework requires by = the submitter "${submissionOwner}" (pulse -> submittedBy); got "${by}".`;
+  return `${ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".`;
+}
+
 function submissionOwnershipFailure(ticket: any, by: string, opts?: any) {
   opts = opts || {};
   if (ticket.status === 'done') return { ok: false, reason: 'done', ticket };
@@ -3038,7 +3046,7 @@ function submissionOwnershipFailure(ticket: any, by: string, opts?: any) {
       reason: 'not_owner',
       ticket,
       ...(held ? { claim: held } : {}),
-      ...(!claimOwner ? { message: `${ticket.ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".` } : {}),
+      ...(!claimOwner ? { message: notOwnerSubmissionMessage(ticket.ref, submissionOwner, by, opts.operation) } : {}),
     };
   }
   if (!claimOwner && opts.allowSubmittedOwner !== true) {
@@ -3138,7 +3146,7 @@ function reworkSubmission(slug?: any, idOrRef?: any, opts?: any) {
     if (!pendingSubmission(ticket) && !retryCheckpoint) {
       return { ok: false, reason: 'submission_required', ticket, message: `${ticket.ref} has no pending submission or retry candidate to reject for rework.` };
     }
-    const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true });
+    const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true, operation: 'rework' });
     if (ownershipFailure) return ownershipFailure;
     const history = rejectionHistory(ticket);
     const source = opts.source || 'cli';

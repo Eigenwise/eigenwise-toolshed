@@ -2576,6 +2576,10 @@ ${verify.outputTail}` : null
       return { ok: true, ticket: source, supersededBy, comment };
     });
   }
+  function notOwnerSubmissionMessage(ref, submissionOwner, by, operation) {
+    if (operation === "rework") return `rework requires by = the submitter "${submissionOwner}" (pulse -> submittedBy); got "${by}".`;
+    return `${ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".`;
+  }
   function submissionOwnershipFailure(ticket, by, opts) {
     opts = opts || {};
     if (ticket.status === "done") return { ok: false, reason: "done", ticket };
@@ -2597,7 +2601,7 @@ ${verify.outputTail}` : null
         reason: "not_owner",
         ticket,
         ...held ? { claim: held } : {},
-        ...!claimOwner ? { message: `${ticket.ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".` } : {}
+        ...!claimOwner ? { message: notOwnerSubmissionMessage(ticket.ref, submissionOwner, by, opts.operation) } : {}
       };
     }
     if (!claimOwner && opts.allowSubmittedOwner !== true) {
@@ -2690,7 +2694,7 @@ ${verify.outputTail}` : null
       if (!pendingSubmission(ticket) && !retryCheckpoint) {
         return { ok: false, reason: "submission_required", ticket, message: `${ticket.ref} has no pending submission or retry candidate to reject for rework.` };
       }
-      const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true });
+      const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true, operation: "rework" });
       if (ownershipFailure) return ownershipFailure;
       const history = rejectionHistory(ticket);
       const source = opts.source || "cli";

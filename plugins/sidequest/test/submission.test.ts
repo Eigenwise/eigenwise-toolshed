@@ -1148,6 +1148,41 @@ test('review rejection preserves the candidate through a normal repair dispatch 
   assert.strictEqual(afterReplacement.rejectedSubmissions[0].supersededBy.commit, replacementCommit);
 });
 
+test('rework refuses a non-submitter by with the submitter-ownership message, not the release wording (GH-375)', async () => {
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh375.js'), 'candidate\n');
+  git(['add', 'lib/gh375.js']);
+  git(['commit', '-m', 'gh375 candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  const t = addTicket('rework refusal names the required submitter');
+  pin(t, commit);
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'exec-x', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, t.ref, 'exec-x', { commit }).ok, true);
+
+  const wrongOwner = await callMcp('rework', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by: 'reviewer',
+    review: 'A reviewer identity, not the submitter.',
+    reason: 'by must equal the submitter identity, not a reviewer label.',
+  });
+  assert.strictEqual(wrongOwner.ok, false);
+  assert.strictEqual(wrongOwner.reason, 'not_owner');
+  assert.match(wrongOwner.message, /rework requires by = the submitter "exec-x"/);
+  assert.match(wrongOwner.message, /got "reviewer"/);
+  assert.doesNotMatch(wrongOwner.message, /has no claim to release/);
+
+  const rightOwner = await callMcp('rework', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by: 'exec-x',
+    review: 'The submitter rejecting their own candidate.',
+    reason: 'by matches the submitter identity.',
+  });
+  assert.strictEqual(rightOwner.ok, true, rightOwner.message);
+});
+
 test('rework preserves every rejected commit and avoids quarantine ref collisions (SQ-1642)', async () => {
   cleanBranch();
   fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
@@ -4321,7 +4356,8 @@ test('SQ-2413: MCP groomClose records terminal recovery evidence and accepts a r
       reason: 'Reject only from the candidate owner.',
     });
     assert.strictEqual(rework.ok, false);
-    assert.match(rework.message, /no claim to release/);
+    assert.match(rework.message, /rework requires by = the submitter "terminal-submitted-source"/);
+    assert.doesNotMatch(rework.message, /no claim to release/);
     git(['reset', '--hard', 'origin/main']);
     fs.writeFileSync(path.join(PROJECT_DIR, 'unrelated-delivery.js'), 'reachable but unrelated\n');
     git(['add', 'unrelated-delivery.js']);
