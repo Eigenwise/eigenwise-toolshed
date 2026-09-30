@@ -108,11 +108,14 @@ function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, clai
     const reason = reservedLocation(canonicalPath) || tempOrNonRepositoryRefusal(canonicalPath, implicit);
     return reason && `not a project root: ${resolved} is ${reason}.`;
   }
-  function registerProject(absPath, name, options = {}) {
+  function boardRootRefusal(absPath, options = {}) {
     const resolved = path.resolve(absPath);
-    const refusal = readMeta(slugify(resolved)) ? null : projectRootRefusal(resolved, Boolean(options.implicit));
+    return readMeta(slugify(resolved)) ? null : projectRootRefusal(resolved, Boolean(options.implicit));
+  }
+  function registerProject(absPath, name, options = {}) {
+    const refusal = boardRootRefusal(absPath, options);
     if (refusal) return { ok: false, reason: refusal };
-    return { ok: true, ...ensureProject(resolved, name) };
+    return { ok: true, ...ensureProject(path.resolve(absPath), name) };
   }
   function flagMissingPath(project) {
     return isDirectory(project.path) ? project : { ...project, missingPath: true };
@@ -364,6 +367,6 @@ function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, clai
     }
     return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
   }
-  return { archiveProject, deleteProjectExact, ensureProject, findProject, listProjects, listProjectsFlaggingMissingPaths, mergeProject, metaLockPath, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, registerProject, setProjectNotify, setProjectRouting, unarchiveProject, withMetaLock };
+  return { archiveProject, boardRootRefusal, deleteProjectExact, ensureProject, findProject, listProjects, listProjectsFlaggingMissingPaths, mergeProject, metaLockPath, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, registerProject, setProjectNotify, setProjectRouting, unarchiveProject, withMetaLock };
 }
 module.exports = { createProjects };

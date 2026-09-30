@@ -176,6 +176,9 @@ var AUTOMATION_TAG = /^<(?:agent-message|local-command(?:-caveat)?|task-notifica
 var INVESTIGATION_READ_THRESHOLD = 8;
 var SUBSTANTIVE_ESCALATION_START = 4;
 var NATIVE_AGENT_ESCALATION_START = 2;
+var SHELL_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
+var EDIT_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "NotebookEdit"]);
+var READ_TOOLS = /* @__PURE__ */ new Set(["Read", "Grep", "Glob"]);
 function boardFor(input) {
   const store = require(runtimeModule("store"));
   const start = stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -189,13 +192,17 @@ function shellCommand(input) {
 }
 function isBoardInteraction(toolName, command) {
   if (toolName.startsWith("mcp__plugin_sidequest_board__")) return true;
-  if (toolName !== "Bash" || !command) return false;
+  if (!SHELL_TOOLS.has(toolName) || !command) return false;
   return /(?:^|[\s"'\\/])sidequest(?:\.js)?(?=\s|["']|$)/i.test(command);
 }
 function isPureRead(command) {
   const parts = command.split(/(?:&&|\|\||;)/).map((part) => part.trim()).filter(Boolean);
   if (!parts.length) return true;
-  return parts.every((part) => /^(?:cd\s+\S+|(?:git\s+)?(?:status|diff|log|show|branch\s+--show-current|rev-parse|ls-files)|(?:ls|dir|pwd|cat|head|tail|rg|grep|find|which|where)\b)/i.test(part));
+  return parts.every((part) => /^(?:cd\s+\S+|(?:git\s+)?(?:status|diff|log|show|branch\s+--show-current|rev-parse|ls-files)|(?:ls|dir|pwd|cat|head|tail|rg|grep|find|which|where|get-(?:childitem|content|item|location)|select-string|test-path)\b)/i.test(part));
+}
+function isVerificationRun(command) {
+  const parts = command.split(/(?:&&|\|\||;)/).map((part) => part.trim()).filter(Boolean);
+  return parts.every((part) => /^(?:cd\s+\S+$|npm\s+(?:test|t|run\s+(?:test|build|typecheck)\S*)\b|node\s+(?:--import\s+\S+\s+)*(?:-e|--eval|--test)\b|(?:npx\s+)?tsc\b)/i.test(part));
 }
 function isBoundedTranscriptLookup(command, prompt) {
   if (!/\b(?:find|search|locate|look\s+up)\b[\s\S]*\b(?:session|transcript)\b/i.test(prompt)) return false;
@@ -204,11 +211,11 @@ function isBoundedTranscriptLookup(command, prompt) {
   return !/\b(?:write(?:File|_text|_bytes|FileSync)?|appendFile(?:Sync)?|unlink(?:Sync)?|remove|rename|replace|mkdir|rmdir|chmod|chown|copy(?:File)?|shutil\.|subprocess\.|os\.system|exec(?:File)?(?:Sync)?|spawn(?:Sync)?|open\([^)]*,\s*['"][wa+]|rm|del|mv|cp|git\s+(?:commit|reset|checkout|clean|merge|rebase)|npm\s+(?:install|publish))\b|(?<!\d)>\s*(?!&)/i.test(command);
 }
 function isSubstantive(toolName, command, prompt) {
-  if (toolName === "Edit" || toolName === "Write" || toolName === "NotebookEdit") return true;
-  return toolName === "Bash" && Boolean(command) && !isPureRead(command) && !isBoundedTranscriptLookup(command, prompt);
+  if (EDIT_TOOLS.has(toolName)) return true;
+  return SHELL_TOOLS.has(toolName) && !isPureRead(command) && !isVerificationRun(command) && !isBoundedTranscriptLookup(command, prompt);
 }
 function isReadClass(toolName, command) {
-  return toolName === "Read" || toolName === "Grep" || toolName === "Glob" || toolName === "Bash" && Boolean(command) && isPureRead(command);
+  return READ_TOOLS.has(toolName) || SHELL_TOOLS.has(toolName) && Boolean(command) && isPureRead(command);
 }
 function isEscalationPoint(activityCount, firstEscalation) {
   let escalation = firstEscalation;
@@ -217,7 +224,7 @@ function isEscalationPoint(activityCount, firstEscalation) {
 }
 function nudgeMessage(readActions, substantiveActions, repeated) {
   const earlierReminder = repeated ? " You have continued after an earlier reminder." : "";
-  return `sidequest: ${readActions} reads / ${substantiveActions} commands this session, no board interaction.${earlierReminder} Multi-file work defaults to board dispatch. In your next reply offer dispatch, or name why inline serves the user better than an executor.`;
+  return `sidequest: ${readActions} reads / ${substantiveActions} commands with no board call.${earlierReminder} Multi-file work defaults to board dispatch under this project's standing authorization: file the ticket(s) with add and dispatch now; do not offer. Only a one-or-two-file edit at a known location stays inline.`;
 }
 function nativeAgentNudgeMessage(nativeAgentSpawns, repeated) {
   const earlierReminder = repeated ? " You have continued after an earlier reminder." : "";

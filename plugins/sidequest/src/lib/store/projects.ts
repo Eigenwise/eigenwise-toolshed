@@ -102,11 +102,15 @@ function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, clai
   // An explicitly named folder may be a plain non-git directory (a notes vault);
   // a board minted implicitly from the session cwd needs a git root. Either way an
   // already-registered board is reused as is.
-  function registerProject(absPath: string, name?: string, options: { implicit?: boolean } = {}) {
+  function boardRootRefusal(absPath: string, options: { implicit?: boolean } = {}) {
     const resolved = path.resolve(absPath);
-    const refusal = readMeta(slugify(resolved)) ? null : projectRootRefusal(resolved, Boolean(options.implicit));
+    return readMeta(slugify(resolved)) ? null : projectRootRefusal(resolved, Boolean(options.implicit));
+  }
+
+  function registerProject(absPath: string, name?: string, options: { implicit?: boolean } = {}) {
+    const refusal = boardRootRefusal(absPath, options);
     if (refusal) return { ok: false as const, reason: refusal };
-    return { ok: true as const, ...ensureProject(resolved, name) };
+    return { ok: true as const, ...ensureProject(path.resolve(absPath), name) };
   }
 
   // Surfaced only: a board whose folder vanished may still hold tickets someone wants.
@@ -390,7 +394,7 @@ function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, clai
     return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
   }
 
-  return { archiveProject, deleteProjectExact, ensureProject, findProject, listProjects, listProjectsFlaggingMissingPaths, mergeProject, metaLockPath, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, registerProject, setProjectNotify, setProjectRouting, unarchiveProject, withMetaLock };
+  return { archiveProject, boardRootRefusal, deleteProjectExact, ensureProject, findProject, listProjects, listProjectsFlaggingMissingPaths, mergeProject, metaLockPath, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, registerProject, setProjectNotify, setProjectRouting, unarchiveProject, withMetaLock };
 }
 
 module.exports = { createProjects };

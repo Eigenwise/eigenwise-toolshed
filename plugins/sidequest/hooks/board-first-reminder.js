@@ -214,27 +214,55 @@ function writeSessionState(file, state) {
 
 // src/hooks/board-first-reminder.ts
 var AUTOMATION_TAG = /^<(?:agent-message|local-command(?:-caveat)?|task-notification|task-progress|task-result)\b/i;
-function boardFor(input) {
+var CHANGE_VERB = /\b(?:add|build|implement|fix|refactor|change|update|create|write|remove|delete|rename|move|migrate|rewrite|port|wire|improve|investigate|audit|debug|make)\b/i;
+var GREETING_LENGTH = 60;
+var INLINE_WORK_WINDOW_KEYS = ["boardInteraction", "readActions", "substantiveActions", "soloChoiceSurfaced", "investigationChoiceSurfaced"];
+var ROUTED_BOARD_REMINDER = "sidequest: gather enough read-only evidence, using Explore only for a quick sweep (it inherits the session model; deep or fan-out investigation is a codebase-exploration spike), then file precise tickets with add and dispatch them without offering. Only a one-or-two-file edit at a known location stays inline.";
+var NEW_BOARD_HINT = "sidequest: no board here yet. For multi-file or multi-step work, the first add creates this repo's board and dispatch is ready through the default profile; file the ticket and dispatch it without offering.";
+function projectRoot(input, store) {
+  return store.nearestRepoRoot(stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR || process.cwd());
+}
+function boardReminder(input) {
   const store = require(runtimeModule("store"));
-  const start = stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  const found = store.findProject(store.nearestRepoRoot(start));
-  if (!found.ok || !found.slug || store.projectDispatchAdmission(found.slug).status !== "routed") return null;
-  return found.slug;
+  const root = projectRoot(input, store);
+  const found = store.findProject(root);
+  if (!found.ok) return store.boardRootRefusal(root, { implicit: true }) ? null : NEW_BOARD_HINT;
+  return store.projectDispatchAdmission(String(found.slug)).status === "routed" ? ROUTED_BOARD_REMINDER : null;
+}
+function looksLikeWorkRequest(prompt) {
+  return CHANGE_VERB.test(prompt) || prompt.length > GREETING_LENGTH;
+}
+function reopenInlineWorkWindow(sessionId2) {
+  const file = sessionStateFile("inline-work", sessionId2);
+  const state = readSessionState(file);
+  if (!state.boardInteraction) return;
+  for (const key of INLINE_WORK_WINDOW_KEYS) delete state[key];
+  writeSessionState(file, { ...state, boardTouchedEarlier: true });
+}
+function remindOnce(input, sessionId2, prompt) {
+  const file = sessionStateFile("board-first", sessionId2);
+  const state = readSessionState(file);
+  if (state.reminded || !looksLikeWorkRequest(prompt)) return;
+  const reminder = boardReminder(input);
+  if (!reminder) return;
+  state.reminded = true;
+  writeSessionState(file, state);
+  writeContext("UserPromptSubmit", reminder);
+}
+function humanPrompt(input) {
+  const prompt = stringField(input, "prompt").trim();
+  return AUTOMATION_TAG.test(prompt) ? "" : prompt;
 }
 function main() {
   const input = readStdin();
   if (!input) return;
   reportLoadedSidequestVersion(input);
   if (isSubagent(input)) return;
-  const id = stringField(input, "session_id", "sessionId").trim();
-  const prompt = stringField(input, "prompt").trim();
-  if (!id || !prompt || AUTOMATION_TAG.test(prompt)) return;
-  const file = sessionStateFile("board-first", id);
-  const state = readSessionState(file);
-  if (state.reminded || !boardFor(input)) return;
-  state.reminded = true;
-  writeSessionState(file, state);
-  writeContext("UserPromptSubmit", "sidequest: gather enough read-only evidence, using Explore only for a quick sweep (it inherits the session model; deep or fan-out investigation is a codebase-exploration spike), then write precise tickets and route implementation by default. Use informed inline judgment when it fits.");
+  const sessionId2 = stringField(input, "session_id", "sessionId").trim();
+  const prompt = humanPrompt(input);
+  if (!sessionId2 || !prompt) return;
+  reopenInlineWorkWindow(sessionId2);
+  remindOnce(input, sessionId2, prompt);
 }
 try {
   main();

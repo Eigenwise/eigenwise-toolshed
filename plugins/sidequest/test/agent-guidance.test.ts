@@ -77,7 +77,7 @@ test('SQ-2731: the negative-control grammar an executor is told matches the guar
   assert.doesNotMatch(executorTemplate, /an ImportError or collection error only proves a symbol vanished/);
 });
 
-test('sidequest listing description covers board use and inline exceptions', () => {
+test('sidequest listing description leads with the board default and leaves inline exceptions to the body', () => {
   const frontmatter = skill.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   assert.ok(frontmatter, 'skill frontmatter must be present');
   const frontmatterLines = frontmatter[1].split(/\r?\n/);
@@ -91,8 +91,10 @@ test('sidequest listing description covers board use and inline exceptions', () 
   const description = descriptionLines.join(' ');
   assert.ok(description.length > 0, 'skill description must not be empty');
   assert.ok(description.length <= 1536, `skill description is ${description.length} characters`);
+  assert.match(description, /^Default for multi-file or multi-step work, even where there is no board yet/);
   assert.match(description, /\bUse for\b/);
-  assert.match(description, /\bStay inline for\b/);
+  assert.doesNotMatch(description, /\bStay inline for\b/, 'inline guidance lives in the skill body, not the listing');
+  assert.match(skill, /Answer direct questions; do operational requests and stated one-line edits to 1–2 named files inline/);
 });
 
 test('external tracker guidance keeps authored GitHub communication self-contained', () => {
