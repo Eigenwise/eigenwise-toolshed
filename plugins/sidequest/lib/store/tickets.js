@@ -1028,6 +1028,41 @@ function createTickets(dependencies) {
     if (!missing.length) return;
     throw new Error(`${ticket.ref}: removeFiles named ${missing.join(", ")}, which this ticket does not declare, so the removal would change nothing. Declared files: ${declared.join(", ") || "(none)"}.`);
   }
+  function inspectableCheckout(ticket) {
+    const { worktree, baseCommit } = dispatchState(ticket) || {};
+    if (!worktree || !baseCommit || !fs.existsSync(worktree)) return null;
+    return { cwd: worktree, base: baseCommit };
+  }
+  function boundCheckoutWrittenPaths(ticket) {
+    const checkout = inspectableCheckout(ticket);
+    if (!checkout) return [];
+    const git = (args) => String(execFileSync("git", args, {
+      cwd: checkout.cwd,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"]
+    })).split(/\r?\n/).filter(Boolean);
+    try {
+      return [...git(["diff", "--name-only", "--no-renames", checkout.base]), ...git(["ls-files", "--others", "--exclude-standard"])];
+    } catch (_) {
+      throw new Error(`${ticket.ref}: removeFiles cannot confirm the bound checkout ${checkout.cwd} has written nothing under the path, because git could not read it. Release the claim first, then remove the path.`);
+    }
+  }
+  function liveClaimDroppedFiles(ticket, next) {
+    if (!ticket.claim?.by || claimReclaimable(ticket)) return [];
+    const kept = new Set(next.map((file) => file.toLowerCase()));
+    return normalizeFiles(ticket.files).filter((file) => !kept.has(file.toLowerCase()));
+  }
+  function assertLiveClaimRemoval(ticket, next) {
+    if (!liveClaimDroppedFiles(ticket, next).length) return;
+    if (!next.length) {
+      throw new Error(`${ticket.ref}: removeFiles would leave the live claim with no declared files, which also drops its implicit release fragment .release/unreleased/${ticket.ref}.md from scope. Keep at least one declared path, or release the claim first and then change the scope.`);
+    }
+    const revoked = boundCheckoutWrittenPaths(ticket).filter((file) => commitScope.isInScope(file, ticket.files) && !commitScope.isInScope(file, next));
+    if (revoked.length) {
+      throw new Error(`${ticket.ref}: removeFiles would revoke ${revoked.join(", ")}, which the bound checkout has already changed since the dispatch base. Keep the path declared, or release the claim first and then remove it.`);
+    }
+  }
   function patchedFileScope(ticket, patch) {
     const adjusts = patch.addFiles !== void 0 || patch.removeFiles !== void 0;
     if (patch.files !== void 0 && adjusts) {
@@ -1036,7 +1071,9 @@ function createTickets(dependencies) {
     if (!adjusts) return patch.files;
     const widened = scopeExpansionFiles(ticket, patch.addFiles);
     assertDeclaredRemovals(ticket, widened, patch.removeFiles);
-    return scopeReductionFiles(widened, patch.removeFiles);
+    const reduced = scopeReductionFiles(widened, patch.removeFiles);
+    assertLiveClaimRemoval(ticket, reduced);
+    return reduced;
   }
   function patchChangesFiles(ticket, patch) {
     const filesPatch = patchedFileScope(ticket, patch);

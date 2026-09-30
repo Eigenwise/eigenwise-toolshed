@@ -1194,6 +1194,53 @@ function assertDeclaredRemovals(ticket?: any, declared?: any[], removals?: any) 
   throw new Error(`${ticket.ref}: removeFiles named ${missing.join(', ')}, which this ticket does not declare, so the removal would change nothing. Declared files: ${declared!.join(', ') || '(none)'}.`);
 }
 
+// Checkout and baseline of a live dispatch whose work can be inspected. A missing or
+// deleted checkout holds nothing the claim holder could still lose.
+function inspectableCheckout(ticket?: any) {
+  const { worktree, baseCommit } = dispatchState(ticket) || {};
+  if (!worktree || !baseCommit || !fs.existsSync(worktree)) return null;
+  return { cwd: worktree, base: baseCommit };
+}
+
+// Everything the bound checkout has written since the dispatch base: committed,
+// staged, unstaged and untracked.
+function boundCheckoutWrittenPaths(ticket?: any): string[] {
+  const checkout = inspectableCheckout(ticket);
+  if (!checkout) return [];
+  const git = (args: string[]) => String(execFileSync('git', args, {
+    cwd: checkout.cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
+  })).split(/\r?\n/).filter(Boolean);
+  try {
+    return [...git(['diff', '--name-only', '--no-renames', checkout.base]), ...git(['ls-files', '--others', '--exclude-standard'])];
+  } catch (_: any) {
+    throw new Error(`${ticket.ref}: removeFiles cannot confirm the bound checkout ${checkout.cwd} has written nothing under the path, because git could not read it. Release the claim first, then remove the path.`);
+  }
+}
+
+// Declared entries a live claim loses in this patch. Empty for an unclaimed ticket,
+// whose scope is free to change.
+function liveClaimDroppedFiles(ticket?: any, next?: any[]): string[] {
+  if (!ticket.claim?.by || claimReclaimable(ticket)) return [];
+  const kept = new Set(next!.map((file: string) => file.toLowerCase()));
+  return normalizeFiles(ticket.files).filter((file: string) => !kept.has(file.toLowerCase()));
+}
+
+// A live claim keeps the work it already did: removing a path the bound checkout
+// changed would strand that change outside the commit gate, and emptying the list
+// also drops the implicit release fragment, which ticketCommitScope only adds while
+// something is declared.
+function assertLiveClaimRemoval(ticket?: any, next?: any[]) {
+  if (!liveClaimDroppedFiles(ticket, next).length) return;
+  if (!next!.length) {
+    throw new Error(`${ticket.ref}: removeFiles would leave the live claim with no declared files, which also drops its implicit release fragment .release/unreleased/${ticket.ref}.md from scope. Keep at least one declared path, or release the claim first and then change the scope.`);
+  }
+  const revoked = boundCheckoutWrittenPaths(ticket)
+    .filter((file: string) => commitScope.isInScope(file, ticket.files) && !commitScope.isInScope(file, next));
+  if (revoked.length) {
+    throw new Error(`${ticket.ref}: removeFiles would revoke ${revoked.join(', ')}, which the bound checkout has already changed since the dispatch base. Keep the path declared, or release the claim first and then remove it.`);
+  }
+}
+
 // The declared list this patch asks for, or undefined when it names no file scope at
 // all. files replaces the whole list while addFiles/removeFiles adjust it in place, so
 // a patch carrying both is ambiguous and is rejected here — before any field lands,
@@ -1208,7 +1255,9 @@ function patchedFileScope(ticket?: any, patch?: any) {
   // call resolves as a removal.
   const widened = scopeExpansionFiles(ticket, patch.addFiles);
   assertDeclaredRemovals(ticket, widened, patch.removeFiles);
-  return scopeReductionFiles(widened, patch.removeFiles);
+  const reduced = scopeReductionFiles(widened, patch.removeFiles);
+  assertLiveClaimRemoval(ticket, reduced);
+  return reduced;
 }
 
 function patchChangesFiles(ticket?: any, patch?: any) {

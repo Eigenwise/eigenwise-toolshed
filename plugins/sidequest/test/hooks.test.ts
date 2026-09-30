@@ -2278,6 +2278,46 @@ test('pre-tool hook denies a subagent MCP remove carrying force (the delete-to-s
   assert.equal(mainThread, null, 'the orchestrator main thread may force-remove');
 });
 
+// The hook scripts are fed directly everywhere else in this file, which cannot see a
+// tool that hooks.json never routes to them. These read the registration the way the
+// host does: every PreToolUse group whose matcher matches the tool name, in order.
+function preToolUseScriptsFor(toolName: string): string[] {
+  const groups: Array<{ matcher: string; hooks: Array<{ command: string }> }> = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8')).hooks.PreToolUse;
+  return groups
+    .filter((group) => new RegExp(`^(?:${group.matcher === '*' ? '.*' : group.matcher})$`).test(toolName))
+    .flatMap((group) => group.hooks.map((hook) => path.join(HOOKS, /hooks\/([\w-]+\.js)/.exec(hook.command)?.[1] || '')));
+}
+
+test('hooks.json routes every live-claim mutation tool to force-exec-bypass for PreToolUse', () => {
+  const source = fs.readFileSync(FORCE_BYPASS, 'utf8');
+  const rules = source.slice(source.indexOf('LIVE_CLAIM_MUTATION_RULES = ['));
+  const toolNames = [...rules.slice(0, rules.indexOf('\n];')).matchAll(/toolName: ["'](mcp__[\w]+)["']/g)].map((match) => match[1]);
+  assert.deepEqual(
+    [...toolNames].sort(),
+    ['mcp__plugin_sidequest_board__remove', 'mcp__plugin_sidequest_board__scopeRequest', 'mcp__plugin_sidequest_board__update'],
+    'the rule table changed: route the new tool in hooks.json and list it here',
+  );
+  for (const toolName of toolNames) {
+    assert.ok(preToolUseScriptsFor(toolName).includes(FORCE_BYPASS), `${toolName} is never routed to force-exec-bypass.js`);
+  }
+});
+
+test('an executor subagent cannot mint a scope grant or force-remove through the registered PreToolUse hooks', () => {
+  const subagent = { agent_id: 'routed-grant-child', agent_type: 'sidequest:sidequest-exec-high', session_id: 'routed-grant-session' };
+  const cases = [
+    { tool_name: 'mcp__plugin_sidequest_board__scopeRequest', tool_input: { ref: 'SQ-1', by: 'orchestrator', grant: true }, reason: /subagents cannot grant a refused scope request/i },
+    { tool_name: 'mcp__plugin_sidequest_board__remove', tool_input: { ref: 'SQ-1', force: true }, reason: /subagents cannot force-remove/i },
+  ];
+  for (const { tool_name, tool_input, reason } of cases) {
+    const scripts = preToolUseScriptsFor(tool_name);
+    const decisions = scripts
+      .map((script) => runHookOutput(script, { ...subagent, tool_name, tool_input }, { SIDEQUEST_AGENT: 'routed-grant-child' }))
+      .filter((output) => output?.hookSpecificOutput?.permissionDecision === 'deny');
+    assert.equal(decisions.length, 1, `${tool_name}: exactly one registered hook denies it (ran ${scripts.map((script) => path.basename(script)).join(', ')})`);
+    assert.match(decisions[0].hookSpecificOutput.permissionDecisionReason, reason);
+  }
+});
+
 test('pre-tool hook: stable dispatch executors require preparation even with a ref', () => {
   const t = fixtureTicket('SQ-232 dispatch passthrough fixture', 'codex-gpt-5-6-terra', 'high');
   const out = runHookOutput(FORCE_BYPASS, {
@@ -4741,8 +4781,8 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the Agent gate must be registered');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__dispatch'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the own-dispatch guard must cover the dispatch MCP tool');
-  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__update'
-    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the closeout update guard must cover the update MCP tool');
+  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__(update|scopeRequest|remove)'
+    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the live-claim mutation guard must cover the update, scopeRequest and remove MCP tools');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Bash|PowerShell'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the own-dispatch guard must cover Sidequest CLI commands');
   assert.ok(!config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Skill'), 'the oversized Skill guard stays removed: its one activation cost a turn and prevented nothing');
