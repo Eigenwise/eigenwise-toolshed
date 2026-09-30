@@ -2277,6 +2277,106 @@ test('SQ-3144: integrate refuses a checkout that does not descend from the recor
   }
 });
 
+// GH-340: long-running services keep rewriting files in the registered checkout. Integrate refuses only
+// dirt the delivery would write, including a rename's source, and reports the rest as ignored.
+function gh340SubmittedCandidate(label: string, files: string[], writeCandidate: () => void) {
+  const stamp = `${process.pid}-${Date.now()}`;
+  const target = `gh340-${label}-${stamp}`;
+  git(['checkout', '-f', '-B', target, 'origin/main']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: target });
+  const t = addTicket(`GH-340 ${label}`, { files, category: 'submission.fixture' });
+  const sessionId = `gh340-${label}-${stamp}`;
+  const prepared = store.prepareDispatch(slug, t.ref, { sessionId, sharedTree: true, integrationBranch: target, integrationMode: 'local' });
+  assert.strictEqual(store.claimTicket(slug, t.ref, `${label}-worker`, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+  }).ok, true);
+  git(['checkout', '-f', '-B', `gh340-candidate-${label}-${stamp}`, target]);
+  writeCandidate();
+  git(['add', '-A']);
+  git(['commit', '-m', `${label} candidate`]);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+  const submitted = runCli(['submit', t.ref, '--by', `${label}-worker`, '--commit', commit]);
+  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  git(['checkout', '-f', target]);
+  return { t, target, commit };
+}
+
+function gh340WriteLibFile(file: string) {
+  return () => {
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, file), 'candidate\n');
+  };
+}
+
+function withGh340Board(run: () => void) {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  try {
+    run();
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+  }
+}
+
+test('GH-340: integrate delivers when every dirty path is outside the delivery and lists them as ignored', () => {
+  withGh340Board(() => {
+    const { t, target, commit } = gh340SubmittedCandidate('disjoint', ['lib/gh340-disjoint.js'], gh340WriteLibFile('lib/gh340-disjoint.js'));
+    fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'rewritten by a running service\n');
+    fs.writeFileSync(path.join(PROJECT_DIR, 'gh340-service.json'), '{"tick":1}\n');
+
+    const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.deepStrictEqual(delivered.integration.ignoredDirtyPaths.slice().sort(), ['README.md', 'gh340-service.json']);
+    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, target]), '');
+    assert.strictEqual(fs.readFileSync(path.join(PROJECT_DIR, 'README.md'), 'utf8'), 'rewritten by a running service\n');
+    assert.strictEqual(fs.readFileSync(path.join(PROJECT_DIR, 'gh340-service.json'), 'utf8'), '{"tick":1}\n');
+  });
+});
+
+test('GH-340: integrate still refuses a dirty path the delivery writes and names only that path', () => {
+  withGh340Board(() => {
+    const { t, target } = gh340SubmittedCandidate('intersect', ['lib/gh340-intersect.js'], gh340WriteLibFile('lib/gh340-intersect.js'));
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh340-intersect.js'), 'operator copy\n');
+    fs.writeFileSync(path.join(PROJECT_DIR, 'gh340-service.json'), '{"tick":2}\n');
+    const headBefore = git(['rev-parse', target]);
+
+    const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+
+    assert.strictEqual(refused.reason, 'integration_target_dirty', refused.message);
+    assert.deepStrictEqual(refused.checkoutState, ['? lib/gh340-intersect.js']);
+    assert.deepStrictEqual(refused.ignoredDirtyPaths, ['gh340-service.json']);
+    assert.match(refused.message, /: lib\/gh340-intersect\.js\. Commit, stash, or remove those paths.* 1 other dirty path\(s\) sit outside the delivery and were ignorable\./);
+    assert.doesNotMatch(refused.message, /gh340-service\.json/);
+    assert.strictEqual(git(['rev-parse', target]), headBefore);
+    assert.strictEqual(fs.readFileSync(path.join(PROJECT_DIR, 'lib', 'gh340-intersect.js'), 'utf8'), 'operator copy\n');
+  });
+});
+
+test('GH-340: integrate refuses an unstaged edit to a file the delivery renames away', () => {
+  withGh340Board(() => {
+    const { t, target } = gh340SubmittedCandidate('rename', ['README.md', 'docs/README.md'], () => {
+      fs.mkdirSync(path.join(PROJECT_DIR, 'docs'), { recursive: true });
+      git(['mv', 'README.md', 'docs/README.md']);
+    });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'rewritten by a running service\n');
+    const headBefore = git(['rev-parse', target]);
+
+    const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+
+    assert.strictEqual(refused.reason, 'integration_target_dirty', refused.message);
+    assert.strictEqual(refused.checkoutState.length, 1);
+    assert.match(refused.checkoutState[0], /^1 \.M .* README\.md$/);
+    assert.match(refused.message, /: README\.md\. Commit, stash/);
+    assert.strictEqual(git(['rev-parse', target]), headBefore);
+    assert.strictEqual(fs.readFileSync(path.join(PROJECT_DIR, 'README.md'), 'utf8'), 'rewritten by a running service\n');
+  });
+});
+
 test('legacy root scope cannot bypass integration and names explicit transitions', () => {
   cleanBranch();
   const ticket = addTicket('legacy root scope snapshot', { files: ['lib/legacy.js'] });

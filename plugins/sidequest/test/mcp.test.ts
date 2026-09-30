@@ -7231,11 +7231,12 @@ test('SQ-2717: a candidate landed only on origin refuses single, wave and pendin
   assert.equal(delivered.verify.status, 'passed');
 });
 
-test('SQ-2717: an untracked file refuses integration with its bytes intact and no verifier run', async () => {
+test('SQ-2717: an untracked file at a delivered path refuses integration with its bytes intact and no verifier run', async () => {
   const repository = landedProofWorktree();
   const project = store.ensureProject(repository).slug;
   const candidate = await submittedLandedProofCandidate(repository, project, 'dirty-guard.txt', 'sq2717-dirty-guard');
-  const untrackedPath = path.join(repository, 'operator-scratch.txt');
+  // GH-340: the untracked file sits where the candidate writes, so it blocks; the tracked edit is outside the delivery.
+  const untrackedPath = path.join(repository, 'dirty-guard.txt');
   const untrackedBytes = Buffer.from('operator bytes that integration must never touch\n');
   fs.writeFileSync(untrackedPath, untrackedBytes);
   const trackedPath = path.join(repository, 'verify-tree.cjs');
@@ -7247,6 +7248,9 @@ test('SQ-2717: an untracked file refuses integration with its bytes intact and n
   const refused = await callTool('integrate', { project, ref: candidate.ticket.ref, by: 'dirty-integrator', mode: 'merge' });
   assert.equal(refused.ok, false);
   assert.equal(refused.reason, 'integration_target_dirty');
+  assert.match(refused.message, /dirty-guard\.txt\. Commit, stash, or remove those paths/);
+  assert.doesNotMatch(refused.message, /verify-tree\.cjs/);
+  assert.match(refused.message, /1 other dirty path\(s\) sit outside the delivery and were ignorable\./);
   assert.equal(verifierRunLog(repository), verifierRunsBefore, 'the pinned verifier never executed against the dirty checkout');
   assert.deepEqual(fs.readFileSync(untrackedPath), untrackedBytes, 'the untracked file keeps its exact bytes');
   assert.deepEqual(fs.readFileSync(trackedPath), Buffer.concat([trackedBytes, Buffer.from('// operator edit\n')]), 'the dirty tracked file keeps its exact bytes');
