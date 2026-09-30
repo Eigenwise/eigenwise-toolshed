@@ -193,6 +193,9 @@ function setProjectNotify(...args) {
 function setProjectRouting(...args) {
   return projectsLayer.setProjectRouting(...args);
 }
+function takeSourceRevisionAdapterSwitch(slug) {
+  return projectsLayer.takeSourceRevisionAdapterSwitch(slug);
+}
 function projectRoutingEnabled(...args) {
   return projectsLayer.projectRoutingEnabled(...args);
 }
@@ -444,9 +447,14 @@ function staleWorktreeCwdWarning(...args) {
 function dispatchUncertaintyWarnings(...args) {
   return warningsLayer.dispatchUncertaintyWarnings(...args);
 }
+function sourceRevisionAdapterSwitchWarnings(ticket) {
+  const adapterSwitch = ticket?.dispatch?.sourceRevisionAdapterSwitch;
+  if (!adapterSwitch) return [];
+  return [`Dispatch information: this board switched its source revision adapter from ${adapterSwitch.from} to ${adapterSwitch.to} at ${adapterSwitch.at}, because a .git now exists at or above its path. This and later dispatches take git baselines instead of filesystem snapshots.`];
+}
 function dispatchWarnings(ticket, slug) {
   const project = !slug && process.env.CLAUDE_PROJECT_DIR ? findProject(process.env.CLAUDE_PROJECT_DIR) : null;
-  return warningsLayer.dispatchWarnings(ticket, slug || (project?.ok ? project.slug : null));
+  return [...warningsLayer.dispatchWarnings(ticket, slug || (project?.ok ? project.slug : null)), ...sourceRevisionAdapterSwitchWarnings(ticket)];
 }
 function dispatchDeclaredFiles(...args) {
   return warningsLayer.dispatchDeclaredFiles(...args);
@@ -750,6 +758,7 @@ const {
   dispatchReadOnly: (...args) => dispatchReadOnly(...args),
   dispatchFilesystemSnapshotPreflight,
   dispatchBaselineForProject,
+  takeSourceRevisionAdapterSwitch,
   dispatchVerifyCommandError: (...args) => dispatchVerifyCommandError(...args),
   dispatchRouteRefusal: (...args) => dispatchRouteRefusal(...args),
   dispatchRouteState: (...args) => dispatchRouteState(...args),

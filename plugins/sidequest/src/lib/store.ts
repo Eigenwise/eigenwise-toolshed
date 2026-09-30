@@ -159,6 +159,7 @@ function nextSeq(...args: any[]) { return projectsLayer.nextSeq(...args); }
 function nextStorySeq(...args: any[]) { return projectsLayer.nextStorySeq(...args); }
 function setProjectNotify(...args: any[]) { return projectsLayer.setProjectNotify(...args); }
 function setProjectRouting(...args: any[]) { return projectsLayer.setProjectRouting(...args); }
+function takeSourceRevisionAdapterSwitch(slug: string) { return projectsLayer.takeSourceRevisionAdapterSwitch(slug); }
 function projectRoutingEnabled(...args: any[]) { return projectsLayer.projectRoutingEnabled(...args); }
 // A board whose path is gone or outside Git has no candidate refs to move.
 function boardRepository(slug: string): string | null {
@@ -376,9 +377,15 @@ function storyContractDriftWarnings(...args: any[]) { return warningsLayer.story
 function crossTicketStateWarnings(...args: any[]) { return warningsLayer.crossTicketStateWarnings(...args); }
 function staleWorktreeCwdWarning(...args: any[]) { return warningsLayer.staleWorktreeCwdWarning(...args); }
 function dispatchUncertaintyWarnings(...args: any[]) { return warningsLayer.dispatchUncertaintyWarnings(...args); }
+// The baseline source changed under this dispatch, so its result says so (GH-334).
+function sourceRevisionAdapterSwitchWarnings(ticket: any): string[] {
+  const adapterSwitch = ticket?.dispatch?.sourceRevisionAdapterSwitch;
+  if (!adapterSwitch) return [];
+  return [`Dispatch information: this board switched its source revision adapter from ${adapterSwitch.from} to ${adapterSwitch.to} at ${adapterSwitch.at}, because a .git now exists at or above its path. This and later dispatches take git baselines instead of filesystem snapshots.`];
+}
 function dispatchWarnings(ticket?: any, slug?: any) {
   const project = !slug && process.env.CLAUDE_PROJECT_DIR ? findProject(process.env.CLAUDE_PROJECT_DIR) : null;
-  return warningsLayer.dispatchWarnings(ticket, slug || (project?.ok ? project.slug : null));
+  return [...warningsLayer.dispatchWarnings(ticket, slug || (project?.ok ? project.slug : null)), ...sourceRevisionAdapterSwitchWarnings(ticket)];
 }
 function dispatchDeclaredFiles(...args: any[]) { return warningsLayer.dispatchDeclaredFiles(...args); }
 function externalDeclaredFiles(...args: any[]) { return warningsLayer.externalDeclaredFiles(...args); }
@@ -661,6 +668,7 @@ const {
   dispatchReadOnly: (...args: any[]) => dispatchReadOnly(...args),
   dispatchFilesystemSnapshotPreflight,
   dispatchBaselineForProject,
+  takeSourceRevisionAdapterSwitch,
   dispatchVerifyCommandError: (...args: any[]) => dispatchVerifyCommandError(...args),
   dispatchRouteRefusal: (...args: any[]) => dispatchRouteRefusal(...args),
   dispatchRouteState: (...args: any[]) => dispatchRouteState(...args),
