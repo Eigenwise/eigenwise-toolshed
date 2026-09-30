@@ -161,11 +161,22 @@ function inheritedRejectedDuplicateGuidance(reason) {
 function negativeControlRecoveryGuidance() {
   return "Revert the non-test changes, run the changed tests, and keep them importable. Say which one happened: failure-kind=assertion when the changed tests failed their assertions, failure-kind=import or failure-kind=collection when the revert stopped them loading, because only an assertion failure proves they catch wrong behavior. Post [sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=<assertion|import|collection> with n greater than zero. The target and assertion must be the changed behavior this ticket is about. Then restore the change and run the declared verify. You may add context after failed=<n>. For every added or modified named test, add [sidequest:negative-control-test] failed <test name>. If a named test does not cover the reverted change, add [sidequest:negative-control-test] unaffected <test name> because <reason> instead. If the control cannot run, post a line beginning [sidequest:negative-control] waived <reason of at least 20 characters>.";
 }
+function skippedSnapshotPaths(walk) {
+  if (!walk.skippedTotal) return "skipped nothing";
+  const more = walk.skippedTotal > walk.skipped.length ? `, and ${walk.skippedTotal - walk.skipped.length} more` : "";
+  return `skipped ${walk.skipped.join(", ")}${more}`;
+}
+function snapshotWalkFacts(walk = { skipped: [], skippedTotal: 0, counted: [] }) {
+  const standing = " The walk leaves out .git, installed and build output directories such as node_modules and dist, and paths the root .gitignore excludes before it counts.";
+  if (!walk.counted.length) return standing;
+  const counted = walk.counted.map((entry) => `${entry.path} (${entry.paths})`).join(", ");
+  return `${standing} This walk ${skippedSnapshotPaths(walk)}; the most paths it counted were under ${counted}.`;
+}
 function filesystemSnapshotLimitGuidance(projectPath, limit) {
   const unit = limit.bound === "path cap" ? "paths" : limit.bound === "byte cap" ? "bytes" : "ms";
   const blockingFile = limit.path ? ` The snapshot was reading ${limit.path} when the clock ran out; a cloud-sync placeholder read cannot be interrupted, so the snapshot process was killed.` : "";
   const recourse = limit.bound === "deadline" ? "point the board at a local directory no sync client mirrors" : "point the board at a smaller directory";
-  return `filesystem snapshot refused for ${projectPath}: ${limit.bound} reached ${limit.observed} ${unit}; cap ${limit.cap} ${unit}. The cap is fixed and no board setting raises it.${blockingFile} Initialize a git repository at the project root so dispatch uses the cheaper git adapter, or ${recourse}. When the directory only holds git repositories one level down, do not initialize it: register each repository as its own board and file the ticket there.`;
+  return `filesystem snapshot refused for ${projectPath}: ${limit.bound} reached ${limit.observed} ${unit}; cap ${limit.cap} ${unit}. The cap is fixed and no board setting raises it.${blockingFile}${snapshotWalkFacts(limit.walk)} Initialize a git repository at the project root so dispatch uses the cheaper git adapter (the board switches to git on its next dispatch once a .git exists at or above it), or ${recourse}. When the directory only holds git repositories one level down, do not initialize it: register each repository as its own board and file the ticket there.`;
 }
 function filesystemSnapshotChildFailureGuidance(failure) {
   if (failure.kind === "spawn-error") {

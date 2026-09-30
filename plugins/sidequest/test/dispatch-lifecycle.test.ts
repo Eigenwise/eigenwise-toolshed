@@ -199,6 +199,37 @@ test('preparing a non-Git ticket uses its persisted dispatch snapshot', () => {
   assert.equal(persistedSnapshots.filter((snapshot: any) => snapshot.value === baseline.revision.value).length, 1);
 });
 
+// GH-334: the store resolves a board by slug here, so no ensureProject runs between `git init` and
+// the dispatch; dispatch itself has to notice the repository and say it switched.
+test('dispatch moves a snapshot board to git after git init and reports the switch once', () => {
+  const lateGitProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-late-git-'));
+  fs.writeFileSync(path.join(lateGitProject, 'page.md'), 'registered before git init\n');
+  const lateGitSlug = store.ensureProject(lateGitProject).slug;
+  assert.equal(store.readMeta(lateGitSlug).sourceRevisionAdapter, 'filesystem-snapshot');
+  execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: lateGitProject, windowsHide: true });
+  execFileSync('git', ['add', 'page.md'], { cwd: lateGitProject, windowsHide: true });
+  execFileSync('git', ['-c', 'user.name=Late Git', '-c', 'user.email=late-git@example.invalid', 'commit', '--quiet', '-m', 'seed'], { cwd: lateGitProject, windowsHide: true });
+  const first = store.createTicket(lateGitSlug, {
+    title: 'dispatch after git init', category: 'dispatch.lifecycle', files: ['page.md'], source: 'test',
+  });
+  const second = store.createTicket(lateGitSlug, {
+    title: 'second dispatch after git init', category: 'dispatch.lifecycle', files: ['page.md'], source: 'test',
+  });
+
+  const prepared = store.prepareDispatch(lateGitSlug, first.ref, { sharedTree: true });
+  const later = store.prepareDispatch(lateGitSlug, second.ref, { sharedTree: true });
+
+  assert.equal(store.readMeta(lateGitSlug).sourceRevisionAdapter, 'git');
+  assert.equal(prepared.ticket.dispatch.lifecycleAttempt.baseline.revision.source, 'git');
+  assert.deepEqual(
+    { from: prepared.ticket.dispatch.sourceRevisionAdapterSwitch.from, to: prepared.ticket.dispatch.sourceRevisionAdapterSwitch.to },
+    { from: 'filesystem-snapshot', to: 'git' },
+  );
+  assert.ok(store.dispatchWarnings(prepared.ticket, lateGitSlug).some((warning: string) => /switched its source revision adapter from filesystem-snapshot to git/.test(warning)));
+  assert.equal(later.ticket.dispatch.sourceRevisionAdapterSwitch, undefined, 'only the dispatch that made the switch reports it');
+  assert.equal(store.readMeta(lateGitSlug).sourceRevisionAdapterSwitch, undefined);
+});
+
 for (const limit of [
   { bound: 'path cap', observed: 501, cap: 500, unit: 'paths' },
   { bound: 'byte cap', observed: 65, cap: 64, unit: 'bytes' },

@@ -9,6 +9,33 @@ function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, clai
     try { return fs.realpathSync.native(resolved); } catch (_) { return resolved; }
   }
 
+  // A board registered before `git init`, or before a parent became a repository, would otherwise
+  // snapshot its whole tree on every dispatch and tell the user to create the repository it already
+  // has (GH-334). The switch only goes toward git: a missing .git never demotes a git board.
+  function adoptDerivedSourceRevisionAdapter(meta: any, derived: string): boolean {
+    if (meta.sourceRevisionAdapter === 'git' || meta.sourceRevisionAdapter === derived) return false;
+    if (meta.sourceRevisionAdapter === 'filesystem-snapshot') {
+      meta.sourceRevisionAdapterSwitch = { from: 'filesystem-snapshot', to: derived, at: new Date().toISOString() };
+    }
+    meta.sourceRevisionAdapter = derived;
+    return true;
+  }
+
+  // Dispatch re-derives as well, because a board resolved by name never passes through ensureProject,
+  // and it takes the recorded switch so exactly one dispatch result reports it.
+  function takeSourceRevisionAdapterSwitch(slug: string) {
+    return withMetaLock(slug, () => {
+      const meta = readMeta(slug);
+      if (!meta) return null;
+      adoptDerivedSourceRevisionAdapter(meta, sourceRevisionAdapterForPath(meta.path));
+      const adapterSwitch = meta.sourceRevisionAdapterSwitch;
+      if (!adapterSwitch) return null;
+      delete meta.sourceRevisionAdapterSwitch;
+      putProject(slug, meta);
+      return adapterSwitch;
+    });
+  }
+
   function ensureProject(absPath?: any, name?: any) {
     const resolved = path.resolve(absPath);
     const slug = slugify(resolved);
@@ -37,7 +64,7 @@ function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, clai
         if (meta.path !== resolved) { meta.path = resolved; changed = true; }
         if (name && meta.name !== name) { meta.name = name; changed = true; }
         if (!meta.name) { meta.name = defaultProjectName(resolved); changed = true; }
-        if (!['git', 'filesystem-snapshot'].includes(meta.sourceRevisionAdapter)) { meta.sourceRevisionAdapter = sourceRevisionAdapter; changed = true; }
+        if (adoptDerivedSourceRevisionAdapter(meta, sourceRevisionAdapter)) changed = true;
         if (typeof meta.seq !== 'number') { meta.seq = 0; changed = true; }
         if (typeof meta.storySeq !== 'number') { meta.storySeq = 0; changed = true; }
         if (changed) db.putRow(handle, 'projects', { slug, data: meta });
@@ -394,7 +421,7 @@ function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, clai
     return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
   }
 
-  return { archiveProject, boardRootRefusal, deleteProjectExact, ensureProject, findProject, listProjects, listProjectsFlaggingMissingPaths, mergeProject, metaLockPath, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, registerProject, setProjectNotify, setProjectRouting, unarchiveProject, withMetaLock };
+  return { archiveProject, boardRootRefusal, deleteProjectExact, ensureProject, findProject, listProjects, listProjectsFlaggingMissingPaths, mergeProject, metaLockPath, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, registerProject, setProjectNotify, setProjectRouting, takeSourceRevisionAdapterSwitch, unarchiveProject, withMetaLock };
 }
 
 module.exports = { createProjects };
