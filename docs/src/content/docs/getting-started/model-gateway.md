@@ -24,7 +24,7 @@ After the wiring is confirmed, fully restart the Claude Code process for that sa
 
 Model Gateway writes `ANTHROPIC_BASE_URL` to `.claude/settings.local.json`, never the committed `.claude/settings.json`. That keeps your local gateway endpoint out of other people's checkouts. You can opt into one shared fallback URL in `~/.claude/settings.json`, but a project's local setting wins. `model-gateway doctor` marks the effective source and calls out conflicting gateway modes.
 
-A Claude alias pin applies to every project already registered as wired. Model Gateway updates only gateway-owned pin values, tells you about any user-owned value it skipped, and prunes missing project directories from the registry. Restart each affected open Claude Code session before its `/model` alias reflects the new pin.
+A Claude alias pin applies to every project already registered as wired. SessionStart checks those projects again on every pin refresh, so a newer shipped default or CLI alias reaches all of them, not only the project you opened. Model Gateway updates only gateway-owned pin values, tells you about any user-owned value it skipped, and prunes missing project directories from the registry. Restart each affected open Claude Code session before its `/model` alias reflects the new pin.
 
 For a direct recovery command, use `node ~/.claude/model-gateway/model-gateway.js <command>`. SessionStart writes this version-independent launcher from Claude Code's installed-plugin registry, so it follows upgrades and uses the highest remaining installed version after an uninstall or downgrade.
 

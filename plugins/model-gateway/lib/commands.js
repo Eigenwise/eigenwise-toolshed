@@ -873,14 +873,13 @@ function refreshRegisteredProjectPins(ownedPins) {
   return reportRegisteredPinSync(syncRegisteredProjectPins({ ownedPins }));
 }
 
+// Syncs on every refresh, not only when this refresh moved a pin: a release that bumps the
+// shipped default moves the effective pin between plugin versions, and no single refresh sees it.
+// The sync writes nothing when every registered project already agrees.
 async function refreshDetectedPinsAndWiring(options = {}) {
-  const previousPins = effectivePins();
   const ownedPins = ownedPinValues();
   await refreshDetectedPins(options);
-  const changed = Object.entries(effectivePins()).some(([alias, pin]) => (
-    previousPins[alias].override === null && previousPins[alias].value !== pin.value
-  ));
-  if (changed) refreshRegisteredProjectPins(ownedPins);
+  refreshRegisteredProjectPins(ownedPins);
 }
 
 function reportEffectivePins(label = '', suffix = '') {
