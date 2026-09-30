@@ -449,7 +449,7 @@ test('ensureProject moves a snapshot board to git once a .git exists at or above
     assert.strictEqual(store.readMeta(slug).sourceRevisionAdapter, 'filesystem-snapshot', 'no .git yet, so the snapshot adapter stays');
     assert.strictEqual(store.readMeta(slug).sourceRevisionAdapterSwitch, undefined);
 
-    execFileSync('git', ['init', '--quiet'], { cwd: parent, windowsHide: true });
+    execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: parent, windowsHide: true });
     store.ensureProject(boardPath);
     const switched = store.readMeta(slug);
     assert.strictEqual(switched.sourceRevisionAdapter, 'git', 'a repository above the board path wins');

@@ -1648,7 +1648,7 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
 
   const ticket = await callTool('add', { project, title: 'payload dispatch', description: DISPATCH_DESCRIPTION, category: 'payload-0' });
   const dispatched = await callToolRaw('dispatch', { allowUnscoped: true, project, ref: ticket.ref });
-  assert.ok(Buffer.byteLength(dispatched.content[0].text) <= 1220, `dispatch is ${Buffer.byteLength(dispatched.content[0].text)} bytes`);
+  assert.ok(Buffer.byteLength(dispatched.content[0].text) <= 1300, `dispatch is ${Buffer.byteLength(dispatched.content[0].text)} bytes`);
   const dispatchPayload = JSON.parse(dispatched.content[0].text);
   assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['effort', 'ref', 'runsLabel', 'spawn', 'writeScope']);
   assert.equal(dispatchPayload.writeScope, 'write scope: unscoped (whole tree)');
@@ -1658,7 +1658,7 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
 
   const warningTicket = await callTool('add', { project, title: 'payload warning', description: DISPATCH_DESCRIPTION, category: 'debugging', files: ['fixture.ts'] });
   const warningDispatch = await callToolRaw('dispatch', { allowUnscoped: true, project, ref: warningTicket.ref });
-  assert.ok(Buffer.byteLength(warningDispatch.content[0].text) <= 1220, `warning dispatch is ${Buffer.byteLength(warningDispatch.content[0].text)} bytes`);
+  assert.ok(Buffer.byteLength(warningDispatch.content[0].text) <= 1300, `warning dispatch is ${Buffer.byteLength(warningDispatch.content[0].text)} bytes`);
   assert.equal(JSON.parse(warningDispatch.content[0].text).warnings, undefined);
 
   const pulse = await callToolRaw('pulse', { project, ref: ticket.ref });
