@@ -76,6 +76,7 @@ async function cmdDispatch(opts: any, positional: any) {
     tokenPrefix: prepared.token.slice(0, 12),
     token: prepared.token,
     recovery: prepared.recovery || null,
+    ...(dispatchState.unscopedOverride?.writeScope ? { writeScope: dispatchState.unscopedOverride.writeScope } : {}),
     warnings: presentedWarnings,
     spawn,
     guidance: prepared.recovery

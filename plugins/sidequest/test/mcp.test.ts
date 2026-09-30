@@ -1519,7 +1519,12 @@ test('board worktree isolation defaults on and overrides dispatch isolation when
   const sharedTicket = store.createTicket(sharedProject, {
     title: 'scope-less disabled board isolation', description: DISPATCH_DESCRIPTION, category: 'coding.normal',
   });
-  const shared = await callTool('dispatch', { allowUnscoped: true, project: sharedProject, ref: sharedTicket.ref, full: true });
+  // GH-341: a whole-tree scope in the shared checkout would commit every dirty path, so it refuses before the work.
+  const refusedShared = await callToolRaw('dispatch', { allowUnscoped: true, project: sharedProject, ref: sharedTicket.ref, full: true });
+  assert.ok(refusedShared.isError);
+  assert.match(refusedShared.content[0].text, /would run in the shared checkout/);
+  store.updateTicket(sharedProject, sharedTicket.ref, { files: ['src/shared.ts'] });
+  const shared = await callTool('dispatch', { project: sharedProject, ref: sharedTicket.ref, full: true });
   assert.equal(shared.spawn.isolation, undefined);
   assert.equal(store.getTicket(sharedProject, sharedTicket.ref).dispatch.sharedTree, true);
   const legacyShared = await callHandler('native_agent', { project: sharedProject, ref: sharedTicket.ref, prompt: 'Implement the ticket.' });
@@ -1645,7 +1650,8 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   const dispatched = await callToolRaw('dispatch', { allowUnscoped: true, project, ref: ticket.ref });
   assert.ok(Buffer.byteLength(dispatched.content[0].text) <= 1220, `dispatch is ${Buffer.byteLength(dispatched.content[0].text)} bytes`);
   const dispatchPayload = JSON.parse(dispatched.content[0].text);
-  assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['effort', 'ref', 'runsLabel', 'spawn']);
+  assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['effort', 'ref', 'runsLabel', 'spawn', 'writeScope']);
+  assert.equal(dispatchPayload.writeScope, 'write scope: unscoped (whole tree)');
   assert.equal(dispatchPayload.token, undefined);
   assert.equal(dispatchPayload.agent, undefined);
   assert.equal(dispatchPayload.guidance, undefined);
@@ -5270,7 +5276,8 @@ test('dispatch rejects a thin routed brief but only warns about a missing coding
 
   await callTool('update', { ref: added.ref, description: DISPATCH_DESCRIPTION });
   const dispatched = await callTool('dispatch', { ref: added.ref, full: true, allowUnscoped: true });
-  assert.deepStrictEqual(dispatched.warnings, [
+  // Earlier whole-tree dispatches on this shared board still overlap this one at `**` (GH-341); those rank lower.
+  assert.deepStrictEqual(dispatched.warnings.slice(0, 2), [
     `Dispatch warning: ${NO_SCOPE_WARNING.replace('Planning-depth warning: ', '')}`,
     'Dispatch warning: this coding/debugging ticket has no verify command. Add one before the executor starts.',
   ]);
@@ -6319,7 +6326,8 @@ test('reporting aliases resolve to catalog slugs and dispatched done defaults pr
     { slug: 'codex-gpt-5-6-luna-fast', id: 'claude-gpt-5.6-luna-fast[1m]' },
   ]);
   try {
-    store.setCategory({ id: 'alias-codex', name: 'Alias Codex', route: { model: 'codex-gpt-5-6-terra-fast', effort: 'high' } });
+    // Read-only so done closes it: an unscoped write dispatch owns the whole tree and must submit (GH-341).
+    store.setCategory({ id: 'alias-codex', name: 'Alias Codex', route: { model: 'codex-gpt-5-6-terra-fast', effort: 'high' }, readonly: true });
     const complete = async (title: any, model?: any) => {
       const added = await callTool('add', {
         title,

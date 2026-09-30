@@ -63,6 +63,8 @@ Before dispatching a wave, ask: “What will every ticket in this wave need to c
 
 When a package commits build output, the source ticket scopes its generated output too. For content-hashed output, assign exactly one rebuild ticket per wave: parallel rebuilds choose different filenames and collide at merge.
 
+A write ticket with no declared files refuses at dispatch unless you pass `allowUnscoped: true` (CLI `--allow-unscoped`). That gives the executor the whole tree as its write scope. Board `alwaysInScope` paths such as `docs/` ride beside it and are never the only scope. The dispatch result's `writeScope` and the briefing's declared-files line say it in one line: `write scope: unscoped (whole tree), always-in-scope: docs/`. A whole-tree commit only works in an isolated worktree, so an unscoped dispatch that would run in the shared checkout refuses at dispatch: declare the paths it needs. A whole-tree candidate overlaps every sibling in a wave, so declare files whenever you know them. Work an executor handed back that you cherry-picked onto the integration branch closes with `groomClose <ref> --deliveryCommit <the cherry-pick> --deliveryMethod manual`.
+
 **The planning pass is for concrete scope, not ceremony.** Before filing a complexity-4+ ticket,
 bounded recon may `Read`/`Glob`/`Grep` named anchors and make one narrow location sweep. Route unfamiliar
 path tracing, deep investigation, or multi-angle research through the live taxonomy, with a proportional

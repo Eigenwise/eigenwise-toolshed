@@ -289,6 +289,21 @@ test('updating declared files with an absolute path is refused with non-repo gui
   assert.deepEqual(store.getTicket(slug, ticket.ref).files, ['plugins/sidequest/worker.js'], 'the refused update changed nothing');
 });
 
+test('the whole-tree scope of an unscoped dispatch commits every changed path, deletions and new directories included (GH-341)', async () => {
+  const root = repo();
+  const wholeTree = ['**', 'docs/'];
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'app.js'), 'module.exports = 1;\n');
+  fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'index.js'), 'other\n');
+  fs.rmSync(path.join(root, 'README.md'));
+
+  const committed = await commitScope.commitScoped(root, 'unscoped work', wholeTree);
+  assert.equal(committed.ok, true, committed.message as string);
+  assert.deepEqual(commitScope.commitPaths(root, committed.commit).sort(), ['README.md', 'plugins/other-plugin/index.js', 'src/app.js']);
+  assert.deepEqual(committed.missingScopes, ['docs'], 'a missing board path rides beside the whole tree without blocking it');
+  assert.equal(git(root, ['status', '--porcelain']), '');
+});
+
 test('missing declared paths warn while existing declared paths commit', async () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');

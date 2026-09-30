@@ -557,8 +557,8 @@ test('pre-tool hook: terminal guard leaves live and submitted executors alone', 
 // When A's own executor closed A, every later call from B's executor was refused as "A is closed".
 test('pre-tool hook: a sibling closing never closes a live executor that claimed its own ticket', () => {
   const sessionId = `sq53-terminal-${++sqSeq}`;
-  const siblingTicket = addStopTicket('SQ-53 sibling that closes first');
-  const ownTicket = addStopTicket('SQ-53 live executor that keeps working');
+  const siblingTicket = addStopTicket('SQ-53 sibling that closes first', { files: ['src/sq53-sibling.ts'] });
+  const ownTicket = addStopTicket('SQ-53 live executor that keeps working', { files: ['src/sq53-own.ts'] });
   const siblingPrepared = store.prepareDispatch(slug, siblingTicket.ref, { allowUnscoped: true, sessionId, sharedTree: true });
   const ownPrepared = store.prepareDispatch(slug, ownTicket.ref, { allowUnscoped: true, sessionId, sharedTree: true });
   const executor = siblingPrepared.ticket.dispatchExecutor;
@@ -742,7 +742,7 @@ test('pre-tool hook: shared-tree claims cannot run raw git commit', () => {
   gitFixture(['init', '-b', 'main', '--quiet'], projectPath);
   gitFixture(['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'fixture'], projectPath);
   const project = store.ensureProject(projectPath).slug;
-  const ticket = store.createTicket(project, { title: 'shared commit guard', category: 'debugging', source: 'cli' });
+  const ticket = store.createTicket(project, { title: 'shared commit guard', category: 'debugging', files: ['src/shared.ts'], source: 'cli' });
   const sessionId = `shared-commit-${++sqSeq}`;
   const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId, sharedTree: true });
   const agentId = `shared-commit-agent-${sqSeq}`;
@@ -5627,7 +5627,7 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
 });
 
 test('a subagent session start preserves a fresh re-dispatch and stale attempt authority stays refused', () => {
-  const ticket = addEffortTicket('fresh launch after failed worktree creation', 'high');
+  const ticket = addStopTicket('fresh launch after failed worktree creation', { files: ['src/fresh-reprepare.ts'] });
   const sessionId = `fresh-reprepare-${++sqSeq}`;
   const first = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId, sharedTree: false });
   const replacement = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId, sharedTree: true });
@@ -5658,7 +5658,7 @@ test('a subagent session start preserves a fresh re-dispatch and stale attempt a
     sessionId,
   }).reason, 'token');
 
-  const failedTicket = addEffortTicket('same attempt launch failure', 'high');
+  const failedTicket = addStopTicket('same attempt launch failure', { files: ['src/launch-failure.ts'] });
   const failedSession = `same-attempt-failure-${++sqSeq}`;
   const failed = store.prepareDispatch(slug, failedTicket.ref, { allowUnscoped: true, sessionId: failedSession, sharedTree: true });
   assert.equal(store.recordDispatchLaunch(slug, failedTicket.ref, {
