@@ -271,4 +271,32 @@ test('dynamic survival guidance checkpoints incomplete work instead of submittin
   assert.doesNotMatch(briefing, /commit and submit the verified portion/);
 });
 
+test("GH-339: TaskStop closeout guidance never names the executor's own launch, and a reduced Agent-schema dispatch briefing carries no launch name at all", () => {
+  assert.match(executorTemplate, /`TaskStop` for each owned task using its task id, never your own launch/);
+  assert.match(executorTemplate, /a reduced Agent-schema dispatch never\s+assigned it one to name/);
+
+  const launchName = 'sq-9339-gh339-taskstop-opus-high';
+  const baseTicket = {
+    ref: 'SQ-9339',
+    model: 'opus',
+    effort: 'high',
+    category: {},
+    executorVerifyKind: 'command',
+    executorVerify: 'npm run typecheck',
+  };
+  const reducedBriefing = agentsync.renderTicketBriefing(
+    { ...baseTicket, dispatch: { launchName, reducedAgentSchema: true } },
+    'ticket-token', undefined, ROOT,
+  );
+  assert.doesNotMatch(reducedBriefing, /TaskStop/);
+  assert.doesNotMatch(reducedBriefing, new RegExp(launchName));
+
+  const normalBriefing = agentsync.renderTicketBriefing(
+    { ...baseTicket, dispatch: { launchName, reducedAgentSchema: false } },
+    'ticket-token', undefined, ROOT,
+  );
+  assert.doesNotMatch(normalBriefing, /TaskStop/);
+  assert.doesNotMatch(normalBriefing, new RegExp(launchName));
+});
+
 export {};
