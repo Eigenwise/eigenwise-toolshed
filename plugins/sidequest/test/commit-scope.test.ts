@@ -1502,7 +1502,7 @@ test('GH-378: a ticket re-pins its own candidate ref over a tip it recorded', ()
   assert.equal(commitScope.preserveCommitRef(root, first, 'refs/sidequest/SQ-2').ok, true, 'a missing ref is created');
 
   const repinned = commitScope.preserveCommitRef(root, second, 'refs/sidequest/SQ-2', [first.slice(0, 12)]);
-  assert.equal(repinned.ok, true, repinned.message);
+  assert.equal(repinned.ok, true, repinned.message || '');
   assert.equal(git(root, ['rev-parse', 'refs/sidequest/SQ-2']), second);
 
   const unchanged = commitScope.preserveCommitRef(root, second, 'refs/sidequest/SQ-2');
