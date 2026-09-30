@@ -498,8 +498,9 @@ effort. Route edits change only board data; the bundled executor def set
 is fixed, so nothing is written or registered when a route changes. A discovered provider the shim
 does not serve spawns `sidequest-exec-model-<slug>-<effort>` (or its `-readonly-model-` twin) with
 `model` omitted: that user-scope def pins the full catalog id, because the Agent `model` parameter
-takes only the four Claude aliases. Sidequest keeps those defs in step with the catalog at SessionStart
-and dispatch. The executor claims with the returned token and exact stable executor name.
+takes only the four Claude aliases. SessionStart writes a def only for a (slug, effort) pair some
+category route or fallback uses on any board, a readonly twin only for readonly categories, and
+prunes the rest; dispatch writes the def it spawns (an override may route an unused pair). The executor claims with the returned token and exact stable executor name.
 
 Cross-session adoption is a fresh `dispatch <ref>` in the adopting session. It rotates
 the token and returns the current spawn for the same stable route. A retained-worktree continuation
