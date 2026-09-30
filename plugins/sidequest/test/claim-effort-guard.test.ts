@@ -31,6 +31,7 @@ const SERVING_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.
 const dispatchPreflight = require('../lib/dispatch-preflight.js');
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const PROJ = path.join(os.tmpdir(), 'sq-claim-effort-fixtures', 'board');
+fs.mkdirSync(PROJ, { recursive: true });
 
 // SQ-1017: dispatch and native-agent now refuse before spawning unless
 // Claude Code's plugin registry has a runnable, board-MCP-capable

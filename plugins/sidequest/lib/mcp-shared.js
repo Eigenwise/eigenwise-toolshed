@@ -36,26 +36,32 @@ function serverVersion() {
     return "0.0.0";
   }
 }
+function registeredBoard(registration) {
+  if (!registration.ok) throw new Error(registration.reason);
+  return registration;
+}
+function namedBoard(arg) {
+  const res = store.findProject(arg);
+  if (res.ok) return { slug: res.slug, meta: res.meta };
+  if (res.reason === "ambiguous") {
+    throw new Error(`project "${arg}" matches ${res.matches.length} boards named "${arg}" — pass the absolute path to disambiguate.`);
+  }
+  if (path.isAbsolute(arg)) return registeredBoard(store.registerProject(store.explicitProjectRoot(arg)));
+  throw unknownBoardError(arg, res.known);
+}
+function unknownBoardError(arg, knownNames) {
+  const known = Array.from(new Set(knownNames || []));
+  return new Error(`project "${arg}" does not match any registered board.${known.length ? " Known: " + known.join(", ") : ""}`);
+}
+function sessionBoard() {
+  const registration = store.registerProject(store.sessionProjectRoot(), void 0, { implicit: true });
+  if (registration.ok) return registration;
+  const known = store.listProjects().map((project) => project.name);
+  throw new Error(`${registration.reason} Pass project to name a registered board${known.length ? ": " + known.join(", ") : ""}.`);
+}
 function resolveProject(projectArg) {
   const arg = projectArg == null ? "" : String(projectArg).trim();
-  if (arg) {
-    const res = store.findProject(arg);
-    if (res.ok) return { slug: res.slug, meta: res.meta };
-    if (res.reason === "ambiguous") {
-      throw new Error(`project "${arg}" matches ${res.matches.length} boards named "${arg}" — pass the absolute path to disambiguate.`);
-    }
-    if (path.isAbsolute(arg)) {
-      let isDir = false;
-      try {
-        isDir = fs.statSync(arg).isDirectory();
-      } catch (_) {
-      }
-      if (isDir) return store.ensureProject(store.nearestRepoRoot(path.resolve(arg)));
-    }
-    const known = Array.from(new Set(res.known || []));
-    throw new Error(`project "${arg}" does not match any registered board.${known.length ? " Known: " + known.join(", ") : ""}`);
-  }
-  return store.ensureProject(store.sessionProjectRoot());
+  return arg ? namedBoard(arg) : sessionBoard();
 }
 function callerWorktreePath(args) {
   const supplied = String(args?.worktree || "").trim();

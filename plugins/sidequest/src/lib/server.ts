@@ -309,6 +309,20 @@ function routingPreview(project?: any, profileId?: any) {
   };
 }
 
+function namedBoardSlug(body: any) {
+  const named = body.project && String(body.project);
+  return named && named !== 'all' ? named : null;
+}
+
+// A projectPath in the body names its folder explicitly, so it may register a
+// plain non-git folder, but never a temp, Claude config, or missing directory.
+function boardForNewWork(body: any): { slug: string | null; error?: string } {
+  const named = namedBoardSlug(body);
+  if (named || !body.projectPath) return { slug: named };
+  const registration = store.registerProject(store.explicitProjectRoot(String(body.projectPath)), body.projectName);
+  return registration.ok ? { slug: registration.slug } : { slug: null, error: registration.reason };
+}
+
 // Stories for one project, each annotated with how many (non-archived) tickets
 // belong to it and which board it lives on — the shape the dashboard's story
 // legend/filter and the "All boards" aggregate consume.
@@ -362,13 +376,13 @@ async function handle(req?: any, res?: any) {
 
   // --- Projects ---
   if (req.method === 'GET' && pathname === '/api/projects') {
-    sendJson(res, 200, { projects: store.listProjects() });
+    sendJson(res, 200, { projects: store.listProjectsFlaggingMissingPaths() });
     return;
   }
 
   // --- Archived boards ---
   if (req.method === 'GET' && pathname === '/api/projects/archived') {
-    sendJson(res, 200, { projects: store.listProjects({ archived: true }) });
+    sendJson(res, 200, { projects: store.listProjectsFlaggingMissingPaths({ archived: true }) });
     return;
   }
 
@@ -532,10 +546,12 @@ async function handle(req?: any, res?: any) {
       sendJson(res, 400, { error: 'bad JSON body' });
       return;
     }
-    let slug = body.project && String(body.project);
-    if ((!slug || slug === 'all') && body.projectPath) {
-      slug = store.ensureProject(body.projectPath, body.projectName).slug;
+    const target = boardForNewWork(body);
+    if (target.error) {
+      sendJson(res, 400, { error: target.error });
+      return;
     }
+    const slug = target.slug;
     if (!slug || slug === 'all') {
       sendJson(res, 400, { error: 'a project is required to create a story' });
       return;
@@ -849,10 +865,12 @@ async function handle(req?: any, res?: any) {
       sendJson(res, 400, { error: 'bad JSON body' });
       return;
     }
-    let slug = body.project && String(body.project);
-    if ((!slug || slug === 'all') && body.projectPath) {
-      slug = store.ensureProject(body.projectPath, body.projectName).slug;
+    const target = boardForNewWork(body);
+    if (target.error) {
+      sendJson(res, 400, { error: target.error });
+      return;
     }
+    const slug = target.slug;
     if (!slug || slug === 'all') {
       sendJson(res, 400, { error: 'a project is required to create a ticket' });
       return;

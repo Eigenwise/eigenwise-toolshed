@@ -270,7 +270,7 @@ async function cmdBoardConfig(opts) {
   console.log(`worktree dependency paths: ${payload.worktreeDependencyPaths.length ? payload.worktreeDependencyPaths.map((dependency) => `${dependency.mode} ${dependency.path}`).join(", ") : "(none)"}`);
 }
 async function cmdProjects(opts) {
-  const projects = store.listProjects({ archived: !!opts.archived });
+  const projects = store.listProjectsFlaggingMissingPaths({ archived: !!opts.archived });
   if (opts.json) {
     process.stdout.write(JSON.stringify({ projects }, null, 2) + "\n");
     return;

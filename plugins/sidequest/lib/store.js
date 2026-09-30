@@ -207,6 +207,12 @@ function deleteProjectExact(...args) {
 function listProjects(...args) {
   return projectsLayer.listProjects(...args);
 }
+function listProjectsFlaggingMissingPaths(...args) {
+  return projectsLayer.listProjectsFlaggingMissingPaths(...args);
+}
+function registerProject(...args) {
+  return projectsLayer.registerProject(...args);
+}
 function findProject(...args) {
   return projectsLayer.findProject(...args);
 }
@@ -793,6 +799,13 @@ function nextDispatchLaunchSeq(state) {
 const { homeRoot, projectsRoot, serverFile, normalizeForHash, slugify, mainWorktreeRoot, nearestRepoRoot, projectDir, ticketsDir, assetsDir } = createPaths({ fs, os, path, crypto });
 function sessionProjectRoot() {
   return nearestRepoRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+}
+function explicitProjectRoot(absPath) {
+  const resolved = path.resolve(absPath);
+  return fs.statSync(resolved, { throwIfNoEntry: false })?.isDirectory() ? nearestRepoRoot(resolved) : resolved;
+}
+function claudeHome() {
+  return process.env.SIDEQUEST_CLAUDE_HOME || path.join(os.homedir(), ".claude");
 }
 const dbByHome = /* @__PURE__ */ new Map();
 const openTransactionCommitTasks = /* @__PURE__ */ new WeakMap();
@@ -3262,6 +3275,9 @@ const {
 projectsLayer = createProjects({
   acquireLock,
   assetsDir,
+  claudeHome,
+  homeRoot,
+  os,
   claimReclaimable,
   cloneCached,
   database,
@@ -3452,6 +3468,9 @@ module.exports = {
   normalizeVerifyCwd,
   completionTreeCheck,
   listProjects,
+  listProjectsFlaggingMissingPaths,
+  registerProject,
+  explicitProjectRoot,
   findProject,
   archiveProject,
   unarchiveProject,

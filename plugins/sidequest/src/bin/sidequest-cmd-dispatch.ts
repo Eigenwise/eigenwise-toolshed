@@ -286,7 +286,7 @@ async function cmdBoardConfig(opts: any) {
 }
 
 async function cmdProjects(opts: any) {
-  const projects = store.listProjects({ archived: !!opts.archived });
+  const projects = store.listProjectsFlaggingMissingPaths({ archived: !!opts.archived });
   if (opts.json) {
     process.stdout.write(JSON.stringify({ projects }, null, 2) + '\n');
     return;
