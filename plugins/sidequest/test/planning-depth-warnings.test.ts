@@ -15,6 +15,7 @@ const { tools: mcpReadTools } = require('../lib/mcp-read');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-planning-warnings-test-'));
 const PROJ = path.join(planningDepthWarningsFixtureParent, 'board');
+fs.mkdirSync(PROJ, { recursive: true });
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const CLAUDE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-planning-warnings-claude-'));
 fs.mkdirSync(path.join(CLAUDE_HOME, 'plugins'), { recursive: true });

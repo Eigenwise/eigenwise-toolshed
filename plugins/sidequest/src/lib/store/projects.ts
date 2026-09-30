@@ -1,6 +1,6 @@
 'use strict';
 
-function createProjects({ acquireLock, assetsDir, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction }: any) {
+function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction }: any) {
   // A directory can be spelled several ways on Windows — an 8.3 alias, a junction —
   // and each spelling hashes to its own slug. Callers hold whichever spelling they
   // were handed, so lookups compare canonically rather than by the stored spelling.
@@ -57,6 +57,65 @@ function createProjects({ acquireLock, assetsDir, claimReclaimable, cloneCached,
     });
     if (changed) invalidateStoreCaches();
     return { slug, dir, meta };
+  }
+
+  function isInside(canonicalChild: string, root: string) {
+    const relative = path.relative(canonicalize(root), canonicalChild);
+    return !relative.startsWith('..') && !path.isAbsolute(relative);
+  }
+
+  function isDirectory(absPath: string) {
+    try { return fs.statSync(absPath).isDirectory(); } catch (_) { return false; }
+  }
+
+  // Junk boards came from whatever cwd a hook or tool call happened to run in:
+  // Codex scratch dirs, temp run dirs, the board's own storage dir (SQ-3179).
+  function reservedLocation(canonicalPath: string) {
+    if (isInside(canonicalPath, homeRoot())) return `inside the Sidequest home (${homeRoot()})`;
+    if (isInside(canonicalPath, claudeHome())) return `inside the Claude config directory (${claudeHome()})`;
+    return null;
+  }
+
+  // An isolated store under temp (a test or verification SIDEQUEST_HOME) is
+  // throwaway, and so are the temp fixture folders it tracks.
+  function throwawayStore() {
+    return isInside(canonicalize(homeRoot()), os.tmpdir());
+  }
+
+  function tempOrNonRepositoryRefusal(canonicalPath: string, implicit: boolean) {
+    if (isInside(canonicalPath, os.tmpdir())) return throwawayStore() ? null : `inside the system temp directory (${os.tmpdir()})`;
+    return implicit ? nonRepositoryRefusal(canonicalPath) : null;
+  }
+
+  function nonRepositoryRefusal(canonicalPath: string) {
+    if (fs.existsSync(path.join(canonicalPath, '.git'))) return null;
+    return 'not a git repository root and was never registered as a board; register it by passing its absolute path as the project if it really is one';
+  }
+
+  function projectRootRefusal(resolved: string, implicit: boolean) {
+    if (!isDirectory(resolved)) return `not a project root: ${resolved} is not an existing directory.`;
+    const canonicalPath = canonicalize(resolved);
+    const reason = reservedLocation(canonicalPath) || tempOrNonRepositoryRefusal(canonicalPath, implicit);
+    return reason && `not a project root: ${resolved} is ${reason}.`;
+  }
+
+  // An explicitly named folder may be a plain non-git directory (a notes vault);
+  // a board minted implicitly from the session cwd needs a git root. Either way an
+  // already-registered board is reused as is.
+  function registerProject(absPath: string, name?: string, options: { implicit?: boolean } = {}) {
+    const resolved = path.resolve(absPath);
+    const refusal = readMeta(slugify(resolved)) ? null : projectRootRefusal(resolved, Boolean(options.implicit));
+    if (refusal) return { ok: false as const, reason: refusal };
+    return { ok: true as const, ...ensureProject(resolved, name) };
+  }
+
+  // Surfaced only: a board whose folder vanished may still hold tickets someone wants.
+  function flagMissingPath(project: any) {
+    return isDirectory(project.path) ? project : { ...project, missingPath: true };
+  }
+
+  function listProjectsFlaggingMissingPaths(opts?: { archived?: boolean; all?: boolean }) {
+    return listProjects(opts).map(flagMissingPath);
   }
 
   function readMeta(slug?: any) {
@@ -331,7 +390,7 @@ function createProjects({ acquireLock, assetsDir, claimReclaimable, cloneCached,
     return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
   }
 
-  return { archiveProject, deleteProjectExact, ensureProject, findProject, listProjects, mergeProject, metaLockPath, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, setProjectNotify, setProjectRouting, unarchiveProject, withMetaLock };
+  return { archiveProject, deleteProjectExact, ensureProject, findProject, listProjects, listProjectsFlaggingMissingPaths, mergeProject, metaLockPath, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, registerProject, setProjectNotify, setProjectRouting, unarchiveProject, withMetaLock };
 }
 
 module.exports = { createProjects };

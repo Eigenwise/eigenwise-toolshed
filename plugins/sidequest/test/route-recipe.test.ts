@@ -12,7 +12,7 @@ const { spawnSync } = require('node:child_process');
 const ROOT = path.join(__dirname, '..');
 const BIN = path.join(ROOT, 'bin', 'sidequest.js');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-route-recipe-'));
-const project = path.join(home, 'project');
+const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-route-recipe-project-'));
 const discovery = path.join(home, 'discovery');
 fs.mkdirSync(path.join(discovery, 'model-gateway'), { recursive: true });
 fs.writeFileSync(path.join(discovery, 'model-gateway', 'catalog.json'), JSON.stringify({
@@ -117,7 +117,7 @@ test('GH-361: a non-shim discovered route recipe names its pinned executor and n
     providers: { opencode: { ready: true, state: 'ready', message: 'ready' } },
     models: [{ slug: 'opencode-deepseek-v4-1-flash', id: 'claude-opencode-deepseek-v4.1-flash', label: 'DeepSeek Flash', provider: 'opencode' }],
   }));
-  const providerEnv = Object.assign({}, env, { SIDEQUEST_HOME: providerHome, SIDEQUEST_DISCOVERY_DIRS: providerDiscovery, CLAUDE_PROJECT_DIR: path.join(providerHome, 'project') });
+  const providerEnv = Object.assign({}, env, { SIDEQUEST_HOME: providerHome, SIDEQUEST_DISCOVERY_DIRS: providerDiscovery, CLAUDE_PROJECT_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'sq-route-recipe-gh361-project-')) });
   const providerCli = (...args: any[]) => {
     const result = spawnSync(process.execPath, [BIN, ...args, '--json'], { encoding: 'utf8', env: providerEnv });
     return { result, body: result.stdout ? JSON.parse(result.stdout) : null };

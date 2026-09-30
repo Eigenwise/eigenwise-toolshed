@@ -83,7 +83,7 @@ MCP is the normal interface for board admin/config; the CLI is fallback for git-
 Apply board-only admin changes directly through an available MCP tool, never as a ticket or dispatch. Live
 category/profile edits affect only that board, not installation defaults unless the user asks. After a
 schema-bumping release, reload plugins before MCP writes. Commands default to the current project;
-`--project "<path-or-slug>"` (MCP: `project`) targets another board.
+`--project "<path-or-slug>"` (MCP: `project`) targets another board (creation rules: `references/board-features.md`).
 
 `dispatch <ref>` is **instant**: it returns the ticket's stable executor, a short `spawn` fetch
 stub, and a token. Pass every supplied `spawn` field (`name` and `description` too) to Agent
