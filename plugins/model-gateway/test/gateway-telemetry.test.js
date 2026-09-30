@@ -437,7 +437,7 @@ test('Anthropic passthrough consumes trace context but keeps its required creden
   });
 
   const response = await request(shimPort, 'POST', '/v1/messages', JSON.stringify({
-    model: 'claude-sonnet-5',
+    model: 'claude-sonnet-5-5',
     messages: [{ role: 'user', content: 'passthrough' }],
   }), {
     traceparent: linkedTraceparent,
@@ -454,8 +454,8 @@ test('Anthropic passthrough consumes trace context but keeps its required creden
   const received = await waitFor(() => collector.received[0], 'Anthropic route telemetry was not received');
   const attributes = attributeMap(spanFrom(received).attributes);
   assert.equal(attributes.backend, 'anthropic');
-  assert.equal(attributes.selected_model, 'claude-sonnet-5');
-  assert.equal(attributes.effective_model, 'claude-sonnet-5');
+  assert.equal(attributes.selected_model, 'claude-sonnet-5-5');
+  assert.equal(attributes.effective_model, 'claude-sonnet-5-5');
   assert.equal(received.body.includes('anthropic-credential'), false);
   assert.equal(received.body.includes('vendor=private'), false);
 });
