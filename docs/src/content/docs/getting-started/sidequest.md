@@ -100,6 +100,8 @@ The lower ticket context keeps declared files, attachment previews, and the full
 
 Completed work can move into the archive without disappearing. The archive view keeps the source board, priority, age, and restore action with each ticket.
 
+A whole board can be archived too (`sidequest archive-board <board>`, or `archive_board` over MCP), for example after a repository moves and gets a new board that numbers its tickets from SQ-1 again. Archiving moves the candidate refs its tickets recorded from `refs/sidequest/SQ-n` to `refs/sidequest-archived/<board>/SQ-n`, so the new board's candidates can't overwrite or build on them; restoring moves them back unless the new board already holds the name. The board's own ref writes, and submit's remedy for a mismatched pin, refuse to repoint a `refs/sidequest/SQ-n` whose commit the ticket never recorded, and name that commit and how to move it aside.
+
 ![Sidequest archive containing nine synthetic tickets from three projects](../../../assets/screenshots/sidequest-archive.png)
 
 *Synthetic demo data showing archived storefront, fulfillment, and support work.*

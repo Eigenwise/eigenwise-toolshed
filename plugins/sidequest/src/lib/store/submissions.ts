@@ -283,7 +283,7 @@ function preservePendingRejection(slug: any, ticket: any, rejected: any, root: s
   for (let attempt = 0; attempt < 100; attempt += 1) {
     rejected.quarantineRef = rejectionQuarantineRef(ticket, firstRejectionNumber + attempt);
     putTicketTransaction(slug, ticket);
-    preserved = commitScope.preserveCommitRef(root, rejected.commit, rejected.quarantineRef, { noOverwrite: true });
+    preserved = commitScope.preserveCommitRef(root, rejected.commit, rejected.quarantineRef);
     if (preserved.ok || preserved.reason !== 'git_ref_collision') break;
   }
   if (!preserved.ok) {
