@@ -1714,6 +1714,15 @@ function resolveDeliveryWorktree(registeredRepo: string, requestedWorktree: stri
   return { ok: true, worktree: candidate };
 }
 
+function refTipEquals(repo: string, ref: string, commit: string): boolean {
+  try {
+    return integrationGit(repo, ['rev-parse', '--verify', `${ref}^{commit}`]).toLowerCase() === commit;
+  } catch (_) {
+    // A target ref this checkout has never fetched is simply not the tip; it must not fail the delivery.
+    return false;
+  }
+}
+
 function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   // A mistyped deliveryMethod previously reached the diverged-upstream preflight below
@@ -1783,13 +1792,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
     // revision until the operator pushes, so it stays `git:<branch>` unless matched otherwise.
     let observedIntegrationRevisionSource = `git:${target.branch}`;
     if (currentBranch !== target.branch) {
-      const matchedRef = commitScope.integrationTargetRefs(target).find((ref: string) => {
-        try {
-          return integrationGit(repo, ['rev-parse', '--verify', `${ref}^{commit}`]).toLowerCase() === resultingHead;
-        } catch (_) {
-          return false;
-        }
-      });
+      const matchedRef = commitScope.integrationTargetRefs(target).find((ref: string) => refTipEquals(repo, ref, resultingHead));
       if (!matchedRef) {
         return {
           ok: false,

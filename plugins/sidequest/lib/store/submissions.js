@@ -1394,6 +1394,13 @@ ${verify.outputTail}` : null
     }
     return { ok: true, worktree: candidate };
   }
+  function refTipEquals(repo, ref, commit) {
+    try {
+      return integrationGit(repo, ["rev-parse", "--verify", `${ref}^{commit}`]).toLowerCase() === commit;
+    } catch (_) {
+      return false;
+    }
+  }
   function recordDeliveredSubmission(slug, idOrRef, opts) {
     opts = opts || {};
     const deliveryMethod = workingTreeDeliveryMethod(opts.deliveryMethod);
@@ -1449,13 +1456,7 @@ ${verify.outputTail}` : null
       const resultingHead = integrationGit(repo, ["rev-parse", "HEAD"]).toLowerCase();
       let observedIntegrationRevisionSource = `git:${target.branch}`;
       if (currentBranch !== target.branch) {
-        const matchedRef = commitScope.integrationTargetRefs(target).find((ref) => {
-          try {
-            return integrationGit(repo, ["rev-parse", "--verify", `${ref}^{commit}`]).toLowerCase() === resultingHead;
-          } catch (_) {
-            return false;
-          }
-        });
+        const matchedRef = commitScope.integrationTargetRefs(target).find((ref) => refTipEquals(repo, ref, resultingHead));
         if (!matchedRef) {
           return {
             ok: false,
