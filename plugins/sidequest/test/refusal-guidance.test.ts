@@ -79,6 +79,9 @@ test('submitted guidance separates unbound rework from a locked bound candidate'
   assert.match(message, /While it is UNBOUND/);
   assert.match(message, /rework, clear, reclaim, and amendment all refuse without writing/i);
   assert.match(message, /kind `oracle`/);
+  assert.match(message, /--by <submitter id>/);
+  assert.match(message, /submittedBy/);
+  assert.doesNotMatch(message, /--by <reviewer>/);
 });
 
 test('manual candidate delivery guidance preserves every pinned authority', () => {

@@ -20,7 +20,7 @@ const {
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } = require("./category-defaults.js");
 const commitScope = require("./commit-scope.js");
 const { commitPaths } = commitScope;
-const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, retainedWorktreeResumeDecision } = require("./worktrees.js");
+const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, retainedWorktreeResumeDecision } = require("./worktrees.js");
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, isCanonicalRegisteredWorktree } = require("./kernel/worktree.js");
 const { reviewLockMessage } = require("./kernel/review-binding.js");
 const { migrateIfNeeded } = require("./migrate.js");
@@ -50,6 +50,7 @@ const { createConfig } = require("./store/config.js");
 const { createSweeps } = require("./store/sweeps.js");
 const { createServer } = require("./store/server.js");
 const { createProjects } = require("./store/projects.js");
+const candidateRefs = require("./store/candidate-refs.js");
 const { createWarnings } = require("./store/warnings.js");
 let servingInstallResolved = false;
 let resolvedServingInstall;
@@ -195,17 +196,38 @@ function setProjectRouting(...args) {
 function projectRoutingEnabled(...args) {
   return projectsLayer.projectRoutingEnabled(...args);
 }
-function archiveProject(...args) {
-  return projectsLayer.archiveProject(...args);
+function boardRepository(slug) {
+  const projectPath = String(readMeta(slug)?.path || "");
+  try {
+    return projectPath ? commitScope.repoRoot(projectPath) : null;
+  } catch (_) {
+    return null;
+  }
 }
-function unarchiveProject(...args) {
-  return projectsLayer.unarchiveProject(...args);
+function archiveProject(slug) {
+  const result = projectsLayer.archiveProject(slug);
+  const repository = result.ok ? boardRepository(slug) : null;
+  return repository ? { ...result, candidateRefs: candidateRefs.archiveBoardCandidateRefs(commitScope, repository, slug, listTickets(slug)) } : result;
+}
+function unarchiveProject(slug) {
+  const result = projectsLayer.unarchiveProject(slug);
+  const repository = result.ok ? boardRepository(slug) : null;
+  return repository ? { ...result, candidateRefs: candidateRefs.restoreBoardCandidateRefs(commitScope, repository, slug) } : result;
+}
+function ticketRecordedCommits(ticket) {
+  return candidateRefs.ticketRecordedCommits(ticket);
 }
 function deleteProjectExact(...args) {
   return projectsLayer.deleteProjectExact(...args);
 }
 function listProjects(...args) {
   return projectsLayer.listProjects(...args);
+}
+function listProjectsFlaggingMissingPaths(...args) {
+  return projectsLayer.listProjectsFlaggingMissingPaths(...args);
+}
+function registerProject(...args) {
+  return projectsLayer.registerProject(...args);
 }
 function findProject(...args) {
   return projectsLayer.findProject(...args);
@@ -500,6 +522,7 @@ const {
   dispatchRouteState,
   execFromBackend,
   resolveExec,
+  discoveredModelBackends,
   resolveReportedExec,
   resolveModelId,
   routingModels,
@@ -652,6 +675,8 @@ const {
   supersedeUnboundAttempt,
   readDispatchBriefing,
   recoverLiveClaimDispatch,
+  recordReleaseObservedCheckout,
+  rekeyReleasedCheckout,
   recordDispatchLaunch,
   recordDispatchAgentFailure,
   recoverDispatchQuotaFailure,
@@ -662,6 +687,7 @@ const {
   recordDispatchWorktreeDependencyLink,
   recoverDispatchWorktreeCreation,
   dispatchIdentityDiagnosis,
+  crossedWorktreeBinding,
   dispatchIsolationExpectation,
   dispatchUnboundClaim,
   boardVerificationEvidencePath,
@@ -674,6 +700,10 @@ const {
   dispatchCanBindRuntimeIdentity,
   recordDispatchRuntimeIdentity,
   bindDispatchClaimToken,
+  exchangeGuessedClaimIdentity,
+  exchangeCrossedClaimCheckout,
+  settleDeferredStops,
+  tokenAdmission,
   bindDispatchAgent,
   dispatchMatchesStopIdentity,
   markDispatchStopped,
@@ -735,6 +765,7 @@ const {
   pendingSubmission: pendingSubmissionForTickets,
   agentWorktreePath,
   agentWorktreeCandidates,
+  agentIdFromWorktreePath,
   resolvedAgentWorktree,
   reclaimUnclaimedDispatchWorktree,
   legacyCategoryForComplexity: (...args) => legacyCategoryForComplexity(...args),
@@ -785,16 +816,35 @@ const { homeRoot, projectsRoot, serverFile, normalizeForHash, slugify, mainWorkt
 function sessionProjectRoot() {
   return nearestRepoRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 }
+function explicitProjectRoot(absPath) {
+  const resolved = path.resolve(absPath);
+  return fs.statSync(resolved, { throwIfNoEntry: false })?.isDirectory() ? nearestRepoRoot(resolved) : resolved;
+}
+function claudeHome() {
+  return process.env.SIDEQUEST_CLAUDE_HOME || path.join(os.homedir(), ".claude");
+}
 const dbByHome = /* @__PURE__ */ new Map();
-const transactionDepth = /* @__PURE__ */ new WeakMap();
+const openTransactionCommitTasks = /* @__PURE__ */ new WeakMap();
 function withinTransaction(handle, fn) {
-  if (transactionDepth.get(handle)) return fn();
-  transactionDepth.set(handle, 1);
+  if (openTransactionCommitTasks.has(handle)) return fn();
+  const commitTasks = [];
+  openTransactionCommitTasks.set(handle, commitTasks);
+  let result;
   try {
-    return db.txn(handle, fn);
+    result = db.txn(handle, () => {
+      commitTasks.length = 0;
+      return fn();
+    });
   } finally {
-    transactionDepth.delete(handle);
+    openTransactionCommitTasks.delete(handle);
   }
+  for (const task of commitTasks) task();
+  return result;
+}
+function afterCommit(task) {
+  const commitTasks = openTransactionCommitTasks.get(database());
+  if (commitTasks) commitTasks.push(task);
+  else task();
 }
 cacheLayer = createCache({ database, db, fs });
 const {
@@ -823,12 +873,14 @@ const {
   markAllRead,
   markRead,
   pendingReminders,
+  pruneOversizedNotificationsOnce,
   pruneRead,
   queueEventNotification,
   setNotifyPrefs,
   setReminder
 } = createNotifications({
   acquireLock,
+  afterCommit,
   crypto,
   getTicket,
   path,
@@ -1304,6 +1356,7 @@ const {
   closeSubmissionAsSuperseded,
   submissionOwnershipFailure,
   submitTicket,
+  pinnedVerificationRequirement,
   recordVerificationCapture,
   recordSubmissionRejection,
   reconcileSubmissionRejections,
@@ -1340,6 +1393,7 @@ const {
   integrationTargetCommit,
   ticketIntegrationTarget,
   ticketIntegrationTargets,
+  deliveryIntegrationTarget,
   listTickets,
   manualVerify,
   VERIFY_ORACLE_KINDS,
@@ -1481,6 +1535,7 @@ function database() {
     migrateIfNeeded(handle, root);
     dbByHome.set(root, handle);
     refreshReadonlyCategorySeeds(handle);
+    pruneOversizedNotificationsOnce();
   }
   if (!refreshingRoutingProfileSeeds) {
     refreshingRoutingProfileSeeds = true;
@@ -1708,6 +1763,7 @@ function stableExecutorName(ticket, artifactMode = false) {
   const resolved = resolveExec(ticket.model, ticket.effort);
   if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort}.`);
   if (artifactMode || sharedTreeArtifactMode(ticket) || !dispatchReadOnly(ticket)) return resolved.agent;
+  if (resolved.readOnlyAgent) return resolved.readOnlyAgent;
   return resolved.backend === "codex" ? stableReadOnlyDispatchName(ticket.effort) : stableReadOnlyClaudeName(ticket.effort);
 }
 const DIRECT_REASON_MIN_LENGTH = 20;
@@ -1866,7 +1922,10 @@ function bindClaimRuntimeIdentity(slug, idOrRef, opts) {
       message: `${found.ref} reduced Agent-schema dispatch requires hook-reported agent_id before the first claim. Stop without claiming; use a host that reports agent_id and permission_mode ("auto" or "bypassPermissions") to PreToolUse. Do not add unsupported Agent fields or change permissions.`
     } : {}
   };
-  return withTicketLock(slug, found.id, () => {
+  const tokenAdmitted = tokenAdmission(claimAdmission, slug, found.id, opts);
+  exchangeGuessedClaimIdentity(slug, found.id, opts?.sessionId, opts?.executor, agentId, tokenAdmitted);
+  exchangeCrossedClaimCheckout(slug, found.id, opts?.sessionId, opts?.observedWorktree, tokenAdmitted);
+  const bound = withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     if (!ticket) return { ok: false, reason: "not_found" };
     const admission = claimAdmission(slug, ticket.id, opts);
@@ -1902,6 +1961,8 @@ function bindClaimRuntimeIdentity(slug, idOrRef, opts) {
     }
     return { ok: true, ticket };
   });
+  settleDeferredStops(opts?.sessionId);
+  return bound;
 }
 function claimTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
@@ -2161,7 +2222,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
             reason: "pending_submission",
             ticket: t,
             submission: t.submission,
-            message: `${heldOwner ? "" : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. When a reviewed candidate already landed through a hand-resolved conflict merge, record that merge with groomClose passing deliveryCommit <the merge commit>, deliveryMethod "manual", and reason. It checks the candidate is an ancestor of that merge and re-runs the merged-tree gate before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`
+            message: `${heldOwner ? "" : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <submitter id> --review <evidence> --reason "what needs repair"\` (the submitter identity from \`sidequest pulse ${t.ref}\` -> submittedBy, not a reviewer), then dispatch the ticket for repair. When a reviewed candidate already landed through a hand-resolved conflict merge, record that merge with groomClose passing deliveryCommit <the merge commit>, deliveryMethod "manual", and reason. It checks the candidate is an ancestor of that merge and re-runs the merged-tree gate before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`
           };
         }
         reopenedSubmission = t.submission;
@@ -2361,6 +2422,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
     } : null;
     if (release) t.release = release;
     if (dispatch2) delete dispatch2.failedClaimSurrender;
+    if (liveClaim) rekeyReleasedCheckout(slug, t, heldOwner);
     if (!dispatch2?.terminalAt || dispatch2.outcome !== terminalOutcome) {
       setDispatchTerminal(t, terminalOutcome, opts.source || "cli", {
         slug,
@@ -2779,6 +2841,25 @@ function ticketIntegrationTargets(slug, tickets) {
   }
   return { ok: true, target: first, targets: resolved };
 }
+function deliveryIntegrationTarget(slug, recorded, integrationBranch) {
+  const branch = integrationBranch == null ? checkedOutBranchDescendingFrom(readMeta(slug)?.path, commitScope.integrationTargetRef(recorded)) : normalizeIntegrationBranch(integrationBranch);
+  if (!branch || branch === recorded.branch) return recorded;
+  return integrationTarget(slug, { mode: deliveryBranchMode(slug, recorded.mode, branch), branch });
+}
+function deliveryBranchMode(slug, recordedMode, branch) {
+  return recordedMode === "remote" && integrationBranchExists(readMeta(slug)?.path, `refs/remotes/origin/${branch}`) ? "remote" : "local";
+}
+function checkedOutBranchDescendingFrom(repo, ref) {
+  const git = (args) => execFileSync("git", args, { cwd: repo, encoding: "utf8", windowsHide: true, stdio: "pipe" }).trim();
+  const currentBranch = git(["branch", "--show-current"]);
+  try {
+    git(["merge-base", "--is-ancestor", ref, "HEAD"]);
+    return currentBranch;
+  } catch (error) {
+    if (error?.status === 1) return "";
+    throw error;
+  }
+}
 function recordedDelivery(slug, ticket, commit, evidence) {
   const requestedCommit = String(commit || "").trim();
   const recordedEvidence = String(evidence || "").trim();
@@ -3052,7 +3133,11 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
     ticket
   };
   if (purpose === "integration") {
-    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireDeliveredWave: true, deliveryMethod: opts.deliveryMethod });
+    const admitted = validateIntegrationSubmission(slug, idOrRef, {
+      requireDeliveredWave: true,
+      deliveryMethod: opts.deliveryMethod,
+      integrationBranch: ticket.submission?.integration?.targetBranch
+    });
     if (!admitted.ok) return admitted;
   }
   const recorded = delivery;
@@ -3206,6 +3291,9 @@ const {
 projectsLayer = createProjects({
   acquireLock,
   assetsDir,
+  claudeHome,
+  homeRoot,
+  os,
   claimReclaimable,
   cloneCached,
   database,
@@ -3313,6 +3401,7 @@ module.exports = {
   availableRoute,
   resolveModelId,
   resolveExec,
+  discoveredModelBackends,
   resolveReportedExec,
   normalizeReportedModel,
   resolvedDispatchRoute,
@@ -3374,6 +3463,7 @@ module.exports = {
   integrationTarget,
   ticketIntegrationTarget,
   ticketIntegrationTargets,
+  deliveryIntegrationTarget,
   normalizeDeliveryMode,
   validateIntegrationSubmission,
   recordDeliveredSubmission,
@@ -3394,9 +3484,13 @@ module.exports = {
   normalizeVerifyCwd,
   completionTreeCheck,
   listProjects,
+  listProjectsFlaggingMissingPaths,
+  registerProject,
+  explicitProjectRoot,
   findProject,
   archiveProject,
   unarchiveProject,
+  ticketRecordedCommits,
   deleteProjectExact,
   mergeProject,
   setProjectNotify,
@@ -3432,6 +3526,7 @@ module.exports = {
   syncLiveDispatchVerification,
   readDispatchBriefing,
   recoverLiveClaimDispatch,
+  recordReleaseObservedCheckout,
   dispatchTokenForRequest,
   isSupersededDispatchToken,
   recordDispatchLaunch,
@@ -3445,6 +3540,7 @@ module.exports = {
   recoverDispatchWorktreeCreation,
   bindDispatchAgent,
   dispatchIdentityDiagnosis,
+  crossedWorktreeBinding,
   dispatchIsolationExpectation,
   dispatchUnboundClaim,
   boardVerificationEvidencePath,
@@ -3482,6 +3578,7 @@ module.exports = {
   MAX_CHECKPOINT_TTL_MIN,
   submissionOwnershipFailure,
   submitTicket,
+  pinnedVerificationRequirement,
   recordVerificationCapture,
   recordSubmissionRejection,
   reconcileSubmissionRejections,

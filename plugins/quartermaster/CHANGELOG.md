@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.11.9 (2026-09-30)
+
+Released in v3.585.0, up from 0.11.8.
+
+### Fixes
+
+- The gateway launcher, doctor's install scope and Quartermaster's gateway check find a model-gateway installed from any marketplace (#380) (SQ-3174)
+  Three readers of `installed_plugins.json` only looked at `model-gateway@eigenwise-toolshed`, so a model-gateway installed from a fork's marketplace was invisible to them. The stable launcher at `~/.claude/model-gateway/model-gateway.js` exited with "no installed Model Gateway CLI was found", `doctor` couldn't report the install scope, and Quartermaster's SessionStart check skipped the gateway health check entirely.
+
+  All three now read every `model-gateway@<marketplace>` entry. The launcher still runs the newest version (then the most recently updated), and Quartermaster checks the newest install when there is more than one.
+
+## 0.11.8 (2026-09-30)
+
+Released in v3.584.0, up from 0.11.7.
+
+### Fixes
+
+- CRAP gate measures a function lizard cuts off at its parameter list over its real body and complexity (GH-315)
+  The CRAP gate no longer exits 2 "coverage unverified" for a function whose parameter list holds
+  parentheses of its own, such as a React component with a function-typed prop
+  (`onSelect: (card: Card) => void`) or a function with a default arrow parameter. lizard's JavaScript,
+  TypeScript and TSX readers end such a function inside its own signature, where coverage has no line
+  data, and leave every branch in its body out of its complexity. The gate now reads the source, measures
+  coverage over the function's real body, and scores the larger of lizard's complexity and the body's own
+  branch count, so an uncovered branchy function fails instead of passing at complexity 1. An edit to
+  that body counts as a change against the base revision. When the gate cannot find where the body ends,
+  the function is still reported as unverified.
+
+## 0.11.7 (2026-09-29)
+
+Released in v3.582.0, up from 0.11.6.
+
+### Fixes
+
+- Quartermaster CRAP gate reports phantom complexity in .tsx: lizard loses a self-closing JSX tag after brace attributes plus a hyphenated attribute and attributes later functions to that component (GH-239)
+  lizard 1.24.0's TSX reader abandons an opening tag as soon as an attribute is not `name="text"` or `name={expr}` — a hyphenated attribute like `data-testid`, a valueless one like `required`, a spread, even tag text holding `(`, `)`, `;` or `=` — and re-emits the `{` of every brace attribute it had already matched. Those unbalanced braces kept the enclosing component open to the end of the file, so a React component was charged with a complexity nothing in it branches on and the functions it swallowed were never gated at all. The gate now measures `.tsx` and `.jsx` through lizard's TypeScript reader, from a byte-for-byte copy of the file under a `.ts` or `.js` name, on both sides of the ratchet. Nothing in the source is rewritten, so line numbers, coverage ranges and baseline identity still come from the real file, and every offender line for those files names the measurement behind it.
+
 ## 0.11.6 (2026-09-28)
 
 Released in v3.581.0, up from 0.11.5.

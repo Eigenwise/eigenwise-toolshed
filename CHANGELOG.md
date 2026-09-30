@@ -8,6 +8,270 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.585.0 (2026-09-30)
+
+### model-gateway 0.52.1 → 0.52.2
+
+#### Fixes
+
+- /healthz answers at once instead of waiting on codex auth status, and a stale gateway.sock is reclaimed (#367) (SQ-3166)
+  On macOS `codex auth status` can take several seconds when it reads the Keychain, and `/healthz` waited for it before answering. Every probe of `/healthz` gives up sooner (1 s for the supervisor, 2 to 3 s for status and `catalog --refresh`), so a running shim read as down: `start` reported "not healthy after 42s", `catalog --refresh` refused to write, and Sidequest lost the Codex models once its catalog expired. Each timed-out probe also started its own auth check, so several ran at once.
+
+  `/healthz` now answers right away with the last known Codex readiness. The proxy and auth checks run in the background, one at a time, and a result is reused for 15 seconds. The readiness block says how old it is: `checkedAt`, `ageMs`, and `stale` (true once it's past 15 seconds, while the next check runs). Before the first check finishes the state is `checking`. `upstreamBlocked` and `upstreamUnavailable` are still read fresh on every call. `doctor`, `ensure`, and `catalog --refresh` keep running their own full check.
+
+  A `gateway.sock` left behind by a shim that died without closing made the next bind fail with `EADDRINUSE`. The shim now connects to it first. If nothing answers and the path is a socket, it removes the file, logs that, and binds. A live listener or a file that isn't a socket is left alone.
+- Windows setup judges the supervisor stop by whether the PID is gone, so a non-zero taskkill no longer leaves the gateway down (SQ-3170)
+  `taskkill /T /F` exits non-zero when any process in the tree slips away mid-kill, even after the
+  target died. `setup`, `stop` and the shim drain used to read that as a failed stop, so `setup` quit
+  with "the stop request failed" and never started the new shim. Every stop now counts as done once the
+  target PID is gone, and the failure reason says the PID is still running instead of guessing at
+  elevation.
+- The gateway launcher, doctor's install scope and Quartermaster's gateway check find a model-gateway installed from any marketplace (#380) (SQ-3174)
+  Three readers of `installed_plugins.json` only looked at `model-gateway@eigenwise-toolshed`, so a model-gateway installed from a fork's marketplace was invisible to them. The stable launcher at `~/.claude/model-gateway/model-gateway.js` exited with "no installed Model Gateway CLI was found", `doctor` couldn't report the install scope, and Quartermaster's SessionStart check skipped the gateway health check entirely.
+
+  All three now read every `model-gateway@<marketplace>` entry. The launcher still runs the newest version (then the most recently updated), and Quartermaster checks the newest install when there is more than one.
+
+### observability 0.7.35 → 0.8.0
+
+#### Features
+
+- Project telemetry works again on Claude Code 2.1.282+: an opt-in --user-export step turns export on in user settings, and the audit and SessionStart report the real state (GH-372) (SQ-3171)
+  Claude Code 2.1.282 stopped reading the export-enabling telemetry variables from project and local settings, so the per-directory wiring exported nothing while `--audit` said `wired`. `OTEL_RESOURCE_ATTRIBUTES` is still read there, so `project.id` attribution is unchanged. `project-telemetry.js --user-export` adds the missing export variables to user settings without replacing existing keys, and the skill asks before running it. `--audit` now reports `wired`, `NO-EXPORT` or `UNWIRED` per directory from the installed version, the effective export variables and recent `claude_code` rows, and SessionStart warns when export is off.
+
+#### Fixes
+
+- A consent-denied hook spool row no longer stops the spool from draining (GH-368) (SQ-3167)
+  One consent-denied row used to pin `hook-spool.jsonl.draining` for good: the drain wrote the row back
+  into `.draining`, and a new drain only rotates the main spool when `.draining` is gone, so every later
+  drain re-read that one row while the main spool grew without bound and `/health` still reported
+  success. A denied row now goes back into the main spool behind new content and `.draining` is always
+  removed, so the next drain rotates and processes everything that arrived since. Denied rows are still
+  kept for a later opt-in (SQ-2753), but only for an hour after they were observed. A row from a session
+  with no project mapping can never be accepted, and without a bound it would be retried forever. An
+  install already stuck in this state clears itself on the first drain after the update.
+
+### quartermaster 0.11.8 → 0.11.9
+
+#### Fixes
+
+- The gateway launcher, doctor's install scope and Quartermaster's gateway check find a model-gateway installed from any marketplace (#380) (SQ-3174)
+  Three readers of `installed_plugins.json` only looked at `model-gateway@eigenwise-toolshed`, so a model-gateway installed from a fork's marketplace was invisible to them. The stable launcher at `~/.claude/model-gateway/model-gateway.js` exited with "no installed Model Gateway CLI was found", `doctor` couldn't report the install scope, and Quartermaster's SessionStart check skipped the gateway health check entirely.
+
+  All three now read every `model-gateway@<marketplace>` entry. The launcher still runs the newest version (then the most recently updated), and Quartermaster checks the newest install when there is more than one.
+
+### sidequest 5.4.2 → 5.4.3
+
+#### Fixes
+
+- worktrees sweep reclaims a finished worktree whose only symlinks resolve inside it, and names what it refused (GH-221)
+  The dependency-link scan now judges a symlink no dispatch record names by where it resolves: one whose target stays inside the worktree is removed with the tree, so the node_modules/.bin entries an executor's install wrote no longer keep every finished worktree on disk. A link that escapes the tree and an unreadable entry still refuse, and the refusal now names the offending path and why after the reason code.
+
+  The sweep's at-risk classifier now judges an ignored file under node_modules by where its path components resolve: a symlink segment whose target stays inside the worktree is a plain component, so the node_modules/.bin links an executor's install wrote no longer make a finished worktree read as dirty and park it as untracked_quarantined for the 14-day retention instead of reclaiming it as ticket_done. A link under node_modules that escapes the tree, a dangling or unreadable entry, a directory entry reached directly rather than through a link, and a nested repository still count as data and still travel into quarantine.
+- The sweep's delete-time re-read trusts an absolute in-tree link that still names the path the tree was renamed from (GH-352)
+  An executing sweep renames a finished worktree into quarantine and reads it again before deleting it. An unrecorded absolute in-tree link under `node_modules/.bin` (an absolute directory or file symlink; a Windows junction dangles after the rename and git lists nothing through it) still names the path the tree was renamed from, so the re-read counted it as escaping the tree and parked every such tree as `late_content_quarantined` instead of deleting it. The re-read now takes the vacated source path the same way the link-release check already does, so a link that resolves there is read at the same place in the moved tree. A link that resolves anywhere else still parks the tree.
+
+  The release also no longer unlinks a recorded dependency path by name alone. A recorded path that is no longer a link is content no read judged, so the tree is parked with `dependency_link_changed` and that content is left in place.
+- Generated model executors only exist for model and effort pairs a route actually uses (#369) (SQ-3168)
+  The fix for #361 wrote ten user-scope agent files for every discovered model whose provider Model Gateway doesn't serve: all five efforts plus a readonly twin, whether or not anything routed there. They show up in the Agent list of every Claude Code session on the machine, so a 14-model catalog meant 140 definitions where maybe 10 could ever run.
+
+  Session start now writes a `sidequest-exec-model-<slug>-<effort>` file only for a pair some category route, category fallback, or the global fallback uses, across the routing profiles and board-local rows of every board on the machine. The `-readonly-model-` twin is only written for readonly categories. Everything else Sidequest generated is removed, so changing a route swaps the files at the next session start. A dispatch still writes the one file it spawns right before the spawn, which covers ticket route and readonly overrides and route changes made mid-session. It no longer prunes, because a parallel dispatch's file may still be waiting for its Agent call.
+- verify-capture loads the pinned command from the ticket, so executors no longer retype a base64 blob (#373) (SQ-3172)
+  The executor briefing printed the pinned verifier as `verify-capture.js --base64 <blob> --project ... --ticket ...`, and the executor model had to retype that blob into its shell call. One wrong character decoded to a different command, which then failed or got refused at submit with `verification_capture_command_mismatch`, even though the executor ran what it was told.
+
+  With `--project` and `--ticket`, the wrapper now loads the pinned verify command from the ticket, the same pin submit compares against, and the briefing line carries only `--project`, `--ticket` and `--worktree`. `--base64` still works: alone it runs as before, and beside `--project/--ticket` a blob that matches the pin changes nothing while one that differs runs nothing and prints the pinned and passed commands side by side. A ticket with no pinned command, an unknown ticket, and an unregistered project are refused by name before anything runs. The recorded capture still comes from the command that actually ran, so a capture of an old command that finishes after the ticket's verify was amended is still refused.
+- A copied node_modules builds under Turbopack and is deleted with its worktree (GH-370) (SQ-3173)
+  Next.js 16 builds with Turbopack, which refuses a worktree's linked `node_modules` because the link
+  points out of the project root. `worktreeDependencyPaths` already offered `{ "path": "node_modules",
+  "mode": "copy" }`, but that copy rewrote every relative link inside it into an absolute path back into
+  your checkout, so the build hit the same refusal one level down. A copy now keeps those links relative,
+  and on macOS it's an APFS clone (`cp -c`), falling back to a plain copy where cloning isn't available.
+
+  The copy is now recorded with its mode beside the dependency links, and the worktree sweep counts a
+  recorded node_modules copy, links inside it included, as install content: it's deleted with the
+  worktree instead of parking the tree in quarantine. A recorded copy that was replaced by a link is
+  still quarantined.
+
+## v3.584.0 (2026-09-30)
+
+### quartermaster 0.11.7 → 0.11.8
+
+#### Fixes
+
+- CRAP gate measures a function lizard cuts off at its parameter list over its real body and complexity (GH-315)
+  The CRAP gate no longer exits 2 "coverage unverified" for a function whose parameter list holds
+  parentheses of its own, such as a React component with a function-typed prop
+  (`onSelect: (card: Card) => void`) or a function with a default arrow parameter. lizard's JavaScript,
+  TypeScript and TSX readers end such a function inside its own signature, where coverage has no line
+  data, and leave every branch in its body out of its complexity. The gate now reads the source, measures
+  coverage over the function's real body, and scores the larger of lizard's complexity and the body's own
+  branch count, so an uncovered branchy function fails instead of passing at complexity 1. An edit to
+  that body counts as a change against the base revision. When the gate cannot find where the body ends,
+  the function is still reported as unverified.
+
+### sidequest 5.4.1 → 5.4.2
+
+#### Fixes
+
+- A reworked ticket's dispatch briefing states the pending rework (GH-349)
+  After `rework` and a fresh `dispatch`, the replacement executor's briefing listed the rejected candidate only under "Rejected submission history", framed as past history. An executor that then read an earlier "candidate accepted" comment on the thread took the relaunch for a duplicate and released it as a contradiction or oracle question, so each rework cost a wasted dispatch. Orchestrators worked around it by restating the rework as a plain comment before dispatching.
+
+  The briefing now opens that section with "## Pending rework" whenever the newest rejection is an unsuperseded rework and no new candidate is pending. It names the rejected candidate and its quarantine ref, the rework reason, and the review, and it tells the executor that this rejection overrides any earlier acceptance on the thread, so it should do the repair and submit a fresh candidate. The section sits above the comment thread. Once a later submit supersedes the rejection, the section is gone and only the history remains.
+
+## v3.583.0 (2026-09-29)
+
+### model-gateway 0.52.0 → 0.52.1
+
+#### Fixes
+
+- model-gateway tests: sibling-retire test waits for the older supervisor's process exit instead of asserting it instantly, so windows-latest stops flaking on exit lag (SQ-3151)
+  Test-only change, nothing shipped to users behaves differently.
+
+  `gateway-process-isolation.test.js`'s "sibling ensure retires dead records without deleting replacement worker and proxy records" test asserted the older sibling supervisor's process was already gone the instant `ensure` exited, with no wait. On a slow Windows runner the older supervisor's own exit can lag `ensure`'s exit, so the assertion flaked (observed on PR #348, run 36586141780). The test now waits up to 5s (the file's existing `waitForProcessesToExit` helper) for the older shim to actually exit before checking, keeping the same assertion and message. No product timeouts changed.
+- model-gateway setup warns instead of failing when a restarted supervisor is still starting after the wait (SQ-3160)
+  On a heavily loaded machine, `setup` (and so the `update-toolshed` gateway step) could print `could not restart shim supervisor: not healthy after 42s` and fail, while the supervisor it had just launched kept running and was serving the new version a minute later (GH-360). A timeout with no shim failure file and the supervisor process still alive is now "still starting": setup prints `warning: shim supervisor still starting after 42s; supervisor pid N is running; check ... status in a minute.`, skips the steps that need a healthy shim, and exits 0, so the updater no longer counts it as a failure. The lifecycle log records `setup-recovery-finished` with `outcome: starting` and the supervisor pid. A supervisor that died during the wait, or a shim that wrote a failure reason, still fails setup as before.
+
+### sidequest 5.4.0 → 5.4.1
+
+#### Fixes
+
+- Wave assembly accepts participants whose non-executable verifiers only agree on kind (SQ-3143)
+  A wave whose participants all pin the same non-executable verifier kind (document, link, manual, attestation, review) now assembles even when each ticket's verify text differs. Three disjoint notes that each pin their own document check used to refuse `wave_verifier_mismatch` and had to be integrated one at a time; the wave gate never runs those kinds, and each participant's check already passed at submission. A mix of executable and non-executable kinds, or executable kinds with different commands, still refuses. The refusal now names each participant's kind and says that non-executable kinds only need to agree on kind.
+- integrate delivers onto a branch fast-forwarded past the one recorded at dispatch (SQ-3144)
+  Dispatch freezes the integration branch it saw. Fast-forward main to develop and stay on main, and `integrate` refused every ticket with `branch_not_checked_out` until you checked develop out again. Now the recorded branch is still the default, but when the checked-out branch is that branch or descends from it, delivery goes onto the checked-out branch. You can also pass `integrationBranch` (CLI `--integration-branch`) to deliver onto the checked-out branch on purpose. The integration record's `targetBranch` is the branch that actually got the delivery, and the integration closure validates against it. Any other checkout still refuses, and the refusal names both branches and the `integrationBranch` way out. In remote mode a followed branch with no `origin/<branch>` is treated as local.
+- The board commit tool commits a staged git mv rename or git rm under a glob scope (SQ-3153)
+  With a glob in the ticket's files (say `plugins/x/*.js`), `git mv` or `git rm` inside it made the board's `commit` fail with `fatal: pathspec '<old path>' did not match any files` (GH-350). The glob expanded to every path `git status` listed, the old side of the rename included, and that went straight into `git add --all`. Exact paths already skipped anything that is neither on disk nor in the index; glob matches now go through the same filter, so the already-staged deletion is left alone and `git commit --only` still records it. A declared path that never existed still refuses with `no_existing_scope`.
+- Unread notifications are bounded and written after the ticket change commits (SQ-3154)
+  Closes GitHub #351. The notification inbox is one store row, and only read entries were ever pruned, so a large board grew it to 9.46 MB with 6,062 unread entries. Every ticket event parsed and rewrote that row inside the ticket's write transaction, which held the SQLite write lock for 320-470 ms and made concurrent writers fail with "database stayed locked".
+
+  Unread notifications are now bounded on every write: entries older than `SIDEQUEST_NOTIFICATIONS_MAX_AGE_DAYS` (default 30) are dropped and only the newest `SIDEQUEST_NOTIFICATIONS_MAX_UNREAD` (default 200) are kept. A reminder that has not fired yet counts as newest, so it is never dropped before it fires. A ticket event's notification is written after the ticket transaction commits, still under `.notifications.lock`; if that write fails, the ticket change stays committed and the notification is lost with a stderr warning. An existing oversized row is pruned once, the first time a store opens with this version, keeping the newest entries.
+- Discovered providers outside the Codex/Grok shim dispatch again, through a pinned executor definition (SQ-3159)
+  Since 5.4.0 a discovered catalog entry whose provider isn't `codex` or `grok` came back from `dispatch` and `route_recipe` with its full id as the Agent `model`, and Claude Code refused it before any executor started, because the Agent tool only takes `sonnet`, `opus`, `haiku`, or `fable` (GH-361, reported by DanielHeinz7). Those entries now spawn `sidequest-exec-model-<slug>-<effort>` (or `sidequest-exec-readonly-model-<slug>-<effort>` for a readonly category) with the model left out. Sidequest writes those definitions into the user agents folder with `model: <full id>` and `effort:` in frontmatter, at SessionStart and again at dispatch, one ladder per current catalog entry, and removes a ladder when its entry leaves the catalog. A same-named file without Sidequest's marker is left alone. `route_recipe` returns `agent.model: null` plus `agent.subagentType` for these routes, and the launch hook strips any Agent model passed for them. Checked on the wire against Claude Code 2.1.284: the subagent request carried the pinned id and the frontmatter effort. A catalog entry that calls its provider `claude` also takes this path, since its id isn't one of the four aliases either.
+
+## v3.582.0 (2026-09-29)
+
+### model-gateway 0.51.7 → 0.52.0
+
+#### Features
+
+- Codex categories fall back to their own Claude fallback when Codex can't run, discovered non-gateway models dispatch as themselves, a transient Codex failure holds dispatch for 30 s, and a refused catalog refresh says why (SQ-3123)
+  One fix per report (GH-217, GH-263, GH-175, GH-227). GH-132 already passed on this base: extra discovery dirs add sources and the installed gateway catalog keeps refreshing, as fixed in 5.2.1.
+
+  A category whose route can't run right now (ChatGPT sign-in missing, gateway readiness unavailable, the model gone from the catalog) now dispatches on the category's own `fallback`, even when that fallback is a Claude model. The dispatch result's `fallbackReason` and the executor briefing both name the fallback and the reason the primary couldn't run, including the gateway's login or setup command. The global fallback still never crosses providers, so a category with no fallback of its own is refused as before. A per-ticket route override that crosses providers is still refused.
+
+  A discovered catalog entry whose provider isn't one the model-gateway shim serves (anything other than `codex` or `grok`) now dispatches with its own id as the agent's model on the Claude executor ladder, instead of going through the shared `claude-codex-auto` executor and route marker that only the shim can resolve.
+
+  model-gateway now holds Codex for 30 s after a terminal upstream failure (was 60 s), and the refusal names the failure's status, when it happened, and when the hold ends. Sidequest re-asks an unready gateway catalog every 30 s instead of pinning a fresh-but-unready refresh for the whole 5-minute catalog window, so a transient failure no longer blocks dispatch for minutes after Codex recovered.
+
+  `model-gateway catalog --refresh` now says why it didn't write: `/healthz` answering with an error status is reported with that status, and a dropped or timed-out connection with its error, instead of always "not answering". Sidequest keeps the refresh's stderr reason and appends it to a Codex dispatch refusal as `Last gateway catalog refresh: ...`.
+
+#### Fixes
+
+- Model Gateway keeps Claude alias pins current in projects where the gateway was turned off (GH-253)
+- model-gateway tests: fixture teardown stops every process it spawned into a home, so Windows CI stops hanging for 300s after a teardown error (SQ-3075)
+  Test-only change, nothing shipped to users behaves differently.
+
+  The gateway test fixture tracked one process per test home, so a `status` or `catalog` run after `serve-shim` replaced the supervisor in that slot. Teardown then killed only the worker named in `shim.pid`, the untracked supervisor respawned it into the home being deleted, and on Windows the removal failed with `no tracked fixture PID survived ... ENOTEMPTY`. A throwing `after` hook skips the hooks after it, so the supervisor's own stop never ran and its IPC channel held the test file open until the 300s budget. The fixture now tracks and stops every process spawned against a home before removing it.
+
+  A fixture child with no IPC stop path used to sit through the full 5s cleanup wait before being killed, on every test that spawned one. It is now stopped right away (`taskkill /T /F` on Windows so the worker goes with its supervisor, SIGTERM elsewhere), which cut those tests from about 5.9s to 1.1s locally. The outer-environment isolation test kills its supervisors as a tree too, so an orphaned PowerShell ownership probe no longer holds its temp file when the home is removed (EBUSY on `__PSScriptPolicyTest_*.ps1`).
+- model-gateway tests: a copied test environment still gets its processes tracked, and a failed home removal no longer holds the test file open for 300s (SQ-3142)
+  Test-only change, nothing shipped to users behaves differently.
+
+  SQ-3075's fixture tracked processes by the environment object, so a test that spread it into a copy (`{ ...environment, CODEX_GATEWAY_MODELS_REFRESH_MS: '150' }`) spawned an untracked supervisor. Teardown removed the home while that supervisor was still running, and its exit writes recreated `logs/lifecycle.jsonl` or `shim-supervisor-failure.txt` between rmSync's delete pass and its rmdir retries. On Windows CI that showed up as `no tracked fixture PID survived ... ENOTEMPTY`. Locally the home just leaked on every run. The fixture now finds the environment by its owned home as well.
+
+  The environment's removal error is now thrown from an `after` hook appended at the end. node:test stops at the first `after` hook that throws, so the old in-place throw skipped the test's own stub-server `close`, and the server kept the file alive until the 300s `--test-timeout`.
+
+### quartermaster 0.11.6 → 0.11.7
+
+#### Fixes
+
+- Quartermaster CRAP gate reports phantom complexity in .tsx: lizard loses a self-closing JSX tag after brace attributes plus a hyphenated attribute and attributes later functions to that component (GH-239)
+  lizard 1.24.0's TSX reader abandons an opening tag as soon as an attribute is not `name="text"` or `name={expr}` — a hyphenated attribute like `data-testid`, a valueless one like `required`, a spread, even tag text holding `(`, `)`, `;` or `=` — and re-emits the `{` of every brace attribute it had already matched. Those unbalanced braces kept the enclosing component open to the end of the file, so a React component was charged with a complexity nothing in it branches on and the functions it swallowed were never gated at all. The gate now measures `.tsx` and `.jsx` through lizard's TypeScript reader, from a byte-for-byte copy of the file under a `.ts` or `.js` name, on both sides of the ratchet. Nothing in the source is rewritten, so line numbers, coverage ranges and baseline identity still come from the real file, and every offender line for those files names the measurement behind it.
+
+### sidequest 5.3.4 → 5.4.0
+
+#### Features
+
+- Verify commands with Windows backslash paths run verbatim, a ticket can name its verify directory, and an unresolvable verify is refused up front (SQ-3118)
+  Three verify-capture reports, one per case (GH-189, GH-290, GH-259).
+
+  On Windows, a verify command that named a backslash path (`cd C:\repo\app && ...`, `cd plugins\app && ...`) ran through Git for Windows `sh.exe`, which read each backslash as an escape and stripped it, so the `cd` failed and the capture recorded `failed_suite` for a suite that never ran. Those commands now run through Command Prompt, which takes them verbatim. Commands with forward-slash paths, and commands whose backslash paths are quoted (`"C:\tools\node.exe" -e "..."`, which `sh.exe` keeps intact), still run through `sh.exe`, and the capture records which shell ran.
+
+  A ticket can now set `verifyCwd` (MCP `add`/`update`, CLI `--verify-cwd`), a directory relative to the project root. The verify-capture wrapper runs the command from that directory of the checkout, the integrate gate does the same, the executor briefing names it, and dispatch's npm script and path checks resolve from it. Unset, the command runs from the project root as before. A `verifyCwd` that's absolute or climbs out with `..` is refused.
+
+  A verify whose command the shell can't find (exit 127) already recorded `toolchain_missing`, never `passed`; a shell that never started now includes the spawn error in its `could_not_run` reason. At `add`/`update`, a verify's first word also counts as runnable when it resolves on `PATH` or is a shell builtin like `test`, `echo`, `true`, or `exit`, and anything else is still refused with guidance.
+- Read-only executors stop claiming bypassPermissions and get a shell write guard, and boards can deny tools per category (SQ-3120)
+  Read-only executors (and the diagnostic probe) no longer declare `permissionMode: bypassPermissions`, and a read-only spawn no longer carries `mode: bypassPermissions`. Claude Code already ignored the frontmatter line in plugin agent files, so they run in the session's own permission mode; the declaration just made the read-only label look like a bypass (GH-282). Read-only executors keep Bash for running suites, but a new guard refuses the shell write forms inside the checkout they run in, or its main checkout: redirects such as `echo x > file`, file commands like `rm`, `mv`, `touch`, `tee`, `sed -i`, and mutating git. The refusal says to keep scratch files and evidence outside the checkout and to hand repository edits back through the ticket. It is a lexical guard, so an interpreter or script can still write.
+
+  `board_config` and `category_edit` take a `deniedTools` list (a tool name, or an `mcp__server` prefix for a whole server). Every executor on that board, or on tickets in that category, is refused those tools when it calls them, write executors included, which closes the gap where there was no way to keep write executors off the Agent tool (GH-222). Read-only executors also get the board's `readOnlyDeniedTools` this way; the packaged read-only definitions never received it. The denial is enforced at call time, so it does not remove the tool's schema from the executor's context.
+
+  The executor brief now says that Claude Code itself, not Sidequest, refuses a Bash command in an isolated worktree when it cannot show the command is not git, so executors split compound commands and hand nested `claude -p` work to the orchestrator instead of retrying (GH-287, GH-200).
+- Codex categories fall back to their own Claude fallback when Codex can't run, discovered non-gateway models dispatch as themselves, a transient Codex failure holds dispatch for 30 s, and a refused catalog refresh says why (SQ-3123)
+  One fix per report (GH-217, GH-263, GH-175, GH-227). GH-132 already passed on this base: extra discovery dirs add sources and the installed gateway catalog keeps refreshing, as fixed in 5.2.1.
+
+  A category whose route can't run right now (ChatGPT sign-in missing, gateway readiness unavailable, the model gone from the catalog) now dispatches on the category's own `fallback`, even when that fallback is a Claude model. The dispatch result's `fallbackReason` and the executor briefing both name the fallback and the reason the primary couldn't run, including the gateway's login or setup command. The global fallback still never crosses providers, so a category with no fallback of its own is refused as before. A per-ticket route override that crosses providers is still refused.
+
+  A discovered catalog entry whose provider isn't one the model-gateway shim serves (anything other than `codex` or `grok`) now dispatches with its own id as the agent's model on the Claude executor ladder, instead of going through the shared `claude-codex-auto` executor and route marker that only the shim can resolve.
+
+  model-gateway now holds Codex for 30 s after a terminal upstream failure (was 60 s), and the refusal names the failure's status, when it happened, and when the hold ends. Sidequest re-asks an unready gateway catalog every 30 s instead of pinning a fresh-but-unready refresh for the whole 5-minute catalog window, so a transient failure no longer blocks dispatch for minutes after Codex recovered.
+
+  `model-gateway catalog --refresh` now says why it didn't write: `/healthz` answering with an error status is reported with that status, and a dropped or timed-out connection with its error, instead of always "not answering". Sidequest keeps the refresh's stderr reason and appends it to a Codex dispatch refusal as `Last gateway catalog refresh: ...`.
+
+#### Fixes
+
+- Manual delivery records a rebased or squash-merged candidate through deliveryRevision (GH-144) [`6c9b8ad`](https://github.com/Eigenwise/eigenwise-toolshed/commit/6c9b8ad5f9f29a7e3a52289ac5681225c2183aa6)
+  A non-reachable pinned delivery can name the landed revision with deliveryRevision. Every submitted path is proven at that revision's tree instead of the integration working tree: identical content, a candidate deletion the revision also carries, or the candidate's own change reverse-applying onto it. A candidate that was rebased, squash-merged, or conflict-resolved before landing can therefore be recorded. Anything left over refuses delivery_content_diverged until resolvedPaths attests exactly those paths, and the record keeps the per-path proof. Without deliveryRevision the working-tree comparison is unchanged.
+- A dispatch binds to a sibling's live worktree when two WorktreeCreate callbacks from one session race, and every completion gate then reads the wrong tree (GH-235)
+  A crossed creation-order binding is exchanged even after the sibling has claimed its ticket: a claim names no checkout, so a holder that never bound an agent id is still exchangeable, and the first claim in a wave no longer freezes a crossing. A start callback for a checkout a live claim occupies is refused rather than re-attributed, with the checkout name (agent-<agentId>) as the only arrival the board can confirm as the owner re-entering. commit, submit and verify-capture share one refusal that names the mismatch and the other live claim instead of sending an executor into a tree another agent is working in.
+
+  Retiring or superseding a dispatch attempt never removes a checkout that another ticket's claimed holder references; that protection ships from develop's SQ-3132 fix (`cross_bound_worktree`), which this change merges past rather than duplicates. The crossing refusal now prescribes the live-claim rebind (commit and pin in your own checkout, then dispatch with claimHolder, worktree and recoveryEvidence) and prints the release fallback with --by and -s todo so it runs as printed.
+- Keep sibling executors launched together bound to their own tickets and checkouts (GH-298)
+  Closes GitHub #298. Executors spawned in one Agent message could be bound to each other's reservations. SubagentStart guesses which reservation a runtime belongs to, and WorktreeCreate attributes each new checkout in creation order, so a crossed executor was refused every write with "has no write lease for this linked worktree", was told to stop when its sibling closed, or lost its ticket when its sibling died.
+
+  - The claim settles the guess. The dispatch token and the hook-reported agent id exchange a guessed agent id between the claimed reservation and the sibling that holds the caller's id. When the checkout the claiming executor runs in is the exact instance an unclaimed sibling recorded, the two checkout records are exchanged, and the claim result names the corrected worktree. A claimed, token-confirmed, or terminal sibling record is never moved.
+  - A sibling that dies before it claims no longer ends the live executor's ticket. While a sibling launched in the same session is unclaimed and could still settle the guess, the stop is held on the stopped runtime's agent id. It moves with that id through the claim-time exchange. Once no unsettled sibling is left, the reservation that holds it ends `stopped_before_claim`.
+  - Live-claim recovery (`dispatch` with `recoveryEvidence`, `claimHolder`, and `worktree`) rebinds a crossed claim to the checkout it names. It is refused while another live ticket holds that checkout and the checkout's HEAD is not this claim's own commit, or while the checkout carries another ticket's commits. Two claims that crossed before anything settled them are swapped instead when both still hold WorktreeCreate records of one session and baseline and neither checkout carries another ticket's commits. A refusal names the fallback: release with kind `handback`, and the redispatch gets a fresh checkout.
+  - A release made from inside the executor's checkout keys the retained continuation to that checkout. A continuation resumes a retained checkout only when its HEAD is this ticket's own board commit, checkpoint, submission, or pinned candidate, and no commit in the range belongs to another ticket. Otherwise the next dispatch gets a fresh checkout and names the reason.
+- The Agent guard names what it actually found, survives a session id change, and SessionStart briefs only an orchestrator (SQ-3119)
+  Four misdiagnoses, one per report (GH-158, GH-310, GH-257, GH-225).
+
+  The generic-Agent denial told users the Board MCP server was not running whenever it found no liveness marker under the current session id. The server wrote that marker once, keyed by the session id it started with, and not at all when it started without one. So `/clear`, a resume, or compaction left a live server looking dead, and users were sent to `/mcp` for a server that was answering. The server now records itself by pid and project, and the guard treats a live server for this project as this session's board even after the session id changed. When it does refuse, it says which case it saw: the recorded server exited (with its pid and marker path), no server recorded itself for this session or project, or the marker directory couldn't be read, in which case it says the state is unknown instead of claiming the board is down.
+
+  A project with no Sidequest install now gets that as the reason, with the `claude plugin install sidequest@eigenwise-toolshed --scope project` fix, instead of a reconnect that can't help.
+
+  SessionStart used to inject the orchestrator block into every session unless the launcher set `SIDEQUEST_NUDGE=off`. It now decides the role itself: a session whose project has a registered board is the orchestrator, a session launched as a Sidequest executor (`agent_type` or `SIDEQUEST_AGENT`) is not, and a project with no board is a plain session. Only the orchestrator gets the block; the others still get drained sweep and reload notices. `SIDEQUEST_NUDGE=off` still silences everything. The Bash guards were already silent for a plain session, and a regression test now keeps them that way.
+- Executors are told their own worktree from their bound agent id, and an executor stop records its dispatch state for project reapers (SQ-3121)
+  The foreign-worktree diagnostics warning worked out "your own checkout" from the hook's cwd, and SubagentStart can report the parent session's checkout there. Native subagents share their parent's session id, so every executor in a fan-out got the same session-keyed answer: its own worktree counted as foreign, and "Nothing under <root> is yours" was false for it (GH-155). The warning now looks up the dispatch bound to the agent id, drops that worktree from the foreign count, and names it first ("Your own worktree is agent-...") so it survives SubagentStart's 512-byte cut. The orchestrator's warning is unchanged. Claude Code still delivers the diagnostics themselves per session; there is still no hook seam to stop that.
+
+  A dev stack an executor starts in its worktree records the orchestrator's pid as its owner, so a reaper keyed on that pid kept it up until the whole session exited (GH-150). A new SubagentStop hook writes `sidequest-dispatch.json` into the stopping executor's own worktree git directory (`git rev-parse --git-path sidequest-dispatch.json`) with its ref, session, agent id, outcome, `terminalAt` and `stoppedAt`. It's matched on session and agent id, so a sibling's stop never writes into another worktree. A project reaper can tear the stack down once `terminalAt` is set.
+- worktreeDependencyPaths now copies tracked paths and files, links sibling checkouts, and dispatch refuses a stray worktree argument (SQ-3122)
+  Copy mode used to fail on any path git had already checked out, so a tracked `env/` holding committed `*.example` files next to gitignored real ones could never be provisioned, and a single file was refused as "must be a directory" (GH-157). Copy now takes a file or a directory, merges into what the checkout created, and copies the working-tree version. Link mode still fills only a path the checkout leaves absent, and its refusal now points at copy for a tracked path or a file.
+
+  A relative dependency on a sibling checkout could not be configured at all, because every path leaving the repo was refused (GH-258). `{ "path": "../<name>", "mode": "link" }` is now accepted and lands beside the worktree in the shared worktree root; copy outside the repo, absolute paths, and anything deeper than one level out are refused with the reason. The wave gate applies the same rules to its checkout and never overwrites a file the candidates carry.
+
+  Dispatch's `worktree` argument only means something for live-claim recovery, yet a fresh dispatch silently dropped it, so a `workingTreeDelivery` ticket aimed at a linked worktree got a lease on the registered checkout and its executor could not write anywhere (GH-162). Prepare now refuses that argument outside recovery and says where the ticket will run instead.
+- Recovery honours an explicit base, list and pulse show the staleness threshold, and the delete guard resolves home paths (SQ-3127)
+  A recovery dispatch that named an older base through `integrationBranch` still got the retained checkout built on newer main. Selection ran before the base was known, and the old base's ancestry passed against the newer checkout, so the override never reached the executor (GH-125). Now a retained checkout with committed checkpoints on a different base falls back to a fresh checkout at the named base and replays the checkpoints there (`released_worktree_base_differs_from_explicit_integration_base`). A checkout holding uncommitted work is still retained, because that work exists nowhere else. Its continuation records a `retainReason` naming the explicit base, the dispatch warning shows it, and the briefing tells the executor to commit the work and rebase it onto the named base instead of changing nothing. When the named base is the checkout's own base, `retainReason` says so.
+
+  `list` printed `claim.stale: false` next to `claimIdleMs` for a claim quiet well past that threshold, while `pulse` showed the board-quiet time (GH-228). Both views already used the same verdict. The catch is that a dispatched or verifying claim is judged against the unobserved-death backstop (`claimAbandonMs`), not `claimIdleMs`. List rows and pulse claims now both come from one function and carry `stale` plus `staleAfterMs`, the threshold that claim is actually judged against.
+
+  The home-delete guard blocked every recursive delete of a `~/` path, so `rm -r ~/repos/project/build` was refused while the same target spelled as an absolute path was allowed (GH-86). A leading `~`, `$HOME`, `$env:USERPROFILE` or `%USERPROFILE%` now resolves to the home directory before the protected-root check, so only the profile, `.claude`, or a parent of either is refused. A home reference anywhere else in a target still blocks.
+- A crossed launch let a recovery-evidence supersede remove the live sibling's checkout, and a failed WorktreeCreate failed the live executor's ticket (SQ-3139)
+  When two executors launched from one session cross in creation order, each reservation can hold the other's checkout until a token claim settles it. Retiring an attempt while a sibling from that session is still unclaimed now keeps the checkout and clears only the retired binding. It no longer removes the tree the live sibling runs in. The dispatch warning names the unclaimed sibling.
+
+  A WorktreeCreate that fails before its checkout exists no longer marks a guessed reservation failed while a sibling is unclaimed. The reservation loses the binding and stays live, so the executor that actually runs under that ticket can still claim it. The hook's stderr names the sibling.
+
+  The claim also settles the checkout in both shapes. A ticket whose binding was released takes the guessed sibling's completed lease. A ticket whose sibling was superseded adopts the parked retired creation record, but only when the checkout instance it runs in is the exact one creation recorded. Before this, the claim stayed leased to the dead sibling's checkout.
+- The deliveryRevision preflight in recorded delivery moves into its own function (SQ-3141)
+  Internal change, no behavior difference. The reachable-candidate resolvedPaths refusal and the deliveryRevision per-path proof that recordDeliveredSubmission ran inline now live in deliveryRevisionPreflight, with the same refusals in the same order. recordDeliveredSubmission drops from cyclomatic complexity 75 to 70.
+- A claim into a crossed checkout emptied the record GH-305's cleanup guard reads, and a parked checkout adoption dropped the tree a third sibling runs in (SQ-3147)
+  A claim now trades checkouts with a live sibling's record only when its own ticket already holds a checkout, or lost its binding to a failed WorktreeCreate. A ticket that never held a binding keeps the old behavior, where the sibling's own agent report settles the crossing. Before this, the claim also emptied the stalled ticket's record, so a later failed WorktreeCreate for that path was refused `dispatch_binding_unavailable` instead of keeping the claimed sibling's tree.
+
+  When three or more executors from one session cross and one is retired, a claim that adopts the parked checkout now parks the checkout it gives up. The next sibling's claim takes it on the exact checkout-instance match. Before this, that record was dropped and the third claim stayed leased to the retired executor's tree.
+
+  A failed WorktreeCreate is held open only for an unclaimed worktree-isolated sibling on the same board. A shared-tree reservation or one on another board can never be the crossed one, and the lone attempt is recorded failed again.
+- The full-suite phase budget no longer caps 4-core CI runners at the 8-core budget (SQ-3150)
+  `npm run test:full` scales its phase budget by core count, but the cap sat at the 8-core value, so a 4-core `windows-latest` runner got the same 1200 s as an 8-core machine and blew it on runner variance with every test passing. The cap is now 2400 s, which is what the 4-core scale produces and still fits under the job's 60 minute timeout.
+
 ## v3.581.0 (2026-09-28)
 
 ### live-rules 2.11.0 → 2.11.1

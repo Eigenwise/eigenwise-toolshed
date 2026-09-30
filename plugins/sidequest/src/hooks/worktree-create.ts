@@ -222,9 +222,9 @@ function recordProvisioningFailure(repository: string, sessionId: string, worktr
   return store.recordDispatchWorktreeProvisioningFailure(project.slug, sessionId, worktree, failure, attempt);
 }
 
-function recordDependencyLink(repository: string, sessionId: string, worktree: string, link: { relativePath: string; target: string }, attempt: string): CreationBinding {
+function recordDependencyLink(repository: string, sessionId: string, worktree: string, link: { relativePath: string; target: string; mode: string }, attempt: string): CreationBinding {
   const store = require(runtimeModule('store')) as WorktreeStore & {
-    recordDispatchWorktreeDependencyLink: (slug: string, sessionId: string, worktree: string, link: { relativePath: string; target: string }, attempt: string) => CreationBinding;
+    recordDispatchWorktreeDependencyLink: (slug: string, sessionId: string, worktree: string, link: { relativePath: string; target: string; mode: string }, attempt: string) => CreationBinding;
   };
   const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: 'project_unavailable' };
@@ -290,7 +290,16 @@ function recoverCreatedWorktree(repository: string, sessionId: string, target: s
   return `worktree recovery preserved the checkout because ${recovery.cleanup?.message || recovery.cleanup?.reason || 'cleanup authority is incomplete'}`;
 }
 
-type UncreatedWorktreeRecovery = (slug: string, sessionId: string, worktree: string, error: unknown, attempt: string, options: { created: boolean }) => CreationBinding;
+type UncreatedWorktreeOutcome = { ok: boolean; reason?: string; heldFor?: string };
+type UncreatedWorktreeRecovery = (slug: string, sessionId: string, worktree: string, error: unknown, attempt: string, options: { created: boolean }) => UncreatedWorktreeOutcome;
+
+function uncreatedWorktreeFailureReport(recovery: UncreatedWorktreeOutcome): string {
+  if (!recovery.ok) return `the attempt still names that path because ${recovery.reason}`;
+  if (recovery.heldFor) {
+    return `the board kept no binding to that path but left the reservation live, because ${recovery.heldFor} from this session has not claimed and creation order may have bound this reservation for a live executor; the attempt that never claims is the one to retire`;
+  }
+  return 'the board recorded the attempt failed and kept no binding to that path, so a plain dispatch prepares its replacement';
+}
 
 function recordUncreatedWorktreeFailure(repository: string, sessionId: string, target: string, error: unknown, attempt: string): string {
   const store = require(runtimeModule('store')) as WorktreeStore & { recoverDispatchWorktreeCreation: UncreatedWorktreeRecovery };
@@ -298,9 +307,7 @@ function recordUncreatedWorktreeFailure(repository: string, sessionId: string, t
   const recovery = project.slug
     ? store.recoverDispatchWorktreeCreation(project.slug, sessionId, target, error, attempt, { created: false })
     : { ok: false, reason: 'its project binding is unavailable' };
-  return recovery.ok
-    ? 'the board recorded the attempt failed and kept no binding to that path, so a plain dispatch prepares its replacement'
-    : `the attempt still names that path because ${recovery.reason}`;
+  return uncreatedWorktreeFailureReport(recovery);
 }
 
 // Binding already pointed the reservation at this path, so a failure before the checkout exists has to retire
@@ -334,7 +341,7 @@ async function createWorktreeMain(): Promise<void> {
       repo: string,
       worktree: string,
       config: { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null },
-      options: { setupTimeoutMs?: number; onDependencyLink?: (link: { relativePath: string; target: string }) => void },
+      options: { setupTimeoutMs?: number; onDependencyLink?: (link: { relativePath: string; target: string; mode: string }) => void },
     ) => Promise<{ command: string; reason: string; stderrTail: string } | null>;
   };
   const { repository, binding } = bindSessionCreation(spawningRepository(stringField(input, 'cwd'), sessionId), sessionId, name, worktrees.namedWorktreePath);

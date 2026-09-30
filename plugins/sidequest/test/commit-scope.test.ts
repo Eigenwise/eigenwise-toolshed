@@ -55,7 +55,7 @@ const commitScope = require('../lib/commit-scope.js') as {
   headCommit(cwd: string): string | null;
   candidatePaths(cwd: string, changedPaths: string[], commit: string, upstreamCommit: string): string[];
   outsideScopeCommitState(result: { commit?: string; rolledBack?: boolean; message?: string }): string;
-  preserveCommitRef(cwd: string, commit: string, gitRef: string): { ok: boolean; reason?: string; commit?: string; gitRef?: string };
+  preserveCommitRef(cwd: string, commit: string, gitRef: string, replaces?: string[]): { ok: boolean; reason?: string; message?: string; commit?: string; gitRef?: string };
 };
 
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
@@ -370,6 +370,48 @@ test('exact declared rename paths commit staged renames atomically', async () =>
   assert.deepEqual(committed.paths.sort(), ['new.txt', 'old.txt']);
   assert.equal(git(root, ['diff', '--cached', '--name-only']), '');
   assert.deepEqual(commitScope.commitPaths(root, committed.commit).sort(), ['new.txt', 'old.txt']);
+});
+
+function claimedCommitFixture(root: string, files: string[], by: string): string {
+  const slug = store.ensureProject(root, `${by} fixture`).slug;
+  const ticket = store.createTicket(slug, {
+    title: `${by} fixture`,
+    files,
+    complexity: 1,
+    complexityWhy: 'The commit tool stages and commits the declared scope.',
+  });
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'The lifecycle fixture claims its ticket directly.' }).ok, true);
+  return ticket.ref;
+}
+
+test('commit tool commits a staged git mv rename under a declared glob scope (GH-350)', async () => {
+  const root = repo();
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'export const worker = true;\n');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'add worker']);
+  const by = 'staged-rename-worker';
+  const ref = claimedCommitFixture(root, ['plugins/sidequest/*.js'], by);
+  git(root, ['mv', 'plugins/sidequest/worker-a.js', 'plugins/sidequest/worker-b.js']);
+
+  const committed = await lifecycleHandler('commit')({ project: root, ref, by, message: 'rename worker', worktree: root });
+
+  assert.equal(committed.ok, true, committed.message as string);
+  assert.equal(git(root, ['diff', '--name-status', '-M', 'HEAD~1', 'HEAD']), 'R100\tplugins/sidequest/worker-a.js\tplugins/sidequest/worker-b.js');
+  assert.equal(git(root, ['diff', '--cached', '--name-only']), '');
+});
+
+test('commit tool keeps refusing a declared path that never existed', async () => {
+  const root = repo();
+  const by = 'never-existed-worker';
+  const ref = claimedCommitFixture(root, ['plugins/sidequest/never-existed.js'], by);
+  const head = git(root, ['rev-parse', 'HEAD']);
+
+  const refused = await lifecycleHandler('commit')({ project: root, ref, by, message: 'typo', worktree: root });
+
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'no_existing_scope');
+  assert.match(refused.message as string, /Missing: plugins\/sidequest\/never-existed\.js/);
+  assert.equal(git(root, ['rev-parse', 'HEAD']), head);
 });
 
 
@@ -1430,4 +1472,42 @@ test('GH-229: undoing a widened root commit leaves the repository without a HEAD
   assert.equal(result.reason, 'outside_scope');
   assert.equal(result.rolledBack, true);
   assert.equal(commitScope.headCommit(root), null, 'the widened root commit is gone');
+});
+
+test('GH-378: pinning over another board\'s refs/sidequest/SQ-1 is refused and leaves that candidate in place', () => {
+  const root = repo();
+  const foreign = git(root, ['rev-parse', 'HEAD']);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'new-board.js'), 'new board candidate\n');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'new board SQ-1 candidate']);
+  const candidate = git(root, ['rev-parse', 'HEAD']);
+  git(root, ['update-ref', 'refs/sidequest/SQ-1', foreign]);
+
+  const refused = commitScope.preserveCommitRef(root, candidate, 'refs/sidequest/SQ-1', [candidate]);
+
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'git_ref_collision');
+  assert.match(refused.message || '', new RegExp(`refs/sidequest/SQ-1 already points to ${foreign}, a commit this ticket never recorded, so it belongs to another board`));
+  assert.ok((refused.message || '').includes(`git update-ref refs/sidequest-archived/foreign/SQ-1 ${foreign} && git update-ref -d refs/sidequest/SQ-1 ${foreign}`));
+  assert.equal(git(root, ['rev-parse', 'refs/sidequest/SQ-1']), foreign);
+});
+
+test('GH-378: a ticket re-pins its own candidate ref over a tip it recorded', () => {
+  const root = repo();
+  const first = git(root, ['rev-parse', 'HEAD']);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'repin.js'), 'second round\n');
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'second round candidate']);
+  const second = git(root, ['rev-parse', 'HEAD']);
+  assert.equal(commitScope.preserveCommitRef(root, first, 'refs/sidequest/SQ-2').ok, true, 'a missing ref is created');
+
+  const repinned = commitScope.preserveCommitRef(root, second, 'refs/sidequest/SQ-2', [first.slice(0, 12)]);
+  assert.equal(repinned.ok, true, repinned.message || '');
+  assert.equal(git(root, ['rev-parse', 'refs/sidequest/SQ-2']), second);
+
+  const unchanged = commitScope.preserveCommitRef(root, second, 'refs/sidequest/SQ-2');
+  assert.equal(unchanged.ok, true, 'pinning the tip the ref already holds needs no recorded revision');
+  assert.equal(commitScope.preserveCommitRef(root, second, 'refs/sidequest/bad..ref').reason, 'invalid_git_ref');
+  assert.equal(commitScope.preserveCommitRef(root, 'f'.repeat(40), 'refs/sidequest/SQ-2').reason, 'missing_commit');
+  assert.equal(commitScope.preserveCommitRef(root, second, '').reason, 'missing_git_ref');
 });

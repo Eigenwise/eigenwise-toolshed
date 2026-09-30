@@ -179,14 +179,14 @@ const PIN_ALIASES = {
 };
 const KNOWN_GOOD_PINS = {
   opus: 'claude-opus-5-5[1m]',
-  sonnet: 'claude-sonnet-5[1m]',
+  sonnet: 'claude-sonnet-5-5[1m]',
   fable: 'claude-fable-5-1[1m]',
 };
 // Defaults this plugin shipped earlier. A wired project still holding one was written by the
 // gateway, not typed by the user, so a pin change must still be allowed to replace it.
 const RETIRED_SHIPPED_PINS = {
   opus: ['claude-opus-5[1m]', 'claude-opus-4-8[1m]'],
-  sonnet: [],
+  sonnet: ['claude-sonnet-5[1m]'],
   fable: [],
 };
 const PIN_OVERRIDE_PATH = path.join(STATE, 'pins.json');

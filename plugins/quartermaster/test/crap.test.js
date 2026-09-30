@@ -10,6 +10,7 @@ const { test } = require('node:test');
 const { COVERAGE_DIR_ENV, crapReport, crapScore, formatReport, PrerequisiteError, realDir, sameDir } = require('../lib/crap.js');
 
 const CLI = path.resolve(__dirname, '../bin/quartermaster.js');
+const { withBodySpans } = require('../lib/crap-core.cjs');
 
 function fixtureProject(files) {
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-'));
@@ -617,6 +618,244 @@ test('the real lizard backend measures a changed JavaScript file end to end', ()
   assert.equal(report.checked, 1);
   assert.equal(report.failures.length, 0);
   assert.equal(crapScore(2, 1), 2);
+});
+
+// lizard 1.24.0's TypeScript and TSX readers end a declaration at the first `)` they meet, so the nested
+// parens of a function-typed prop close the signature early: these are the rows it reports for GRID_SOURCE.
+const GRID_SOURCE = [
+  'export function VirtualizedCardGrid({',
+  '  cards,',
+  '  onSelect,',
+  '}: {',
+  '  cards: Card[];',
+  '  onSelect: (card: Card) => void;',
+  '}) {',
+  '  const rows = [];',
+  '  for (const c of cards) {',
+  '    if (c.id) rows.push(c);',
+  '  }',
+  '  return <ul>{rows.map((r) => <li key={r.id} onClick={() => onSelect(r)}>{r.id}</li>)}</ul>;',
+  '}',
+  '',
+  'export function after(x: number) {',
+  '  return x ? 1 : 2;',
+  '}',
+  '',
+].join('\n');
+
+function track(projectDir) {
+  execFileSync('git', ['add', '-A'], { cwd: projectDir, windowsHide: true });
+}
+
+function lizardRow(file, name, complexity, start, end) {
+  return `${end - start + 1},${complexity},10,1,${end - start + 1},"${name}@${start}-${end}@${file}","${file}","${name}","${name} ()",${start},${end}`;
+}
+
+// The gate may point lizard at a copy of the file rather than the file itself, so the fake names whatever it was pointed at.
+function truncatedGridCsv({ cwd }) {
+  const file = fs.readdirSync(cwd, { recursive: true }).map((entry) => String(entry).replaceAll('\\', '/')).find((entry) => /\.tsx?$/.test(entry));
+  return `${[
+    lizardRow(file, 'VirtualizedCardGrid', 1, 1, 6),
+    lizardRow(file, '(anonymous)', 1, 12, 12),
+    lizardRow(file, '(anonymous)', 1, 12, 12),
+    lizardRow(file, 'after', 2, 15, 17),
+  ].join('\n')}\n`;
+}
+
+// Like istanbul, no DA record on signature lines: only the body's statements are executable.
+function gridLcov(file) {
+  return `SF:${file}\n${[8, 9, 10, 12, 16].map((line) => `DA:${line},1`).join('\n')}\nend_of_record\n`;
+}
+
+test('a component whose lizard span stops inside its parameter list is measured over its real body', () => {
+  const projectDir = fixtureProject({ 'README.md': 'base\n' });
+  commitBase(projectDir);
+  fs.mkdirSync(path.join(projectDir, 'src'));
+  fs.writeFileSync(path.join(projectDir, 'src/grid.tsx'), GRID_SOURCE, 'utf8');
+  fs.mkdirSync(path.join(projectDir, 'coverage'));
+  fs.writeFileSync(path.join(projectDir, 'coverage/lcov.info'), gridLcov('src/grid.tsx'), 'utf8');
+  track(projectDir);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: truncatedGridCsv });
+
+  const grid = report.functions.find((entry) => entry.function === 'VirtualizedCardGrid');
+  assert.equal(grid.line, 1);
+  assert.equal(grid.coverage, 1);
+  assert.equal(grid.cc, 3);
+  assert.equal(report.functions.find((entry) => entry.function === 'after').coverage, 1);
+  assert.equal(report.checked, 4);
+  assert.deepEqual(report.failures, []);
+});
+
+test('a body edit to a function lizard truncated at its parameter list counts as a change', () => {
+  const projectDir = fixtureProject({ 'src/grid.tsx': GRID_SOURCE, 'coverage/lcov.info': gridLcov('src/grid.tsx') });
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/grid.tsx'), GRID_SOURCE.replace('if (c.id) rows.push(c);', 'if (c.id) rows.unshift(c);'), 'utf8');
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: truncatedGridCsv });
+
+  assert.equal(report.checked, 1);
+  assert.deepEqual(report.failures, []);
+});
+
+test('a default arrow and a nested destructure in a JavaScript parameter list do not cut the function off at its signature', () => {
+  const projectDir = fixtureProject({ 'README.md': 'base\n' });
+  commitBase(projectDir);
+  fs.mkdirSync(path.join(projectDir, 'src'));
+  fs.writeFileSync(path.join(projectDir, 'src/app.js'), 'function pick(read = (value) => value, { mode: { strict } } = { mode: { strict: true } }) {\n  if (strict) return read(1);\n  return 0;\n}\n', 'utf8');
+  fs.mkdirSync(path.join(projectDir, 'coverage'));
+  fs.writeFileSync(path.join(projectDir, 'coverage/lcov.info'), lcov([[2, 1], [3, 1]]), 'utf8');
+  track(projectDir);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => `${lizardRow('src/app.js', 'pick', 1, 1, 1)}\n` });
+
+  assert.equal(report.functions[0].coverage, 1);
+  assert.equal(report.functions[0].cc, 2);
+  assert.deepEqual(report.failures, []);
+});
+
+test('a TSX function-typed prop with an object return type is measured over its body with the body\'s own branches', () => {
+  const projectDir = fixtureProject({ 'README.md': 'base\n' });
+  commitBase(projectDir);
+  fs.mkdirSync(path.join(projectDir, 'src'));
+  fs.writeFileSync(path.join(projectDir, 'src/picker.tsx'), [
+    'export function usePicker({ onPick }: { onPick: (id: string) => void }): { pick: () => void; label: string } {',
+    "  const label = onPick ? 'ready' : 'idle';",
+    '  return { pick: () => onPick(label), label };',
+    '}',
+    '',
+  ].join('\n'), 'utf8');
+  fs.mkdirSync(path.join(projectDir, 'coverage'));
+  fs.writeFileSync(path.join(projectDir, 'coverage/lcov.info'), lcov([[2, 1], [3, 1]], 'src/picker.tsx'), 'utf8');
+  track(projectDir);
+
+  // The rows lizard 1.24.0 reports for this source.
+  const rows = [lizardRow('src/picker.tsx', 'usePicker', 1, 1, 1), lizardRow('src/picker.tsx', 'pick', 1, 3, 3)];
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => `${rows.join('\n')}\n` });
+
+  const picker = report.functions.find((entry) => entry.function === 'usePicker');
+  assert.deepEqual([picker.cc, picker.coverage], [2, 1]);
+  assert.deepEqual(report.failures, []);
+});
+
+// The owner's review input: a real cc of 9 that lizard reads as 1 because it stops at `(value)`.
+const ROUTE_SOURCE = [
+  'export function route(kind, onMiss = (value) => value, { mode: { strict } } = { mode: { strict: true } }) {',
+  "  if (kind === 'a') return 'alpha';",
+  "  if (kind === 'b') return 'beta';",
+  "  if (kind === 'c' && strict) return 'gamma';",
+  "  if (kind === 'd' || kind === 'e') return 'delta';",
+  "  if (kind === 'f') return 'phi';",
+  '  return strict ? onMiss(kind) : kind;',
+  '}',
+  '',
+].join('\n');
+
+function uncoveredRouteProject(files = {}) {
+  const projectDir = fixtureProject({ 'README.md': 'base\n', ...files });
+  commitBase(projectDir);
+  fs.mkdirSync(path.join(projectDir, 'src'));
+  fs.writeFileSync(path.join(projectDir, 'src/route.js'), ROUTE_SOURCE, 'utf8');
+  fs.mkdirSync(path.join(projectDir, 'coverage'));
+  fs.writeFileSync(path.join(projectDir, 'coverage/lcov.info'), lcov([2, 3, 4, 5, 6, 7].map((line) => [line, 0]), 'src/route.js'), 'utf8');
+  track(projectDir);
+  return projectDir;
+}
+
+test('an uncovered function lizard truncated at its signature fails on the complexity of its real body', () => {
+  const projectDir = uncoveredRouteProject();
+  // The rows lizard 1.24.0 reports for ROUTE_SOURCE, including the `onMiss` it reads out of line 7.
+  const rows = [lizardRow('src/route.js', 'route', 1, 1, 1), lizardRow('src/route.js', 'onMiss', 1, 7, 7)];
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => `${rows.join('\n')}\n` });
+
+  const route = report.functions.find((entry) => entry.function === 'route');
+  assert.deepEqual([route.cc, route.coverage, route.crap], [9, 0, 90]);
+  assert.deepEqual(report.failures.map((entry) => entry.function), ['route']);
+  assert.match(formatReport(report), /route cc=9 coverage=0% CRAP=90\nCRAP gate failed/);
+});
+
+test('a widened body counts its own branches and leaves each nested function to its own row', () => {
+  const source = [
+    'function outer(read = (v) => v || 0, label?: string) {',
+    '  const pick = (x) => x ? 1 : 2',
+    '  if (read) return pick(read)',
+    '  items.forEach(function each(item) { if (item) use(item) })',
+    '  return fetch().catch(() => null) ?? label',
+    '}',
+    '',
+  ].join('\n');
+
+  const [row] = withBodySpans([{ file: 'src/outer.ts', name: 'outer', ordinal: 0, complexity: 1, start: 1, end: 1 }], () => source);
+
+  assert.deepEqual([row.end, row.complexity], [6, 3]);
+});
+
+test('a truncated function whose body this scan cannot close keeps lizard\'s row and stays unverified', () => {
+  const projectDir = fixtureProject({ 'README.md': 'base\n' });
+  commitBase(projectDir);
+  fs.mkdirSync(path.join(projectDir, 'src'));
+  fs.writeFileSync(path.join(projectDir, 'src/app.js'), 'function pick(read = (value) => value) {\n  if (read) return read(1);\n  return 0;\n', 'utf8');
+  fs.mkdirSync(path.join(projectDir, 'coverage'));
+  fs.writeFileSync(path.join(projectDir, 'coverage/lcov.info'), lcov([[2, 0], [3, 0]]), 'utf8');
+  track(projectDir);
+
+  assert.throws(
+    () => crapReport({ projectDir, ratchet: 'main', runLizard: () => `${lizardRow('src/app.js', 'pick', 1, 1, 1)}\n` }),
+    (error) => error instanceof PrerequisiteError && /coverage is unverified for src\/app\.js:1 pick/.test(error.message),
+  );
+});
+
+test('a widened body reads block comments and template text as no code, and counts the code inside a template expression', () => {
+  const source = [
+    'function describe(read = (v) => v, label) {',
+    '  /* holds { an open brace,',
+    '     an if (x) and a && */',
+    "  const tag = `row ${read({ id: label }) || 'none'} \\` if (x) { ${`inner ${label}`}`;",
+    '  if (label) return tag;',
+    '  return `${tag}`;',
+    '}',
+    '',
+  ].join('\n');
+
+  const [row] = withBodySpans([{ file: 'src/describe.js', name: 'describe', ordinal: 0, complexity: 1, start: 1, end: 1 }], () => source);
+
+  // One `||` inside the first `${...}` and the `if` on line 5; the comment's and the template text's `{`, `if` and `&&` count nothing.
+  assert.deepEqual([row.end, row.complexity], [7, 3]);
+});
+
+test('the real lizard backend measures a JSX component with a function-typed prop over its body', () => {
+  const probe = spawnSync('lizard', ['--version'], { encoding: 'utf8' });
+  if (probe.error || probe.status !== 0) return;
+  const projectDir = fixtureProject({
+    '.claude/quartermaster/crap.json': JSON.stringify({ base: 'main', sources: ['src'] }),
+    'README.md': 'base\n',
+  });
+  commitBase(projectDir);
+  fs.mkdirSync(path.join(projectDir, 'src'));
+  fs.writeFileSync(path.join(projectDir, 'src/grid.tsx'), GRID_SOURCE, 'utf8');
+  fs.mkdirSync(path.join(projectDir, 'coverage'));
+  fs.writeFileSync(path.join(projectDir, 'coverage/lcov.info'), gridLcov('src/grid.tsx'), 'utf8');
+  track(projectDir);
+
+  const result = runCli(['--json'], projectDir);
+
+  assert.equal(result.status, 0, result.stderr);
+  const grid = JSON.parse(result.stdout).functions.find((entry) => entry.function === 'VirtualizedCardGrid');
+  assert.equal(grid.coverage, 1);
+  assert.equal(grid.cc, 3);
+});
+
+test('the real lizard backend fails the uncovered route its reader cuts off at a default arrow', () => {
+  const probe = spawnSync('lizard', ['--version'], { encoding: 'utf8' });
+  if (probe.error || probe.status !== 0) return;
+  const projectDir = uncoveredRouteProject({ '.claude/quartermaster/crap.json': JSON.stringify({ base: 'main', sources: ['src'] }) });
+
+  const result = runCli([], projectDir);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stdout, /src\/route\.js:1 route cc=9 coverage=0% CRAP=90\n/);
+  assert.match(result.stdout, /CRAP gate failed/);
 });
 
 test('a .tsx tag lizard gives up on cannot invent complexity, or hide the function it swallowed', (t) => {

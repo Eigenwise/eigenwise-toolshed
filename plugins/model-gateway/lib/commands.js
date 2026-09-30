@@ -274,13 +274,15 @@ configureRemoteControl({ args, flag, log, die, doctor, fetchShimHealth, requestS
 //
 // Returns 'user', 'project-only', or 'unknown' when installed_plugins.json is
 // absent (for example, a --plugin-dir development checkout).
-function installScope() {
+function installScope(home = os.homedir()) {
   try {
-    const file = path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
+    const file = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const entries = (data.plugins && data.plugins['model-gateway@eigenwise-toolshed']) || [];
+    const entries = Object.entries(data.plugins || {})
+      .filter(([pluginId]) => pluginId.startsWith('model-gateway@'))
+      .flatMap(([, installs]) => installs);
     if (!entries.length) return 'unknown';
-    return entries.some((e) => e.scope === 'user') ? 'user' : 'project-only';
+    return entries.some((entry) => entry.scope === 'user') ? 'user' : 'project-only';
   } catch { return 'unknown'; }
 }
 
@@ -433,7 +435,7 @@ async function setup({ preserveWiring = false } = {}) {
     log('model-gateway: proxy unchanged; keeping its authenticated process running.');
   }
   const supervisorRestart = proxyRecoveryHandoff ? null : await restartShimIfOutdated({ operation: 'setup' });
-  if (supervisorRestart && !supervisorRestart.ok) die(`could not restart shim supervisor: ${supervisorRestart.reason}`);
+  if (supervisorRestart && !supervisorRestart.ok && !supervisorRestart.stillStarting) die(`could not restart shim supervisor: ${supervisorRestart.reason}`);
   if (!supervisorRestart && !proxyRecoveryHandoff) {
     const restarting = await restartWorkerWithDrain();
     if (!restarting.ok) die(`could not restart shim worker: ${restarting.reason}`);
@@ -443,8 +445,10 @@ async function setup({ preserveWiring = false } = {}) {
   const v = spawnSync(PROXY_BIN, ['--version'], { encoding: 'utf8', windowsHide: true });
   log(`installed: ${(v.stdout || v.stderr || '').trim() || PROXY_BIN}`);
 
+  if (supervisorRestart?.stillStarting) return warnShimStillStarting(supervisorRestart);
   // one-shot: start everything, and finish the wiring when auth already works
   const r = await startAll({ lifecycleOperation: 'setup', preserveRunningSupervisor: proxyRecoveryHandoff });
+  if (r.stillStarting) return warnShimStillStarting(r);
   if (!r.ok) die(r.reason);
   clearUpstreamBlocked();
   clearUpstreamUnavailable();
@@ -558,6 +562,11 @@ function reportSiblingSupervisorReplacement(stopped, quiet) {
   if (!quiet && stopped.siblingInstallRoot) log(`model-gateway: replaced older sibling shim version at ${stopped.siblingInstallRoot}.`);
 }
 
+function recoveryOutcome(result) {
+  if (result.ok) return 'ready';
+  return result.stillStarting ? 'starting' : 'failed';
+}
+
 function lifecycleRecovery(lifecycleOperation, recordLifecycle) {
   let attempted = false;
   return {
@@ -575,7 +584,8 @@ function lifecycleRecovery(lifecycleOperation, recordLifecycle) {
         recordLifecycle(`${lifecycleOperation}-recovery-finished`, {
           component: lifecycleOperation,
           pid: process.pid,
-          outcome: result.ok ? 'ready' : 'failed',
+          outcome: recoveryOutcome(result),
+          ...(result.supervisorPid ? { supervisorPid: result.supervisorPid } : {}),
         });
       }
       return { ...result, recoveryAttempted: attempted };
@@ -616,18 +626,18 @@ async function keepRunningShim(shim, context) {
   if (shim.owner.state === 'same-install') context.reapOrphans(shim.pid);
   noticeStaleSession(shim.health);
   // setup handed a replaced proxy to this supervisor, so it waits for that proxy to answer.
-  if (context.preserveRunningSupervisor) return finishStartingShim([], context);
+  if (context.preserveRunningSupervisor) return finishStartingShim([], context, shim.pid);
   return reportShimReady([], context);
 }
 
 function waitForRunningShim(shim, context) {
-  return finishStartingShim([], context);
+  return finishStartingShim([], context, shim.pid);
 }
 
 async function replaceShim(shim, context) {
   const refused = await clearShimForStart(shim, context);
   if (refused) return context.recovery.finish(refused);
-  return finishStartingShim(launchSupervisor(context), context);
+  return finishStartingShim(['shim'], context, launchSupervisor(context));
 }
 
 async function clearShimForStart(shim, { quiet, lifecycleOperation, reapOrphans, stopSupervisor, recovery }) {
@@ -645,20 +655,35 @@ async function clearShimForStart(shim, { quiet, lifecycleOperation, reapOrphans,
 function launchSupervisor({ recovery, spawnSupervisor }) {
   recovery.begin();
   try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
-  spawnSupervisor('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], {});
-  return ['shim'];
+  return spawnSupervisor('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], {});
 }
 
-async function finishStartingShim(started, context) {
+async function finishStartingShim(started, context, supervisorPid) {
   const readiness = await context.awaitReadiness({ timeout: context.timeout });
   if (readiness.ok) return reportShimReady(started, context);
   if (!readiness.timedOut) return context.recovery.finish({ ok: false, reason: readiness.reason });
+  const waited = `${Math.ceil(context.timeout / 1000)}s`;
+  // The wait returns early on a failure file, so a timeout with the supervisor alive means it is still starting.
+  const stillStarting = context.supervisorAlive(supervisorPid);
   return context.recovery.finish({
     ok: false,
-    reason: `not healthy after ${Math.ceil(context.timeout / 1000)}s (check logs in ${LOGS})`,
+    reason: stillStarting
+      ? `still starting after ${waited}; supervisor pid ${supervisorPid} is running`
+      : `not healthy after ${waited} (check logs in ${LOGS})`,
     started,
     waitCutShort: context.quiet,
+    ...(stillStarting ? { stillStarting, supervisorPid } : {}),
   });
+}
+
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
 }
 
 async function reportShimReady(started, { quiet, report, refreshCatalog, recovery }) {
@@ -684,6 +709,7 @@ async function startAll({
   reapOrphans = reapGatewayOrphans,
   stopSupervisor = stopRunningSupervisor,
   spawnSupervisor = spawnDetached,
+  supervisorAlive = processAlive,
   awaitReadiness = waitForStartupReadiness,
   refreshCatalog = writeCatalog,
   report = log,
@@ -692,7 +718,7 @@ async function startAll({
   if (!proxyExists()) return { ok: false, reason: 'proxy binary missing (run setup)' };
   ensureState();
   const context = {
-    quiet, lifecycleOperation, recordLifecycle, reapOrphans, stopSupervisor, spawnSupervisor, awaitReadiness, refreshCatalog, report,
+    quiet, lifecycleOperation, recordLifecycle, reapOrphans, stopSupervisor, spawnSupervisor, supervisorAlive, awaitReadiness, refreshCatalog, report,
     preserveRunningSupervisor, timeout: startupWaitMsFor(quiet), recovery: lifecycleRecovery(lifecycleOperation, recordLifecycle),
   };
   const shim = await readSettledShimState(() => probeShim({ resolveOwner, fetchHealth }), context);
@@ -847,14 +873,13 @@ function refreshRegisteredProjectPins(ownedPins) {
   return reportRegisteredPinSync(syncRegisteredProjectPins({ ownedPins }));
 }
 
+// Syncs on every refresh, not only when this refresh moved a pin: a release that bumps the
+// shipped default moves the effective pin between plugin versions, and no single refresh sees it.
+// The sync writes nothing when every registered project already agrees.
 async function refreshDetectedPinsAndWiring(options = {}) {
-  const previousPins = effectivePins();
   const ownedPins = ownedPinValues();
   await refreshDetectedPins(options);
-  const changed = Object.entries(effectivePins()).some(([alias, pin]) => (
-    previousPins[alias].override === null && previousPins[alias].value !== pin.value
-  ));
-  if (changed) refreshRegisteredProjectPins(ownedPins);
+  refreshRegisteredProjectPins(ownedPins);
 }
 
 function reportEffectivePins(label = '', suffix = '') {
@@ -1774,6 +1799,12 @@ async function writeCatalog() {
 // /update-toolshed was started in, and that directory is not consent to route it
 // through the gateway (GH-292). Recorded projects already had their pins synced by
 // refreshDetectedPinsAndWiring, and each wired session reconciles itself at SessionStart.
+// A loaded machine can outlast the startup wait while the new supervisor is alive and finishes on its own schedule
+// (GH-360); failing the update or starting a second supervisor would both be wrong.
+function warnShimStillStarting(result) {
+  log(`model-gateway: warning: shim supervisor ${result.reason}; check \`node "${resolveStableCommandPath()}" status\` in a minute.`);
+}
+
 async function finishUpdateWithoutWiring() {
   log(`model-gateway: update leaves wiring as recorded and never wires the directory it runs from. To wire a project, run node "${resolveStableCommandPath()}" env --write-project inside it.`);
   await writeCatalog().catch(() => { /* advisory only; the next ensure retries */ });
@@ -2705,6 +2736,7 @@ module.exports = {
   syncCompatMode,
   waitForStartupReadiness,
   settingsPath,
+  installScope,
   COMPAT_HOST,
   COMPAT_PORT,
   DEFAULT_BASE_URL,
@@ -2712,6 +2744,7 @@ module.exports = {
   SOCKET_PATH,
   WIRING_CONFIG_PATH,
   parseSemver,
+  processAlive,
   semverLt,
   resolveNewestInstalledCliPath,
   staleSessionReloadNotice,

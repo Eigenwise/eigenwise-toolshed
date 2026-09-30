@@ -411,7 +411,7 @@ function verifyEmbedsWorktreeRoot(verify, worktreeRoot) {
 }
 async function cmdRework(opts, positional) {
   const idOrRef = positional[0];
-  if (!idOrRef) fail('rework: pass a ticket ref, e.g. sidequest rework SQ-3 --by reviewer --review SQ-4 --reason "what needs repair"');
+  if (!idOrRef) fail('rework: pass a ticket ref, e.g. sidequest rework SQ-3 --by <submitter id> --review SQ-4 --reason "what needs repair"');
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
   const review = String(opts.review || "").trim();
@@ -641,8 +641,9 @@ async function cmdIntegrate(opts, positional) {
       } else {
         target = store.ticketIntegrationTarget(slug, ticket);
       }
+      target = store.deliveryIntegrationTarget(slug, target, opts["integration-branch"]);
     } catch (error) {
-      fail(`integrate: ${error && error.message || error}`);
+      fail(`integrate:${error && error.message || error}`);
       return;
     }
   }
@@ -680,11 +681,13 @@ async function cmdIntegrate(opts, positional) {
   const delivery = refs.length > 1 ? store.integrateSubmissionWave(slug, refs, {
     mode,
     target,
+    integrationBranch: opts["integration-branch"],
     skipVerify: !!opts["skip-verify"],
     verificationWaiver
   }) : store.integrateSubmission(slug, idOrRef, {
     mode,
     target,
+    integrationBranch: opts["integration-branch"],
     skipVerify: !!opts["skip-verify"],
     verificationWaiver
   });
