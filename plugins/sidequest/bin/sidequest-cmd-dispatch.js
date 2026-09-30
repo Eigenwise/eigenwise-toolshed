@@ -77,6 +77,7 @@ async function cmdDispatch(opts, positional) {
     tokenPrefix: prepared.token.slice(0, 12),
     token: prepared.token,
     recovery: prepared.recovery || null,
+    ...dispatchState.unscopedOverride?.writeScope ? { writeScope: dispatchState.unscopedOverride.writeScope } : {},
     warnings: presentedWarnings,
     spawn: spawn2,
     guidance: prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} and its dispatched token file.`

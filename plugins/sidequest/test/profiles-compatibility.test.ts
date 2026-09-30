@@ -169,7 +169,7 @@ test('profile edits propagate, repoint previews report drift, and prepared dispa
   store.setRoutingProfileCategory(target, { id: 'w7.dispatch', name: 'W7 dispatch', description: 'Dispatch integration fixture', route: { model: 'sonnet', effort: 'medium' }, fallback: null, contract: 'Use the fixture.', artifactRoots: [], enabled: true });
   store.setProjectRoutingProfile(project, target, 'compatibility-test');
 
-  const ticket = store.createTicket(project, { title: 'Prepared profile route', category: 'w7.dispatch', description: 'A sufficiently grounded integration fixture for dispatch policy refresh.' });
+  const ticket = store.createTicket(project, { title: 'Prepared profile route', category: 'w7.dispatch', files: ['src/profile-route.ts'], description: 'A sufficiently grounded integration fixture for dispatch policy refresh.' });
   const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId: 'w7-prepared' });
   assert.deepEqual(prepared.ticket.dispatch.route, { model: 'sonnet', effort: 'medium' });
   store.setRoutingProfileCategory(target, 'w7.dispatch', { route: { model: 'opus', effort: 'high' } });
@@ -181,7 +181,7 @@ test('profile edits propagate, repoint previews report drift, and prepared dispa
   const refreshed = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId: 'w7-retry' });
   assert.deepEqual(refreshed.ticket.dispatch.route, { model: 'opus', effort: 'high' });
 
-  const activeTicket = store.createTicket(project, { title: 'Launched profile route', category: 'w7.dispatch', description: 'A sufficiently grounded integration fixture for active dispatch policy refresh.' });
+  const activeTicket = store.createTicket(project, { title: 'Launched profile route', category: 'w7.dispatch', files: ['src/profile-route.ts'], description: 'A sufficiently grounded integration fixture for active dispatch policy refresh.' });
   const active = store.prepareDispatch(project, activeTicket.ref, { allowUnscoped: true, sessionId: 'w7-active' });
   assert.equal(store.recordDispatchLaunch(project, activeTicket.ref, { token: active.token, executor: active.ticket.dispatchExecutor, sessionId: 'w7-active', agentName: 'w7-agent' }).ok, true);
   store.setRoutingProfileCategory(target, 'w7.dispatch', { route: { model: 'fable', effort: 'high' } });

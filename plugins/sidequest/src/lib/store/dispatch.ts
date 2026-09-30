@@ -5,12 +5,32 @@ const { classifyVerificationKind, verificationRequirement } = require('../kernel
 const { resolveSuite } = require('../suite-resolver.js');
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationOutcome } = require('../kernel/review-binding');
 const { compareSemver } = require('../plugin-freshness.js');
+const { WHOLE_TREE_SCOPE } = require('../commit-scope.js');
 
 function unscopedWriteCannotAutoApprove(ticket?: any, options?: any) {
   const { dispatchReadOnly, normalizeFiles, autoApproveScope } = options;
   return !dispatchReadOnly(ticket)
     && !normalizeFiles(ticket?.files).length
     && (!Array.isArray(autoApproveScope) || !autoApproveScope.length);
+}
+
+function undeclaredWriteScopeRefusal(ref: string) {
+  return `prepare dispatch: ${ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to give the executor the whole tree as its write scope (isolated worktree only).`;
+}
+
+// GH-341: an unscoped dispatch used to bind only the board's alwaysInScope paths, so
+// the executor silently got docs/ and nothing else. Board paths ride beside the whole
+// tree; they never stand in for it.
+function unscopedWriteScopeLine(alwaysInScope: unknown) {
+  const boardPaths = Array.isArray(alwaysInScope) ? alwaysInScope : [];
+  return `write scope: unscoped (whole tree)${boardPaths.length ? `, always-in-scope: ${boardPaths.join(', ')}` : ''}`;
+}
+
+// A whole-tree commit in the shared checkout would sweep every other dirty path into
+// this ticket, so the refusal comes before the work instead of at submit.
+function unscopedSharedTreeRefusal(ref: string, boardPaths: readonly string[]) {
+  const boardOnly = boardPaths.length ? ` Board policy alone would give it only ${boardPaths.join(', ')}.` : '';
+  return `prepare dispatch: ${ref} has no declared file scope and would run in the shared checkout, where an unscoped (whole tree) write scope would commit every dirty path in it.${boardOnly} Declare the paths it needs (\`sidequest update ${ref} --file <path>\`), or dispatch it into an isolated worktree.`;
 }
 
 function namedSuiteForTicket(ticket: any, projectPath: string) {
@@ -1821,7 +1841,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     autoApproveScope: boardConfig(slug)?.autoApproveScope,
   });
   if (initialNoDeclaredFileScope && opts.allowUnscoped !== true) {
-    throw new Error(`prepare dispatch: ${found.ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to explicitly accept that the executor can block on its first write and end without a submission.`);
+    throw new Error(undeclaredWriteScopeRefusal(found.ref));
   }
   const verifyError = dispatchVerifyCommandError(found, projectPath);
   if (verifyError) throw new Error(verifyError);
@@ -1980,7 +2000,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       autoApproveScope: boardConfig(slug)?.autoApproveScope,
     });
     if (noDeclaredFileScope && opts.allowUnscoped !== true) {
-      throw new Error(`prepare dispatch: ${t.ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to explicitly accept that the executor can block on its first write and end without a submission.`);
+      throw new Error(undeclaredWriteScopeRefusal(t.ref));
     }
     const fallbackReason = !current?.recovery && resolvedPolicy?.fallbackReason || null;
     const recovery = current && current.recovery && activeDispatchRoute(t) ? current.recovery : null;
@@ -2007,12 +2027,13 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     // (the-bot-resurrection SQ-825: a path granted after a handback never
     // entered the redispatch binding and had to ship as an out-of-band commit).
     const releasedBinding = current?.outcome === 'released' && Array.isArray(current.declaredFiles) && current.declaredFiles.length
-      ? current.declaredFiles.slice()
+      ? current.declaredFiles.filter((file: string) => file !== WHOLE_TREE_SCOPE)
       : null;
     const effectiveFiles = releasedBinding
       ? Array.from(new Set([...releasedBinding, ...effectiveScope(slug, t)]))
       : effectiveScope(slug, t);
     const readonly = dispatchReadOnly(t);
+    const wholeTreeScope = !readonly && opts.allowUnscoped === true && !normalizeFiles(t.files).length;
     const requestedSharedTree = opts.sharedTree === true
       || (!Object.hasOwn(opts, 'sharedTree') && Boolean(current?.sharedTree));
     const reducedAgentSchema = opts.reducedAgentSchema === true
@@ -2032,6 +2053,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       throw new Error(`prepare dispatch: ${t.ref} cannot pin the immutable candidate checkout. ${worktreeWarning}`);
     }
     if (worktreeWarning) sharedTree = true;
+    if (wholeTreeScope && sharedTree) throw new Error(unscopedSharedTreeRefusal(t.ref, effectiveFiles));
     if (t.workingTreeDelivery === true && !sharedTree) {
       throw new Error(`prepare dispatch: ${t.ref} declares a working-tree deliverable and must run in the shared checkout. Re-dispatch with sharedTree:true.`);
     }
@@ -2049,8 +2071,9 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       ? categoryArtifactRoot(category, effectiveFiles[0])
       : null;
     const artifactMode = Boolean(artifactRoot);
-    const declaredFiles = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(effectiveFiles, t.files, t.ref);
-    const boardAddedFiles = declaredFiles.filter((file: string) => !commitScope.isInScope(file, t.files));
+    const writeScope = wholeTreeScope ? [WHOLE_TREE_SCOPE, ...effectiveFiles] : effectiveFiles;
+    const declaredFiles = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(writeScope, t.files, t.ref);
+    const boardAddedFiles = declaredFiles.filter((file: string) => file !== WHOLE_TREE_SCOPE && !commitScope.isInScope(file, t.files));
     const artifactScope = artifactMode ? effectiveFiles[0] : null;
     const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
     const dirtyBaselineCapture = sharedTree && !artifactMode ? captureDirtyBaseline(slug) : null;
@@ -2192,10 +2215,11 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       ...(integrationTargetState ? { integrationTarget: integrationTargetState } : {}),
       ...(localAheadWarning ? { localAheadWarning } : {}),
       readonly,
-      ...(noDeclaredFileScope ? {
+      ...(wholeTreeScope ? {
         unscopedOverride: {
           at: now,
           source: opts.source || opts.transport || 'store',
+          writeScope: unscopedWriteScopeLine(boardConfig(slug)?.alwaysInScope),
         },
       } : {}),
       ...(nonRepoOutput ? { nonRepoOutput: true } : {}),

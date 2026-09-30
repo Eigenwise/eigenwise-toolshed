@@ -28,6 +28,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var commit_scope_exports = {};
 __export(commit_scope_exports, {
+  WHOLE_TREE_SCOPE: () => WHOLE_TREE_SCOPE,
   candidatePaths: () => candidatePaths,
   commitPaths: () => commitPaths,
   commitScoped: () => commitScoped,
@@ -306,6 +307,7 @@ function foreignReleaseFragmentRefusalMessage(operation, ticketRef, fragments) {
   }
   return `${operation}: refused ${ticketRef}; only ${ownFragment} is implicitly writable, except a deleted fragment from a related review-rejected candidate. Other release fragments: ${fragments.join(", ")}.`;
 }
+const WHOLE_TREE_SCOPE = "**";
 function ticketCommitScope(effectiveFiles, declaredFiles, ticketRef) {
   const scope = Array.isArray(effectiveFiles) ? effectiveFiles.slice() : [];
   const fragment = Array.isArray(declaredFiles) && declaredFiles.length ? ticketReleaseFragment(ticketRef) : null;
@@ -820,6 +822,7 @@ async function commitScoped(cwd, message, files) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  WHOLE_TREE_SCOPE,
   candidatePaths,
   commitPaths,
   commitScoped,

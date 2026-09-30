@@ -209,10 +209,10 @@ export function applyDeliveryContentCommitGuidance(ref: string): string {
     + ' Do not claim unchanged paths as reviewedReplacements, hand-edit the recorded delivery, or offer an unrelated later head as proof: a commit whose tree differs from the candidate on any submitted path is refused.';
 }
 
-// GH-295: an executor that released as technical_blocker leaves no submission, so integrate, done and submit
+// GH-295, GH-341: an executor that released as technical_blocker or handback leaves no submission, so integrate, done and submit
 // all refuse work the orchestrator then landed by hand, and none of them said which closure still works.
 export function landedWithoutSubmissionGuidance(ref: string): string {
-  return `When the work already landed outside the executor's submit (it released, for example as technical_blocker, and you committed it), close it with \`groomClose ${ref} --deliveryCommit <sha> --deliveryMethod manual --reason "<evidence>"\` once that commit is reachable from the recorded integration branch.`;
+  return `When the work already landed outside the executor's submit (it released, for example as technical_blocker or handback, and you committed or cherry-picked it), close it with \`groomClose ${ref} --deliveryCommit <sha> --deliveryMethod manual --reason "<evidence>"\` once that commit is reachable from the recorded integration branch; for a cherry-pick, pass the cherry-picked commit, not the executor's original.`;
 }
 
 // Why one overlapping submission was not admitted as inherited rejected ancestry.

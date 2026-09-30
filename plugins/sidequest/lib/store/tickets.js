@@ -627,6 +627,11 @@ function createTickets(dependencies) {
     const refusals = rulings.filter((ruling) => ruling.reason);
     return refusals.length ? ` Not auto-approved: ${refusals.map((ruling) => `${ruling.file}: ${ruling.reason}`).join("; ")}.` : "";
   }
+  function liveWholeTreeScope(ticket) {
+    const dispatch = dispatchState(ticket);
+    const bound = dispatch && !dispatch.terminalAt ? dispatch.declaredFiles : null;
+    return Array.isArray(bound) && bound.includes(commitScope.WHOLE_TREE_SCOPE) ? [commitScope.WHOLE_TREE_SCOPE] : [];
+  }
   function requestScope(slug, idOrRef, by, files, opts) {
     opts = opts || {};
     by = String(by || "agent");
@@ -657,7 +662,7 @@ function createTickets(dependencies) {
       }
       const foreignReleaseFragments = commitScope.foreignReleaseFragmentScopePaths(requested, t.ref);
       const isForeignReleaseFragmentScope = (file) => foreignReleaseFragments.some((fragment) => commitScope.isInScope(file, [fragment]) && commitScope.isInScope(fragment, [file]));
-      const scope = commitScope.ticketCommitScope(effectiveScope(slug, t), t.files, t.ref);
+      const scope = commitScope.ticketCommitScope([...effectiveScope(slug, t), ...liveWholeTreeScope(t)], t.files, t.ref);
       const additions = requested.filter((file) => !isForeignReleaseFragmentScope(file) && !commitScope.isInScope(file, scope));
       const covered = requested.filter((file) => !isForeignReleaseFragmentScope(file) && commitScope.isInScope(file, scope));
       const now = (/* @__PURE__ */ new Date()).toISOString();

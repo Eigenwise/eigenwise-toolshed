@@ -797,9 +797,13 @@ function scopeAddedBeyondDeclared(ticket, slug, declared) {
   const added = store.effectiveScope(slug, ticket).filter((file) => !declaredKeys.has(scopeKey(file)));
   return scopeListing("Auto-paired tracked generated files (regenerate before verifying)", added.filter((file) => !alwaysKeys.has(scopeKey(file)))) + scopeListing("Board-added scope (board config alwaysInScope, not declared on this ticket; a dirty path here still blocks submit)", added.filter((file) => alwaysKeys.has(scopeKey(file))));
 }
+function noDeclaredFilesText(ticket) {
+  const writeScope = ticket?.dispatch?.unscopedOverride?.writeScope;
+  return writeScope ? `(No files were declared.) ${writeScope}.` : "(No files were declared.)";
+}
 function taskAndScopeBody(ticket, slug) {
   const declared = Array.isArray(ticket?.files) ? ticket.files : [];
-  const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
+  const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : noDeclaredFilesText(ticket);
   const scopedFiles = declaredFiles + scopeAddedBeyondDeclared(ticket, slug, declared);
   return executorTaskBody(ticket, ticket?.category || {}, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket), ticketContinuationPacket(ticket));
 }

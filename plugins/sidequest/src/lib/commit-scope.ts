@@ -304,6 +304,9 @@ export function foreignReleaseFragmentRefusalMessage(operation: string, ticketRe
   return `${operation}: refused ${ticketRef}; only ${ownFragment} is implicitly writable, except a deleted fragment from a related review-rejected candidate. Other release fragments: ${fragments.join(', ')}.`;
 }
 
+// The write scope an allowUnscoped dispatch binds (GH-341): the glob every path matches.
+export const WHOLE_TREE_SCOPE = '**';
+
 export function ticketCommitScope(effectiveFiles: unknown, declaredFiles: unknown, ticketRef: unknown): string[] {
   const scope = Array.isArray(effectiveFiles) ? effectiveFiles.slice() : [];
   const fragment = Array.isArray(declaredFiles) && declaredFiles.length ? ticketReleaseFragment(ticketRef) : null;
