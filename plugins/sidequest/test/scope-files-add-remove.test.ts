@@ -195,7 +195,10 @@ test('removeFiles refuses to empty a live claim, which would also drop the impli
 test('removeFiles fails closed when the bound checkout exists but git cannot read it', () => {
   const fixture = createClaimedDispatch({ files: ['a.ts', 'b.ts'], realWorktree: true });
   // Breaking the worktree's .git pointer leaves the directory in place but unreadable to git.
-  fs.writeFileSync(path.join(fixture.worktree, '.git'), 'gitdir: /nonexistent/sq-broken-worktree\n');
+  // Windows marks the pointer hidden, and writeFileSync cannot open a hidden file, so remove it first.
+  const gitPath = path.join(fixture.worktree, '.git');
+  fs.rmSync(gitPath, { force: true, recursive: true });
+  fs.writeFileSync(gitPath, 'gitdir: /nonexistent/sq-broken-worktree\n');
   assert.throws(() => liveRemoval(fixture, ['b.ts']), /cannot confirm the bound checkout .* git could not read it\. Release the claim first/);
   assert.deepEqual(fixture.store.getTicket(fixture.project, fixture.ticket.ref).files, ['a.ts', 'b.ts']);
 });
