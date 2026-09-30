@@ -72,7 +72,7 @@ is reported as unverified, as before.
 A parameter list that holds a call (`load(path = resolve(), opts)`) is worse for a `function`, method or
 constructor: lizard reports no row for it at all, and can lose plain functions after it in the same
 file, so the gate would never have checked it. The gate reads each such definition from the source,
-unless a lizard row of the same name starts on its line, or a row lizard calls `(anonymous)` does and the definition's own parameter list contains an arrow, and scores it with its own branch count. In a
+unless a lizard row of the same name starts on its line, or a row lizard calls `(anonymous)` does and is that definition's own: lizard gives that name to a function whose parameter list holds an arrow type (`work: () => T`) and ends the row inside the list, where the gate's body widening reaches the definition. A callback's `(anonymous)` row on the line, or a default arrow (`work = () => {}`, which lizard names `work`), does not stand in for it. The gate scores the definition with its own branch count. In a
 file where it finds one, it also reads every other definition lizard gave no row. These rows are
 labelled `source=source-scan` in the report, and they pair with the base revision the same way lizard's
 rows do. A file lizard gave no row counts as measured only when every definition in it (a `function`

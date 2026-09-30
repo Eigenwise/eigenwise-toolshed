@@ -1101,6 +1101,40 @@ for (const [label, callback] of [['function', 'function (x) { return x; }'], ['a
   });
 }
 
+const CALL_FIRST_DEFAULT_BODY = ['  if (a) return 1;', '  if (b) return 2;', '  if (a && b) return 3;', '  return a ? 4 : 5;', '}', ''];
+const CALL_FIRST_DEFAULT_HEAD = 'export function retry(now = Date.now(), work = () => {}) {';
+
+test('a default arrow in the parameter list and a callback on the same line leave the dropped function its own row', () => {
+  // The owner's round-four input (callFirstDefault): lizard 1.24.0 gives `work` and (anonymous), both on line 1, and no row for `retry`.
+  const source = [`${CALL_FIRST_DEFAULT_HEAD} const pick = list.find((x) => x);`, ...CALL_FIRST_DEFAULT_BODY].join('\n');
+  const rows = [{ name: 'work', complexity: 1, start: 1, end: 1 }, { name: '(anonymous)', complexity: 1, start: 1, end: 1 }];
+
+  assert.deepEqual(scannedRows(source, rows), ['retry@1-6 cc=6 ordinal=0']);
+});
+
+test('the same function with its callback on the next line keeps its row too', () => {
+  const source = [CALL_FIRST_DEFAULT_HEAD, '  const pick = list.find((x) => x);', ...CALL_FIRST_DEFAULT_BODY].join('\n');
+  const rows = [{ name: 'work', complexity: 1, start: 1, end: 1 }, { name: '(anonymous)', complexity: 1, start: 2, end: 2 }];
+
+  assert.deepEqual(scannedRows(source, rows), ['retry@1-7 cc=6 ordinal=0']);
+});
+
+test('the real lizard backend does not let a default arrow and a same-line callback hide an uncovered function from the gate', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const source = [`${CALL_FIRST_DEFAULT_HEAD} const pick = list.find((x) => x);`, ...CALL_FIRST_DEFAULT_BODY].join('\n');
+  const projectDir = fs.realpathSync.native(
+    droppedProject(source, [[1, 0], [2, 0], [3, 0], [4, 0], [5, 0]], { '.claude/quartermaster/crap.json': JSON.stringify({ base: 'main', sources: ['src'] }) }),
+  );
+
+  const result = runCli([], projectDir);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stdout, /^src\/load\.js:1 retry cc=6 coverage=0% CRAP=42 source=source-scan$/m);
+});
+
 test('a regex whose character class holds a slash is one literal, so the function around it still gets its row', () => {
   // The owner's review input: `[\\/]` is the usual path-separator class. `/\\+/g` is the control without a class.
   const source = [

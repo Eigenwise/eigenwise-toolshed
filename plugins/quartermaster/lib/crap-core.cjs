@@ -445,9 +445,13 @@ function rowStart(line, name) {
   return `${line}\u0000${name}`;
 }
 
-/** lizard names a function whose own parameter list holds an arrow type (`work: () => T`) "(anonymous)"; a callback elsewhere on the line does not stand in for it. */
-function arrowRowStandsIn(rowStarts, tokens, line, open, close) {
-  return rowStarts.has(rowStart(line, ANONYMOUS)) && tokens.slice(open, close).some((token) => token.value === '=>');
+/**
+ * lizard names a function whose parameter list holds an arrow type (`work: () => T`) "(anonymous)" and ends that
+ * row inside the list, so the row is this function's only when widening it lands on this parameter list. A
+ * callback's row on the line widens elsewhere, and a default arrow (`work = () => {}`) gets a row of its own name.
+ */
+function anonymousRowStandsIn(rowStarts, tokens, line, open) {
+  return rowStarts.has(rowStart(line, ANONYMOUS)) && truncatedSignature(tokens, { name: ANONYMOUS, start: line })?.open === open;
 }
 
 function bracedSignature(tokens, open, signatureOf) {
@@ -462,7 +466,7 @@ function scannedEntry(tokens, file, open, { rowStarts, signatureOf }) {
   const signature = bracedSignature(tokens, open, signatureOf);
   if (!signature) return null;
   const { close, start, end } = signature;
-  if (arrowRowStandsIn(rowStarts, tokens, tokens[head.first].line, open, close)) return null;
+  if (anonymousRowStandsIn(rowStarts, tokens, tokens[head.first].line, open)) return null;
   const complexity = 1 + branchCount(tokens, open, close) + branchCount(tokens, start + 1, end);
   return { file, name: head.name, complexity, start: tokens[head.first].line, end: tokens[end].line, source: SCANNED_SOURCE };
 }
