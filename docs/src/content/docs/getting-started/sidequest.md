@@ -128,6 +128,8 @@ For substantial changes, Claude can turn the request into a story with linked ti
 
 Sidequest keeps ticket activity visible in the board. Ask Claude to check active work after a restart or when you need help with a ticket that was started in another session.
 
+Executors share the orchestrator's context window settings. Claude executors run at the full 1M window, and Codex executors are capped at 272k tokens because OpenAI bills input above that at 2x. The `models` tool output and the dashboard's model pickers show each discovered model's window next to it. To change the numbers, see [Context window and cost](../model-gateway/#context-window-and-cost) in the Model Gateway guide.
+
 CI watch alerts exclude completed runs marked `skipped` or `neutral`. Neither conclusion proves that the required checks passed; release verification still needs successful checks on the exact commit.
 
 ### Boards in sibling repositories

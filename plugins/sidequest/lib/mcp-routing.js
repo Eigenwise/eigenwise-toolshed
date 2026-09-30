@@ -480,7 +480,7 @@ const tools = [
   },
   {
     name: "models",
-    description: "Available models, global fallback, and compact effective category routes. Pass full:true for configured routes, resolved executors, and warnings.",
+    description: "Available models, global fallback, and compact effective category routes. Discovered rows carry contextWindow tokens and a contextWindowNote. Pass full:true for configured routes, resolved executors, and warnings.",
     inputSchema: { type: "object", properties: { project: PROJECT_PROP, full: { type: "boolean", description: "Include configured/resolved category detail and warnings." } } },
     handler(args) {
       const { slug } = resolveProject(args.project);

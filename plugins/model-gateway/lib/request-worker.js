@@ -31,7 +31,7 @@ const {
   REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT, SOCKET_PATH,
   MODEL_WINDOW_POLICY, STATE, syncGatewayDiscoveryCache, TRACE_HEADERS,
   codexContextWindow, codexContextWindowModelId, codexReadinessMessage, gatewayAdvertisedWindow, gatewayClientModelId, mkdirs,
-  resolveGatewayModelPolicy,
+  resolveGatewayModelPolicy, CODEX_COMPACT_HEADROOM, capCompactTrigger, contextWindowCap,
 } = require('./runtime.js');
 
 const execFileAsync = promisify(execFile);
@@ -274,7 +274,6 @@ function statelessBackendThreadRefusal(payload) {
 
 const SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
 const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
-const CODEX_COMPACT_HEADROOM = 40000;
 
 function sentryBackendWindow(policy) {
   const backendWindow = policy.backendWindow;
@@ -284,14 +283,15 @@ function sentryBackendWindow(policy) {
   return backendWindow;
 }
 
-function effectiveSentryPolicy(policy, compactTrigger = configuredCompactTrigger) {
+// The lowest trigger wins: the backend's own headroom, CODEX_GATEWAY_COMPACT_TRIGGER, and a saved context-window cap.
+function effectiveSentryPolicy(policy, compactTrigger = configuredCompactTrigger, cap = contextWindowCap(policy?.backend)) {
   if (policy?.sentry !== 'synthetic-413') return null;
   const backendWindow = sentryBackendWindow(policy);
-  const derivedTrigger = backendWindow - CODEX_COMPACT_HEADROOM;
-  const useConfiguredTrigger = Number.isFinite(compactTrigger) && compactTrigger > 0 && compactTrigger <= derivedTrigger;
-  return useConfiguredTrigger
-    ? { backendWindow, compactTrigger, source: 'env' }
-    : { backendWindow, compactTrigger: derivedTrigger, source: 'derived' };
+  const triggers = [{ compactTrigger: backendWindow - CODEX_COMPACT_HEADROOM, source: 'derived' }];
+  if (Number.isFinite(compactTrigger) && compactTrigger > 0) triggers.push({ compactTrigger, source: 'env' });
+  if (cap) triggers.push({ compactTrigger: capCompactTrigger(cap), source: 'cap' });
+  const [lowest] = triggers.sort((left, right) => left.compactTrigger - right.compactTrigger);
+  return { backendWindow, ...lowest };
 }
 
 function sentryPolicyFor(model) {
