@@ -8,6 +8,36 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.583.0 (2026-09-29)
+
+### model-gateway 0.52.0 → 0.52.1
+
+#### Fixes
+
+- model-gateway tests: sibling-retire test waits for the older supervisor's process exit instead of asserting it instantly, so windows-latest stops flaking on exit lag (SQ-3151)
+  Test-only change, nothing shipped to users behaves differently.
+
+  `gateway-process-isolation.test.js`'s "sibling ensure retires dead records without deleting replacement worker and proxy records" test asserted the older sibling supervisor's process was already gone the instant `ensure` exited, with no wait. On a slow Windows runner the older supervisor's own exit can lag `ensure`'s exit, so the assertion flaked (observed on PR #348, run 36586141780). The test now waits up to 5s (the file's existing `waitForProcessesToExit` helper) for the older shim to actually exit before checking, keeping the same assertion and message. No product timeouts changed.
+- model-gateway setup warns instead of failing when a restarted supervisor is still starting after the wait (SQ-3160)
+  On a heavily loaded machine, `setup` (and so the `update-toolshed` gateway step) could print `could not restart shim supervisor: not healthy after 42s` and fail, while the supervisor it had just launched kept running and was serving the new version a minute later (GH-360). A timeout with no shim failure file and the supervisor process still alive is now "still starting": setup prints `warning: shim supervisor still starting after 42s; supervisor pid N is running; check ... status in a minute.`, skips the steps that need a healthy shim, and exits 0, so the updater no longer counts it as a failure. The lifecycle log records `setup-recovery-finished` with `outcome: starting` and the supervisor pid. A supervisor that died during the wait, or a shim that wrote a failure reason, still fails setup as before.
+
+### sidequest 5.4.0 → 5.4.1
+
+#### Fixes
+
+- Wave assembly accepts participants whose non-executable verifiers only agree on kind (SQ-3143)
+  A wave whose participants all pin the same non-executable verifier kind (document, link, manual, attestation, review) now assembles even when each ticket's verify text differs. Three disjoint notes that each pin their own document check used to refuse `wave_verifier_mismatch` and had to be integrated one at a time; the wave gate never runs those kinds, and each participant's check already passed at submission. A mix of executable and non-executable kinds, or executable kinds with different commands, still refuses. The refusal now names each participant's kind and says that non-executable kinds only need to agree on kind.
+- integrate delivers onto a branch fast-forwarded past the one recorded at dispatch (SQ-3144)
+  Dispatch freezes the integration branch it saw. Fast-forward main to develop and stay on main, and `integrate` refused every ticket with `branch_not_checked_out` until you checked develop out again. Now the recorded branch is still the default, but when the checked-out branch is that branch or descends from it, delivery goes onto the checked-out branch. You can also pass `integrationBranch` (CLI `--integration-branch`) to deliver onto the checked-out branch on purpose. The integration record's `targetBranch` is the branch that actually got the delivery, and the integration closure validates against it. Any other checkout still refuses, and the refusal names both branches and the `integrationBranch` way out. In remote mode a followed branch with no `origin/<branch>` is treated as local.
+- The board commit tool commits a staged git mv rename or git rm under a glob scope (SQ-3153)
+  With a glob in the ticket's files (say `plugins/x/*.js`), `git mv` or `git rm` inside it made the board's `commit` fail with `fatal: pathspec '<old path>' did not match any files` (GH-350). The glob expanded to every path `git status` listed, the old side of the rename included, and that went straight into `git add --all`. Exact paths already skipped anything that is neither on disk nor in the index; glob matches now go through the same filter, so the already-staged deletion is left alone and `git commit --only` still records it. A declared path that never existed still refuses with `no_existing_scope`.
+- Unread notifications are bounded and written after the ticket change commits (SQ-3154)
+  Closes GitHub #351. The notification inbox is one store row, and only read entries were ever pruned, so a large board grew it to 9.46 MB with 6,062 unread entries. Every ticket event parsed and rewrote that row inside the ticket's write transaction, which held the SQLite write lock for 320-470 ms and made concurrent writers fail with "database stayed locked".
+
+  Unread notifications are now bounded on every write: entries older than `SIDEQUEST_NOTIFICATIONS_MAX_AGE_DAYS` (default 30) are dropped and only the newest `SIDEQUEST_NOTIFICATIONS_MAX_UNREAD` (default 200) are kept. A reminder that has not fired yet counts as newest, so it is never dropped before it fires. A ticket event's notification is written after the ticket transaction commits, still under `.notifications.lock`; if that write fails, the ticket change stays committed and the notification is lost with a stderr warning. An existing oversized row is pruned once, the first time a store opens with this version, keeping the newest entries.
+- Discovered providers outside the Codex/Grok shim dispatch again, through a pinned executor definition (SQ-3159)
+  Since 5.4.0 a discovered catalog entry whose provider isn't `codex` or `grok` came back from `dispatch` and `route_recipe` with its full id as the Agent `model`, and Claude Code refused it before any executor started, because the Agent tool only takes `sonnet`, `opus`, `haiku`, or `fable` (GH-361, reported by DanielHeinz7). Those entries now spawn `sidequest-exec-model-<slug>-<effort>` (or `sidequest-exec-readonly-model-<slug>-<effort>` for a readonly category) with the model left out. Sidequest writes those definitions into the user agents folder with `model: <full id>` and `effort:` in frontmatter, at SessionStart and again at dispatch, one ladder per current catalog entry, and removes a ladder when its entry leaves the catalog. A same-named file without Sidequest's marker is left alone. `route_recipe` returns `agent.model: null` plus `agent.subagentType` for these routes, and the launch hook strips any Agent model passed for them. Checked on the wire against Claude Code 2.1.284: the subagent request carried the pinned id and the frontmatter effort. A catalog entry that calls its provider `claude` also takes this path, since its id isn't one of the four aliases either.
+
 ## v3.582.0 (2026-09-29)
 
 ### model-gateway 0.51.7 → 0.52.0
