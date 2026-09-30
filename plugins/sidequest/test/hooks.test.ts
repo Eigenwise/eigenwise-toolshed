@@ -2359,6 +2359,36 @@ test('pre-tool hook denies a subagent MCP remove carrying force (the delete-to-s
   assert.equal(mainThread, null, 'the orchestrator main thread may force-remove');
 });
 
+// The tests above feed force-exec-bypass.js directly, so they cannot see whether
+// Claude Code's hooks.json actually routes a tool name to it (SQ-3203: it never
+// did for board__remove, so an executor's remove {force:true} reached the MCP
+// handler unblocked). This walks the live-claim mutation rules out of the source
+// and checks each one against the real manifest, so a rule added without a route
+// fails here instead of silently reaching the handler.
+test('hook manifest routes force-exec-bypass for every live-claim mutation rule tool name (SQ-3203)', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'hooks', 'force-exec-bypass.ts'), 'utf8');
+  const signature = source.match(/function executorLiveClaimMutationRefusal\([^)]*\)[^{]*{/);
+  assert.ok(signature, 'executorLiveClaimMutationRefusal must still exist in force-exec-bypass.ts');
+  let depth = 1;
+  let index = signature!.index! + signature![0].length;
+  while (depth > 0 && index < source.length) {
+    if (source[index] === '{') depth++;
+    else if (source[index] === '}') depth--;
+    index++;
+  }
+  const body = source.slice(signature!.index! + signature![0].length, index - 1);
+  const toolNames = [...body.matchAll(/toolName === '(mcp__plugin_sidequest_board__\w+)'/g)].map((match) => match[1]);
+  assert.ok(toolNames.length >= 2, 'expected at least the update and remove live-claim mutation rules');
+
+  const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
+  const preToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> = config.hooks.PreToolUse;
+  for (const toolName of toolNames) {
+    const routed = preToolUse.some((entry) => new RegExp(`^(?:${entry.matcher === '*' ? '.*' : entry.matcher})$`).test(toolName)
+      && entry.hooks.some((hook) => hook.command.includes('force-exec-bypass.js')));
+    assert.ok(routed, `${toolName} has a live-claim mutation rule but no PreToolUse matcher in hooks.json runs force-exec-bypass.js for it`);
+  }
+});
+
 test('pre-tool hook: stable dispatch executors require preparation even with a ref', () => {
   const t = fixtureTicket('SQ-232 dispatch passthrough fixture', 'codex-gpt-5-6-terra', 'high');
   const out = runHookOutput(FORCE_BYPASS, {
@@ -4825,8 +4855,10 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the Agent gate must be registered');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__dispatch'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the own-dispatch guard must cover the dispatch MCP tool');
-  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__update'
+  assert.ok(config.hooks.PreToolUse.some((entry?: any) => new RegExp(`^(?:${entry.matcher === '*' ? '.*' : entry.matcher})$`).test('mcp__plugin_sidequest_board__update')
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the closeout update guard must cover the update MCP tool');
+  assert.ok(config.hooks.PreToolUse.some((entry?: any) => new RegExp(`^(?:${entry.matcher === '*' ? '.*' : entry.matcher})$`).test('mcp__plugin_sidequest_board__remove')
+    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the force-remove guard must cover the remove MCP tool');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Bash|PowerShell'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the own-dispatch guard must cover Sidequest CLI commands');
   assert.ok(!config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Skill'), 'the oversized Skill guard stays removed: its one activation cost a turn and prevented nothing');
