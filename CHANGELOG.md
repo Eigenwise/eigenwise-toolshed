@@ -8,6 +8,32 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.584.0 (2026-09-30)
+
+### quartermaster 0.11.7 → 0.11.8
+
+#### Fixes
+
+- CRAP gate measures a function lizard cuts off at its parameter list over its real body and complexity (GH-315)
+  The CRAP gate no longer exits 2 "coverage unverified" for a function whose parameter list holds
+  parentheses of its own, such as a React component with a function-typed prop
+  (`onSelect: (card: Card) => void`) or a function with a default arrow parameter. lizard's JavaScript,
+  TypeScript and TSX readers end such a function inside its own signature, where coverage has no line
+  data, and leave every branch in its body out of its complexity. The gate now reads the source, measures
+  coverage over the function's real body, and scores the larger of lizard's complexity and the body's own
+  branch count, so an uncovered branchy function fails instead of passing at complexity 1. An edit to
+  that body counts as a change against the base revision. When the gate cannot find where the body ends,
+  the function is still reported as unverified.
+
+### sidequest 5.4.1 → 5.4.2
+
+#### Fixes
+
+- A reworked ticket's dispatch briefing states the pending rework (GH-349)
+  After `rework` and a fresh `dispatch`, the replacement executor's briefing listed the rejected candidate only under "Rejected submission history", framed as past history. An executor that then read an earlier "candidate accepted" comment on the thread took the relaunch for a duplicate and released it as a contradiction or oracle question, so each rework cost a wasted dispatch. Orchestrators worked around it by restating the rework as a plain comment before dispatching.
+
+  The briefing now opens that section with "## Pending rework" whenever the newest rejection is an unsuperseded rework and no new candidate is pending. It names the rejected candidate and its quarantine ref, the rework reason, and the review, and it tells the executor that this rejection overrides any earlier acceptance on the thread, so it should do the repair and submit a fresh candidate. The section sits above the comment thread. Once a later submit supersedes the rejection, the section is gone and only the history remains.
+
 ## v3.583.0 (2026-09-29)
 
 ### model-gateway 0.52.0 → 0.52.1
