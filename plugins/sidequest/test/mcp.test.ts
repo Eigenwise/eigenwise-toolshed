@@ -5133,7 +5133,7 @@ test('native_agent carries ticket anchors and verify command through its stable 
 test('native_agent applies explicit ticket route override refusals before spawning', async () => {
   seedCatalog([
     { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' },
-    { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol', label: 'Sol' },
+    { slug: 'codex-gpt-6-1-sol', id: 'claude-gpt-6.1-sol', label: 'Sol' },
   ]);
   try {
     const slug = store.ensureProject(PROJ).slug;
@@ -5142,17 +5142,17 @@ test('native_agent applies explicit ticket route override refusals before spawni
     const crossing = store.createTicket(slug, {
       title: 'Refuse provider crossing through MCP native agent',
       category: 'native-route-override-claude',
-      route: { model: 'codex-gpt-5-6-sol', effort: 'high' },
+      route: { model: 'codex-gpt-6-1-sol', effort: 'high' },
     });
     const sameProvider = store.createTicket(slug, {
       title: 'Allow same provider through MCP native agent',
       category: 'native-route-override-codex',
-      route: { model: 'codex-gpt-5-6-sol', effort: 'high' },
+      route: { model: 'codex-gpt-6-1-sol', effort: 'high' },
     });
 
     await assert.rejects(
       () => callHandler('native_agent', { ref: crossing.ref, prompt: 'Implement the ticket.' }),
-      /route override "codex-gpt-5-6-sol" crosses providers from category "native-route-override-claude" and was refused/,
+      /route override "codex-gpt-6-1-sol" crosses providers from category "native-route-override-claude" and was refused/,
     );
 
     const native = await callHandler('native_agent', { ref: sameProvider.ref, prompt: 'Implement the ticket.' });

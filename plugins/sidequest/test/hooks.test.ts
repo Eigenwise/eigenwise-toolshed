@@ -27,7 +27,7 @@ fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.str
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
   models: [
     { slug: 'codex-gpt-5-6-luna', id: 'claude-gpt-5.6-luna[1m]', label: 'GPT-5.6 Luna' },
-    { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' },
+    { slug: 'codex-gpt-6-1-sol', id: 'claude-gpt-6.1-sol[1m]', label: 'GPT-6.1 Sol' },
     { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' },
   ],
 }));
@@ -796,7 +796,7 @@ test('pre-tool hook: readonly Claude executors inherit the session mode while di
       tool_input: {
         subagent_type: stableReadOnlyDispatchName(effort),
         model: 'fable',
-        prompt: `Review SQ-1.\n[sidequest-route model=gpt-5.6-sol effort=${effort}]`,
+        prompt: `Review SQ-1.\n[sidequest-route model=gpt-6.1-sol effort=${effort}]`,
       },
     });
     assert.equal(dispatch.hookSpecificOutput.permissionDecision, 'deny');
@@ -5182,11 +5182,11 @@ test('pre-tool hook: route marker batches require an exact prepared briefing', (
     codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
     models: [
       { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' },
-      { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]' },
+      { slug: 'codex-gpt-6-1-sol', id: 'claude-gpt-6.1-sol[1m]' },
     ],
   }));
   const a = fixtureTicket('SQ-347 dispatch batch A', 'codex-gpt-5-6-terra', 'high');
-  const b = fixtureTicket('SQ-347 dispatch batch B', 'codex-gpt-5-6-sol', 'high');
+  const b = fixtureTicket('SQ-347 dispatch batch B', 'codex-gpt-6-1-sol', 'high');
   const proseSibling = runForceBypassWithEnv(
     { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-prose', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nPrior ${b.ref} had a sol route. --project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
@@ -5194,7 +5194,7 @@ test('pre-tool hook: route marker batches require an exact prepared briefing', (
   assert.equal(proseSibling.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(proseSibling.hookSpecificOutput.permissionDecisionReason, /requires the exact prepared FIRST action briefing command/);
   const mixed = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-mixed', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nRef: ${b.ref}\n[sidequest-route model=codex-gpt-5-6-sol effort=high]\n--project "${slug}"` },
+    { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-mixed', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nRef: ${b.ref}\n[sidequest-route model=codex-gpt-6-1-sol effort=high]\n--project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
   );
   assert.equal(mixed.hookSpecificOutput.permissionDecision, 'deny');
@@ -5272,7 +5272,7 @@ test('pre-tool hook: prepared codex dispatch accepts the gateway-form route mark
     assert.match(retired.hookSpecificOutput.permissionDecisionReason, /ticket resolved route is/);
 
     const drifted = runForceBypassWithEnv(
-      { ...base, prompt: base.prompt.replace('model=gpt-5.6-terra', 'model=gpt-5.6-sol') },
+      { ...base, prompt: base.prompt.replace('model=gpt-5.6-terra', 'model=gpt-6.1-sol') },
       { SIDEQUEST_DISCOVERY_DIRS: catalog }
     );
     assert.equal(drifted.hookSpecificOutput.permissionDecision, 'deny');
@@ -5324,7 +5324,7 @@ test('pre-tool hook: exact prepared briefing is the sole dispatch launch authori
     },
     {
       name: 'route mismatch',
-      mutate: (prompt: string) => prompt.replace('model=gpt-5.6-terra', 'model=gpt-5.6-sol'),
+      mutate: (prompt: string) => prompt.replace('model=gpt-5.6-terra', 'model=gpt-6.1-sol'),
     },
   ];
   for (const dispatchCase of cases) {
@@ -5502,16 +5502,16 @@ test('readonly category executors pass spawn correction, start binding, and stop
     updatedAt: new Date().toISOString(),
     source: 'model-gateway',
     codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
-    models: [{ slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]' }],
+    models: [{ slug: 'codex-gpt-6-1-sol', id: 'claude-gpt-6.1-sol[1m]' }],
   }));
   const previousDirs = process.env.SIDEQUEST_DISCOVERY_DIRS;
   process.env.SIDEQUEST_DISCOVERY_DIRS = catalog;
   try {
     const cases = [
       ['codebase-exploration', 'sonnet', 'low', 'sidequest-exec-readonly-low'],
-      ['research', 'codex-gpt-5-6-sol', 'medium', 'sidequest-exec-dispatch-readonly'],
+      ['research', 'codex-gpt-6-1-sol', 'medium', 'sidequest-exec-dispatch-readonly'],
       ['review-audit', 'sonnet', 'high', 'sidequest-exec-readonly-high'],
-      ['spike-investigation', 'codex-gpt-5-6-sol', 'xhigh', 'sidequest-exec-dispatch-readonly'],
+      ['spike-investigation', 'codex-gpt-6-1-sol', 'xhigh', 'sidequest-exec-dispatch-readonly'],
     ] as const;
     const projectPath = store.readMeta(slug).path;
 

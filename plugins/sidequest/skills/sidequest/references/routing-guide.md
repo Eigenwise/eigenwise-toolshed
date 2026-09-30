@@ -15,6 +15,8 @@ From Anthropic's [Choosing the right model](https://platform.claude.com/docs/en/
 | **opus** | Multi-file features, shared contracts, cross-cutting refactors, and complex agentic coding | Usually `high`; `xhigh` is the documented starting point for coding and agentic work |
 | **fable** | Root-cause investigations, architecture decisions, and work larger than one sitting | Start with `high`; use `xhigh` for model-sensitive work |
 
+On the Codex side, GPT-6.1 Sol (`codex-gpt-6-1-sol`) is the default Codex model; GPT-6 Astra is reserved for frontier or high-stakes tickets. On load, Sidequest rewrites stored routes still on a retired Sol (`codex-gpt-5-6-sol`, `codex-gpt-6-sol`) or on Astra outside a `*frontier*` category to GPT-6.1 Sol.
+
 Normal category routes, including legacy complexity mapping, top out at `xhigh`. Reserve `max` for
 exceptional, genuinely frontier problems. Effort is a category route field, not a second classification
 system. The live category description and contract remain authoritative over this general guidance.

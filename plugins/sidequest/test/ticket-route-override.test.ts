@@ -21,7 +21,7 @@ fs.writeFileSync(path.join(catalogDirectory, 'catalog.json'), JSON.stringify({
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
   models: [
     { slug: 'codex-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'Codex Terra' },
-    { slug: 'codex-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'Codex Sol' },
+    { slug: 'codex-sol', id: 'claude-gpt-6.1-sol[1m]', label: 'Codex Sol' },
   ],
 }));
 process.env.SIDEQUEST_HOME = sidequestHome;
@@ -61,7 +61,7 @@ test('a ticket route override prepares its own marker and leaves sibling routing
   const overrideDispatch = store.prepareDispatch(slug, overridden.ref, { allowUnscoped: true, sessionId: 'ticket-override' });
   const siblingDispatch = store.prepareDispatch(slug, sibling.ref, { allowUnscoped: true, sessionId: 'ticket-sibling' });
 
-  assert.deepEqual(overrideDispatch.ticket.dispatch.route, { model: 'codex-sol', effort: 'high', marker: 'gpt-5.6-sol' });
+  assert.deepEqual(overrideDispatch.ticket.dispatch.route, { model: 'codex-sol', effort: 'high', marker: 'gpt-6.1-sol' });
   assert.deepEqual(siblingDispatch.ticket.dispatch.route, { model: 'codex-terra', effort: 'medium', marker: 'gpt-5.6-terra' });
   assert.deepEqual(store.getCategory('ticket.override').route, { model: 'codex-terra', effort: 'medium' });
 });
@@ -144,7 +144,7 @@ test('effective readonly state controls cross-provider routes through add and up
     }
 
     const prepared = store.prepareDispatch(slug, created.ref, { allowUnscoped: true, sessionId: `readonly-override-${index}` });
-    assert.deepEqual(prepared.ticket.dispatch.route, { model: 'codex-sol', effort: 'high', marker: 'gpt-5.6-sol' });
+    assert.deepEqual(prepared.ticket.dispatch.route, { model: 'codex-sol', effort: 'high', marker: 'gpt-6.1-sol' });
     assert.equal(prepared.ticket.dispatch.readonly, true);
     assert.equal(prepared.ticket.dispatch.executor, 'sidequest-exec-dispatch-readonly');
     assert.equal(prepared.ticket.dispatchExecutor, 'sidequest-exec-dispatch-readonly');

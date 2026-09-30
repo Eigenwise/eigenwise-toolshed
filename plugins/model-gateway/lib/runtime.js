@@ -94,6 +94,15 @@ const MODEL_WINDOW_POLICY = Object.freeze({
     advertisedWindow: 920000,
     sentry: 'synthetic-413',
   }),
+  'gpt-6.1-sol': Object.freeze({
+    backend: 'codex',
+    backendId: 'gpt-6.1-sol',
+    backendWindow: 920012,
+    measurement: 'measured 2026-09-30: 920012 accepted; 935012 refused',
+    pickerAlias: 'claude-gpt-6.1-sol[1m]',
+    advertisedWindow: 920000,
+    sentry: 'synthetic-413',
+  }),
   'grok-4.5': Object.freeze({
     backend: 'grok',
     backendId: 'grok-4.5',
