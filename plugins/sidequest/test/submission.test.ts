@@ -552,7 +552,7 @@ test('MCP submit refuses a completed capture from before the submitted candidate
     });
     assert.strictEqual(refused.ok, false);
     assert.strictEqual(refused.reason, 'verification_capture_required');
-    assert.match(refused.message, /Run "node --version" through the dispatched verify-capture wrapper again/);
+    assert.match(refused.message, new RegExp(`this direct claim, .*A direct claim has no dispatch briefing: from the checkout holding that candidate, run node ".*verify-capture.js" --project ".+" --ticket "${t.ref}"`));
     assert.strictEqual(store.getTicket(slug, t.ref).claim.by, by);
     assert.strictEqual(store.releaseTicket(slug, t.ref, by, {
       status: 'todo',
@@ -6434,4 +6434,76 @@ test('integration verification runs the recorded verifier from the ticket verify
 
   assert.strictEqual(result.ok, true, JSON.stringify(result.verify));
   assert.strictEqual(result.verify.status, 'passed');
+});
+
+// GitHub #377: the orchestrator takes a ticket an earlier round dispatched, amends its verify, and
+// claims it directly. The wrapper and submit both have to use the amended verify, and the capture
+// the wrapper records for the direct claim has to admit the submit.
+function claimDirectlyAfterEarlierDispatch(title: string, command: string, file: string) {
+  const ticket = addTicket(title, {
+    category: 'submission.fixture',
+    executorVerifyKind: 'command',
+    executorVerify: command,
+    files: [file],
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `${ticket.ref}-earlier-round`, sharedTree: true });
+  assert.strictEqual(prepared.ok, true, prepared.message);
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, 'earlier-round-executor', {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: `${ticket.ref}-earlier-round`,
+  }).ok, true);
+  const handBack = () => assert.strictEqual(store.releaseTicket(slug, ticket.ref, 'earlier-round-executor', { status: 'todo', reason: 'Earlier round handed back.' }).ok, true);
+  const claimDirectly = () => {
+    const claim = store.claimTicket(slug, ticket.ref, 'orchestrator', { direct: true, force: true, reason: 'The submission fixture requires a local direct claim.' });
+    assert.strictEqual(claim.ok, true, claim.reason);
+  };
+  return { ticket, prepared, handBack, claimDirectly };
+}
+
+test('GH-377: a direct claim after a terminal dispatch submits with a capture of the amended verify', async () => {
+  cleanBranch();
+  const currentCommand = 'node --version';
+  const { ticket, handBack, claimDirectly } = claimDirectlyAfterEarlierDispatch('direct claim after an earlier dispatch', 'node -e "process.exit(0)" -- stale', 'lib/gh-377-amended.js');
+  handBack();
+  store.updateTicket(slug, ticket.ref, { executorVerifyKind: 'command', executorVerify: currentCommand });
+  claimDirectly();
+
+  const candidate = createCandidateCommit('gh-377-amended.js', 'direct claim candidate\n');
+  pin(ticket, candidate);
+  const target = { project: PROJECT_DIR, ticket: ticket.ref };
+  assert.deepStrictEqual(captureCommand([], target), { command: currentCommand }, 'the wrapper loads the amended verify, not the earlier dispatch pin');
+  const capture = await runVerifyCapture(currentCommand, PROJECT_DIR);
+  try {
+    assert.strictEqual(capture.status, 'passed');
+    const recorded = recordCapture(target, capture, PROJECT_DIR);
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    const submitted = store.submitTicket(slug, ticket.ref, 'orchestrator', { commit: candidate, verify: currentCommand });
+    assert.strictEqual(submitted.ok, true, submitted.message);
+    assert.strictEqual(store.getTicket(slug, ticket.ref).submission.commit, candidate);
+  } finally {
+    fs.rmSync(capture.logPath, { force: true });
+  }
+});
+
+test('GH-377: a capture recorded by the earlier dispatch attempt does not admit the direct claim', async () => {
+  cleanBranch();
+  const command = 'node --version';
+  const { ticket, prepared, handBack, claimDirectly } = claimDirectlyAfterEarlierDispatch('earlier attempt capture', command, 'lib/gh-377-earlier.js');
+  const candidate = createCandidateCommit('gh-377-earlier.js', 'earlier attempt candidate\n');
+  pin(ticket, candidate);
+  const capture = await runVerifyCapture(command, PROJECT_DIR);
+  try {
+    const recorded = recordCapture({ project: PROJECT_DIR, ticket: ticket.ref }, capture, PROJECT_DIR);
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.capture.dispatchNonce, prepared.token);
+    handBack();
+    claimDirectly();
+
+    const refused = store.submitTicket(slug, ticket.ref, 'orchestrator', { commit: candidate, verify: command });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'verification_capture_required');
+    assert.ok(!refused.message.includes('<none>'), refused.message);
+    assert.match(refused.message, new RegExp(`verify-capture\\.js" --project ".+" --ticket "${ticket.ref}"`));
+  } finally {
+    fs.rmSync(capture.logPath, { force: true });
+  }
 });
