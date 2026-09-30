@@ -2279,7 +2279,7 @@ test('SQ-3144: integrate refuses a checkout that does not descend from the recor
 
 // GH-340: long-running services keep rewriting files in the registered checkout. Integrate refuses only
 // dirt the delivery would write, including a rename's source, and reports the rest as ignored.
-function gh340SubmittedCandidate(label: string, files: string[], writeCandidate: () => void) {
+function gh340SubmittedCandidate(label: string, files: string[], writeCandidate: (ticket: { ref: string }) => void) {
   const stamp = `${process.pid}-${Date.now()}`;
   const target = `gh340-${label}-${stamp}`;
   git(['checkout', '-f', '-B', target, 'origin/main']);
@@ -2293,7 +2293,7 @@ function gh340SubmittedCandidate(label: string, files: string[], writeCandidate:
     sessionId,
   }).ok, true);
   git(['checkout', '-f', '-B', `gh340-candidate-${label}-${stamp}`, target]);
-  writeCandidate();
+  writeCandidate(t);
   git(['add', '-A']);
   git(['commit', '-m', `${label} candidate`]);
   const commit = git(['rev-parse', 'HEAD']);
@@ -2374,6 +2374,42 @@ test('GH-340: integrate refuses an unstaged edit to a file the delivery renames 
     assert.match(refused.message, /: README\.md\. Commit, stash/);
     assert.strictEqual(git(['rev-parse', target]), headBefore);
     assert.strictEqual(fs.readFileSync(path.join(PROJECT_DIR, 'README.md'), 'utf8'), 'rewritten by a running service\n');
+  });
+});
+
+// GH-156: integrate on a per-ticket integrationBranch refused wave_invalidated while the
+// message showed the assembled baseline equal to the candidate's. Equal baselines are the
+// healthy fast-forward case and must deliver.
+test('GH-156: integrate delivers a candidate whose parent is the checked-out target head', () => {
+  withGh340Board(() => {
+    const { t, target, commit } = gh340SubmittedCandidate('gh156-parent', ['lib/gh156-parent.js'], gh340WriteLibFile('lib/gh156-parent.js'));
+    const submittedBaseline = store.getTicket(slug, t.ref).submission.baseline.revision.value;
+    assert.strictEqual(submittedBaseline, git(['rev-parse', `${commit}^`]));
+    assert.strictEqual(git(['rev-parse', target]), submittedBaseline, 'the target head is the candidate parent');
+
+    const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, target]), '');
+    assert.strictEqual(store.getTicket(slug, t.ref).submission.wave.baseline.revision.value, submittedBaseline);
+  });
+});
+
+// GH-156 (5.3.2 report): the ticket's real work lived outside the repo, so its candidate
+// carried nothing but its own release fragment, and none of its declared files. That is
+// a legitimate delivery.
+test('GH-156: integrate delivers a candidate that changes only its own release fragment', () => {
+  withGh340Board(() => {
+    const { t, target, commit } = gh340SubmittedCandidate('gh156-fragment', ['docs/gh156-never-written.md'], (ticket) => {
+      fs.mkdirSync(path.join(PROJECT_DIR, '.release', 'unreleased'), { recursive: true });
+      fs.writeFileSync(path.join(PROJECT_DIR, '.release', 'unreleased', `${ticket.ref}.md`), '- external work delivered\n');
+    });
+    assert.deepStrictEqual(store.getTicket(slug, t.ref).submission.changedPaths, [`.release/unreleased/${t.ref}.md`]);
+
+    const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, target]), '');
   });
 });
 
