@@ -274,13 +274,15 @@ configureRemoteControl({ args, flag, log, die, doctor, fetchShimHealth, requestS
 //
 // Returns 'user', 'project-only', or 'unknown' when installed_plugins.json is
 // absent (for example, a --plugin-dir development checkout).
-function installScope() {
+function installScope(home = os.homedir()) {
   try {
-    const file = path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
+    const file = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const entries = (data.plugins && data.plugins['model-gateway@eigenwise-toolshed']) || [];
+    const entries = Object.entries(data.plugins || {})
+      .filter(([pluginId]) => pluginId.startsWith('model-gateway@'))
+      .flatMap(([, installs]) => installs);
     if (!entries.length) return 'unknown';
-    return entries.some((e) => e.scope === 'user') ? 'user' : 'project-only';
+    return entries.some((entry) => entry.scope === 'user') ? 'user' : 'project-only';
   } catch { return 'unknown'; }
 }
 
@@ -2735,6 +2737,7 @@ module.exports = {
   syncCompatMode,
   waitForStartupReadiness,
   settingsPath,
+  installScope,
   COMPAT_HOST,
   COMPAT_PORT,
   DEFAULT_BASE_URL,

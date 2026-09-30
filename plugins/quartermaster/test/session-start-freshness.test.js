@@ -642,6 +642,21 @@ test('preserves gateway checker failure causes with bounded diagnostics', () => 
   assert.doesNotMatch(findingText(problems).join('\n'), /local health check is unavailable/);
 });
 
+test('GH-380: a model-gateway installed from another marketplace still gets its health check, newest install first', () => {
+  const checked = [];
+  const problems = gatewayFreshness([
+    { id: 'quartermaster@fork-toolshed', version: '9.0.0', installPath: 'C:/quartermaster' },
+    { id: 'model-gateway@fork-toolshed', version: '0.9.0', installPath: 'C:/gateway-0.9.0' },
+    { id: 'model-gateway@fork-toolshed', version: '0.10.0', installPath: 'C:/gateway-0.10.0' },
+  ], (gateway) => {
+    checked.push(gateway.installPath);
+    return { available: true, minProxyVersion: '0.1.14', proxyVersion: '0.1.33', auth: false, proxy: true, shim: true };
+  });
+
+  assert.deepEqual(checked, ['C:/gateway-0.10.0']);
+  assert.deepEqual(findingText(problems), ['model-gateway is not authenticated']);
+});
+
 test('GH-141: a real doctor failure is named by its own stderr cause, not by an unrelated stdout auth line', () => {
   const gateway = { installPath: 'C:/gateway' };
   // model-gateway's doctor writes an optional auth status line to stdout (see commands.js's `log()`
