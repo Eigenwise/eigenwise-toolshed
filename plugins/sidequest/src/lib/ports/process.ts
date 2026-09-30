@@ -52,8 +52,21 @@ function windowsPosixShell(): string | null {
 // doesn't match a file. sh/bash pass the pattern through literally instead. Detecting zsh
 // here lets us restore that literal-passthrough behavior instead of switching everyone's
 // verify shell.
+// SHELL can be a symlink under another name (`/opt/bin/mysh` -> zsh), which a basename check alone
+// misses, so the resolved target is checked too.
+const ZSH_NAME = /(?:^|[\\/])zsh(?:\.exe)?$/i;
+
+function resolvedExecutable(executable: string): string {
+  try {
+    return fs.realpathSync(executable);
+  } catch {
+    // An unresolvable SHELL is spawned as-is later; only its own name can say it is zsh.
+    return executable;
+  }
+}
+
 function isZshExecutable(executable: string): boolean {
-  return /(?:^|[\\/])zsh(?:\.exe)?$/i.test(executable);
+  return ZSH_NAME.test(executable) || ZSH_NAME.test(resolvedExecutable(executable));
 }
 
 function posixShellDefinition(): ShellDefinition {

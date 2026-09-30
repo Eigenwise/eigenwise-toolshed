@@ -42,8 +42,16 @@ function windowsPosixShell() {
   if (discovered.status !== 0) return null;
   return String(discovered.stdout || "").split(/\r?\n/).map((candidate) => candidate.trim()).find((candidate) => fs.existsSync(candidate)) || null;
 }
+const ZSH_NAME = /(?:^|[\\/])zsh(?:\.exe)?$/i;
+function resolvedExecutable(executable) {
+  try {
+    return fs.realpathSync(executable);
+  } catch {
+    return executable;
+  }
+}
 function isZshExecutable(executable) {
-  return /(?:^|[\\/])zsh(?:\.exe)?$/i.test(executable);
+  return ZSH_NAME.test(executable) || ZSH_NAME.test(resolvedExecutable(executable));
 }
 function posixShellDefinition() {
   const posixShell = process.env.SHELL || "/bin/sh";

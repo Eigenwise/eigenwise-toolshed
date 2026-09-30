@@ -782,9 +782,10 @@ ${String(ticket?.description || "")}`;
     if (!absent.size) return null;
     return `recorded verify references paths absent from this repo: ${[...absent].join(", ")}. This is allowed for greenfield work; confirm the executor creates them before verifying.`;
   }
+  const QUOTED_SPAN = /["'][^"']*["']/g;
   function unquotedTokens(segment) {
     const tokens = [];
-    for (const match of segment.matchAll(/"[^"]*"|'[^']*'|[^\s;&|()]+/g)) {
+    for (const match of segment.matchAll(/(?:"[^"]*"|'[^']*'|[^\s;&|()])+/g)) {
       const word = match[0];
       if (!/^(["']).*\1$/.test(word)) tokens.push(word);
     }
@@ -795,15 +796,31 @@ ${String(ticket?.description || "")}`;
     const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : token;
     if (/^(?:-|\.\.?$|[A-Za-z][\w+.-]*:\/\/)/.test(value)) return false;
     if (!/[\\/]|\.[A-Za-z0-9_-]+$/.test(value)) return false;
-    return /[[\]*?]/.test(value.replace(/["'][^"']*["']/g, ""));
+    return /[[\]*?]/.test(value.replace(QUOTED_SPAN, ""));
+  }
+  function isWildcardToken(token) {
+    return /[*?]/.test(token.replace(QUOTED_SPAN, ""));
+  }
+  function doubleQuoted(token) {
+    return `"${token.replace(/["']/g, "")}"`;
+  }
+  function literalBracketAdvice(token) {
+    return `for a literal bracket path like ${JSON.stringify(token)}, quote it (${doubleQuoted(token)}) for a tool that takes literal paths (for example tsc or pytest); for a runner that globs its own arguments (for example node --test) quote it and also escape each "[" as "[[]" (${doubleQuoted(token.replace(/\[/g, "[[]"))}), because a quoted bare "[id]" is read as a character class that matches nothing, so node --test runs 0 tests (or a sibling path that does match) while still exiting 0`;
+  }
+  function intendedGlobAdvice(token) {
+    return `for an intended glob like ${JSON.stringify(token)}, quote it (${doubleQuoted(token)}) so a runner that globs its own arguments (for example node --test) sees the pattern; leave it unquoted, relying on the shell to expand it first, for a tool that takes literal paths (for example tsc or pytest), where a quoted glob is a hard error`;
+  }
+  function unquotedGlobAdvice(offenders) {
+    const wildcard = offenders.find(isWildcardToken);
+    const bracket = offenders.find((token) => !isWildcardToken(token));
+    return [bracket && literalBracketAdvice(bracket), wildcard && intendedGlobAdvice(wildcard)].filter(Boolean).join("; ");
   }
   function verifyUnquotedGlobIssue(ticket) {
     const verify = String(ticket?.executorVerify || "").trim();
     if (!verify || manualVerify(verify)) return null;
     const offenders = [...new Set(splitVerifyCommands(verify).segments.flatMap(unquotedTokens).filter(globCharacterPathToken))];
     if (!offenders.length) return null;
-    const [firstOffender] = offenders;
-    return `recorded verify references an unquoted path with shell glob characters: ${offenders.join(", ")}. zsh used to abort the run with "no matches found" (or "bad pattern") when a token like ${JSON.stringify(firstOffender)} didn't match a real file, and bash can silently expand it into whichever different path happens to match instead. Quote it, e.g. "${firstOffender}", so every shell passes it through literally when the tool does its own glob matching (for example a test runner such as node --test); leave it unquoted, relying on the shell to expand it first, when the tool expects already-expanded literal paths (for example tsc or pytest).`;
+    return `recorded verify references an unquoted path with shell glob characters: ${offenders.join(", ")}. zsh used to abort the run with "no matches found" (or "bad pattern") when a token like ${JSON.stringify(offenders[0])} didn't match a real file, and bash can silently expand it into whichever different path happens to match instead. The fix depends on the token kind: ${unquotedGlobAdvice(offenders)}.`;
   }
   function verifyUnquotedGlobWarning(ticket) {
     const issue = verifyUnquotedGlobIssue(ticket);

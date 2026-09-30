@@ -664,6 +664,30 @@ test('shellScript omits the zsh preamble for a non-zsh POSIX shell', () => {
   assert.strictEqual(script.split('\n')[0], '(');
 });
 
+// A SHELL that is a symlink under another name (/opt/bin/mysh -> zsh) still runs zsh, so it
+// needs the same literal-passthrough preamble. The target only has to be named zsh; nothing runs.
+test('a SHELL symlink under another name that resolves to zsh is treated as zsh', { skip: process.platform === 'win32' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-zsh-symlink-'));
+  const originalShell = process.env.SHELL;
+  try {
+    const target = path.join(dir, 'zsh');
+    const link = path.join(dir, 'mysh');
+    fs.writeFileSync(target, '');
+    fs.symlinkSync(target, link);
+    process.env.SHELL = link;
+    assert.strictEqual(shellCommand('verify-script.sh', 'linux').isZsh, true);
+    process.env.SHELL = path.join(dir, 'other');
+    fs.writeFileSync(process.env.SHELL, '');
+    assert.strictEqual(shellCommand('verify-script.sh', 'linux').isZsh, false);
+    process.env.SHELL = path.join(dir, 'missing');
+    assert.strictEqual(shellCommand('verify-script.sh', 'linux').isZsh, false);
+  } finally {
+    if (originalShell === undefined) delete process.env.SHELL;
+    else process.env.SHELL = originalShell;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // GitHub #110: the wrapper's candidate came from process.cwd() at invocation, with nothing
 // refusing a run from the wrong checkout of the same repository. An isolated-worktree
 // executor that ran the briefing command from the shared registered checkout got a
