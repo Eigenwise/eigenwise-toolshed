@@ -812,6 +812,23 @@ async function launchEnsure(options = {}) {
   return true;
 }
 
+// Warns only; turning export on in user settings changes every session, so it stays an explicit
+// step of the enable-project-telemetry skill. A broken settings file must not block the launch.
+function userExportNotice(options = {}) {
+  try {
+    const config = consentedConfig(options.configFile || defaultConfigPath(options.dataDir || defaultDataDir(options.environment)));
+    return config ? require('../../bin/project-telemetry.js').userExportNotice(config, options) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function launchWithNotices(options = {}) {
+  const notices = [userExportNotice(options)].filter(Boolean);
+  await launchEnsure({ ...options, reportNotice: (message) => notices.push(message) });
+  return notices.length > 0 ? JSON.stringify({ systemMessage: notices.join('\n') }) : '';
+}
+
 function handoffArgument(argv, name) {
   const index = argv.indexOf(name);
   if (index < 0 || !argv[index + 1]) throw new Error(`Missing ${name} for observer handoff.`);
@@ -829,11 +846,7 @@ async function main() {
     return;
   }
   if (process.argv.includes('--launch')) {
-    await launchEnsure({
-      reportNotice(message) {
-        process.stdout.write(JSON.stringify({ systemMessage: message }));
-      },
-    });
+    process.stdout.write(await launchWithNotices());
     return;
   }
   if (process.argv.includes('--health')) {
@@ -853,6 +866,7 @@ module.exports = {
   ensureObservability,
   healthSnapshot,
   launchEnsure,
+  launchWithNotices,
   managedLogNeedsRotation,
   observerIdentity,
   portListening,

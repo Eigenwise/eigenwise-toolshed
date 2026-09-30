@@ -50,14 +50,17 @@ function parseWorktreeStatus(stdout: string): WorktreeStatusEntry[] {
   return entries;
 }
 
+type RecordedDependencyPaths = { links: readonly string[]; copies: readonly string[] };
+
 // `vacatedSource` is the path a quarantined tree was renamed from: an absolute in-tree link written
 // before the rename still names it, and reading such a link has to land back inside the tree (SQ-80).
 // It is canonicalized once here so the per-entry, per-component walk below never repeats that work.
-function atRiskStatusEntries(stdout: string, worktree: string, recordedLinks: readonly string[], vacatedSource: string | null = null): WorktreeStatusEntry[] {
+function atRiskStatusEntries(stdout: string, worktree: string, { links: recordedLinks, copies }: RecordedDependencyPaths, vacatedSource: string | null = null): WorktreeStatusEntry[] {
   const canonicalVacatedSource = vacatedSource ? canonicalPath(vacatedSource) : null;
   return parseWorktreeStatus(stdout)
     .filter((entry) => !recordedLinks.some((link) => entry.path === link || entry.path.startsWith(`${link}/`)))
-    .filter((entry) => !installedDependencyCacheFile(worktree, entry, canonicalVacatedSource));
+    .filter((entry) => !installedDependencyCacheFile(worktree, entry, canonicalVacatedSource))
+    .filter((entry) => !copiedDependencyContent(worktree, entry, copies));
 }
 
 // A target under the vacated source no longer exists there, so it is read at the same place in the
@@ -126,13 +129,50 @@ function dependencyCacheEntryResolvesToAcceptedLeaf(worktree: string, relativePa
   return false;
 }
 
+// A node_modules the board copied in (GH-370) holds the links an install makes, like npm's .bin entries
+// or pnpm's package links, and they came with the copy. So inside a recorded copy a link counts as install
+// content too, as long as the copy's own root is still the directory the copy made. A nested repository
+// still shows as a directory entry and stays at risk.
+function copiedDependencyContent(worktree: string, entry: WorktreeStatusEntry, recordedCopies: readonly string[]): boolean {
+  const copy = recordedCopyContaining(entry.path, recordedCopies);
+  if (!copy || entry.code !== '!!') return false;
+  try {
+    return !nativeFs.lstatSync(path.join(worktree, copy)).isSymbolicLink() && !nativeFs.lstatSync(path.join(worktree, entry.path)).isDirectory();
+  } catch (_) {
+    return false;
+  }
+}
+
+type DependencyRecord = { relativePath?: string; target?: string; worktree?: string; mode?: string; [field: string]: unknown };
+
+// Records carry no mode from before copies were recorded, and every one of those is a link.
+function recordedDependencies(ticketOrDispatch: any, mode: 'link' | 'copy'): DependencyRecord[] {
+  const dispatch = ticketOrDispatch?.dispatch || ticketOrDispatch;
+  const records = Array.isArray(dispatch?.ownedDependencyLinks) ? dispatch.ownedDependencyLinks : [];
+  return records.filter((record: DependencyRecord) => (record?.mode === 'copy') === (mode === 'copy'));
+}
+
+// Only a copied node_modules is trusted: the sweep treats it exactly as the ignored install it replaces.
+function recordedDependencyPaths(worktree: string, ticketOrDispatch: any): RecordedDependencyPaths {
+  const worktreeIdentity = canonicalPath(worktree);
+  const copies = recordedDependencies(ticketOrDispatch, 'copy')
+    .filter((record) => canonicalPath(String(record.worktree)) === worktreeIdentity)
+    .map((record) => String(record.relativePath))
+    .filter(dependencyCachePath);
+  return { links: recordedDependencyLinkPaths(worktree, ticketOrDispatch), copies };
+}
+
+function recordedCopyContaining(relativePath: string, recordedCopies: readonly string[]): string | undefined {
+  return recordedCopies.find((copied) => relativePath.startsWith(`${copied}/`));
+}
+
 function atRiskStatusEntriesSync(worktree: string, ticketOrDispatch: any = null): WorktreeStatusEntry[] {
   const stdout = execFileSync('git', [...AT_RISK_STATUS_ARGUMENTS], {
     cwd: worktree,
     encoding: 'utf8',
     windowsHide: true,
   });
-  return atRiskStatusEntries(stdout, worktree, recordedDependencyLinkPaths(worktree, ticketOrDispatch));
+  return atRiskStatusEntries(stdout, worktree, recordedDependencyPaths(worktree, ticketOrDispatch));
 }
 
 function unmergedCheckoutPaths(worktree: string): string[] {
@@ -316,9 +356,22 @@ function dependencyPlacement(repository: string, worktree: string, dependency: W
   return { source, target };
 }
 
-function copyDependencyPath(source: string, target: string, options: { overwrite: boolean }): void {
+// verbatimSymlinks keeps a relative link inside the copy relative; without it cpSync rewrites it to an absolute
+// path into the main checkout, and Turbopack refuses a link out of the project root (GH-370).
+function copyDependencyPath(source: string, target: string, options: { overwrite: boolean }, platform: string = process.platform): void {
   nativeFs.mkdirSync(path.dirname(target), { recursive: true });
-  nativeFs.cpSync(source, target, { recursive: true, force: options.overwrite });
+  if (!nativeFs.existsSync(target) && cloneDependencyPath(source, target, platform)) return;
+  nativeFs.cpSync(source, target, { recursive: true, force: options.overwrite, verbatimSymlinks: true });
+}
+
+// An APFS clone shares blocks with the checkout, so a copied node_modules costs neither the time nor the disk
+// of a real copy. cpSync's directory path ignores its clone flag, and `cp -c` fails outright on a volume that
+// cannot clone, which leaves the plain copy as the fallback.
+function cloneDependencyPath(source: string, target: string, platform: string): boolean {
+  if (platform !== 'darwin') return false;
+  if (spawnSync('cp', ['-Rc', source, target], { stdio: 'ignore', windowsHide: true }).status === 0) return true;
+  nativeFs.rmSync(target, { recursive: true, force: true });
+  return false;
 }
 
 function createDirectoryLink(source: string, target: string): void {
@@ -326,16 +379,22 @@ function createDirectoryLink(source: string, target: string): void {
   nativeFs.symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
 }
 
+// A copy is recorded too, so the sweep can tell the install it provisioned from content an executor put there.
 type ProvisionedDependencyLink = {
   relativePath: string;
   target: string;
+  mode: 'link' | 'copy';
 };
+
+function provisionedDependency(worktree: string, source: string, target: string, mode: 'link' | 'copy'): ProvisionedDependencyLink {
+  return { relativePath: path.relative(worktree, target).split(path.sep).join('/'), target: canonicalPath(source), mode };
+}
 
 function provisionDependencyPath(repository: string, worktree: string, dependency: WorktreeDependency): ProvisionedDependencyLink | null {
   const { source, target } = dependencyPlacement(repository, worktree, dependency);
   if (dependency.mode === 'copy') {
     copyDependencyPath(source, target, { overwrite: true });
-    return null;
+    return provisionedDependency(worktree, source, target, 'copy');
   }
   if (!nativeFs.statSync(source).isDirectory()) throw new Error(`link mode needs a directory, use copy mode for a file: ${dependency.path}`);
   if (!pathIsInside(worktree, target)) return linkBesideWorktree(source, target, dependency.path);
@@ -343,10 +402,7 @@ function provisionDependencyPath(repository: string, worktree: string, dependenc
     throw new Error(`worktree dependency path already exists after checkout: ${dependency.path}. link mode fills only a path the checkout leaves absent; use copy mode for a tracked path`);
   }
   createDirectoryLink(source, target);
-  return {
-    relativePath: path.relative(worktree, target).split(path.sep).join('/'),
-    target: canonicalPath(source),
-  };
+  return provisionedDependency(worktree, source, target, 'link');
 }
 
 // Every worktree of the board shares this link, so an existing link to the same source is the expected case,
@@ -887,7 +943,7 @@ async function inspectWorktree(entry: { worktree: string }, ticket: any, minAgeM
     upstream ? patchEquivalence(entry.worktree, 'HEAD', upstream) : Promise.resolve({ equivalent: false, ahead: null, equivalentCommits: 0, unmatchedCommits: null }),
     upstream ? reachableFrom(entry.worktree, 'HEAD', upstream) : Promise.resolve(false),
   ]);
-  const statusEntries = cleanResult.ok ? atRiskStatusEntries(cleanResult.stdout, entry.worktree, recordedDependencyLinkPaths(entry.worktree, ticket)) : [];
+  const statusEntries = cleanResult.ok ? atRiskStatusEntries(cleanResult.stdout, entry.worktree, recordedDependencyPaths(entry.worktree, ticket)) : [];
   return {
     clean: cleanResult.ok && statusEntries.length === 0,
     statusKnown: cleanResult.ok,
@@ -1553,7 +1609,7 @@ function normalizedWorktreeRelativePath(worktree: string, pathname: string): str
 
 function ownedDependencyLinks(ticketOrDispatch: any, worktree: string, lease: any): OwnedDependencyLink[] | null {
   const dispatch = ticketOrDispatch?.dispatch || ticketOrDispatch;
-  const records = Array.isArray(dispatch?.ownedDependencyLinks) ? dispatch.ownedDependencyLinks : [];
+  const records = recordedDependencies(ticketOrDispatch, 'link');
   if (!dispatch || !records.length) return [];
   if (!lease) return null;
   const normalized: OwnedDependencyLink[] = [];
@@ -1638,7 +1694,7 @@ function firstUntrustedDependencyLink(root: string, owned: (linkPath: string) =>
   return null;
 }
 
-function ownedDependencyLinkMatches(linkPath: string, record: OwnedDependencyLink): boolean {
+function ownedDependencyLinkMatches(linkPath: string, record: Pick<OwnedDependencyLink, 'target'>): boolean {
   try {
     const status = nativeFs.lstatSync(linkPath);
     if (!status.isSymbolicLink()) return false;
@@ -1651,8 +1707,7 @@ function ownedDependencyLinkMatches(linkPath: string, record: OwnedDependencyLin
 // The sweep provisions and releases these links itself, so they are the one thing inside a worktree
 // that is not this ticket's data. Every other entry the status read returns is.
 function recordedDependencyLinkPaths(worktree: string, ticketOrDispatch: any): string[] {
-  const dispatch = ticketOrDispatch?.dispatch || ticketOrDispatch;
-  const records = Array.isArray(dispatch?.ownedDependencyLinks) ? dispatch.ownedDependencyLinks : [];
+  const records = recordedDependencies(ticketOrDispatch, 'link');
   const worktreeIdentity = canonicalPath(worktree);
   const paths: string[] = [];
   for (const record of records) {
@@ -1756,14 +1811,14 @@ function worktreeSymbolicLinks(worktree: string): string[] | null {
 async function lateContentInMovedWorktree(
   destination: string,
   classifiedHead: string | null,
-  recordedLinks: readonly string[],
+  recorded: RecordedDependencyPaths,
   branch: string | null,
   vacatedSource: string,
 ): Promise<{ blocked: string | null; head: string | null; branchTip: string | null }> {
   const blockedBy = (blocked: string) => ({ blocked, head: null, branchTip: null });
   const status = await git(destination, [...AT_RISK_STATUS_ARGUMENTS]);
   if (!status.ok) return blockedBy(`the moved tree could not be read again: ${status.stderr || `git status exited ${status.status}`}`);
-  const held = atRiskStatusEntries(status.stdout, destination, recordedLinks, vacatedSource);
+  const held = atRiskStatusEntries(status.stdout, destination, recorded, vacatedSource);
   if (held.length) return blockedBy(`the moved tree holds ${held.length} entries the classification did not see, starting with ${held[0]!.code} ${held[0]!.path}`);
   const head = await git(destination, ['rev-parse', 'HEAD']);
   if (!head.ok) return blockedBy(`the moved tree's HEAD could not be read again: ${head.stderr || `git rev-parse exited ${head.status}`}`);
@@ -1794,14 +1849,15 @@ function recordedPathHoldsNonLink(linkPath: string): boolean {
 // not own, so the tree stays parked instead and the refusal names that link and its target. `vacatedSource`
 // is the path the tree was renamed from: an in-tree link created before the rename (the only shape a
 // Windows junction can take is an absolute target) still resolves there, and that still counts as
-// staying with the tree rather than escaping it.
-function releaseQuarantinedDependencyLinks(destination: string, recordedLinks: readonly string[], vacatedSource: string): { ok: boolean; reason: string; detail: string } {
+// staying with the tree rather than escaping it. A link inside a recorded copy came with it (GH-370).
+function releaseQuarantinedDependencyLinks(destination: string, recordedLinks: readonly string[], vacatedSource: string, recordedCopies: readonly string[] = []): { ok: boolean; reason: string; detail: string } {
   const replaced = recordedLinks.find((relativePath) => recordedPathHoldsNonLink(path.resolve(destination, relativePath)));
   if (replaced) return { ok: false, reason: 'dependency_link_changed', detail: `${replaced} is no longer the dependency link that was recorded` };
   if (!unlinkOwnedDependencyLinks(recordedLinks.map((relativePath) => path.resolve(destination, relativePath)))) {
     return { ok: false, reason: 'dependency_link_unlink_failed', detail: 'a recorded dependency link could not be released' };
   }
-  const refusal = firstUntrustedDependencyLink(destination, undefined, vacatedSource);
+  const cameWithCopy = (linkPath: string) => Boolean(recordedCopyContaining(path.relative(destination, linkPath).split(path.sep).join('/'), recordedCopies));
+  const refusal = firstUntrustedDependencyLink(destination, cameWithCopy, vacatedSource);
   return refusal ? { ok: false, reason: refusal.reason, detail: refusal.detail } : { ok: true, reason: '', detail: '' };
 }
 
@@ -2425,7 +2481,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       // moved copy has been read again and found to be what the classification saw (SQ-2952, SQ-2958).
       const parking = entry.action === 'quarantine';
       const moveMessage = parking ? 'untracked work quarantined' : 'reclaimed worktree moved into quarantine';
-      const recordedLinks = recordedDependencyLinkPaths(entry.path, ticket);
+      const recorded = recordedDependencyPaths(entry.path, ticket);
       const quarantine = await quarantineCandidate(entry, moveMessage, options);
       if (!quarantine.ok || !quarantine.destination) {
         recordFailure(entry.path, quarantine.stderr);
@@ -2453,7 +2509,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
         reportSweepProgress(options, entries, removed, sweepingStatus);
       };
       if (parking) {
-        if (!unlinkOwnedDependencyLinks(recordedLinks.map((relativePath) => path.resolve(destination, relativePath)))) {
+        if (!unlinkOwnedDependencyLinks(recorded.links.map((relativePath) => path.resolve(destination, relativePath)))) {
           failures.push({ path: destination, message: 'quarantined the worktree, but its recorded dependency links could not be released at the quarantine destination' });
         }
         await park(entry.reason, moveMessage);
@@ -2461,7 +2517,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       }
       const classifiedReason = entry.reason;
       const branch = localBranchName(entry.branch);
-      const movedRead = await lateContentInMovedWorktree(destination, entry.head, recordedLinks, branch, entry.path);
+      const movedRead = await lateContentInMovedWorktree(destination, entry.head, recorded, branch, entry.path);
       if (movedRead.blocked) {
         await park('late_content_quarantined', `classified ${classifiedReason}, but ${movedRead.blocked}, so the moved tree was parked instead of deleted`);
         continue;
@@ -2473,7 +2529,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
         await park('detached_head_unpinned', `classified ${classifiedReason}, but its detached HEAD ${shortCommit(movedRead.head)} is held by no other ref, so the moved tree was parked instead of deleted`);
         continue;
       }
-      const dependencyLinksReleased = releaseQuarantinedDependencyLinks(destination, recordedLinks, entry.path);
+      const dependencyLinksReleased = releaseQuarantinedDependencyLinks(destination, recorded.links, entry.path, recorded.copies);
       if (!dependencyLinksReleased.ok) {
         await park(
           dependencyLinksReleased.reason,
@@ -2577,4 +2633,4 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   };
 }
 
-module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks };
+module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks };

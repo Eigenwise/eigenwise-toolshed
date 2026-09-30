@@ -6,6 +6,9 @@ const DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 const DEFAULT_BATCH_SIZE = 256;
 const DEFAULT_DRAIN_BUDGET_MS = 10_000;
 const DEFAULT_FAILURE_THRESHOLD = 3;
+// SQ-2753 keeps a consent-denied row so a later opt-in can still accept it. A row from a session
+// with no project mapping never can be, so the age bound is what stops it being retried forever.
+const WITHHELD_MAX_AGE_MS = 60 * 60 * 1000;
 
 function readBoundedLines(filePath, maxBytes) {
   const stat = fs.statSync(filePath);
@@ -72,6 +75,10 @@ function recordDrainSuccess(options) {
   state.consecutive_failures = 0;
   state.last_error = null;
   state.last_success_at = new Date().toISOString();
+}
+
+function keepsDeniedLine(result, observation, now) {
+  return Boolean(result.consent_denied) && now - Date.parse(observation?.observed_at) <= WITHHELD_MAX_AGE_MS;
 }
 
 function drainBudgetMs(options) {
@@ -143,7 +150,7 @@ async function drainHookSpool(options) {
         for (const [index, result] of results.entries()) {
           if (!result.accepted) {
             rejected += 1;
-            if (result.consent_denied) withheldLines.push(parsedLines[index]);
+            if (keepsDeniedLine(result, observations[index], startedAt)) withheldLines.push(parsedLines[index]);
           } else if (result.duplicate) duplicates += 1;
           else drained += 1;
         }
@@ -157,7 +164,9 @@ async function drainHookSpool(options) {
       }
       await yieldToEventLoop();
     }
-    if (withheldLines.length === 0) fs.unlinkSync(drainingPath);
+    // Withheld rows go back behind new spool content. Left in .draining, they stopped every later drain from rotating the spool (GH-368).
+    if (withheldLines.length > 0) fs.appendFileSync(spoolPath, `${withheldLines.join('\n')}\n`, { encoding: 'utf8', mode: 0o600 });
+    fs.unlinkSync(drainingPath);
     recordDrainSuccess(options);
     return { drained, duplicates, rejected, malformed, droppedBytes };
   } catch (error) {
@@ -173,6 +182,7 @@ module.exports = {
   DEFAULT_DRAIN_BUDGET_MS,
   DEFAULT_FAILURE_THRESHOLD,
   DEFAULT_MAX_BYTES,
+  WITHHELD_MAX_AGE_MS,
   drainHookSpool,
   readBoundedLines,
 };

@@ -88,9 +88,9 @@ the exact executor and spawn object a fresh `dispatch <ref>` returned.
   EXACT `spawn.subagent_type` the dispatch returned (`sidequest-exec-model-<slug>-<effort>`, or
   `sidequest-exec-readonly-model-<slug>-<effort>` for a readonly category) with the `model` parameter
   OMITTED. The Agent tool only accepts `sonnet|opus|haiku|fable`, so the full catalog id and the
-  effort ride that definition's frontmatter instead. Sidequest writes these user-scope definitions
-  at SessionStart and again at dispatch, one ladder per current catalog entry, and removes a ladder
-  once its entry leaves the catalog. Readiness refusals for these routes name the provider.
+  effort ride that definition's frontmatter instead. SessionStart writes these user-scope definitions
+  only for (slug, effort) pairs a category route or fallback on any board uses, with a readonly twin
+  only for readonly categories, and prunes every other one; dispatch writes the one it spawns. Readiness refusals for these routes name the provider.
 - `<effort>` is the ticket's `effort` verbatim from the fresh read, never a level you judge fits
   better: the executor claims with `--effort <baked level>` and the board refuses the claim on a
   mismatch, bouncing the ticket back.
