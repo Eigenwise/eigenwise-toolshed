@@ -21,8 +21,8 @@ test('seeded categories match the checked-in global category snapshot', () => {
 
 test('seeded Sol fallbacks name GPT-6.1 Sol and stored rows still on a retired Sol move to it', () => {
   const coding = starterRoutingProfilesFor([{ slug: 'codex-gpt-6-1-sol', provider: 'codex' }]).find((profile) => profile.id === 'coding')!;
-  for (const id of ['experiment', 'coding.hard', 'spike-investigation']) {
-    assert.equal(coding.categories.find((category) => category.id === id)!.fallback.model, 'codex-gpt-6-1-sol', id);
+  for (const [id, effort] of [['experiment', 'high'], ['coding.hard', 'xhigh'], ['spike-investigation', 'high']]) {
+    assert.deepEqual(coding.categories.find((category) => category.id === id)!.fallback, { model: 'codex-gpt-6-1-sol', effort }, id);
   }
 
   assert.deepEqual(categoryWithCurrentCodexRoutes({ id: 'review-audit', route: { model: 'codex-gpt-6-sol', effort: 'high' }, fallback: null }), {
