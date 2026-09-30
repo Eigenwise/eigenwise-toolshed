@@ -31,6 +31,7 @@ __export(commit_scope_exports, {
   candidatePaths: () => candidatePaths,
   commitPaths: () => commitPaths,
   commitScoped: () => commitScoped,
+  foreignRefMessage: () => foreignRefMessage,
   foreignReleaseFragmentPaths: () => foreignReleaseFragmentPaths,
   foreignReleaseFragmentRefusalMessage: () => foreignReleaseFragmentRefusalMessage,
   foreignReleaseFragmentScopePaths: () => foreignReleaseFragmentScopePaths,
@@ -41,9 +42,12 @@ __export(commit_scope_exports, {
   isInScope: () => import_scope_match2.isInScope,
   isRemoteIntegrationRef: () => isRemoteIntegrationRef,
   linkedWorktree: () => linkedWorktree,
+  listRefs: () => listRefs,
+  moveRefs: () => moveRefs,
   outsideScopeCommitState: () => outsideScopeCommitState,
   preserveCommitRef: () => preserveCommitRef,
   rangePaths: () => rangePaths,
+  recordsCommit: () => recordsCommit,
   repoRoot: () => repoRoot,
   scopedPaths: () => import_scope_match2.scopedPaths,
   scopedWorkPending: () => scopedWorkPending,
@@ -510,30 +514,61 @@ function unpublishedReleaseTip(cwd, commit, remoteBranchRef) {
   const plugins = annotated.filter((name) => PLUGIN_RELEASE_TAG.test(name));
   return { commit: tip.value, tags: [...marketplace, ...plugins].sort() };
 }
-function preserveCommitRef(cwd, commit, gitRef, options) {
+const EMPTY_OBJECT_ID = "0000000000000000000000000000000000000000";
+function commitMatchesRevision(commit, revision) {
+  const text = String(revision || "").trim().toLowerCase();
+  return text.length >= 7 && commit.startsWith(text);
+}
+function recordsCommit(recorded, commit) {
+  return recorded.some((revision) => commitMatchesRevision(commit, revision));
+}
+function ownsRefTip(current, replaces) {
+  return current === EMPTY_OBJECT_ID || recordsCommit(replaces, current);
+}
+function foreignRefMessage(ref, commit) {
+  const archived = ref.replace("refs/sidequest/", "refs/sidequest-archived/foreign/");
+  return `${ref} already points to ${commit}, a commit this ticket never recorded, so it belongs to another board or ticket on this repository. Archiving that board moves its candidate refs to refs/sidequest-archived/<board>/; otherwise move this one aside with \`git update-ref ${archived} ${commit} && git update-ref -d ${ref} ${commit}\`, then retry.`;
+}
+function compareAndSetRef(root, ref, tip, replaces) {
+  const existing = resolvedCommit(root, ref);
+  const current = existing.ok ? existing.value : EMPTY_OBJECT_ID;
+  const preserved = { ok: true, commit: tip, gitRef: ref };
+  if (current === tip) return preserved;
+  if (!ownsRefTip(current, replaces)) return { ok: false, reason: "git_ref_collision", message: foreignRefMessage(ref, current) };
+  const updated = gitResult(root, ["update-ref", ref, tip, current]);
+  return updated.ok ? preserved : { ok: false, reason: "git_ref_collision", message: updated.message };
+}
+function refTarget(root, commit, ref) {
+  const tip = resolvedCommit(root, commit);
+  if (!tip.ok) return { ok: false, reason: "missing_commit", message: tip.message };
+  const validRef = gitResult(root, ["check-ref-format", ref]);
+  return validRef.ok ? tip : { ok: false, reason: "invalid_git_ref", message: validRef.message };
+}
+function preserveCommitRef(cwd, commit, gitRef, replaces = []) {
   const ref = String(gitRef || "").trim();
   if (!ref) return { ok: false, reason: "missing_git_ref" };
   try {
     const root = repoRoot(cwd);
-    const tip = resolvedCommit(root, commit);
-    if (!tip.ok) return { ok: false, reason: "missing_commit", message: tip.message };
-    const validRef = gitResult(root, ["check-ref-format", ref]);
-    if (!validRef.ok) return { ok: false, reason: "invalid_git_ref", message: validRef.message };
-    if (options?.noOverwrite) {
-      const existing = resolvedCommit(root, ref);
-      if (existing.ok) {
-        if (existing.value === tip.value) return { ok: true, commit: tip.value, gitRef: ref };
-        return { ok: false, reason: "git_ref_collision", message: `${ref} already points to ${existing.value}` };
-      }
-      const emptyRef = "0000000000000000000000000000000000000000";
-      const created = gitResult(root, ["update-ref", ref, tip.value, emptyRef]);
-      if (!created.ok) return { ok: false, reason: "git_ref_collision", message: created.message };
-      return { ok: true, commit: tip.value, gitRef: ref };
-    }
-    git(root, ["update-ref", ref, tip.value]);
-    return { ok: true, commit: tip.value, gitRef: ref };
+    const target = refTarget(root, commit, ref);
+    return target.ok ? compareAndSetRef(root, ref, target.value, replaces) : target;
   } catch (error) {
     return { ok: false, reason: "git_error", message: errorMessage(error) };
+  }
+}
+function listRefs(cwd, prefix) {
+  const listed = gitResult(cwd, ["for-each-ref", "--format=%(refname) %(objectname)", prefix]);
+  if (!listed.ok) return [];
+  return listed.value.split(/\r?\n/).map((line) => line.trim().split(" ")).filter((fields) => fields.length === 2).map(([name, commit]) => ({ name, commit }));
+}
+function moveRefs(cwd, moves) {
+  const script = moves.map((move) => `create ${move.to} ${move.commit}
+delete ${move.from} ${move.commit}
+`).join("");
+  try {
+    (0, import_git_process.execFileSync)("git", ["update-ref", "--stdin"], { cwd, encoding: "utf8", input: script, windowsHide: true });
+    return { ok: true, value: "" };
+  } catch (error) {
+    return { ok: false, message: errorMessage(error) };
   }
 }
 function scopedWorkPending(cwd, files, options) {
@@ -788,6 +823,7 @@ async function commitScoped(cwd, message, files) {
   candidatePaths,
   commitPaths,
   commitScoped,
+  foreignRefMessage,
   foreignReleaseFragmentPaths,
   foreignReleaseFragmentRefusalMessage,
   foreignReleaseFragmentScopePaths,
@@ -798,9 +834,12 @@ async function commitScoped(cwd, message, files) {
   isInScope,
   isRemoteIntegrationRef,
   linkedWorktree,
+  listRefs,
+  moveRefs,
   outsideScopeCommitState,
   preserveCommitRef,
   rangePaths,
+  recordsCommit,
   repoRoot,
   scopedPaths,
   scopedWorkPending,

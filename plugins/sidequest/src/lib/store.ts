@@ -77,6 +77,7 @@ const { createConfig } = require('./store/config.js');
 const { createSweeps } = require('./store/sweeps.js');
 const { createServer } = require('./store/server.js');
 const { createProjects } = require('./store/projects.js');
+const candidateRefs = require('./store/candidate-refs.js');
 const { createWarnings } = require('./store/warnings.js');
 
 let servingInstallResolved = false;
@@ -159,8 +160,29 @@ function nextStorySeq(...args: any[]) { return projectsLayer.nextStorySeq(...arg
 function setProjectNotify(...args: any[]) { return projectsLayer.setProjectNotify(...args); }
 function setProjectRouting(...args: any[]) { return projectsLayer.setProjectRouting(...args); }
 function projectRoutingEnabled(...args: any[]) { return projectsLayer.projectRoutingEnabled(...args); }
-function archiveProject(...args: any[]) { return projectsLayer.archiveProject(...args); }
-function unarchiveProject(...args: any[]) { return projectsLayer.unarchiveProject(...args); }
+// A board whose path is gone or outside Git has no candidate refs to move.
+function boardRepository(slug: string): string | null {
+  const projectPath = String(readMeta(slug)?.path || '');
+  try {
+    return projectPath ? commitScope.repoRoot(projectPath) : null;
+  } catch (_: any) {
+    return null;
+  }
+}
+
+function archiveProject(slug: string) {
+  const result = projectsLayer.archiveProject(slug);
+  const repository = result.ok ? boardRepository(slug) : null;
+  return repository ? { ...result, candidateRefs: candidateRefs.archiveBoardCandidateRefs(commitScope, repository, slug, listTickets(slug)) } : result;
+}
+
+function unarchiveProject(slug: string) {
+  const result = projectsLayer.unarchiveProject(slug);
+  const repository = result.ok ? boardRepository(slug) : null;
+  return repository ? { ...result, candidateRefs: candidateRefs.restoreBoardCandidateRefs(commitScope, repository, slug) } : result;
+}
+
+function ticketRecordedCommits(ticket: any): string[] { return candidateRefs.ticketRecordedCommits(ticket); }
 function deleteProjectExact(...args: any[]) { return projectsLayer.deleteProjectExact(...args); }
 function listProjects(...args: any[]) { return projectsLayer.listProjects(...args); }
 function findProject(...args: any[]) { return projectsLayer.findProject(...args); }
@@ -3839,6 +3861,7 @@ module.exports = {
   findProject,
   archiveProject,
   unarchiveProject,
+  ticketRecordedCommits,
   deleteProjectExact,
   mergeProject,
   setProjectNotify,

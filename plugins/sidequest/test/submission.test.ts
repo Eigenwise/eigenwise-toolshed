@@ -6435,3 +6435,50 @@ test('integration verification runs the recorded verifier from the ticket verify
   assert.strictEqual(result.ok, true, JSON.stringify(result.verify));
   assert.strictEqual(result.verify.status, 'passed');
 });
+
+test('GH-378: submit never repoints another board\'s refs/sidequest/<ref> and names that commit instead', async () => {
+  cleanBranch();
+  const ticket = addTicket('new board reuses an archived board ref name', { files: ['lib/reused-ref.js'] });
+  const by = 'reused-ref-worker';
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  const foreign = git(['rev-parse', 'origin/main']);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'reused-ref.js'), 'first round\n');
+  git(['add', 'lib/reused-ref.js']);
+  git(['commit', '-m', 'first round candidate']);
+  const firstRound = git(['rev-parse', 'HEAD']);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'reused-ref.js'), 'second round\n');
+  git(['add', 'lib/reused-ref.js']);
+  git(['commit', '-m', 'second round candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(ticket, foreign);
+  const submitArgs = {
+    project: PROJECT_DIR,
+    ref: ticket.ref,
+    by,
+    commit,
+    verify: 'npm run test:files -- test/submission.test.ts',
+    body: 'Changed lib/reused-ref.js. Scoped submission test passed. Nothing skipped.',
+  };
+
+  const tipMismatch = await callMcp('submit', { ...submitArgs, worktree: PROJECT_DIR });
+  assert.equal(tipMismatch.ok, false);
+  assert.match(tipMismatch.message, new RegExp(`refs/sidequest/${ticket.ref} already points to ${foreign}, a commit this ticket never recorded, so it belongs to another board`));
+  assert.doesNotMatch(tipMismatch.message, /Point it back at the submitted commit/);
+
+  const claimed = store.getTicket(slug, ticket.ref);
+  claimed.dispatch = { sanctionedCommits: [firstRound] };
+  persist(claimed);
+  pin(ticket, firstRound);
+  const ownTipMismatch = await callMcp('submit', { ...submitArgs, worktree: PROJECT_DIR });
+  assert.equal(ownTipMismatch.ok, false);
+  assert.match(ownTipMismatch.message, /Point it back at the submitted commit/);
+
+  pin(ticket, foreign);
+  git(['reset', '--hard', 'origin/main']);
+  await assert.rejects(
+    callMcp('submit', { ...submitArgs, worktree: path.join(PROJECT_DIR, 'missing-reused-ref-worktree') }),
+    new RegExp(`already points to ${foreign}, a commit this ticket never recorded`),
+  );
+  assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`]), foreign, 'the foreign candidate ref is left in place');
+});

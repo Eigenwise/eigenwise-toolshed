@@ -50,6 +50,7 @@ const { createConfig } = require("./store/config.js");
 const { createSweeps } = require("./store/sweeps.js");
 const { createServer } = require("./store/server.js");
 const { createProjects } = require("./store/projects.js");
+const candidateRefs = require("./store/candidate-refs.js");
 const { createWarnings } = require("./store/warnings.js");
 let servingInstallResolved = false;
 let resolvedServingInstall;
@@ -195,11 +196,26 @@ function setProjectRouting(...args) {
 function projectRoutingEnabled(...args) {
   return projectsLayer.projectRoutingEnabled(...args);
 }
-function archiveProject(...args) {
-  return projectsLayer.archiveProject(...args);
+function boardRepository(slug) {
+  const projectPath = String(readMeta(slug)?.path || "");
+  try {
+    return projectPath ? commitScope.repoRoot(projectPath) : null;
+  } catch (_) {
+    return null;
+  }
 }
-function unarchiveProject(...args) {
-  return projectsLayer.unarchiveProject(...args);
+function archiveProject(slug) {
+  const result = projectsLayer.archiveProject(slug);
+  const repository = result.ok ? boardRepository(slug) : null;
+  return repository ? { ...result, candidateRefs: candidateRefs.archiveBoardCandidateRefs(commitScope, repository, slug, listTickets(slug)) } : result;
+}
+function unarchiveProject(slug) {
+  const result = projectsLayer.unarchiveProject(slug);
+  const repository = result.ok ? boardRepository(slug) : null;
+  return repository ? { ...result, candidateRefs: candidateRefs.restoreBoardCandidateRefs(commitScope, repository, slug) } : result;
+}
+function ticketRecordedCommits(ticket) {
+  return candidateRefs.ticketRecordedCommits(ticket);
 }
 function deleteProjectExact(...args) {
   return projectsLayer.deleteProjectExact(...args);
@@ -3455,6 +3471,7 @@ module.exports = {
   findProject,
   archiveProject,
   unarchiveProject,
+  ticketRecordedCommits,
   deleteProjectExact,
   mergeProject,
   setProjectNotify,

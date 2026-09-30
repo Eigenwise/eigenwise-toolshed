@@ -226,6 +226,11 @@ function sharedTreeSubmissionBoundaries(slug, ticket) {
     return liveSubmission || integratedSubmission ? [{ ref: candidate.ref, commit }] : [];
   });
 }
+function tipMismatchRemedy(ticket, range, gitRef) {
+  const refTip = String(range.refTip || "");
+  if (refTip && !commitScope.recordsCommit(store.ticketRecordedCommits(ticket), refTip)) return commitScope.foreignRefMessage(gitRef, refTip);
+  return `${gitRef} points to a different commit. Point it back at the submitted commit with \`git update-ref ${gitRef} <commit>\`, then resubmit.`;
+}
 function submissionRangeRemedy(ticket, range, gitRef) {
   const reason = String(range.reason || "").trim();
   const pinnedBase = dispatchBaseMessage(ticket);
@@ -235,7 +240,7 @@ function submissionRangeRemedy(ticket, range, gitRef) {
     missing_git_ref: `${gitRef} is missing or does not point to the submitted commit. Run \`git update-ref ${gitRef} <commit>\`, then resubmit.`,
     missing_upstream: `fetch or recreate the recorded integration ref, then resubmit the preserved commit without changing its base.`,
     missing_commit: `preserve the work commit, restore it in this worktree, update ${gitRef}, and resubmit.`,
-    tip_mismatch: `${gitRef} points to a different commit. Point it back at the submitted commit with \`git update-ref ${gitRef} <commit>\`, then resubmit.`,
+    tip_mismatch: tipMismatchRemedy(ticket, range, gitRef),
     missing_recorded_upstream: `fetch the recorded upstream commit, then resubmit the preserved commit without changing its base.`,
     expected_upstream_diverged: `preserve the submission for orchestrator reconciliation; do not replace it by syncing to a branch tip.`,
     unrelated_history: `rebuild only this ticket's work from ${pinnedBase}, update ${gitRef}, and resubmit.`,
@@ -259,7 +264,7 @@ function submissionRangeFailureMessage(ticket, range, gitRef) {
 function uncommittedScopeFailureMessage(ticket, paths) {
   return `submit: refused ${ticket.ref}; uncommitted changes fall inside this ticket's declared scope: ${paths.join(", ")}. Commit these paths, or explain why they are deliberately excluded before resubmitting.`;
 }
-function submissionRoot(meta, worktree, commit, gitRef) {
+function submissionRoot(meta, ticket, worktree, commit, gitRef) {
   if (worktree == null) return process.cwd();
   try {
     return worktreeRoot(worktree, "submit");
@@ -272,9 +277,9 @@ function submissionRoot(meta, worktree, commit, gitRef) {
     } catch (repositoryError) {
       throw new Error(`submit: worktree is gone and the board repository is unavailable: ${repositoryError?.message || repositoryError}`);
     }
-    const preserved = commitScope.preserveCommitRef(repository, commit, gitRef);
+    const preserved = commitScope.preserveCommitRef(repository, commit, gitRef, store.ticketRecordedCommits(ticket));
     if (!preserved.ok) {
-      throw new Error(`submit: worktree is gone and ${commit} is unavailable from the board repository: ${preserved.message || preserved.reason}. Release this ticket to todo for a fresh board dispatch; the board cannot submit a candidate it cannot inspect.`);
+      throw new Error(`submit: worktree is gone and the board repository could not pin ${commit} at ${gitRef}: ${preserved.message || preserved.reason}. When the commit itself is unavailable, release this ticket to todo for a fresh board dispatch; the board cannot submit a candidate it cannot inspect.`);
     }
     return repository;
   }
@@ -936,7 +941,7 @@ const tools = [
         throw new Error(`invalid commit "${commit}" — pass the verified commit's hex hash (7-64 chars)`);
       }
       const gitRef = args.gitRef || `refs/sidequest/${ticket.ref}`;
-      const root = submissionRoot(meta, args.worktree, commit, gitRef);
+      const root = submissionRoot(meta, ticket, args.worktree, commit, gitRef);
       const standing = submitWorktreeRefusal(slug, ticket, root, args);
       if (standing) return mutationAck(slug, { ok: false, ticket, ...standing });
       const verify = String(args.verify || "").trim();
