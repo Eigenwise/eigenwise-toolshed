@@ -956,13 +956,8 @@ function negativeControlTestReport(comments, expectedTestNames = []) {
   return { markerLines, unreported };
 }
 const NEGATIVE_CONTROL_MARKER_TAG = "[sidequest:negative-control]";
-function firstFailedMatchAfterSemicolon(assertionText) {
-  const failedPattern = /\s+failed=(\d+)/g;
-  let match;
-  while (match = failedPattern.exec(assertionText)) {
-    if (assertionText.slice(0, match.index).includes(";")) return match;
-  }
-  return null;
+function assertionTerminatorAt(assertionText) {
+  return assertionText.replace(/"[^"]*"|`[^`]*`/g, (span) => " ".repeat(span.length)).indexOf(";");
 }
 function parseNegativeControlMarker(markerLine) {
   const afterTag = markerLine.slice(NEGATIVE_CONTROL_MARKER_TAG.length).replace(/^\s+/, "");
@@ -971,16 +966,16 @@ function parseNegativeControlMarker(markerLine) {
   const assertionAt = targetText.search(/;\s*assertion=/);
   if (assertionAt < 0) return { ok: false, detail: 'no "; assertion=" follows its target= value' };
   const assertionText = targetText.slice(assertionAt).replace(/^;\s*assertion=/, "");
-  const failedMatch = firstFailedMatchAfterSemicolon(assertionText);
-  if (!failedMatch) return { ok: false, detail: 'no "<command> failed=<n>" follows its assertion= value' };
-  const beforeFailed = assertionText.slice(0, failedMatch.index);
-  const semiIndex = beforeFailed.lastIndexOf(";");
+  const assertionEnd = assertionTerminatorAt(assertionText);
+  if (assertionEnd < 0) return { ok: false, detail: 'no ";" ends its assertion= value' };
+  const tail = assertionText.slice(assertionEnd + 1).match(/^\s*(?!failed=)(.+?)\s+failed=(\d+)/);
+  if (!tail) return { ok: false, detail: 'no non-empty "<command> failed=<n>" follows its assertion= value' };
   return {
     ok: true,
     target: targetText.slice(0, assertionAt).trim(),
-    assertion: beforeFailed.slice(0, semiIndex).trim(),
-    command: beforeFailed.slice(semiIndex + 1).trim(),
-    failed: Number(failedMatch[1])
+    assertion: assertionText.slice(0, assertionEnd).trim(),
+    command: String(tail[1]),
+    failed: Number(tail[2])
   };
 }
 function negativeControlResult(ticket, expectedTestNames = []) {

@@ -898,6 +898,66 @@ test('SQ-95: a failed= inside the assertion prose does not end the parse before 
   git(['commit', '-m', 'negative control failed in assertion prose fixture']);
 });
 
+test('SQ-116: a quoted failed=<n> inside the assertion prose does not mask the command\'s real count', () => {
+  const by = 'negative-control-quoted-semicolon-assertion';
+  const ticket = addNegativeControlTicket('negative control reads the count from the command segment', by);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=fixture; assertion=returns "a; failed=2" on empty input; node --test failed=0 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const zeroRun = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(zeroRun.reason, 'negative_control_zero_failures', 'assertion count masks zero run');
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=fixture; assertion=returns "a; failed=0" on empty input; node --test failed=2 failure-kind=assertion',
+    source: 'mcp',
+  }).ok, true);
+  const failingRun = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(failingRun.ok, true, failingRun.message);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control quoted semicolon assertion fixture']);
+});
+
+test('SQ-116: a marker with no command between the assertion and failed=<n> is refused', () => {
+  const by = 'negative-control-missing-command';
+  const ticket = addNegativeControlTicket('negative control requires a command', by);
+
+  const markerLine = '[sidequest:negative-control] target=fixture; assertion=changed value; failed=2 failure-kind=assertion';
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: markerLine, source: 'mcp' }).ok, true);
+  const refusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(refusal.reason, 'negative_control_evidence_required', 'missing command');
+  assert.match(refusal.message, /no non-empty "<command> failed=<n>" follows its assertion= value/);
+
+  const noTerminator = '[sidequest:negative-control] target=fixture; assertion=changed value node --test failed=2 failure-kind=assertion';
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: noTerminator, source: 'mcp' }).ok, true);
+  const unterminated = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(unterminated.reason, 'negative_control_evidence_required');
+  assert.match(unterminated.message, /no ";" ends its assertion= value/);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control missing command fixture']);
+});
+
 test('SQ-83: a malformed newest marker without a real failed count is skipped in favor of an older valid one', () => {
   const by = 'negative-control-skip-to-older';
   const ticket = addNegativeControlTicket('negative control skips to an older valid marker', by);
