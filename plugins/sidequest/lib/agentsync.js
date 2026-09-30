@@ -561,13 +561,10 @@ function linkedPlanSuffix(link, slug) {
   return plan ? ` (plan: ${path.resolve(plan.path)})` : "";
 }
 function capturedVerifyCommand(verify, ticketRef, project, boundWorktree) {
-  const command = String(verify || "").trim();
-  if (!command) return "";
-  const encoded = Buffer.from(command, "utf8").toString("base64");
   const captureScript = path.join(__dirname, "verify-capture.js");
-  const target = String(ticketRef || "").trim() && String(project || "").trim() ? ` --project ${JSON.stringify(String(project))} --ticket ${JSON.stringify(String(ticketRef))}` : "";
-  const worktree = String(boundWorktree || "").trim() ? ` --worktree ${JSON.stringify(String(boundWorktree))}` : "";
-  return `node "${captureScript}" --base64 ${encoded}${target}${worktree}`;
+  const commandSource = ticketRef && project ? ` --project ${JSON.stringify(String(project))} --ticket ${JSON.stringify(String(ticketRef))}` : ` --base64 ${Buffer.from(verify.trim(), "utf8").toString("base64")}`;
+  const worktree = boundWorktree ? ` --worktree ${JSON.stringify(boundWorktree)}` : "";
+  return `node "${captureScript}"${commandSource}${worktree}`;
 }
 function ticketEvidenceGuidance(ticket) {
   const directory = String(ticket?.dispatch?.evidenceDirectory || "").trim();
@@ -1179,15 +1176,35 @@ function renderReadOnlyDiscoveredModelAgent(name, effort, modelId, readOnlyDenie
     disallowedTools: readOnlyTools.disallowedTools
   }));
 }
-function discoveredModelAgentSources(readOnlyDeniedTools) {
-  const sources = /* @__PURE__ */ new Map();
+function routedDiscoveredModelExec(route) {
+  const exec = route && store.resolveExec(route.model, route.effort);
+  return isDiscoveredModelExecutor(exec?.agent) ? exec : null;
+}
+function routedDiscoveredModelDefinitions() {
+  const globalFallback = store.getRoutingFallback();
+  const definitions = [];
+  for (const { route, fallback, readonly } of store.getCategoryRoutePairs()) {
+    for (const exec of [route, fallback, globalFallback].map(routedDiscoveredModelExec)) {
+      if (!exec) continue;
+      definitions.push({ name: exec.agent, effort: exec.effort, modelId: exec.spawnId, readOnly: false });
+      if (readonly) definitions.push({ name: exec.readOnlyAgent, effort: exec.effort, modelId: exec.spawnId, readOnly: true });
+    }
+  }
+  return definitions;
+}
+function requestedDiscoveredModelDefinitions(executor) {
   for (const backend of store.discoveredModelBackends()) {
     for (const effort of EXEC_EFFORTS) {
-      const name = discoveredModelExecutorName(backend.agentSlug, effort);
-      const readOnlyName = readOnlyDiscoveredModelExecutorName(backend.agentSlug, effort);
-      sources.set(`${name}.md`, renderDiscoveredModelAgent(name, effort, backend.id));
-      sources.set(`${readOnlyName}.md`, renderReadOnlyDiscoveredModelAgent(readOnlyName, effort, backend.id, readOnlyDeniedTools));
+      if (discoveredModelExecutorName(backend.agentSlug, effort) === executor) return [{ name: executor, effort, modelId: backend.id, readOnly: false }];
+      if (readOnlyDiscoveredModelExecutorName(backend.agentSlug, effort) === executor) return [{ name: executor, effort, modelId: backend.id, readOnly: true }];
     }
+  }
+  return [];
+}
+function discoveredModelAgentSources(definitions, readOnlyDeniedTools) {
+  const sources = /* @__PURE__ */ new Map();
+  for (const { name, effort, modelId, readOnly } of definitions) {
+    sources.set(`${name}.md`, readOnly ? renderReadOnlyDiscoveredModelAgent(name, effort, modelId, readOnlyDeniedTools) : renderDiscoveredModelAgent(name, effort, modelId));
   }
   return sources;
 }
@@ -1222,19 +1239,24 @@ function writeOwnedDiscoveredModelAgent(filePath, source) {
   fs.writeFileSync(filePath, source);
   return true;
 }
-function syncDiscoveredModelAgents(opts) {
-  const dir = opts?.dir || defaultAgentsDir();
-  const wanted = discoveredModelAgentSources(opts?.readOnlyDeniedTools);
-  const removed = pruneDiscoveredModelAgents(dir, wanted);
+function writeDiscoveredModelAgents(dir, wanted) {
   let written = 0;
   for (const [filename, source] of wanted) {
     if (writeOwnedDiscoveredModelAgent(path.join(dir, filename), source)) written++;
   }
+  return written;
+}
+function syncDiscoveredModelAgents(opts) {
+  const dir = opts?.dir || defaultAgentsDir();
+  const wanted = discoveredModelAgentSources(routedDiscoveredModelDefinitions(), opts?.readOnlyDeniedTools);
+  const removed = pruneDiscoveredModelAgents(dir, wanted);
+  const written = writeDiscoveredModelAgents(dir, wanted);
   return { written, removed, unchanged: wanted.size - written };
 }
 function ensureDiscoveredModelAgents(executor, opts) {
   if (!isDiscoveredModelExecutor(executor)) return;
-  if (syncDiscoveredModelAgents(opts).written > 0) waitForNativeAgentReload(opts?.waitMs);
+  const wanted = discoveredModelAgentSources(requestedDiscoveredModelDefinitions(executor), opts?.readOnlyDeniedTools);
+  if (writeDiscoveredModelAgents(opts?.dir || defaultAgentsDir(), wanted) > 0) waitForNativeAgentReload(opts?.waitMs);
 }
 function syncExecAgentsIfChanged(_prefs, opts) {
   const migrated = migrateExecAgents(_prefs, opts);

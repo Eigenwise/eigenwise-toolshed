@@ -26,7 +26,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-test
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
-const { recordCapture, runVerifyCapture } = require('../lib/verify-capture.js');
+const { captureCommand, recordCapture, runVerifyCapture } = require('../lib/verify-capture.js');
 const agentsync = require('../lib/agentsync.js');
 const mcp = require('../lib/mcp.js');
 const db = require('../lib/db.js');
@@ -411,10 +411,11 @@ test('capture accepts a live verify amendment and still rejects unrelated comman
 
 // SQ-2713. A bound review reviewer ran its pinned verify twice and the wrapper
 // refused both with verification_capture_command_mismatch, so this pins the one
-// byte-for-byte contract the reviewer could not check: the base64 the briefing
-// tells it to run has to decode to exactly the command the capture demands,
-// including the `&&` and `--` a real suite verifier carries.
-test('a bound review briefs the exact base64 bytes its capture requires', async () => {
+// byte-for-byte contract the reviewer could not check: the command the briefed
+// wrapper runs has to be exactly the command the capture demands, including the
+// `&&` and `--` a real suite verifier carries. Since GH-373 the briefing names the
+// ticket and the wrapper loads that command from it, so there is no blob to retype.
+test('a bound review briefs the ticket whose pinned command its capture requires', async () => {
   const command = 'node -e "process.exit(0)" && node -e "process.exit(0)" -- test/first.test.ts test/second.test.ts';
   const source = submittedGateSource('bound review capture source', 'review-capture-source.txt', 'bound-review-capture-source');
   const review = store.createTicket(slug, {
@@ -429,9 +430,10 @@ test('a bound review briefs the exact base64 bytes its capture requires', async 
   assert.strictEqual(prepared.ticket.dispatch.verificationRequirement.command, command);
 
   const briefing = agentsync.renderTicketBriefing(store.getTicket(slug, review.ref), prepared.token, slug, PROJECT_DIR);
-  const encoded = briefing.match(/verify-capture\.js" --base64 (\S+)/)?.[1];
-  assert.ok(encoded, 'the review briefing must carry a base64 capture command');
-  const briefedCommand = Buffer.from(encoded, 'base64').toString('utf8');
+  const briefed = briefing.match(/verify-capture\.js" --project ("[^"]*") --ticket ("[^"]*")/);
+  assert.ok(briefed, 'the review briefing must name the capture target');
+  assert.doesNotMatch(briefing, /--base64/);
+  const briefedCommand = captureCommand([], { project: JSON.parse(briefed[1]), ticket: JSON.parse(briefed[2]) }).command;
   assert.strictEqual(briefedCommand, command);
 
   const capture = await runVerifyCapture(briefedCommand, PROJECT_DIR);
@@ -447,9 +449,9 @@ test('a bound review briefs the exact base64 bytes its capture requires', async 
 
 // SQ-2713. The SQ-2711 reviewer saw only `capture=unrecorded reason=...`, so it
 // never learned which side of the comparison differed and retried the same run.
-// The wrapper has to print the store's message, which is the only place the two
-// command strings appear side by side.
-test('the capture wrapper prints which command the refused capture used', () => {
+// A --base64 command that differs from the ticket's pin is now refused before it
+// runs (GH-373), and the refusal has to print both command strings side by side.
+test('the capture wrapper prints which command was pinned and which was passed', () => {
   const pinnedCommand = 'node -e "process.exit(0)" && node -e "process.exit(0)" -- test/pinned.test.ts';
   const ranCommand = 'node -e "process.exit(0)"';
   const ticket = addTicket('wrapper capture diagnostics', {
@@ -470,13 +472,13 @@ test('the capture wrapper prints which command the refused capture used', () => 
     ], { cwd: PROJECT_DIR, encoding: 'utf8', env: { ...process.env, SIDEQUEST_HOME }, windowsHide: true });
   } catch (error: any) {
     status = error.status;
-    output = String(error.stdout || '');
+    output = String(error.stdout || '') + String(error.stderr || '');
   }
 
   assert.strictEqual(status, 2);
   assert.match(output, /capture=unrecorded reason=verification_capture_command_mismatch/);
   assert.ok(output.includes(`Pinned command: ${JSON.stringify(pinnedCommand)}`), output);
-  assert.ok(output.includes(`Captured command: ${JSON.stringify(ranCommand)}`), output);
+  assert.ok(output.includes(`Passed command: ${JSON.stringify(ranCommand)}`), output);
 });
 
 test('repeated captures use the dispatch pin after a stale lifecycle mirror rewrite', async () => {

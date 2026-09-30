@@ -8,6 +8,89 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.585.0 (2026-09-30)
+
+### model-gateway 0.52.1 → 0.52.2
+
+#### Fixes
+
+- /healthz answers at once instead of waiting on codex auth status, and a stale gateway.sock is reclaimed (#367) (SQ-3166)
+  On macOS `codex auth status` can take several seconds when it reads the Keychain, and `/healthz` waited for it before answering. Every probe of `/healthz` gives up sooner (1 s for the supervisor, 2 to 3 s for status and `catalog --refresh`), so a running shim read as down: `start` reported "not healthy after 42s", `catalog --refresh` refused to write, and Sidequest lost the Codex models once its catalog expired. Each timed-out probe also started its own auth check, so several ran at once.
+
+  `/healthz` now answers right away with the last known Codex readiness. The proxy and auth checks run in the background, one at a time, and a result is reused for 15 seconds. The readiness block says how old it is: `checkedAt`, `ageMs`, and `stale` (true once it's past 15 seconds, while the next check runs). Before the first check finishes the state is `checking`. `upstreamBlocked` and `upstreamUnavailable` are still read fresh on every call. `doctor`, `ensure`, and `catalog --refresh` keep running their own full check.
+
+  A `gateway.sock` left behind by a shim that died without closing made the next bind fail with `EADDRINUSE`. The shim now connects to it first. If nothing answers and the path is a socket, it removes the file, logs that, and binds. A live listener or a file that isn't a socket is left alone.
+- Windows setup judges the supervisor stop by whether the PID is gone, so a non-zero taskkill no longer leaves the gateway down (SQ-3170)
+  `taskkill /T /F` exits non-zero when any process in the tree slips away mid-kill, even after the
+  target died. `setup`, `stop` and the shim drain used to read that as a failed stop, so `setup` quit
+  with "the stop request failed" and never started the new shim. Every stop now counts as done once the
+  target PID is gone, and the failure reason says the PID is still running instead of guessing at
+  elevation.
+- The gateway launcher, doctor's install scope and Quartermaster's gateway check find a model-gateway installed from any marketplace (#380) (SQ-3174)
+  Three readers of `installed_plugins.json` only looked at `model-gateway@eigenwise-toolshed`, so a model-gateway installed from a fork's marketplace was invisible to them. The stable launcher at `~/.claude/model-gateway/model-gateway.js` exited with "no installed Model Gateway CLI was found", `doctor` couldn't report the install scope, and Quartermaster's SessionStart check skipped the gateway health check entirely.
+
+  All three now read every `model-gateway@<marketplace>` entry. The launcher still runs the newest version (then the most recently updated), and Quartermaster checks the newest install when there is more than one.
+
+### observability 0.7.35 → 0.8.0
+
+#### Features
+
+- Project telemetry works again on Claude Code 2.1.282+: an opt-in --user-export step turns export on in user settings, and the audit and SessionStart report the real state (GH-372) (SQ-3171)
+  Claude Code 2.1.282 stopped reading the export-enabling telemetry variables from project and local settings, so the per-directory wiring exported nothing while `--audit` said `wired`. `OTEL_RESOURCE_ATTRIBUTES` is still read there, so `project.id` attribution is unchanged. `project-telemetry.js --user-export` adds the missing export variables to user settings without replacing existing keys, and the skill asks before running it. `--audit` now reports `wired`, `NO-EXPORT` or `UNWIRED` per directory from the installed version, the effective export variables and recent `claude_code` rows, and SessionStart warns when export is off.
+
+#### Fixes
+
+- A consent-denied hook spool row no longer stops the spool from draining (GH-368) (SQ-3167)
+  One consent-denied row used to pin `hook-spool.jsonl.draining` for good: the drain wrote the row back
+  into `.draining`, and a new drain only rotates the main spool when `.draining` is gone, so every later
+  drain re-read that one row while the main spool grew without bound and `/health` still reported
+  success. A denied row now goes back into the main spool behind new content and `.draining` is always
+  removed, so the next drain rotates and processes everything that arrived since. Denied rows are still
+  kept for a later opt-in (SQ-2753), but only for an hour after they were observed. A row from a session
+  with no project mapping can never be accepted, and without a bound it would be retried forever. An
+  install already stuck in this state clears itself on the first drain after the update.
+
+### quartermaster 0.11.8 → 0.11.9
+
+#### Fixes
+
+- The gateway launcher, doctor's install scope and Quartermaster's gateway check find a model-gateway installed from any marketplace (#380) (SQ-3174)
+  Three readers of `installed_plugins.json` only looked at `model-gateway@eigenwise-toolshed`, so a model-gateway installed from a fork's marketplace was invisible to them. The stable launcher at `~/.claude/model-gateway/model-gateway.js` exited with "no installed Model Gateway CLI was found", `doctor` couldn't report the install scope, and Quartermaster's SessionStart check skipped the gateway health check entirely.
+
+  All three now read every `model-gateway@<marketplace>` entry. The launcher still runs the newest version (then the most recently updated), and Quartermaster checks the newest install when there is more than one.
+
+### sidequest 5.4.2 → 5.4.3
+
+#### Fixes
+
+- worktrees sweep reclaims a finished worktree whose only symlinks resolve inside it, and names what it refused (GH-221)
+  The dependency-link scan now judges a symlink no dispatch record names by where it resolves: one whose target stays inside the worktree is removed with the tree, so the node_modules/.bin entries an executor's install wrote no longer keep every finished worktree on disk. A link that escapes the tree and an unreadable entry still refuse, and the refusal now names the offending path and why after the reason code.
+
+  The sweep's at-risk classifier now judges an ignored file under node_modules by where its path components resolve: a symlink segment whose target stays inside the worktree is a plain component, so the node_modules/.bin links an executor's install wrote no longer make a finished worktree read as dirty and park it as untracked_quarantined for the 14-day retention instead of reclaiming it as ticket_done. A link under node_modules that escapes the tree, a dangling or unreadable entry, a directory entry reached directly rather than through a link, and a nested repository still count as data and still travel into quarantine.
+- The sweep's delete-time re-read trusts an absolute in-tree link that still names the path the tree was renamed from (GH-352)
+  An executing sweep renames a finished worktree into quarantine and reads it again before deleting it. An unrecorded absolute in-tree link under `node_modules/.bin` (an absolute directory or file symlink; a Windows junction dangles after the rename and git lists nothing through it) still names the path the tree was renamed from, so the re-read counted it as escaping the tree and parked every such tree as `late_content_quarantined` instead of deleting it. The re-read now takes the vacated source path the same way the link-release check already does, so a link that resolves there is read at the same place in the moved tree. A link that resolves anywhere else still parks the tree.
+
+  The release also no longer unlinks a recorded dependency path by name alone. A recorded path that is no longer a link is content no read judged, so the tree is parked with `dependency_link_changed` and that content is left in place.
+- Generated model executors only exist for model and effort pairs a route actually uses (#369) (SQ-3168)
+  The fix for #361 wrote ten user-scope agent files for every discovered model whose provider Model Gateway doesn't serve: all five efforts plus a readonly twin, whether or not anything routed there. They show up in the Agent list of every Claude Code session on the machine, so a 14-model catalog meant 140 definitions where maybe 10 could ever run.
+
+  Session start now writes a `sidequest-exec-model-<slug>-<effort>` file only for a pair some category route, category fallback, or the global fallback uses, across the routing profiles and board-local rows of every board on the machine. The `-readonly-model-` twin is only written for readonly categories. Everything else Sidequest generated is removed, so changing a route swaps the files at the next session start. A dispatch still writes the one file it spawns right before the spawn, which covers ticket route and readonly overrides and route changes made mid-session. It no longer prunes, because a parallel dispatch's file may still be waiting for its Agent call.
+- verify-capture loads the pinned command from the ticket, so executors no longer retype a base64 blob (#373) (SQ-3172)
+  The executor briefing printed the pinned verifier as `verify-capture.js --base64 <blob> --project ... --ticket ...`, and the executor model had to retype that blob into its shell call. One wrong character decoded to a different command, which then failed or got refused at submit with `verification_capture_command_mismatch`, even though the executor ran what it was told.
+
+  With `--project` and `--ticket`, the wrapper now loads the pinned verify command from the ticket, the same pin submit compares against, and the briefing line carries only `--project`, `--ticket` and `--worktree`. `--base64` still works: alone it runs as before, and beside `--project/--ticket` a blob that matches the pin changes nothing while one that differs runs nothing and prints the pinned and passed commands side by side. A ticket with no pinned command, an unknown ticket, and an unregistered project are refused by name before anything runs. The recorded capture still comes from the command that actually ran, so a capture of an old command that finishes after the ticket's verify was amended is still refused.
+- A copied node_modules builds under Turbopack and is deleted with its worktree (GH-370) (SQ-3173)
+  Next.js 16 builds with Turbopack, which refuses a worktree's linked `node_modules` because the link
+  points out of the project root. `worktreeDependencyPaths` already offered `{ "path": "node_modules",
+  "mode": "copy" }`, but that copy rewrote every relative link inside it into an absolute path back into
+  your checkout, so the build hit the same refusal one level down. A copy now keeps those links relative,
+  and on macOS it's an APFS clone (`cp -c`), falling back to a plain copy where cloning isn't available.
+
+  The copy is now recorded with its mode beside the dependency links, and the worktree sweep counts a
+  recorded node_modules copy, links inside it included, as install content: it's deleted with the
+  worktree instead of parking the tree in quarantine. A recorded copy that was replaced by a link is
+  still quarantined.
+
 ## v3.584.0 (2026-09-30)
 
 ### quartermaster 0.11.7 → 0.11.8
