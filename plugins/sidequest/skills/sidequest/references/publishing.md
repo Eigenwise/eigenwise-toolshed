@@ -268,14 +268,16 @@ the ticket.
    `sidequest comments <ref> --json` for it. The queue is intentionally compact and does not replace the
    full thread. Act on unresolved risks or questions: resolve them, skip and file a scoped integration
    ticket, or leave the submission parked. Do not cherry-pick until the thread is understood.
-4. **Put the project's registered checkout on a clean configured target branch.** `integrate` always
+4. **Put the project's registered checkout on the configured target branch, clean where the delivery writes.** `integrate` always
    merges and verifies in that registered checkout: the control plane folds whatever directory you call
    it from back to the registered repo root, so adding a scratch linked worktree does NOT move the
    target. Check out the configured integration branch there and confirm
-   `git branch --show-current` reports it; a detached HEAD or any other branch refuses. Any staged,
-   modified, or untracked file in that checkout refuses with `integration_target_dirty` and names the
-   offending paths before a branch moves or a verifier runs, so commit, stash, or remove them first
-   rather than trying to hide them in another worktree. Install the touched plugin's dependencies
+   `git branch --show-current` reports it; a detached HEAD or any other branch refuses. A modified or
+   untracked file the delivery writes (a rename's source included), and any staged or unmerged entry,
+   refuses with `integration_target_dirty` and names only those paths before a branch moves or a
+   verifier runs, so commit, stash, or remove them first rather than trying to hide them in another
+   worktree. Unstaged edits and untracked files outside the delivery (a running service's logs or
+   JSON) stay put: the merge goes around them and the delivery record lists them in `ignoredDirtyPaths`. Install the touched plugin's dependencies
    before reverifying, for this repo: `cd plugins/<name> && npm ci`.
 5. **Reconstruct each admitted submission before assembly**. Resolve its durable ref and require it
    still points to the submitted tip. Require the recorded upstream commit to remain reachable from
@@ -385,7 +387,7 @@ just to run `submit` or `done`.
 The lock records owner pid + session metadata + timestamp. A publisher that dies mid-transaction leaves: a
 held lock (reclaimable — same session refreshes on re-acquire; anyone else waits for the TTL or
 `--steal`s a provably stale holder), a registered checkout left mid-delivery or dirty (`git status`,
-and `integrate` refuses it as `integration_target_dirty` until it is clean), and either parked
+and `integrate` refuses it as `integration_target_dirty` until the paths the delivery writes are clean), and either parked
 submissions from a pre-delivery failure or done tickets whose local delivery has not reached the remote
 yet. Nothing is lost: rerun the transaction from step 1, inspect each ticket's completion and delivery
 record, recover any durable refs needed for the push, then finish the push or record the failure on the
