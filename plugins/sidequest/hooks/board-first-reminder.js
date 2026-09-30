@@ -257,10 +257,9 @@ function main() {
   const input = readStdin();
   if (!input) return;
   reportLoadedSidequestVersion(input);
-  if (isSubagent(input)) return;
   const sessionId2 = stringField(input, "session_id", "sessionId").trim();
   const prompt = humanPrompt(input);
-  if (!sessionId2 || !prompt) return;
+  if (isSubagent(input) || !sessionId2 || !prompt) return;
   reopenInlineWorkWindow(sessionId2);
   remindOnce(input, sessionId2, prompt);
 }
