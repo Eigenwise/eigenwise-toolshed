@@ -25,6 +25,8 @@ interface CatalogModel {
   id?: unknown;
   label?: unknown;
   provider?: unknown;
+  contextWindow?: unknown;
+  contextWindowNote?: unknown;
 }
 
 export interface ExternalModel {
@@ -33,6 +35,8 @@ export interface ExternalModel {
   label: string;
   provider: string;
   source: string;
+  contextWindow?: number;
+  contextWindowNote?: string;
 }
 
 export interface ProviderReadiness {
@@ -261,19 +265,31 @@ function currentCatalog(catalogPath: string, schemas: ReadonlySet<number>): Cata
   return usableCatalog(refreshGatewayCatalog(catalogPath), schemas, catalogPath);
 }
 
+function catalogText(value: unknown, fallback = ''): string {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text || fallback;
+}
+
+function catalogProvider(model: CatalogModel, schema: number): string {
+  if (schema < 4) return 'codex';
+  const provider = model.provider;
+  return typeof provider === 'string' && provider === provider.toLowerCase() && SLUG_RE.test(provider) ? provider : '';
+}
+
+function catalogContextWindow(model: CatalogModel): Pick<ExternalModel, 'contextWindow' | 'contextWindowNote'> {
+  const contextWindow = model.contextWindow;
+  if (typeof contextWindow !== 'number' || !Number.isSafeInteger(contextWindow) || contextWindow <= 0) return {};
+  const contextWindowNote = catalogText(model.contextWindowNote);
+  return contextWindowNote ? { contextWindow, contextWindowNote } : { contextWindow };
+}
+
 function validateEntry(raw: unknown, source: string, schema: number): ExternalModel | null {
-  if (!isRecord(raw)) return null;
-  const model = raw as CatalogModel;
-  const slug = typeof model.slug === 'string' ? model.slug.trim().toLowerCase() : '';
-  if (!SLUG_RE.test(slug)) return null;
-  const id = typeof model.id === 'string' ? model.id.trim() : '';
-  if (!id) return null;
-  const provider = schema >= 4
-    ? typeof model.provider === 'string' && model.provider === model.provider.toLowerCase() && SLUG_RE.test(model.provider) ? model.provider : ''
-    : 'codex';
-  if (!provider) return null;
-  const label = typeof model.label === 'string' && model.label.trim() ? model.label.trim() : slug;
-  return { slug, id, label, provider, source };
+  const model: CatalogModel = isRecord(raw) ? raw : {};
+  const slug = catalogText(model.slug).toLowerCase();
+  const id = catalogText(model.id);
+  const provider = catalogProvider(model, schema);
+  if (!SLUG_RE.test(slug) || !id || !provider) return null;
+  return { slug, id, label: catalogText(model.label, slug), provider, source, ...catalogContextWindow(model) };
 }
 
 export function configuredExternalModelProvider(slug: string): string | null {

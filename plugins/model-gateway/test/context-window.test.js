@@ -19,6 +19,12 @@ const RUNTIME = path.join(__dirname, '..', 'lib', 'runtime.js');
 // deterministic; the override test sets it explicitly in its own child env.
 delete process.env.CODEX_GATEWAY_CONTEXT_WINDOW;
 delete process.env.CODEX_GATEWAY_COMPACT_TRIGGER;
+// In-process requires read the saved context-window setting from the home directory; a machine's own
+// setting must not change what these assertions see.
+const inProcessHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-context-window-'));
+process.env.HOME = inProcessHome;
+process.env.USERPROFILE = inProcessHome;
+test.after(() => fs.rmSync(inProcessHome, { recursive: true, force: true }));
 
 function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
@@ -174,11 +180,11 @@ test('Codex discovery advertises client 1M aliases and forwards backend base ids
   const models = JSON.parse((await request(shimPort, 'GET', '/v1/models')).body);
   const codexModels = models.data.filter(({ id }) => id.startsWith('claude-gpt-'));
   assert.deepEqual(codexModels.map(({ id, max_input_tokens }) => ({ id, max_input_tokens })), [
-    { id: 'claude-gpt-5.2[1m]', max_input_tokens: 920000 },
-    { id: 'claude-gpt-5.6-sol[1m]', max_input_tokens: 920000 },
-    { id: 'claude-gpt-5.6-terra[1m]', max_input_tokens: 920000 },
-    { id: 'claude-gpt-5.6-luna[1m]', max_input_tokens: 920000 },
-    { id: 'claude-gpt-6-astra[1m]', max_input_tokens: 920000 },
+    { id: 'claude-gpt-5.2[1m]', max_input_tokens: 272000 },
+    { id: 'claude-gpt-5.6-sol[1m]', max_input_tokens: 272000 },
+    { id: 'claude-gpt-5.6-terra[1m]', max_input_tokens: 272000 },
+    { id: 'claude-gpt-5.6-luna[1m]', max_input_tokens: 272000 },
+    { id: 'claude-gpt-6-astra[1m]', max_input_tokens: 272000 },
   ]);
   assert.ok(models.data.some(({ id }) => id === 'claude-grok-4.5[1m]'));
   const { resolveGatewayModelPolicy } = require(RUNTIME);
@@ -212,7 +218,7 @@ test('window policy marks measured rows and advertises unmeasured Codex defaults
   });
   assert.equal(gatewayClientModelId('gpt-5.2'), 'claude-gpt-5.2[1m]');
   assert.equal(resolveGatewayModelPolicy('claude-opus-4-8[1m]').sentry, 'none');
-  assert.equal(gatewayModel('gpt-6-astra-fast', 'codex').max_input_tokens, 920000);
+  assert.equal(gatewayModel('gpt-6-astra-fast', 'codex').max_input_tokens, 272000);
   assert.match(resolveGatewayModelPolicy('claude-gpt-6.1-sol-fast[1m]').measurement, /^measured 2026-09-30/);
 });
 
@@ -221,12 +227,12 @@ test('Codex sentry derives a headroom-preserving trigger for each policy row', (
   const { resolveGatewayModelPolicy } = require(RUNTIME);
   const policy = resolveGatewayModelPolicy('gpt-5.2');
 
-  assert.deepEqual(effectiveSentryPolicy(policy, 320000), {
+  assert.deepEqual(effectiveSentryPolicy(policy, 320000, null), {
     backendWindow: 920000,
     compactTrigger: 320000,
     source: 'env',
   });
-  assert.deepEqual(effectiveSentryPolicy(policy, Number.NaN), {
+  assert.deepEqual(effectiveSentryPolicy(policy, Number.NaN, null), {
     backendWindow: 920000,
     compactTrigger: 880000,
     source: 'derived',
@@ -236,7 +242,7 @@ test('Codex sentry derives a headroom-preserving trigger for each policy row', (
     backendId: 'gpt-test-300k',
     backendWindow: 300000,
     sentry: 'synthetic-413',
-  }, 320000), {
+  }, 320000, null), {
     backendWindow: 300000,
     compactTrigger: 260000,
     source: 'derived',
@@ -299,7 +305,7 @@ test('Codex sentry logs a startup policy line for every advertised model row', a
       assert.match(matchingLines[0], new RegExp(`sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=none$`));
       continue;
     }
-    assert.match(matchingLines[0], new RegExp(`sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=${policy.sentry} effectiveTrigger=\\d+ source=(env|derived)$`));
+    assert.match(matchingLines[0], new RegExp(`sentry policy id=${policy.backendId} backendWindow=${policy.backendWindow} sentry=${policy.sentry} effectiveTrigger=\\d+ source=(env|derived|cap)$`));
   }
 });
 
@@ -616,7 +622,7 @@ test('genuine no-numbers 413 gets usage numbers appended', async (t) => {
   });
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
-  const shimPort = await spawnShim(t, proxyPort, { CODEX_GATEWAY_COMPACT_TRIGGER: '369000' });
+  const shimPort = await spawnShim(t, proxyPort, { CODEX_GATEWAY_COMPACT_TRIGGER: '369000', CODEX_GATEWAY_CONTEXT_WINDOW: 'full' });
 
   assert.equal((await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders)).status, 200);
   const response = await request(shimPort, 'POST', '/v1/messages', codexBody, sentrySessionHeaders);
@@ -1601,7 +1607,7 @@ test('doctor describes project-local wiring as the default', () => {
       encoding: 'utf8',
     });
     assert.match(result.stdout, /wiring: effective none/);
-    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 920000 \| 1000000 \| 967000 \| synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 272000 \| 1000000 \| 967000 \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
     assert.match(result.stdout, /default wiring target: this project's \.claude\/settings\.local\.json/);
     // Fresh HOME means an empty detected-pin cache, so this value is the shipped constant rather than
@@ -1649,8 +1655,10 @@ test('doctor reports the 1M Codex resolver aliases and a lower explicit cap', ()
       encoding: 'utf8',
     });
     assert.match(result.stdout, /model window policy: auto-compact cap 325000 \(settings project-local\)/);
-    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol\[1m\] \| 920012 \| 920000 \| 1000000 \| 292000 \| synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
-    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 920000 \| 1000000 \| 292000 \| synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol\[1m\] \| 920012 \| 272000 \| 1000000 \| 292000 \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 272000 \| 1000000 \| 292000 \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
+    assert.match(result.stdout, /context window claude: full \(1M through the \[1m\] alias pins\) \[default\]; autoCompactWindow 325000 from settings project-local caps this session; compacts near 292000/);
+    assert.match(result.stdout, /context window codex: 272000 cap \[default\]; compacts past 187000; OpenAI bills input above 272k tokens at 2x; the cap keeps every request, including compaction, under it/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
@@ -1677,7 +1685,7 @@ test('doctor warns when the configured Codex window resolves to the unknown-mode
       isolatedOverrides,
       encoding: 'utf8',
     });
-    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol \| 920012 \| 200000 \| 200000 \| 167000 \| synthetic-413 \| 880012 \(derived\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol \| 920012 \| 200000 \| 200000 \| 167000 \| synthetic-413 \| 115000 \(cap\) \| 2026-09-05/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
