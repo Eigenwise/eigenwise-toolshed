@@ -27,11 +27,17 @@ function compareVersions(left, right) {
   return 0;
 }
 
+function modelGatewayInstalls(registry) {
+  return Object.entries(registry.plugins || {})
+    .filter(([pluginId]) => pluginId.startsWith('model-gateway@'))
+    .flatMap(([, installs]) => installs);
+}
+
 function currentModelGatewayCli() {
   const claudeHome = process.env.MODEL_GATEWAY_CLAUDE_HOME || path.join(os.homedir(), '.claude');
   try {
     const registry = JSON.parse(fs.readFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), 'utf8'));
-    const candidates = (registry.plugins?.['model-gateway@eigenwise-toolshed'] || [])
+    const candidates = modelGatewayInstalls(registry)
       .filter((install) => install?.installPath)
       .map((install) => ({ ...install, script: path.join(install.installPath, 'bin', 'model-gateway.js') }))
       .filter((install) => fs.existsSync(install.script));
