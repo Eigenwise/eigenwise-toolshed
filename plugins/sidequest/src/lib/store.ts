@@ -995,16 +995,22 @@ function ownChangeAttribution(root: string, changes: OwnChange[], working: strin
   };
 }
 
+// What the candidate itself changed since its dispatch base, from its own commits; when git cannot
+// read an integration ref or commit, every change is the candidate's.
+function attributeOwnChanges(slug: any, ticket: any, workspace: any, working: any, changedPaths: string[]) {
+  try {
+    const changes = ownChanges(slug, ticket, workspace.root, workspace.base);
+    if (changes) return ownChangeAttribution(workspace.root, changes, working, changedPaths);
+  } catch (_: any) { /* an integration ref or commit git cannot read leaves every change the candidate's */ }
+  return { paths: changedPaths, testNames: [...new Set(changeTestNames(workspace.root, { from: workspace.base, to: null }, changedPaths))] };
+}
+
 // Which scoped paths and named tests the negative control answers for: the candidate's own changes
 // since its dispatch base, never what a merge carried in from the integration branch.
 function negativeControlChanges(slug: any, ticket: any, delta: any, changedPaths: string[]) {
   const workspace = delta?.workspace;
   if (!workspace?.base) return { paths: changedPaths, testNames: [] as string[] };
-  try {
-    const changes = ownChanges(slug, ticket, workspace.root, workspace.base);
-    if (changes) return ownChangeAttribution(workspace.root, changes, delta.working, changedPaths);
-  } catch (_: any) { /* an integration ref or commit git cannot read leaves every change the candidate's */ }
-  return { paths: changedPaths, testNames: [...new Set(changeTestNames(workspace.root, { from: workspace.base, to: null }, changedPaths))] };
+  return attributeOwnChanges(slug, ticket, workspace, delta.working, changedPaths);
 }
 
 function mixedChange(paths: string[]) {

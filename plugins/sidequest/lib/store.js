@@ -982,15 +982,18 @@ function ownChangeAttribution(root, changes, working, changedPaths) {
     testNames: [...new Set(names)].filter((name) => current.has(name))
   };
 }
-function negativeControlChanges(slug, ticket, delta, changedPaths) {
-  const workspace = delta?.workspace;
-  if (!workspace?.base) return { paths: changedPaths, testNames: [] };
+function attributeOwnChanges(slug, ticket, workspace, working, changedPaths) {
   try {
     const changes = ownChanges(slug, ticket, workspace.root, workspace.base);
-    if (changes) return ownChangeAttribution(workspace.root, changes, delta.working, changedPaths);
+    if (changes) return ownChangeAttribution(workspace.root, changes, working, changedPaths);
   } catch (_) {
   }
   return { paths: changedPaths, testNames: [...new Set(changeTestNames(workspace.root, { from: workspace.base, to: null }, changedPaths))] };
+}
+function negativeControlChanges(slug, ticket, delta, changedPaths) {
+  const workspace = delta?.workspace;
+  if (!workspace?.base) return { paths: changedPaths, testNames: [] };
+  return attributeOwnChanges(slug, ticket, workspace, delta.working, changedPaths);
 }
 function mixedChange(paths) {
   return paths.some(isTestSidePath) && paths.some((file) => !isTestSidePath(file));
