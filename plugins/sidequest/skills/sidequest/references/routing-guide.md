@@ -40,8 +40,9 @@ degraded route and warning. The dispatcher does nothing special for that warning
 object from the fresh `list` or `ready` read.
 
 The `exec` projection names the exact executor and concrete model. Claude routes expose `exec.model`; Codex
-routes expose a backend-specific `exec.agent` with `exec.model` null, so spawn that exact agent with the
-`model` parameter omitted. Inject the category contract verbatim alongside the ticket contract. Never
+routes and other discovered providers expose a backend-specific `exec.agent` with `exec.model` null, so spawn
+that exact agent with the `model` parameter omitted. The Agent tool accepts only `sonnet`, `opus`, `haiku`, and
+`fable` as `model`; a discovered id rides the executor definition's frontmatter instead. Inject the category contract verbatim alongside the ticket contract. Never
 hand-pick a model or effort after reading the route.
 
 ## Per-ticket model requests
@@ -57,7 +58,8 @@ The `route_recipe` MCP tool and `sidequest route <category> --json` CLI command 
 ```js
 const recipe = await route_recipe({ category });
 const result = await Agent({
-  model: recipe.agent.model,
+  ...(recipe.agent.subagentType ? { subagent_type: recipe.agent.subagentType } : {}),
+  ...(recipe.agent.model ? { model: recipe.agent.model } : {}),
   prompt: recipe.agent.promptPrefix + prompt,
 });
 ```
@@ -72,6 +74,12 @@ Claude workflow effort follows the session. For a Codex route, the recipe puts t
 
 ```json
 {"route":{"model":"codex-gpt-5-6-terra","effort":"medium"},"agent":{"model":"claude-codex-auto","promptPrefix":"[sidequest-route model=gpt-5.6-terra effort=medium]\\n\\n"}}
+```
+
+For a discovered provider the shim does not serve (catalog provider other than `codex`/`grok`), `agent.model` is null and `agent.subagentType` names the Sidequest definition that pins the full catalog id and the effort (`effortCarrier: "definition"`). Omit `model` and spawn that type:
+
+```json
+{"route":{"model":"opencode-deepseek-v4-1-flash","effort":"high"},"agent":{"model":null,"subagentType":"sidequest-exec-model-opencode-deepseek-v4-1-flash-high","promptPrefix":""}}
 ```
 
 `route` is display and provenance data. `agent` is the caller wiring surface. Use exactly one gateway marker, unchanged. A prepared ticket dispatch adds ` ticket=<ref>` before the closing bracket, and the gateway records that ref with its usage. Never quote it in the prompt or append another marker. Codex effort rides only in that marker; Claude effort follows the session. A Codex gateway authentication failure remains a spawn-time error, so report the failed spawn instead of translating the recipe by hand.

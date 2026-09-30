@@ -45,6 +45,8 @@ var CLAUDE_PREFIX = "sidequest-exec-";
 var DISPATCH_PREFIX = "sidequest-exec-dispatch-";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
 var READ_ONLY_DISPATCH_PREFIX = "sidequest-exec-dispatch-readonly-";
+var DISCOVERED_MODEL_PREFIX = "sidequest-exec-model-";
+var READ_ONLY_DISCOVERED_MODEL_PREFIX = "sidequest-exec-readonly-model-";
 var TICKET_PREFIX = "sidequest-sq-";
 var LEGACY_TICKET_PREFIX = "sidequest-ticket-";
 var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
@@ -138,6 +140,17 @@ function stableClaudeName(effort) {
 function stableReadOnlyClaudeName(effort) {
   return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
 }
+var DISCOVERED_MODEL_SUFFIX_RE = /^[a-z0-9][a-z0-9-]*-(low|medium|high|xhigh|max)$/;
+function discoveredModelEffort(name, prefix) {
+  const effort = DISCOVERED_MODEL_SUFFIX_RE.exec(name.slice(prefix.length))?.[1];
+  return name.startsWith(prefix) && isEffort(effort) ? effort : null;
+}
+function classifyDiscoveredModel(name) {
+  const readOnlyEffort = discoveredModelEffort(name, READ_ONLY_DISCOVERED_MODEL_PREFIX);
+  if (readOnlyEffort) return { kind: "read_only_discovered_model", effort: readOnlyEffort };
+  const effort = discoveredModelEffort(name, DISCOVERED_MODEL_PREFIX);
+  return effort ? { kind: "discovered_model", effort } : null;
+}
 var BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
   DISPATCH_NAME,
   READ_ONLY_DISPATCH_NAME,
@@ -153,7 +166,7 @@ function canonicalExecutorName(name) {
 }
 function isReadOnlyExecutor(name) {
   const kind = classify(name).kind;
-  return kind === "read_only_codex_dispatch" || kind === "read_only_claude_builtin";
+  return kind === "read_only_codex_dispatch" || kind === "read_only_claude_builtin" || kind === "read_only_discovered_model";
 }
 function classify(value) {
   if (typeof value !== "string" || !value) return { kind: "unknown", effort: null };
@@ -161,6 +174,8 @@ function classify(value) {
   if (name === READ_ONLY_DISPATCH_NAME) return { kind: "read_only_codex_dispatch", effort: null };
   if (name === DISPATCH_NAME) return { kind: "codex_dispatch", effort: null };
   if (name === DIAGNOSTIC_PROBE_NAME) return { kind: "unknown", effort: null };
+  const discoveredModel = classifyDiscoveredModel(name);
+  if (discoveredModel) return discoveredModel;
   if (name.startsWith(READ_ONLY_DISPATCH_PREFIX)) {
     const effort = name.slice(READ_ONLY_DISPATCH_PREFIX.length);
     if (isEffort(effort)) return { kind: "read_only_codex_dispatch", effort };
@@ -752,9 +767,23 @@ function classifyExecutor(type) {
     return fallbackClassify(type);
   }
 }
+var CURRENT_EXECUTOR_KINDS = /* @__PURE__ */ new Set([
+  "claude_builtin",
+  "codex_dispatch",
+  "discovered_model",
+  "read_only_claude_builtin",
+  "read_only_codex_dispatch",
+  "read_only_discovered_model"
+]);
 function isCurrentExecutor(classification) {
-  return classification.kind === "claude_builtin" || classification.kind === "codex_dispatch" || classification.kind === "read_only_claude_builtin" || classification.kind === "read_only_codex_dispatch";
+  return CURRENT_EXECUTOR_KINDS.has(classification.kind);
 }
+var FRONTMATTER_MODEL_KINDS = /* @__PURE__ */ new Set([
+  "codex_dispatch",
+  "read_only_codex_dispatch",
+  "discovered_model",
+  "read_only_discovered_model"
+]);
 function isSubagentCaller(input) {
   return Boolean(stringField(input, "agent_id"));
 }
@@ -1593,7 +1622,7 @@ function main() {
   const launchAgentName = preparedSpawn?.name || requestedAgentName || dispatchAgentName(input);
   if (launchAgentName && !reducedAgentSchema) updatedInput.name = launchAgentName;
   const preparedCorrection = correctionMessage(corrections);
-  if (isDispatchExecutor) {
+  if (FRONTMATTER_MODEL_KINDS.has(classification.kind)) {
     const hadModel = Object.prototype.hasOwnProperty.call(toolInput, "model");
     if (hadModel) delete updatedInput.model;
     recordAuthoritativeLaunch(input, type, launchAgentName);
