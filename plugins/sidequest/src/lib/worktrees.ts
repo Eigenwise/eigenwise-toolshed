@@ -50,26 +50,75 @@ function parseWorktreeStatus(stdout: string): WorktreeStatusEntry[] {
   return entries;
 }
 
-function atRiskStatusEntries(stdout: string, worktree: string, recordedLinks: readonly string[]): WorktreeStatusEntry[] {
+// `vacatedSource` is the path a quarantined tree was renamed from: an absolute in-tree link written
+// before the rename still names it, and reading such a link has to land back inside the tree (SQ-80).
+// It is canonicalized once here so the per-entry, per-component walk below never repeats that work.
+function atRiskStatusEntries(stdout: string, worktree: string, recordedLinks: readonly string[], vacatedSource: string | null = null): WorktreeStatusEntry[] {
+  const canonicalVacatedSource = vacatedSource ? canonicalPath(vacatedSource) : null;
   return parseWorktreeStatus(stdout)
     .filter((entry) => !recordedLinks.some((link) => entry.path === link || entry.path.startsWith(`${link}/`)))
-    .filter((entry) => !installedDependencyCacheFile(worktree, entry));
+    .filter((entry) => !installedDependencyCacheFile(worktree, entry, canonicalVacatedSource));
+}
+
+// A target under the vacated source no longer exists there, so it is read at the same place in the
+// tree it moved into instead.
+function rebasedOntoMovedTree(canonicalWorktree: string, canonicalVacatedSource: string | null, target: string): string {
+  return canonicalVacatedSource && pathIsInside(canonicalVacatedSource, target)
+    ? path.join(canonicalWorktree, path.relative(canonicalVacatedSource, target))
+    : target;
+}
+
+// A path component that is itself a link is resolved once here, so the segment loop below only
+// ever judges a real file or directory. `null` means the component could not be trusted: it escaped
+// the worktree, or `linkTargetPath` left a link behind (a chain the platform could not resolve, such
+// as a cycle).
+function resolvedInTreePathComponent(canonicalWorktree: string, current: string, canonicalVacatedSource: string | null): { stats: import('node:fs').Stats; current: string; followedLink: boolean } | null {
+  const stats = nativeFs.lstatSync(current);
+  if (!stats.isSymbolicLink()) return { stats, current, followedLink: false };
+  const target = linkTargetPath(current, nativeFs.readlinkSync(current));
+  const resolved = rebasedOntoMovedTree(canonicalWorktree, canonicalVacatedSource, target);
+  if (!pathIsInside(canonicalWorktree, resolved)) return null;
+  const resolvedStats = nativeFs.lstatSync(resolved);
+  if (resolvedStats.isSymbolicLink()) return null;
+  return { stats: resolvedStats, current: resolved, followedLink: true };
+}
+
+// A leaf reached directly, never through a link, still has to be a plain file; one reached through an
+// in-tree link can be a directory too, since git never walks a POSIX directory symlink to list what
+// is behind it (#224 review item 1).
+function acceptedDependencyCacheLeaf(resolved: { stats: import('node:fs').Stats; followedLink: boolean }): boolean {
+  return resolved.stats.isFile() || (resolved.followedLink && resolved.stats.isDirectory());
 }
 
 // Worktree setup runs `npm ci`, so every real worktree carries an ignored node_modules that setup
 // regenerates; counting it as data would park every finished worktree for the retention period.
-// Only plain files reached through plain directories are dropped: a link or a nested repository
-// under node_modules is content the sweep did not put there (SQ-2952 CRITICAL 1), so it still
-// travels into quarantine. git status follows a junction and lists the files behind it, which is
-// why every ancestor is checked and not just the leaf.
-function installedDependencyCacheFile(worktree: string, entry: WorktreeStatusEntry): boolean {
-  if (entry.code !== '!!' || !dependencyCachePath(entry.path) || entry.path.endsWith('/')) return false;
-  const segments = entry.path.split(/[\\/]+/).filter(Boolean);
+// Only plain files (or, through a link, directories) are dropped, reached through path components
+// that stay inside the worktree: a link out of the tree or a nested repository under node_modules is
+// content the sweep did not put there (SQ-2952 CRITICAL 1), so it still travels into quarantine. A
+// link resolving inside the tree is a plain component instead, because it can reach nothing the tree
+// does not already own, and `npm ci` writes one per `node_modules/.bin` entry (SQ-22). git status
+// follows a Windows junction and lists the files behind it, which is why every ancestor is resolved
+// and not just the leaf, but a plain POSIX directory symlink is never walked -- git reports it as the
+// leaf itself, so pnpm's `node_modules/<dep> -> .pnpm/...` and a workspace's
+// `node_modules/<pkg> -> ../packages/<pkg>` need `acceptedDependencyCacheLeaf` above (#224 review item 1).
+function installedDependencyCacheFile(worktree: string, entry: WorktreeStatusEntry, canonicalVacatedSource: string | null): boolean {
+  if (entry.code !== '!!' || !dependencyCachePath(entry.path)) return false;
+  return dependencyCacheEntryResolvesToAcceptedLeaf(worktree, entry.path, canonicalVacatedSource);
+}
+
+// Split from the entry-shape guard above so that check stays a single early return; this is the part
+// that walks every path component and judges the leaf (#224 review item 3).
+function dependencyCacheEntryResolvesToAcceptedLeaf(worktree: string, relativePath: string, canonicalVacatedSource: string | null): boolean {
+  const segments = relativePath.split(/[\\/]+/).filter(Boolean);
+  const canonicalWorktree = canonicalPath(worktree);
+  let current = worktree;
   try {
-    for (let depth = 1; depth <= segments.length; depth += 1) {
-      const stats = nativeFs.lstatSync(path.join(worktree, ...segments.slice(0, depth)));
-      if (stats.isSymbolicLink()) return false;
-      if (depth === segments.length) return stats.isFile();
+    for (let depth = 0; depth < segments.length; depth += 1) {
+      current = path.join(current, segments[depth]!);
+      const resolved = resolvedInTreePathComponent(canonicalWorktree, current, canonicalVacatedSource);
+      if (!resolved) return false;
+      current = resolved.current;
+      if (depth === segments.length - 1) return acceptedDependencyCacheLeaf(resolved);
     }
   } catch (_) {
     return false;
@@ -1493,6 +1542,7 @@ type OwnedDependencyLink = {
 };
 
 type DependencyLinkSafety = { safe: boolean; links: string[] };
+type DependencyLinkRefusal = { reason: string; detail: string };
 
 function normalizedWorktreeRelativePath(worktree: string, pathname: string): string | null {
   const relativePath = path.relative(worktree, pathname).split(path.sep).join('/');
@@ -1543,6 +1593,51 @@ function linkTargetPath(linkPath: string, target: string): string {
     : path.resolve(path.dirname(linkPath), withoutWindowsNamespace));
 }
 
+function dependencyLinkDisplayPath(root: string, pathname: string): string {
+  const relative = path.relative(root, pathname).split(path.sep).join('/');
+  return relative && relative !== '..' && !relative.startsWith('../') && !path.isAbsolute(relative) ? relative : pathname;
+}
+
+// Removal is the whole hazard: `fs.rm` and `git worktree remove` can follow a link that leaves the
+// tree and delete data the tree never owned, which is why a `node_modules` linked to a shared store
+// has to be released first. A link whose resolved target stays inside the tree can reach nothing but
+// data that goes with the tree anyway, so it is removed with it like any other entry. Rejecting those
+// kept every done worktree on disk instead: every `node_modules/.bin` entry an executor's install
+// wrote is one, and no record names them (SQ-21).
+// A quarantined tree is judged at its destination after the rename that moved it there, but a link
+// created before that rename (an in-tree Windows junction, which can only hold an absolute target)
+// still resolves under the path it was renamed from. `trustedRoots` names both the current root and
+// that vacated source, so a target the rename left behind still reads as staying with the tree,
+// not escaping it.
+function untrustedDependencyLinkRefusal(root: string, linkPath: string, trustedRoots: readonly string[], owned: (linkPath: string) => boolean): DependencyLinkRefusal | null {
+  if (owned(linkPath)) return null;
+  let target: string;
+  try {
+    target = nativeFs.readlinkSync(linkPath);
+  } catch (_) {
+    return { reason: 'dependency_link_unreadable', detail: `unreadable ${dependencyLinkDisplayPath(root, linkPath)}` };
+  }
+  const resolved = linkTargetPath(linkPath, target);
+  if (trustedRoots.some((trustedRoot) => pathIsInside(trustedRoot, resolved))) return null;
+  return {
+    reason: 'dependency_link_untrusted',
+    detail: `${dependencyLinkDisplayPath(root, linkPath)} escapes worktree -> ${resolved}`,
+  };
+}
+
+// The tree walk itself is `worktreeSymbolicLinks`'s: every link in the tree is enumerated once
+// there, and this function only judges each one, instead of carrying its own duplicate recursive walk.
+function firstUntrustedDependencyLink(root: string, owned: (linkPath: string) => boolean = () => false, additionalTrustedRoot: string | null = null): DependencyLinkRefusal | null {
+  const trustedRoots = additionalTrustedRoot ? [canonicalPath(root), canonicalPath(additionalTrustedRoot)] : [canonicalPath(root)];
+  const links = worktreeSymbolicLinks(root);
+  if (!links) return { reason: 'dependency_link_unreadable', detail: `unreadable ${root}` };
+  for (const linkPath of links) {
+    const refusal = untrustedDependencyLinkRefusal(root, linkPath, trustedRoots, owned);
+    if (refusal) return refusal;
+  }
+  return null;
+}
+
 function ownedDependencyLinkMatches(linkPath: string, record: OwnedDependencyLink): boolean {
   try {
     const status = nativeFs.lstatSync(linkPath);
@@ -1570,48 +1665,48 @@ function recordedDependencyLinkPaths(worktree: string, ticketOrDispatch: any): s
   return paths;
 }
 
-function dependencyLinkSafety(worktree: string, ticketOrDispatch: any, lease: any): DependencyLinkSafety {
-  const records = ownedDependencyLinks(ticketOrDispatch, worktree, lease);
-  if (!records) return { safe: false, links: [] };
-  const recordsByPath = new Map(records.map((record) => [record.relativePath, record]));
-  if (recordsByPath.size !== records.length) return { safe: false, links: [] };
+// Each record has to still be the link it was when recorded, or a stale record could authorize
+// unlinking something else entirely; `null` means at least one has drifted (moved, replaced, or
+// missing with an error other than ENOENT) and the caller has to fall back to distrust (#224 review
+// item 3).
+function verifiedOwnedDependencyLinkPaths(worktree: string, records: readonly OwnedDependencyLink[]): string[] | null {
   const links: string[] = [];
   for (const record of records) {
     const linkPath = path.resolve(worktree, record.relativePath);
     try {
       nativeFs.lstatSync(linkPath);
     } catch (error: any) {
-      if (error?.code === 'ENOENT') continue;
-      return { safe: false, links: [] };
+      if (error?.code !== 'ENOENT') return null;
+      continue;
     }
-    if (!ownedDependencyLinkMatches(linkPath, record)) return { safe: false, links: [] };
+    if (!ownedDependencyLinkMatches(linkPath, record)) return null;
     links.push(linkPath);
   }
-  const scan = (pathname: string): boolean => {
-    let status: import('node:fs').Stats;
-    try {
-      status = nativeFs.lstatSync(pathname);
-    } catch (_) {
-      return false;
-    }
-    if (status.isSymbolicLink()) {
-      const relativePath = normalizedWorktreeRelativePath(worktree, pathname);
-      const record = relativePath ? recordsByPath.get(relativePath) : null;
-      return Boolean(record && ownedDependencyLinkMatches(pathname, record));
-    }
-    if (!status.isDirectory()) return true;
-    let entries: import('node:fs').Dirent[];
-    try {
-      entries = nativeFs.readdirSync(pathname, { withFileTypes: true });
-    } catch (_) {
-      return false;
-    }
-    for (const entry of entries) {
-      if (!scan(path.join(pathname, entry.name))) return false;
-    }
-    return true;
-  };
-  return { safe: scan(worktree), links };
+  return links;
+}
+
+// Whether a link the untrusted-link scan is looking at is one of these records' own is judged by
+// normalizing it back to a relative path and checking that record's match, not by walking the
+// records list per link.
+function recordedLinkIsOwned(worktree: string, recordsByPath: Map<string, OwnedDependencyLink>, linkPath: string): boolean {
+  const relativePath = normalizedWorktreeRelativePath(worktree, linkPath);
+  const record = relativePath ? recordsByPath.get(relativePath) : null;
+  return Boolean(record && ownedDependencyLinkMatches(linkPath, record));
+}
+
+// A caller that gets `safe: false` back never trusts the recorded list either way: it falls back to
+// unlinking every symlink the tree holds and re-checks what is left (`releaseWorktreeDependencyLinks`),
+// so none of these early exits is a refusal a caller ever shows -- only the untrusted-link check at
+// the end decides the result a caller passes through (#224 review item 3).
+function dependencyLinkSafety(worktree: string, ticketOrDispatch: any, lease: any): DependencyLinkSafety {
+  const records = ownedDependencyLinks(ticketOrDispatch, worktree, lease);
+  if (!records) return { safe: false, links: [] };
+  const recordsByPath = new Map(records.map((record) => [record.relativePath, record]));
+  if (recordsByPath.size !== records.length) return { safe: false, links: [] };
+  const links = verifiedOwnedDependencyLinkPaths(worktree, records);
+  if (!links) return { safe: false, links: [] };
+  const refusal = firstUntrustedDependencyLink(worktree, (linkPath) => recordedLinkIsOwned(worktree, recordsByPath, linkPath));
+  return refusal ? { safe: false, links: [] } : { safe: true, links };
 }
 
 function unlinkOwnedDependencyLinks(links: readonly string[]): boolean {
@@ -1663,11 +1758,12 @@ async function lateContentInMovedWorktree(
   classifiedHead: string | null,
   recordedLinks: readonly string[],
   branch: string | null,
+  vacatedSource: string,
 ): Promise<{ blocked: string | null; head: string | null; branchTip: string | null }> {
   const blockedBy = (blocked: string) => ({ blocked, head: null, branchTip: null });
   const status = await git(destination, [...AT_RISK_STATUS_ARGUMENTS]);
   if (!status.ok) return blockedBy(`the moved tree could not be read again: ${status.stderr || `git status exited ${status.status}`}`);
-  const held = atRiskStatusEntries(status.stdout, destination, recordedLinks);
+  const held = atRiskStatusEntries(status.stdout, destination, recordedLinks, vacatedSource);
   if (held.length) return blockedBy(`the moved tree holds ${held.length} entries the classification did not see, starting with ${held[0]!.code} ${held[0]!.path}`);
   const head = await git(destination, ['rev-parse', 'HEAD']);
   if (!head.ok) return blockedBy(`the moved tree's HEAD could not be read again: ${head.stderr || `git rev-parse exited ${head.status}`}`);
@@ -1681,29 +1777,55 @@ async function lateContentInMovedWorktree(
   return { blocked: null, head: head.stdout, branchTip: tip.stdout };
 }
 
+// The late-content read exempts a recorded path by name alone, so what stands there now has to still
+// be a link before it is unlinked; anything else is content no read judged, and unlinking it would
+// delete it (SQ-80). A missing path is left to the unlink to report.
+function recordedPathHoldsNonLink(linkPath: string): boolean {
+  try {
+    return !nativeFs.lstatSync(linkPath).isSymbolicLink();
+  } catch (_) {
+    return false;
+  }
+}
+
 // Links are released only at the destination, once the tree has actually moved, so a failed move
 // leaves the source record-for-record as well as byte-for-byte (SQ-2952, SQ-2958). The final walk is
-// the gate on deletion: `fs.rm` follows nothing, but a link that is still there is content this
-// sweep did not provision, and the tree stays parked instead.
-function releaseQuarantinedDependencyLinks(destination: string, recordedLinks: readonly string[]): { ok: boolean; reason: string } {
+// the gate on deletion: a link still pointing out of the moved tree could reach data the tree does
+// not own, so the tree stays parked instead and the refusal names that link and its target. `vacatedSource`
+// is the path the tree was renamed from: an in-tree link created before the rename (the only shape a
+// Windows junction can take is an absolute target) still resolves there, and that still counts as
+// staying with the tree rather than escaping it.
+function releaseQuarantinedDependencyLinks(destination: string, recordedLinks: readonly string[], vacatedSource: string): { ok: boolean; reason: string; detail: string } {
+  const replaced = recordedLinks.find((relativePath) => recordedPathHoldsNonLink(path.resolve(destination, relativePath)));
+  if (replaced) return { ok: false, reason: 'dependency_link_changed', detail: `${replaced} is no longer the dependency link that was recorded` };
   if (!unlinkOwnedDependencyLinks(recordedLinks.map((relativePath) => path.resolve(destination, relativePath)))) {
-    return { ok: false, reason: 'dependency_link_unlink_failed' };
+    return { ok: false, reason: 'dependency_link_unlink_failed', detail: 'a recorded dependency link could not be released' };
   }
-  const remaining = worktreeSymbolicLinks(destination);
-  if (!remaining) return { ok: false, reason: 'dependency_link_unreadable' };
-  return remaining.length ? { ok: false, reason: 'dependency_link_untrusted' } : { ok: true, reason: '' };
+  const refusal = firstUntrustedDependencyLink(destination, undefined, vacatedSource);
+  return refusal ? { ok: false, reason: refusal.reason, detail: refusal.detail } : { ok: true, reason: '', detail: '' };
+}
+
+// A link that reappears after every one this call knew about was just unlinked has drifted since
+// `dependencyLinkSafety` looked; the only prior classification still trusted here is an unreadable
+// tree, so anything else reports as changed rather than repeating that stale reason (#224 review
+// item 3).
+function releaseWorktreeDependencyLinksResult(remaining: DependencyLinkRefusal | null): { ok: boolean; reason?: string; detail?: string } {
+  if (!remaining) return { ok: true };
+  return {
+    ok: false,
+    reason: remaining.reason === 'dependency_link_unreadable' ? remaining.reason : 'dependency_link_changed',
+    detail: remaining.detail,
+  };
 }
 
 // Failed-creation recovery still hands its checkout to `git worktree remove`, which follows a
 // junction and deletes what it points at, so every link is unlinked before that removal.
-function releaseWorktreeDependencyLinks(worktree: string, ticketOrDispatch: any, lease: any): { ok: boolean; reason?: string } {
+function releaseWorktreeDependencyLinks(worktree: string, ticketOrDispatch: any, lease: any): { ok: boolean; reason?: string; detail?: string } {
   const verified = dependencyLinkSafety(worktree, ticketOrDispatch, lease);
   const links = verified.safe ? verified.links : worktreeSymbolicLinks(worktree);
-  if (!links) return { ok: false, reason: 'dependency_link_unreadable' };
-  if (!unlinkOwnedDependencyLinks(links)) return { ok: false, reason: 'dependency_link_unlink_failed' };
-  const remaining = worktreeSymbolicLinks(worktree);
-  if (!remaining) return { ok: false, reason: 'dependency_link_unreadable' };
-  return remaining.length ? { ok: false, reason: 'dependency_link_changed' } : { ok: true };
+  if (!links) return { ok: false, reason: 'dependency_link_unreadable', detail: `unreadable ${worktree}` };
+  if (!unlinkOwnedDependencyLinks(links)) return { ok: false, reason: 'dependency_link_unlink_failed', detail: 'a dependency link could not be released' };
+  return releaseWorktreeDependencyLinksResult(firstUntrustedDependencyLink(worktree));
 }
 
 function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, facts: any = {}): any {
@@ -1826,7 +1948,7 @@ function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, fac
       worktree: entry.worktree,
       reclaimed: false,
       reason: dependencyLinksReleased.reason,
-      message: 'immutable recovery fact: owned dependency links could not be proven safe for cleanup.',
+      message: `immutable recovery fact: owned dependency links could not be proven safe for cleanup${dependencyLinksReleased.detail ? `: ${dependencyLinksReleased.detail}` : ''}.`,
     };
   }
   execFileSync('git', ['worktree', 'remove', entry.worktree], { cwd: repository, windowsHide: true });
@@ -2314,9 +2436,10 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
         continue;
       }
       const destination = quarantine.destination;
-      const park = async (reason: string, message: string) => {
+      const park = async (reason: string, message: string, detail = '') => {
         entry.action = 'quarantine';
         entry.reason = reason;
+        if (detail) entry.detail = detail;
         entry.quarantine = destination;
         entry.quarantineRegistrationRepaired = await repairParkedRegistration(repo, destination);
         quarantined.push({ path: entry.path, destination, message });
@@ -2338,7 +2461,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       }
       const classifiedReason = entry.reason;
       const branch = localBranchName(entry.branch);
-      const movedRead = await lateContentInMovedWorktree(destination, entry.head, recordedLinks, branch);
+      const movedRead = await lateContentInMovedWorktree(destination, entry.head, recordedLinks, branch, entry.path);
       if (movedRead.blocked) {
         await park('late_content_quarantined', `classified ${classifiedReason}, but ${movedRead.blocked}, so the moved tree was parked instead of deleted`);
         continue;
@@ -2350,9 +2473,13 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
         await park('detached_head_unpinned', `classified ${classifiedReason}, but its detached HEAD ${shortCommit(movedRead.head)} is held by no other ref, so the moved tree was parked instead of deleted`);
         continue;
       }
-      const dependencyLinksReleased = releaseQuarantinedDependencyLinks(destination, recordedLinks);
+      const dependencyLinksReleased = releaseQuarantinedDependencyLinks(destination, recordedLinks, entry.path);
       if (!dependencyLinksReleased.ok) {
-        await park(dependencyLinksReleased.reason, `classified ${classifiedReason}, but the moved tree still holds a dependency link, so it was parked instead of deleted`);
+        await park(
+          dependencyLinksReleased.reason,
+          `classified ${classifiedReason}, but the moved tree still holds a dependency link (${dependencyLinksReleased.detail}), so it was parked instead of deleted`,
+          dependencyLinksReleased.detail,
+        );
         continue;
       }
       try {
@@ -2450,4 +2577,4 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   };
 }
 
-module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep };
+module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks };
