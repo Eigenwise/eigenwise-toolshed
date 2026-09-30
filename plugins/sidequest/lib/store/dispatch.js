@@ -2357,7 +2357,7 @@ function createDispatch(dependencies) {
     if (normalizedRelativePath !== relativePath || normalizedRelativePath.split("/").some((segment) => !segment || segment === "." || segment === "..")) return null;
     const outsideWorktree = path.relative(worktree, linkPath);
     if (outsideWorktree === ".." || outsideWorktree.startsWith(`..${path.sep}`) || path.isAbsolute(outsideWorktree)) return null;
-    return { relativePath, target: canonicalPath(target) };
+    return { relativePath, target: canonicalPath(target), mode: dependency?.mode === "copy" ? "copy" : "link" };
   }
   function recordDispatchWorktreeDependencyLink(slug, sessionId, worktree, dependency, attempt) {
     if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: "missing_attempt" };
@@ -2383,6 +2383,7 @@ function createDispatch(dependencies) {
         const record = {
           relativePath: link.relativePath,
           target: link.target,
+          mode: link.mode,
           worktree: canonicalPath(current.worktree),
           gitDirectory: canonicalPath(current.worktreeGitDirectory),
           commonGitDirectory: canonicalPath(current.worktreeCommonGitDirectory),

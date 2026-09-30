@@ -222,9 +222,9 @@ function recordProvisioningFailure(repository: string, sessionId: string, worktr
   return store.recordDispatchWorktreeProvisioningFailure(project.slug, sessionId, worktree, failure, attempt);
 }
 
-function recordDependencyLink(repository: string, sessionId: string, worktree: string, link: { relativePath: string; target: string }, attempt: string): CreationBinding {
+function recordDependencyLink(repository: string, sessionId: string, worktree: string, link: { relativePath: string; target: string; mode: string }, attempt: string): CreationBinding {
   const store = require(runtimeModule('store')) as WorktreeStore & {
-    recordDispatchWorktreeDependencyLink: (slug: string, sessionId: string, worktree: string, link: { relativePath: string; target: string }, attempt: string) => CreationBinding;
+    recordDispatchWorktreeDependencyLink: (slug: string, sessionId: string, worktree: string, link: { relativePath: string; target: string; mode: string }, attempt: string) => CreationBinding;
   };
   const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: 'project_unavailable' };
@@ -341,7 +341,7 @@ async function createWorktreeMain(): Promise<void> {
       repo: string,
       worktree: string,
       config: { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null },
-      options: { setupTimeoutMs?: number; onDependencyLink?: (link: { relativePath: string; target: string }) => void },
+      options: { setupTimeoutMs?: number; onDependencyLink?: (link: { relativePath: string; target: string; mode: string }) => void },
     ) => Promise<{ command: string; reason: string; stderrTail: string } | null>;
   };
   const { repository, binding } = bindSessionCreation(spawningRepository(stringField(input, 'cwd'), sessionId), sessionId, name, worktrees.namedWorktreePath);
