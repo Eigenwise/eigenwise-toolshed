@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.8 (2026-09-30)
+
+Released in v3.584.0, up from 0.11.7.
+
+### Fixes
+
+- CRAP gate measures a function lizard cuts off at its parameter list over its real body and complexity (GH-315)
+  The CRAP gate no longer exits 2 "coverage unverified" for a function whose parameter list holds
+  parentheses of its own, such as a React component with a function-typed prop
+  (`onSelect: (card: Card) => void`) or a function with a default arrow parameter. lizard's JavaScript,
+  TypeScript and TSX readers end such a function inside its own signature, where coverage has no line
+  data, and leave every branch in its body out of its complexity. The gate now reads the source, measures
+  coverage over the function's real body, and scores the larger of lizard's complexity and the body's own
+  branch count, so an uncovered branchy function fails instead of passing at complexity 1. An edit to
+  that body counts as a change against the base revision. When the gate cannot find where the body ends,
+  the function is still reported as unverified.
+
 ## 0.11.7 (2026-09-29)
 
 Released in v3.582.0, up from 0.11.6.
