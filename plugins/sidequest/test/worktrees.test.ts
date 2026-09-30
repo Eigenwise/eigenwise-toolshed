@@ -84,11 +84,12 @@ function integratedTicket(ref: string, agentId: string, worktree: string, baseCo
   };
 }
 
-function recordedDependencyLink(ticket: any, worktree: string, relativePath: string, target: string): void {
+function recordedDependencyLink(ticket: any, worktree: string, relativePath: string, target: string, mode?: 'copy'): void {
   const dispatch = ticket.dispatch;
   dispatch.ownedDependencyLinks = [{
     relativePath,
     target: worktrees.canonicalPath(target),
+    ...(mode ? { mode } : {}),
     worktree: worktrees.canonicalPath(worktree),
     gitDirectory: worktrees.canonicalPath(dispatch.worktreeGitDirectory),
     commonGitDirectory: worktrees.canonicalPath(dispatch.worktreeCommonGitDirectory),
@@ -379,10 +380,112 @@ test('provisionWorktree reports every created link before a setup failure', asyn
     }, { onDependencyLink: (link: { relativePath: string; target: string }) => recorded.push(link) });
 
     assert.equal(failure?.reason, 'exited with status 7');
-    assert.deepEqual(recorded, [{ relativePath: 'dependency-targets/partial', target: worktrees.canonicalPath(target) }]);
+    assert.deepEqual(recorded, [{ relativePath: 'dependency-targets/partial', target: worktrees.canonicalPath(target), mode: 'link' }]);
     assert.equal(fs.lstatSync(path.join(worktree, 'dependency-targets', 'partial')).isSymbolicLink(), true);
   } finally {
     fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+// A relative link inside node_modules, like npm's .bin entries or pnpm's package links.
+function installedNodeModules(checkout: string): string {
+  const nodeModules = path.join(checkout, 'node_modules');
+  fs.mkdirSync(path.join(nodeModules, 'installed'), { recursive: true });
+  fs.writeFileSync(path.join(nodeModules, 'installed', 'index.js'), 'module.exports = 1;\n');
+  fs.mkdirSync(path.join(nodeModules, '.bin'));
+  fs.symlinkSync(path.join('..', 'installed'), path.join(nodeModules, '.bin', 'installed'), 'dir');
+  return nodeModules;
+}
+
+test('GH-370: copy mode provisions node_modules as a real directory whose links stay inside it', async () => {
+  const { repository, worktreeRoot } = repositoryFixture();
+  installedNodeModules(repository);
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'copied-node-modules');
+  const recorded: unknown[] = [];
+  try {
+    const failure = await worktrees.provisionWorktree(repository, worktree, { worktreeDependencyPaths: [{ path: 'node_modules', mode: 'copy' }] }, { onDependencyLink: (link: unknown) => recorded.push(link) });
+
+    assert.equal(failure, null);
+    const copied = fs.lstatSync(path.join(worktree, 'node_modules'));
+    assert.equal(copied.isSymbolicLink(), false, 'Turbopack refuses a node_modules link that leaves the project root');
+    assert.equal(copied.isDirectory(), true);
+    assert.equal(fs.readFileSync(path.join(worktree, 'node_modules', 'installed', 'index.js'), 'utf8'), 'module.exports = 1;\n');
+    assert.equal(fs.readlinkSync(path.join(worktree, 'node_modules', '.bin', 'installed')), path.join('..', 'installed'), 'a relative link is copied verbatim, not rewritten into the main checkout');
+    assert.deepEqual(recorded, [{ relativePath: 'node_modules', target: worktrees.canonicalPath(path.join(repository, 'node_modules')), mode: 'copy' }]);
+  } finally {
+    git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('GH-370: the macOS clone path falls back to a plain copy and yields the same directory', () => {
+  const { repository } = repositoryFixture();
+  const source = installedNodeModules(repository);
+  const target = path.join(repository, 'cloned', 'node_modules');
+  try {
+    worktrees.copyDependencyPath(source, target, { overwrite: false }, 'darwin');
+
+    assert.equal(fs.lstatSync(target).isDirectory(), true);
+    assert.equal(fs.readFileSync(path.join(target, 'installed', 'index.js'), 'utf8'), 'module.exports = 1;\n');
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+function sweepCopiedNodeModules(name: string, prepare: (worktree: string, ticket: any) => void) {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), `sq-${name}-quarantine-`));
+  const worktree = createAgentWorktree(repository, worktreeRoot, name);
+  const ticket = integratedTicket(`SQ-${name.toUpperCase()}`, name, worktree, baseCommit);
+  prepare(worktree, ticket);
+  const oldTimestamp = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(worktree, oldTimestamp, oldTimestamp);
+  const cleanup = () => {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
+  };
+  return { repository, worktree, ticket, quarantineDir, cleanup };
+}
+
+test('GH-370: sweep deletes a recorded node_modules copy, links inside it included, instead of quarantining it', async () => {
+  const fixture = sweepCopiedNodeModules('copied-sweep', (worktree, ticket) => {
+    const copy = installedNodeModules(worktree);
+    createDependencyLink(worktree, 'node_modules/.bin/junction', path.join(copy, 'installed'));
+    recordedDependencyLink(ticket, worktree, 'node_modules', path.join(worktree, 'source-node-modules'), 'copy');
+  });
+  try {
+    const result = await worktrees.sweep(fixture.repository, [fixture.ticket], { execute: true, minAgeMs: 0, integrationTarget, quarantineDir: fixture.quarantineDir });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(fixture.worktree));
+
+    assert.equal(entry.action, 'remove');
+    assert.equal(entry.clean, true);
+    assert.equal(fs.existsSync(fixture.worktree), false);
+    assert.deepEqual(result.quarantined, []);
+    assert.deepEqual(fs.readdirSync(fixture.quarantineDir), []);
+    assert.deepEqual(result.failures, []);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('GH-370: sweep quarantines a recorded node_modules copy that was replaced by a link', async () => {
+  let target = '';
+  const fixture = sweepCopiedNodeModules('copy-swapped', (worktree, ticket) => {
+    target = path.join(path.dirname(worktree), 'foreign-node-modules');
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, 'sentinel.txt'), 'foreign');
+    createDependencyLink(worktree, 'node_modules', target);
+    recordedDependencyLink(ticket, worktree, 'node_modules', target, 'copy');
+  });
+  try {
+    const result = await worktrees.sweep(fixture.repository, [fixture.ticket], { execute: true, minAgeMs: 0, integrationTarget, quarantineDir: fixture.quarantineDir });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(fixture.worktree));
+
+    assert.equal(entry.action, 'quarantine');
+    assert.equal(fs.readFileSync(path.join(target, 'sentinel.txt'), 'utf8'), 'foreign');
+  } finally {
+    fixture.cleanup();
   }
 });
 
@@ -2156,6 +2259,28 @@ test('releaseQuarantinedDependencyLinks leaves a recorded path alone once it is 
     assert.equal(fs.readFileSync(kept, 'utf8'), 'work that replaced the link\n');
   } finally {
     fs.rmSync(destination, { recursive: true, force: true });
+  }
+});
+
+// GH-370 on top of #224: a copied node_modules keeps its links verbatim, and an npm workspace or pnpm
+// junction in the checkout's install points back into that checkout. The copy is install content, so
+// such a link inside it does not park the tree; the same link anywhere else still does.
+test('GH-370: releaseQuarantinedDependencyLinks trusts an escaping link inside a recorded copy and nowhere else', () => {
+  const destination = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-copied-escaping-link-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-copied-escaping-target-'));
+  fs.writeFileSync(path.join(outside, 'sentinel.txt'), 'main checkout package\n');
+  createDependencyLink(destination, 'node_modules/workspace-package', outside);
+  try {
+    const uncopied = worktrees.releaseQuarantinedDependencyLinks(destination, [], destination);
+    assert.equal(uncopied.ok, false);
+    assert.equal(uncopied.reason, 'dependency_link_untrusted');
+
+    const copied = worktrees.releaseQuarantinedDependencyLinks(destination, [], destination, ['node_modules']);
+    assert.equal(copied.ok, true);
+    assert.equal(fs.readFileSync(path.join(outside, 'sentinel.txt'), 'utf8'), 'main checkout package\n');
+  } finally {
+    fs.rmSync(destination, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
   }
 });
 

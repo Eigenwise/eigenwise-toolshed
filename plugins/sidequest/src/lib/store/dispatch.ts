@@ -2940,7 +2940,7 @@ function normalizedOwnedDependencyLink(worktree: string, dependency?: any) {
   if (normalizedRelativePath !== relativePath || normalizedRelativePath.split('/').some((segment: string) => !segment || segment === '.' || segment === '..')) return null;
   const outsideWorktree = path.relative(worktree, linkPath);
   if (outsideWorktree === '..' || outsideWorktree.startsWith(`..${path.sep}`) || path.isAbsolute(outsideWorktree)) return null;
-  return { relativePath, target: canonicalPath(target) };
+  return { relativePath, target: canonicalPath(target), mode: dependency?.mode === 'copy' ? 'copy' : 'link' };
 }
 
 function recordDispatchWorktreeDependencyLink(slug?: any, sessionId?: any, worktree?: any, dependency?: any, attempt?: any) {
@@ -2972,6 +2972,7 @@ function recordDispatchWorktreeDependencyLink(slug?: any, sessionId?: any, workt
       const record = {
         relativePath: link.relativePath,
         target: link.target,
+        mode: link.mode,
         worktree: canonicalPath(current.worktree),
         gitDirectory: canonicalPath(current.worktreeGitDirectory),
         commonGitDirectory: canonicalPath(current.worktreeCommonGitDirectory),

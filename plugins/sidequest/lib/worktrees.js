@@ -31,9 +31,9 @@ function parseWorktreeStatus(stdout) {
   }
   return entries;
 }
-function atRiskStatusEntries(stdout, worktree, recordedLinks, vacatedSource = null) {
+function atRiskStatusEntries(stdout, worktree, { links: recordedLinks, copies }, vacatedSource = null) {
   const canonicalVacatedSource = vacatedSource ? canonicalPath(vacatedSource) : null;
-  return parseWorktreeStatus(stdout).filter((entry) => !recordedLinks.some((link) => entry.path === link || entry.path.startsWith(`${link}/`))).filter((entry) => !installedDependencyCacheFile(worktree, entry, canonicalVacatedSource));
+  return parseWorktreeStatus(stdout).filter((entry) => !recordedLinks.some((link) => entry.path === link || entry.path.startsWith(`${link}/`))).filter((entry) => !installedDependencyCacheFile(worktree, entry, canonicalVacatedSource)).filter((entry) => !copiedDependencyContent(worktree, entry, copies));
 }
 function rebasedOntoMovedTree(canonicalWorktree, canonicalVacatedSource, target) {
   return canonicalVacatedSource && pathIsInside(canonicalVacatedSource, target) ? path.join(canonicalWorktree, path.relative(canonicalVacatedSource, target)) : target;
@@ -72,13 +72,35 @@ function dependencyCacheEntryResolvesToAcceptedLeaf(worktree, relativePath, cano
   }
   return false;
 }
+function copiedDependencyContent(worktree, entry, recordedCopies) {
+  const copy = recordedCopyContaining(entry.path, recordedCopies);
+  if (!copy || entry.code !== "!!") return false;
+  try {
+    return !nativeFs.lstatSync(path.join(worktree, copy)).isSymbolicLink() && !nativeFs.lstatSync(path.join(worktree, entry.path)).isDirectory();
+  } catch (_) {
+    return false;
+  }
+}
+function recordedDependencies(ticketOrDispatch, mode) {
+  const dispatch = ticketOrDispatch?.dispatch || ticketOrDispatch;
+  const records = Array.isArray(dispatch?.ownedDependencyLinks) ? dispatch.ownedDependencyLinks : [];
+  return records.filter((record) => record?.mode === "copy" === (mode === "copy"));
+}
+function recordedDependencyPaths(worktree, ticketOrDispatch) {
+  const worktreeIdentity = canonicalPath(worktree);
+  const copies = recordedDependencies(ticketOrDispatch, "copy").filter((record) => canonicalPath(String(record.worktree)) === worktreeIdentity).map((record) => String(record.relativePath)).filter(dependencyCachePath);
+  return { links: recordedDependencyLinkPaths(worktree, ticketOrDispatch), copies };
+}
+function recordedCopyContaining(relativePath, recordedCopies) {
+  return recordedCopies.find((copied) => relativePath.startsWith(`${copied}/`));
+}
 function atRiskStatusEntriesSync(worktree, ticketOrDispatch = null) {
   const stdout = execFileSync("git", [...AT_RISK_STATUS_ARGUMENTS], {
     cwd: worktree,
     encoding: "utf8",
     windowsHide: true
   });
-  return atRiskStatusEntries(stdout, worktree, recordedDependencyLinkPaths(worktree, ticketOrDispatch));
+  return atRiskStatusEntries(stdout, worktree, recordedDependencyPaths(worktree, ticketOrDispatch));
 }
 function unmergedCheckoutPaths(worktree) {
   return atRiskStatusEntriesSync(worktree).filter((entry) => UNMERGED_STATUS_CODES.has(entry.code)).map((entry) => entry.path).filter(Boolean);
@@ -222,19 +244,29 @@ function dependencyPlacement(repository, worktree, dependency) {
   if (!nativeFs.existsSync(source)) throw new Error(`configured worktree dependency path does not exist: ${dependency.path}`);
   return { source, target };
 }
-function copyDependencyPath(source, target, options) {
+function copyDependencyPath(source, target, options, platform = process.platform) {
   nativeFs.mkdirSync(path.dirname(target), { recursive: true });
-  nativeFs.cpSync(source, target, { recursive: true, force: options.overwrite });
+  if (!nativeFs.existsSync(target) && cloneDependencyPath(source, target, platform)) return;
+  nativeFs.cpSync(source, target, { recursive: true, force: options.overwrite, verbatimSymlinks: true });
+}
+function cloneDependencyPath(source, target, platform) {
+  if (platform !== "darwin") return false;
+  if (spawnSync("cp", ["-Rc", source, target], { stdio: "ignore", windowsHide: true }).status === 0) return true;
+  nativeFs.rmSync(target, { recursive: true, force: true });
+  return false;
 }
 function createDirectoryLink(source, target) {
   nativeFs.mkdirSync(path.dirname(target), { recursive: true });
   nativeFs.symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
 }
+function provisionedDependency(worktree, source, target, mode) {
+  return { relativePath: path.relative(worktree, target).split(path.sep).join("/"), target: canonicalPath(source), mode };
+}
 function provisionDependencyPath(repository, worktree, dependency) {
   const { source, target } = dependencyPlacement(repository, worktree, dependency);
   if (dependency.mode === "copy") {
     copyDependencyPath(source, target, { overwrite: true });
-    return null;
+    return provisionedDependency(worktree, source, target, "copy");
   }
   if (!nativeFs.statSync(source).isDirectory()) throw new Error(`link mode needs a directory, use copy mode for a file: ${dependency.path}`);
   if (!pathIsInside(worktree, target)) return linkBesideWorktree(source, target, dependency.path);
@@ -242,10 +274,7 @@ function provisionDependencyPath(repository, worktree, dependency) {
     throw new Error(`worktree dependency path already exists after checkout: ${dependency.path}. link mode fills only a path the checkout leaves absent; use copy mode for a tracked path`);
   }
   createDirectoryLink(source, target);
-  return {
-    relativePath: path.relative(worktree, target).split(path.sep).join("/"),
-    target: canonicalPath(source)
-  };
+  return provisionedDependency(worktree, source, target, "link");
 }
 function linkBesideWorktree(source, target, relativePath) {
   try {
@@ -662,7 +691,7 @@ async function inspectWorktree(entry, ticket, minAgeMs, upstream, notIntegratedS
     upstream ? patchEquivalence(entry.worktree, "HEAD", upstream) : Promise.resolve({ equivalent: false, ahead: null, equivalentCommits: 0, unmatchedCommits: null }),
     upstream ? reachableFrom(entry.worktree, "HEAD", upstream) : Promise.resolve(false)
   ]);
-  const statusEntries = cleanResult.ok ? atRiskStatusEntries(cleanResult.stdout, entry.worktree, recordedDependencyLinkPaths(entry.worktree, ticket)) : [];
+  const statusEntries = cleanResult.ok ? atRiskStatusEntries(cleanResult.stdout, entry.worktree, recordedDependencyPaths(entry.worktree, ticket)) : [];
   return {
     clean: cleanResult.ok && statusEntries.length === 0,
     statusKnown: cleanResult.ok,
@@ -1202,7 +1231,7 @@ function normalizedWorktreeRelativePath(worktree, pathname) {
 }
 function ownedDependencyLinks(ticketOrDispatch, worktree, lease) {
   const dispatch = ticketOrDispatch?.dispatch || ticketOrDispatch;
-  const records = Array.isArray(dispatch?.ownedDependencyLinks) ? dispatch.ownedDependencyLinks : [];
+  const records = recordedDependencies(ticketOrDispatch, "link");
   if (!dispatch || !records.length) return [];
   if (!lease) return null;
   const normalized = [];
@@ -1267,8 +1296,7 @@ function ownedDependencyLinkMatches(linkPath, record) {
   }
 }
 function recordedDependencyLinkPaths(worktree, ticketOrDispatch) {
-  const dispatch = ticketOrDispatch?.dispatch || ticketOrDispatch;
-  const records = Array.isArray(dispatch?.ownedDependencyLinks) ? dispatch.ownedDependencyLinks : [];
+  const records = recordedDependencies(ticketOrDispatch, "link");
   const worktreeIdentity = canonicalPath(worktree);
   const paths = [];
   for (const record of records) {
@@ -1347,11 +1375,11 @@ function worktreeSymbolicLinks(worktree) {
   };
   return walk(worktree) ? links : null;
 }
-async function lateContentInMovedWorktree(destination, classifiedHead, recordedLinks, branch, vacatedSource) {
+async function lateContentInMovedWorktree(destination, classifiedHead, recorded, branch, vacatedSource) {
   const blockedBy = (blocked) => ({ blocked, head: null, branchTip: null });
   const status = await git(destination, [...AT_RISK_STATUS_ARGUMENTS]);
   if (!status.ok) return blockedBy(`the moved tree could not be read again: ${status.stderr || `git status exited ${status.status}`}`);
-  const held = atRiskStatusEntries(status.stdout, destination, recordedLinks, vacatedSource);
+  const held = atRiskStatusEntries(status.stdout, destination, recorded, vacatedSource);
   if (held.length) return blockedBy(`the moved tree holds ${held.length} entries the classification did not see, starting with ${held[0].code} ${held[0].path}`);
   const head = await git(destination, ["rev-parse", "HEAD"]);
   if (!head.ok) return blockedBy(`the moved tree's HEAD could not be read again: ${head.stderr || `git rev-parse exited ${head.status}`}`);
@@ -1368,13 +1396,14 @@ function recordedPathHoldsNonLink(linkPath) {
     return false;
   }
 }
-function releaseQuarantinedDependencyLinks(destination, recordedLinks, vacatedSource) {
+function releaseQuarantinedDependencyLinks(destination, recordedLinks, vacatedSource, recordedCopies = []) {
   const replaced = recordedLinks.find((relativePath) => recordedPathHoldsNonLink(path.resolve(destination, relativePath)));
   if (replaced) return { ok: false, reason: "dependency_link_changed", detail: `${replaced} is no longer the dependency link that was recorded` };
   if (!unlinkOwnedDependencyLinks(recordedLinks.map((relativePath) => path.resolve(destination, relativePath)))) {
     return { ok: false, reason: "dependency_link_unlink_failed", detail: "a recorded dependency link could not be released" };
   }
-  const refusal = firstUntrustedDependencyLink(destination, void 0, vacatedSource);
+  const cameWithCopy = (linkPath) => Boolean(recordedCopyContaining(path.relative(destination, linkPath).split(path.sep).join("/"), recordedCopies));
+  const refusal = firstUntrustedDependencyLink(destination, cameWithCopy, vacatedSource);
   return refusal ? { ok: false, reason: refusal.reason, detail: refusal.detail } : { ok: true, reason: "", detail: "" };
 }
 function releaseWorktreeDependencyLinksResult(remaining) {
@@ -1871,7 +1900,7 @@ async function sweep(repo, tickets, options = {}) {
       }
       const parking = entry.action === "quarantine";
       const moveMessage = parking ? "untracked work quarantined" : "reclaimed worktree moved into quarantine";
-      const recordedLinks = recordedDependencyLinkPaths(entry.path, ticket);
+      const recorded = recordedDependencyPaths(entry.path, ticket);
       const quarantine = await quarantineCandidate(entry, moveMessage, options);
       if (!quarantine.ok || !quarantine.destination) {
         recordFailure(entry.path, quarantine.stderr);
@@ -1896,7 +1925,7 @@ async function sweep(repo, tickets, options = {}) {
         reportSweepProgress(options, entries, removed, sweepingStatus);
       };
       if (parking) {
-        if (!unlinkOwnedDependencyLinks(recordedLinks.map((relativePath) => path.resolve(destination, relativePath)))) {
+        if (!unlinkOwnedDependencyLinks(recorded.links.map((relativePath) => path.resolve(destination, relativePath)))) {
           failures.push({ path: destination, message: "quarantined the worktree, but its recorded dependency links could not be released at the quarantine destination" });
         }
         await park(entry.reason, moveMessage);
@@ -1904,7 +1933,7 @@ async function sweep(repo, tickets, options = {}) {
       }
       const classifiedReason = entry.reason;
       const branch = localBranchName(entry.branch);
-      const movedRead = await lateContentInMovedWorktree(destination, entry.head, recordedLinks, branch, entry.path);
+      const movedRead = await lateContentInMovedWorktree(destination, entry.head, recorded, branch, entry.path);
       if (movedRead.blocked) {
         await park("late_content_quarantined", `classified ${classifiedReason}, but ${movedRead.blocked}, so the moved tree was parked instead of deleted`);
         continue;
@@ -1913,7 +1942,7 @@ async function sweep(repo, tickets, options = {}) {
         await park("detached_head_unpinned", `classified ${classifiedReason}, but its detached HEAD ${shortCommit(movedRead.head)} is held by no other ref, so the moved tree was parked instead of deleted`);
         continue;
       }
-      const dependencyLinksReleased = releaseQuarantinedDependencyLinks(destination, recordedLinks, entry.path);
+      const dependencyLinksReleased = releaseQuarantinedDependencyLinks(destination, recorded.links, entry.path, recorded.copies);
       if (!dependencyLinksReleased.ok) {
         await park(
           dependencyLinksReleased.reason,
@@ -2002,4 +2031,4 @@ async function sweep(repo, tickets, options = {}) {
     failures
   };
 }
-module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks };
+module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks };
