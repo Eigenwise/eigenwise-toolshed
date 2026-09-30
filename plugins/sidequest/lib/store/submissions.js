@@ -194,7 +194,7 @@ function createSubmissions(dependencies) {
     for (let attempt = 0; attempt < 100; attempt += 1) {
       rejected.quarantineRef = rejectionQuarantineRef(ticket, firstRejectionNumber + attempt);
       putTicketTransaction(slug, ticket);
-      preserved = commitScope.preserveCommitRef(root, rejected.commit, rejected.quarantineRef, { noOverwrite: true });
+      preserved = commitScope.preserveCommitRef(root, rejected.commit, rejected.quarantineRef);
       if (preserved.ok || preserved.reason !== "git_ref_collision") break;
     }
     if (!preserved.ok) {
@@ -493,9 +493,21 @@ Expires: ${checkpoint.expiresAt}`;
     ensureDir(dir);
     return path.join(dir, `${Date.now()}-${crypto.randomBytes(4).toString("hex")}.log`);
   }
+  function directlyClaimed(ticket) {
+    return (ticket.dispatch?.lifecycleAttempt || ticket.lifecycleAttempt)?.execution === "direct";
+  }
+  function dispatchPinnedRequirement(ticket) {
+    if (directlyClaimed(ticket)) return null;
+    return ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
+  }
+  function directClaimCaptureInvocation(slug, ticket) {
+    if (!directlyClaimed(ticket)) return "";
+    const script = path.join(__dirname, "..", "verify-capture.js");
+    return `node "${script}" --project ${JSON.stringify(String(readMeta(slug)?.path || slug))} --ticket ${JSON.stringify(String(ticket.ref))}`;
+  }
   function pinnedVerificationRequirement(ticket) {
-    const pinned = ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
-    if (pinned && typeof pinned === "object") return pinned;
+    const pinned = dispatchPinnedRequirement(ticket);
+    if (pinned instanceof Object) return pinned;
     const legacyCommand = String(ticket.executorVerify || ticket.submission?.verify || "").trim();
     if (!legacyCommand) {
       return verificationRequirement({ kind: "custom", evidence: "legacy project verifier was not recorded" });
@@ -532,7 +544,7 @@ Checkpoint current work, release the claim, and re-dispatch; the recovery dispat
     return withTicketLock(slug, found.id, () => {
       const ticket = getTicket(slug, found.id);
       if (!ticket) return { ok: false, reason: "not_found" };
-      const pinnedAtDispatch = ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
+      const pinnedAtDispatch = dispatchPinnedRequirement(ticket);
       const requirement = pinnedVerificationRequirement(ticket);
       const capturedCommand = String(capture?.command || "");
       const command = capturedCommand.trim();
@@ -2083,7 +2095,7 @@ ${verify.outputTail}` : null
       return { ok: false, message: error?.message || String(error) };
     }
   }
-  function submissionVerificationResult(ticket, sourceRevision, verify, candidateCommit) {
+  function submissionVerificationResult(ticket, sourceRevision, verify, candidateCommit, directCaptureInvocation) {
     const requirement = pinnedVerificationRequirement(ticket);
     const evidence = String(verify || "").trim();
     if (requirement.kind === "attestation" || sourceRevision != null) {
@@ -2112,7 +2124,7 @@ ${verify.outputTail}` : null
       return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
         source: "git",
         value: String(candidateCommit || "").trim().toLowerCase()
-      }, String(ticket.dispatchNonce || ""));
+      }, String(ticket.dispatchNonce || ""), directCaptureInvocation);
     }
     if (requirement.command) {
       const error2 = verifyCommandError(requirement.command);
@@ -2126,7 +2138,7 @@ ${verify.outputTail}` : null
       return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
         source: "git",
         value: String(candidateCommit || "").trim().toLowerCase()
-      }, String(ticket.dispatchNonce || ""));
+      }, String(ticket.dispatchNonce || ""), directCaptureInvocation);
     }
     if (requirement.kind === "custom" && requirement.evidenceContract === "legacy project verifier was not recorded" && !evidence) {
       return { result: { kind: "custom", status: "passed", evidence: requirement.evidenceContract }, expectedEvidence: null };
@@ -2139,7 +2151,7 @@ ${verify.outputTail}` : null
     const adapterFacts = opts.admissionFacts || {};
     const sourceRevisionFacts = sourceRevision && isSourceRevisionAdapterFacts(opts.admissionFacts) ? opts.admissionFacts : null;
     const sourceRevisionResolution = sourceRevisionFacts?.baseline || null;
-    const verification = submissionVerificationResult(ticket, sourceRevision, verify, opts.commit);
+    const verification = submissionVerificationResult(ticket, sourceRevision, verify, opts.commit, directClaimCaptureInvocation(slug, ticket));
     const completion = sourceRevision ? { ok: true } : completionTreeCheck(slug, ticket, { explicitNoOp: range?.noOp === true });
     const admitted = adapterFacts.admittedScope || executionScope(slug, ticket);
     const scope = adapterFacts.scope || commitScope.ticketCommitScope(admitted, ticket.files, ticket.ref);
@@ -2576,6 +2588,10 @@ ${verify.outputTail}` : null
       return { ok: true, ticket: source, supersededBy, comment };
     });
   }
+  function notOwnerSubmissionMessage(ref, submissionOwner, by, operation) {
+    if (operation === "rework") return `rework requires by = the submitter "${submissionOwner}" (pulse -> submittedBy); got "${by}".`;
+    return `${ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".`;
+  }
   function submissionOwnershipFailure(ticket, by, opts) {
     opts = opts || {};
     if (ticket.status === "done") return { ok: false, reason: "done", ticket };
@@ -2597,7 +2613,7 @@ ${verify.outputTail}` : null
         reason: "not_owner",
         ticket,
         ...held ? { claim: held } : {},
-        ...!claimOwner ? { message: `${ticket.ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".` } : {}
+        ...!claimOwner ? { message: notOwnerSubmissionMessage(ticket.ref, submissionOwner, by, opts.operation) } : {}
       };
     }
     if (!claimOwner && opts.allowSubmittedOwner !== true) {
@@ -2690,7 +2706,7 @@ ${verify.outputTail}` : null
       if (!pendingSubmission(ticket) && !retryCheckpoint) {
         return { ok: false, reason: "submission_required", ticket, message: `${ticket.ref} has no pending submission or retry candidate to reject for rework.` };
       }
-      const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true });
+      const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true, operation: "rework" });
       if (ownershipFailure) return ownershipFailure;
       const history = rejectionHistory(ticket);
       const source = opts.source || "cli";

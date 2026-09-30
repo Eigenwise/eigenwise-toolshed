@@ -283,7 +283,7 @@ function preservePendingRejection(slug: any, ticket: any, rejected: any, root: s
   for (let attempt = 0; attempt < 100; attempt += 1) {
     rejected.quarantineRef = rejectionQuarantineRef(ticket, firstRejectionNumber + attempt);
     putTicketTransaction(slug, ticket);
-    preserved = commitScope.preserveCommitRef(root, rejected.commit, rejected.quarantineRef, { noOverwrite: true });
+    preserved = commitScope.preserveCommitRef(root, rejected.commit, rejected.quarantineRef);
     if (preserved.ok || preserved.reason !== 'git_ref_collision') break;
   }
   if (!preserved.ok) {
@@ -622,9 +622,27 @@ function integrationVerifyLogPath(slug: any, ticket: any) {
   return path.join(dir, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.log`);
 }
 
+function directlyClaimed(ticket: any) {
+  return (ticket.dispatch?.lifecycleAttempt || ticket.lifecycleAttempt)?.execution === 'direct';
+}
+
+// GH-377: a direct claim over an earlier dispatch runs the ticket's current verify. The terminal
+// dispatch's pin no longer governs it, and nothing re-pins it after `update {verify}`.
+function dispatchPinnedRequirement(ticket: any) {
+  if (directlyClaimed(ticket)) return null;
+  return ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
+}
+
+// Same form as the briefing's capture line (agentsync capturedVerifyCommand), which a direct claim never gets.
+function directClaimCaptureInvocation(slug: any, ticket: any) {
+  if (!directlyClaimed(ticket)) return '';
+  const script = path.join(__dirname, '..', 'verify-capture.js');
+  return `node "${script}" --project ${JSON.stringify(String(readMeta(slug)?.path || slug))} --ticket ${JSON.stringify(String(ticket.ref))}`;
+}
+
 function pinnedVerificationRequirement(ticket: any) {
-  const pinned = ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
-  if (pinned && typeof pinned === 'object') return pinned;
+  const pinned = dispatchPinnedRequirement(ticket);
+  if (pinned instanceof Object) return pinned;
   const legacyCommand = String(ticket.executorVerify || ticket.submission?.verify || '').trim();
   if (!legacyCommand) {
     return verificationRequirement({ kind: 'custom', evidence: 'legacy project verifier was not recorded' });
@@ -663,9 +681,7 @@ function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
   return withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     if (!ticket) return { ok: false, reason: 'not_found' };
-    const pinnedAtDispatch = ticket.dispatch?.verificationRequirement
-      || ticket.dispatch?.lifecycleAttempt?.verificationRequirement
-      || ticket.lifecycleAttempt?.verificationRequirement;
+    const pinnedAtDispatch = dispatchPinnedRequirement(ticket);
     const requirement = pinnedVerificationRequirement(ticket);
     const capturedCommand = String(capture?.command || '');
     const command = capturedCommand.trim();
@@ -2455,7 +2471,7 @@ function sharedTreeDescendantPaths(slug: any, ticket: any, range: any, admittedS
   }
 }
 
-function submissionVerificationResult(ticket: any, sourceRevision: any, verify: any, candidateCommit?: any) {
+function submissionVerificationResult(ticket: any, sourceRevision: any, verify: any, candidateCommit?: any, directCaptureInvocation?: string) {
   const requirement = pinnedVerificationRequirement(ticket);
   const evidence = String(verify || '').trim();
   if (requirement.kind === 'attestation' || sourceRevision != null) {
@@ -2488,7 +2504,7 @@ function submissionVerificationResult(ticket: any, sourceRevision: any, verify: 
     return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
       source: 'git',
       value: String(candidateCommit || '').trim().toLowerCase(),
-    }, String(ticket.dispatchNonce || ''));
+    }, String(ticket.dispatchNonce || ''), directCaptureInvocation);
   }
   if (requirement.command) {
     const error = verifyCommandError(requirement.command);
@@ -2502,7 +2518,7 @@ function submissionVerificationResult(ticket: any, sourceRevision: any, verify: 
     return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
       source: 'git',
       value: String(candidateCommit || '').trim().toLowerCase(),
-    }, String(ticket.dispatchNonce || ''));
+    }, String(ticket.dispatchNonce || ''), directCaptureInvocation);
   }
   if (requirement.kind === 'custom' && requirement.evidenceContract === 'legacy project verifier was not recorded' && !evidence) {
     return { result: { kind: 'custom', status: 'passed', evidence: requirement.evidenceContract }, expectedEvidence: null };
@@ -2520,7 +2536,7 @@ function submissionAdmissionDecision(slug: any, ticket: any, by: string, opts: a
     ? opts.admissionFacts
     : null;
   const sourceRevisionResolution = sourceRevisionFacts?.baseline || null;
-  const verification = submissionVerificationResult(ticket, sourceRevision, verify, opts.commit);
+  const verification = submissionVerificationResult(ticket, sourceRevision, verify, opts.commit, directClaimCaptureInvocation(slug, ticket));
   const completion = sourceRevision
     ? { ok: true }
     : completionTreeCheck(slug, ticket, { explicitNoOp: range?.noOp === true });
@@ -3017,6 +3033,14 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
   });
 }
 
+// Only `rework` gets its own wording: nothing is being released there, and the
+// generic "has no claim to release" phrasing names the wrong operation (GH-375).
+// The other two callers (reject-submission, clear-submission) keep it, unchanged.
+function notOwnerSubmissionMessage(ref: string, submissionOwner: string, by: string, operation?: string): string {
+  if (operation === 'rework') return `rework requires by = the submitter "${submissionOwner}" (pulse -> submittedBy); got "${by}".`;
+  return `${ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".`;
+}
+
 function submissionOwnershipFailure(ticket: any, by: string, opts?: any) {
   opts = opts || {};
   if (ticket.status === 'done') return { ok: false, reason: 'done', ticket };
@@ -3038,7 +3062,7 @@ function submissionOwnershipFailure(ticket: any, by: string, opts?: any) {
       reason: 'not_owner',
       ticket,
       ...(held ? { claim: held } : {}),
-      ...(!claimOwner ? { message: `${ticket.ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".` } : {}),
+      ...(!claimOwner ? { message: notOwnerSubmissionMessage(ticket.ref, submissionOwner, by, opts.operation) } : {}),
     };
   }
   if (!claimOwner && opts.allowSubmittedOwner !== true) {
@@ -3138,7 +3162,7 @@ function reworkSubmission(slug?: any, idOrRef?: any, opts?: any) {
     if (!pendingSubmission(ticket) && !retryCheckpoint) {
       return { ok: false, reason: 'submission_required', ticket, message: `${ticket.ref} has no pending submission or retry candidate to reject for rework.` };
     }
-    const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true });
+    const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true, operation: 'rework' });
     if (ownershipFailure) return ownershipFailure;
     const history = rejectionHistory(ticket);
     const source = opts.source || 'cli';

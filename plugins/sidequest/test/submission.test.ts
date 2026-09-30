@@ -552,7 +552,7 @@ test('MCP submit refuses a completed capture from before the submitted candidate
     });
     assert.strictEqual(refused.ok, false);
     assert.strictEqual(refused.reason, 'verification_capture_required');
-    assert.match(refused.message, /Run "node --version" through the dispatched verify-capture wrapper again/);
+    assert.match(refused.message, new RegExp(`this direct claim, .*A direct claim has no dispatch briefing: from the checkout holding that candidate, run node ".*verify-capture.js" --project ".+" --ticket "${t.ref}"`));
     assert.strictEqual(store.getTicket(slug, t.ref).claim.by, by);
     assert.strictEqual(store.releaseTicket(slug, t.ref, by, {
       status: 'todo',
@@ -1146,6 +1146,41 @@ test('review rejection preserves the candidate through a normal repair dispatch 
   assert.strictEqual(afterReplacement.submission.integratedAt, null, 'repair submission is still queued, never integrated early');
   assert.strictEqual(afterReplacement.submission.supersedesRejectedSubmission, originalCommit);
   assert.strictEqual(afterReplacement.rejectedSubmissions[0].supersededBy.commit, replacementCommit);
+});
+
+test('rework refuses a non-submitter by with the submitter-ownership message, not the release wording (GH-375)', async () => {
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh375.js'), 'candidate\n');
+  git(['add', 'lib/gh375.js']);
+  git(['commit', '-m', 'gh375 candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  const t = addTicket('rework refusal names the required submitter');
+  pin(t, commit);
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'exec-x', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, t.ref, 'exec-x', { commit }).ok, true);
+
+  const wrongOwner = await callMcp('rework', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by: 'reviewer',
+    review: 'A reviewer identity, not the submitter.',
+    reason: 'by must equal the submitter identity, not a reviewer label.',
+  });
+  assert.strictEqual(wrongOwner.ok, false);
+  assert.strictEqual(wrongOwner.reason, 'not_owner');
+  assert.match(wrongOwner.message, /rework requires by = the submitter "exec-x"/);
+  assert.match(wrongOwner.message, /got "reviewer"/);
+  assert.doesNotMatch(wrongOwner.message, /has no claim to release/);
+
+  const rightOwner = await callMcp('rework', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by: 'exec-x',
+    review: 'The submitter rejecting their own candidate.',
+    reason: 'by matches the submitter identity.',
+  });
+  assert.strictEqual(rightOwner.ok, true, rightOwner.message);
 });
 
 test('rework preserves every rejected commit and avoids quarantine ref collisions (SQ-1642)', async () => {
@@ -4321,7 +4356,8 @@ test('SQ-2413: MCP groomClose records terminal recovery evidence and accepts a r
       reason: 'Reject only from the candidate owner.',
     });
     assert.strictEqual(rework.ok, false);
-    assert.match(rework.message, /no claim to release/);
+    assert.match(rework.message, /rework requires by = the submitter "terminal-submitted-source"/);
+    assert.doesNotMatch(rework.message, /no claim to release/);
     git(['reset', '--hard', 'origin/main']);
     fs.writeFileSync(path.join(PROJECT_DIR, 'unrelated-delivery.js'), 'reachable but unrelated\n');
     git(['add', 'unrelated-delivery.js']);
@@ -6434,4 +6470,123 @@ test('integration verification runs the recorded verifier from the ticket verify
 
   assert.strictEqual(result.ok, true, JSON.stringify(result.verify));
   assert.strictEqual(result.verify.status, 'passed');
+});
+
+// GitHub #377: the orchestrator takes a ticket an earlier round dispatched, amends its verify, and
+// claims it directly. The wrapper and submit both have to use the amended verify, and the capture
+// the wrapper records for the direct claim has to admit the submit.
+function claimDirectlyAfterEarlierDispatch(title: string, command: string, file: string) {
+  const ticket = addTicket(title, {
+    category: 'submission.fixture',
+    executorVerifyKind: 'command',
+    executorVerify: command,
+    files: [file],
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `${ticket.ref}-earlier-round`, sharedTree: true });
+  assert.strictEqual(prepared.ok, true, prepared.message);
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, 'earlier-round-executor', {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: `${ticket.ref}-earlier-round`,
+  }).ok, true);
+  const handBack = () => assert.strictEqual(store.releaseTicket(slug, ticket.ref, 'earlier-round-executor', { status: 'todo', reason: 'Earlier round handed back.' }).ok, true);
+  const claimDirectly = () => {
+    const claim = store.claimTicket(slug, ticket.ref, 'orchestrator', { direct: true, force: true, reason: 'The submission fixture requires a local direct claim.' });
+    assert.strictEqual(claim.ok, true, claim.reason);
+  };
+  return { ticket, prepared, handBack, claimDirectly };
+}
+
+test('GH-377: a direct claim after a terminal dispatch submits with a capture of the amended verify', async () => {
+  cleanBranch();
+  const currentCommand = 'node --version';
+  const { ticket, handBack, claimDirectly } = claimDirectlyAfterEarlierDispatch('direct claim after an earlier dispatch', 'node -e "process.exit(0)" -- stale', 'lib/gh-377-amended.js');
+  handBack();
+  store.updateTicket(slug, ticket.ref, { executorVerifyKind: 'command', executorVerify: currentCommand });
+  claimDirectly();
+
+  const candidate = createCandidateCommit('gh-377-amended.js', 'direct claim candidate\n');
+  pin(ticket, candidate);
+  const target = { project: PROJECT_DIR, ticket: ticket.ref };
+  assert.deepStrictEqual(captureCommand([], target), { command: currentCommand }, 'the wrapper loads the amended verify, not the earlier dispatch pin');
+  const capture = await runVerifyCapture(currentCommand, PROJECT_DIR);
+  try {
+    assert.strictEqual(capture.status, 'passed');
+    const recorded = recordCapture(target, capture, PROJECT_DIR);
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    const submitted = store.submitTicket(slug, ticket.ref, 'orchestrator', { commit: candidate, verify: currentCommand });
+    assert.strictEqual(submitted.ok, true, submitted.message);
+    assert.strictEqual(store.getTicket(slug, ticket.ref).submission.commit, candidate);
+  } finally {
+    fs.rmSync(capture.logPath, { force: true });
+  }
+});
+
+test('GH-377: a capture recorded by the earlier dispatch attempt does not admit the direct claim', async () => {
+  cleanBranch();
+  const command = 'node --version';
+  const { ticket, prepared, handBack, claimDirectly } = claimDirectlyAfterEarlierDispatch('earlier attempt capture', command, 'lib/gh-377-earlier.js');
+  const candidate = createCandidateCommit('gh-377-earlier.js', 'earlier attempt candidate\n');
+  pin(ticket, candidate);
+  const capture = await runVerifyCapture(command, PROJECT_DIR);
+  try {
+    const recorded = recordCapture({ project: PROJECT_DIR, ticket: ticket.ref }, capture, PROJECT_DIR);
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.capture.dispatchNonce, prepared.token);
+    handBack();
+    claimDirectly();
+
+    const refused = store.submitTicket(slug, ticket.ref, 'orchestrator', { commit: candidate, verify: command });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'verification_capture_required');
+    assert.ok(!refused.message.includes('<none>'), refused.message);
+    assert.match(refused.message, new RegExp(`verify-capture\\.js" --project ".+" --ticket "${ticket.ref}"`));
+  } finally {
+    fs.rmSync(capture.logPath, { force: true });
+  }
+});
+
+test('GH-378: submit never repoints another board\'s refs/sidequest/<ref> and names that commit instead', async () => {
+  cleanBranch();
+  const ticket = addTicket('new board reuses an archived board ref name', { files: ['lib/reused-ref.js'] });
+  const by = 'reused-ref-worker';
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  const foreign = git(['rev-parse', 'origin/main']);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'reused-ref.js'), 'first round\n');
+  git(['add', 'lib/reused-ref.js']);
+  git(['commit', '-m', 'first round candidate']);
+  const firstRound = git(['rev-parse', 'HEAD']);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'reused-ref.js'), 'second round\n');
+  git(['add', 'lib/reused-ref.js']);
+  git(['commit', '-m', 'second round candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(ticket, foreign);
+  const submitArgs = {
+    project: PROJECT_DIR,
+    ref: ticket.ref,
+    by,
+    commit,
+    verify: 'npm run test:files -- test/submission.test.ts',
+    body: 'Changed lib/reused-ref.js. Scoped submission test passed. Nothing skipped.',
+  };
+
+  const tipMismatch = await callMcp('submit', { ...submitArgs, worktree: PROJECT_DIR });
+  assert.equal(tipMismatch.ok, false);
+  assert.match(tipMismatch.message, new RegExp(`refs/sidequest/${ticket.ref} already points to ${foreign}, a commit this ticket never recorded, so it belongs to another board`));
+  assert.doesNotMatch(tipMismatch.message, /Point it back at the submitted commit/);
+
+  const claimed = store.getTicket(slug, ticket.ref);
+  claimed.dispatch = { sanctionedCommits: [firstRound] };
+  persist(claimed);
+  pin(ticket, firstRound);
+  const ownTipMismatch = await callMcp('submit', { ...submitArgs, worktree: PROJECT_DIR });
+  assert.equal(ownTipMismatch.ok, false);
+  assert.match(ownTipMismatch.message, /Point it back at the submitted commit/);
+
+  pin(ticket, foreign);
+  git(['reset', '--hard', 'origin/main']);
+  await assert.rejects(
+    callMcp('submit', { ...submitArgs, worktree: path.join(PROJECT_DIR, 'missing-reused-ref-worktree') }),
+    new RegExp(`already points to ${foreign}, a commit this ticket never recorded`),
+  );
+  assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`]), foreign, 'the foreign candidate ref is left in place');
 });

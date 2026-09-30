@@ -50,6 +50,7 @@ const { createConfig } = require("./store/config.js");
 const { createSweeps } = require("./store/sweeps.js");
 const { createServer } = require("./store/server.js");
 const { createProjects } = require("./store/projects.js");
+const candidateRefs = require("./store/candidate-refs.js");
 const { createWarnings } = require("./store/warnings.js");
 let servingInstallResolved = false;
 let resolvedServingInstall;
@@ -195,11 +196,26 @@ function setProjectRouting(...args) {
 function projectRoutingEnabled(...args) {
   return projectsLayer.projectRoutingEnabled(...args);
 }
-function archiveProject(...args) {
-  return projectsLayer.archiveProject(...args);
+function boardRepository(slug) {
+  const projectPath = String(readMeta(slug)?.path || "");
+  try {
+    return projectPath ? commitScope.repoRoot(projectPath) : null;
+  } catch (_) {
+    return null;
+  }
 }
-function unarchiveProject(...args) {
-  return projectsLayer.unarchiveProject(...args);
+function archiveProject(slug) {
+  const result = projectsLayer.archiveProject(slug);
+  const repository = result.ok ? boardRepository(slug) : null;
+  return repository ? { ...result, candidateRefs: candidateRefs.archiveBoardCandidateRefs(commitScope, repository, slug, listTickets(slug)) } : result;
+}
+function unarchiveProject(slug) {
+  const result = projectsLayer.unarchiveProject(slug);
+  const repository = result.ok ? boardRepository(slug) : null;
+  return repository ? { ...result, candidateRefs: candidateRefs.restoreBoardCandidateRefs(commitScope, repository, slug) } : result;
+}
+function ticketRecordedCommits(ticket) {
+  return candidateRefs.ticketRecordedCommits(ticket);
 }
 function deleteProjectExact(...args) {
   return projectsLayer.deleteProjectExact(...args);
@@ -2193,7 +2209,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
             reason: "pending_submission",
             ticket: t,
             submission: t.submission,
-            message: `${heldOwner ? "" : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. When a reviewed candidate already landed through a hand-resolved conflict merge, record that merge with groomClose passing deliveryCommit <the merge commit>, deliveryMethod "manual", and reason. It checks the candidate is an ancestor of that merge and re-runs the merged-tree gate before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`
+            message: `${heldOwner ? "" : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <submitter id> --review <evidence> --reason "what needs repair"\` (the submitter identity from \`sidequest pulse ${t.ref}\` -> submittedBy, not a reviewer), then dispatch the ticket for repair. When a reviewed candidate already landed through a hand-resolved conflict merge, record that merge with groomClose passing deliveryCommit <the merge commit>, deliveryMethod "manual", and reason. It checks the candidate is an ancestor of that merge and re-runs the merged-tree gate before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`
           };
         }
         reopenedSubmission = t.submission;
@@ -3455,6 +3471,7 @@ module.exports = {
   findProject,
   archiveProject,
   unarchiveProject,
+  ticketRecordedCommits,
   deleteProjectExact,
   mergeProject,
   setProjectNotify,
