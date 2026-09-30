@@ -1,5 +1,5 @@
 "use strict";
-function createProjects({ acquireLock, assetsDir, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction }) {
+function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction }) {
   function canonicalize(absPath) {
     const resolved = path.resolve(absPath);
     try {
@@ -74,6 +74,51 @@ function createProjects({ acquireLock, assetsDir, claimReclaimable, cloneCached,
     });
     if (changed) invalidateStoreCaches();
     return { slug, dir, meta };
+  }
+  function isInside(canonicalChild, root) {
+    const relative = path.relative(canonicalize(root), canonicalChild);
+    return !relative.startsWith("..") && !path.isAbsolute(relative);
+  }
+  function isDirectory(absPath) {
+    try {
+      return fs.statSync(absPath).isDirectory();
+    } catch (_) {
+      return false;
+    }
+  }
+  function reservedLocation(canonicalPath) {
+    if (isInside(canonicalPath, homeRoot())) return `inside the Sidequest home (${homeRoot()})`;
+    if (isInside(canonicalPath, claudeHome())) return `inside the Claude config directory (${claudeHome()})`;
+    return null;
+  }
+  function throwawayStore() {
+    return isInside(canonicalize(homeRoot()), os.tmpdir());
+  }
+  function tempOrNonRepositoryRefusal(canonicalPath, implicit) {
+    if (isInside(canonicalPath, os.tmpdir())) return throwawayStore() ? null : `inside the system temp directory (${os.tmpdir()})`;
+    return implicit ? nonRepositoryRefusal(canonicalPath) : null;
+  }
+  function nonRepositoryRefusal(canonicalPath) {
+    if (fs.existsSync(path.join(canonicalPath, ".git"))) return null;
+    return "not a git repository root and was never registered as a board; register it by passing its absolute path as the project if it really is one";
+  }
+  function projectRootRefusal(resolved, implicit) {
+    if (!isDirectory(resolved)) return `not a project root: ${resolved} is not an existing directory.`;
+    const canonicalPath = canonicalize(resolved);
+    const reason = reservedLocation(canonicalPath) || tempOrNonRepositoryRefusal(canonicalPath, implicit);
+    return reason && `not a project root: ${resolved} is ${reason}.`;
+  }
+  function registerProject(absPath, name, options = {}) {
+    const resolved = path.resolve(absPath);
+    const refusal = readMeta(slugify(resolved)) ? null : projectRootRefusal(resolved, Boolean(options.implicit));
+    if (refusal) return { ok: false, reason: refusal };
+    return { ok: true, ...ensureProject(resolved, name) };
+  }
+  function flagMissingPath(project) {
+    return isDirectory(project.path) ? project : { ...project, missingPath: true };
+  }
+  function listProjectsFlaggingMissingPaths(opts) {
+    return listProjects(opts).map(flagMissingPath);
   }
   function readMeta(slug) {
     const key = String(slug || "");
@@ -319,6 +364,6 @@ function createProjects({ acquireLock, assetsDir, claimReclaimable, cloneCached,
     }
     return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
   }
-  return { archiveProject, deleteProjectExact, ensureProject, findProject, listProjects, mergeProject, metaLockPath, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, setProjectNotify, setProjectRouting, unarchiveProject, withMetaLock };
+  return { archiveProject, deleteProjectExact, ensureProject, findProject, listProjects, listProjectsFlaggingMissingPaths, mergeProject, metaLockPath, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, registerProject, setProjectNotify, setProjectRouting, unarchiveProject, withMetaLock };
 }
 module.exports = { createProjects };

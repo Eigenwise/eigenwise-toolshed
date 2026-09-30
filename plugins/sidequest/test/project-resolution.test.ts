@@ -62,6 +62,8 @@ function runCli(args?: any, opts?: any) {
     SIDEQUEST_HOME,
     CLAUDE_PROJECT_DIR: opts.cwd || path.join(FAKE_ROOT, '__unused_default__'),
   });
+  // An implicit board needs its folder to exist (SQ-3179).
+  fs.mkdirSync(env.CLAUDE_PROJECT_DIR, { recursive: true });
   const res = spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env });
   return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '' };
 }
@@ -322,7 +324,7 @@ test('CLI: --project with a non-existent absolute path fails loudly and creates 
     { cwd: ELSEWHERE }
   );
   assert.notStrictEqual(res.status, 0, 'a non-existent absolute --project path must fail');
-  assert.match(res.stderr, /does not match any registered board/i);
+  assert.match(res.stderr, /not a project root: .*this-dir-does-not-exist is not an existing directory/);
   assert.deepStrictEqual(projectSlugsOnDisk(), before, 'a non-existent absolute --project path must never create a board');
 });
 
