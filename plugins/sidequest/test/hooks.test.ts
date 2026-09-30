@@ -199,20 +199,26 @@ function runHookProcessForBudget(script?: any, payload?: any, envOverrides?: any
 // keep a floor above the ~3.6s durations already observed on a loaded Windows
 // runner (SQ-2895). The calibration spawn itself carries an explicit timeout so a
 // stalled child (or an inherited preload that never returns) fails loudly instead
-// of hanging test collection indefinitely (SQ-2999/SQ-3000).
+// of hanging test collection indefinitely (SQ-2999/SQ-3000). A one-time calibration
+// at module load only sees the runner's load at collection time; a runner that gets
+// busy later (e.g. neighbouring tests spawning hook processes) can outrun that stale
+// baseline (SQ-3175). Re-measure it fresh at each unbounded waitForPath call instead,
+// via the default-parameter expression below, so the bound tracks load at the wait.
 const PROCESS_SPAWN_CALIBRATION_TIMEOUT_MS = 5_000;
 const PROCESS_SPAWN_CALIBRATION_OPTIONS = {
   windowsHide: true,
   timeout: PROCESS_SPAWN_CALIBRATION_TIMEOUT_MS,
 } as const;
-const PROCESS_SPAWN_BASELINE_MS = (() => {
+function measureProcessSpawnBaselineMs(): number {
   const started = Date.now();
   execFileSync(process.execPath, ['-e', ''], PROCESS_SPAWN_CALIBRATION_OPTIONS);
   return Math.max(1, Date.now() - started);
-})();
-const WAIT_FOR_PATH_DEFAULT_MS = Math.max(5000, PROCESS_SPAWN_BASELINE_MS * 40);
+}
+function waitForPathDefaultBudgetMs(): number {
+  return Math.max(5000, measureProcessSpawnBaselineMs() * 40);
+}
 
-async function waitForPath(file: string, budgetMs: number = WAIT_FOR_PATH_DEFAULT_MS): Promise<void> {
+async function waitForPath(file: string, budgetMs: number = waitForPathDefaultBudgetMs()): Promise<void> {
   const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {
     if (fs.existsSync(file)) return;
