@@ -22,10 +22,11 @@ __export(category_defaults_exports, {
   ROUTING_PROFILE_SEED_REVISION: () => ROUTING_PROFILE_SEED_REVISION,
   STARTER_GATEWAY_MODEL_SLUGS: () => STARTER_GATEWAY_MODEL_SLUGS,
   STARTER_ROUTING_PROFILES: () => STARTER_ROUTING_PROFILES,
+  categoryWithCurrentCodexRoutes: () => categoryWithCurrentCodexRoutes,
   starterRoutingProfilesFor: () => starterRoutingProfilesFor
 });
 module.exports = __toCommonJS(category_defaults_exports);
-const ROUTING_PROFILE_SEED_REVISION = 8;
+const ROUTING_PROFILE_SEED_REVISION = 9;
 const DEFAULT_CATEGORIES = [
   {
     id: "codebase-exploration",
@@ -368,9 +369,9 @@ const GATEWAY_ROUTE_BY_PROFILE_CATEGORY = {
 const GATEWAY_FALLBACK_BY_PROFILE_CATEGORY = {
   coding: {
     debugging: { model: "codex-gpt-5-6-terra", effort: "high" },
-    experiment: { model: "codex-gpt-5-6-sol", effort: "high" },
-    "coding.hard": { model: "codex-gpt-5-6-sol", effort: "xhigh" },
-    "spike-investigation": { model: "codex-gpt-5-6-sol", effort: "high" },
+    experiment: { model: "codex-gpt-6-1-sol", effort: "high" },
+    "coding.hard": { model: "codex-gpt-6-1-sol", effort: "xhigh" },
+    "spike-investigation": { model: "codex-gpt-6-1-sol", effort: "high" },
     "visual-evaluation": { model: "codex-gpt-5-6-terra", effort: "medium" }
   }
 };
@@ -392,11 +393,32 @@ function starterRoutingProfilesFor(models) {
     })
   }));
 }
+const RETIRED_CODEX_ROUTE_MODELS = /* @__PURE__ */ new Map([
+  ["codex-gpt-5-6-sol", "codex-gpt-6-1-sol"],
+  ["codex-gpt-5-6-sol-fast", "codex-gpt-6-1-sol-fast"],
+  ["codex-gpt-6-sol", "codex-gpt-6-1-sol"],
+  ["codex-gpt-6-sol-fast", "codex-gpt-6-1-sol-fast"]
+]);
+const ASTRA_ROUTE_MODELS = /* @__PURE__ */ new Map([
+  ["codex-gpt-6-astra", "codex-gpt-6-1-sol"],
+  ["codex-gpt-6-astra-fast", "codex-gpt-6-1-sol-fast"]
+]);
+function currentCodexRoute(route, keepsAstra) {
+  const replacement = RETIRED_CODEX_ROUTE_MODELS.get(route?.model) ?? (keepsAstra ? void 0 : ASTRA_ROUTE_MODELS.get(route?.model));
+  return replacement ? { ...route, model: replacement } : route;
+}
+function categoryWithCurrentCodexRoutes(category, categoryId = category.id) {
+  const keepsAstra = String(categoryId).includes("frontier");
+  const route = currentCodexRoute(category.route, keepsAstra);
+  const fallback = currentCodexRoute(category.fallback, keepsAstra);
+  return route === category.route && fallback === category.fallback ? null : { ...category, route, fallback };
+}
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   DEFAULT_CATEGORIES,
   ROUTING_PROFILE_SEED_REVISION,
   STARTER_GATEWAY_MODEL_SLUGS,
   STARTER_ROUTING_PROFILES,
+  categoryWithCurrentCodexRoutes,
   starterRoutingProfilesFor
 });

@@ -213,6 +213,7 @@ test('window policy marks measured rows and advertises unmeasured Codex defaults
   assert.equal(gatewayClientModelId('gpt-5.2'), 'claude-gpt-5.2[1m]');
   assert.equal(resolveGatewayModelPolicy('claude-opus-4-8[1m]').sentry, 'none');
   assert.equal(gatewayModel('gpt-6-astra-fast', 'codex').max_input_tokens, 920000);
+  assert.match(resolveGatewayModelPolicy('claude-gpt-6.1-sol-fast[1m]').measurement, /^measured 2026-09-30/);
 });
 
 test('Codex sentry derives a headroom-preserving trigger for each policy row', () => {

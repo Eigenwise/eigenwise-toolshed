@@ -44,7 +44,7 @@ const {
   isFilesystemSnapshotLimitError,
   isFilesystemSnapshotChildError,
 } = sourceRevisionCapability;
-const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } = require('./category-defaults.js');
+const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, categoryWithCurrentCodexRoutes, starterRoutingProfilesFor } = require('./category-defaults.js');
 const commitScope = require('./commit-scope.js');
 const { commitPaths } = commitScope;
 const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, retainedWorktreeResumeDecision } = require('./worktrees.js');
@@ -1466,57 +1466,67 @@ function refreshRoutingProfileSeeds(handle?: any) {
   invalidateStoreCaches();
 }
 
-// A profile entry is keyed by the id inside its stored category; a project layer row carries its own.
-function categoryNeedingReadonlyFlag(readonlyIds: Set<string>, data: string, rowId?: string) {
+type StoredCategoryRewrite = (category: any, categoryId: unknown) => object | null;
+
+function rewrittenStoredCategory(rewrite: StoredCategoryRewrite, data: string, categoryId: string) {
   let category: any;
   try { category = JSON.parse(data); } catch (_: any) { return null; }
-  if (!readonlyIds.has(rowId ?? category?.id) || category?.readonly !== undefined) return null;
-  return category;
+  return category ? rewrite(category, categoryId) : null;
 }
 
-function readonlyCategorySeedsAreStale(handle: any, readonlyIds: Set<string>) {
-  for (const row of handle.prepare('SELECT data FROM routing_profile_entries').all()) {
-    if (categoryNeedingReadonlyFlag(readonlyIds, row.data)) return true;
+function storedCategoriesNeedRewrite(handle: any, rewrite: StoredCategoryRewrite) {
+  return handle.prepare('SELECT category_id, data FROM routing_profile_entries').all()
+    .some((row: any) => rewrittenStoredCategory(rewrite, row.data, row.category_id))
+    || handle.prepare('SELECT id, data FROM project_categories').all()
+      .some((row: any) => rewrittenStoredCategory(rewrite, row.data, row.id));
+}
+
+interface StoredCategoryRewriteOutcome { affectedProjects: Set<string>; rewrittenIds: Set<string> }
+
+function rewriteProfileEntries(handle: any, rewrite: StoredCategoryRewrite, outcome: StoredCategoryRewriteOutcome) {
+  const update = handle.prepare('UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?');
+  const now = new Date().toISOString();
+  for (const row of handle.prepare('SELECT profile_id, category_id, data FROM routing_profile_entries').all()) {
+    const category = rewrittenStoredCategory(rewrite, row.data, row.category_id);
+    if (!category) continue;
+    update.run(JSON.stringify(category), now, row.profile_id, row.category_id);
+    for (const pointer of handle.prepare('SELECT project FROM project_routing_profiles WHERE profile_id = ?').all(row.profile_id)) outcome.affectedProjects.add(String(pointer.project));
+    outcome.rewrittenIds.add(String(row.category_id));
   }
-  for (const row of handle.prepare('SELECT id, data FROM project_categories').all()) {
-    if (categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id)) return true;
+}
+
+function rewriteProjectCategories(handle: any, rewrite: StoredCategoryRewrite, outcome: StoredCategoryRewriteOutcome) {
+  const update = handle.prepare('UPDATE project_categories SET data = ? WHERE project = ? AND id = ?');
+  for (const row of handle.prepare('SELECT project, id, data FROM project_categories').all()) {
+    const category = rewrittenStoredCategory(rewrite, row.data, row.id);
+    if (!category) continue;
+    update.run(JSON.stringify(category), row.project, row.id);
+    outcome.affectedProjects.add(String(row.project));
+    outcome.rewrittenIds.add(String(row.id));
   }
-  return false;
+}
+
+// Scanning first means a settled store never opens a write transaction, which is the whole cost
+// of a load-time rewrite on process start. The scan inside the transaction stays authoritative so the
+// decision is never acted on from outside the lock.
+function rewriteStoredCategories(handle: any, rewrite: StoredCategoryRewrite) {
+  if (!storedCategoriesNeedRewrite(handle, rewrite)) return;
+  withinTransaction(handle, () => {
+    const outcome: StoredCategoryRewriteOutcome = { affectedProjects: new Set(), rewrittenIds: new Set() };
+    rewriteProfileEntries(handle, rewrite, outcome);
+    rewriteProjectCategories(handle, rewrite, outcome);
+    if (outcome.rewrittenIds.size) refreshPreparedDispatches(handle, [...outcome.affectedProjects], [...outcome.rewrittenIds]);
+  });
 }
 
 function refreshReadonlyCategorySeeds(handle?: any) {
-  const readonlyIds = new Set([
+  const readonlyIds = new Set<unknown>([
     ...DEFAULT_CATEGORIES.filter((category: any) => category.readonly === true).map((category: any) => category.id),
     'hand-analysis',
   ]);
-  // Scanning first means a settled store never opens a write transaction, which is the whole cost
-  // of this refresher on process start. The scan inside the transaction stays authoritative so the
-  // decision is never acted on from outside the lock.
-  if (!readonlyCategorySeedsAreStale(handle, readonlyIds)) return;
-  const affected = new Set<string>();
-  let changed = false;
-  withinTransaction(handle, () => {
-    const updateProfileEntry = handle.prepare('UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?');
-    const updateProjectEntry = handle.prepare('UPDATE project_categories SET data = ? WHERE project = ? AND id = ?');
-    const now = new Date().toISOString();
-    for (const row of handle.prepare('SELECT profile_id, category_id, data FROM routing_profile_entries').all()) {
-      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data);
-      if (!category) continue;
-      category.readonly = true;
-      updateProfileEntry.run(JSON.stringify(category), now, row.profile_id, row.category_id);
-      for (const project of handle.prepare('SELECT project FROM project_routing_profiles WHERE profile_id = ?').all(row.profile_id)) affected.add(String(project.project));
-      changed = true;
-    }
-    for (const row of handle.prepare('SELECT project, id, data FROM project_categories').all()) {
-      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id);
-      if (!category) continue;
-      category.readonly = true;
-      updateProjectEntry.run(JSON.stringify(category), row.project, row.id);
-      affected.add(String(row.project));
-      changed = true;
-    }
-    if (changed) refreshPreparedDispatches(handle, [...affected], [...readonlyIds]);
-  });
+  rewriteStoredCategories(handle, (category, categoryId) => (
+    readonlyIds.has(categoryId) && category.readonly === undefined ? { ...category, readonly: true } : null
+  ));
 }
 
 function refreshRoutingProfileSeedsForCatalogState(handle: unknown, root: string) {
@@ -1534,6 +1544,7 @@ function database() {
     migrateIfNeeded(handle, root);
     dbByHome.set(root, handle);
     refreshReadonlyCategorySeeds(handle);
+    rewriteStoredCategories(handle, categoryWithCurrentCodexRoutes);
     pruneOversizedNotificationsOnce();
   }
   if (!refreshingRoutingProfileSeeds) {

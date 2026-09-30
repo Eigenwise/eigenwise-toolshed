@@ -17,7 +17,7 @@ const {
   isFilesystemSnapshotLimitError,
   isFilesystemSnapshotChildError
 } = sourceRevisionCapability;
-const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } = require("./category-defaults.js");
+const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, categoryWithCurrentCodexRoutes, starterRoutingProfilesFor } = require("./category-defaults.js");
 const commitScope = require("./commit-scope.js");
 const { commitPaths } = commitScope;
 const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, retainedWorktreeResumeDecision } = require("./worktrees.js");
@@ -1471,55 +1471,54 @@ function refreshRoutingProfileSeeds(handle) {
   });
   invalidateStoreCaches();
 }
-function categoryNeedingReadonlyFlag(readonlyIds, data, rowId) {
+function rewrittenStoredCategory(rewrite, data, categoryId) {
   let category;
   try {
     category = JSON.parse(data);
   } catch (_) {
     return null;
   }
-  if (!readonlyIds.has(rowId ?? category?.id) || category?.readonly !== void 0) return null;
-  return category;
+  return category ? rewrite(category, categoryId) : null;
 }
-function readonlyCategorySeedsAreStale(handle, readonlyIds) {
-  for (const row of handle.prepare("SELECT data FROM routing_profile_entries").all()) {
-    if (categoryNeedingReadonlyFlag(readonlyIds, row.data)) return true;
+function storedCategoriesNeedRewrite(handle, rewrite) {
+  return handle.prepare("SELECT category_id, data FROM routing_profile_entries").all().some((row) => rewrittenStoredCategory(rewrite, row.data, row.category_id)) || handle.prepare("SELECT id, data FROM project_categories").all().some((row) => rewrittenStoredCategory(rewrite, row.data, row.id));
+}
+function rewriteProfileEntries(handle, rewrite, outcome) {
+  const update = handle.prepare("UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?");
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  for (const row of handle.prepare("SELECT profile_id, category_id, data FROM routing_profile_entries").all()) {
+    const category = rewrittenStoredCategory(rewrite, row.data, row.category_id);
+    if (!category) continue;
+    update.run(JSON.stringify(category), now, row.profile_id, row.category_id);
+    for (const pointer of handle.prepare("SELECT project FROM project_routing_profiles WHERE profile_id = ?").all(row.profile_id)) outcome.affectedProjects.add(String(pointer.project));
+    outcome.rewrittenIds.add(String(row.category_id));
   }
-  for (const row of handle.prepare("SELECT id, data FROM project_categories").all()) {
-    if (categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id)) return true;
+}
+function rewriteProjectCategories(handle, rewrite, outcome) {
+  const update = handle.prepare("UPDATE project_categories SET data = ? WHERE project = ? AND id = ?");
+  for (const row of handle.prepare("SELECT project, id, data FROM project_categories").all()) {
+    const category = rewrittenStoredCategory(rewrite, row.data, row.id);
+    if (!category) continue;
+    update.run(JSON.stringify(category), row.project, row.id);
+    outcome.affectedProjects.add(String(row.project));
+    outcome.rewrittenIds.add(String(row.id));
   }
-  return false;
+}
+function rewriteStoredCategories(handle, rewrite) {
+  if (!storedCategoriesNeedRewrite(handle, rewrite)) return;
+  withinTransaction(handle, () => {
+    const outcome = { affectedProjects: /* @__PURE__ */ new Set(), rewrittenIds: /* @__PURE__ */ new Set() };
+    rewriteProfileEntries(handle, rewrite, outcome);
+    rewriteProjectCategories(handle, rewrite, outcome);
+    if (outcome.rewrittenIds.size) refreshPreparedDispatches(handle, [...outcome.affectedProjects], [...outcome.rewrittenIds]);
+  });
 }
 function refreshReadonlyCategorySeeds(handle) {
   const readonlyIds = /* @__PURE__ */ new Set([
     ...DEFAULT_CATEGORIES.filter((category) => category.readonly === true).map((category) => category.id),
     "hand-analysis"
   ]);
-  if (!readonlyCategorySeedsAreStale(handle, readonlyIds)) return;
-  const affected = /* @__PURE__ */ new Set();
-  let changed = false;
-  withinTransaction(handle, () => {
-    const updateProfileEntry = handle.prepare("UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?");
-    const updateProjectEntry = handle.prepare("UPDATE project_categories SET data = ? WHERE project = ? AND id = ?");
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    for (const row of handle.prepare("SELECT profile_id, category_id, data FROM routing_profile_entries").all()) {
-      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data);
-      if (!category) continue;
-      category.readonly = true;
-      updateProfileEntry.run(JSON.stringify(category), now, row.profile_id, row.category_id);
-      for (const project of handle.prepare("SELECT project FROM project_routing_profiles WHERE profile_id = ?").all(row.profile_id)) affected.add(String(project.project));
-      changed = true;
-    }
-    for (const row of handle.prepare("SELECT project, id, data FROM project_categories").all()) {
-      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id);
-      if (!category) continue;
-      category.readonly = true;
-      updateProjectEntry.run(JSON.stringify(category), row.project, row.id);
-      affected.add(String(row.project));
-      changed = true;
-    }
-    if (changed) refreshPreparedDispatches(handle, [...affected], [...readonlyIds]);
-  });
+  rewriteStoredCategories(handle, (category, categoryId) => readonlyIds.has(categoryId) && category.readonly === void 0 ? { ...category, readonly: true } : null);
 }
 function refreshRoutingProfileSeedsForCatalogState(handle, root) {
   const currentState = catalogStateFingerprint();
@@ -1535,6 +1534,7 @@ function database() {
     migrateIfNeeded(handle, root);
     dbByHome.set(root, handle);
     refreshReadonlyCategorySeeds(handle);
+    rewriteStoredCategories(handle, categoryWithCurrentCodexRoutes);
     pruneOversizedNotificationsOnce();
   }
   if (!refreshingRoutingProfileSeeds) {

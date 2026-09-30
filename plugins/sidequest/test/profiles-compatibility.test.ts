@@ -22,7 +22,7 @@ fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.str
   source: 'model-gateway',
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
   models: [
-    { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' },
+    { slug: 'codex-gpt-6-1-sol', id: 'claude-gpt-6.1-sol[1m]', label: 'GPT-6.1 Sol' },
     { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' },
   ],
 }));
@@ -284,6 +284,37 @@ test('provider capability changes migrate only untouched seeds and preserve prep
   assert.equal(pinned.dispatch.route.effort, 'high');
   assert.equal(pinned.dispatch.outcome, 'prepared');
   assert.ok(pinned.dispatch.policyChangedAt);
+});
+
+test('SQ-3184: the next store load moves retired Sol and non-frontier Astra rows to GPT-6.1 Sol and leaves user picks alone', () => {
+  const profileId = `retired-sol-${Date.now()}`;
+  const boardPath = path.join(HOME, 'retired-sol-board');
+  fs.mkdirSync(boardPath, { recursive: true });
+  const board = store.ensureProject(boardPath, 'Retired Sol board').slug;
+  const fixtureCategory = (id: string, route: object, fallback: object | null) => ({
+    id, name: id, description: `${id} fixture`, route, fallback, contract: 'Use the fixture.', artifactRoots: [], enabled: true,
+  });
+  store.createRoutingProfile(profileId, { from: 'coding', name: 'Retired Sol fixture' });
+  store.setRoutingProfileCategory(profileId, fixtureCategory('retired.review', { model: 'codex-gpt-5-6-sol', effort: 'high' }, { model: 'opus', effort: 'high' }));
+  store.setRoutingProfileCategory(profileId, fixtureCategory('retired.hard', { model: 'opus', effort: 'high' }, { model: 'codex-gpt-6-astra', effort: 'xhigh' }));
+  store.setRoutingProfileCategory(profileId, fixtureCategory('retired.frontier', { model: 'opus', effort: 'xhigh' }, { model: 'codex-gpt-6-astra', effort: 'xhigh' }));
+  store.setRoutingProfileCategory(profileId, fixtureCategory('retired.user-pick', { model: 'codex-gpt-5-6-terra', effort: 'high' }, { model: 'sonnet', effort: 'high' }));
+  store.setProjectRoutingProfile(board, profileId, 'compatibility-test');
+  store.setProjectCategory(board, 'retired.board-row', 'ADD', fixtureCategory('retired.board-row', { model: 'codex-gpt-6-sol-fast', effort: 'medium' }, null));
+
+  runCli('profile', 'list', '--json');
+
+  const reopened = db.openDb(HOME);
+  const profileRoutes = Object.fromEntries(reopened.prepare('SELECT category_id, data FROM routing_profile_entries WHERE profile_id = ?').all(profileId)
+    .map((row: any) => [row.category_id, JSON.parse(row.data)]));
+  const boardRow = JSON.parse(reopened.prepare('SELECT data FROM project_categories WHERE project = ? AND id = ?').get(board, 'retired.board-row').data);
+  reopened.close();
+  assert.deepEqual(profileRoutes['retired.review'].route, { model: 'codex-gpt-6-1-sol', effort: 'high' });
+  assert.deepEqual(profileRoutes['retired.hard'].fallback, { model: 'codex-gpt-6-1-sol', effort: 'xhigh' });
+  assert.deepEqual(profileRoutes['retired.frontier'].fallback, { model: 'codex-gpt-6-astra', effort: 'xhigh' });
+  assert.deepEqual(profileRoutes['retired.user-pick'].route, { model: 'codex-gpt-5-6-terra', effort: 'high' });
+  assert.deepEqual(boardRow.route, { model: 'codex-gpt-6-1-sol-fast', effort: 'medium' });
+  assert.equal(boardRow.fallback, null);
 });
 
 // SQ-2196. The routing-profile seed refresh runs from database(), which any code inside an open transaction

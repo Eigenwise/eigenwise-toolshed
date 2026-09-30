@@ -72,8 +72,8 @@ test('full-suite catalog supplies the ready Codex capability and every default C
     gatewayCatalog.models.map((model) => [model.slug, model.id, model.provider]),
     [
       ['codex-gpt-5-6-luna', 'claude-codex-gpt-5-6-luna', 'codex'],
-      ['codex-gpt-5-6-sol', 'claude-codex-gpt-5-6-sol', 'codex'],
       ['codex-gpt-5-6-terra', 'claude-codex-gpt-5-6-terra', 'codex'],
+      ['codex-gpt-6-1-sol', 'claude-codex-gpt-6-1-sol', 'codex'],
     ],
   );
 });
