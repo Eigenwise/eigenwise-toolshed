@@ -14,6 +14,8 @@ const CLI = path.join(ROOT, 'bin', 'sidequest.js');
 const DECLARED_PATH = 'plugins/sidequest/src/lib/store/tickets.ts';
 const REFUSED_PATH = 'plugins/other/src/a.ts';
 const SECOND_REFUSED_PATH = 'plugins/other/src/b.ts';
+// A foreign release fragment is refused on every dispatch, including a whole-tree one (SQ-3187), and no live-claim remedy applies to it.
+const NO_REMEDY_REFUSED_PATH = '.release/unreleased/SQ-999.md';
 
 // GitHub #173: the orchestrator's scopeRequest was refused with not_owner, so there
 // was no append-only path for it at all. grantScope grants the paths a claim still
@@ -190,7 +192,7 @@ test('the refusal comment names remedies that work under a live claim and never 
 
 test('a refusal with no live-claim remedy still tells the executor to hand back', () => {
   const fixture = createClaimedDispatch({ files: [] });
-  const refusal = fixture.store.requestScope(fixture.project, fixture.ticket.ref, fixture.worker, [REFUSED_PATH]);
+  const refusal = fixture.store.requestScope(fixture.project, fixture.ticket.ref, fixture.worker, [NO_REMEDY_REFUSED_PATH]);
   assert.equal(refusal.state, 'refused');
   assert.equal(refusal.noBounce, false);
   assert.match(refusalBody(refusal), /release with kind "handback"/);
@@ -258,9 +260,9 @@ test('MCP scopeRequest tells a refused executor to bounce only when nothing else
   assert.deepEqual(refused.refused, [REFUSED_PATH]);
   assert.match(refused.instruction, /Do not bounce/);
 
-  // A ticket that declares nothing has no declared list to widen, so the bounce stands.
+  // A refusal no live-claim remedy can answer (a foreign release fragment) keeps the bounce.
   const undeclared = createClaimedDispatch({ files: [] });
-  const bounced = await callTool('scopeRequest', { ref: undeclared.ticket.ref, by: undeclared.worker, files: [REFUSED_PATH] });
+  const bounced = await callTool('scopeRequest', { ref: undeclared.ticket.ref, by: undeclared.worker, files: [NO_REMEDY_REFUSED_PATH] });
   assert.equal(bounced.state, 'refused');
   assert.match(bounced.instruction, /release with kind "handback"/);
 });
@@ -316,7 +318,7 @@ test('the scope-request CLI prints the next step that actually applies', () => {
   assert.doesNotMatch(refused.stdout, /--release-kind handback/);
 
   const undeclared = createClaimedDispatch({ files: [] });
-  const bounced = cli(cliEnv(undeclared), ['scope-request', undeclared.ticket.ref, '--file', REFUSED_PATH, '--by', undeclared.worker]);
+  const bounced = cli(cliEnv(undeclared), ['scope-request', undeclared.ticket.ref, '--file', NO_REMEDY_REFUSED_PATH, '--by', undeclared.worker]);
   assert.equal(bounced.status, 0, bounced.stderr);
   assert.match(bounced.stdout, /release with --release-kind handback/);
 });
