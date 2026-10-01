@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 
 const runnerModuleUrl = pathToFileURL(path.join(__dirname, '..', 'scripts', 'test-full.mjs')).href;
+const pluginRoot = path.join(__dirname, '..');
 
 function loadBudgetHelpers() {
   const script = `
@@ -107,4 +109,37 @@ test('full-suite budget keeps actionable timeout and warning copy', () => {
     helpers.summary,
     '### Sidequest functional test phase\n- Duration: 800000 ms\n- Warning threshold: 720000 ms\n- Phase budget: 960000 ms\n- Concurrency: 4 on 4 available cores',
   );
+});
+
+// SQ-3204: test:files ran the TS loader without ever invoking tsc, so a tsc error in a named
+// test file (SQ-3178, SQ-3184) passed every scoped verify and only failed at `npm run test:full`
+// or the release cut.
+test('test:files fails a named test file that has a type error, instead of only test:full catching it', () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'package.json'), 'utf8'));
+  const fixture = fs.mkdtempSync(path.join(pluginRoot, 'test', '.test-files-typecheck-'));
+  try {
+    fs.mkdirSync(path.join(fixture, 'test'));
+    fs.writeFileSync(path.join(fixture, 'test', '_sidequest-test-home.ts'), '');
+    fs.writeFileSync(path.join(fixture, 'test', 'broken.test.ts'), "const brokenTypeError: number = 'not a number';\nconsole.log(brokenTypeError);\n");
+    fs.writeFileSync(path.join(fixture, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022', module: 'Node16', moduleResolution: 'Node16', strict: true, skipLibCheck: true, types: ['node'], noEmit: true,
+      },
+      include: ['test/**/*.ts'],
+    }));
+    fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({
+      private: true,
+      type: 'commonjs',
+      scripts: { typecheck: packageJson.scripts.typecheck, 'test:files': packageJson.scripts['test:files'] },
+    }));
+
+    const result = spawnSync('npm', ['run', 'test:files', '--', 'test/broken.test.ts'], {
+      cwd: fixture, encoding: 'utf8', windowsHide: true, shell: true,
+    });
+
+    assert.notEqual(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(`${result.stdout}${result.stderr}`, /error TS2322/);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
 });
