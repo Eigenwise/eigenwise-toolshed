@@ -388,44 +388,72 @@ export async function captureCoverage(changedPaths, suppliedDirectory, runSuite 
   return { coverageDirectory: await runSuites(suites, runSuite), suiteSummary: suites.map((suite) => suite.plugin).join(', ') || 'none, no plugin changed' };
 }
 
-export async function run(options = parseArguments(process.argv.slice(2))) {
-  const base = mergeBase(options.base);
+function changedPathContext(base) {
   const allChangedEntries = diffEntries(base);
   const changedEntries = diffEntries(base, 'plugins');
-  const allChangedPaths = allChangedEntries.map((entry) => entry.path);
-  const changedPaths = changedEntries.map((entry) => entry.path);
-  const { coverageDirectory, suiteSummary } = await captureCoverage(changedPaths, options.coverageDirectory);
+  return {
+    allChangedPaths: allChangedEntries.map((entry) => entry.path),
+    changedEntries,
+    changedPaths: changedEntries.map((entry) => entry.path),
+  };
+}
+
+async function measureMetrics(changedPaths, coverageDirectory) {
+  const coverageScripts = await readCoverage(coverageDirectory);
+  const sources = (await sourcePaths()).filter((sourcePath) => changedPaths.includes(path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/')));
+  const lizardResult = spawnSync('lizard', ['--csv', ...sources], { cwd: repositoryRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
+  if (lizardResult.status !== 0) throw new Error(`lizard failed with exit ${lizardResult.status ?? 'signal'}`);
+  const lizardRecords = parseLizardCsv(lizardResult.stdout || '');
+  const lizardByPath = Map.groupBy([...lizardRecords, ...sources.map((sourcePath) => ({ file: sourcePath }))], (entry) => normalizedPath(entry.file));
+  return (await Promise.all(sources.map((sourcePath) => sourceMetrics(sourcePath, coverageScripts, lizardByPath.get(normalizedPath(sourcePath)))))).flat();
+}
+
+function metricStatus(metric) {
+  if (metric.unverified) return 'UNVERIFIED';
+  return metric.crap >= THRESHOLD ? 'FAIL' : 'PASS';
+}
+
+function writeMetricRows(metrics) {
+  metrics.sort((left, right) => left.relativePath.localeCompare(right.relativePath) || left.line - right.line);
+  for (const metric of metrics) process.stdout.write(`${metricStatus(metric)} ${metric.unverified ? formatUnverifiedMetric(metric) : formatMetric(metric)}\n`);
+}
+
+function writeGateResult({ base, changedMetrics, failures, unverified, suiteSummary }) {
+  if (failures.length || unverified.length) {
+    const errors = [...failures, ...unverified.map(formatUnverifiedMetric)];
+    process.stderr.write(`CRAP gate failed against ${base} (coverage suites: ${suiteSummary}):\n${errors.map((failure) => `- ${failure}`).join('\n')}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const summary = changedMetrics.length ? `${changedMetrics.length} changed or new functions scored below ${THRESHOLD}.` : 'no changed or new functions were scored.';
+  process.stdout.write(`CRAP gate passed against ${base} (coverage suites: ${suiteSummary}): ${summary}\n`);
+}
+
+export async function reportMetrics({ allChangedPaths, base, baseWasExplicit, changedEntries, changedPaths, metrics, options, suiteSummary }) {
+  const changedMetrics = await changedMetricsAgainstBase(metrics, changedEntries, base);
+  const unverified = changedMetrics.filter((metric) => metric.unverified);
+  const failures = changedMetrics.filter((metric) => !metric.unverified && metric.crap >= THRESHOLD).map(formatMetric);
+  writeMetricRows(options.all ? metrics : changedMetrics);
+  const warning = emptyChangedFunctionWarning({
+    changedMetrics,
+    workingTreeIsClean: !runGit(['status', '--porcelain']),
+    baseWasExplicit,
+    base,
+    allChangedPaths,
+    changedPaths,
+  });
+  if (warning) process.stderr.write(`${warning}\n`);
+  writeGateResult({ base, changedMetrics, failures, unverified, suiteSummary });
+  return { metrics, changedMetrics, failures, unverified };
+}
+
+export async function run(options = parseArguments(process.argv.slice(2))) {
+  const base = mergeBase(options.base);
+  const changes = changedPathContext(base);
+  const { coverageDirectory, suiteSummary } = await captureCoverage(changes.changedPaths, options.coverageDirectory);
   try {
-    const coverageScripts = await readCoverage(coverageDirectory);
-    const sources = (await sourcePaths()).filter((sourcePath) => changedPaths.includes(path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/')));
-    const lizardResult = spawnSync('lizard', ['--csv', ...sources], { cwd: repositoryRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
-    if (lizardResult.status !== 0) throw new Error(`lizard failed with exit ${lizardResult.status ?? 'signal'}`);
-    const lizardRecords = parseLizardCsv(lizardResult.stdout ?? '');
-    const lizardByPath = Map.groupBy(lizardRecords, (entry) => normalizedPath(entry.file));
-    const metrics = (await Promise.all(sources.map((sourcePath) => sourceMetrics(sourcePath, coverageScripts, lizardByPath.get(normalizedPath(sourcePath)) ?? [])))).flat();
-    const changedMetrics = await changedMetricsAgainstBase(metrics, changedEntries, base);
-    const unverified = changedMetrics.filter((metric) => metric.unverified);
-    const failures = changedMetrics.filter((metric) => !metric.unverified && metric.crap >= THRESHOLD).map(formatMetric);
-    const displayedMetrics = options.all ? metrics : changedMetrics;
-    displayedMetrics.sort((left, right) => left.relativePath.localeCompare(right.relativePath) || left.line - right.line).forEach((metric) => {
-      const status = metric.unverified ? 'UNVERIFIED' : metric.crap >= THRESHOLD ? 'FAIL' : 'PASS';
-      process.stdout.write(`${status} ${metric.unverified ? formatUnverifiedMetric(metric) : formatMetric(metric)}\n`);
-    });
-    const warning = emptyChangedFunctionWarning({
-      changedMetrics,
-      workingTreeIsClean: !runGit(['status', '--porcelain']),
-      baseWasExplicit: Boolean(options.base),
-      base,
-      allChangedPaths,
-      changedPaths,
-    });
-    if (warning) process.stderr.write(`${warning}\n`);
-    if (failures.length || unverified.length) {
-      const errors = [...failures, ...unverified.map(formatUnverifiedMetric)];
-      process.stderr.write(`CRAP gate failed against ${base} (coverage suites: ${suiteSummary}):\n${errors.map((failure) => `- ${failure}`).join('\n')}\n`);
-      process.exitCode = 1;
-    } else process.stdout.write(`CRAP gate passed against ${base} (coverage suites: ${suiteSummary}): ${changedMetrics.length ? `${changedMetrics.length} changed or new functions scored below ${THRESHOLD}.` : 'no changed or new functions were scored.'}\n`);
-    return { metrics, changedMetrics, failures, unverified };
+    const metrics = await measureMetrics(changes.changedPaths, coverageDirectory);
+    return reportMetrics({ ...changes, base, baseWasExplicit: Boolean(options.base), metrics, options, suiteSummary });
   } finally {
     if (!options.coverageDirectory) await fs.rm(coverageDirectory, { recursive: true, force: true });
   }

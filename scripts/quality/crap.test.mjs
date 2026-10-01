@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import crapCore from './crap-core.cjs';
-import { baselineFunctions, builtOutput, captureCoverage, changedMetricsAgainstBase, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, functionCoverage, isScoredSource, lizardMetric, selectSuites, sourceMetrics } from './crap.mjs';
+import { fileURLToPath } from 'node:url';
+import { baselineFunctions, builtOutput, captureCoverage, changedMetricsAgainstBase, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, functionCoverage, isScoredSource, lizardMetric, reportMetrics, run, selectSuites, sourceMetrics } from './crap.mjs';
 
 const { crapScore, parseLizardCsv } = crapCore;
 
@@ -356,4 +357,93 @@ test('a failing suite stops the capture and names its plugin', async () => {
   const { suites, error } = await suitesRunFor(['plugins/model-gateway/lib/a.js', 'plugins/observability/lib/a.js'], 1);
   assert.equal(suites.length, 1);
   assert.match(error.message, /model-gateway tests failed with exit 1/);
+});
+
+async function withCapturedProcessOutput(action) {
+  const originalExitCode = process.exitCode;
+  const originalStandardOutputWrite = process.stdout.write;
+  const originalStandardErrorWrite = process.stderr.write;
+  process.exitCode = undefined;
+  process.stdout.write = () => true;
+  process.stderr.write = () => true;
+  try {
+    return await action();
+  } finally {
+    process.exitCode = originalExitCode;
+    process.stdout.write = originalStandardOutputWrite;
+    process.stderr.write = originalStandardErrorWrite;
+  }
+}
+
+test('runs production CLI phases and its failing report outcome', async () => {
+  const coverageDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-production-cli-'));
+  try {
+    const result = await withCapturedProcessOutput(() => run({ base: 'HEAD', coverageDirectory, all: false }));
+    assert.deepEqual(result.changedMetrics, []);
+
+    const failingMetric = metric({ complexity: 6, coverage: 1, relativePath: 'scripts/quality/crap.mjs' });
+    const anotherFailingMetric = { ...failingMetric, identity: '<root>/FunctionDeclaration:anotherSubject#0', line: 2, name: 'anotherSubject' };
+    await withCapturedProcessOutput(async () => {
+      const reported = await reportMetrics({
+        allChangedPaths: ['scripts/quality/crap.mjs'],
+        base: 'HEAD',
+        baseWasExplicit: true,
+        changedEntries: [{ path: 'scripts/quality/crap.mjs' }],
+        changedPaths: ['scripts/quality/crap.mjs'],
+        metrics: [anotherFailingMetric, failingMetric],
+        options: { all: true },
+        suiteSummary: 'none',
+      });
+      assert.equal(reported.failures.length, 2);
+      assert.equal(process.exitCode, 1);
+    });
+  } finally {
+    await fs.rm(coverageDirectory, { recursive: true, force: true });
+  }
+});
+
+const qualityDirectory = path.dirname(fileURLToPath(import.meta.url));
+const passSubject = 'export function subject(value) {\n  return value + 1;\n}\n';
+const failingSubject = 'export function subject(value) {\n  if (value === 1) return 1;\n  if (value === 2) return 2;\n  if (value === 3) return 3;\n  if (value === 4) return 4;\n  if (value === 5) return 5;\n  return 0;\n}\n';
+
+async function createCliFixture() {
+  const fixtureRoot = await fs.mkdtemp(path.join(process.cwd(), 'plugins', 'sidequest', 'test', 'crap-cli-fixture-'));
+  const qualityFixtureDirectory = path.join(fixtureRoot, 'scripts', 'quality');
+  const pluginRoot = path.join(fixtureRoot, 'plugins', 'sidequest');
+  await fs.mkdir(path.join(pluginRoot, 'src'), { recursive: true });
+  await fs.mkdir(path.join(fixtureRoot, 'plugins', 'quartermaster', 'lib'), { recursive: true });
+  await fs.mkdir(qualityFixtureDirectory, { recursive: true });
+  await Promise.all([
+    fs.copyFile(path.join(qualityDirectory, 'crap.mjs'), path.join(qualityFixtureDirectory, 'crap.mjs')),
+    fs.copyFile(path.join(qualityDirectory, 'crap-core.cjs'), path.join(qualityFixtureDirectory, 'crap-core.cjs')),
+    fs.copyFile(path.join(process.cwd(), 'plugins', 'quartermaster', 'lib', 'crap-core.cjs'), path.join(fixtureRoot, 'plugins', 'quartermaster', 'lib', 'crap-core.cjs')),
+    fs.writeFile(path.join(pluginRoot, 'package.json'), JSON.stringify({ type: 'module', scripts: { 'test:full': 'node test.mjs' } })),
+    fs.writeFile(path.join(pluginRoot, 'src', 'subject.js'), 'export function subject(value) {\n  return value;\n}\n'),
+    fs.writeFile(path.join(pluginRoot, 'test.mjs'), "import assert from 'node:assert/strict';\nimport { subject } from './src/subject.js';\nassert.equal(typeof subject, 'function');\nsubject(0);\n"),
+  ]);
+  runGitFixture(fixtureRoot, ['init', '-q']);
+  return { fixtureRoot, base: commitFixture(fixtureRoot, 'initial') };
+}
+
+function runCliFixture(fixtureRoot, base) {
+  return spawnSync(process.execPath, ['scripts/quality/crap.mjs', '--base', base], { cwd: fixtureRoot, encoding: 'utf8' });
+}
+
+test('the CLI captures a fixture suite and reports passing and failing changed functions', async () => {
+  const { fixtureRoot, base } = await createCliFixture();
+  try {
+    await fs.writeFile(path.join(fixtureRoot, 'plugins', 'sidequest', 'src', 'subject.js'), passSubject);
+    const passing = runCliFixture(fixtureRoot, base);
+    assert.equal(passing.status, 0);
+    assert.match(passing.stdout, /PASS plugins\/sidequest\/src\/subject\.js:1 subject/);
+    assert.match(passing.stdout, /coverage suites: sidequest/);
+
+    await fs.writeFile(path.join(fixtureRoot, 'plugins', 'sidequest', 'src', 'subject.js'), failingSubject);
+    const failing = runCliFixture(fixtureRoot, base);
+    assert.equal(failing.status, 1);
+    assert.match(failing.stdout, /FAIL plugins\/sidequest\/src\/subject\.js:1 subject/);
+    assert.match(failing.stderr, /CRAP gate failed against/);
+  } finally {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
 });
