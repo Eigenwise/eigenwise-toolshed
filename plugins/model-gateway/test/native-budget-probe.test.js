@@ -128,12 +128,18 @@ test('output and debug bounds stop synthetic children and remove oversized fixtu
   assert.equal(debug.status, 'UNVERIFIED', 'oversized numeric-observation file cannot produce a receipt');
 });
 
-test('launch failure remains UNVERIFIED and leaves no temporary fixture', async () => {
-  const before = fs.readdirSync(SCRATCHPAD).filter((name) => name.startsWith('native-budget-'));
-  const failed = await probe.runNativeCase({ binary: process.execPath, scratchpad: SCRATCHPAD,
-    model: 'gpt-6.1-sol', hostEnvironment: {}, launch: () => { throw new Error('synthetic launch refusal'); } });
-  assert.equal(failed.status, 'UNVERIFIED');
-  assert.deepEqual(fs.readdirSync(SCRATCHPAD).filter((name) => name.startsWith('native-budget-')), before);
+test('launch failure remains UNVERIFIED and removes only its owned fixture', async () => {
+  const sibling = fs.mkdtempSync(path.join(SCRATCHPAD, 'native-budget-sibling-'));
+  try {
+    const before = fs.readdirSync(SCRATCHPAD).filter((name) => name.startsWith('native-budget-'));
+    const failed = await probe.runNativeCase({ binary: process.execPath, scratchpad: SCRATCHPAD,
+      model: 'gpt-6.1-sol', hostEnvironment: {}, launch: () => { throw new Error('synthetic launch refusal'); } });
+    assert.equal(failed.status, 'UNVERIFIED');
+    assert.deepEqual(fs.readdirSync(SCRATCHPAD).filter((name) => name.startsWith('native-budget-')), before);
+    assert.equal(fs.existsSync(sibling), true, 'launch failure cleanup must preserve a sibling fixture');
+  } finally {
+    fs.rmSync(sibling, { recursive: true, force: true });
+  }
 });
 
 test('numeric telemetry ignores unrelated text, malformed events and missing resolver fields', () => {
