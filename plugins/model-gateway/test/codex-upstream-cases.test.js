@@ -231,17 +231,19 @@ test('#238: /v1/models refreshes on a timer and a burst of 50 never triggers a r
   assert.ok(slowest < 1500, `slowest /v1/models took ${slowest} ms`);
 });
 
-test('#238: a slow proxy auth status inside /healthz does not stall /v1/models', async (t) => {
+test('#238 #367: a 5 s proxy auth status stalls neither /healthz nor /v1/models, and concurrent probes share one check', async (t) => {
   const environment = gatewayTestEnvironment(t);
   const home = environment.HOME;
   const bin = path.join(home, '.claude', 'model-gateway', 'bin');
   fs.mkdirSync(bin, { recursive: true });
   const fakeProxy = path.join(bin, process.platform === 'win32' ? 'claude-code-proxy.exe' : 'claude-code-proxy');
   try { fs.linkSync(process.execPath, fakeProxy); } catch { fs.copyFileSync(process.execPath, fakeProxy); }
+  const authStarts = path.join(home, 'auth-status-starts.log');
   const slowAuthStatus = path.join(home, 'slow-auth-status.js');
   fs.writeFileSync(slowAuthStatus, [
     "if (/codex$/.test(process.argv[1] || '')) {",
-    '  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);',
+    `  require('fs').appendFileSync(${JSON.stringify(authStarts)}, 'x');`,
+    '  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000);',
     "  process.stdout.write('account: fixture\\n');",
     '  process.exit(0);',
     '}',
@@ -249,13 +251,30 @@ test('#238: a slow proxy auth status inside /healthz does not stall /v1/models',
   environment.NODE_OPTIONS = `--require "${slowAuthStatus.replace(/\\/g, '/')}"`;
   const { port } = await workerBehind(t, (res) => { res.writeHead(500); res.end(); }, environment);
 
-  const health = request(port, 'GET', '/healthz');
-  await sleep(200);
+  const probes = await Promise.all(Array.from({ length: 5 }, () => request(port, 'GET', '/healthz')));
   const models = await Promise.all(Array.from({ length: 10 }, () => request(port, 'GET', '/v1/models')));
-  const healthResult = await health;
 
-  assert.ok(healthResult.ms >= 1400, `the fixture auth status must actually be slow (healthz took ${healthResult.ms} ms)`);
-  assert.equal(JSON.parse(healthResult.body).codexReadiness.checks.codexAuth, true);
+  for (const probe of probes) {
+    assert.equal(probe.status, 200);
+    assert.ok(probe.ms < 1000, `/healthz took ${probe.ms} ms, past the supervisor's 1000 ms probe`);
+    const readiness = JSON.parse(probe.body).codexReadiness;
+    assert.equal(readiness.state, 'checking', 'the auth status is still running, so nothing is confirmed yet');
+    assert.equal(readiness.ready, false);
+    assert.equal(readiness.checkedAt, null);
+  }
   const slowest = Math.max(...models.map((response) => response.ms));
   assert.ok(slowest < 750, `/v1/models waited ${slowest} ms behind the auth status`);
+
+  let confirmed = null;
+  const deadline = Date.now() + 20000;
+  while (!confirmed && Date.now() < deadline) {
+    const readiness = await codexReadiness(port);
+    if (readiness.checkedAt) confirmed = readiness;
+    else await sleep(200);
+  }
+  assert.ok(confirmed, 'the background auth check never reported');
+  assert.equal(confirmed.checks.codexAuth, true);
+  assert.equal(confirmed.stale, false);
+  assert.equal(typeof confirmed.ageMs, 'number');
+  assert.equal(fs.readFileSync(authStarts, 'utf8'), 'x', 'every probe shared the one in-flight auth status');
 });

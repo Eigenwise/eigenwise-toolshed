@@ -1,6 +1,7 @@
 'use strict';
 
 const { normalizeDeniedTools } = require('../denied-tools.js');
+const { discoveredModelExecutorName, readOnlyDiscoveredModelExecutorName } = require('../exec-names.js');
 
 function createRouting(dependencies: any) {
   const {
@@ -87,8 +88,16 @@ function discoveredBySlug() {
 }
 
 // The model-gateway shim serves these providers behind the shared claude-codex-auto executor and its route
-// marker. Any other discovered provider has its own gateway, so its id goes out as the agent's model (GH-263).
+// marker. Any other discovered provider has its own gateway, so it runs as its own id (GH-263) through a
+// generated executor definition that pins that id (GH-361).
 const GATEWAY_SHIM_PROVIDERS = new Set(['codex', 'grok']);
+
+function discoveredModelBackends() {
+  const discovered = discoverExternalModels();
+  return discovered
+    .map((entry?: any) => resolvedBackend(entry, discovered))
+    .filter((backend?: any) => backend.backend !== 'codex');
+}
 
 function resolvedBackend(entry?: any, discovered?: any) {
   const agentSlug = discovered.filter((candidate?: any) => candidate.slug === entry.slug).length > 1
@@ -188,14 +197,16 @@ function gatewayMarkerExec(backend?: any, effort?: any) {
   return { agent: stableDispatchName(resolvedEffort), effort: resolvedEffort, model: null, spawnId: backend.id, dispatchModel: dispatchModelFor(backend.id), backend: 'codex', source: backend.source, slug: backend.slug, runsModel: backend.slug, apiModel: backend.id, runsLabel: backend.label || backend.slug, dispatch: 'native-agent' };
 }
 
+// The Agent tool refuses any `model` outside sonnet/opus/haiku/fable, so the id rides the generated
+// definition's frontmatter and the spawn carries no model (GH-361).
 function discoveredModelExec(backend?: any, effort?: any) {
   const resolvedEffort = effort || HAIKU_BACKEND_EFFORT;
-  return { agent: stableClaudeName(resolvedEffort), effort: resolvedEffort, model: backend.id, spawnId: backend.id, backend: backend.backend, source: backend.source, slug: backend.slug, runsModel: backend.slug, apiModel: backend.id, runsLabel: backend.label, dispatch: 'native-agent' };
+  return { agent: discoveredModelExecutorName(backend.agentSlug, resolvedEffort), readOnlyAgent: readOnlyDiscoveredModelExecutorName(backend.agentSlug, resolvedEffort), effort: resolvedEffort, model: null, spawnId: backend.id, backend: backend.backend, source: backend.source, slug: backend.slug, runsModel: backend.slug, apiModel: backend.id, runsLabel: backend.label, dispatch: 'native-agent' };
 }
 
 function execFromBackend(backend?: any, effort?: any) {
   if (backend.backend === 'codex') return gatewayMarkerExec(backend, effort);
-  if (backend.backend !== 'claude') return discoveredModelExec(backend, effort);
+  if (backend.backend !== 'claude' || backend.source) return discoveredModelExec(backend, effort);
   const runtime = backend.slug;
   const agent = effort ? stableClaudeName(effort) : null;
   return { agent, model: runtime, spawnId: runtime, backend: 'claude', slug: runtime, runsModel: runtime, apiModel: backend.id, runsLabel: backend.label, dispatch: 'native-agent' };
@@ -594,14 +605,15 @@ function getCategoryRoutePairs() {
   const pairs: any[] = [];
   const seen = new Set();
   const add = (category?: any) => {
-    if (!category) return;
+    if (!category?.enabled) return;
     const route = normalizeRoute(category.route);
     const fallback = category.fallback == null ? null : normalizeRoute(category.fallback);
     if (!route) return;
-    const key = JSON.stringify({ route, fallback });
+    const readonly = category.readonly === true;
+    const key = JSON.stringify({ route, fallback, readonly });
     if (seen.has(key)) return;
     seen.add(key);
-    pairs.push({ route, fallback });
+    pairs.push({ route, fallback, readonly });
   };
 
   for (const row of database().prepare('SELECT data FROM routing_profile_entries ORDER BY profile_id, position, category_id').all()) {
@@ -1377,6 +1389,7 @@ function applyDerivedRouting(t?: any, opts?: any) {
     dispatchRouteState,
     execFromBackend,
     resolveExec,
+    discoveredModelBackends,
     resolveReportedExec,
     resolveModelId,
     routingModels,

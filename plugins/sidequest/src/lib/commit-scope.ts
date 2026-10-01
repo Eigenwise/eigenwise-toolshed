@@ -7,6 +7,7 @@ export { isInScope, scopedPaths } from './scope-match.js';
 
 type UnknownRecord = Record<string, unknown>;
 type GitResult = { ok: true; value: string } | { ok: false; message: string };
+type NamedRef = { name: string; commit: string };
 
 function isRecord(value: unknown): value is UnknownRecord {
   return value !== null && typeof value === 'object';
@@ -303,6 +304,9 @@ export function foreignReleaseFragmentRefusalMessage(operation: string, ticketRe
   return `${operation}: refused ${ticketRef}; only ${ownFragment} is implicitly writable, except a deleted fragment from a related review-rejected candidate. Other release fragments: ${fragments.join(', ')}.`;
 }
 
+// The write scope an allowUnscoped dispatch binds (GH-341): the glob every path matches.
+export const WHOLE_TREE_SCOPE = '**';
+
 export function ticketCommitScope(effectiveFiles: unknown, declaredFiles: unknown, ticketRef: unknown): string[] {
   const scope = Array.isArray(effectiveFiles) ? effectiveFiles.slice() : [];
   const fragment = Array.isArray(declaredFiles) && declaredFiles.length ? ticketReleaseFragment(ticketRef) : null;
@@ -591,30 +595,80 @@ export function unpublishedReleaseTip(cwd: string, commit: unknown, remoteBranch
   return { commit: tip.value, tags: [...marketplace, ...plugins].sort() };
 }
 
-export function preserveCommitRef(cwd: string, commit: unknown, gitRef: unknown, options?: { noOverwrite?: boolean }) {
+const EMPTY_OBJECT_ID = '0000000000000000000000000000000000000000';
+
+function commitMatchesRevision(commit: string, revision: unknown): boolean {
+  const text = String(revision || '').trim().toLowerCase();
+  return text.length >= 7 && commit.startsWith(text);
+}
+
+export function recordsCommit(recorded: readonly unknown[], commit: string): boolean {
+  return recorded.some((revision) => commitMatchesRevision(commit, revision));
+}
+
+// No ref yet counts as owned: creating it names the empty id, so a racing writer still loses.
+function ownsRefTip(current: string, replaces: readonly unknown[]): boolean {
+  return current === EMPTY_OBJECT_ID || recordsCommit(replaces, current);
+}
+
+export function foreignRefMessage(ref: string, commit: string): string {
+  const archived = ref.replace('refs/sidequest/', 'refs/sidequest-archived/foreign/');
+  return `${ref} already points to ${commit}, a commit this ticket never recorded, so it belongs to another board or ticket on this repository. `
+    + 'Archiving that board moves its candidate refs to refs/sidequest-archived/<board>/; otherwise move this one aside with '
+    + `\`git update-ref ${archived} ${commit} && git update-ref -d ${ref} ${commit}\`, then retry.`;
+}
+
+// A board for the same repository numbers its tickets from SQ-1 again, so an existing
+// refs/sidequest/<ref> may be another board's candidate (GitHub #378). Only a tip this
+// ticket recorded may be replaced, and the update names that tip so a concurrent move loses.
+function compareAndSetRef(root: string, ref: string, tip: string, replaces: readonly unknown[]) {
+  const existing = resolvedCommit(root, ref);
+  const current = existing.ok ? existing.value : EMPTY_OBJECT_ID;
+  const preserved = { ok: true as const, commit: tip, gitRef: ref };
+  if (current === tip) return preserved;
+  if (!ownsRefTip(current, replaces)) return { ok: false as const, reason: 'git_ref_collision', message: foreignRefMessage(ref, current) };
+  const updated = gitResult(root, ['update-ref', ref, tip, current]);
+  return updated.ok ? preserved : { ok: false as const, reason: 'git_ref_collision', message: updated.message };
+}
+
+function refTarget(root: string, commit: unknown, ref: string) {
+  const tip = resolvedCommit(root, commit);
+  if (!tip.ok) return { ok: false as const, reason: 'missing_commit', message: tip.message };
+  const validRef = gitResult(root, ['check-ref-format', ref]);
+  return validRef.ok ? tip : { ok: false as const, reason: 'invalid_git_ref', message: validRef.message };
+}
+
+// `replaces` lists the revisions the ticket recorded; any other existing tip is refused.
+export function preserveCommitRef(cwd: string, commit: unknown, gitRef: unknown, replaces: readonly unknown[] = []) {
   const ref = String(gitRef || '').trim();
   if (!ref) return { ok: false as const, reason: 'missing_git_ref' };
   try {
     const root = repoRoot(cwd);
-    const tip = resolvedCommit(root, commit);
-    if (!tip.ok) return { ok: false as const, reason: 'missing_commit', message: tip.message };
-    const validRef = gitResult(root, ['check-ref-format', ref]);
-    if (!validRef.ok) return { ok: false as const, reason: 'invalid_git_ref', message: validRef.message };
-    if (options?.noOverwrite) {
-      const existing = resolvedCommit(root, ref);
-      if (existing.ok) {
-        if (existing.value === tip.value) return { ok: true as const, commit: tip.value, gitRef: ref };
-        return { ok: false as const, reason: 'git_ref_collision', message: `${ref} already points to ${existing.value}` };
-      }
-      const emptyRef = '0000000000000000000000000000000000000000';
-      const created = gitResult(root, ['update-ref', ref, tip.value, emptyRef]);
-      if (!created.ok) return { ok: false as const, reason: 'git_ref_collision', message: created.message };
-      return { ok: true as const, commit: tip.value, gitRef: ref };
-    }
-    git(root, ['update-ref', ref, tip.value]);
-    return { ok: true as const, commit: tip.value, gitRef: ref };
+    const target = refTarget(root, commit, ref);
+    return target.ok ? compareAndSetRef(root, ref, target.value, replaces) : target;
   } catch (error) {
     return { ok: false as const, reason: 'git_error', message: errorMessage(error) };
+  }
+}
+
+export function listRefs(cwd: string, prefix: string): NamedRef[] {
+  const listed = gitResult(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', prefix]);
+  if (!listed.ok) return [];
+  return listed.value.split(/\r?\n/)
+    .map((line) => line.trim().split(' '))
+    .filter((fields) => fields.length === 2)
+    .map(([name, commit]) => ({ name: name!, commit: commit! }));
+}
+
+// One update-ref transaction: every move lands or none does, and each side names the tip
+// that was read, so a ref that changed or a target that appeared meanwhile refuses the batch.
+export function moveRefs(cwd: string, moves: ReadonlyArray<{ from: string; to: string; commit: string }>): GitResult {
+  const script = moves.map((move) => `create ${move.to} ${move.commit}\ndelete ${move.from} ${move.commit}\n`).join('');
+  try {
+    execFileSync('git', ['update-ref', '--stdin'], { cwd, encoding: 'utf8', input: script, windowsHide: true });
+    return { ok: true, value: '' };
+  } catch (error) {
+    return { ok: false, message: errorMessage(error) };
   }
 }
 
@@ -908,7 +962,7 @@ export async function commitScoped(cwd: string, message: unknown, files: unknown
     }
     const concreteGlobPaths = globScopedWorkingPaths(root, commitScopes);
     const directScopes = commitScopes.filter((scope) => !hasGlob(scope));
-    const stageableScopes = [...new Set([...stageableScopedPaths(root, directScopes), ...concreteGlobPaths])];
+    const stageableScopes = stageableScopedPaths(root, [...new Set([...directScopes, ...concreteGlobPaths])]);
     const committableScopes = [...new Set([
       ...directScopes.filter((scope) => !ignoredUntrackedScope(root, scope)),
       ...concreteGlobPaths.filter((scope) => !ignoredUntrackedScope(root, scope)),

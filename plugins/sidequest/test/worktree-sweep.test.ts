@@ -72,6 +72,24 @@ test('worktree sweep rows print known facts without placeholder values', () => {
 });
 
 
+// A bare `dependency_link_untrusted` named no link and no target, so 29 retained trees read as one
+// unexplained refusal and nobody could tell which link to release (SQ-21).
+test('a sweep row prints the dependency link refusal detail after its reason code', () => {
+  const row = worktreeSweepEntryLine({
+    action: 'keep',
+    path: 'C:\\worktrees\\agent-linked',
+    ticket: 'SQ-21',
+    reason: 'dependency_link_untrusted',
+    detail: 'node_modules/shared escapes worktree -> C:\\store\\shared',
+    clean: true,
+    ahead: 0,
+    patchEquivalent: false,
+    ageMs: 60 * 60 * 1000,
+  });
+
+  assert.equal(row, '  KEEP C:\\worktrees\\agent-linked SQ-21 [dependency_link_untrusted: node_modules/shared escapes worktree -> C:\\store\\shared; clean; ahead 0; patch-equivalent false; age 60m]');
+});
+
 test('deferred SessionStart sweep reports active classification and the finishing command', () => {
   const notice = deferralNotice('C:/repo', {
     phase: 'classifying',

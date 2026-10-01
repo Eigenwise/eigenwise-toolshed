@@ -55,6 +55,12 @@ wave delivers its exact Git participant set and the resulting revision passes it
 participant only after the record exists. It validates each submitted range and admitted scope again,
 names stray paths, and never deletes a pinned ref.
 
+Delivery lands on the branch recorded at dispatch, unless the checkout is on that branch's fast-forward
+(it is the recorded branch or descends from it): then it lands on the checked-out branch. Pass
+`integrationBranch` (CLI `--integration-branch`) to deliver onto another checked-out branch on purpose.
+The integration record's `targetBranch` names the branch that got the delivery. Any other checkout
+refuses `branch_not_checked_out`.
+
 `integrate` with `wave: {}` opens a fresh wave at the matching tickets' recorded delivery target current head.
 A recorded wave for the same participants whose baseline is behind that head is superseded rather than
 reused. A candidate verified against an ancestor of the current target can join that wave; the merged-tree
@@ -105,7 +111,7 @@ gate covers the newer target content. An assembly refusal leaves every submitted
 
 ### Overlapping candidates with different pinned verifiers
 
-A wave refuses when participants pin different verifier requirements. Keep those frozen records intact. When reviewed candidates overlap, compose their exact accepted candidate refs in the registered target, run every participant's pinned verifier and the full composed gate against that tree, then record each delivery through `groomClose` with its own immutable candidate as `deliveryCommit` and `deliveryMethod: "manual"`. Omit `integration: true`: that field selects the assembled-wave route and requires a matching delivered wave.
+A wave refuses `wave_verifier_mismatch` when participants pin different verifier requirements. Non-executable kinds (document, link, manual, attestation, review) only need to agree on kind, so three document tickets with different verify text still assemble as one wave; executable kinds must pin the same command, and a mix of executable and non-executable kinds refuses. Keep those frozen records intact. When reviewed candidates overlap, compose their exact accepted candidate refs in the registered target, run every participant's pinned verifier and the full composed gate against that tree, then record each delivery through `groomClose` with its own immutable candidate as `deliveryCommit` and `deliveryMethod: "manual"`. Omit `integration: true`: that field selects the assembled-wave route and requires a matching delivered wave.
 
 This route still fails closed. Do not skip a verifier or review, substitute current `HEAD` for the pinned candidate, claim an unverified target, or close when the candidate's submitted paths are missing or differ without naming the hand-resolved ones in `resolvedPaths`. `groomClose` compares the pinned candidate to the registered target working tree, or to the tree at `deliveryRevision` when one is named, and reruns delivery verification before it records delivery.
 
@@ -262,14 +268,16 @@ the ticket.
    `sidequest comments <ref> --json` for it. The queue is intentionally compact and does not replace the
    full thread. Act on unresolved risks or questions: resolve them, skip and file a scoped integration
    ticket, or leave the submission parked. Do not cherry-pick until the thread is understood.
-4. **Put the project's registered checkout on a clean configured target branch.** `integrate` always
+4. **Put the project's registered checkout on the configured target branch, clean where the delivery writes.** `integrate` always
    merges and verifies in that registered checkout: the control plane folds whatever directory you call
    it from back to the registered repo root, so adding a scratch linked worktree does NOT move the
    target. Check out the configured integration branch there and confirm
-   `git branch --show-current` reports it; a detached HEAD or any other branch refuses. Any staged,
-   modified, or untracked file in that checkout refuses with `integration_target_dirty` and names the
-   offending paths before a branch moves or a verifier runs, so commit, stash, or remove them first
-   rather than trying to hide them in another worktree. Install the touched plugin's dependencies
+   `git branch --show-current` reports it; a detached HEAD or any other branch refuses. A modified or
+   untracked file the delivery writes (a rename's source included), and any staged or unmerged entry,
+   refuses with `integration_target_dirty` and names only those paths before a branch moves or a
+   verifier runs, so commit, stash, or remove them first rather than trying to hide them in another
+   worktree. Unstaged edits and untracked files outside the delivery (a running service's logs or
+   JSON) stay put: the merge goes around them and the delivery record lists them in `ignoredDirtyPaths`. Install the touched plugin's dependencies
    before reverifying, for this repo: `cd plugins/<name> && npm ci`.
 5. **Reconstruct each admitted submission before assembly**. Resolve its durable ref and require it
    still points to the submitted tip. Require the recorded upstream commit to remain reachable from
@@ -357,7 +365,9 @@ is recorded against the already-done ticket; it must not be described as remotel
 - For an **unbound** candidate that a review rejects or otherwise needs its original work redone,
   use `sidequest rework <ref> --by <candidate-owner> --review "<evidence>" --reason "<repair>"`.
   It preserves the candidate and rejection evidence while returning the ticket to `todo` for a
-  normal repair claim.
+  normal repair claim. The repair dispatch's briefing carries a "Pending rework" section naming
+  the rejected candidate, reason, and review above the comment thread, so do not restate the rework
+  as a comment before dispatching.
 - Use `sidequest submit <ref> --clear -s todo` only for an actual integration bounce: delivery
   returned an unbound candidate to its producer without a review rejection, and the candidate must
   be dropped before the ticket can restart. Record the delivery refusal. A review-bound candidate
@@ -377,7 +387,7 @@ just to run `submit` or `done`.
 The lock records owner pid + session metadata + timestamp. A publisher that dies mid-transaction leaves: a
 held lock (reclaimable — same session refreshes on re-acquire; anyone else waits for the TTL or
 `--steal`s a provably stale holder), a registered checkout left mid-delivery or dirty (`git status`,
-and `integrate` refuses it as `integration_target_dirty` until it is clean), and either parked
+and `integrate` refuses it as `integration_target_dirty` until the paths the delivery writes are clean), and either parked
 submissions from a pre-delivery failure or done tickets whose local delivery has not reached the remote
 yet. Nothing is lost: rerun the transaction from step 1, inspect each ticket's completion and delivery
 record, recover any durable refs needed for the push, then finish the push or record the failure on the

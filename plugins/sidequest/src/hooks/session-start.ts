@@ -213,48 +213,60 @@ function emit(context: string, notice: string, initialUserMessage = ''): void {
   writeContext('SessionStart', withWorkforce(output), initialUserMessage);
 }
 
-async function main(): Promise<void> {
-  const data = readStdin();
-  if (!data) return;
-  const primarySession = isPrimarySession(data);
-  if (primarySession) {
-    const sessionId = stringField(data, 'session_id', 'sessionId') || process.env.CLAUDE_CODE_SESSION_ID || '';
-    initializeCompactionState(sessionId, data.transcript_path || data.transcriptPath);
-  }
+function isRestoredContext(source: string): boolean {
+  return source === 'compact' || source === 'resume';
+}
 
-  reportLoadedSidequestVersion(data, { pluginRoot: pluginRoot() });
-  const freshnessNotice = sidequestReloadWarning(stringField(data, 'cwd', 'project_dir', 'projectDir') || process.env.CLAUDE_PROJECT_DIR || process.cwd(), { pluginRoot: pluginRoot() });
+function startCompactionTracking(data: HookInput): void {
+  const sessionId = stringField(data, 'session_id', 'sessionId') || process.env.CLAUDE_CODE_SESSION_ID || '';
+  initializeCompactionState(sessionId, data.transcript_path || data.transcriptPath);
+}
+
+async function restartNoticeFor(data: HookInput, primarySession: boolean): Promise<string> {
+  const freshnessNotice = sidequestReloadWarning(sessionProjectStart(data), { pluginRoot: pluginRoot() });
   registerSweepSession(data);
-  let sweepNotices = primarySession ? lostLaunchNotices(data) : [];
+  const sweepNotices = primarySession ? lostLaunchNotices(data) : [];
   try {
     sweepNotices.push(...await runSweep(data));
   } catch (error: unknown) {
     sweepNotices.push(`sidequest: worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`);
   }
-  const source = stringField(data, 'source');
-  const restartNotice = [
+  return [
     freshnessNotice,
-    source === 'compact' || source === 'resume' ? '' : diagnosticWorktreeWarning(data),
+    isRestoredContext(stringField(data, 'source')) ? '' : diagnosticWorktreeWarning(data),
     ...sweepNotices,
   ].filter(Boolean).join('\n');
+}
 
-  if (briefingWithheld(data, restartNotice)) return;
+// The standing authorization leads the block: buried mid-paragraph, sessions kept offering dispatch instead of doing it (SQ-3181).
+const ROUTED_GUIDANCE = {
+  standingAuthorization: 'A usable Sidequest project route is standing authorization to file tickets and dispatch returned executors without offering it or asking for a further user request when work is a multi-file change, at an unknown location that needs discovery, or an investigation.\n',
+  boardAuthorization: 'Quick edits at a named or known location, one-line fixes, operational requests, and direct questions stay inline and do not load user-story. For work beyond a small task, load the user-story skill before ticketing or dispatching; do not plan it inline. For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together. Ask before work beyond the approved scope unless explicit standing permission covers it.',
+  inlineBoundary: '',
+  fanoutGuidance: '',
+};
+const UNROUTED_GUIDANCE = {
+  standingAuthorization: '',
+  boardAuthorization: 'Sidequest has no usable project route here, so substantive work may stay inline. Use board_config to enable a category with an available executor before asking for board dispatch.',
+  inlineBoundary: 'Specific one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch; say why. Ask before work beyond the approved scope unless explicit standing permission covers it.',
+  fanoutGuidance: 'For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together.',
+};
+
+function emitOrchestratorBriefing(data: HookInput, restartNotice: string): void {
   const cli = `node "${pluginRoot()}/bin/sidequest.js"`;
   const watch = `Arm a persistent Monitor running ${cli} watch --project <path>; ticket alerts default to dispatches prepared by this session plus unowned and terminal tickets, while failed GitHub CI runs stay project-wide. Use --all for project-wide ticket alerts. Skip it if Monitor is unavailable.`;
-  const dispatchAdmission = dispatchAdmissionStatus(data);
-  const boardAuthorization = dispatchAdmission === 'routed'
-    ? 'Quick edits at a named or known location, one-line fixes, operational requests, and direct questions stay inline and do not load user-story. For work beyond a small task, load the user-story skill before ticketing or dispatching; do not plan it inline. A usable Sidequest project route is standing authorization to file tickets and dispatch returned executors without offering it or asking for a further user request when work is a multi-file change, at an unknown location that needs discovery, or an investigation. For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together. Ask before work beyond the approved scope unless explicit standing permission covers it.'
-    : 'Sidequest has no usable project route here, so substantive work may stay inline. Use board_config to enable a category with an available executor before asking for board dispatch.';
-  const inlineBoundary = dispatchAdmission === 'routed' ? '' : 'Specific one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch; say why. Ask before work beyond the approved scope unless explicit standing permission covers it.';
-  const fanoutGuidance = dispatchAdmission === 'routed' ? '' : 'For independent per-item work, shard implementation and read-only investigation tickets, then dispatch each wave concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together.';
+  const { standingAuthorization, boardAuthorization, inlineBoundary, fanoutGuidance } = dispatchAdmissionStatus(data) === 'routed'
+    ? ROUTED_GUIDANCE
+    : UNROUTED_GUIDANCE;
   const upstreamDefects = `If Sidequest itself misbehaves (a refusal contradicting observed state, a dead retrieval handle, a guard loop, a reproducible tool error), report it to the user with the reproducing evidence as an upstream defect; never encode a workaround into project rules, hooks, or memory, and mark any unavoidable stopgap temporary, naming the defect it awaits. ${upstreamDefectDestination()}`;
-  const checkpoint = checkpointingGuidance(data);
+  const checkpointGuidance = checkpointingGuidance(data);
+  const checkpoint = checkpointGuidance ? `${checkpointGuidance} ` : '';
   const recovery = 'Context is UTF-8 bounded. Omitted details name a typed board retrieval call.';
   const initialUserMessage = hasMidWaveBoard(data) ? '/sidequest:sidequest' : '';
 
-  if (source === 'compact' || source === 'resume') {
+  if (isRestoredContext(stringField(data, 'source'))) {
     emit(
-      `=== sidequest (active — context restored) ===\n${recovery}\nROLE: ORCHESTRATOR. ${checkpoint}${checkpoint ? ' ' : ''}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} ${upstreamDefects} Dispatch executors with the returned spawn unchanged. Ticket and dispatch before multi-file investigation. never TaskOutput. If Board MCP is unavailable, stop and tell the user to run /mcp and reconnect plugin:sidequest:board, or restart Claude Code; do not retry. Use pulse/changes for liveness; a restored window replays background-task reminders that can name already-finished agents, so believe the board over them and do not investigate. An executor ends its own run at submit, done, or release, so terminal board evidence needs no TaskStop; TaskStop is host cleanup only when pulse still shows one alive after its ticket went terminal. A dispatch that died before its first claim is retired from this session with dispatch recoveryEvidence (the host failure report), never release or TaskStop. Keep live claims, retained continuations, and integration candidates steerable. If a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Board MCP is the lifecycle authority; no Sidequest CLI or raw Agent fallback.`,
+      `=== sidequest (active — context restored) ===\n${standingAuthorization}${recovery}\nROLE: ORCHESTRATOR. ${checkpoint}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} ${upstreamDefects} Dispatch executors with the returned spawn unchanged. Ticket and dispatch before multi-file investigation. never TaskOutput. If Board MCP is unavailable, stop and tell the user to run /mcp and reconnect plugin:sidequest:board, or restart Claude Code; do not retry. Use pulse/changes for liveness; a restored window replays background-task reminders that can name already-finished agents, so believe the board over them and do not investigate. An executor ends its own run at submit, done, or release, so terminal board evidence needs no TaskStop; TaskStop is host cleanup only when pulse still shows one alive after its ticket went terminal. A dispatch that died before its first claim is retired from this session with dispatch recoveryEvidence (the host failure report), never release or TaskStop. Keep live claims, retained continuations, and integration candidates steerable. If a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Board MCP is the lifecycle authority; no Sidequest CLI or raw Agent fallback.`,
       restartNotice,
       initialUserMessage,
     );
@@ -262,10 +274,22 @@ async function main(): Promise<void> {
   }
 
   emit(
-    `=== sidequest (active) ===\n${recovery}\nROLE: ORCHESTRATOR. ${checkpoint}${checkpoint ? ' ' : ''}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} ${upstreamDefects} Substantive multi-file changes and investigations need tickets, then dispatch and the returned executor. Operational requests can run inline. Use board MCP tools first. Tiny lookups use Read, Glob, Grep, or WebFetch. Do not use TaskOutput. One diagnose-first retry; two failures need evidence and user escalation. An executor ends its own run at submit, done, or release, so terminal board evidence needs no TaskStop; TaskStop is host cleanup only when pulse still shows one alive after its ticket went terminal. A dispatch that died before its first claim is retired from this session with dispatch recoveryEvidence (the host failure report), never release or TaskStop. Keep live claims, retained continuations, and integration candidates steerable. When a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Workers own claimed work and report conflicts, verification, and cleanup.`,
+    `=== sidequest (active) ===\n${standingAuthorization}${recovery}\nROLE: ORCHESTRATOR. ${checkpoint}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} ${upstreamDefects} Substantive multi-file changes and investigations need tickets, then dispatch and the returned executor. Operational requests can run inline. Use board MCP tools first. Tiny lookups use Read, Glob, Grep, or WebFetch. Do not use TaskOutput. One diagnose-first retry; two failures need evidence and user escalation. An executor ends its own run at submit, done, or release, so terminal board evidence needs no TaskStop; TaskStop is host cleanup only when pulse still shows one alive after its ticket went terminal. A dispatch that died before its first claim is retired from this session with dispatch recoveryEvidence (the host failure report), never release or TaskStop. Keep live claims, retained continuations, and integration candidates steerable. When a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Workers own claimed work and report conflicts, verification, and cleanup.`,
     restartNotice,
     initialUserMessage,
   );
+}
+
+async function main(): Promise<void> {
+  const data = readStdin();
+  if (!data) return;
+  const primarySession = isPrimarySession(data);
+  if (primarySession) startCompactionTracking(data);
+
+  reportLoadedSidequestVersion(data, { pluginRoot: pluginRoot() });
+  const restartNotice = await restartNoticeFor(data, primarySession);
+  if (briefingWithheld(data, restartNotice)) return;
+  emitOrchestratorBriefing(data, restartNotice);
 }
 
 main().catch((error: unknown) => {

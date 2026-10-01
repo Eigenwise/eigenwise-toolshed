@@ -201,7 +201,7 @@ function stopVerdict(
   }
 
   if (dispatchStopped && classification.kind !== 'unknown') {
-    return `exec DIED before claiming; fresh-dispatch only after diagnosis.`;
+    return `exec DIED before claiming; fresh-dispatch only after diagnosis, once pulse shows its ticket failed. A stop is held while a sibling launched with it is unclaimed, until that sibling's claim settles whose ticket it was.`;
   }
   return null;
 }

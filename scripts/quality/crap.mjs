@@ -98,7 +98,7 @@ export async function collectFunctions(text, fileName) {
         const identity = `${parentId}/${functionKind(node)}:${name}#${ordinal}`;
         const start = node.getStart();
         const end = node.end;
-        functions.push({ identity, name, start, end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, fingerprint: crypto.createHash('sha256').update(text.slice(start, end).replace(/\s+/g, ' ')).digest('hex') });
+        functions.push({ identity, parent: parentId, name, start, end, line: sourceFile.getLineAndCharacterOfPosition(start).line + 1, fingerprint: crypto.createHash('sha256').update(text.slice(start, end).replace(/\s+/g, ' ')).digest('hex') });
         node.forEachChild((child) => visit(child, identity));
       } else node.forEachChild((child) => visit(child, parentId));
     }
@@ -178,8 +178,8 @@ async function outputPathsForSource(sourcePath) {
   return [];
 }
 
-function matchingCoverage(records, descriptor) {
-  return records.filter((record) => record.functionName === descriptor.name && record.ranges[0]);
+function namedRecords(descriptor, outputs) {
+  return { records: outputs.flatMap((output) => output.records).filter((record) => record.functionName === descriptor.name && record.ranges[0]) };
 }
 
 export function lizardMetric(descriptor, lizardEntries) {
@@ -187,33 +187,72 @@ export function lizardMetric(descriptor, lizardEntries) {
   return lizardEntries.find((entry) => entry.start === descriptor.line && entry.name === expectedName)?.complexity ?? null;
 }
 
+function siblingIdentities(descriptors, parent) {
+  return descriptors.filter((descriptor) => descriptor.parent === parent).map((descriptor) => descriptor.identity).join('\n');
+}
+
+// V8 names an inline callback "" and the build ships no source map, so an unnamed function is
+// found by position: its twin in each output has the same identity, trusted only where every
+// function under the same parent lines up, since anything looser pins coverage on a neighbour.
+function anonymousRecords(descriptor, outputs) {
+  const sourceSiblings = siblingIdentities(outputs[0].descriptors, descriptor.parent);
+  const records = [];
+  for (const output of outputs) {
+    const outputSiblings = siblingIdentities(output.descriptors, descriptor.parent);
+    if (!outputSiblings) continue;
+    if (outputSiblings !== sourceSiblings) return { unverified: `the functions beside it in ${output.relativePath} do not line up with the source, so its coverage cannot be paired` };
+    const twin = output.descriptors.find((candidate) => candidate.identity === descriptor.identity);
+    records.push(...output.records.filter((record) => record.ranges[0]?.startOffset === twin.start));
+  }
+  return { records };
+}
+
+// outputs[0] is the source itself; the rest are its build outputs.
+export function functionCoverage(descriptor, outputs) {
+  const paired = descriptor.name === '<anonymous>' ? anonymousRecords(descriptor, outputs) : namedRecords(descriptor, outputs);
+  if (paired.unverified) return paired;
+  const intervals = paired.records.flatMap((record) => projectIntervals(record.ranges, descriptor));
+  const coveredLength = mergeIntervals(intervals).reduce((total, [start, end]) => total + end - start, 0);
+  return { coverage: Math.min(1, coveredLength / (descriptor.end - descriptor.start)) };
+}
+
+export async function builtOutput(outputPath, coverageScripts, needsFunctions) {
+  let text;
+  try {
+    text = await fs.readFile(outputPath, 'utf8');
+  } catch {
+    return null;
+  }
+  return {
+    relativePath: path.relative(repositoryRoot, outputPath).replaceAll('\\', '/'),
+    descriptors: needsFunctions ? await collectFunctions(text, outputPath) : [],
+    records: coverageScripts.get(normalizedPath(outputPath)) ?? [],
+  };
+}
+
 export async function sourceMetrics(sourcePath, coverageScripts, lizardEntries) {
   const sourceText = await fs.readFile(sourcePath, 'utf8');
   const descriptors = await collectFunctions(sourceText, sourcePath);
-  const sourceRecords = coverageScripts.get(normalizedPath(sourcePath)) ?? [];
+  const relativePath = path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/');
+  const source = { relativePath, descriptors, records: coverageScripts.get(normalizedPath(sourcePath)) ?? [] };
   const outputPaths = await outputPathsForSource(sourcePath);
-  const outputRecords = (await Promise.all(outputPaths.map(async (outputPath) => {
-    try {
-      await fs.access(outputPath);
-      return coverageScripts.get(normalizedPath(outputPath)) ?? [];
-    } catch {
-      return [];
-    }
-  }))).flat();
-  if (!sourceRecords.length && !outputPaths.length) throw new Error(`could not resolve coverage output for ${path.relative(repositoryRoot, sourcePath)}; measurement is unverified.`);
+  if (!source.records.length && !outputPaths.length) throw new Error(`could not resolve coverage output for ${path.relative(repositoryRoot, sourcePath)}; measurement is unverified.`);
+  // Parsing an output is a TypeScript API round trip, and only unnamed functions need it.
+  const needsFunctions = descriptors.some((descriptor) => descriptor.name === '<anonymous>');
+  const builtOutputs = await Promise.all(outputPaths.filter((outputPath) => outputPath !== sourcePath).map((outputPath) => builtOutput(outputPath, coverageScripts, needsFunctions)));
+  const outputs = [source, ...builtOutputs.filter(Boolean)];
   return descriptors.map((descriptor) => {
     const metric = {
       identity: descriptor.identity,
       fingerprint: descriptor.fingerprint,
       line: descriptor.line,
       name: descriptor.name,
-      relativePath: path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/'),
+      relativePath,
     };
     const complexity = lizardMetric(descriptor, lizardEntries);
     if (complexity === null) return { ...metric, unverified: 'lizard could not measure this function' };
-    const intervals = [...matchingCoverage(sourceRecords, descriptor), ...matchingCoverage(outputRecords, descriptor)].flatMap((record) => projectIntervals(record.ranges, descriptor));
-    const coveredLength = mergeIntervals(intervals).reduce((total, [start, end]) => total + end - start, 0);
-    const coverage = Math.min(1, coveredLength / (descriptor.end - descriptor.start));
+    const { coverage, unverified } = functionCoverage(descriptor, outputs);
+    if (unverified) return { ...metric, unverified };
     return { ...metric, coverage, complexity, crap: crapScore(complexity, coverage) };
   });
 }

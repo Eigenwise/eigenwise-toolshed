@@ -1314,6 +1314,9 @@
         "reason": {
           "type": "string"
         },
+        "integrationBranch": {
+          "type": "string"
+        },
         "skipVerify": {
           "type": "boolean"
         },

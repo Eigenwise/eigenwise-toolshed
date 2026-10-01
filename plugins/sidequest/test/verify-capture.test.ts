@@ -10,7 +10,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 
-const { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureSlotDirectory, recordCapture } = require('../lib/verify-capture.js');
+const { runVerifyCapture, runCapturedVerification, runFullSuiteVerification, shellCommand, captureSlotDirectory, recordCapture, captureCommand } = require('../lib/verify-capture.js');
 const { runProcessVerification } = require('../lib/ports/process.js');
 const store = require('../lib/store.js');
 const worktrees = require('../lib/worktrees.js');
@@ -25,9 +25,11 @@ function nodeCommand(scriptPath: string, argument: string) {
   return `"${process.execPath}" "${scriptPath}" "${argument}"`;
 }
 
-function runCaptureProcess(command: string, project: string, ticket: string, options: { worktree?: string; cwd?: string } = {}): Promise<Readonly<{ status: number | null; output: string }>> {
+// A null command omits --base64, so the wrapper loads the ticket's pinned command itself (GH-373).
+function runCaptureProcess(command: string | null, project: string, ticket: string, options: { worktree?: string; cwd?: string } = {}): Promise<Readonly<{ status: number | null; output: string }>> {
   return new Promise((resolve, reject) => {
-    const args = [path.join(SIDEQUEST_DIR, 'lib', 'verify-capture.js'), '--base64', Buffer.from(command).toString('base64'), '--project', project, '--ticket', ticket];
+    const commandArguments = command === null ? [] : ['--base64', Buffer.from(command).toString('base64')];
+    const args = [path.join(SIDEQUEST_DIR, 'lib', 'verify-capture.js'), ...commandArguments, '--project', project, '--ticket', ticket];
     if (options.worktree) args.push('--worktree', options.worktree);
     const child = spawn(process.execPath, args, {
       cwd: options.cwd || project,
@@ -189,8 +191,11 @@ test('synchronous full-suite verification uses the capture slot', async () => {
   execFileSync('git', ['add', '--all'], { cwd: project, windowsHide: true });
   execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'fixture'], { cwd: project, windowsHide: true });
 
+  // The wrapper runs only a ticket's pinned command (GH-373), so the slot holder needs a real ticket.
+  const { slug } = store.ensureProject(project);
+  const ticket = store.createTicket(slug, { title: 'slot holder', executorVerifyKind: 'suite', executorVerify: 'npm run test:full' });
   try {
-    const first = runCaptureProcess('npm run test:full', project, 'SQ-1');
+    const first = runCaptureProcess(null, project, ticket.ref);
     await waitForFile(started);
     const capture = runFullSuiteVerification('npm run test:full', project, (environment: NodeJS.ProcessEnv) => runProcessVerification(
       { kind: 'command', command: 'npm run test:full', evidenceContract: 'command output' },
@@ -198,14 +203,14 @@ test('synchronous full-suite verification uses the capture slot', async () => {
     ));
     const firstResult = await first;
 
-    assert.equal(firstResult.status, 2, firstResult.output);
+    assert.equal(firstResult.status, 0, firstResult.output);
     assert.deepEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 });
     assert.equal(capture.queuePosition, 2);
     assert.ok(capture.waitedForSlotMs >= 500, `waited ${capture.waitedForSlotMs}ms`);
     assert.deepEqual(fs.readFileSync(observedSiblingCaptures, 'utf8').trim().split(/\r?\n/).sort(), ['0', '1']);
   } finally {
-    fs.rmSync(project, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    fs.rmSync(captureSlotDirectory(project), { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    fs.rmSync(captureSlotDirectory(project), { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });
 
@@ -228,8 +233,8 @@ test('a failed synchronous slot release still removes its own waiter', () => {
     assert.equal(capture.status, 'could_not_run');
     assert.deepEqual(fs.readdirSync(path.join(slotDirectory, 'waiting')), [], 'the board process must not leave a live-PID waiter behind');
   } finally {
-    fs.rmSync(project, { recursive: true, force: true });
-    fs.rmSync(slotDirectory, { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    fs.rmSync(slotDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });
 
@@ -285,8 +290,8 @@ test('full-suite capture retries EPERM while a sibling releases its slot', async
     assert.ok(recordedWait, 'the EPERM-retried capture records its slot queue position');
   } finally {
     if (releaseTimer) clearTimeout(releaseTimer);
-    fs.rmSync(project, { recursive: true, force: true });
-    fs.rmSync(slotDirectory, { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    fs.rmSync(slotDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });
 
@@ -343,8 +348,8 @@ test('full-suite capture reclaims a killed owner without waiting for the slot ti
     assert.equal(fs.existsSync(staleWaiterPath), false);
     assert.ok(recorded?.ok, recorded?.reason);
   } finally {
-    fs.rmSync(project, { recursive: true, force: true });
-    fs.rmSync(slotDirectory, { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    fs.rmSync(slotDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });
 
@@ -789,5 +794,108 @@ test('a ticket verifyCwd runs the captured command from that directory of the ch
     }
   } finally {
     fs.rmSync(project, { recursive: true, force: true });
+  }
+});
+
+// GH-373: an executor retyped the briefing's base64 blob, got one character wrong, and ran a
+// different command. With --project/--ticket the wrapper loads the pinned command itself.
+function captureIdentity(capture: { command: string; status: string; candidate: unknown; dispatchNonce: string; cleanWorktree?: boolean }) {
+  return { command: capture.command, status: capture.status, candidate: capture.candidate, dispatchNonce: capture.dispatchNonce, cleanWorktree: capture.cleanWorktree };
+}
+
+test('GH-373: the ticket-loaded command records the same capture identity as the base64 path', async () => {
+  const fixture = setupIsolatedDispatch('gh-373-ticket-loaded');
+  try {
+    const fromTicket = await runCaptureProcess(null, fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
+    assert.equal(fromTicket.status, 0, fromTicket.output);
+    const fromBase64 = await runCaptureProcess(ISOLATED_DISPATCH_VERIFY_COMMAND, fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
+    assert.equal(fromBase64.status, 0, fromBase64.output);
+
+    const [ticketCapture, base64Capture] = readRecordedCaptures(fixture.project, fixture.ticket.ref);
+    assert.equal(ticketCapture.command, ISOLATED_DISPATCH_VERIFY_COMMAND);
+    assert.equal(ticketCapture.status, 'passed');
+    assert.deepEqual(captureIdentity(ticketCapture), captureIdentity(base64Capture));
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('GH-373: a corrupted --base64 beside --project/--ticket refuses in plain words and runs nothing', async () => {
+  const fixture = setupIsolatedDispatch('gh-373-corrupted-blob');
+  try {
+    const corrupted = 'git rev-parse HEAF';
+    const { status, output } = await runCaptureProcess(corrupted, fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
+    assert.equal(status, 2, output);
+    assert.match(output, /capture=unrecorded reason=verification_capture_command_mismatch/);
+    assert.match(output, /The command passed with --base64 is not the verify command pinned on /);
+    assert.ok(output.includes(`Pinned command: ${JSON.stringify(ISOLATED_DISPATCH_VERIFY_COMMAND)}`), output);
+    assert.ok(output.includes(`Passed command: ${JSON.stringify(corrupted)}`), output);
+    assert.match(output, /Drop --base64/);
+    assert.doesNotMatch(output, /^verify=/m, 'the refused command must never run');
+    assert.equal(recordedCaptureCount(fixture.project, fixture.ticket.ref), 0);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+// Amending a live dispatch's verify re-pins it. The wrapper then runs the amended command and records
+// that, the command that actually ran. The old briefing's blob is refused before it runs, and a capture
+// of the old command that finishes after the amendment is still refused by the store, because the
+// recorded identity comes from what ran, never from a fresh read of the ticket.
+test('GH-373: a verify amended after dispatch records the command that ran and still catches the old one', async () => {
+  const fixture = setupIsolatedDispatch('gh-373-amended-verify');
+  try {
+    const amended = 'git status --short';
+    store.updateTicket(fixture.slug, fixture.ticket.ref, { executorVerify: amended });
+    assert.equal(store.getTicket(fixture.slug, fixture.ticket.ref).dispatch.verificationRequirement.command, amended);
+
+    const oldBlob = await runCaptureProcess(ISOLATED_DISPATCH_VERIFY_COMMAND, fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
+    assert.equal(oldBlob.status, 2, oldBlob.output);
+    assert.ok(oldBlob.output.includes(`Pinned command: ${JSON.stringify(amended)}`), oldBlob.output);
+    assert.equal(recordedCaptureCount(fixture.project, fixture.ticket.ref), 0);
+
+    const staleRun = { command: ISOLATED_DISPATCH_VERIFY_COMMAND, status: 'passed', exitCode: 0, logPath: null, shell: 'fixture' };
+    const refused = recordCapture({ project: fixture.project, ticket: fixture.ticket.ref }, staleRun, fixture.worktree);
+    assert.equal(refused.reason, 'verification_capture_command_mismatch');
+
+    const { status, output } = await runCaptureProcess(null, fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
+    assert.equal(status, 0, output);
+    const recorded = readRecordedCaptures(fixture.project, fixture.ticket.ref);
+    assert.equal(recorded.length, 1);
+    assert.equal(recorded[0].command, amended);
+    assert.equal(recorded[0].status, 'passed');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('GH-373: a ticket without a pinned verify command refuses and records nothing', async () => {
+  const project = initGitRepo('sq-verify-capture-no-verify-');
+  const { slug } = store.ensureProject(project);
+  const ticket = store.createTicket(slug, { title: 'no pinned verify command' });
+  try {
+    const { status, output } = await runCaptureProcess(null, project, ticket.ref);
+    assert.equal(status, 2, output);
+    assert.match(output, /capture=unrecorded reason=verification_capture_no_pinned_command/);
+    assert.ok(output.includes(`${ticket.ref} has no pinned verify command`), output);
+    assert.equal(recordedCaptureCount(project, ticket.ref), 0);
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test('GH-373: the wrapper names a missing board or ticket, and keeps --base64 alone working', () => {
+  const project = initGitRepo('sq-verify-capture-missing-target-');
+  const unregistered = initGitRepo('sq-verify-capture-unregistered-');
+  store.ensureProject(project);
+  try {
+    const encoded = ['--base64', Buffer.from('node --version').toString('base64')];
+    assert.deepEqual(captureCommand(encoded, null), { command: 'node --version' });
+    assert.match(captureCommand([], null).refusal, /^Usage: node verify-capture\.js --project <path> --ticket <ref>/);
+    assert.match(captureCommand(encoded, { project, ticket: 'SQ-999999' }).refusal, /reason=not_found\nTicket SQ-999999 does not exist on the board/);
+    assert.match(captureCommand([], { project: unregistered, ticket: 'SQ-1' }).refusal, /reason=project_not_found\nNo Sidequest board is registered for /);
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+    fs.rmSync(unregistered, { recursive: true, force: true });
   }
 });

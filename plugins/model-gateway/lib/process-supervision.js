@@ -194,8 +194,16 @@ function stopProcess(name, options) {
 async function stopProcessAsync(name) {
   const pid = recordedGatewayPid(name);
   if (!pid) return true;
-  if (await killPidAsync(pid, { name, record: readPidRecord(name) }) !== true) return false;
-  return removePid(name);
+  if (!(await stopAndConfirmExit(pid, { name, record: readPidRecord(name) }))) return false;
+  // A supervisor's recovery can record a replacement while the exit is confirmed; its record stays.
+  removePid(name, pid);
+  return true;
+}
+// taskkill /T /F exits non-zero when any process in the tree slips away mid-kill, even after the
+// target itself died (GH-371), so a stop counts by whether the target is gone, never by the kill's result.
+async function stopAndConfirmExit(pid, { kill = killPidAsync, ...killOptions } = {}) {
+  await kill(pid, killOptions);
+  return waitForProcessExit(pid, PROCESS_STOP_TIMEOUT_MS);
 }
 function recordStopRequest(operation, name) {
   const pid = recordedGatewayPid(name);
@@ -565,7 +573,7 @@ function unknownPortOwnerReason(owner, port = PUBLIC_SHIM_PORT) {
   return `could not confirm the owner of :${port} (last observed PID ${owner.pid || 'unknown'}); the owning process could not be identified as this model-gateway install; left the listener untouched`;
 }
 function stopFailureReason(pid, port = PUBLIC_SHIM_PORT, component = 'shim supervisor') {
-  return `could not stop the ${component} on :${port} (PID ${pid}); the stop request failed. If it is elevated, run stop or setup from a session with the same privileges`;
+  return `could not stop the ${component} on :${port} (PID ${pid}); it is still running after the stop request`;
 }
 function isDescendantInProcessTable(pid, ancestorPid, processes) {
   const visited = new Set();
@@ -636,11 +644,11 @@ async function stopAll({ report = console.log, resolveOwner = resolvePortOwner }
   for (const name of ['shim', 'guardian', 'proxy']) {
     if (!(await stopProcessAsync(name))) return { ok: false, reason: stopFailureReason(readPid(name), PUBLIC_SHIM_PORT) };
   }
-  if (owner.pid && processInfoSync(owner.pid) && !(await killPidAsync(owner.pid))) return { ok: false, reason: stopFailureReason(owner.pid, PUBLIC_SHIM_PORT) };
+  if (owner.pid && processInfoSync(owner.pid) && !(await stopAndConfirmExit(owner.pid))) return { ok: false, reason: stopFailureReason(owner.pid, PUBLIC_SHIM_PORT) };
   reapGatewayOrphans(null);
   return { ok: true };
 }
-async function stopRunningSupervisor({ quiet = false, operation = 'restart', report = console.log, resolveOwner = resolvePortOwner } = {}) {
+async function stopRunningSupervisor({ quiet = false, operation = 'restart', report = console.log, resolveOwner = resolvePortOwner, kill = killPidAsync } = {}) {
   const owner = await resolveOwner(PUBLIC_SHIM_PORT);
   if (owner.state === 'foreign-install') return { ok: false, reason: foreignPortOwnerReason(owner) };
   if (owner.state === 'unknown') {
@@ -658,7 +666,7 @@ async function stopRunningSupervisor({ quiet = false, operation = 'restart', rep
       signal: WIN ? 'TASKKILL' : 'SIGTERM',
     });
   }
-  if (pid && !(await killPidAsync(pid, { name: 'guardian', record: readPidRecord('guardian') }))) return { ok: false, reason: stopFailureReason(pid, PUBLIC_SHIM_PORT) };
+  if (pid && !(await stopAndConfirmExit(pid, { kill, name: 'guardian', record: readPidRecord('guardian') }))) return { ok: false, reason: stopFailureReason(pid, PUBLIC_SHIM_PORT) };
   if (!pid && !(await stopProcessAsync('guardian'))) return { ok: false, reason: stopFailureReason(targetPid, PUBLIC_SHIM_PORT) };
   if (!((await waitForProcessExit(targetPid, 3000)) && (await waitForShimExit(3000)))) {
     return { ok: false, reason: `could not stop the shim supervisor on :${PUBLIC_SHIM_PORT}${pid ? ` (PID ${pid})` : ''}; run node "${CLI_PATH}" stop, then ensure` };

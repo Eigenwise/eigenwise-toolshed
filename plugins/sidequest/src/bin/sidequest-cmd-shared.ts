@@ -8,41 +8,38 @@ function fail(msg: any) {
   process.exit(1);
 }
 
-async function resolveProject(opts: any) {
-  const arg = opts.project;
-  if (arg) {
-    const res = store.findProject(arg);
-    if (res.ok) return { slug: res.slug, meta: res.meta };
-    if (res.reason === 'ambiguous') {
-      const lines = res.matches.map((p: any) => `    "${p.name}" -> ${p.path}`).join('\n');
-      fail(`--project "${arg}" matches ${res.matches.length} boards named "${arg}" — pass the path to disambiguate:\n${lines}`);
-    }
-    // An absolute path to a real directory: create (or reuse) its board. The dir
-    // must exist so a typo'd path fails loudly here instead of minting junk;
-    // idempotent keying means this can never produce a duplicate of an existing
-    // board. Anything non-absolute (a name, a relative ref) falls through to the
-    // registered-only error below.
-    if (path.isAbsolute(arg)) {
-      let isDir = false;
-      try { isDir = (await fs.stat(arg)).isDirectory(); } catch (_: any) { /* missing/unreadable -> not a dir */ }
-      if (isDir) return store.ensureProject(store.nearestRepoRoot(path.resolve(arg)), opts.name);
-    }
-    const known = Array.from(new Set(res.known || []));
-    fail(
-      `--project "${arg}" does not match any registered board.` +
-      (known.length ? ` Known projects: ${known.join(', ')}` : ' No projects are registered yet.')
-    );
+function registeredBoard(registration: any) {
+  if (!registration.ok) fail(registration.reason);
+  return registration;
+}
+
+function unknownBoardFailure(arg: string, knownNames?: string[]) {
+  const known = Array.from(new Set(knownNames || []));
+  fail(
+    `--project "${arg}" does not match any registered board.` +
+    (known.length ? ` Known projects: ${known.join(', ')}` : ' No projects are registered yet.')
+  );
+}
+
+function namedBoard(arg: string, name?: string) {
+  const res = store.findProject(arg);
+  if (res.ok) return { slug: res.slug, meta: res.meta };
+  if (res.reason === 'ambiguous') {
+    const lines = res.matches.map((p: any) => `    "${p.name}" -> ${p.path}`).join('\n');
+    fail(`--project "${arg}" matches ${res.matches.length} boards named "${arg}" — pass the path to disambiguate:\n${lines}`);
   }
-  // Anchor to the git repo the agent is working in, not the raw cwd. The Bash
-  // env here has no CLAUDE_PROJECT_DIR, so this used to fall straight to
-  // process.cwd() — meaning a `cd` into any subfolder (e.g. bin/docai_refactored)
-  // minted a brand-new board on that subfolder path, splitting one repo into
-  // several duplicate boards. nearestRepoRoot() collapses any subfolder back to
-  // its repo root; a non-repo folder is returned unchanged, so plain notes dirs
-  // behave as before. --project (above) still targets any board explicitly.
-  const start = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  const dir = store.nearestRepoRoot(start);
-  return store.ensureProject(dir, opts.name);
+  // An absolute path registers (or reuses) its board, and may be a plain non-git
+  // folder. Anything non-absolute (a name, a relative ref) must already be registered.
+  if (path.isAbsolute(arg)) return registeredBoard(store.registerProject(store.explicitProjectRoot(arg), name));
+  return unknownBoardFailure(arg, res.known);
+}
+
+async function resolveProject(opts: any) {
+  if (opts.project) return namedBoard(opts.project, opts.name);
+  // Anchor to the git repo the agent is working in, not the raw cwd: the Bash env
+  // has no CLAUDE_PROJECT_DIR, and a `cd` into a subfolder used to mint a duplicate
+  // board on that subfolder. A cwd outside any git repo gets no board implicitly.
+  return registeredBoard(store.registerProject(store.sessionProjectRoot(), opts.name, { implicit: true }));
 }
 
 

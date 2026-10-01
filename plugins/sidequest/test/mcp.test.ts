@@ -1519,7 +1519,12 @@ test('board worktree isolation defaults on and overrides dispatch isolation when
   const sharedTicket = store.createTicket(sharedProject, {
     title: 'scope-less disabled board isolation', description: DISPATCH_DESCRIPTION, category: 'coding.normal',
   });
-  const shared = await callTool('dispatch', { allowUnscoped: true, project: sharedProject, ref: sharedTicket.ref, full: true });
+  // GH-341: a whole-tree scope in the shared checkout would commit every dirty path, so it refuses before the work.
+  const refusedShared = await callToolRaw('dispatch', { allowUnscoped: true, project: sharedProject, ref: sharedTicket.ref, full: true });
+  assert.ok(refusedShared.isError);
+  assert.match(refusedShared.content[0].text, /would run in the shared checkout/);
+  store.updateTicket(sharedProject, sharedTicket.ref, { files: ['src/shared.ts'] });
+  const shared = await callTool('dispatch', { project: sharedProject, ref: sharedTicket.ref, full: true });
   assert.equal(shared.spawn.isolation, undefined);
   assert.equal(store.getTicket(sharedProject, sharedTicket.ref).dispatch.sharedTree, true);
   const legacyShared = await callHandler('native_agent', { project: sharedProject, ref: sharedTicket.ref, prompt: 'Implement the ticket.' });
@@ -1643,16 +1648,17 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
 
   const ticket = await callTool('add', { project, title: 'payload dispatch', description: DISPATCH_DESCRIPTION, category: 'payload-0' });
   const dispatched = await callToolRaw('dispatch', { allowUnscoped: true, project, ref: ticket.ref });
-  assert.ok(Buffer.byteLength(dispatched.content[0].text) <= 1220, `dispatch is ${Buffer.byteLength(dispatched.content[0].text)} bytes`);
+  assert.ok(Buffer.byteLength(dispatched.content[0].text) <= 1300, `dispatch is ${Buffer.byteLength(dispatched.content[0].text)} bytes`);
   const dispatchPayload = JSON.parse(dispatched.content[0].text);
-  assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['effort', 'ref', 'runsLabel', 'spawn']);
+  assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['effort', 'ref', 'runsLabel', 'spawn', 'writeScope']);
+  assert.equal(dispatchPayload.writeScope, 'write scope: unscoped (whole tree)');
   assert.equal(dispatchPayload.token, undefined);
   assert.equal(dispatchPayload.agent, undefined);
   assert.equal(dispatchPayload.guidance, undefined);
 
   const warningTicket = await callTool('add', { project, title: 'payload warning', description: DISPATCH_DESCRIPTION, category: 'debugging', files: ['fixture.ts'] });
   const warningDispatch = await callToolRaw('dispatch', { allowUnscoped: true, project, ref: warningTicket.ref });
-  assert.ok(Buffer.byteLength(warningDispatch.content[0].text) <= 1220, `warning dispatch is ${Buffer.byteLength(warningDispatch.content[0].text)} bytes`);
+  assert.ok(Buffer.byteLength(warningDispatch.content[0].text) <= 1300, `warning dispatch is ${Buffer.byteLength(warningDispatch.content[0].text)} bytes`);
   assert.equal(JSON.parse(warningDispatch.content[0].text).warnings, undefined);
 
   const pulse = await callToolRaw('pulse', { project, ref: ticket.ref });
@@ -5133,7 +5139,7 @@ test('native_agent carries ticket anchors and verify command through its stable 
 test('native_agent applies explicit ticket route override refusals before spawning', async () => {
   seedCatalog([
     { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' },
-    { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol', label: 'Sol' },
+    { slug: 'codex-gpt-6-1-sol', id: 'claude-gpt-6.1-sol', label: 'Sol' },
   ]);
   try {
     const slug = store.ensureProject(PROJ).slug;
@@ -5142,17 +5148,17 @@ test('native_agent applies explicit ticket route override refusals before spawni
     const crossing = store.createTicket(slug, {
       title: 'Refuse provider crossing through MCP native agent',
       category: 'native-route-override-claude',
-      route: { model: 'codex-gpt-5-6-sol', effort: 'high' },
+      route: { model: 'codex-gpt-6-1-sol', effort: 'high' },
     });
     const sameProvider = store.createTicket(slug, {
       title: 'Allow same provider through MCP native agent',
       category: 'native-route-override-codex',
-      route: { model: 'codex-gpt-5-6-sol', effort: 'high' },
+      route: { model: 'codex-gpt-6-1-sol', effort: 'high' },
     });
 
     await assert.rejects(
       () => callHandler('native_agent', { ref: crossing.ref, prompt: 'Implement the ticket.' }),
-      /route override "codex-gpt-5-6-sol" crosses providers from category "native-route-override-claude" and was refused/,
+      /route override "codex-gpt-6-1-sol" crosses providers from category "native-route-override-claude" and was refused/,
     );
 
     const native = await callHandler('native_agent', { ref: sameProvider.ref, prompt: 'Implement the ticket.' });
@@ -5270,7 +5276,8 @@ test('dispatch rejects a thin routed brief but only warns about a missing coding
 
   await callTool('update', { ref: added.ref, description: DISPATCH_DESCRIPTION });
   const dispatched = await callTool('dispatch', { ref: added.ref, full: true, allowUnscoped: true });
-  assert.deepStrictEqual(dispatched.warnings, [
+  // Earlier whole-tree dispatches on this shared board still overlap this one at `**` (GH-341); those rank lower.
+  assert.deepStrictEqual(dispatched.warnings.slice(0, 2), [
     `Dispatch warning: ${NO_SCOPE_WARNING.replace('Planning-depth warning: ', '')}`,
     'Dispatch warning: this coding/debugging ticket has no verify command. Add one before the executor starts.',
   ]);
@@ -6319,7 +6326,8 @@ test('reporting aliases resolve to catalog slugs and dispatched done defaults pr
     { slug: 'codex-gpt-5-6-luna-fast', id: 'claude-gpt-5.6-luna-fast[1m]' },
   ]);
   try {
-    store.setCategory({ id: 'alias-codex', name: 'Alias Codex', route: { model: 'codex-gpt-5-6-terra-fast', effort: 'high' } });
+    // Read-only so done closes it: an unscoped write dispatch owns the whole tree and must submit (GH-341).
+    store.setCategory({ id: 'alias-codex', name: 'Alias Codex', route: { model: 'codex-gpt-5-6-terra-fast', effort: 'high' }, readonly: true });
     const complete = async (title: any, model?: any) => {
       const added = await callTool('add', {
         title,
@@ -7231,11 +7239,12 @@ test('SQ-2717: a candidate landed only on origin refuses single, wave and pendin
   assert.equal(delivered.verify.status, 'passed');
 });
 
-test('SQ-2717: an untracked file refuses integration with its bytes intact and no verifier run', async () => {
+test('SQ-2717: an untracked file at a delivered path refuses integration with its bytes intact and no verifier run', async () => {
   const repository = landedProofWorktree();
   const project = store.ensureProject(repository).slug;
   const candidate = await submittedLandedProofCandidate(repository, project, 'dirty-guard.txt', 'sq2717-dirty-guard');
-  const untrackedPath = path.join(repository, 'operator-scratch.txt');
+  // GH-340: the untracked file sits where the candidate writes, so it blocks; the tracked edit is outside the delivery.
+  const untrackedPath = path.join(repository, 'dirty-guard.txt');
   const untrackedBytes = Buffer.from('operator bytes that integration must never touch\n');
   fs.writeFileSync(untrackedPath, untrackedBytes);
   const trackedPath = path.join(repository, 'verify-tree.cjs');
@@ -7247,6 +7256,9 @@ test('SQ-2717: an untracked file refuses integration with its bytes intact and n
   const refused = await callTool('integrate', { project, ref: candidate.ticket.ref, by: 'dirty-integrator', mode: 'merge' });
   assert.equal(refused.ok, false);
   assert.equal(refused.reason, 'integration_target_dirty');
+  assert.match(refused.message, /dirty-guard\.txt\. Commit, stash, or remove those paths/);
+  assert.doesNotMatch(refused.message, /verify-tree\.cjs/);
+  assert.match(refused.message, /1 other dirty path\(s\) sit outside the delivery and were ignorable\./);
   assert.equal(verifierRunLog(repository), verifierRunsBefore, 'the pinned verifier never executed against the dirty checkout');
   assert.deepEqual(fs.readFileSync(untrackedPath), untrackedBytes, 'the untracked file keeps its exact bytes');
   assert.deepEqual(fs.readFileSync(trackedPath), Buffer.concat([trackedBytes, Buffer.from('// operator edit\n')]), 'the dirty tracked file keeps its exact bytes');

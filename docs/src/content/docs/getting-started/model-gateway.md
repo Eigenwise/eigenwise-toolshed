@@ -24,7 +24,7 @@ After the wiring is confirmed, fully restart the Claude Code process for that sa
 
 Model Gateway writes `ANTHROPIC_BASE_URL` to `.claude/settings.local.json`, never the committed `.claude/settings.json`. That keeps your local gateway endpoint out of other people's checkouts. You can opt into one shared fallback URL in `~/.claude/settings.json`, but a project's local setting wins. `model-gateway doctor` marks the effective source and calls out conflicting gateway modes.
 
-A Claude alias pin applies to every project already registered as wired. Model Gateway updates only gateway-owned pin values, tells you about any user-owned value it skipped, and prunes missing project directories from the registry. Restart each affected open Claude Code session before its `/model` alias reflects the new pin.
+A Claude alias pin applies to every project already registered as wired. SessionStart checks those projects again on every pin refresh, so a newer shipped default or CLI alias reaches all of them, not only the project you opened. Model Gateway updates only gateway-owned pin values, tells you about any user-owned value it skipped, and prunes missing project directories from the registry. Restart each affected open Claude Code session before its `/model` alias reflects the new pin.
 
 For a direct recovery command, use `node ~/.claude/model-gateway/model-gateway.js <command>`. SessionStart writes this version-independent launcher from Claude Code's installed-plugin registry, so it follows upgrades and uses the highest remaining installed version after an uninstall or downgrade.
 
@@ -47,8 +47,8 @@ previous cache, and `status` reports `fallback catalog (proxy unreachable)`.
 
 Updating Toolshed never wires a project. Only `setup` or `env --write-project` run inside a project wires it.
 
-- `claude-gpt-*[1m]` uses your ChatGPT/Codex subscription. `MODEL_WINDOW_POLICY` in Model Gateway's runtime is the authority for every gateway picker row. GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured rows; other Codex proxy rows use its explicit unmeasured 920k default until measured.
-- A `[1m]` alias gives Claude Code a 1M client window, but a lower explicit `autoCompactWindow` still wins. The optional `325000` setting is a cap, and with that cap the client compacts around `292000`. The alias is removed before forwarding to the backend and does not promise a 1M backend input limit. Use `/context` to inspect the selected model and effective cap.
+- `claude-gpt-*[1m]` uses your ChatGPT/Codex subscription. `MODEL_WINDOW_POLICY` in Model Gateway's runtime is the authority for every gateway picker row. GPT-6.1 Sol, GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured rows; other Codex proxy rows use its explicit unmeasured 920k default until measured. GPT-6.1 Sol is the default Codex model; GPT-6 Astra is reserved for frontier or high-stakes tickets.
+- A `[1m]` alias gives Claude Code a 1M client window, but a lower explicit `autoCompactWindow` still wins. An `autoCompactWindow` is one number for the whole session, so it caps Claude rows too; the Codex cost cap lives in `context-window` instead (see [Context window and cost](#context-window-and-cost)). The alias is removed before forwarding to the backend and does not promise a 1M backend input limit. Use `/context` to inspect the selected model and effective cap.
 - `claude-grok-4.5[1m]` uses your Grok subscription when the Grok CLI is installed and signed in. Its measured backend window is 500k. The shared synthetic-413 sentry returns Claude Code's compaction signal 40k tokens before that backend limit if the client has not compacted first. The alias is removed before requests reach the backend.
 - Claude models keep using Anthropic.
 
@@ -81,11 +81,44 @@ Claude Desktop has its own native Gateway configuration, separate from the Claud
 
 This is a Desktop-side restriction, not a Model Gateway bug, and there is no supported workaround: no Anthropic-named alias to disguise a Codex or Grok route, no binary patch, no credential or auth substitution, no TLS interception, no global env or hosts trick. The Claude Code CLI remains the verified way to use gateway models. VS Code success has been reported by users but is not independently verified here. This limitation is specific to the installed Desktop version and can be revisited if a future release removes the model-family filter.
 
+## Context window and cost
+
+Long context costs differently per backend. Claude charges nothing extra for its 1M window. OpenAI bills Codex input above 272k tokens at 2x, so past that point every request costs double. Model Gateway keeps one setting per backend:
+
+| Backend | Default | What it does |
+| --- | --- | --- |
+| Claude | `full` | 1M through the `[1m]` alias pins |
+| Codex | `272000` | OpenAI bills input above 272k tokens at 2x; the cap keeps every request, including compaction, under it |
+| Grok | `full` | the measured 500k backend window |
+
+Show the current values, or change them:
+
+```sh
+node ~/.claude/model-gateway/model-gateway.js context-window
+node ~/.claude/model-gateway/model-gateway.js context-window --claude full --codex 272000 --grok full
+```
+
+A value is `full` or a whole number of tokens up to 1,000,000. The setting lives in `~/.claude/model-gateway/context-window.json`. The older `CODEX_GATEWAY_CONTEXT_WINDOW` environment variable still works, but only when no Codex value is saved. `status` and `doctor` print the effective window for each backend, and Sidequest's `models` output and the dashboard's model pickers show the same numbers.
+
+The numbers are per backend, not per role. Sidequest executors run through the same Claude Code process and send the same model ids as the orchestrator, and nothing in a request tells the gateway which role sent it, so the orchestrator and every executor share these values.
+
+How the Codex cap holds. Claude Code never reads the gateway's advertised `max_input_tokens` for a `[1m]` row (its gateway discovery cache keeps only the id and name), so the client alone would let a Codex session grow to its 1M alias window. The gateway enforces the cap itself. After each response it records the input tokens that turn used, and when the last turn went past the trigger it answers the next request with a "prompt is too long" error, which makes Claude Code compact. The compaction request is the largest one a session sends:
+
+- the turn that crossed the trigger can already be one turn of growth past it (up to 40,000 tokens: a response plus its tool results),
+- the compaction request resends that turn plus one more turn of growth,
+- and adds Claude Code's compaction instructions (about 7,300 characters; budgeted at 5,000 tokens).
+
+So a cap compacts past cap minus 85,000. With the 272,000 default, sessions compact past 187,000, ordinary turns stay under about 227,000, and the compaction request stays at or under 272,000. `/v1/models` advertises the cap itself, so picker ids keep their `[1m]` suffix. A capped Codex value needs at least 185,000 tokens so the trigger keeps 100,000 tokens of working room. The running gateway reads the setting when it starts, so restart it after a change (`stop`, then `ensure`).
+
+A Claude cap works differently: it is written as Claude Code's `autoCompactWindow` into every project wired at project scope (`.claude/settings.local.json`), and a project wired later picks it up at its next session start. `autoCompactWindow` is one number for the whole session, so a Claude cap also bounds Codex and Grok rows in that session. The command refuses a Claude cap when no project is wired at project scope, because writing it to your user settings would cap every project. For the same reason, a user-level `autoCompactWindow` (for example the older `325000` suggestion) keeps Claude from getting its full window; `status` names the file that sets it.
+
 ## Daily use
 
 There are no routine Model Gateway commands to remember. The shim supervisor checks the proxy's `/v1/models` endpoint while it runs and confirms a failed probe through a fresh connection before recovering an unavailable proxy with bounded backoff. It leaves a healthy proxy alone. If a session survives a plugin update, its older plugin copy leaves the newer shim running and asks you to reload plugins or restart Claude Code. Claude handles setup, updates, authentication checks, model discovery, and settings repair through the skill.
 
 SessionStart launches a missing supervisor outside the hook's process tree, then waits no more than 12 seconds inside its 30-second hook budget. A slow proxy keeps starting in the background. Claude asks you to retry the Codex model in a few seconds instead of holding the session-start hook open.
+
+Setup and updates wait up to 42 seconds (the 30-second drain timeout plus 12) for a restarted supervisor. On a heavily loaded machine that can run out while the new supervisor is still coming up. If its process is still alive and the shim wrote no failure reason, setup prints a warning with the supervisor's PID and exits successfully, so `update-toolshed` doesn't count it as a failure; run `status` a minute later to confirm it is `running-ours`. A supervisor that died during the wait, or a shim that recorded why it failed, still fails setup.
 
 `status`, `doctor` and `ensure` share one probe of the shim, so they print the same state: `running-ours` (with the version it serves), `running-foreign` (a listener from another install, or one whose owner can't be identified), `starting`, or `stopped`. `ensure` treats a `running-ours` shim at the installed version as done, and gives a `starting` one its startup window instead of binding a second supervisor against it. While a proxy the supervisor just started is still warming up (it holds its port before `/v1/models` answers), recovery waits up to 30 seconds before replacing it. On Windows the port owner is read from `netstat`'s address and PID columns, so a German or French UI language no longer hides it and upgrades replace the running shim.
 
@@ -96,6 +129,10 @@ When the gateway disappears or restarts, ask Claude to run `doctor`. It names `~
 `SIDEQUEST_DISCOVERY_DIRS` accepts comma-separated extra catalog roots. Sidequest always keeps `~/.claude` in discovery, so adding a root does not hide the installed Model Gateway catalog. Only that installed catalog has a refresh command. Fixture or shared catalogs at extra roots keep using their recorded contents without a five-minute expiry.
 
 That refresh command is `catalog --refresh --json`, and Sidequest runs it whenever the installed catalog has expired. If it cannot write a fresh catalog it exits non-zero and says why on stderr: `/healthz` returned an error status (named), the shim didn't answer `/healthz` at all (with the connection error), `/v1/models` returned an error, or the model list held no gateway ids. It keeps the stored catalog and its timestamp as they were, so Sidequest treats the attempt as a failure instead of accepting an expired file, and adds that stderr reason to its Codex dispatch refusal as `Last gateway catalog refresh: ...`. If your gateway models disappear from a board a few minutes after each shim start, run that command yourself and read its exit code and stderr.
+
+The shim's `/healthz` is a liveness check: a 200 means the shim is up and serving, and it answers right away. Its `codexReadiness` block is the last known readiness, not a fresh one. The slow parts (the proxy's `/v1/models` and `codex auth status`, which can take several seconds on macOS when it reads the Keychain) run in the background, one check at a time however many probes arrive. `checkedAt` and `ageMs` say when that check finished. `stale: false` means it's under 15 seconds old. `stale: true` means it's older, and the next check is already running. Right after a shim start, before the first check has finished, the state is `checking`, with `checks: null`. `upstreamBlocked` and `upstreamUnavailable` are always current. `doctor`, `ensure`, and `catalog --refresh` don't use this cached block. They run their own full readiness check.
+
+On macOS and Linux, a shim that died without closing can leave `~/.claude/model-gateway/gateway.sock` behind. The next shim connects to it first. If nothing answers and the file is a socket, the shim removes it, logs that it did, and binds. A socket with a live listener is never touched.
 
 Running Model Gateway's own suite uses a separate test home and never touches the installed gateway. Codex sessions dropping while tests ran was a supervisor cleanup bug, fixed in this version. Cleanup uses this home's recorded PIDs and targeted ownership checks only: the recorded command or start time must match the live process. Windows hides the command line of a process running at a higher privilege level than the session asking, so a record whose start time still matches is accepted on that alone, and a record is discarded only when a command line it *can* read contradicts it. A reused PID is never stopped. When the command line is unavailable, `doctor` says so and names elevation as the likely cause: `stop` and `setup` then have to run from a session with the same privileges as the one that started the gateway. If startup, restart, or drain cannot confirm who owns a listener, it leaves that listener alone and startup records `owner-unknown`; confirmed foreign listeners are refused too. On POSIX, process probes pin their child locale to C so they can read start times without requiring a global locale settings change.
 

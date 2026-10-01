@@ -11,7 +11,8 @@ const { spawnSync } = require('node:child_process');
 const ROOT = path.join(__dirname, '..');
 const BIN = path.join(ROOT, 'bin', 'sidequest.js');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-surface-'));
-const project = path.join(home, 'project');
+const projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-surface-projects-'));
+const project = path.join(projectsRoot, 'project');
 fs.mkdirSync(project, { recursive: true });
 const env = Object.assign({}, process.env, { SIDEQUEST_HOME: home, CLAUDE_PROJECT_DIR: project });
 
@@ -22,7 +23,7 @@ function cli(...args: any[]) {
 
 function freshMcp() {
   process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-mcp-surface-'));
-  process.env.CLAUDE_PROJECT_DIR = path.join(process.env.SIDEQUEST_HOME, 'project');
+  process.env.CLAUDE_PROJECT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-mcp-project-'));
   for (const target of ['../lib/mcp.js', '../lib/store.js']) delete require.cache[require.resolve(target)];
   return require('../lib/mcp.js');
 }
@@ -100,7 +101,7 @@ test('MCP category tools stamp tickets and reject unknown categories', async () 
 });
 
 test('CLI project category layers stay isolated and expose effective origins', () => {
-  const second = path.join(home, 'second-project');
+  const second = path.join(projectsRoot, 'second-project');
   fs.mkdirSync(second, { recursive: true });
   let run = cli('category', 'add', 'project-only', '--project', project, '--name', 'Project only', '--route-model', 'sonnet', '--route-effort', 'medium');
   assert.equal(run.result.status, 0, run.result.stderr);
@@ -132,7 +133,7 @@ test('CLI project category layers stay isolated and expose effective origins', (
 });
 
 test('CLI category list defaults to the current project taxonomy and supports global policy view', () => {
-  const projectOnly = path.join(home, 'list-project');
+  const projectOnly = path.join(projectsRoot, 'list-project');
   fs.mkdirSync(projectOnly, { recursive: true });
   let run = cli('category', 'add', 'project-only-list', '--project', projectOnly, '--name', 'Project only list', '--route-model', 'sonnet', '--route-effort', 'medium');
   assert.equal(run.result.status, 0, run.result.stderr);
@@ -155,7 +156,7 @@ test('CLI category list defaults to the current project taxonomy and supports gl
 
 test('CLI profile category operations never resolve the current board', () => {
   const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-profile-category-scope-'));
-  const currentProject = path.join(isolatedHome, 'current-project');
+  const currentProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-profile-category-project-'));
   fs.mkdirSync(currentProject, { recursive: true });
   const isolatedEnv = Object.assign({}, process.env, { SIDEQUEST_HOME: isolatedHome, CLAUDE_PROJECT_DIR: currentProject });
   const isolatedCli = (...args: any[]) => {
@@ -207,7 +208,7 @@ test('CLI profile category operations never resolve the current board', () => {
 });
 
 test('CLI category edit forks a board category, and reset returns it to the shared default', () => {
-  const scoped = path.join(home, 'fork-project');
+  const scoped = path.join(projectsRoot, 'fork-project');
   fs.mkdirSync(scoped, { recursive: true });
 
   let run = cli('category', 'edit', 'coding.easy', '--project', scoped, '--name', 'Local coding.easy');

@@ -3,7 +3,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("node:child_process");
-const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require("./exec-names.js");
+const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, discoveredModelExecutorName, readOnlyDiscoveredModelExecutorName, isDiscoveredModelExecutor, DIAGNOSTIC_PROBE_NAME, bundledAgentType, isReadOnlyExecutor } = require("./exec-names.js");
 const { createWorktreeLease, canonicalPath } = require("./kernel/worktree.js");
 const crypto = require("crypto");
 const store = require("./store.js");
@@ -16,6 +16,7 @@ const { scopeKey } = require("./scope-match.js");
 const TEMPLATE_PATH = path.join(__dirname, "..", "scripts", "_exec-template.md");
 const LEGACY_MARKER = "<!-- generated-by: sidequest-agentsync -->";
 const MARKER = "<!-- generated-by: sidequest-agentsync gen2 -->";
+const DISCOVERED_MODEL_MARKER = "<!-- generated-by: sidequest-agentsync discovered-model -->";
 const TEMP_MARKER = "<!-- generated-by: sidequest-native-agent -->";
 const TEMP_PREFIX = "sidequest-native-";
 const TICKET_PREFIX = "sidequest-ticket-";
@@ -49,33 +50,34 @@ function routeMarker(dispatchModel, effort, ticketRef) {
   if (!EMITTED_ROUTE_MARKER_RE.test(marker)) throw new Error("dispatch route marker does not match the gateway grammar.");
   return marker;
 }
+function recipeAgentWiring(exec, effort) {
+  if (exec.backend === "codex") {
+    return {
+      agent: { model: DISPATCH_MODEL_ID, promptPrefix: `${routeMarker(exec.dispatchModel, effort)}
+
+` },
+      effortCarrier: "marker"
+    };
+  }
+  if (isDiscoveredModelExecutor(exec.agent)) {
+    ensureDiscoveredModelAgents(exec.agent);
+    return { agent: { model: null, subagentType: exec.agent, promptPrefix: "" }, effortCarrier: "definition" };
+  }
+  return { agent: { model: exec.model, promptPrefix: "" }, effortCarrier: "none" };
+}
 function workflowRecipe(category, resolved) {
   const exec = resolved && resolved.exec;
   if (!category || !exec) throw new Error("A resolved category route is required.");
-  const recipe = {
+  return {
     project: category.project,
     category: category.id,
     categoryName: category.name,
     backend: exec.backend,
     route: { model: resolved.model, effort: resolved.effort },
     runsLabel: exec.runsLabel,
-    agent: null,
-    effortCarrier: null,
+    ...recipeAgentWiring(exec, resolved.effort),
     warnings: Array.isArray(resolved.warnings) ? resolved.warnings.slice() : []
   };
-  if (exec.backend === "codex") {
-    recipe.agent = {
-      model: DISPATCH_MODEL_ID,
-      promptPrefix: `${routeMarker(exec.dispatchModel, resolved.effort)}
-
-`
-    };
-    recipe.effortCarrier = "marker";
-  } else {
-    recipe.agent = { model: exec.model, promptPrefix: "" };
-    recipe.effortCarrier = "none";
-  }
-  return recipe;
 }
 const EXECUTOR_SKILLS = ["sidequest:verify-discipline"];
 const READ_ONLY_DENIED_TOOLS = [
@@ -546,8 +548,10 @@ function ticketIsolationContract(ticket, projectPath) {
     "Worktree isolation contract: this dispatch runs in its own linked worktree, never in the shared checkout.",
     "The harness refuses heredocs in isolated worktrees; Write scripts to your scratchpad and run them by path.",
     `Expected worktree root: ${expected}`,
+    "If the claim result carries `worktreeCorrection`, its `worktree` replaces this root: siblings launched together can be recorded against each other's checkouts until they claim.",
     "Confirm it before your first write, and again after any resume from a coordinator message: `git rev-parse --git-dir` must differ from `git rev-parse --git-common-dir`.",
-    `If they match you are in the shared checkout ${root}. Stop. Write nothing, tell the orchestrator this ticket lost its worktree and needs re-dispatch, and name any work you already have staged there so it can be committed out of the shared tree rather than lost.`
+    `If they match you are in the shared checkout ${root}. Stop. Write nothing, tell the orchestrator this ticket lost its worktree and needs re-dispatch, and name any work you already have staged there so it can be committed out of the shared tree rather than lost.`,
+    `If it is a DIFFERENT linked worktree, the binding is crossed: commit, submit and verify-capture refuse and name the other live claim, because anything the board diffs in ${expected} would be that executor's work, test names included. Do not enter the bound tree or work around the refusal. Follow the refusal's remedy and ask the orchestrator to rebind this live claim to that checkout (\`dispatch\` with \`claimHolder\`, \`worktree\` and \`recoveryEvidence\`). When both claims were launched together and hold exactly each other's checkouts with neither carrying another ticket's commits, the board swaps the two records onto their own checkouts at once. Otherwise it allows the rebind only once the checkout's HEAD is this claim's own commit: commit your work with git in the checkout you run in, pin that hash at \`refs/sidequest/${ticket.ref}\`, and comment it as the crossing evidence before asking for the rebind. If you have no exact crossing to swap and no commit to pin, or the rebind is refused, release this ticket with kind \`technical_blocker\` and status \`todo\`, quoting the refusal as its command and output evidence, so the orchestrator redispatches it onto a checkout of its own and salvages your commit by hash.`
   ].join("\n")];
 }
 const DEPENDENCY_LINK_TYPES = /* @__PURE__ */ new Set(["blocks", "blocked-by"]);
@@ -557,13 +561,10 @@ function linkedPlanSuffix(link, slug) {
   return plan ? ` (plan: ${path.resolve(plan.path)})` : "";
 }
 function capturedVerifyCommand(verify, ticketRef, project, boundWorktree) {
-  const command = String(verify || "").trim();
-  if (!command) return "";
-  const encoded = Buffer.from(command, "utf8").toString("base64");
   const captureScript = path.join(__dirname, "verify-capture.js");
-  const target = String(ticketRef || "").trim() && String(project || "").trim() ? ` --project ${JSON.stringify(String(project))} --ticket ${JSON.stringify(String(ticketRef))}` : "";
-  const worktree = String(boundWorktree || "").trim() ? ` --worktree ${JSON.stringify(String(boundWorktree))}` : "";
-  return `node "${captureScript}" --base64 ${encoded}${target}${worktree}`;
+  const commandSource = ticketRef && project ? ` --project ${JSON.stringify(String(project))} --ticket ${JSON.stringify(String(ticketRef))}` : ` --base64 ${Buffer.from(verify.trim(), "utf8").toString("base64")}`;
+  const worktree = boundWorktree ? ` --worktree ${JSON.stringify(boundWorktree)}` : "";
+  return `node "${captureScript}"${commandSource}${worktree}`;
 }
 function ticketEvidenceGuidance(ticket) {
   const directory = String(ticket?.dispatch?.evidenceDirectory || "").trim();
@@ -703,10 +704,34 @@ function rejectedSubmissionRows(ticket) {
     ...rejected.supersededAt ? { supersededAt: rejected.supersededAt, supersededBy: rejected.supersededBy || null } : {}
   }));
 }
+function latestPendingRework(ticket) {
+  const latest = ticket.rejectedSubmissions.filter(Boolean).at(-1);
+  return latest.rejectionKind === "rework" && !latest.supersededAt && !ticket.submission ? latest : null;
+}
+function preservedRefSuffix(rejected) {
+  return rejected.quarantineRef && rejected.preservationState !== "pending" ? ` (preserved at ${rejected.quarantineRef})` : "";
+}
+function pendingReworkBody(ticket) {
+  const latest = latestPendingRework(ticket);
+  if (!latest) return null;
+  const candidate = latest.commit || latest.sourceRevision.value;
+  const preserved = preservedRefSuffix(latest);
+  return [
+    "## Pending rework",
+    `This dispatch repairs a rejected candidate. Candidate ${candidate} was sent back for rework at ${latest.rejectedAt} and the ticket returned to todo. This rejection overrides any earlier comment that accepted, approved, or queued that candidate, so this launch is not a duplicate: do the repair below and submit a fresh candidate. Do not release over that earlier acceptance as a contradiction or oracle question.`,
+    `Rejected candidate: ${candidate}${preserved}`,
+    `Rework reason:
+${latest.reason}`,
+    `Review:
+${latest.review}`
+  ].join("\n\n");
+}
 function rejectedSubmissionHistoryBody(ticket) {
   const rows = rejectedSubmissionRows(ticket);
   if (!rows.length) return null;
+  const pendingRework = pendingReworkBody(ticket);
   return [
+    ...pendingRework ? [pendingRework] : [],
     "## Rejected submission history",
     `${rows.length} prior candidate${rows.length === 1 ? " was" : "s were"} rejected. Do not resubmit any rejected commit or include one in an admitted range.`,
     ...rows.map((rejected) => [
@@ -772,9 +797,13 @@ function scopeAddedBeyondDeclared(ticket, slug, declared) {
   const added = store.effectiveScope(slug, ticket).filter((file) => !declaredKeys.has(scopeKey(file)));
   return scopeListing("Auto-paired tracked generated files (regenerate before verifying)", added.filter((file) => !alwaysKeys.has(scopeKey(file)))) + scopeListing("Board-added scope (board config alwaysInScope, not declared on this ticket; a dirty path here still blocks submit)", added.filter((file) => alwaysKeys.has(scopeKey(file))));
 }
+function noDeclaredFilesText(ticket) {
+  const writeScope = ticket?.dispatch?.unscopedOverride?.writeScope;
+  return writeScope ? `(No files were declared.) ${writeScope}.` : "(No files were declared.)";
+}
 function taskAndScopeBody(ticket, slug) {
   const declared = Array.isArray(ticket?.files) ? ticket.files : [];
-  const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
+  const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : noDeclaredFilesText(ticket);
   const scopedFiles = declaredFiles + scopeAddedBeyondDeclared(ticket, slug, declared);
   return executorTaskBody(ticket, ticket?.category || {}, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket), ticketContinuationPacket(ticket));
 }
@@ -991,6 +1020,7 @@ function agentSpawn(name, isolation, model, agentType, prompt, description, opti
   const taskLabel = suppliedLabel || "Sidequest ticket executor.";
   const reducedAgentSchema = options?.reducedAgentSchema === true;
   const subagentType = bundledAgentType(agentType || name);
+  ensureDiscoveredModelAgents(subagentType);
   return Object.assign(
     { subagent_type: subagentType, description: taskLabel },
     reducedAgentSchema ? {} : { name, ...unattendedSpawnMode(subagentType) },
@@ -1135,12 +1165,114 @@ function migrateExecAgents(_prefs, opts) {
   }
   return { written: 0, removed, unchanged };
 }
+function renderDiscoveredModelAgent(name, effort, modelId) {
+  return renderExecAgent({ name, effort, modelId, marker: DISCOVERED_MODEL_MARKER });
+}
+function renderReadOnlyDiscoveredModelAgent(name, effort, modelId, readOnlyDeniedTools) {
+  const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
+  return withoutPermissionMode(renderExecAgent({
+    name,
+    effort,
+    modelId,
+    marker: DISCOVERED_MODEL_MARKER,
+    extraNote: readOnlyNote(),
+    tools: readOnlyTools.tools,
+    disallowedTools: readOnlyTools.disallowedTools
+  }));
+}
+function routedDiscoveredModelExec(route) {
+  const exec = route && store.resolveExec(route.model, route.effort);
+  return isDiscoveredModelExecutor(exec?.agent) ? exec : null;
+}
+function routedDiscoveredModelDefinitions() {
+  const globalFallback = store.getRoutingFallback();
+  const definitions = [];
+  for (const { route, fallback, readonly } of store.getCategoryRoutePairs()) {
+    for (const exec of [route, fallback, globalFallback].map(routedDiscoveredModelExec)) {
+      if (!exec) continue;
+      definitions.push({ name: exec.agent, effort: exec.effort, modelId: exec.spawnId, readOnly: false });
+      if (readonly) definitions.push({ name: exec.readOnlyAgent, effort: exec.effort, modelId: exec.spawnId, readOnly: true });
+    }
+  }
+  return definitions;
+}
+function requestedDiscoveredModelDefinitions(executor) {
+  for (const backend of store.discoveredModelBackends()) {
+    for (const effort of EXEC_EFFORTS) {
+      if (discoveredModelExecutorName(backend.agentSlug, effort) === executor) return [{ name: executor, effort, modelId: backend.id, readOnly: false }];
+      if (readOnlyDiscoveredModelExecutorName(backend.agentSlug, effort) === executor) return [{ name: executor, effort, modelId: backend.id, readOnly: true }];
+    }
+  }
+  return [];
+}
+function discoveredModelAgentSources(definitions, readOnlyDeniedTools) {
+  const sources = /* @__PURE__ */ new Map();
+  for (const { name, effort, modelId, readOnly } of definitions) {
+    sources.set(`${name}.md`, readOnly ? renderReadOnlyDiscoveredModelAgent(name, effort, modelId, readOnlyDeniedTools) : renderDiscoveredModelAgent(name, effort, modelId));
+  }
+  return sources;
+}
+function readTextOrNull(filePath) {
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch (_) {
+    return null;
+  }
+}
+function agentFileNames(dir) {
+  try {
+    return fs.readdirSync(dir);
+  } catch (_) {
+    return [];
+  }
+}
+function pruneDiscoveredModelAgents(dir, wanted) {
+  let removed = 0;
+  for (const filename of agentFileNames(dir)) {
+    if (wanted.has(filename) || !isDiscoveredModelExecutor(filename.replace(/\.md$/, ""))) continue;
+    if (!readTextOrNull(path.join(dir, filename))?.includes(DISCOVERED_MODEL_MARKER)) continue;
+    fs.rmSync(path.join(dir, filename), { force: true });
+    removed++;
+  }
+  return removed;
+}
+function writeOwnedDiscoveredModelAgent(filePath, source) {
+  const previous = readTextOrNull(filePath);
+  if (previous === source || previous !== null && !previous.includes(DISCOVERED_MODEL_MARKER)) return false;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, source);
+  return true;
+}
+function writeDiscoveredModelAgents(dir, wanted) {
+  let written = 0;
+  for (const [filename, source] of wanted) {
+    if (writeOwnedDiscoveredModelAgent(path.join(dir, filename), source)) written++;
+  }
+  return written;
+}
+function syncDiscoveredModelAgents(opts) {
+  const dir = opts?.dir || defaultAgentsDir();
+  const wanted = discoveredModelAgentSources(routedDiscoveredModelDefinitions(), opts?.readOnlyDeniedTools);
+  const removed = pruneDiscoveredModelAgents(dir, wanted);
+  const written = writeDiscoveredModelAgents(dir, wanted);
+  return { written, removed, unchanged: wanted.size - written };
+}
+function ensureDiscoveredModelAgents(executor, opts) {
+  if (!isDiscoveredModelExecutor(executor)) return;
+  const wanted = discoveredModelAgentSources(requestedDiscoveredModelDefinitions(executor), opts?.readOnlyDeniedTools);
+  if (writeDiscoveredModelAgents(opts?.dir || defaultAgentsDir(), wanted) > 0) waitForNativeAgentReload(opts?.waitMs);
+}
 function syncExecAgentsIfChanged(_prefs, opts) {
-  const result = migrateExecAgents(_prefs, opts);
-  return Object.assign({}, result, {
-    skipped: result.removed === 0,
+  const migrated = migrateExecAgents(_prefs, opts);
+  const discovered = syncDiscoveredModelAgents(opts);
+  const removed = migrated.removed + discovered.removed;
+  return {
+    written: discovered.written,
+    removed,
+    unchanged: migrated.unchanged + discovered.unchanged,
+    skipped: removed === 0 && discovered.written === 0,
     installHash: stableInstallHash(EXECUTOR_SKILLS, opts?.readOnlyDeniedTools)
-  });
+  };
 }
 function syncExecAgents(_prefs, opts) {
   if (!opts?.dir) return migrateExecAgents(_prefs, opts);
@@ -1237,6 +1369,9 @@ module.exports = {
   ticketIsolation,
   syncExecAgents,
   syncExecAgentsIfChanged,
+  syncDiscoveredModelAgents,
+  ensureDiscoveredModelAgents,
+  DISCOVERED_MODEL_MARKER,
   migrateExecAgents,
   stableInstallHash,
   EXECUTOR_CONTRADICTION_RULE,

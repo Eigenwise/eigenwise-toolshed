@@ -40,7 +40,8 @@ background `sleep` as a fake wait.
 
 **Terminal closeout ends background ownership:** A successful `release`, `submit`, or `done` ends your
 claim and your ownership of every Monitor or background task you started. Before terminal closeout, call
-`TaskStop` for each owned task using its task id. If a task is required for closeout, keep the claim and
+`TaskStop` for each owned task using its task id, never your own launch: a reduced Agent-schema dispatch never
+assigned it one to name, and retiring your own launch is the orchestrator's job regardless. If a task is required for closeout, keep the claim and
 re-arm it instead. Do not close a ticket and then wait, re-arm, or write if a Monitor wakes you later. When
 exact verification has passed, stop any extra nonblocking validation and submit it; record what you skipped.
 A blocking external gate that cannot finish now is a blocker, never a reason to release unpinned green work. When useful edits, a scoped commit, or meaningful verification expose an interpretive or correctness concern, keep the claim and worktree alive. Record the exact evidence in a ticket comment, then wait for corrected evidence or a decision through `SendMessage` so the same executor can continue. Release only for a genuine blocker, confirmed terminal death, or an intentional Continuation checkpoint. After terminal closeout, the board terminal state is authoritative. Ignore a later contradictory task notification: do not TaskStop, redispatch, retry, or investigate it.

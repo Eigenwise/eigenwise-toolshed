@@ -77,7 +77,7 @@ test('SQ-2731: the negative-control grammar an executor is told matches the guar
   assert.doesNotMatch(executorTemplate, /an ImportError or collection error only proves a symbol vanished/);
 });
 
-test('sidequest listing description covers board use and inline exceptions', () => {
+test('sidequest listing description leads with the board default and leaves inline exceptions to the body', () => {
   const frontmatter = skill.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   assert.ok(frontmatter, 'skill frontmatter must be present');
   const frontmatterLines = frontmatter[1].split(/\r?\n/);
@@ -91,8 +91,10 @@ test('sidequest listing description covers board use and inline exceptions', () 
   const description = descriptionLines.join(' ');
   assert.ok(description.length > 0, 'skill description must not be empty');
   assert.ok(description.length <= 1536, `skill description is ${description.length} characters`);
+  assert.match(description, /^Default for multi-file or multi-step work, even where there is no board yet/);
   assert.match(description, /\bUse for\b/);
-  assert.match(description, /\bStay inline for\b/);
+  assert.doesNotMatch(description, /\bStay inline for\b/, 'inline guidance lives in the skill body, not the listing');
+  assert.match(skill, /Answer direct questions; do operational requests and stated one-line edits to 1–2 named files inline/);
 });
 
 test('external tracker guidance keeps authored GitHub communication self-contained', () => {
@@ -269,6 +271,34 @@ test('dynamic survival guidance checkpoints incomplete work instead of submittin
   assert.match(briefing, /release the ticket to `todo`/);
   assert.match(briefing, /Do not submit incomplete ticket work as ready/);
   assert.doesNotMatch(briefing, /commit and submit the verified portion/);
+});
+
+test("GH-339: TaskStop closeout guidance never names the executor's own launch, and a reduced Agent-schema dispatch briefing carries no launch name at all", () => {
+  assert.match(executorTemplate, /`TaskStop` for each owned task using its task id, never your own launch/);
+  assert.match(executorTemplate, /a reduced Agent-schema dispatch never\s+assigned it one to name/);
+
+  const launchName = 'sq-9339-gh339-taskstop-opus-high';
+  const baseTicket = {
+    ref: 'SQ-9339',
+    model: 'opus',
+    effort: 'high',
+    category: {},
+    executorVerifyKind: 'command',
+    executorVerify: 'npm run typecheck',
+  };
+  const reducedBriefing = agentsync.renderTicketBriefing(
+    { ...baseTicket, dispatch: { launchName, reducedAgentSchema: true } },
+    'ticket-token', undefined, ROOT,
+  );
+  assert.doesNotMatch(reducedBriefing, /TaskStop/);
+  assert.doesNotMatch(reducedBriefing, new RegExp(launchName));
+
+  const normalBriefing = agentsync.renderTicketBriefing(
+    { ...baseTicket, dispatch: { launchName, reducedAgentSchema: false } },
+    'ticket-token', undefined, ROOT,
+  );
+  assert.doesNotMatch(normalBriefing, /TaskStop/);
+  assert.doesNotMatch(normalBriefing, new RegExp(launchName));
 });
 
 export {};

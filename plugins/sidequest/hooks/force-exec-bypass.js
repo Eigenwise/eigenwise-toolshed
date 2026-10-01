@@ -45,6 +45,8 @@ var CLAUDE_PREFIX = "sidequest-exec-";
 var DISPATCH_PREFIX = "sidequest-exec-dispatch-";
 var READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
 var READ_ONLY_DISPATCH_PREFIX = "sidequest-exec-dispatch-readonly-";
+var DISCOVERED_MODEL_PREFIX = "sidequest-exec-model-";
+var READ_ONLY_DISCOVERED_MODEL_PREFIX = "sidequest-exec-readonly-model-";
 var TICKET_PREFIX = "sidequest-sq-";
 var LEGACY_TICKET_PREFIX = "sidequest-ticket-";
 var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
@@ -138,6 +140,17 @@ function stableClaudeName(effort) {
 function stableReadOnlyClaudeName(effort) {
   return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
 }
+var DISCOVERED_MODEL_SUFFIX_RE = /^[a-z0-9][a-z0-9-]*-(low|medium|high|xhigh|max)$/;
+function discoveredModelEffort(name, prefix) {
+  const effort = DISCOVERED_MODEL_SUFFIX_RE.exec(name.slice(prefix.length))?.[1];
+  return name.startsWith(prefix) && isEffort(effort) ? effort : null;
+}
+function classifyDiscoveredModel(name) {
+  const readOnlyEffort = discoveredModelEffort(name, READ_ONLY_DISCOVERED_MODEL_PREFIX);
+  if (readOnlyEffort) return { kind: "read_only_discovered_model", effort: readOnlyEffort };
+  const effort = discoveredModelEffort(name, DISCOVERED_MODEL_PREFIX);
+  return effort ? { kind: "discovered_model", effort } : null;
+}
 var BUNDLED_AGENT_NAMES = /* @__PURE__ */ new Set([
   DISPATCH_NAME,
   READ_ONLY_DISPATCH_NAME,
@@ -153,7 +166,7 @@ function canonicalExecutorName(name) {
 }
 function isReadOnlyExecutor(name) {
   const kind = classify(name).kind;
-  return kind === "read_only_codex_dispatch" || kind === "read_only_claude_builtin";
+  return kind === "read_only_codex_dispatch" || kind === "read_only_claude_builtin" || kind === "read_only_discovered_model";
 }
 function classify(value) {
   if (typeof value !== "string" || !value) return { kind: "unknown", effort: null };
@@ -161,6 +174,8 @@ function classify(value) {
   if (name === READ_ONLY_DISPATCH_NAME) return { kind: "read_only_codex_dispatch", effort: null };
   if (name === DISPATCH_NAME) return { kind: "codex_dispatch", effort: null };
   if (name === DIAGNOSTIC_PROBE_NAME) return { kind: "unknown", effort: null };
+  const discoveredModel = classifyDiscoveredModel(name);
+  if (discoveredModel) return discoveredModel;
   if (name.startsWith(READ_ONLY_DISPATCH_PREFIX)) {
     const effort = name.slice(READ_ONLY_DISPATCH_PREFIX.length);
     if (isEffort(effort)) return { kind: "read_only_codex_dispatch", effort };
@@ -752,9 +767,23 @@ function classifyExecutor(type) {
     return fallbackClassify(type);
   }
 }
+var CURRENT_EXECUTOR_KINDS = /* @__PURE__ */ new Set([
+  "claude_builtin",
+  "codex_dispatch",
+  "discovered_model",
+  "read_only_claude_builtin",
+  "read_only_codex_dispatch",
+  "read_only_discovered_model"
+]);
 function isCurrentExecutor(classification) {
-  return classification.kind === "claude_builtin" || classification.kind === "codex_dispatch" || classification.kind === "read_only_claude_builtin" || classification.kind === "read_only_codex_dispatch";
+  return CURRENT_EXECUTOR_KINDS.has(classification.kind);
 }
+var FRONTMATTER_MODEL_KINDS = /* @__PURE__ */ new Set([
+  "codex_dispatch",
+  "read_only_codex_dispatch",
+  "discovered_model",
+  "read_only_discovered_model"
+]);
 function isSubagentCaller(input) {
   return Boolean(stringField(input, "agent_id"));
 }
@@ -877,21 +906,31 @@ function matchesDeniedWork(records, toolInput) {
   const promptPrefix = deniedWorkPromptPrefix(toolInput);
   return records.some((record) => record.description !== "" && record.description === description || record.promptPrefix !== "" && record.promptPrefix === promptPrefix);
 }
+function boardTouchedThisSession(sessionId) {
+  const inlineWork = readSessionState(sessionStateFile("inline-work", sessionId));
+  return Boolean(inlineWork.boardInteraction || inlineWork.boardTouchedEarlier);
+}
+function exploreDenial(sessionId, state, toolInput, priorPasses) {
+  if (matchesDeniedWork(deniedWorkRecords(state), toolInput)) {
+    return "sidequest: this Explore spawn matches work a generic Agent was already denied for. The block applied to the work, not the agent type. File a spike ticket (usually codebase-exploration), route it, dispatch it, then spawn the returned executor; rerouting denied work through Explore is a violation.";
+  }
+  if (priorPasses < EXPLORE_FREE_SPAWNS || boardTouchedThisSession(sessionId)) return "";
+  return `sidequest: Explore spawn ${priorPasses + 1} this session with no board interaction. Explore inherits the session model; investigation at this scale belongs on the board, where a codebase-exploration spike runs a cheaper route. File the spike, route it, dispatch it, then spawn the returned executor.`;
+}
 function guardMainSessionExplore(input, toolInput) {
   const sessionId = guardSessionId(input);
   if (!sessionId || dispatchAdmission(input).status !== "routed") return;
   const file = sessionStateFile("explore-fanout", sessionId);
   const state = readSessionState(file);
-  if (matchesDeniedWork(deniedWorkRecords(state), toolInput)) {
-    writeDeny("PreToolUse", "sidequest: this Explore spawn matches work a generic Agent was already denied for. The block applied to the work, not the agent type. File a spike ticket (usually codebase-exploration), route it, dispatch it, then spawn the returned executor; rerouting denied work through Explore is a violation.");
-    return;
-  }
   const priorPasses = Number(state.explorePasses) || 0;
-  const boardInteraction = Boolean(readSessionState(sessionStateFile("inline-work", sessionId)).boardInteraction);
-  if (priorPasses >= EXPLORE_FREE_SPAWNS && !boardInteraction) {
-    writeDeny("PreToolUse", `sidequest: Explore spawn ${priorPasses + 1} this session with no board interaction. Explore inherits the session model; investigation at this scale belongs on the board, where a codebase-exploration spike runs a cheaper route. File the spike, route it, dispatch it, then spawn the returned executor.`);
+  const denial = exploreDenial(sessionId, state, toolInput, priorPasses);
+  if (denial) {
+    writeDeny("PreToolUse", denial);
     return;
   }
+  recordExplorePass(file, state, priorPasses);
+}
+function recordExplorePass(file, state, priorPasses) {
   state.explorePasses = priorPasses + 1;
   writeSessionState(file, state);
   if (priorPasses < EXPLORE_FREE_SPAWNS) {
@@ -1167,6 +1206,10 @@ function denyReason(result, type) {
       return `${base}. ${retry}`;
   }
 }
+function liveDispatchBinding(ticket, sessionId, agentId) {
+  const dispatch = ticket.dispatch;
+  return dispatch?.sessionId === sessionId && !dispatch.terminalAt && dispatch.agentId === agentId;
+}
 function dispatchIdentityMatches(ticket, agentId, type) {
   const dispatch = ticket.dispatch;
   if (dispatch?.agentId === agentId) return true;
@@ -1212,8 +1255,10 @@ function terminalExecutorTicket(input) {
   try {
     const store = require(runtimeModule("store"));
     const matches = [];
+    let liveBinding = false;
     for (const project of store.listProjects({ all: true })) {
       for (const ticket of store.listTickets(project.slug)) {
+        liveBinding = liveBinding || liveDispatchBinding(ticket, sessionId, agentId);
         if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId || !dispatchIdentityMatches(ticket, agentId, executor)) continue;
         if (!ticket.dispatch?.terminalAt) return null;
         if (ticket.claim?.by) continue;
@@ -1227,7 +1272,7 @@ function terminalExecutorTicket(input) {
         }
       }
     }
-    return matches.length === 1 ? matches[0] || null : null;
+    return !liveBinding && matches.length === 1 ? matches[0] || null : null;
   } catch (_) {
     return null;
   }
@@ -1611,7 +1656,7 @@ function main() {
   const launchAgentName = preparedSpawn?.name || requestedAgentName || dispatchAgentName(input);
   if (launchAgentName && !reducedAgentSchema) updatedInput.name = launchAgentName;
   const preparedCorrection = correctionMessage(corrections);
-  if (isDispatchExecutor) {
+  if (FRONTMATTER_MODEL_KINDS.has(classification.kind)) {
     const hadModel = Object.prototype.hasOwnProperty.call(toolInput, "model");
     if (hadModel) delete updatedInput.model;
     recordAuthoritativeLaunch(input, type, launchAgentName);

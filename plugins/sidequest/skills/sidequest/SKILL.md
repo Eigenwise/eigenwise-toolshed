@@ -1,8 +1,8 @@
 ---
 name: sidequest
 description: >-
-  Open or manage Sidequest tickets and board workflow. Use for board lifecycle work, planning substantial or ambiguous work, and
-  dispatch/integration/recovery. Stay inline for quick edits at a known location, direct questions, or operational requests.
+  Default for multi-file or multi-step work, even where there is no board yet: the first add creates it. Use for
+  tickets, board lifecycle, planning substantial or ambiguous work, and dispatch/integration/recovery.
 ---
 
 # sidequest
@@ -55,7 +55,7 @@ dependencies before fixing the shared root. Prefer measured deletion; avoid hypo
 compulsory extractions and unrelated cleanup. Preserve trust-boundary validation, data-loss prevention,
 accessibility, permissions and immutable candidate/review authority.
 
-Do stated one-line mechanical edits to 1–2 named files inline before solo-fit or ticketing. Bounded recon (`Read`, `Glob`, `Grep` on named anchors, one narrow sweep) stays inline; unfamiliar paths or deep investigation go through the live taxonomy.
+Answer direct questions; do operational requests and stated one-line edits to 1–2 named files inline before solo-fit or ticketing. Bounded recon (`Read`, `Glob`, `Grep` on named anchors, one narrow sweep) stays inline; unfamiliar paths or deep investigation go through the live taxonomy.
 
 ### INLINE-SAFE direct work
 
@@ -83,7 +83,7 @@ MCP is the normal interface for board admin/config; the CLI is fallback for git-
 Apply board-only admin changes directly through an available MCP tool, never as a ticket or dispatch. Live
 category/profile edits affect only that board, not installation defaults unless the user asks. After a
 schema-bumping release, reload plugins before MCP writes. Commands default to the current project;
-`--project "<path-or-slug>"` (MCP: `project`) targets another board.
+`--project "<path-or-slug>"` (MCP: `project`) targets another board (creation rules: `references/board-features.md`).
 
 `dispatch <ref>` is **instant**: it returns the ticket's stable executor, a short `spawn` fetch
 stub, and a token. Pass every supplied `spawn` field (`name` and `description` too) to Agent
@@ -95,7 +95,7 @@ attachment and report missing or unreadable ones, while the spawn keeps that con
 transcript. Never trust a worker's self-report — the
 claim's token and exact executor name are the evidence.
 
-**Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent.model` and `recipe.agent.promptPrefix + prompt` in Agent. Never hand-translate route, gateway, virtual-model, marker, or effort fields. A user-named model for one ticket means set that ticket's `route` override, never edit the category route, which repoints later tickets too. See `references/routing-guide.md`.
+**Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent` in Agent: `model` and `subagentType` when set, `promptPrefix + prompt`. Never hand-translate route, gateway, virtual-model, marker, or effort fields. A user-named model for one ticket means set that ticket's `route` override, never edit the category route, which repoints later tickets too. See `references/routing-guide.md`.
 
 **Locations:** CLI: `plugins/sidequest/bin/sidequest.js`; DB: `~/.claude/sidequest/sidequest.db`
 (`SIDEQUEST_HOME`). Never scan from root.
