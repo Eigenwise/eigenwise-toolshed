@@ -24,6 +24,8 @@ function fixtureLaunch(mode, owned) {
     assert.match(fs.readFileSync(path.join(options.cwd, '.claude', 'agents', 'budget-worker.md'), 'utf8'), /model: codex-auto/);
     const child = spawnGatewayProcess(null, process.execPath, [CLIENT, mode, ...argumentsList], options);
     owned.child = child;
+    owned.launches ??= [];
+    owned.launches.push({ root: owned.root, port: owned.port, child });
     return child;
   };
 }
@@ -157,7 +159,93 @@ test('fixture protocol supports streamed replies and bounds model metadata', () 
   assert.match(stream, /event: message_start/);
   assert.match(stream, /event: content_block_start/);
   assert.match(stream, /event: message_stop/);
+  assert.deepEqual(response.content, [{ type: 'text', text: 'fixture-done' }], 'auxiliary models get plain fixture text');
+  assert.equal(counters.mainTurns, 0, 'auxiliary requests cannot consume main-turn pressure');
   assert.equal(counters.models.other, 1, 'unknown model text is reduced to an allowlisted counter');
+});
+
+test('auxiliary traffic preserves the main pressure sequence and stripped Opus IDs still need native window proof', async () => {
+  const counters = { requests: 0, summaryRequests: 0, mainTurns: 0, models: { other: 0, 'gpt-6.1-sol': 0, 'codex-auto': 0 } };
+  probe.fixtureReply({ model: 'fixture-auxiliary', system: '' }, counters);
+  const first = probe.fixtureReply({ model: 'gpt-6.1-sol', system: '' }, counters);
+  probe.fixtureReply({ model: 'codex-auto', system: '' }, counters);
+  probe.fixtureReply({ model: 'fixture-auxiliary', system: '' }, counters);
+  const second = probe.fixtureReply({ model: 'gpt-6.1-sol', system: '' }, counters);
+  assert.equal(first.usage.input_tokens, 238000, 'first actual main turn retains below-threshold pressure');
+  assert.equal(second.usage.input_tokens, 240000, 'second actual main turn retains above-threshold pressure');
+  assert.equal(counters.mainTurns, 2, 'workers and auxiliary requests never advance mainTurns');
+  const recognized = await syntheticRun('complete', 'claude-opus-5-5[1m]');
+  assert.equal(recognized.counters.models['claude-opus-5-5'], 3, 'recognized frontend may strip the bracket suffix upstream');
+  recognized.counters.windows = [];
+  assert.equal(probe.reportCases(recognized, recognized).recognizedClaude.status, 'UNVERIFIED', 'model acceptance alone cannot prove a full native window');
+});
+
+test('an exact /context diagnostic uses separate count_tokens traffic and only structured native metadata', async () => {
+  const owned = {};
+  const result = await probe.runProbe({ binary: process.execPath, scratchpad: SCRATCHPAD, hostEnvironment: {},
+    launch: fixtureLaunch('metadataOnly', owned) });
+  assert.equal(owned.launches.length, 4, 'two model cases each launch an isolated pressure flow and exact context prompt');
+  assert.equal(result.cases.projectEnv.status, 'PASS', 'native-shaped raw window can prove the project cap without debug prose');
+  assert.equal(result.cases.recognizedClaude.status, 'PASS', 'native-shaped full raw window plus stripped model acceptance is required');
+  assert.equal(result.cases.proactiveCompaction.status, 'UNVERIFIED', 'raw window and fake token counts cannot manufacture a native threshold receipt');
+  const context = result.runs[0].context.counters;
+  assert.equal(context.countRequests, 1, 'count_tokens requests are counted separately');
+  assert.equal(context.requests, 0, 'count_tokens never generates an Agent/main response');
+  assert.equal(context.mainTurns, 0, 'count_tokens never advances main pressure');
+  assert.deepEqual(context.contextUsage, [{ model: 'gpt-6.1-sol', raw_max_tokens: 272000, total_tokens: 42, percentage: 0 }]);
+  assert.equal(JSON.stringify(result).includes('fixture-secret'), false, 'rendered categories and memory paths never escape');
+  assert.equal(result.runs[0].counters.agentAvailable, true);
+  assert.equal(result.runs[0].counters.agentToolAvailable, true);
+  for (const launch of owned.launches) {
+    assert.equal(fs.existsSync(launch.root), false);
+    assert.notEqual(launch.child.exitCode ?? launch.child.signalCode, null);
+    await assertPortClosed(launch.port);
+  }
+});
+
+test('an emitted context-diagnostic refusal stops the next model case and cleans both owned launches', async () => {
+  const owned = {};
+  const result = await probe.runProbe({ binary: process.execPath, scratchpad: SCRATCHPAD, hostEnvironment: { CLAUDECODE: 'keep' },
+    launch: fixtureLaunch('refuseContext', owned) });
+  assert.equal(result.status, 'BLOCKED');
+  assert.equal(owned.launches.length, 2, 'actual context refusal prevents the recognized-model launch');
+  assert.equal(result.runs[0].context.counters.toolRefusals, 1);
+  assert.equal(result.runs[0].context.counters.toolErrors, 1);
+  assert.deepEqual(Object.values(result.cases).map((entry) => entry.status), Array(5).fill('UNVERIFIED'));
+  assert.equal(owned.environment.CLAUDECODE, 'keep');
+  for (const launch of owned.launches) {
+    assert.equal(fs.existsSync(launch.root), false);
+    await assertPortClosed(launch.port);
+  }
+});
+
+test('structured telemetry is numeric, allowlisted and bounded while unavailable agents and errors stay distinguishable', async () => {
+  const result = await syntheticRun('noObservation');
+  const counters = result.counters;
+  probe.observeEvent('{"type":"system","subtype":"init","agents":[],"tools":[]}', counters);
+  assert.equal(counters.agentAvailable, false);
+  assert.equal(counters.agentToolAvailable, false);
+  probe.observeEvent('{"type":"system","subtype":"init"}', counters);
+  assert.equal(counters.agentAvailable, null, 'missing registration metadata stays unobserved');
+  assert.equal(counters.agentToolAvailable, null);
+  probe.observeEvent('{"type":"user","message":{"content":[null,{"type":"text","text":"fixture-only"},{"type":"tool_result","is_error":true,"content":"Unknown fixture worker"},{"type":"tool_result","is_error":false,"content":"fixture-done"}]}}', counters);
+  probe.observeEvent('{"type":"user","message":{"content":"fixture-only"}}', counters);
+  assert.equal(counters.toolResults, 2);
+  assert.equal(counters.toolErrors, 1, 'nonpermission worker errors stay separate from refusal');
+  assert.equal(counters.toolRefusals, 0);
+  probe.observeEvent('{"type":"assistant","context_usage":{"model":"private-model","raw_max_tokens":1000000,"total_tokens":1}}', counters);
+  probe.observeEvent('{"type":"assistant","context_usage":{"model":"gpt-6.1-sol","raw_max_tokens":-1,"total_tokens":1}}', counters);
+  probe.observeEvent('{"type":"assistant","context_usage":{"model":"gpt-6.1-sol","raw_max_tokens":272000,"total_tokens":"1"}}', counters);
+  assert.deepEqual(counters.contextUsage, [], 'invalid or arbitrary metadata never proves a native window');
+  probe.observeEvent('{"type":"result","usage":{}}', counters);
+  const event = JSON.stringify({ type: 'assistant', context_usage: { model: 'gpt-6.1-sol', raw_max_tokens: 272000, total_tokens: 300000, percentage: 110, agents: ['private-description'] },
+    message: { usage: { input_tokens: 240000, output_tokens: -1, cache_read_input_tokens: 'no', secret: 'private' } } });
+  for (let index = 0; index < 40; index++) probe.observeEvent(event, counters);
+  assert.equal(counters.contextUsage.length, 32, 'structured context history is bounded');
+  assert.equal(counters.nativeUsage.length, 32, 'native usage history is bounded');
+  assert.deepEqual(counters.nativeUsage[0], { input_tokens: 240000 });
+  assert.deepEqual(counters.contextUsage[0], { model: 'gpt-6.1-sol', raw_max_tokens: 272000, total_tokens: 300000, percentage: 110 });
+  assert.equal(JSON.stringify(counters).includes('private'), false);
 });
 
 test('CLI validation and inherited-budget refusal use only synthetic processes', async () => {

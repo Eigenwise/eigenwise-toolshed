@@ -15,20 +15,36 @@ async function request(modelName, system = '') {
 }
 
 async function observeSyntheticRun() {
-  const first = await request(model);
+  const upstreamModel = model.replace('[1m]', '');
+  process.stdout.write('{"type":"system","subtype":"init","agents":["budget-worker"],"tools":["Agent"]}\n');
+  const first = await request(upstreamModel);
   await request('codex-auto');
-  const second = await request(model);
+  const second = await request(upstreamModel);
   await request('codex-auto');
   const recognized = model === 'claude-opus-5-5[1m]';
   const threshold = recognized ? 967000 : 239000;
   const effectiveWindow = recognized ? 980000 : 252000;
-  fs.writeFileSync(debugPath, `ignored fixture line\nautocompact: tokens=${first.usage.input_tokens} threshold=${threshold} effectiveWindow=${effectiveWindow}\nautocompact: tokens=${second.usage.input_tokens} threshold=${threshold} effectiveWindow=${effectiveWindow}\n`);
+  if (mode !== 'metadataOnly') fs.writeFileSync(debugPath, `ignored fixture line\nautocompact: tokens=${first.usage.input_tokens} threshold=${threshold} effectiveWindow=${effectiveWindow}\nautocompact: tokens=${second.usage.input_tokens} threshold=${threshold} effectiveWindow=${effectiveWindow}\n`);
   if (!recognized) {
-    await request(model, 'You are a helpful AI assistant tasked with summarizing conversations.');
+    await request(upstreamModel, 'You are a helpful AI assistant tasked with summarizing conversations.');
     process.stdout.write('{"type":"system","subtype":"compact_boundary"}\n');
   }
-  await request(model);
+  await request(upstreamModel);
+  process.stdout.write(`${JSON.stringify({ type: 'assistant', message: { usage: second.usage } })}\n`);
   process.stdout.write('not-json\n{"type":"result","is_error":false}\n');
+}
+
+async function observeSyntheticContext() {
+  if (mode === 'refuseContext') return refuseTool();
+  const response = await fetch(`${process.env.ANTHROPIC_BASE_URL}/v1/messages/count_tokens?beta=true`, {
+    method: 'POST', body: JSON.stringify({ model: model.replace('[1m]', ''), messages: [] }),
+  });
+  const count = await response.json();
+  if (count.input_tokens !== 42) throw new Error('synthetic count protocol mismatch');
+  const usage = { model, raw_max_tokens: model === 'gpt-6.1-sol' ? 272000 : 1000000,
+    total_tokens: 42, percentage: 0, categories: [{ synthetic: 'must not escape' }], memory_files: [{ path: 'fixture-secret' }] };
+  process.stdout.write(`${JSON.stringify({ type: 'assistant', context_usage: usage })}\n`);
+  process.stdout.write('{"type":"result","is_error":false}\n');
 }
 
 async function malformedRequest() {
@@ -69,9 +85,11 @@ function noObservation() {
   process.stdout.write('{"type":"result","is_error":false}\n');
 }
 
-const modes = { complete: observeSyntheticRun, malformed: malformedRequest, refuse, refuseTool, timeout: waitForever,
-  oversizedDebug, oversizedOutput, noObservation };
-process.stdin.resume();
+const modes = { complete: observeSyntheticRun, metadataOnly: observeSyntheticRun, refuseContext: observeSyntheticRun,
+  malformed: malformedRequest, refuse, refuseTool, timeout: waitForever, oversizedDebug, oversizedOutput, noObservation };
+let prompt = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => { prompt += chunk; });
 process.stdin.once('end', () => {
-  Promise.resolve().then(modes[mode]).catch(() => { process.exitCode = 1; });
+  Promise.resolve().then(prompt === '/context' ? observeSyntheticContext : modes[mode]).catch(() => { process.exitCode = 1; });
 });
