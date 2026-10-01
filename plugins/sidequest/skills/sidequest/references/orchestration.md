@@ -79,7 +79,7 @@ anchors, expected behavior, boundaries, and precise verification commands needed
 If finishing would need facts the contract does not carry, gather only the facts that could change the decision,
 then add them to the spec or split the work further.
 
-**Non-repo deliverables need a durable rendezvous.** A report, analysis, or dataset must land on an agent-independent surface: the ticket comment thread when it fits the comment cap, a declared artifact root under the project (for example `.claude/.codebase-info`) for larger artifacts, or a user-named absolute path outside any session temp tree. Never pin a session scratchpad path in a ticket as the deliverable location or its verify command, because different agents resolve different scratchpad roots for the same project. Put the durable location and the exact verification step in the ticket before dispatch.
+**Non-repo deliverables need a durable rendezvous.** A report, analysis, or dataset must land on an agent-independent surface: the ticket comment thread when it fits the comment cap, a declared artifact root under the project (for example `.claude/.codebase-info`) for larger artifacts (a read-only ticket may close with `done` over paths under its category's `artifactRoots`; any other declared-scope change refuses `done_scope_violation`, naming those roots), or a user-named absolute path outside any session temp tree. Never pin a session scratchpad path in a ticket as the deliverable location or its verify command, because different agents resolve different scratchpad roots for the same project. Put the durable location and the exact verification step in the ticket before dispatch.
 
 ## Inline-safe direct work
 

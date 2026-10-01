@@ -2347,6 +2347,13 @@ function boundReviewLeftScopeUnused(dispatch: any, completionDelta: any, declare
   return ![...completionDelta.working, ...completionDelta.committed].some((file: string) => commitScope.isInScope(file, declaredFiles));
 }
 
+// A readonly category's artifactRoots name the one write it authorizes, so done must not count those paths
+// against it (GH-332).
+function readOnlyChangesOutsideArtifactRoots(slug: string, ticket: any, changedPaths: string[]) {
+  const artifactRoots: string[] = normalizeArtifactRoots(getCategory(ticketCategory(ticket), { project: slug })?.artifactRoots);
+  return { artifactRoots, paths: changedPaths.filter((file) => !commitScope.isInScope(file, artifactRoots)) };
+}
+
 // Release a claim. Only the owner or a reclaimable claim may release it.
 // force can reopen the owner's pending submission, never bypass ownership.
 function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
@@ -2446,18 +2453,19 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         const scopedWorking = completionDelta.working.filter((file: string) => commitScope.isInScope(file, declaredFiles));
         // A restricted read-only executor cannot own shared-checkout changes; siblings must remain free to commit during its run.
         const sharedTreeReadOnly = activeReadOnlyDispatch && dispatch?.sharedTree === true;
-        const scopedChanges = activeReadOnlyDispatch && !sharedTreeReadOnly
-          ? Array.from(new Set([...scopedWorking, ...scopedCommitted]))
-          : [];
-        if (scopedChanges.length) {
-          const paths = scopedChanges.sort();
+        const readOnlyChanges = activeReadOnlyDispatch && !sharedTreeReadOnly
+          ? readOnlyChangesOutsideArtifactRoots(slug, t, Array.from(new Set([...scopedWorking, ...scopedCommitted])))
+          : { artifactRoots: [], paths: [] };
+        if (readOnlyChanges.paths.length) {
+          const paths = readOnlyChanges.paths.sort();
           const mode = activeReadOnlyDispatch ? 'read-only dispatch' : 'declared scope';
           return {
             ok: false,
             reason: 'done_scope_violation',
-            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths inside its declared scope since dispatch base: ${paths.join(', ')}. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
+            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths inside its declared scope and outside its category artifactRoots [${readOnlyChanges.artifactRoots.join(', ')}] since dispatch base: ${paths.join(', ')}. Paths under those artifactRoots are the only writes a read-only dispatch may close with. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
             ticket: t,
             unscopedPaths: paths,
+            artifactRoots: readOnlyChanges.artifactRoots,
           };
         }
       }

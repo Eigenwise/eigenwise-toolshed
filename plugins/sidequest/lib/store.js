@@ -2201,6 +2201,10 @@ function boundReviewLeftScopeUnused(dispatch2, completionDelta, declaredFiles) {
   if (dispatch2?.reviewTarget?.candidate?.source !== "git" || !completionDelta?.ok) return false;
   return ![...completionDelta.working, ...completionDelta.committed].some((file) => commitScope.isInScope(file, declaredFiles));
 }
+function readOnlyChangesOutsideArtifactRoots(slug, ticket, changedPaths) {
+  const artifactRoots = normalizeArtifactRoots(getCategory(ticketCategory(ticket), { project: slug })?.artifactRoots);
+  return { artifactRoots, paths: changedPaths.filter((file) => !commitScope.isInScope(file, artifactRoots)) };
+}
 function releaseTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
   by = String(by || "agent");
@@ -2275,16 +2279,17 @@ function releaseTicket(slug, idOrRef, by, opts) {
         sharedTreeCommittedScope = dispatch2?.sharedTree === true && scopedCommitted.length > 0;
         const scopedWorking = completionDelta.working.filter((file) => commitScope.isInScope(file, declaredFiles));
         const sharedTreeReadOnly = activeReadOnlyDispatch && dispatch2?.sharedTree === true;
-        const scopedChanges = activeReadOnlyDispatch && !sharedTreeReadOnly ? Array.from(/* @__PURE__ */ new Set([...scopedWorking, ...scopedCommitted])) : [];
-        if (scopedChanges.length) {
-          const paths = scopedChanges.sort();
+        const readOnlyChanges = activeReadOnlyDispatch && !sharedTreeReadOnly ? readOnlyChangesOutsideArtifactRoots(slug, t, Array.from(/* @__PURE__ */ new Set([...scopedWorking, ...scopedCommitted]))) : { artifactRoots: [], paths: [] };
+        if (readOnlyChanges.paths.length) {
+          const paths = readOnlyChanges.paths.sort();
           const mode = activeReadOnlyDispatch ? "read-only dispatch" : "declared scope";
           return {
             ok: false,
             reason: "done_scope_violation",
-            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths inside its declared scope since dispatch base: ${paths.join(", ")}. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
+            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths inside its declared scope and outside its category artifactRoots [${readOnlyChanges.artifactRoots.join(", ")}] since dispatch base: ${paths.join(", ")}. Paths under those artifactRoots are the only writes a read-only dispatch may close with. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
             ticket: t,
-            unscopedPaths: paths
+            unscopedPaths: paths,
+            artifactRoots: readOnlyChanges.artifactRoots
           };
         }
       }

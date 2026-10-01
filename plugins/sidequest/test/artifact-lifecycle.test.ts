@@ -174,6 +174,62 @@ test('an explicitly marked shared-tree artifact ticket may close with done after
   assert.strictEqual(done.ticket.submission == null, true);
 });
 
+test('the update-codebase-map shared-tree handoff writes one map file and closes with done', () => {
+  const created = ticket('refresh the codebase map', [
+    'Refresh the map from the stored gitCommit through the visible working tree.',
+    'Artifact write carve-out: write only .claude/.codebase-info/**; all project source is read-only.',
+    store.SHARED_TREE_ARTIFACT_MARKER,
+  ].join('\n'), ['.claude/.codebase-info/']);
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+  assert.strictEqual(prepared.ticket.dispatch.readonly, true);
+  assert.strictEqual(prepared.ticket.dispatch.artifactMode, true);
+  assert.strictEqual(claim(prepared, 'map-refresh-worker').ok, true);
+  writeProjectFile('.claude/.codebase-info/INDEX.md', '# Refreshed map\n');
+
+  const done = store.completeTicket(slug, created.ref, 'map-refresh-worker', { source: 'mcp' });
+
+  assert.strictEqual(done.ok, true, done.message);
+  assert.strictEqual(done.ticket.status, 'done');
+});
+
+function isolatedReadOnlyDispatch(title: string, files: string[], by: string) {
+  const created = ticket(title, 'Write the one documentation artifact the category authorizes.', files);
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: false });
+  assert.strictEqual(prepared.ticket.dispatch.readonly, true);
+  assert.strictEqual(claim(prepared, by).ok, true);
+  const bound = store.getTicket(slug, created.ref);
+  bound.dispatch.agentId = `agent-${by}`;
+  bound.dispatch.worktree = PROJECT;
+  bound.dispatch.baseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8', windowsHide: true }).trim();
+  persistTicket(bound);
+  return created;
+}
+
+test('an isolated read-only dispatch closes with done after committing one file under its category artifactRoots (GH-332)', () => {
+  const created = isolatedReadOnlyDispatch('isolated map artifact', ['.claude/.codebase-info/areas.md'], 'isolated-artifact-worker');
+  commitProjectFile('.claude/.codebase-info/areas.md', '# Areas\n');
+
+  const done = store.completeTicket(slug, created.ref, 'isolated-artifact-worker', { source: 'mcp' });
+
+  assert.strictEqual(done.ok, true, done.message);
+  assert.strictEqual(done.ticket.status, 'done');
+  assert.strictEqual(done.ticket.submission == null, true);
+});
+
+test('an isolated read-only dispatch writing outside its category artifactRoots refuses done and names the allowed roots', () => {
+  const created = isolatedReadOnlyDispatch('isolated source write', ['.claude/.codebase-info/', 'src'], 'isolated-source-worker');
+  writeProjectFile('.claude/.codebase-info/INDEX.md', '# Map\n');
+  writeProjectFile('src/edited.js', 'module.exports = 1;\n');
+
+  const done = store.completeTicket(slug, created.ref, 'isolated-source-worker', { source: 'mcp' });
+
+  assert.strictEqual(done.ok, false);
+  assert.strictEqual(done.reason, 'done_scope_violation');
+  assert.deepStrictEqual(done.unscopedPaths, ['src/edited.js']);
+  assert.deepStrictEqual(done.artifactRoots, ['.claude/.codebase-info']);
+  assert.match(done.message, /outside its category artifactRoots \[\.claude\/\.codebase-info\]/);
+});
+
 test('artifact completion permits untouched pre-existing dirt', () => {
   const relativePath = 'untouched-caller-dirt.txt';
   writeProjectFile(relativePath, 'untouched caller dirt\n');
