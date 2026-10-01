@@ -209,8 +209,8 @@ test('synchronous full-suite verification uses the capture slot', async () => {
     assert.ok(capture.waitedForSlotMs >= 500, `waited ${capture.waitedForSlotMs}ms`);
     assert.deepEqual(fs.readFileSync(observedSiblingCaptures, 'utf8').trim().split(/\r?\n/).sort(), ['0', '1']);
   } finally {
-    fs.rmSync(project, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    fs.rmSync(captureSlotDirectory(project), { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    fs.rmSync(captureSlotDirectory(project), { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });
 
@@ -233,8 +233,8 @@ test('a failed synchronous slot release still removes its own waiter', () => {
     assert.equal(capture.status, 'could_not_run');
     assert.deepEqual(fs.readdirSync(path.join(slotDirectory, 'waiting')), [], 'the board process must not leave a live-PID waiter behind');
   } finally {
-    fs.rmSync(project, { recursive: true, force: true });
-    fs.rmSync(slotDirectory, { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    fs.rmSync(slotDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });
 
@@ -290,8 +290,8 @@ test('full-suite capture retries EPERM while a sibling releases its slot', async
     assert.ok(recordedWait, 'the EPERM-retried capture records its slot queue position');
   } finally {
     if (releaseTimer) clearTimeout(releaseTimer);
-    fs.rmSync(project, { recursive: true, force: true });
-    fs.rmSync(slotDirectory, { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    fs.rmSync(slotDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });
 
@@ -348,8 +348,8 @@ test('full-suite capture reclaims a killed owner without waiting for the slot ti
     assert.equal(fs.existsSync(staleWaiterPath), false);
     assert.ok(recorded?.ok, recorded?.reason);
   } finally {
-    fs.rmSync(project, { recursive: true, force: true });
-    fs.rmSync(slotDirectory, { recursive: true, force: true });
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    fs.rmSync(slotDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });
 

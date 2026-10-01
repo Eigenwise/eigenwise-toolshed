@@ -82,6 +82,14 @@ test('wave assembly invalidates a candidate when its source revision moved', () 
   assert.match(decision.invalidated[0]?.message || '', /groomClose using deliveryCommit/);
 });
 
+test('GH-156: a fragment-only candidate on the wave baseline assembles', () => {
+  const opened = openedWave([participant('SQ-1', ['docs/report.md', '.release/unreleased/SQ-1.md'])]);
+
+  const decision = wave.assembleWave(opened, [candidate('SQ-1', ['.release/unreleased/SQ-1.md'])]);
+
+  assert.equal(decision.ok, true);
+});
+
 test('SQ-16: a surface_overlap invalidation names every path outside the wave surface', () => {
   const opened = openedWave([participant('SQ-1', ['plugins/sidequest/src'])]);
 

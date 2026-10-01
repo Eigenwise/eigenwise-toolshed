@@ -685,6 +685,13 @@ function packageScopeRefusalNote(rulings: Array<{ file: string; reason: string |
   return refusals.length ? ` Not auto-approved: ${refusals.map((ruling) => `${ruling.file}: ${ruling.reason}`).join('; ')}.` : '';
 }
 
+// A live allowUnscoped dispatch commits anywhere (GH-341), so a request inside it is covered, not refused.
+function liveWholeTreeScope(ticket?: any): string[] {
+  const dispatch = dispatchState(ticket);
+  const bound = dispatch && !dispatch.terminalAt ? dispatch.declaredFiles : null;
+  return Array.isArray(bound) && bound.includes(commitScope.WHOLE_TREE_SCOPE) ? [commitScope.WHOLE_TREE_SCOPE] : [];
+}
+
 function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: any) {
   opts = opts || {};
   by = String(by || 'agent');
@@ -719,7 +726,7 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     ));
     // Match the commit gate (submissions.ts), which admits the ticket's own release
     // fragment implicitly; asking for it back must read as covered, not as an addition.
-    const scope = commitScope.ticketCommitScope(effectiveScope(slug, t), t.files, t.ref);
+    const scope = commitScope.ticketCommitScope([...effectiveScope(slug, t), ...liveWholeTreeScope(t)], t.files, t.ref);
     const additions = requested.filter((file?: any) => !isForeignReleaseFragmentScope(file) && !commitScope.isInScope(file, scope));
     const covered = requested.filter((file?: any) => !isForeignReleaseFragmentScope(file) && commitScope.isInScope(file, scope));
     const now = new Date().toISOString();

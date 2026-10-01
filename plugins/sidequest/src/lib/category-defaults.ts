@@ -1,4 +1,4 @@
-export const ROUTING_PROFILE_SEED_REVISION = 8;
+export const ROUTING_PROFILE_SEED_REVISION = 9;
 
 export const DEFAULT_CATEGORIES = [
   {
@@ -353,9 +353,9 @@ const GATEWAY_ROUTE_BY_PROFILE_CATEGORY: Readonly<Record<string, Readonly<Record
 const GATEWAY_FALLBACK_BY_PROFILE_CATEGORY: Readonly<Record<string, Readonly<Record<string, { model: string; effort: string }>>>> = {
   coding: {
     debugging: { model: 'codex-gpt-5-6-terra', effort: 'high' },
-    experiment: { model: 'codex-gpt-5-6-sol', effort: 'high' },
-    'coding.hard': { model: 'codex-gpt-5-6-sol', effort: 'xhigh' },
-    'spike-investigation': { model: 'codex-gpt-5-6-sol', effort: 'high' },
+    experiment: { model: 'codex-gpt-6-1-sol', effort: 'high' },
+    'coding.hard': { model: 'codex-gpt-6-1-sol', effort: 'xhigh' },
+    'spike-investigation': { model: 'codex-gpt-6-1-sol', effort: 'high' },
     'visual-evaluation': { model: 'codex-gpt-5-6-terra', effort: 'medium' },
   },
 };
@@ -383,4 +383,37 @@ export function starterRoutingProfilesFor(models: readonly GatewayModelCapabilit
       };
     }),
   }));
+}
+
+// A stored row still naming a model a newer shipped default replaced is rewritten on load, the way a
+// retired shipped pin is. Only these exact ids move; a row pointed anywhere else stays the user's.
+const RETIRED_CODEX_ROUTE_MODELS: ReadonlyMap<unknown, string> = new Map([
+  ['codex-gpt-5-6-sol', 'codex-gpt-6-1-sol'],
+  ['codex-gpt-5-6-sol-fast', 'codex-gpt-6-1-sol-fast'],
+  ['codex-gpt-6-sol', 'codex-gpt-6-1-sol'],
+  ['codex-gpt-6-sol-fast', 'codex-gpt-6-1-sol-fast'],
+]);
+
+// GPT-6.1 Sol is close enough to Astra that Astra is kept only for frontier categories.
+const ASTRA_ROUTE_MODELS: ReadonlyMap<unknown, string> = new Map([
+  ['codex-gpt-6-astra', 'codex-gpt-6-1-sol'],
+  ['codex-gpt-6-astra-fast', 'codex-gpt-6-1-sol-fast'],
+]);
+
+interface StoredRoute { model?: unknown; effort?: unknown }
+
+function currentCodexRoute(route: StoredRoute | null | undefined, keepsAstra: boolean) {
+  const replacement = RETIRED_CODEX_ROUTE_MODELS.get(route?.model)
+    ?? (keepsAstra ? undefined : ASTRA_ROUTE_MODELS.get(route?.model));
+  return replacement ? { ...route, model: replacement } : route;
+}
+
+export function categoryWithCurrentCodexRoutes<Category extends { id?: unknown; route?: StoredRoute | null; fallback?: StoredRoute | null }>(
+  category: Category,
+  categoryId: unknown = category.id,
+): Category | null {
+  const keepsAstra = String(categoryId).includes('frontier');
+  const route = currentCodexRoute(category.route, keepsAstra);
+  const fallback = currentCodexRoute(category.fallback, keepsAstra);
+  return route === category.route && fallback === category.fallback ? null : { ...category, route, fallback };
 }

@@ -44,7 +44,7 @@ const {
   isFilesystemSnapshotLimitError,
   isFilesystemSnapshotChildError,
 } = sourceRevisionCapability;
-const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } = require('./category-defaults.js');
+const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, categoryWithCurrentCodexRoutes, starterRoutingProfilesFor } = require('./category-defaults.js');
 const commitScope = require('./commit-scope.js');
 const { commitPaths } = commitScope;
 const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, retainedWorktreeResumeDecision } = require('./worktrees.js');
@@ -159,6 +159,7 @@ function nextSeq(...args: any[]) { return projectsLayer.nextSeq(...args); }
 function nextStorySeq(...args: any[]) { return projectsLayer.nextStorySeq(...args); }
 function setProjectNotify(...args: any[]) { return projectsLayer.setProjectNotify(...args); }
 function setProjectRouting(...args: any[]) { return projectsLayer.setProjectRouting(...args); }
+function takeSourceRevisionAdapterSwitch(slug: string) { return projectsLayer.takeSourceRevisionAdapterSwitch(slug); }
 function projectRoutingEnabled(...args: any[]) { return projectsLayer.projectRoutingEnabled(...args); }
 // A board whose path is gone or outside Git has no candidate refs to move.
 function boardRepository(slug: string): string | null {
@@ -187,6 +188,7 @@ function deleteProjectExact(...args: any[]) { return projectsLayer.deleteProject
 function listProjects(...args: any[]) { return projectsLayer.listProjects(...args); }
 function listProjectsFlaggingMissingPaths(...args: any[]) { return projectsLayer.listProjectsFlaggingMissingPaths(...args); }
 function registerProject(...args: any[]) { return projectsLayer.registerProject(...args); }
+function boardRootRefusal(...args: any[]) { return projectsLayer.boardRootRefusal(...args); }
 function findProject(...args: any[]) { return projectsLayer.findProject(...args); }
 function mergeProject(...args: any[]) { return projectsLayer.mergeProject(...args); }
 
@@ -376,9 +378,15 @@ function storyContractDriftWarnings(...args: any[]) { return warningsLayer.story
 function crossTicketStateWarnings(...args: any[]) { return warningsLayer.crossTicketStateWarnings(...args); }
 function staleWorktreeCwdWarning(...args: any[]) { return warningsLayer.staleWorktreeCwdWarning(...args); }
 function dispatchUncertaintyWarnings(...args: any[]) { return warningsLayer.dispatchUncertaintyWarnings(...args); }
+// The baseline source changed under this dispatch, so its result says so (GH-334).
+function sourceRevisionAdapterSwitchWarnings(ticket: any): string[] {
+  const adapterSwitch = ticket?.dispatch?.sourceRevisionAdapterSwitch;
+  if (!adapterSwitch) return [];
+  return [`Dispatch information: this board switched its source revision adapter from ${adapterSwitch.from} to ${adapterSwitch.to} at ${adapterSwitch.at}, because a .git now exists at or above its path. This and later dispatches take git baselines instead of filesystem snapshots.`];
+}
 function dispatchWarnings(ticket?: any, slug?: any) {
   const project = !slug && process.env.CLAUDE_PROJECT_DIR ? findProject(process.env.CLAUDE_PROJECT_DIR) : null;
-  return warningsLayer.dispatchWarnings(ticket, slug || (project?.ok ? project.slug : null));
+  return [...warningsLayer.dispatchWarnings(ticket, slug || (project?.ok ? project.slug : null)), ...sourceRevisionAdapterSwitchWarnings(ticket)];
 }
 function dispatchDeclaredFiles(...args: any[]) { return warningsLayer.dispatchDeclaredFiles(...args); }
 function externalDeclaredFiles(...args: any[]) { return warningsLayer.externalDeclaredFiles(...args); }
@@ -661,6 +669,7 @@ const {
   dispatchReadOnly: (...args: any[]) => dispatchReadOnly(...args),
   dispatchFilesystemSnapshotPreflight,
   dispatchBaselineForProject,
+  takeSourceRevisionAdapterSwitch,
   dispatchVerifyCommandError: (...args: any[]) => dispatchVerifyCommandError(...args),
   dispatchRouteRefusal: (...args: any[]) => dispatchRouteRefusal(...args),
   dispatchRouteState: (...args: any[]) => dispatchRouteState(...args),
@@ -1466,57 +1475,67 @@ function refreshRoutingProfileSeeds(handle?: any) {
   invalidateStoreCaches();
 }
 
-// A profile entry is keyed by the id inside its stored category; a project layer row carries its own.
-function categoryNeedingReadonlyFlag(readonlyIds: Set<string>, data: string, rowId?: string) {
+type StoredCategoryRewrite = (category: any, categoryId: unknown) => object | null;
+
+function rewrittenStoredCategory(rewrite: StoredCategoryRewrite, data: string, categoryId: string) {
   let category: any;
   try { category = JSON.parse(data); } catch (_: any) { return null; }
-  if (!readonlyIds.has(rowId ?? category?.id) || category?.readonly !== undefined) return null;
-  return category;
+  return category ? rewrite(category, categoryId) : null;
 }
 
-function readonlyCategorySeedsAreStale(handle: any, readonlyIds: Set<string>) {
-  for (const row of handle.prepare('SELECT data FROM routing_profile_entries').all()) {
-    if (categoryNeedingReadonlyFlag(readonlyIds, row.data)) return true;
+function storedCategoriesNeedRewrite(handle: any, rewrite: StoredCategoryRewrite) {
+  return handle.prepare('SELECT category_id, data FROM routing_profile_entries').all()
+    .some((row: any) => rewrittenStoredCategory(rewrite, row.data, row.category_id))
+    || handle.prepare('SELECT id, data FROM project_categories').all()
+      .some((row: any) => rewrittenStoredCategory(rewrite, row.data, row.id));
+}
+
+interface StoredCategoryRewriteOutcome { affectedProjects: Set<string>; rewrittenIds: Set<string> }
+
+function rewriteProfileEntries(handle: any, rewrite: StoredCategoryRewrite, outcome: StoredCategoryRewriteOutcome) {
+  const update = handle.prepare('UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?');
+  const now = new Date().toISOString();
+  for (const row of handle.prepare('SELECT profile_id, category_id, data FROM routing_profile_entries').all()) {
+    const category = rewrittenStoredCategory(rewrite, row.data, row.category_id);
+    if (!category) continue;
+    update.run(JSON.stringify(category), now, row.profile_id, row.category_id);
+    for (const pointer of handle.prepare('SELECT project FROM project_routing_profiles WHERE profile_id = ?').all(row.profile_id)) outcome.affectedProjects.add(String(pointer.project));
+    outcome.rewrittenIds.add(String(row.category_id));
   }
-  for (const row of handle.prepare('SELECT id, data FROM project_categories').all()) {
-    if (categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id)) return true;
+}
+
+function rewriteProjectCategories(handle: any, rewrite: StoredCategoryRewrite, outcome: StoredCategoryRewriteOutcome) {
+  const update = handle.prepare('UPDATE project_categories SET data = ? WHERE project = ? AND id = ?');
+  for (const row of handle.prepare('SELECT project, id, data FROM project_categories').all()) {
+    const category = rewrittenStoredCategory(rewrite, row.data, row.id);
+    if (!category) continue;
+    update.run(JSON.stringify(category), row.project, row.id);
+    outcome.affectedProjects.add(String(row.project));
+    outcome.rewrittenIds.add(String(row.id));
   }
-  return false;
+}
+
+// Scanning first means a settled store never opens a write transaction, which is the whole cost
+// of a load-time rewrite on process start. The scan inside the transaction stays authoritative so the
+// decision is never acted on from outside the lock.
+function rewriteStoredCategories(handle: any, rewrite: StoredCategoryRewrite) {
+  if (!storedCategoriesNeedRewrite(handle, rewrite)) return;
+  withinTransaction(handle, () => {
+    const outcome: StoredCategoryRewriteOutcome = { affectedProjects: new Set(), rewrittenIds: new Set() };
+    rewriteProfileEntries(handle, rewrite, outcome);
+    rewriteProjectCategories(handle, rewrite, outcome);
+    if (outcome.rewrittenIds.size) refreshPreparedDispatches(handle, [...outcome.affectedProjects], [...outcome.rewrittenIds]);
+  });
 }
 
 function refreshReadonlyCategorySeeds(handle?: any) {
-  const readonlyIds = new Set([
+  const readonlyIds = new Set<unknown>([
     ...DEFAULT_CATEGORIES.filter((category: any) => category.readonly === true).map((category: any) => category.id),
     'hand-analysis',
   ]);
-  // Scanning first means a settled store never opens a write transaction, which is the whole cost
-  // of this refresher on process start. The scan inside the transaction stays authoritative so the
-  // decision is never acted on from outside the lock.
-  if (!readonlyCategorySeedsAreStale(handle, readonlyIds)) return;
-  const affected = new Set<string>();
-  let changed = false;
-  withinTransaction(handle, () => {
-    const updateProfileEntry = handle.prepare('UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?');
-    const updateProjectEntry = handle.prepare('UPDATE project_categories SET data = ? WHERE project = ? AND id = ?');
-    const now = new Date().toISOString();
-    for (const row of handle.prepare('SELECT profile_id, category_id, data FROM routing_profile_entries').all()) {
-      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data);
-      if (!category) continue;
-      category.readonly = true;
-      updateProfileEntry.run(JSON.stringify(category), now, row.profile_id, row.category_id);
-      for (const project of handle.prepare('SELECT project FROM project_routing_profiles WHERE profile_id = ?').all(row.profile_id)) affected.add(String(project.project));
-      changed = true;
-    }
-    for (const row of handle.prepare('SELECT project, id, data FROM project_categories').all()) {
-      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id);
-      if (!category) continue;
-      category.readonly = true;
-      updateProjectEntry.run(JSON.stringify(category), row.project, row.id);
-      affected.add(String(row.project));
-      changed = true;
-    }
-    if (changed) refreshPreparedDispatches(handle, [...affected], [...readonlyIds]);
-  });
+  rewriteStoredCategories(handle, (category, categoryId) => (
+    readonlyIds.has(categoryId) && category.readonly === undefined ? { ...category, readonly: true } : null
+  ));
 }
 
 function refreshRoutingProfileSeedsForCatalogState(handle: unknown, root: string) {
@@ -1534,6 +1553,7 @@ function database() {
     migrateIfNeeded(handle, root);
     dbByHome.set(root, handle);
     refreshReadonlyCategorySeeds(handle);
+    rewriteStoredCategories(handle, categoryWithCurrentCodexRoutes);
     pruneOversizedNotificationsOnce();
   }
   if (!refreshingRoutingProfileSeeds) {
@@ -2327,6 +2347,13 @@ function boundReviewLeftScopeUnused(dispatch: any, completionDelta: any, declare
   return ![...completionDelta.working, ...completionDelta.committed].some((file: string) => commitScope.isInScope(file, declaredFiles));
 }
 
+// A readonly category's artifactRoots name the one write it authorizes, so done must not count those paths
+// against it (GH-332).
+function readOnlyChangesOutsideArtifactRoots(slug: string, ticket: any, changedPaths: string[]) {
+  const artifactRoots: string[] = normalizeArtifactRoots(getCategory(ticketCategory(ticket), { project: slug })?.artifactRoots);
+  return { artifactRoots, paths: changedPaths.filter((file) => !commitScope.isInScope(file, artifactRoots)) };
+}
+
 // Release a claim. Only the owner or a reclaimable claim may release it.
 // force can reopen the owner's pending submission, never bypass ownership.
 function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
@@ -2426,18 +2453,19 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         const scopedWorking = completionDelta.working.filter((file: string) => commitScope.isInScope(file, declaredFiles));
         // A restricted read-only executor cannot own shared-checkout changes; siblings must remain free to commit during its run.
         const sharedTreeReadOnly = activeReadOnlyDispatch && dispatch?.sharedTree === true;
-        const scopedChanges = activeReadOnlyDispatch && !sharedTreeReadOnly
-          ? Array.from(new Set([...scopedWorking, ...scopedCommitted]))
-          : [];
-        if (scopedChanges.length) {
-          const paths = scopedChanges.sort();
+        const readOnlyChanges = activeReadOnlyDispatch && !sharedTreeReadOnly
+          ? readOnlyChangesOutsideArtifactRoots(slug, t, Array.from(new Set([...scopedWorking, ...scopedCommitted])))
+          : { artifactRoots: [], paths: [] };
+        if (readOnlyChanges.paths.length) {
+          const paths = readOnlyChanges.paths.sort();
           const mode = activeReadOnlyDispatch ? 'read-only dispatch' : 'declared scope';
           return {
             ok: false,
             reason: 'done_scope_violation',
-            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths inside its declared scope since dispatch base: ${paths.join(', ')}. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
+            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths inside its declared scope and outside its category artifactRoots [${readOnlyChanges.artifactRoots.join(', ')}] since dispatch base: ${paths.join(', ')}. Paths under those artifactRoots are the only writes a read-only dispatch may close with. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
             ticket: t,
             unscopedPaths: paths,
+            artifactRoots: readOnlyChanges.artifactRoots,
           };
         }
       }
@@ -3872,6 +3900,7 @@ module.exports = {
   listProjects,
   listProjectsFlaggingMissingPaths,
   registerProject,
+  boardRootRefusal,
   explicitProjectRoot,
   findProject,
   archiveProject,

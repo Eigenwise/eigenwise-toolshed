@@ -8,6 +8,26 @@ function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, clai
       return resolved;
     }
   }
+  function adoptDerivedSourceRevisionAdapter(meta, derived) {
+    if (meta.sourceRevisionAdapter === "git" || meta.sourceRevisionAdapter === derived) return false;
+    if (meta.sourceRevisionAdapter === "filesystem-snapshot") {
+      meta.sourceRevisionAdapterSwitch = { from: "filesystem-snapshot", to: derived, at: (/* @__PURE__ */ new Date()).toISOString() };
+    }
+    meta.sourceRevisionAdapter = derived;
+    return true;
+  }
+  function takeSourceRevisionAdapterSwitch(slug) {
+    return withMetaLock(slug, () => {
+      const meta = readMeta(slug);
+      if (!meta) return null;
+      adoptDerivedSourceRevisionAdapter(meta, sourceRevisionAdapterForPath(meta.path));
+      const adapterSwitch = meta.sourceRevisionAdapterSwitch;
+      if (!adapterSwitch) return null;
+      delete meta.sourceRevisionAdapterSwitch;
+      putProject(slug, meta);
+      return adapterSwitch;
+    });
+  }
   function ensureProject(absPath, name) {
     const resolved = path.resolve(absPath);
     const slug = slugify(resolved);
@@ -45,10 +65,7 @@ function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, clai
           meta.name = defaultProjectName(resolved);
           changed = true;
         }
-        if (!["git", "filesystem-snapshot"].includes(meta.sourceRevisionAdapter)) {
-          meta.sourceRevisionAdapter = sourceRevisionAdapter;
-          changed = true;
-        }
+        if (adoptDerivedSourceRevisionAdapter(meta, sourceRevisionAdapter)) changed = true;
         if (typeof meta.seq !== "number") {
           meta.seq = 0;
           changed = true;
@@ -108,11 +125,14 @@ function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, clai
     const reason = reservedLocation(canonicalPath) || tempOrNonRepositoryRefusal(canonicalPath, implicit);
     return reason && `not a project root: ${resolved} is ${reason}.`;
   }
-  function registerProject(absPath, name, options = {}) {
+  function boardRootRefusal(absPath, options = {}) {
     const resolved = path.resolve(absPath);
-    const refusal = readMeta(slugify(resolved)) ? null : projectRootRefusal(resolved, Boolean(options.implicit));
+    return readMeta(slugify(resolved)) ? null : projectRootRefusal(resolved, Boolean(options.implicit));
+  }
+  function registerProject(absPath, name, options = {}) {
+    const refusal = boardRootRefusal(absPath, options);
     if (refusal) return { ok: false, reason: refusal };
-    return { ok: true, ...ensureProject(resolved, name) };
+    return { ok: true, ...ensureProject(path.resolve(absPath), name) };
   }
   function flagMissingPath(project) {
     return isDirectory(project.path) ? project : { ...project, missingPath: true };
@@ -364,6 +384,6 @@ function createProjects({ acquireLock, assetsDir, claudeHome, homeRoot, os, clai
     }
     return { tickets: ticketPlan.length, stories: storyPlan.length, mapping };
   }
-  return { archiveProject, deleteProjectExact, ensureProject, findProject, listProjects, listProjectsFlaggingMissingPaths, mergeProject, metaLockPath, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, registerProject, setProjectNotify, setProjectRouting, unarchiveProject, withMetaLock };
+  return { archiveProject, boardRootRefusal, deleteProjectExact, ensureProject, findProject, listProjects, listProjectsFlaggingMissingPaths, mergeProject, metaLockPath, nextSeq, nextStorySeq, projectRoutingEnabled, readMeta, registerProject, setProjectNotify, setProjectRouting, takeSourceRevisionAdapterSwitch, unarchiveProject, withMetaLock };
 }
 module.exports = { createProjects };

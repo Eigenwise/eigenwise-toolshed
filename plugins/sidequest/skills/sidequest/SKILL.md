@@ -1,8 +1,8 @@
 ---
 name: sidequest
 description: >-
-  Open or manage Sidequest tickets and board workflow. Use for board lifecycle work, planning substantial or ambiguous work, and
-  dispatch/integration/recovery. Stay inline for quick edits at a known location, direct questions, or operational requests.
+  Default for multi-file or multi-step work, even where there is no board yet: the first add creates it. Use for
+  tickets, board lifecycle, planning substantial or ambiguous work, and dispatch/integration/recovery.
 ---
 
 # sidequest
@@ -55,7 +55,7 @@ dependencies before fixing the shared root. Prefer measured deletion; avoid hypo
 compulsory extractions and unrelated cleanup. Preserve trust-boundary validation, data-loss prevention,
 accessibility, permissions and immutable candidate/review authority.
 
-Do stated one-line mechanical edits to 1–2 named files inline before solo-fit or ticketing. Bounded recon (`Read`, `Glob`, `Grep` on named anchors, one narrow sweep) stays inline; unfamiliar paths or deep investigation go through the live taxonomy.
+Answer direct questions; do operational requests and stated one-line edits to 1–2 named files inline before solo-fit or ticketing. Bounded recon (`Read`, `Glob`, `Grep` on named anchors, one narrow sweep) stays inline; unfamiliar paths or deep investigation go through the live taxonomy.
 
 ### INLINE-SAFE direct work
 
