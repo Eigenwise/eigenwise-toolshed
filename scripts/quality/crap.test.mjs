@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import crapCore from './crap-core.cjs';
-import { baselineFunctions, builtOutput, changedMetricsAgainstBase, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, functionCoverage, isScoredSource, lizardMetric, sourceMetrics } from './crap.mjs';
+import { baselineFunctions, builtOutput, captureCoverage, changedMetricsAgainstBase, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, functionCoverage, isScoredSource, lizardMetric, selectSuites, sourceMetrics } from './crap.mjs';
 
 const { crapScore, parseLizardCsv } = crapCore;
 
@@ -307,4 +307,53 @@ test('reads a built output with its functions, and skips one that was never buil
   } finally {
     await fs.rm(temporaryDirectory, { recursive: true, force: true });
   }
+});
+
+async function suitesRunFor(changedPaths, status = 0) {
+  const suites = [];
+  const captured = await captureCoverage(changedPaths, null, (suite) => {
+    suites.push(suite);
+    return { status };
+  }).catch((error) => ({ error }));
+  if (captured.coverageDirectory) await fs.rm(captured.coverageDirectory, { recursive: true, force: true });
+  return { suites, ...captured };
+}
+
+test('a sidequest-only diff runs only the sidequest suite', async () => {
+  const { suites, suiteSummary } = await suitesRunFor(['plugins/sidequest/src/lib/store.ts']);
+  assert.deepEqual(suites.map((suite) => suite.plugin), ['sidequest']);
+  assert.deepEqual(suites[0].args, ['run', 'test:full']);
+  assert.equal(suiteSummary, 'sidequest');
+});
+
+test('a gateway plus observability diff runs both suites and nothing else', async () => {
+  const { suites, suiteSummary } = await suitesRunFor(['plugins/model-gateway/lib/commands.js', 'plugins/observability/lib/store.js', 'plugins/model-gateway/lib/settings-wiring.js']);
+  assert.deepEqual(suites.map((suite) => suite.plugin), ['model-gateway', 'observability']);
+  assert.deepEqual(suites[0].args, ['run', 'test']);
+  assert.deepEqual(suites[1].args.slice(0, 1), ['--test']);
+  assert.equal(suiteSummary, 'model-gateway, observability');
+});
+
+test('a quartermaster hooks diff runs the quartermaster node --test suite', async () => {
+  const { suites } = await suitesRunFor(['plugins/quartermaster/hooks/session-start-nudge.js']);
+  assert.deepEqual(suites.map((suite) => suite.plugin), ['quartermaster']);
+  assert.equal(suites[0].args[0], '--test');
+});
+
+test('a diff outside the plugins runs no suite', async () => {
+  const { suites, suiteSummary } = await suitesRunFor(['docs/src/content/docs/contributing.md', 'plugins']);
+  assert.deepEqual(suites, []);
+  assert.equal(suiteSummary, 'none, no plugin changed');
+  assert.deepEqual(await selectSuites(['plugins/not-a-plugin/lib/a.js']), []);
+});
+
+test('a supplied coverage directory runs no suite', async () => {
+  const captured = await captureCoverage(['plugins/sidequest/src/a.ts'], '/tmp/supplied', () => assert.fail('no suite should run'));
+  assert.deepEqual(captured, { coverageDirectory: '/tmp/supplied', suiteSummary: 'none, --coverage supplied' });
+});
+
+test('a failing suite stops the capture and names its plugin', async () => {
+  const { suites, error } = await suitesRunFor(['plugins/model-gateway/lib/a.js', 'plugins/observability/lib/a.js'], 1);
+  assert.equal(suites.length, 1);
+  assert.match(error.message, /model-gateway tests failed with exit 1/);
 });
