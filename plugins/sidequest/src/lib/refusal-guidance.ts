@@ -99,7 +99,7 @@ export const CLAIM_REFUSAL_MESSAGES: Readonly<Record<string, RefusalMessage>> = 
   not_owner: (ref, claim) => `${ref} is owned by "${refusalOwner(claim)}" rather than you. ${notOwnerRecovery(ref, claim)}`,
   busy: (ref) => `${ref} is temporarily locked by another claim attempt. Retry \`sidequest claim ${ref}\` in a moment.`,
   empty: () => 'No tickets are available on this board. Run `sidequest ready` to inspect the queue.',
-  submitted: (ref) => `${ref} is READY_FOR_INTEGRATION with a submitted commit. Run the orchestrator publish flow. While it is UNBOUND, a review rejection is \`sidequest rework ${ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the same ticket for a normal repair claim; the old candidate remains recorded until replacement submission. Once a \`review-audit\` ticket is bound to the candidate, rework, clear, reclaim, and amendment all refuse without writing: record the failed review's evidence on the review ticket, release that review with kind \`oracle\`, and repair through a fresh ticket, dispatch, commit, review, and candidate. \`submit --clear\` intentionally drops an unbound candidate and is only for an integration bounce. \`release\`/\`update\` alone refuse rather than silently leaving it wedged (SQ-1010).`,
+  submitted: (ref) => `${ref} is READY_FOR_INTEGRATION with a submitted commit. Run the orchestrator publish flow. While it is UNBOUND, a review rejection is \`sidequest rework ${ref} --by <submitter id> --review <evidence> --reason "what needs repair"\` (the submitter identity from \`sidequest pulse ${ref}\` -> submittedBy, not a reviewer), then dispatch the same ticket for a normal repair claim; the old candidate remains recorded until replacement submission. Once a \`review-audit\` ticket is bound to the candidate, rework, clear, reclaim, and amendment all refuse without writing: record the failed review's evidence on the review ticket, release that review with kind \`oracle\`, and repair through a fresh ticket, dispatch, commit, review, and candidate. \`submit --clear\` intentionally drops an unbound candidate and is only for an integration bounce. \`release\`/\`update\` alone refuse rather than silently leaving it wedged (SQ-1010).`,
   dispatch_required: (ref) => `${ref} is category-routed and has no prepared dispatch. File a spike for investigation when needed, then run \`sidequest dispatch ${ref}\` and spawn its returned executor. Inline is limited to the inline-safe allowlist: \`sidequest claim ${ref} --direct --reason "why this is inline-safe"\` (MCP \`direct:true\` with \`reason\`).`,
   token: (ref) => `${ref} has a prepared dispatch whose token file was missing, unreadable, or invalid. Re-run the exact claim from this executor's briefing with its dispatched \`tokenFile\` path; do not transcribe the token, retry dispatch from this executor, or release a dispatch you did not claim. The orchestrator should run \`sidequest pulse ${ref}\`: from the session that prepared the dispatch with the host's failure report in hand, or once pulse reports stalled because an unclaimed runtime has no readable signal or is past its deadline, retire it in one call with \`sidequest dispatch ${ref} --recovery-evidence "<observed failed-claim evidence>"\` (MCP \`recoveryEvidence\`), which records the evidence on the failed attempt and prepares a fresh one; otherwise wait for the active attempt to become terminal before dispatching again.`,
   prepared_compatibility_stale: (ref) => `${ref}'s prepared Sidequest runtime/version snapshot no longer matches the installed MCP and hooks configuration, so the token-file refusal already retired that dispatch attempt. Stop without claiming. The orchestrator can dispatch ${ref} again for a fresh token file.`,
@@ -209,10 +209,10 @@ export function applyDeliveryContentCommitGuidance(ref: string): string {
     + ' Do not claim unchanged paths as reviewedReplacements, hand-edit the recorded delivery, or offer an unrelated later head as proof: a commit whose tree differs from the candidate on any submitted path is refused.';
 }
 
-// GH-295: an executor that released as technical_blocker leaves no submission, so integrate, done and submit
+// GH-295, GH-341: an executor that released as technical_blocker or handback leaves no submission, so integrate, done and submit
 // all refuse work the orchestrator then landed by hand, and none of them said which closure still works.
 export function landedWithoutSubmissionGuidance(ref: string): string {
-  return `When the work already landed outside the executor's submit (it released, for example as technical_blocker, and you committed it), close it with \`groomClose ${ref} --deliveryCommit <sha> --deliveryMethod manual --reason "<evidence>"\` once that commit is reachable from the recorded integration branch.`;
+  return `When the work already landed outside the executor's submit (it released, for example as technical_blocker or handback, and you committed or cherry-picked it), close it with \`groomClose ${ref} --deliveryCommit <sha> --deliveryMethod manual --reason "<evidence>"\` once that commit is reachable from the recorded integration branch; for a cherry-pick, pass the cherry-picked commit, not the executor's original.`;
 }
 
 // Why one overlapping submission was not admitted as inherited rejected ancestry.
@@ -250,9 +250,30 @@ export function negativeControlRecoveryGuidance(): string {
   return 'Revert the non-test changes, run the changed tests, and keep them importable. Say which one happened: failure-kind=assertion when the changed tests failed their assertions, failure-kind=import or failure-kind=collection when the revert stopped them loading, because only an assertion failure proves they catch wrong behavior. Post [sidequest:negative-control] target=<broken file:line or behavior>; assertion=<named assertion>; <command> failed=<n> failure-kind=<assertion|import|collection> with n greater than zero. The target and assertion must be the changed behavior this ticket is about. Then restore the change and run the declared verify. You may add context after failed=<n>. For every added or modified named test, add [sidequest:negative-control-test] failed <test name>. If a named test does not cover the reverted change, add [sidequest:negative-control-test] unaffected <test name> because <reason> instead. If the control cannot run, post a line beginning [sidequest:negative-control] waived <reason of at least 20 characters>.';
 }
 
+type SnapshotWalkFacts = Readonly<{
+  skipped: readonly string[];
+  skippedTotal: number;
+  counted: readonly Readonly<{ path: string; paths: number }>[];
+}>;
+
+function skippedSnapshotPaths(walk: SnapshotWalkFacts): string {
+  if (!walk.skippedTotal) return 'skipped nothing';
+  const more = walk.skippedTotal > walk.skipped.length ? `, and ${walk.skippedTotal - walk.skipped.length} more` : '';
+  return `skipped ${walk.skipped.join(', ')}${more}`;
+}
+
+// Which directories held the counted paths is what tells a user whether the tree is really too big
+// or the walk counted something it should have left out (GH-334).
+function snapshotWalkFacts(walk: SnapshotWalkFacts = { skipped: [], skippedTotal: 0, counted: [] }): string {
+  const standing = ' The walk leaves out .git, installed and build output directories such as node_modules and dist, and paths the root .gitignore excludes before it counts.';
+  if (!walk.counted.length) return standing;
+  const counted = walk.counted.map((entry) => `${entry.path} (${entry.paths})`).join(', ');
+  return `${standing} This walk ${skippedSnapshotPaths(walk)}; the most paths it counted were under ${counted}.`;
+}
+
 export function filesystemSnapshotLimitGuidance(
   projectPath: string,
-  limit: Readonly<{ bound: string; observed: number; cap: number; path?: string | null }>,
+  limit: Readonly<{ bound: string; observed: number; cap: number; path?: string | null; walk?: SnapshotWalkFacts }>,
 ): string {
   const unit = limit.bound === 'path cap' ? 'paths' : limit.bound === 'byte cap' ? 'bytes' : 'ms';
   const blockingFile = limit.path
@@ -261,7 +282,7 @@ export function filesystemSnapshotLimitGuidance(
   const recourse = limit.bound === 'deadline'
     ? 'point the board at a local directory no sync client mirrors'
     : 'point the board at a smaller directory';
-  return `filesystem snapshot refused for ${projectPath}: ${limit.bound} reached ${limit.observed} ${unit}; cap ${limit.cap} ${unit}. The cap is fixed and no board setting raises it.${blockingFile} Initialize a git repository at the project root so dispatch uses the cheaper git adapter, or ${recourse}. When the directory only holds git repositories one level down, do not initialize it: register each repository as its own board and file the ticket there.`;
+  return `filesystem snapshot refused for ${projectPath}: ${limit.bound} reached ${limit.observed} ${unit}; cap ${limit.cap} ${unit}. The cap is fixed and no board setting raises it.${blockingFile}${snapshotWalkFacts(limit.walk)} Initialize a git repository at the project root so dispatch uses the cheaper git adapter (the board switches to git on its next dispatch once a .git exists at or above it), or ${recourse}. When the directory only holds git repositories one level down, do not initialize it: register each repository as its own board and file the ticket there.`;
 }
 
 // The project can be perfectly readable while the child that snapshots it cannot run or answer;

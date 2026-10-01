@@ -194,7 +194,7 @@ function createSubmissions(dependencies) {
     for (let attempt = 0; attempt < 100; attempt += 1) {
       rejected.quarantineRef = rejectionQuarantineRef(ticket, firstRejectionNumber + attempt);
       putTicketTransaction(slug, ticket);
-      preserved = commitScope.preserveCommitRef(root, rejected.commit, rejected.quarantineRef, { noOverwrite: true });
+      preserved = commitScope.preserveCommitRef(root, rejected.commit, rejected.quarantineRef);
       if (preserved.ok || preserved.reason !== "git_ref_collision") break;
     }
     if (!preserved.ok) {
@@ -493,9 +493,21 @@ Expires: ${checkpoint.expiresAt}`;
     ensureDir(dir);
     return path.join(dir, `${Date.now()}-${crypto.randomBytes(4).toString("hex")}.log`);
   }
+  function directlyClaimed(ticket) {
+    return (ticket.dispatch?.lifecycleAttempt || ticket.lifecycleAttempt)?.execution === "direct";
+  }
+  function dispatchPinnedRequirement(ticket) {
+    if (directlyClaimed(ticket)) return null;
+    return ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
+  }
+  function directClaimCaptureInvocation(slug, ticket) {
+    if (!directlyClaimed(ticket)) return "";
+    const script = path.join(__dirname, "..", "verify-capture.js");
+    return `node "${script}" --project ${JSON.stringify(String(readMeta(slug)?.path || slug))} --ticket ${JSON.stringify(String(ticket.ref))}`;
+  }
   function pinnedVerificationRequirement(ticket) {
-    const pinned = ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
-    if (pinned && typeof pinned === "object") return pinned;
+    const pinned = dispatchPinnedRequirement(ticket);
+    if (pinned instanceof Object) return pinned;
     const legacyCommand = String(ticket.executorVerify || ticket.submission?.verify || "").trim();
     if (!legacyCommand) {
       return verificationRequirement({ kind: "custom", evidence: "legacy project verifier was not recorded" });
@@ -532,7 +544,7 @@ Checkpoint current work, release the claim, and re-dispatch; the recovery dispat
     return withTicketLock(slug, found.id, () => {
       const ticket = getTicket(slug, found.id);
       if (!ticket) return { ok: false, reason: "not_found" };
-      const pinnedAtDispatch = ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
+      const pinnedAtDispatch = dispatchPinnedRequirement(ticket);
       const requirement = pinnedVerificationRequirement(ticket);
       const capturedCommand = String(capture?.command || "");
       const command = capturedCommand.trim();
@@ -878,15 +890,41 @@ ${verify.outputTail}` : null
   function integrationTargetCheckoutState(repo) {
     return integrationGit(repo, ["status", "--porcelain=v2", "--untracked-files=all"]).split(/\r?\n/).filter(Boolean);
   }
-  function integrationTargetCheckoutPath(entry) {
-    if (/^[?!] /.test(entry)) return entry.slice(2);
-    const fieldsBeforePath = entry.startsWith("1 ") ? 8 : entry.startsWith("2 ") ? 9 : entry.startsWith("u ") ? 10 : 0;
-    return fieldsBeforePath ? entry.split(" ", fieldsBeforePath + 1)[fieldsBeforePath]?.split("	")[0] || entry : entry;
+  const CHECKOUT_ENTRY_FIELDS_BEFORE_PATH = { "?": 1, "!": 1, "1": 8, "2": 9, u: 10 };
+  function integrationTargetCheckoutPaths(entry) {
+    const fieldsBeforePath = CHECKOUT_ENTRY_FIELDS_BEFORE_PATH[entry[0] || ""] ?? 0;
+    return entry.split(" ").slice(fieldsBeforePath).join(" ").split("	");
   }
-  function integrationTargetDirtyMessage(mode, checkoutState) {
-    const paths = checkoutState.slice(0, INTEGRATION_TARGET_DIRTY_PATH_LIMIT).map(integrationTargetCheckoutPath);
-    const remaining = checkoutState.length - paths.length;
-    return `${mode} refused; integration target has pending checkout state: ${paths.join(", ")}${remaining > 0 ? `, and ${remaining} more` : ""}.`;
+  function integrationTargetCheckoutPath(entry) {
+    return integrationTargetCheckoutPaths(entry)[0] || entry;
+  }
+  function deliveryWrittenPaths(repo, submissions) {
+    return new Set(submissions.flatMap((submission) => [
+      ...submission.changedPaths || [],
+      ...integrationGit(repo, ["diff", "--name-only", "--no-renames", `HEAD...${submission.commit}`]).split(/\r?\n/).filter(Boolean)
+    ]));
+  }
+  function checkoutEntryBlocksDelivery(entry, writtenPaths) {
+    const unstagedOnly = entry.startsWith("? ") || entry.startsWith("1 .");
+    return !unstagedOnly || integrationTargetCheckoutPaths(entry).some((entryPath) => writtenPaths.has(entryPath));
+  }
+  function integrationTargetDirt(repo, submissions) {
+    const checkoutState = integrationTargetCheckoutState(repo);
+    if (!checkoutState.length) return { blocking: [], ignoredDirtyPaths: [] };
+    const writtenPaths = deliveryWrittenPaths(repo, submissions);
+    const blocking = checkoutState.filter((entry) => checkoutEntryBlocksDelivery(entry, writtenPaths));
+    const ignoredDirtyPaths = checkoutState.filter((entry) => !blocking.includes(entry)).map(integrationTargetCheckoutPath);
+    return { blocking, ignoredDirtyPaths };
+  }
+  function integrationTargetDirtyMessage(mode, blocking, ignoredDirtyPaths) {
+    const paths = blocking.slice(0, INTEGRATION_TARGET_DIRTY_PATH_LIMIT).map(integrationTargetCheckoutPath);
+    const remaining = blocking.length - paths.length;
+    const more = remaining > 0 ? `, and ${remaining} more` : "";
+    const ignorable = ignoredDirtyPaths.length ? ` ${ignoredDirtyPaths.length} other dirty path(s) sit outside the delivery and were ignorable.` : "";
+    return `${mode} refused; integration target has pending checkout state the delivery writes, or staged or unmerged state: ${paths.join(", ")}${more}. Commit, stash, or remove those paths; unstaged edits and untracked files outside the delivery can stay.${ignorable}`;
+  }
+  function checkoutStateBeyondIgnoredPaths(repo, ignoredDirtyPaths) {
+    return integrationTargetCheckoutState(repo).filter((entry) => !ignoredDirtyPaths.includes(integrationTargetCheckoutPath(entry)));
   }
   function integrationOperationResidue(repo) {
     return ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"].filter((reference) => {
@@ -894,10 +932,10 @@ ${verify.outputTail}` : null
       return fs.existsSync(operationPath);
     });
   }
-  function restoreCleanIntegrationCheckout(repo, before) {
+  function restoreCleanIntegrationCheckout(repo, before, ignoredDirtyPaths) {
     integrationGit(repo, ["reset", "--merge", before]);
     const resultingHead = integrationGit(repo, ["rev-parse", "HEAD"]);
-    const checkoutState = integrationTargetCheckoutState(repo);
+    const checkoutState = checkoutStateBeyondIgnoredPaths(repo, ignoredDirtyPaths);
     const operationResidue = integrationOperationResidue(repo);
     if (resultingHead !== before || checkoutState.length || operationResidue.length) {
       throw new Error(`Expected clean checkout at ${before}; HEAD is ${resultingHead}, status has ${checkoutState.length} entries, operation residue: ${operationResidue.join(", ") || "none"}.`);
@@ -918,7 +956,10 @@ ${verify.outputTail}` : null
     }
     return `Automatic rollback refused: ${targetBranch} no longer contains the delivered merge ${deliveryHead}; it now points at ${currentHead}. Manual recovery: inspect ${targetBranch} and recover it from the recorded pre-merge head ${before}.`;
   }
-  function restorePostMergeVerificationCheckout(repo, before, deliveryHead, targetBranch, mode) {
+  function postMergeRollbackReset(ignoredDirtyPaths) {
+    return ignoredDirtyPaths.length ? { flag: "--merge", strategy: "merge-reset-delivery-head" } : { flag: "--hard", strategy: "hard-reset-delivery-head" };
+  }
+  function restorePostMergeVerificationCheckout(repo, before, deliveryHead, targetBranch, mode, ignoredDirtyPaths) {
     const currentBranch = integrationGit(repo, ["branch", "--show-current"]);
     const currentHead = integrationGit(repo, ["rev-parse", "HEAD"]);
     const branchHead = integrationGit(repo, ["rev-parse", "--verify", `refs/heads/${targetBranch}^{commit}`]);
@@ -926,14 +967,15 @@ ${verify.outputTail}` : null
     if (currentBranch !== targetBranch || currentHead !== deliveryHead || branchHead !== deliveryHead || mergeBase !== before) {
       throw new Error(rejectedPostMergeRollbackMessage(repo, before, deliveryHead, targetBranch, currentHead));
     }
-    integrationGit(repo, ["reset", "--hard", before]);
+    const reset = postMergeRollbackReset(ignoredDirtyPaths);
+    integrationGit(repo, ["reset", reset.flag, before]);
     const resultingHead = integrationGit(repo, ["rev-parse", "HEAD"]);
-    const checkoutState = integrationTargetCheckoutState(repo);
+    const checkoutState = checkoutStateBeyondIgnoredPaths(repo, ignoredDirtyPaths);
     const operationResidue = integrationOperationResidue(repo);
     if (resultingHead !== before || checkoutState.length || operationResidue.length) {
       throw new Error(`Expected clean hard-reset checkout at ${before}; HEAD is ${resultingHead}, status has ${checkoutState.length} entries, operation residue: ${operationResidue.join(", ") || "none"}.`);
     }
-    return { strategy: "hard-reset-delivery-head", before, deliveryHead, targetBranch };
+    return { strategy: reset.strategy, before, deliveryHead, targetBranch };
   }
   function deliveryLockPath(repo) {
     return path.resolve(repo, integrationGit(repo, ["rev-parse", "--git-common-dir"]), "sidequest-delivery.lock");
@@ -961,10 +1003,10 @@ ${verify.outputTail}` : null
   function handResolvedConflictRecovery(ticket, candidate, targetBranch) {
     return `Resolve it by hand: on ${targetBranch} merge the pinned candidate itself (\`git merge --no-ff ${candidate}\`, not a cherry-pick), resolve the conflict in that merge commit, commit and re-gate it, then record it with integrate deliveryCommit ${candidate} and reason (CLI \`sidequest integrate ${ticket.ref} --delivery-commit ${candidate} --reason "<resolution>"\`), or with groomClose passing deliveryCommit <the resolved merge commit> and deliveryMethod "manual". Keeping ${candidate} as a parent of that merge is what proves the candidate content; either record still requires the bound review and a passing merged-tree gate.`;
   }
-  function postMergeVerificationFailure(slug, ticket, verify, repo, mode, before, deliveryHead, targetBranch) {
+  function postMergeVerificationFailure(slug, ticket, verify, repo, mode, before, deliveryHead, targetBranch, ignoredDirtyPaths) {
     const verificationMessage = `${ticket.ref} verification returned ${verify.status} after ${mode} delivery: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || "not created"}.`;
     try {
-      const rollback = restorePostMergeVerificationCheckout(repo, before, deliveryHead, targetBranch, mode);
+      const rollback = restorePostMergeVerificationCheckout(repo, before, deliveryHead, targetBranch, mode, ignoredDirtyPaths);
       restoreRolledBackExpectedUpstreams(slug, repo, before, deliveryHead);
       return integrationFailure(slug, ticket, {
         reason: `${verificationOutcome(verify)}_post_merge`,
@@ -1797,16 +1839,6 @@ ${verify.outputTail}` : null
     if (!lockLease) return deliveryInProgress(assembled.tickets[0]);
     try {
       lockLease.refresh();
-      const checkoutState = integrationTargetCheckoutState(repo);
-      if (checkoutState.length) {
-        return {
-          ok: false,
-          reason: "integration_target_dirty",
-          tickets: assembled.tickets,
-          checkoutState,
-          message: integrationTargetDirtyMessage(normalizeDeliveryMode(opts.mode), checkoutState)
-        };
-      }
       const mode = normalizeDeliveryMode(opts.mode);
       const currentBranch = integrationGit(repo, ["branch", "--show-current"]);
       if (currentBranch !== target.branch) {
@@ -1821,6 +1853,17 @@ ${verify.outputTail}` : null
           return { ok: false, reason: "pinned_ref_mismatch", ticket, tickets: assembled.tickets, message: `${gitRef} points to ${pinnedCommit}, not submitted ${submission.commit}.` };
         }
         candidates.push({ ticket, submission, gitRef, pinnedCommit, changedPaths: changedIntegrationPaths(repo, submission) });
+      }
+      const dirt = integrationTargetDirt(repo, candidates.map((candidate) => candidate.submission));
+      if (dirt.blocking.length) {
+        return {
+          ok: false,
+          reason: "integration_target_dirty",
+          tickets: assembled.tickets,
+          checkoutState: dirt.blocking,
+          ignoredDirtyPaths: dirt.ignoredDirtyPaths,
+          message: integrationTargetDirtyMessage(mode, dirt.blocking, dirt.ignoredDirtyPaths)
+        };
       }
       const before = integrationGit(repo, ["rev-parse", "HEAD"]);
       try {
@@ -1837,7 +1880,7 @@ ${verify.outputTail}` : null
         const conflictedPaths = unmergedIntegrationPaths(repo);
         const message = integrationConflictMessage(error, conflictedPaths);
         try {
-          restoreCleanIntegrationCheckout(repo, before);
+          restoreCleanIntegrationCheckout(repo, before, dirt.ignoredDirtyPaths);
         } catch (rollbackError) {
           return { ok: false, reason: "wave_delivery_rollback_failed", tickets: assembled.tickets, before, conflictedPaths, message: `${message} Rollback failed: ${integrationGitError(rollbackError)}` };
         }
@@ -1847,7 +1890,7 @@ ${verify.outputTail}` : null
       const verification = verifyDeliveredSubmission(slug, assembled.tickets[0], opts);
       if (!verificationAccepted(verification)) {
         try {
-          restoreCleanIntegrationCheckout(repo, before);
+          restoreCleanIntegrationCheckout(repo, before, dirt.ignoredDirtyPaths);
         } catch (rollbackError) {
           return { ok: false, reason: `${verificationOutcome(verification)}_wave_delivery_rollback_failed`, tickets: assembled.tickets, before, verify: verification, message: `Wave ${assembled.wave.id} verification failed and rollback failed: ${integrationGitError(rollbackError)}` };
         }
@@ -1870,6 +1913,7 @@ ${verify.outputTail}` : null
         resultingHead,
         deliveredFiles: candidate.changedPaths,
         dirtyFiles: mode === "apply" ? candidate.changedPaths : [],
+        ignoredDirtyPaths: dirt.ignoredDirtyPaths,
         verify: verification
       }));
       const failedIntegration = integrations.find((integration) => !integration.ok);
@@ -1885,6 +1929,7 @@ ${verify.outputTail}` : null
           resultingHead,
           pinnedCommits: candidates.map((candidate) => candidate.pinnedCommit),
           participants: assembled.participantRefs,
+          ignoredDirtyPaths: dirt.ignoredDirtyPaths,
           verify: verification
         }
       };
@@ -1910,19 +1955,20 @@ ${verify.outputTail}` : null
       return { ok: false, reason: "integration_target_unavailable", ticket, message: integrationGitError(error) };
     }
     if (!repo || !target?.branch) return { ok: false, reason: "integration_target_unavailable", ticket };
-    let checkoutState;
+    let dirt;
     try {
-      checkoutState = integrationTargetCheckoutState(repo);
+      dirt = integrationTargetDirt(repo, [ticket.submission]);
     } catch (error) {
       return { ok: false, reason: "integration_target_unavailable", ticket, message: integrationGitError(error) };
     }
-    if (checkoutState.length) {
+    if (dirt.blocking.length) {
       return {
         ok: false,
         reason: "integration_target_dirty",
         ticket,
-        checkoutState,
-        message: integrationTargetDirtyMessage(mode, checkoutState)
+        checkoutState: dirt.blocking,
+        ignoredDirtyPaths: dirt.ignoredDirtyPaths,
+        message: integrationTargetDirtyMessage(mode, dirt.blocking, dirt.ignoredDirtyPaths)
       };
     }
     const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
@@ -1981,7 +2027,7 @@ ${verify.outputTail}` : null
           verify: verify2,
           reconciled: true,
           deliveredFiles: changedPaths,
-          ignoredDirtyPaths: []
+          ignoredDirtyPaths: dirt.ignoredDirtyPaths
         });
         return result2.ok ? { ok: true, ticket: result2.ticket, integration: result2.ticket.submission.integration } : deliveryRecordFailure(ticket, delivered, result2);
       }
@@ -1994,7 +2040,7 @@ ${verify.outputTail}` : null
           const conflictedPaths = unmergedIntegrationPaths(repo);
           const message = integrationConflictMessage(error, conflictedPaths);
           try {
-            restoreCleanIntegrationCheckout(repo, before);
+            restoreCleanIntegrationCheckout(repo, before, dirt.ignoredDirtyPaths);
           } catch (rollbackError) {
             return integrationFailure(slug, ticket, {
               reason: "merge_failed_rollback_failed",
@@ -2013,7 +2059,7 @@ ${verify.outputTail}` : null
             const conflictedPaths = unmergedIntegrationPaths(repo);
             const message = integrationConflictMessage(error, conflictedPaths);
             try {
-              restoreCleanIntegrationCheckout(repo, before);
+              restoreCleanIntegrationCheckout(repo, before, dirt.ignoredDirtyPaths);
             } catch (rollbackError) {
               return integrationFailure(slug, ticket, {
                 reason: `${mode}_failed_rollback_failed`,
@@ -2037,13 +2083,13 @@ ${verify.outputTail}` : null
       const deliveredFiles = mode === "apply" ? Array.from(/* @__PURE__ */ new Set([
         ...integrationGit(repo, ["diff", "--name-only"]).split(/\r?\n/).filter(Boolean),
         ...integrationGit(repo, ["diff", "--cached", "--name-only"]).split(/\r?\n/).filter(Boolean)
-      ])) : changedPaths;
+      ])).filter((deliveredPath) => !dirt.ignoredDirtyPaths.includes(deliveredPath)) : changedPaths;
       const verify = verifyDeliveredSubmission(slug, ticket, opts);
       const acceptedVerify = verificationAccepted(verify);
-      if (!acceptedVerify) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before, resultingHead, target.branch);
+      if (!acceptedVerify) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before, resultingHead, target.branch, dirt.ignoredDirtyPaths);
       delivered = { commit: pinnedCommit, targetBranch: target.branch, resultingHead };
       const waveDelivery = recordTicketWaveDelivery(slug, ticket, { source: "git", value: resultingHead, observedAt: (/* @__PURE__ */ new Date()).toISOString() }, verify);
-      if (!waveDelivery.ok) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before, resultingHead, target.branch);
+      if (!waveDelivery.ok) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before, resultingHead, target.branch, dirt.ignoredDirtyPaths);
       const result = updateSubmissionIntegration(slug, ticket.id, {
         outcome: "delivered",
         deliveredAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -2051,7 +2097,7 @@ ${verify.outputTail}` : null
         verify,
         dirtyFiles: mode === "apply" ? deliveredFiles : [],
         deliveredFiles,
-        ignoredDirtyPaths: []
+        ignoredDirtyPaths: dirt.ignoredDirtyPaths
       });
       return result.ok ? { ok: true, ticket: result.ticket, integration: result.ticket.submission.integration } : deliveryRecordFailure(ticket, delivered, result);
     } catch (error) {
@@ -2083,7 +2129,7 @@ ${verify.outputTail}` : null
       return { ok: false, message: error?.message || String(error) };
     }
   }
-  function submissionVerificationResult(ticket, sourceRevision, verify, candidateCommit) {
+  function submissionVerificationResult(ticket, sourceRevision, verify, candidateCommit, directCaptureInvocation) {
     const requirement = pinnedVerificationRequirement(ticket);
     const evidence = String(verify || "").trim();
     if (requirement.kind === "attestation" || sourceRevision != null) {
@@ -2112,7 +2158,7 @@ ${verify.outputTail}` : null
       return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
         source: "git",
         value: String(candidateCommit || "").trim().toLowerCase()
-      }, String(ticket.dispatchNonce || ""));
+      }, String(ticket.dispatchNonce || ""), directCaptureInvocation);
     }
     if (requirement.command) {
       const error2 = verifyCommandError(requirement.command);
@@ -2126,7 +2172,7 @@ ${verify.outputTail}` : null
       return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
         source: "git",
         value: String(candidateCommit || "").trim().toLowerCase()
-      }, String(ticket.dispatchNonce || ""));
+      }, String(ticket.dispatchNonce || ""), directCaptureInvocation);
     }
     if (requirement.kind === "custom" && requirement.evidenceContract === "legacy project verifier was not recorded" && !evidence) {
       return { result: { kind: "custom", status: "passed", evidence: requirement.evidenceContract }, expectedEvidence: null };
@@ -2139,7 +2185,7 @@ ${verify.outputTail}` : null
     const adapterFacts = opts.admissionFacts || {};
     const sourceRevisionFacts = sourceRevision && isSourceRevisionAdapterFacts(opts.admissionFacts) ? opts.admissionFacts : null;
     const sourceRevisionResolution = sourceRevisionFacts?.baseline || null;
-    const verification = submissionVerificationResult(ticket, sourceRevision, verify, opts.commit);
+    const verification = submissionVerificationResult(ticket, sourceRevision, verify, opts.commit, directClaimCaptureInvocation(slug, ticket));
     const completion = sourceRevision ? { ok: true } : completionTreeCheck(slug, ticket, { explicitNoOp: range?.noOp === true });
     const admitted = adapterFacts.admittedScope || executionScope(slug, ticket);
     const scope = adapterFacts.scope || commitScope.ticketCommitScope(admitted, ticket.files, ticket.ref);
@@ -2576,6 +2622,10 @@ ${verify.outputTail}` : null
       return { ok: true, ticket: source, supersededBy, comment };
     });
   }
+  function notOwnerSubmissionMessage(ref, submissionOwner, by, operation) {
+    if (operation === "rework") return `rework requires by = the submitter "${submissionOwner}" (pulse -> submittedBy); got "${by}".`;
+    return `${ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".`;
+  }
   function submissionOwnershipFailure(ticket, by, opts) {
     opts = opts || {};
     if (ticket.status === "done") return { ok: false, reason: "done", ticket };
@@ -2597,7 +2647,7 @@ ${verify.outputTail}` : null
         reason: "not_owner",
         ticket,
         ...held ? { claim: held } : {},
-        ...!claimOwner ? { message: `${ticket.ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".` } : {}
+        ...!claimOwner ? { message: notOwnerSubmissionMessage(ticket.ref, submissionOwner, by, opts.operation) } : {}
       };
     }
     if (!claimOwner && opts.allowSubmittedOwner !== true) {
@@ -2690,7 +2740,7 @@ ${verify.outputTail}` : null
       if (!pendingSubmission(ticket) && !retryCheckpoint) {
         return { ok: false, reason: "submission_required", ticket, message: `${ticket.ref} has no pending submission or retry candidate to reject for rework.` };
       }
-      const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true });
+      const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true, operation: "rework" });
       if (ownershipFailure) return ownershipFailure;
       const history = rejectionHistory(ticket);
       const source = opts.source || "cli";

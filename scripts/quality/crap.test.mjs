@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import crapCore from './crap-core.cjs';
-import { baselineFunctions, changedMetricsAgainstBase, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, isScoredSource, lizardMetric, sourceMetrics } from './crap.mjs';
+import { baselineFunctions, builtOutput, changedMetricsAgainstBase, collectFunctions, compareAgainstBase, diffEntries, emptyChangedFunctionWarning, functionCoverage, isScoredSource, lizardMetric, sourceMetrics } from './crap.mjs';
 
 const { crapScore, parseLizardCsv } = crapCore;
 
@@ -239,5 +239,72 @@ test('a rename plus one edited function reports only that function', async () =>
     assert.match(failures[0], /renamed\.js:\d+ second/);
   } finally {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+function v8Record(functionName, text, functionText, count) {
+  const startOffset = text.indexOf(functionText);
+  return { functionName, ranges: [{ startOffset, endOffset: startOffset + functionText.length, count }] };
+}
+
+test('scores an inline callback covered in one process and idle in another as covered', async () => {
+  const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-two-process-'));
+  const sourcePath = path.join(temporaryDirectory, 'fixture.js');
+  const callback = '(value) => value > 1 ? value : 0';
+  const outer = `function outer(values) {\n  return values.map(${callback});\n}`;
+  const sourceText = `${outer}\n`;
+  await fs.writeFile(sourcePath, sourceText);
+  try {
+    const idleProcess = [v8Record('outer', sourceText, outer, 1), v8Record('', sourceText, callback, 0)];
+    const busyProcess = [v8Record('outer', sourceText, outer, 1), v8Record('', sourceText, callback, 3)];
+    const coverageScripts = new Map([[path.resolve(sourcePath).replaceAll('\\', '/').toLowerCase(), [...idleProcess, ...busyProcess]]]);
+    const lizardEntries = [{ start: 1, name: 'outer', complexity: 1 }, { start: 2, name: '(anonymous)', complexity: 2 }];
+    const metrics = await sourceMetrics(sourcePath, coverageScripts, lizardEntries);
+    const closure = metrics.find((entry) => entry.name === '<anonymous>');
+    assert.equal(closure.coverage, 1);
+    assert.equal(closure.crap, 2);
+  } finally {
+    await fs.rm(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+const typedSource = 'export function outer(values: number[]): number[] {\n  return values.map((value: number) => value + 1);\n}\n';
+const builtCallback = '(value) => value + 1';
+const builtText = `export function outer(values) {\n  return values.map(${builtCallback});\n}\n`;
+
+async function coverageOutput(relativePath, text, records = []) {
+  return { relativePath, descriptors: await collectFunctions(text, relativePath), records };
+}
+
+test('pairs a TypeScript inline callback with its twin in the built output', async () => {
+  const source = await coverageOutput('src/lib/subject.ts', typedSource);
+  const unrelatedBundle = await coverageOutput('hooks/other.js', 'function elsewhere() { return [1].map((item) => item); }\n');
+  const built = await coverageOutput('lib/subject.js', builtText, [v8Record('', builtText, builtCallback, 2)]);
+  const closure = source.descriptors.find((descriptor) => descriptor.name === '<anonymous>');
+  assert.deepEqual(functionCoverage(closure, [source, unrelatedBundle, built]), { coverage: 1 });
+});
+
+test('leaves a TypeScript inline callback unverified when the built output does not line up', async () => {
+  const source = await coverageOutput('src/lib/subject.ts', typedSource);
+  const reshapedText = `export function outer(values) {\n  const extra = () => 0;\n  return values.map(${builtCallback});\n}\n`;
+  const built = await coverageOutput('lib/subject.js', reshapedText, [v8Record('', reshapedText, builtCallback, 2)]);
+  const closure = source.descriptors.find((descriptor) => descriptor.name === '<anonymous>');
+  assert.match(functionCoverage(closure, [source, built]).unverified, /lib\/subject\.js do not line up with the source/);
+});
+
+test('reads a built output with its functions, and skips one that was never built', async () => {
+  const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'crap-built-output-'));
+  const outputPath = path.join(temporaryDirectory, 'subject.js');
+  await fs.writeFile(outputPath, builtText);
+  try {
+    const records = [v8Record('', builtText, builtCallback, 2)];
+    const coverageScripts = new Map([[path.resolve(outputPath).replaceAll('\\', '/').toLowerCase(), records]]);
+    const output = await builtOutput(outputPath, coverageScripts, true);
+    assert.deepEqual(output.descriptors.map((descriptor) => descriptor.name), ['outer', '<anonymous>']);
+    assert.equal(output.records, records);
+    assert.deepEqual((await builtOutput(outputPath, new Map(), false)).descriptors, []);
+    assert.equal(await builtOutput(path.join(temporaryDirectory, 'missing.js'), coverageScripts, true), null);
+  } finally {
+    await fs.rm(temporaryDirectory, { recursive: true, force: true });
   }
 });

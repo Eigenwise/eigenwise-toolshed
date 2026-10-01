@@ -906,21 +906,31 @@ function matchesDeniedWork(records, toolInput) {
   const promptPrefix = deniedWorkPromptPrefix(toolInput);
   return records.some((record) => record.description !== "" && record.description === description || record.promptPrefix !== "" && record.promptPrefix === promptPrefix);
 }
+function boardTouchedThisSession(sessionId) {
+  const inlineWork = readSessionState(sessionStateFile("inline-work", sessionId));
+  return Boolean(inlineWork.boardInteraction || inlineWork.boardTouchedEarlier);
+}
+function exploreDenial(sessionId, state, toolInput, priorPasses) {
+  if (matchesDeniedWork(deniedWorkRecords(state), toolInput)) {
+    return "sidequest: this Explore spawn matches work a generic Agent was already denied for. The block applied to the work, not the agent type. File a spike ticket (usually codebase-exploration), route it, dispatch it, then spawn the returned executor; rerouting denied work through Explore is a violation.";
+  }
+  if (priorPasses < EXPLORE_FREE_SPAWNS || boardTouchedThisSession(sessionId)) return "";
+  return `sidequest: Explore spawn ${priorPasses + 1} this session with no board interaction. Explore inherits the session model; investigation at this scale belongs on the board, where a codebase-exploration spike runs a cheaper route. File the spike, route it, dispatch it, then spawn the returned executor.`;
+}
 function guardMainSessionExplore(input, toolInput) {
   const sessionId = guardSessionId(input);
   if (!sessionId || dispatchAdmission(input).status !== "routed") return;
   const file = sessionStateFile("explore-fanout", sessionId);
   const state = readSessionState(file);
-  if (matchesDeniedWork(deniedWorkRecords(state), toolInput)) {
-    writeDeny("PreToolUse", "sidequest: this Explore spawn matches work a generic Agent was already denied for. The block applied to the work, not the agent type. File a spike ticket (usually codebase-exploration), route it, dispatch it, then spawn the returned executor; rerouting denied work through Explore is a violation.");
-    return;
-  }
   const priorPasses = Number(state.explorePasses) || 0;
-  const boardInteraction = Boolean(readSessionState(sessionStateFile("inline-work", sessionId)).boardInteraction);
-  if (priorPasses >= EXPLORE_FREE_SPAWNS && !boardInteraction) {
-    writeDeny("PreToolUse", `sidequest: Explore spawn ${priorPasses + 1} this session with no board interaction. Explore inherits the session model; investigation at this scale belongs on the board, where a codebase-exploration spike runs a cheaper route. File the spike, route it, dispatch it, then spawn the returned executor.`);
+  const denial = exploreDenial(sessionId, state, toolInput, priorPasses);
+  if (denial) {
+    writeDeny("PreToolUse", denial);
     return;
   }
+  recordExplorePass(file, state, priorPasses);
+}
+function recordExplorePass(file, state, priorPasses) {
   state.explorePasses = priorPasses + 1;
   writeSessionState(file, state);
   if (priorPasses < EXPLORE_FREE_SPAWNS) {

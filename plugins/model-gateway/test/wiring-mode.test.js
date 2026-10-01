@@ -236,6 +236,30 @@ test('pin refresh updates registered un-overridden pins', (t) => {
   assert.match(result.output, new RegExp(`updated gateway pins in ${path.join(otherProject, '.claude', 'settings.local.json').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
 });
 
+test('a pin refresh rewrites registered projects still holding retired shipped defaults', (t) => {
+  const { home, project } = fixture(t);
+  const retiredOpusPins = ['claude-opus-4-8[1m]', 'claude-opus-5[1m]'];
+  const registeredProjects = retiredOpusPins.map((opusPin, index) => {
+    const projectDirectory = path.join(path.dirname(project), `registered-${index}`);
+    writeJson(path.join(projectDirectory, '.claude', 'settings.local.json'), gatewaySettings({
+      ANTHROPIC_DEFAULT_OPUS_MODEL: opusPin,
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-5[1m]',
+      ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-5-1[1m]',
+    }));
+    return projectDirectory;
+  });
+  writeJson(projectRegistry(home), { projects: registeredProjects });
+
+  const result = run(home, project, ['env', '--write-project']);
+
+  assert.equal(result.code, 0, result.output);
+  for (const projectDirectory of registeredProjects) {
+    const env = JSON.parse(fs.readFileSync(path.join(projectDirectory, '.claude', 'settings.local.json'), 'utf8')).env;
+    assert.equal(env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5-5[1m]');
+    assert.equal(env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5-5[1m]');
+  }
+});
+
 test('project wiring registry deduplicates an existing project alias', (t) => {
   const { home, project } = fixture(t);
   const alias = path.join(path.dirname(project), 'project-alias');

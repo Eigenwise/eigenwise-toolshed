@@ -24,7 +24,7 @@ After the wiring is confirmed, fully restart the Claude Code process for that sa
 
 Model Gateway writes `ANTHROPIC_BASE_URL` to `.claude/settings.local.json`, never the committed `.claude/settings.json`. That keeps your local gateway endpoint out of other people's checkouts. You can opt into one shared fallback URL in `~/.claude/settings.json`, but a project's local setting wins. `model-gateway doctor` marks the effective source and calls out conflicting gateway modes.
 
-A Claude alias pin applies to every project already registered as wired. Model Gateway updates only gateway-owned pin values, tells you about any user-owned value it skipped, and prunes missing project directories from the registry. Restart each affected open Claude Code session before its `/model` alias reflects the new pin.
+A Claude alias pin applies to every project already registered as wired. SessionStart checks those projects again on every pin refresh, so a newer shipped default or CLI alias reaches all of them, not only the project you opened. Model Gateway updates only gateway-owned pin values, tells you about any user-owned value it skipped, and prunes missing project directories from the registry. Restart each affected open Claude Code session before its `/model` alias reflects the new pin.
 
 For a direct recovery command, use `node ~/.claude/model-gateway/model-gateway.js <command>`. SessionStart writes this version-independent launcher from Claude Code's installed-plugin registry, so it follows upgrades and uses the highest remaining installed version after an uninstall or downgrade.
 
@@ -47,8 +47,8 @@ previous cache, and `status` reports `fallback catalog (proxy unreachable)`.
 
 Updating Toolshed never wires a project. Only `setup` or `env --write-project` run inside a project wires it.
 
-- `claude-gpt-*[1m]` uses your ChatGPT/Codex subscription. `MODEL_WINDOW_POLICY` in Model Gateway's runtime is the authority for every gateway picker row. GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured rows; other Codex proxy rows use its explicit unmeasured 920k default until measured.
-- A `[1m]` alias gives Claude Code a 1M client window, but a lower explicit `autoCompactWindow` still wins. The optional `325000` setting is a cap, and with that cap the client compacts around `292000`. The alias is removed before forwarding to the backend and does not promise a 1M backend input limit. Use `/context` to inspect the selected model and effective cap.
+- `claude-gpt-*[1m]` uses your ChatGPT/Codex subscription. `MODEL_WINDOW_POLICY` in Model Gateway's runtime is the authority for every gateway picker row. GPT-6.1 Sol, GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured rows; other Codex proxy rows use its explicit unmeasured 920k default until measured. GPT-6.1 Sol is the default Codex model; GPT-6 Astra is reserved for frontier or high-stakes tickets.
+- A `[1m]` alias gives Claude Code a 1M client window, but a lower explicit `autoCompactWindow` still wins. An `autoCompactWindow` is one number for the whole session, so it caps Claude rows too; the Codex cost cap lives in `context-window` instead (see [Context window and cost](#context-window-and-cost)). The alias is removed before forwarding to the backend and does not promise a 1M backend input limit. Use `/context` to inspect the selected model and effective cap.
 - `claude-grok-4.5[1m]` uses your Grok subscription when the Grok CLI is installed and signed in. Its measured backend window is 500k. The shared synthetic-413 sentry returns Claude Code's compaction signal 40k tokens before that backend limit if the client has not compacted first. The alias is removed before requests reach the backend.
 - Claude models keep using Anthropic.
 
@@ -80,6 +80,37 @@ This works with Model Gateway alone; Sidequest isn't required. Sidequest's own e
 Claude Desktop has its own native Gateway configuration, separate from the Claude Code CLI settings above. You can point it at Model Gateway's endpoint, but installed Desktop 1.49585.0 validates every Gateway model ID on the client side and rejects any `gpt`, `codex`, or other non-Anthropic family marker before it reaches the picker or a session. This applies to both an explicit model entry you add yourself and an ID Desktop discovers automatically; a trailing `[1m]` is stripped first and does not change the outcome. Only a genuinely Anthropic-backed route, such as a real Claude alias, is usable there.
 
 This is a Desktop-side restriction, not a Model Gateway bug, and there is no supported workaround: no Anthropic-named alias to disguise a Codex or Grok route, no binary patch, no credential or auth substitution, no TLS interception, no global env or hosts trick. The Claude Code CLI remains the verified way to use gateway models. VS Code success has been reported by users but is not independently verified here. This limitation is specific to the installed Desktop version and can be revisited if a future release removes the model-family filter.
+
+## Context window and cost
+
+Long context costs differently per backend. Claude charges nothing extra for its 1M window. OpenAI bills Codex input above 272k tokens at 2x, so past that point every request costs double. Model Gateway keeps one setting per backend:
+
+| Backend | Default | What it does |
+| --- | --- | --- |
+| Claude | `full` | 1M through the `[1m]` alias pins |
+| Codex | `272000` | OpenAI bills input above 272k tokens at 2x; the cap keeps every request, including compaction, under it |
+| Grok | `full` | the measured 500k backend window |
+
+Show the current values, or change them:
+
+```sh
+node ~/.claude/model-gateway/model-gateway.js context-window
+node ~/.claude/model-gateway/model-gateway.js context-window --claude full --codex 272000 --grok full
+```
+
+A value is `full` or a whole number of tokens up to 1,000,000. The setting lives in `~/.claude/model-gateway/context-window.json`. The older `CODEX_GATEWAY_CONTEXT_WINDOW` environment variable still works, but only when no Codex value is saved. `status` and `doctor` print the effective window for each backend, and Sidequest's `models` output and the dashboard's model pickers show the same numbers.
+
+The numbers are per backend, not per role. Sidequest executors run through the same Claude Code process and send the same model ids as the orchestrator, and nothing in a request tells the gateway which role sent it, so the orchestrator and every executor share these values.
+
+How the Codex cap holds. Claude Code never reads the gateway's advertised `max_input_tokens` for a `[1m]` row (its gateway discovery cache keeps only the id and name), so the client alone would let a Codex session grow to its 1M alias window. The gateway enforces the cap itself. After each response it records the input tokens that turn used, and when the last turn went past the trigger it answers the next request with a "prompt is too long" error, which makes Claude Code compact. The compaction request is the largest one a session sends:
+
+- the turn that crossed the trigger can already be one turn of growth past it (up to 40,000 tokens: a response plus its tool results),
+- the compaction request resends that turn plus one more turn of growth,
+- and adds Claude Code's compaction instructions (about 7,300 characters; budgeted at 5,000 tokens).
+
+So a cap compacts past cap minus 85,000. With the 272,000 default, sessions compact past 187,000, ordinary turns stay under about 227,000, and the compaction request stays at or under 272,000. `/v1/models` advertises the cap itself, so picker ids keep their `[1m]` suffix. A capped Codex value needs at least 185,000 tokens so the trigger keeps 100,000 tokens of working room. The running gateway reads the setting when it starts, so restart it after a change (`stop`, then `ensure`).
+
+A Claude cap works differently: it is written as Claude Code's `autoCompactWindow` into every project wired at project scope (`.claude/settings.local.json`), and a project wired later picks it up at its next session start. `autoCompactWindow` is one number for the whole session, so a Claude cap also bounds Codex and Grok rows in that session. The command refuses a Claude cap when no project is wired at project scope, because writing it to your user settings would cap every project. For the same reason, a user-level `autoCompactWindow` (for example the older `325000` suggestion) keeps Claude from getting its full window; `status` names the file that sets it.
 
 ## Daily use
 

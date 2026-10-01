@@ -1,7 +1,21 @@
 # Board features: stories, notifications, reminders, assignment, attachments
 
 Read this for the exact commands behind stories, reminders, notifications, human assignment, or
-attachment-path resolution.
+attachment-path resolution, and for which folders can become a board.
+
+## Which folders get a board
+
+A call without `project` uses the session's project root (the git root above `CLAUDE_PROJECT_DIR` or
+the cwd). It creates a board there only when that folder is a git repository root, and reuses a board
+that is already registered. An absolute path passed as `--project` (MCP: `project`, dashboard API:
+`projectPath`) may register a plain non-git folder such as a notes vault. Neither path creates a board
+for a missing folder, anything in the Sidequest home, anything under `~/.claude`, or anything in the
+system temp dir. The refusal starts `not a project root:`, names the path and the rule, and on MCP lists
+the registered boards to pass as `project`. Read-only calls that name a board keep working. A
+`SIDEQUEST_HOME` that itself lives in the temp dir is a throwaway store and accepts temp fixture folders.
+
+`projects` marks a board whose folder no longer exists with `missingPath: true`. Nothing archives or
+deletes it automatically; archive it with `archive_board` once you've checked it holds nothing you want.
 
 ## User stories
 

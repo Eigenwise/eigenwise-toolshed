@@ -22,7 +22,7 @@ fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.str
   source: 'model-gateway',
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
   models: [
-    { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' },
+    { slug: 'codex-gpt-6-1-sol', id: 'claude-gpt-6.1-sol[1m]', label: 'GPT-6.1 Sol' },
     { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' },
   ],
 }));
@@ -199,6 +199,37 @@ test('preparing a non-Git ticket uses its persisted dispatch snapshot', () => {
   assert.equal(persistedSnapshots.filter((snapshot: any) => snapshot.value === baseline.revision.value).length, 1);
 });
 
+// GH-334: the store resolves a board by slug here, so no ensureProject runs between `git init` and
+// the dispatch; dispatch itself has to notice the repository and say it switched.
+test('dispatch moves a snapshot board to git after git init and reports the switch once', () => {
+  const lateGitProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-late-git-'));
+  fs.writeFileSync(path.join(lateGitProject, 'page.md'), 'registered before git init\n');
+  const lateGitSlug = store.ensureProject(lateGitProject).slug;
+  assert.equal(store.readMeta(lateGitSlug).sourceRevisionAdapter, 'filesystem-snapshot');
+  execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: lateGitProject, windowsHide: true });
+  execFileSync('git', ['add', 'page.md'], { cwd: lateGitProject, windowsHide: true });
+  execFileSync('git', ['-c', 'user.name=Late Git', '-c', 'user.email=late-git@example.invalid', 'commit', '--quiet', '-m', 'seed'], { cwd: lateGitProject, windowsHide: true });
+  const first = store.createTicket(lateGitSlug, {
+    title: 'dispatch after git init', category: 'dispatch.lifecycle', files: ['page.md'], source: 'test',
+  });
+  const second = store.createTicket(lateGitSlug, {
+    title: 'second dispatch after git init', category: 'dispatch.lifecycle', files: ['page.md'], source: 'test',
+  });
+
+  const prepared = store.prepareDispatch(lateGitSlug, first.ref, { sharedTree: true });
+  const later = store.prepareDispatch(lateGitSlug, second.ref, { sharedTree: true });
+
+  assert.equal(store.readMeta(lateGitSlug).sourceRevisionAdapter, 'git');
+  assert.equal(prepared.ticket.dispatch.lifecycleAttempt.baseline.revision.source, 'git');
+  assert.deepEqual(
+    { from: prepared.ticket.dispatch.sourceRevisionAdapterSwitch.from, to: prepared.ticket.dispatch.sourceRevisionAdapterSwitch.to },
+    { from: 'filesystem-snapshot', to: 'git' },
+  );
+  assert.ok(store.dispatchWarnings(prepared.ticket, lateGitSlug).some((warning: string) => /switched its source revision adapter from filesystem-snapshot to git/.test(warning)));
+  assert.equal(later.ticket.dispatch.sourceRevisionAdapterSwitch, undefined, 'only the dispatch that made the switch reports it');
+  assert.equal(store.readMeta(lateGitSlug).sourceRevisionAdapterSwitch, undefined);
+});
+
 for (const limit of [
   { bound: 'path cap', observed: 501, cap: 500, unit: 'paths' },
   { bound: 'byte cap', observed: 65, cap: 64, unit: 'bytes' },
@@ -305,7 +336,7 @@ test('a changed recovery route refuses before rehashing or mutating the prepared
     return originalRevision(projectPath, observedAt);
   }, (snapshotStore: any) => {
     snapshotStore.setCategory({
-      id: 'snapshot.recovery.route', name: 'Snapshot recovery route', route: { model: 'fable', effort: 'high' }, fallback: { model: 'codex-gpt-5-6-sol', effort: 'high' }, enabled: true,
+      id: 'snapshot.recovery.route', name: 'Snapshot recovery route', route: { model: 'fable', effort: 'high' }, fallback: { model: 'codex-gpt-6-1-sol', effort: 'high' }, enabled: true,
     });
     const snapshotProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-recovery-route-'));
     fs.writeFileSync(path.join(snapshotProject, 'page.md'), 'recovery route\n');
@@ -651,6 +682,43 @@ test('dispatch lists what it adds beyond the ticket files and never adds a decla
   } finally {
     store.deleteTicket(projectSlug, golden.ref);
     store.deleteTicket(projectSlug, docsFile.ref);
+  }
+});
+
+test('GH-341: an unscoped write dispatch binds the whole tree beside docs/, says so, and refuses the shared checkout', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-unscoped-whole-tree-'));
+  execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: project });
+  execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: project });
+  execFileSync('git', ['config', 'user.name', 'Unscoped Whole Tree Test'], { cwd: project });
+  fs.mkdirSync(path.join(project, 'docs'));
+  fs.mkdirSync(path.join(project, 'src'));
+  fs.writeFileSync(path.join(project, 'docs', 'tools.md'), '# Tools\n');
+  fs.writeFileSync(path.join(project, 'src', 'app.js'), 'module.exports = 1;\n');
+  execFileSync('git', ['add', '.'], { cwd: project });
+  execFileSync('git', ['commit', '--quiet', '-m', 'seed fixture'], { cwd: project });
+  const projectSlug = store.ensureProject(project).slug;
+  assert.deepEqual(store.boardConfig(projectSlug).alwaysInScope, ['docs/']);
+  const unscoped = store.createTicket(projectSlug, { title: 'edit src without declared files', category: 'dispatch.lifecycle', source: 'test' });
+  try {
+    assert.throws(
+      () => store.prepareDispatch(projectSlug, unscoped.ref, { sessionId: `unscoped-shared-${Date.now()}`, sharedTree: true, allowUnscoped: true }),
+      (error: any) => /would run in the shared checkout/.test(error.message)
+        && /Board policy alone would give it only docs\//.test(error.message)
+        && error.message.includes(`sidequest update ${unscoped.ref} --file <path>`),
+    );
+    assert.equal(store.getTicket(projectSlug, unscoped.ref).dispatch, undefined, 'the refused dispatch records nothing');
+
+    const prepared = store.prepareDispatch(projectSlug, unscoped.ref, { sessionId: `unscoped-isolated-${Date.now()}`, allowUnscoped: true });
+    assert.equal(prepared.ticket.dispatch.sharedTree, false);
+    assert.deepEqual(prepared.ticket.dispatch.declaredFiles, ['**', 'docs/']);
+    assert.deepEqual(prepared.ticket.dispatch.boardAddedFiles, ['docs/'], 'writeScope names the whole tree; boardAddedFiles keeps to real paths');
+    assert.equal(prepared.ticket.dispatch.unscopedOverride.writeScope, 'write scope: unscoped (whole tree), always-in-scope: docs/');
+    const executionScope = store.executionScope(projectSlug, prepared.ticket);
+    assert.ok(require('../lib/commit-scope.js').isInScope('src/app.js', executionScope), `docs/ must not be the only scope, got ${executionScope.join(', ')}`);
+    const briefing = agentsync.renderTicketBriefing(store.getTicket(projectSlug, unscoped.ref), 'unscoped-token', projectSlug, project);
+    assert.match(briefing, /\(No files were declared\.\) write scope: unscoped \(whole tree\), always-in-scope: docs\/\./);
+  } finally {
+    store.deleteTicket(projectSlug, unscoped.ref);
   }
 });
 
@@ -4052,9 +4120,10 @@ function runTeammateIdle(teammateName?: any) {
 // Those same fields must not be able to veto a match: only an exact agent id or
 // an exact agent name may prove identity.
 function finishDispatch(title?: any, options: any = {}) {
-  const ticket = store.createTicket(slug, { title, category: 'dispatch.lifecycle', source: 'test' });
+  // Read-only, so done closes it: an unscoped write dispatch now owns the whole tree and must submit (GH-341).
+  const ticket = store.createTicket(slug, { title, category: 'research', source: 'test' });
   const sessionId = options.sessionId || `idle-${ticket.id}`;
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, allowUnscoped: true });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
   const executor = prepared.ticket.dispatchExecutor;
   const agentName = options.agentName || `idle-teammate-${ticket.id}`;
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { sessionId, token: prepared.token, executor, agentName }).ok, true);
@@ -4878,6 +4947,37 @@ test('SQ-3110 GH-295: work landed after a technical_blocker release names groomC
     assert.equal(closed.ok, true, `groomClose delivery: ${closed.reason} ${closed.message || ''}`);
   } finally {
     store.releaseTicket(slug, ticket.ref, 'sq3110-blocker-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('GH-341: a handback whose commit the orchestrator cherry-picked closes through groomClose manual', () => {
+  const ticket = createFixture('gh341 cherry-picked handback fixture');
+  const sessionId = `gh341-handback-${Date.now()}`;
+  const by = 'gh341-handback-executor';
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor }).ok, true);
+  const branch = `gh341-handback-${ticket.id}`;
+  execFileSync('git', ['checkout', '--quiet', '-b', branch], { cwd: PROJECT });
+  commitFixtureChange();
+  const original = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  execFileSync('git', ['checkout', '--quiet', 'main'], { cwd: PROJECT });
+  execFileSync('git', ['commit', '--quiet', '--allow-empty', '-m', 'main moves on before the cherry-pick'], { cwd: PROJECT });
+  assert.equal(store.releaseTicket(slug, ticket.ref, by, { status: 'todo', source: 'test', releaseKind: 'handback', releaseReason: 'scope refused src/' }).ok, true);
+  execFileSync('git', ['cherry-pick', original], { cwd: PROJECT, stdio: 'ignore' });
+  const landed = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  assert.notEqual(landed, original, 'the cherry-pick is a new commit, so only it is reachable from main');
+  try {
+    const refused = store.integrateSubmission(slug, ticket.ref, { deliveryMethod: 'manual', deliveryCommit: landed });
+    assert.equal(refused.reason, 'submission_required');
+    assert.match(refused.message, /handback/);
+    assert.match(refused.message, /pass the cherry-picked commit/);
+    const closed = store.completeTicketAsControlPlane(slug, ticket.ref, {
+      purpose: 'delivery', by: 'orchestrator', reason: 'cherry-picked the handback commit onto main', deliveryCommit: landed, deliveryMethod: 'manual',
+    });
+    assert.equal(closed.ok, true, `groomClose delivery: ${closed.reason} ${closed.message || ''}`);
+  } finally {
+    execFileSync('git', ['branch', '--quiet', '-D', branch], { cwd: PROJECT });
+    store.releaseTicket(slug, ticket.ref, 'gh341-handback-cleanup', { status: 'todo', source: 'test', force: true });
   }
 });
 

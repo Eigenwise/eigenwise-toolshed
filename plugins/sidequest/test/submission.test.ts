@@ -552,7 +552,7 @@ test('MCP submit refuses a completed capture from before the submitted candidate
     });
     assert.strictEqual(refused.ok, false);
     assert.strictEqual(refused.reason, 'verification_capture_required');
-    assert.match(refused.message, /Run "node --version" through the dispatched verify-capture wrapper again/);
+    assert.match(refused.message, new RegExp(`this direct claim, .*A direct claim has no dispatch briefing: from the checkout holding that candidate, run node ".*verify-capture.js" --project ".+" --ticket "${t.ref}"`));
     assert.strictEqual(store.getTicket(slug, t.ref).claim.by, by);
     assert.strictEqual(store.releaseTicket(slug, t.ref, by, {
       status: 'todo',
@@ -1146,6 +1146,41 @@ test('review rejection preserves the candidate through a normal repair dispatch 
   assert.strictEqual(afterReplacement.submission.integratedAt, null, 'repair submission is still queued, never integrated early');
   assert.strictEqual(afterReplacement.submission.supersedesRejectedSubmission, originalCommit);
   assert.strictEqual(afterReplacement.rejectedSubmissions[0].supersededBy.commit, replacementCommit);
+});
+
+test('rework refuses a non-submitter by with the submitter-ownership message, not the release wording (GH-375)', async () => {
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh375.js'), 'candidate\n');
+  git(['add', 'lib/gh375.js']);
+  git(['commit', '-m', 'gh375 candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  const t = addTicket('rework refusal names the required submitter');
+  pin(t, commit);
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'exec-x', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, t.ref, 'exec-x', { commit }).ok, true);
+
+  const wrongOwner = await callMcp('rework', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by: 'reviewer',
+    review: 'A reviewer identity, not the submitter.',
+    reason: 'by must equal the submitter identity, not a reviewer label.',
+  });
+  assert.strictEqual(wrongOwner.ok, false);
+  assert.strictEqual(wrongOwner.reason, 'not_owner');
+  assert.match(wrongOwner.message, /rework requires by = the submitter "exec-x"/);
+  assert.match(wrongOwner.message, /got "reviewer"/);
+  assert.doesNotMatch(wrongOwner.message, /has no claim to release/);
+
+  const rightOwner = await callMcp('rework', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by: 'exec-x',
+    review: 'The submitter rejecting their own candidate.',
+    reason: 'by matches the submitter identity.',
+  });
+  assert.strictEqual(rightOwner.ok, true, rightOwner.message);
 });
 
 test('rework preserves every rejected commit and avoids quarantine ref collisions (SQ-1642)', async () => {
@@ -2240,6 +2275,142 @@ test('SQ-3144: integrate refuses a checkout that does not descend from the recor
   } finally {
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
   }
+});
+
+// GH-340: long-running services keep rewriting files in the registered checkout. Integrate refuses only
+// dirt the delivery would write, including a rename's source, and reports the rest as ignored.
+function gh340SubmittedCandidate(label: string, files: string[], writeCandidate: (ticket: { ref: string }) => void) {
+  const stamp = `${process.pid}-${Date.now()}`;
+  const target = `gh340-${label}-${stamp}`;
+  git(['checkout', '-f', '-B', target, 'origin/main']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: target });
+  const t = addTicket(`GH-340 ${label}`, { files, category: 'submission.fixture' });
+  const sessionId = `gh340-${label}-${stamp}`;
+  const prepared = store.prepareDispatch(slug, t.ref, { sessionId, sharedTree: true, integrationBranch: target, integrationMode: 'local' });
+  assert.strictEqual(store.claimTicket(slug, t.ref, `${label}-worker`, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+  }).ok, true);
+  git(['checkout', '-f', '-B', `gh340-candidate-${label}-${stamp}`, target]);
+  writeCandidate(t);
+  git(['add', '-A']);
+  git(['commit', '-m', `${label} candidate`]);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+  const submitted = runCli(['submit', t.ref, '--by', `${label}-worker`, '--commit', commit]);
+  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  git(['checkout', '-f', target]);
+  return { t, target, commit };
+}
+
+function gh340WriteLibFile(file: string) {
+  return () => {
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, file), 'candidate\n');
+  };
+}
+
+function withGh340Board(run: () => void) {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  try {
+    run();
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+  }
+}
+
+test('GH-340: integrate delivers when every dirty path is outside the delivery and lists them as ignored', () => {
+  withGh340Board(() => {
+    const { t, target, commit } = gh340SubmittedCandidate('disjoint', ['lib/gh340-disjoint.js'], gh340WriteLibFile('lib/gh340-disjoint.js'));
+    fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'rewritten by a running service\n');
+    fs.writeFileSync(path.join(PROJECT_DIR, 'gh340-service.json'), '{"tick":1}\n');
+
+    const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.deepStrictEqual(delivered.integration.ignoredDirtyPaths.slice().sort(), ['README.md', 'gh340-service.json']);
+    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, target]), '');
+    assert.strictEqual(fs.readFileSync(path.join(PROJECT_DIR, 'README.md'), 'utf8'), 'rewritten by a running service\n');
+    assert.strictEqual(fs.readFileSync(path.join(PROJECT_DIR, 'gh340-service.json'), 'utf8'), '{"tick":1}\n');
+  });
+});
+
+test('GH-340: integrate still refuses a dirty path the delivery writes and names only that path', () => {
+  withGh340Board(() => {
+    const { t, target } = gh340SubmittedCandidate('intersect', ['lib/gh340-intersect.js'], gh340WriteLibFile('lib/gh340-intersect.js'));
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh340-intersect.js'), 'operator copy\n');
+    fs.writeFileSync(path.join(PROJECT_DIR, 'gh340-service.json'), '{"tick":2}\n');
+    const headBefore = git(['rev-parse', target]);
+
+    const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+
+    assert.strictEqual(refused.reason, 'integration_target_dirty', refused.message);
+    assert.deepStrictEqual(refused.checkoutState, ['? lib/gh340-intersect.js']);
+    assert.deepStrictEqual(refused.ignoredDirtyPaths, ['gh340-service.json']);
+    assert.match(refused.message, /: lib\/gh340-intersect\.js\. Commit, stash, or remove those paths.* 1 other dirty path\(s\) sit outside the delivery and were ignorable\./);
+    assert.doesNotMatch(refused.message, /gh340-service\.json/);
+    assert.strictEqual(git(['rev-parse', target]), headBefore);
+    assert.strictEqual(fs.readFileSync(path.join(PROJECT_DIR, 'lib', 'gh340-intersect.js'), 'utf8'), 'operator copy\n');
+  });
+});
+
+test('GH-340: integrate refuses an unstaged edit to a file the delivery renames away', () => {
+  withGh340Board(() => {
+    const { t, target } = gh340SubmittedCandidate('rename', ['README.md', 'docs/README.md'], () => {
+      fs.mkdirSync(path.join(PROJECT_DIR, 'docs'), { recursive: true });
+      git(['mv', 'README.md', 'docs/README.md']);
+    });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'rewritten by a running service\n');
+    const headBefore = git(['rev-parse', target]);
+
+    const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+
+    assert.strictEqual(refused.reason, 'integration_target_dirty', refused.message);
+    assert.strictEqual(refused.checkoutState.length, 1);
+    assert.match(refused.checkoutState[0], /^1 \.M .* README\.md$/);
+    assert.match(refused.message, /: README\.md\. Commit, stash/);
+    assert.strictEqual(git(['rev-parse', target]), headBefore);
+    assert.strictEqual(fs.readFileSync(path.join(PROJECT_DIR, 'README.md'), 'utf8'), 'rewritten by a running service\n');
+  });
+});
+
+// GH-156: integrate on a per-ticket integrationBranch refused wave_invalidated while the
+// message showed the assembled baseline equal to the candidate's. Equal baselines are the
+// healthy fast-forward case and must deliver.
+test('GH-156: integrate delivers a candidate whose parent is the checked-out target head', () => {
+  withGh340Board(() => {
+    const { t, target, commit } = gh340SubmittedCandidate('gh156-parent', ['lib/gh156-parent.js'], gh340WriteLibFile('lib/gh156-parent.js'));
+    const submittedBaseline = store.getTicket(slug, t.ref).submission.baseline.revision.value;
+    assert.strictEqual(submittedBaseline, git(['rev-parse', `${commit}^`]));
+    assert.strictEqual(git(['rev-parse', target]), submittedBaseline, 'the target head is the candidate parent');
+
+    const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, target]), '');
+    assert.strictEqual(store.getTicket(slug, t.ref).submission.wave.baseline.revision.value, submittedBaseline);
+  });
+});
+
+// GH-156 (5.3.2 report): the ticket's real work lived outside the repo, so its candidate
+// carried nothing but its own release fragment, and none of its declared files. That is
+// a legitimate delivery.
+test('GH-156: integrate delivers a candidate that changes only its own release fragment', () => {
+  withGh340Board(() => {
+    const { t, target, commit } = gh340SubmittedCandidate('gh156-fragment', ['docs/gh156-never-written.md'], (ticket) => {
+      fs.mkdirSync(path.join(PROJECT_DIR, '.release', 'unreleased'), { recursive: true });
+      fs.writeFileSync(path.join(PROJECT_DIR, '.release', 'unreleased', `${ticket.ref}.md`), '- external work delivered\n');
+    });
+    assert.deepStrictEqual(store.getTicket(slug, t.ref).submission.changedPaths, [`.release/unreleased/${t.ref}.md`]);
+
+    const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, target]), '');
+  });
 });
 
 test('legacy root scope cannot bypass integration and names explicit transitions', () => {
@@ -4321,7 +4492,8 @@ test('SQ-2413: MCP groomClose records terminal recovery evidence and accepts a r
       reason: 'Reject only from the candidate owner.',
     });
     assert.strictEqual(rework.ok, false);
-    assert.match(rework.message, /no claim to release/);
+    assert.match(rework.message, /rework requires by = the submitter "terminal-submitted-source"/);
+    assert.doesNotMatch(rework.message, /no claim to release/);
     git(['reset', '--hard', 'origin/main']);
     fs.writeFileSync(path.join(PROJECT_DIR, 'unrelated-delivery.js'), 'reachable but unrelated\n');
     git(['add', 'unrelated-delivery.js']);
@@ -6434,4 +6606,123 @@ test('integration verification runs the recorded verifier from the ticket verify
 
   assert.strictEqual(result.ok, true, JSON.stringify(result.verify));
   assert.strictEqual(result.verify.status, 'passed');
+});
+
+// GitHub #377: the orchestrator takes a ticket an earlier round dispatched, amends its verify, and
+// claims it directly. The wrapper and submit both have to use the amended verify, and the capture
+// the wrapper records for the direct claim has to admit the submit.
+function claimDirectlyAfterEarlierDispatch(title: string, command: string, file: string) {
+  const ticket = addTicket(title, {
+    category: 'submission.fixture',
+    executorVerifyKind: 'command',
+    executorVerify: command,
+    files: [file],
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `${ticket.ref}-earlier-round`, sharedTree: true });
+  assert.strictEqual(prepared.ok, true, prepared.message);
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, 'earlier-round-executor', {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: `${ticket.ref}-earlier-round`,
+  }).ok, true);
+  const handBack = () => assert.strictEqual(store.releaseTicket(slug, ticket.ref, 'earlier-round-executor', { status: 'todo', reason: 'Earlier round handed back.' }).ok, true);
+  const claimDirectly = () => {
+    const claim = store.claimTicket(slug, ticket.ref, 'orchestrator', { direct: true, force: true, reason: 'The submission fixture requires a local direct claim.' });
+    assert.strictEqual(claim.ok, true, claim.reason);
+  };
+  return { ticket, prepared, handBack, claimDirectly };
+}
+
+test('GH-377: a direct claim after a terminal dispatch submits with a capture of the amended verify', async () => {
+  cleanBranch();
+  const currentCommand = 'node --version';
+  const { ticket, handBack, claimDirectly } = claimDirectlyAfterEarlierDispatch('direct claim after an earlier dispatch', 'node -e "process.exit(0)" -- stale', 'lib/gh-377-amended.js');
+  handBack();
+  store.updateTicket(slug, ticket.ref, { executorVerifyKind: 'command', executorVerify: currentCommand });
+  claimDirectly();
+
+  const candidate = createCandidateCommit('gh-377-amended.js', 'direct claim candidate\n');
+  pin(ticket, candidate);
+  const target = { project: PROJECT_DIR, ticket: ticket.ref };
+  assert.deepStrictEqual(captureCommand([], target), { command: currentCommand }, 'the wrapper loads the amended verify, not the earlier dispatch pin');
+  const capture = await runVerifyCapture(currentCommand, PROJECT_DIR);
+  try {
+    assert.strictEqual(capture.status, 'passed');
+    const recorded = recordCapture(target, capture, PROJECT_DIR);
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    const submitted = store.submitTicket(slug, ticket.ref, 'orchestrator', { commit: candidate, verify: currentCommand });
+    assert.strictEqual(submitted.ok, true, submitted.message);
+    assert.strictEqual(store.getTicket(slug, ticket.ref).submission.commit, candidate);
+  } finally {
+    fs.rmSync(capture.logPath, { force: true });
+  }
+});
+
+test('GH-377: a capture recorded by the earlier dispatch attempt does not admit the direct claim', async () => {
+  cleanBranch();
+  const command = 'node --version';
+  const { ticket, prepared, handBack, claimDirectly } = claimDirectlyAfterEarlierDispatch('earlier attempt capture', command, 'lib/gh-377-earlier.js');
+  const candidate = createCandidateCommit('gh-377-earlier.js', 'earlier attempt candidate\n');
+  pin(ticket, candidate);
+  const capture = await runVerifyCapture(command, PROJECT_DIR);
+  try {
+    const recorded = recordCapture({ project: PROJECT_DIR, ticket: ticket.ref }, capture, PROJECT_DIR);
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.capture.dispatchNonce, prepared.token);
+    handBack();
+    claimDirectly();
+
+    const refused = store.submitTicket(slug, ticket.ref, 'orchestrator', { commit: candidate, verify: command });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'verification_capture_required');
+    assert.ok(!refused.message.includes('<none>'), refused.message);
+    assert.match(refused.message, new RegExp(`verify-capture\\.js" --project ".+" --ticket "${ticket.ref}"`));
+  } finally {
+    fs.rmSync(capture.logPath, { force: true });
+  }
+});
+
+test('GH-378: submit never repoints another board\'s refs/sidequest/<ref> and names that commit instead', async () => {
+  cleanBranch();
+  const ticket = addTicket('new board reuses an archived board ref name', { files: ['lib/reused-ref.js'] });
+  const by = 'reused-ref-worker';
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  const foreign = git(['rev-parse', 'origin/main']);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'reused-ref.js'), 'first round\n');
+  git(['add', 'lib/reused-ref.js']);
+  git(['commit', '-m', 'first round candidate']);
+  const firstRound = git(['rev-parse', 'HEAD']);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'reused-ref.js'), 'second round\n');
+  git(['add', 'lib/reused-ref.js']);
+  git(['commit', '-m', 'second round candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(ticket, foreign);
+  const submitArgs = {
+    project: PROJECT_DIR,
+    ref: ticket.ref,
+    by,
+    commit,
+    verify: 'npm run test:files -- test/submission.test.ts',
+    body: 'Changed lib/reused-ref.js. Scoped submission test passed. Nothing skipped.',
+  };
+
+  const tipMismatch = await callMcp('submit', { ...submitArgs, worktree: PROJECT_DIR });
+  assert.equal(tipMismatch.ok, false);
+  assert.match(tipMismatch.message, new RegExp(`refs/sidequest/${ticket.ref} already points to ${foreign}, a commit this ticket never recorded, so it belongs to another board`));
+  assert.doesNotMatch(tipMismatch.message, /Point it back at the submitted commit/);
+
+  const claimed = store.getTicket(slug, ticket.ref);
+  claimed.dispatch = { sanctionedCommits: [firstRound] };
+  persist(claimed);
+  pin(ticket, firstRound);
+  const ownTipMismatch = await callMcp('submit', { ...submitArgs, worktree: PROJECT_DIR });
+  assert.equal(ownTipMismatch.ok, false);
+  assert.match(ownTipMismatch.message, /Point it back at the submitted commit/);
+
+  pin(ticket, foreign);
+  git(['reset', '--hard', 'origin/main']);
+  await assert.rejects(
+    callMcp('submit', { ...submitArgs, worktree: path.join(PROJECT_DIR, 'missing-reused-ref-worktree') }),
+    new RegExp(`already points to ${foreign}, a commit this ticket never recorded`),
+  );
+  assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`]), foreign, 'the foreign candidate ref is left in place');
 });

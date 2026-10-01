@@ -3,7 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import { extname, resolve } from 'node:path';
 import type { Baseline, SourceRevision } from './kernel';
-import type { SnapshotChildResult } from './source-revision-snapshot-child';
+import type { SnapshotChildResult, SnapshotCountedEntry } from './source-revision-snapshot-child';
 
 export type SourceRevisionResolution = Readonly<{
   candidateExists: boolean;
@@ -39,19 +39,36 @@ export const FILESYSTEM_SNAPSHOT_MAX_ELAPSED_MS = 10_000;
 
 export type FilesystemSnapshotLimit = 'path cap' | 'byte cap' | 'deadline';
 
+// What a cap refusal's walk left out and where the paths it did count came from. A walk killed
+// by the deadline reports nothing, so it keeps the empty facts.
+export type FilesystemSnapshotWalkFacts = Readonly<{
+  skipped: readonly string[];
+  skippedTotal: number;
+  counted: readonly SnapshotCountedEntry[];
+}>;
+
+const NO_WALK_FACTS: FilesystemSnapshotWalkFacts = Object.freeze({ skipped: [], skippedTotal: 0, counted: [] });
+
+function snapshotLimitMessage(bound: FilesystemSnapshotLimit, observed: number, cap: number, blockingPath: string | null): string {
+  const reading = blockingPath ? ` while reading ${blockingPath}` : '';
+  return `filesystem snapshot ${bound} exceeded: observed ${observed}, cap ${cap}${reading}`;
+}
+
 export class FilesystemSnapshotLimitError extends Error {
   readonly bound: FilesystemSnapshotLimit;
   readonly observed: number;
   readonly cap: number;
   readonly path: string | null;
+  readonly walk: FilesystemSnapshotWalkFacts;
 
-  constructor(bound: FilesystemSnapshotLimit, observed: number, cap: number, blockingPath: string | null = null) {
-    super(`filesystem snapshot ${bound} exceeded: observed ${observed}, cap ${cap}${blockingPath ? ` while reading ${blockingPath}` : ''}`);
+  constructor(bound: FilesystemSnapshotLimit, observed: number, cap: number, blockingPath: string | null = null, walk: FilesystemSnapshotWalkFacts = NO_WALK_FACTS) {
+    super(snapshotLimitMessage(bound, observed, cap, blockingPath));
     this.name = 'FilesystemSnapshotLimitError';
     this.bound = bound;
     this.observed = observed;
     this.cap = cap;
     this.path = blockingPath;
+    this.walk = walk;
   }
 }
 
@@ -181,7 +198,7 @@ export function filesystemSnapshotRevision(
   if (!root || !Number.isFinite(Date.parse(observedAt))) return null;
   const result = snapshotChildResult(root, options);
   if ('limit' in result) {
-    throw new FilesystemSnapshotLimitError(result.limit.bound, result.limit.observed, result.limit.cap);
+    throw new FilesystemSnapshotLimitError(result.limit.bound, result.limit.observed, result.limit.cap, null, result.limit);
   }
   if (!('digest' in result)) return null;
   return Object.freeze({

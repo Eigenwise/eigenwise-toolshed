@@ -19,7 +19,7 @@ fs.writeFileSync(path.join(catalogDirectory, 'catalog.json'), JSON.stringify({
   updatedAt: new Date().toISOString(),
   source: 'model-gateway',
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
-  models: [{ slug: 'codex-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'Codex Sol' }],
+  models: [{ slug: 'codex-sol', id: 'claude-gpt-6.1-sol[1m]', label: 'Codex Sol' }],
 }));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 process.env.SIDEQUEST_DISCOVERY_DIRS = discovery;
@@ -361,7 +361,7 @@ test('a bound effectively readonly review preserves its candidate and prepared r
       { route: active.dispatch.route, executor: active.dispatch.executor, readonly: active.dispatch.readonly },
       preparedIdentity,
     );
-    assert.deepEqual(preparedIdentity.route, { model: 'codex-sol', effort: 'high', marker: 'gpt-5.6-sol' });
+    assert.deepEqual(preparedIdentity.route, { model: 'codex-sol', effort: 'high', marker: 'gpt-6.1-sol' });
     assert.equal(preparedIdentity.executor, 'sidequest-exec-dispatch-readonly');
     assert.equal(active.reviewTarget.ref, source.ref);
     assert.equal(active.reviewTarget.candidate.value, commit);

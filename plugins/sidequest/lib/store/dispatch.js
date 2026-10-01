@@ -4,9 +4,21 @@ const { classifyVerificationKind, verificationRequirement } = require("../kernel
 const { resolveSuite } = require("../suite-resolver.js");
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationOutcome } = require("../kernel/review-binding");
 const { compareSemver } = require("../plugin-freshness.js");
+const { WHOLE_TREE_SCOPE } = require("../commit-scope.js");
 function unscopedWriteCannotAutoApprove(ticket, options) {
   const { dispatchReadOnly, normalizeFiles, autoApproveScope } = options;
   return !dispatchReadOnly(ticket) && !normalizeFiles(ticket?.files).length && (!Array.isArray(autoApproveScope) || !autoApproveScope.length);
+}
+function undeclaredWriteScopeRefusal(ref) {
+  return `prepare dispatch: ${ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to give the executor the whole tree as its write scope (isolated worktree only).`;
+}
+function unscopedWriteScopeLine(alwaysInScope) {
+  const boardPaths = Array.isArray(alwaysInScope) ? alwaysInScope : [];
+  return `write scope: unscoped (whole tree)${boardPaths.length ? `, always-in-scope: ${boardPaths.join(", ")}` : ""}`;
+}
+function unscopedSharedTreeRefusal(ref, boardPaths) {
+  const boardOnly = boardPaths.length ? ` Board policy alone would give it only ${boardPaths.join(", ")}.` : "";
+  return `prepare dispatch: ${ref} has no declared file scope and would run in the shared checkout, where an unscoped (whole tree) write scope would commit every dirty path in it.${boardOnly} Declare the paths it needs (\`sidequest update ${ref} --file <path>\`), or dispatch it into an isolated worktree.`;
 }
 function namedSuiteForTicket(ticket, projectPath) {
   const directories = new Set(
@@ -37,7 +49,7 @@ function requirementsMatch(left, right) {
   return JSON.stringify(left || null) === JSON.stringify(right || null);
 }
 function createDispatch(dependencies) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimGraceMs, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, servingInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimGraceMs, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchFilesystemSnapshotPreflight, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, takeSourceRevisionAdapterSwitch, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
   function syncLiveDispatchVerification(slug, ticket, amendment) {
     const state = dispatchState(ticket);
     if (!state || state.terminalAt) return null;
@@ -1453,7 +1465,7 @@ function createDispatch(dependencies) {
       autoApproveScope: boardConfig(slug)?.autoApproveScope
     });
     if (initialNoDeclaredFileScope && opts.allowUnscoped !== true) {
-      throw new Error(`prepare dispatch: ${found.ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to explicitly accept that the executor can block on its first write and end without a submission.`);
+      throw new Error(undeclaredWriteScopeRefusal(found.ref));
     }
     const verifyError = dispatchVerifyCommandError(found, projectPath);
     if (verifyError) throw new Error(verifyError);
@@ -1484,6 +1496,7 @@ function createDispatch(dependencies) {
     }
     assertDispatchTransport(opts.transport, { allowUnverifiedTransport: !!opts.allowUnverifiedTransport });
     const pythonIoEncoding = projectPath ? ensurePythonIoEncoding(projectPath) : { written: false };
+    const sourceRevisionAdapterSwitch = takeSourceRevisionAdapterSwitch(slug);
     const captureFilesystemSnapshot = withTicketLock(slug, found.id, () => {
       const ticket = getTicket(slug, found.id);
       if (!ticket) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
@@ -1589,7 +1602,7 @@ function createDispatch(dependencies) {
           autoApproveScope: boardConfig(slug)?.autoApproveScope
         });
         if (noDeclaredFileScope && opts.allowUnscoped !== true) {
-          throw new Error(`prepare dispatch: ${t.ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to explicitly accept that the executor can block on its first write and end without a submission.`);
+          throw new Error(undeclaredWriteScopeRefusal(t.ref));
         }
         const fallbackReason = !current?.recovery && resolvedPolicy?.fallbackReason || null;
         const recovery = current && current.recovery && activeDispatchRoute(t) ? current.recovery : null;
@@ -1606,9 +1619,10 @@ function createDispatch(dependencies) {
           });
         }
         priorTokenFile = dispatchTokenFile(t);
-        const releasedBinding = current?.outcome === "released" && Array.isArray(current.declaredFiles) && current.declaredFiles.length ? current.declaredFiles.slice() : null;
+        const releasedBinding = current?.outcome === "released" && Array.isArray(current.declaredFiles) && current.declaredFiles.length ? current.declaredFiles.filter((file) => file !== WHOLE_TREE_SCOPE) : null;
         const effectiveFiles = releasedBinding ? Array.from(/* @__PURE__ */ new Set([...releasedBinding, ...effectiveScope(slug, t)])) : effectiveScope(slug, t);
         const readonly = dispatchReadOnly(t);
+        const wholeTreeScope = !readonly && opts.allowUnscoped === true && !normalizeFiles(t.files).length;
         const requestedSharedTree = opts.sharedTree === true || !Object.hasOwn(opts, "sharedTree") && Boolean(current?.sharedTree);
         const reducedAgentSchema = opts.reducedAgentSchema === true || !Object.hasOwn(opts, "reducedAgentSchema") && current?.reducedAgentSchema === true;
         const explicitIsolation = Object.hasOwn(opts, "sharedTree") && opts.sharedTree === false;
@@ -1624,6 +1638,7 @@ function createDispatch(dependencies) {
           throw new Error(`prepare dispatch: ${t.ref} cannot pin the immutable candidate checkout. ${worktreeWarning}`);
         }
         if (worktreeWarning) sharedTree = true;
+        if (wholeTreeScope && sharedTree) throw new Error(unscopedSharedTreeRefusal(t.ref, effectiveFiles));
         if (t.workingTreeDelivery === true && !sharedTree) {
           throw new Error(`prepare dispatch: ${t.ref} declares a working-tree deliverable and must run in the shared checkout. Re-dispatch with sharedTree:true.`);
         }
@@ -1637,8 +1652,9 @@ function createDispatch(dependencies) {
         const category = getCategory(ticketCategory(t), { project: slug });
         const artifactRoot = sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t) ? categoryArtifactRoot(category, effectiveFiles[0]) : null;
         const artifactMode = Boolean(artifactRoot);
-        const declaredFiles = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(effectiveFiles, t.files, t.ref);
-        const boardAddedFiles = declaredFiles.filter((file) => !commitScope.isInScope(file, t.files));
+        const writeScope = wholeTreeScope ? [WHOLE_TREE_SCOPE, ...effectiveFiles] : effectiveFiles;
+        const declaredFiles = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(writeScope, t.files, t.ref);
+        const boardAddedFiles = declaredFiles.filter((file) => file !== WHOLE_TREE_SCOPE && !commitScope.isInScope(file, t.files));
         const artifactScope = artifactMode ? effectiveFiles[0] : null;
         const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
         const dirtyBaselineCapture = sharedTree && !artifactMode ? captureDirtyBaseline(slug) : null;
@@ -1737,10 +1753,11 @@ function createDispatch(dependencies) {
           ...integrationTargetState ? { integrationTarget: integrationTargetState } : {},
           ...localAheadWarning ? { localAheadWarning } : {},
           readonly,
-          ...noDeclaredFileScope ? {
+          ...wholeTreeScope ? {
             unscopedOverride: {
               at: now,
-              source: opts.source || opts.transport || "store"
+              source: opts.source || opts.transport || "store",
+              writeScope: unscopedWriteScopeLine(boardConfig(slug)?.alwaysInScope)
             }
           } : {},
           ...nonRepoOutput ? { nonRepoOutput: true } : {},
@@ -1767,6 +1784,7 @@ function createDispatch(dependencies) {
           } : {},
           ...unboundAttemptsSkipped ? { unboundAttemptsSkipped: true } : {},
           ...fallbackReason ? { fallbackReason } : {},
+          ...sourceRevisionAdapterSwitch ? { sourceRevisionAdapterSwitch } : {},
           storyContract: contract,
           storyLogRevision,
           ...contractDrift ? { storyContractDrift: Object.assign({}, contractDrift, { rebasedAt: now }) } : {},
