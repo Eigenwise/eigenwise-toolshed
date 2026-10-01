@@ -73,3 +73,28 @@ test('scopeRequest inside a whole-tree unscoped dispatch reads as covered, not r
   assert.deepEqual(result.approved, []);
   assert.equal(comments.some((comment: { body: string }) => /declares no files/.test(comment.body)), false);
 });
+
+// GitHub #403: an addition the board auto-approves leaves no refused path, so the
+// result must not carry "Scope expansion refused: ." beside a granted state.
+test('scopeRequest that auto-approves its addition carries no refusal message', () => {
+  const fixture = createClaimedDispatch();
+  const sibling = 'plugins/sidequest/src/lib/store/auto-approved-sibling.ts';
+  const result = fixture.store.requestScope(fixture.project, fixture.ticket.ref, 'scope-evidence-worker', [sibling]);
+  const comments = fixture.store.getTicket(fixture.project, fixture.ticket.ref).comments || [];
+
+  assert.equal(result.state, 'granted');
+  assert.deepEqual(result.approved, [sibling]);
+  assert.deepEqual(result.refused, []);
+  assert.equal(result.message, undefined);
+  assert.equal(comments.some((comment: { body: string }) => /Scope expansion refused/.test(comment.body)), false);
+});
+
+test('scopeRequest names only the refused paths when one addition is approved and another is not', () => {
+  const fixture = createClaimedDispatch();
+  const sibling = 'plugins/sidequest/src/lib/store/auto-approved-sibling.ts';
+  const outside = 'docs/not-in-this-package.md';
+  const result = fixture.store.requestScope(fixture.project, fixture.ticket.ref, 'scope-evidence-worker', [sibling, outside]);
+
+  assert.equal(result.state, 'refused');
+  assert.equal(result.message, `Scope expansion refused: ${outside}.`);
+});

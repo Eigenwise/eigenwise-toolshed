@@ -237,3 +237,59 @@ test('a mixed files patch is refused before any other field lands', () => {
   assert.equal(after.title, 'original title');
   assert.deepEqual(after.files, ['a.ts']);
 });
+
+// GitHub #403: files replaces the list, so a replace on a live claim that omits a
+// declared path dropped scope the claim still held, including scopeRequest grants.
+function liveReplace(fixture: ReturnType<typeof createClaimedDispatch>, files: string[]) {
+  return fixture.store.updateTicket(fixture.project, fixture.ticket.ref, {
+    files,
+    by: 'scope-add-remove-orchestrator',
+  }, undefined, { allowLiveClaimCloseoutUpdate: true });
+}
+
+test('a live-claim files replace that drops declared scope is refused and leaves the scope untouched', () => {
+  const kept = 'plugins/sidequest/src/lib/store/tickets.ts';
+  const dropped = 'plugins/sidequest/src/lib/store/dispatch.ts';
+  const fixture = createClaimedDispatch({ files: [kept, dropped] });
+  const declaredBefore = [...fixture.ticket.dispatch.declaredFiles];
+  assert.throws(
+    () => liveReplace(fixture, [kept]),
+    (error: Error) => error.message.includes(`drop ${dropped}`)
+      && !error.message.includes(`drop ${kept}`)
+      && /Use addFiles to add paths without dropping the rest, removeFiles/.test(error.message)
+      && /release the claim first/.test(error.message),
+  );
+  const after = fixture.store.getTicket(fixture.project, fixture.ticket.ref);
+  assert.deepEqual(after.files, [kept, dropped]);
+  assert.deepEqual(after.dispatch.declaredFiles, declaredBefore);
+});
+
+test('a live-claim files replace that keeps every declared path is allowed', () => {
+  const a = 'plugins/sidequest/src/lib/store/tickets.ts';
+  const b = 'plugins/sidequest/src/lib/store/dispatch.ts';
+  const added = 'plugins/sidequest/src/lib/store/extra.ts';
+  const fixture = createClaimedDispatch({ files: [a, b] });
+  assert.deepEqual(liveReplace(fixture, [a, b, added]).files, [a, b, added]);
+  assert.deepEqual(liveReplace(fixture, [added, b, a]).files, [added, b, a]);
+  assert.deepEqual(liveReplace(fixture, [b, a, added]).files, [b, a, added]);
+  // A broader entry still covers the narrower declared ones, so nothing is lost.
+  assert.deepEqual(liveReplace(fixture, ['plugins/sidequest/src']).files, ['plugins/sidequest/src']);
+});
+
+test('a path a scopeRequest grant added is held by the claim, so a replace that omits it is refused', () => {
+  const declared = 'plugins/sidequest/src/lib/store/tickets.ts';
+  const granted = 'plugins/sidequest/src/lib/store/granted-by-request.ts';
+  const fixture = createClaimedDispatch({ files: [declared] });
+  const request = fixture.store.requestScope(fixture.project, fixture.ticket.ref, fixture.ticket.claim.by, [granted]);
+  assert.equal(request.state, 'granted');
+  const widened = fixture.store.getTicket(fixture.project, fixture.ticket.ref);
+  assert.ok(widened.files.includes(granted));
+  assert.throws(() => liveReplace(fixture, [declared]), (error: Error) => error.message.includes(`drop ${granted}`));
+  assert.deepEqual(fixture.store.getTicket(fixture.project, fixture.ticket.ref).files, widened.files);
+});
+
+test('an unclaimed ticket keeps replace semantics even when the list shrinks', () => {
+  const { project, store } = freshProject();
+  const ticket = store.createTicket(project, { title: 'unclaimed replace', category: 'debugging', files: ['a.ts', 'b.ts'] });
+  assert.deepEqual(store.updateTicket(project, ticket.ref, { files: ['a.ts'] }).files, ['a.ts']);
+});
