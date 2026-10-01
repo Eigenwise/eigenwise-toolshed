@@ -2412,6 +2412,7 @@ function preToolUseScriptsFor(toolName: string): string[] {
     .flatMap((group) => group.hooks.map((hook) => path.join(HOOKS, /hooks\/([\w-]+\.js)/.exec(hook.command)?.[1] || '')));
 }
 
+// SQ-3203: board__remove was never routed, so an executor's remove {force:true} reached the handler unblocked.
 test('hooks.json routes every live-claim mutation tool to force-exec-bypass for PreToolUse', () => {
   const source = fs.readFileSync(FORCE_BYPASS, 'utf8');
   const rules = source.slice(source.indexOf('LIVE_CLAIM_MUTATION_RULES = ['));
@@ -2439,36 +2440,6 @@ test('an executor subagent cannot mint a scope grant or force-remove through the
       .filter((output) => output?.hookSpecificOutput?.permissionDecision === 'deny');
     assert.equal(decisions.length, 1, `${tool_name}: exactly one registered hook denies it (ran ${scripts.map((script) => path.basename(script)).join(', ')})`);
     assert.match(decisions[0].hookSpecificOutput.permissionDecisionReason, reason);
-  }
-});
-
-// The tests above feed force-exec-bypass.js directly, so they cannot see whether
-// Claude Code's hooks.json actually routes a tool name to it (SQ-3203: it never
-// did for board__remove, so an executor's remove {force:true} reached the MCP
-// handler unblocked). This walks the live-claim mutation rules out of the source
-// and checks each one against the real manifest, so a rule added without a route
-// fails here instead of silently reaching the handler.
-test('hook manifest routes force-exec-bypass for every live-claim mutation rule tool name (SQ-3203)', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'hooks', 'force-exec-bypass.ts'), 'utf8');
-  const signature = source.match(/function executorLiveClaimMutationRefusal\([^)]*\)[^{]*{/);
-  assert.ok(signature, 'executorLiveClaimMutationRefusal must still exist in force-exec-bypass.ts');
-  let depth = 1;
-  let index = signature!.index! + signature![0].length;
-  while (depth > 0 && index < source.length) {
-    if (source[index] === '{') depth++;
-    else if (source[index] === '}') depth--;
-    index++;
-  }
-  const body = source.slice(signature!.index! + signature![0].length, index - 1);
-  const toolNames = [...body.matchAll(/toolName === '(mcp__plugin_sidequest_board__\w+)'/g)].map((match) => match[1]);
-  assert.ok(toolNames.length >= 2, 'expected at least the update and remove live-claim mutation rules');
-
-  const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
-  const preToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> = config.hooks.PreToolUse;
-  for (const toolName of toolNames) {
-    const routed = preToolUse.some((entry) => new RegExp(`^(?:${entry.matcher === '*' ? '.*' : entry.matcher})$`).test(toolName)
-      && entry.hooks.some((hook) => hook.command.includes('force-exec-bypass.js')));
-    assert.ok(routed, `${toolName} has a live-claim mutation rule but no PreToolUse matcher in hooks.json runs force-exec-bypass.js for it`);
   }
 });
 
