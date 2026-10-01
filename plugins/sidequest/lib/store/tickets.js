@@ -1079,10 +1079,7 @@ function createTickets(dependencies) {
     if (patch.files !== void 0 && adjusts) {
       throw new Error(`${ticket.ref}: update cannot mix files with addFiles/removeFiles in one call. Use files to replace the declared list, or addFiles/removeFiles to adjust it without dropping the rest.`);
     }
-    if (!adjusts) {
-      if (patch.files !== void 0) assertLiveClaimReplace(ticket, normalizeFiles(patch.files));
-      return patch.files;
-    }
+    if (!adjusts) return patch.files;
     const widened = scopeExpansionFiles(ticket, patch.addFiles);
     assertDeclaredRemovals(ticket, widened, patch.removeFiles);
     const reduced = scopeReductionFiles(widened, patch.removeFiles);
@@ -1164,6 +1161,7 @@ function createTickets(dependencies) {
       }
       const prevStatus = t.status;
       const filesPatch = patchedFileScope(t, patch);
+      if (patch.files !== void 0) assertLiveClaimReplace(t, normalizeFiles(patch.files));
       if (patch.title != null) t.title = String(patch.title).trim().slice(0, 300) || t.title;
       if (patch.description != null) t.description = String(patch.description).trim();
       if (patch.status != null) t.status = nextStatus;

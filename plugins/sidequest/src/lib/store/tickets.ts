@@ -1269,10 +1269,7 @@ function patchedFileScope(ticket?: any, patch?: any) {
   if (patch.files !== undefined && adjusts) {
     throw new Error(`${ticket.ref}: update cannot mix files with addFiles/removeFiles in one call. Use files to replace the declared list, or addFiles/removeFiles to adjust it without dropping the rest.`);
   }
-  if (!adjusts) {
-    if (patch.files !== undefined) assertLiveClaimReplace(ticket, normalizeFiles(patch.files));
-    return patch.files;
-  }
+  if (!adjusts) return patch.files;
   // Appended first, then dropped: a path named by both addFiles and removeFiles in one
   // call resolves as a removal.
   const widened = scopeExpansionFiles(ticket, patch.addFiles);
@@ -1369,6 +1366,9 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
     // Resolved before the first field lands: a patch that mixes files with
     // addFiles/removeFiles throws here rather than after a title has been assigned.
     const filesPatch = patchedFileScope(t, patch);
+    // After the closeout refusal, so a claim holder still hears to use scopeRequest and
+    // only a control-plane caller that may change a live claim's scope meets this guard.
+    if (patch.files !== undefined) assertLiveClaimReplace(t, normalizeFiles(patch.files));
     if (patch.title != null) t.title = String(patch.title).trim().slice(0, 300) || t.title;
     if (patch.description != null) t.description = String(patch.description).trim();
     if (patch.status != null) t.status = nextStatus;
