@@ -203,7 +203,7 @@ function resolveReadOnlyTools(readOnlyDeniedTools?: any) {
 }
 
 function readOnlyNote() {
-  return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
+  return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree; Sidequest's shell guard permits writes under the ticket's verification directory, though that does not override Claude Code's own worktree command checks. Do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
 
 // SQ-2747: `git worktree remove --force` on a raw scratch checkout deletes a junctioned

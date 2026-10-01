@@ -5873,6 +5873,34 @@ test('read-only shell guard: a linked worktree cannot write into its main checko
   assert.equal(runReadOnlyShell('git status', linked), null);
 });
 
+test('read-only shell guard: a content cmdlet writes only its path, so fixture text naming git reaches the evidence root (SQ-3202)', () => {
+  const root = readOnlyShellCheckout();
+  const evidence = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-readonly-evidence-'));
+  const fixture = "git(['checkout', 'main'])";
+  const evidenceFile = path.join(evidence, 'probe.ts');
+  const runPowerShell = (command: string) => runReadOnlyShell(command, root, stableReadOnlyDispatchName(), 'PowerShell');
+  for (const command of [
+    `Set-Content -Path "${evidenceFile}" -Value "${fixture}"`,
+    `Set-Content "${evidenceFile}" "${fixture}"`,
+    `New-Item -Path "${evidenceFile}" -ItemType File -Value "${fixture}"`,
+    `"${fixture}" | Out-File -Encoding utf8 -FilePath "${evidenceFile}"`,
+  ]) {
+    assert.equal(runPowerShell(command), null, command);
+  }
+  assert.equal(runReadOnlyShell(`node -e "require('fs').writeFileSync(process.argv[1], process.argv[2])" "${evidenceFile}" "${fixture}"`, root), null);
+
+  for (const command of [
+    `Set-Content -Path "${path.join(root, 'probe.ts')}" -Value "${fixture}"`,
+    `Set-Content probe.ts "${fixture}"`,
+    `"${fixture}" | Out-File -FilePath sub/probe.ts`,
+  ]) {
+    const reason = runPowerShell(command)?.hookSpecificOutput?.permissionDecisionReason || '';
+    assert.match(reason, /read-only executor, refusing a shell write inside the repository checkout/, command);
+    assert.match(reason, /Writes under the ticket's verification directory .* are permitted whatever the file says; move the fixture there/, command);
+  }
+  assert.equal(runReadOnlyShell('git checkout main', root)?.hookSpecificOutput?.permissionDecision, 'deny');
+});
+
 test('read-only executors never ship or spawn with bypassPermissions (GH-282)', () => {
   const sources = agentsync.bundledExecutorSources();
   for (const [filename, source] of sources) {
