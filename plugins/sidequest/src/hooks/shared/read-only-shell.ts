@@ -34,10 +34,18 @@ function inPlaceEditTargets(words: string[]): string[] {
   return words.some((word) => /^-[a-z]*i/i.test(word)) ? operands(words).slice(1) : [];
 }
 
+// A content cmdlet's other words (-Value text, -ItemType File, -Encoding utf8) are data, not paths:
+// reading them as targets refused fixture writes to the evidence root (SQ-3202).
+function contentCmdletTargets(words: string[]): string[] {
+  const pathFlag = words.findIndex((word) => /^-(path|literalpath|filepath)$/i.test(word));
+  return pathFlag > 0 ? words.slice(pathFlag + 1, pathFlag + 2) : operands(words).slice(0, 1);
+}
+
 const WRITE_TARGET_READERS = new Map<string, WriteTargetReader>([
   ...['rm', 'rmdir', 'mv', 'touch', 'mkdir', 'tee', 'truncate', 'chmod', 'chown', 'unlink',
-    'remove-item', 'set-content', 'add-content', 'out-file', 'new-item', 'move-item', 'rename-item', 'clear-content',
-    'ri', 'ni', 'del', 'erase', 'rd', 'md', 'move', 'ren'].map((name): [string, WriteTargetReader] => [name, operands]),
+    'remove-item', 'move-item', 'rename-item', 'clear-content',
+    'ri', 'del', 'erase', 'rd', 'md', 'move', 'ren'].map((name): [string, WriteTargetReader] => [name, operands]),
+  ...['set-content', 'add-content', 'out-file', 'new-item', 'ni'].map((name): [string, WriteTargetReader] => [name, contentCmdletTargets]),
   ...['cp', 'copy', 'copy-item', 'ln', 'install', 'rsync'].map((name): [string, WriteTargetReader] => [name, (words) => operands(words).slice(-1)]),
   ['sed', inPlaceEditTargets],
   ['perl', inPlaceEditTargets],
@@ -140,6 +148,6 @@ function firstCheckoutWrite(command: string, cwd: string): string | null {
 export function readOnlyShellRefusal(command: string, cwd: string): string | null {
   const blocked = firstCheckoutWrite(command, cwd);
   return blocked
-    ? `sidequest: read-only executor, refusing a shell write inside the repository checkout (${blocked}). Keep temporary files and evidence outside the checkout, in your scratchpad or the ticket's verification directory. If the ticket needs a repository change, comment the needed edit on the ticket and release it instead.`
+    ? `sidequest: read-only executor, refusing a shell write inside the repository checkout (${blocked}). Keep temporary files and evidence outside the checkout, in your scratchpad or the ticket's verification directory. Writes under the ticket's verification directory (~/.claude/sidequest/projects/<slug>/verification/<ref>/) are permitted whatever the file says; move the fixture there. If the ticket needs a repository change, comment the needed edit on the ticket and release it instead.`
     : null;
 }

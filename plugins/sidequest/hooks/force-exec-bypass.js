@@ -399,6 +399,10 @@ function gitWriteTargets(words) {
 function inPlaceEditTargets(words) {
   return words.some((word) => /^-[a-z]*i/i.test(word)) ? operands(words).slice(1) : [];
 }
+function contentCmdletTargets(words) {
+  const pathFlag = words.findIndex((word) => /^-(path|literalpath|filepath)$/i.test(word));
+  return pathFlag > 0 ? words.slice(pathFlag + 1, pathFlag + 2) : operands(words).slice(0, 1);
+}
 var WRITE_TARGET_READERS = new Map([
   ...[
     "rm",
@@ -412,15 +416,10 @@ var WRITE_TARGET_READERS = new Map([
     "chown",
     "unlink",
     "remove-item",
-    "set-content",
-    "add-content",
-    "out-file",
-    "new-item",
     "move-item",
     "rename-item",
     "clear-content",
     "ri",
-    "ni",
     "del",
     "erase",
     "rd",
@@ -428,6 +427,7 @@ var WRITE_TARGET_READERS = new Map([
     "move",
     "ren"
   ].map((name) => [name, operands]),
+  ...["set-content", "add-content", "out-file", "new-item", "ni"].map((name) => [name, contentCmdletTargets]),
   ...["cp", "copy", "copy-item", "ln", "install", "rsync"].map((name) => [name, (words) => operands(words).slice(-1)]),
   ["sed", inPlaceEditTargets],
   ["perl", inPlaceEditTargets],
@@ -505,7 +505,7 @@ function firstCheckoutWrite(command, cwd) {
 }
 function readOnlyShellRefusal(command, cwd) {
   const blocked = firstCheckoutWrite(command, cwd);
-  return blocked ? `sidequest: read-only executor, refusing a shell write inside the repository checkout (${blocked}). Keep temporary files and evidence outside the checkout, in your scratchpad or the ticket's verification directory. If the ticket needs a repository change, comment the needed edit on the ticket and release it instead.` : null;
+  return blocked ? `sidequest: read-only executor, refusing a shell write inside the repository checkout (${blocked}). Keep temporary files and evidence outside the checkout, in your scratchpad or the ticket's verification directory. Writes under the ticket's verification directory (~/.claude/sidequest/projects/<slug>/verification/<ref>/) are permitted whatever the file says; move the fixture there. If the ticket needs a repository change, comment the needed edit on the ticket and release it instead.` : null;
 }
 
 // src/lib/board-mcp-liveness.ts
