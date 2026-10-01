@@ -46,6 +46,11 @@ function refuse() {
   process.exitCode = 7;
 }
 
+function refuseTool() {
+  process.stdout.write('{"type":"user","message":{"content":[{"type":"tool_result","is_error":true,"content":"Permission denied for Agent"}]}}\n');
+  waitForever();
+}
+
 function waitForever() {
   setInterval(() => process.stdout.write('waiting\n'), 20);
 }
@@ -64,7 +69,7 @@ function noObservation() {
   process.stdout.write('{"type":"result","is_error":false}\n');
 }
 
-const modes = { complete: observeSyntheticRun, malformed: malformedRequest, refuse, timeout: waitForever,
+const modes = { complete: observeSyntheticRun, malformed: malformedRequest, refuse, refuseTool, timeout: waitForever,
   oversizedDebug, oversizedOutput, noObservation };
 process.stdin.resume();
 process.stdin.once('end', () => {

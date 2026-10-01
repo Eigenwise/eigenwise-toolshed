@@ -72,18 +72,24 @@ test('absence, error and timeout never become native compatibility receipts', as
   assert.equal(probe.reportCases(timedOut, timedOut).proactiveCompaction.status, 'UNVERIFIED');
 });
 
-test('host and child refusals stop the probe, preserve guards and clean fixture resources', async () => {
+test('budget overrides block preflight; native markers stay intact until a synthetic child actually refuses', async () => {
   const owned = {};
   const blocked = await probe.runProbe({ binary: process.execPath, scratchpad: SCRATCHPAD,
-    hostEnvironment: { CLAUDECODE: 'synthetic-nesting-guard' }, launch: fixtureLaunch('complete', owned) });
+    hostEnvironment: { CLAUDE_CODE_MAX_CONTEXT_TOKENS: '272000' }, launch: fixtureLaunch('complete', owned) });
   assert.equal(blocked.status, 'BLOCKED');
-  assert.equal(blocked.runs.length, 1, 'host refusal prevents every subsequent native case');
-  assert.equal(owned.child, undefined, 'guard blocks before launch');
+  assert.equal(blocked.runs.length, 1, 'inherited budget override prevents an ambiguous resolver experiment');
+  assert.equal(owned.child, undefined, 'budget precheck blocks before launch');
   assert.deepEqual(Object.values(blocked.cases).map((entry) => entry.status), Array(5).fill('UNVERIFIED'));
-  const refused = await probe.runProbe({ binary: process.execPath, scratchpad: SCRATCHPAD, hostEnvironment: {},
+  const markers = { CLAUDECODE: 'synthetic-native-marker', CLAUDE_CODE_CHILD_SESSION: 'synthetic-child-marker' };
+  assert.equal(probe.hostBlocked(markers), false, 'marker presence must not manufacture a native-host refusal');
+  const refused = await probe.runProbe({ binary: process.execPath, scratchpad: SCRATCHPAD, hostEnvironment: markers,
     launch: fixtureLaunch('refuse', owned) });
+  assert.equal(owned.environment.CLAUDECODE, markers.CLAUDECODE, 'native CLAUDECODE value reaches the child unchanged');
+  assert.equal(owned.environment.CLAUDE_CODE_CHILD_SESSION, markers.CLAUDE_CODE_CHILD_SESSION, 'native child-session guard reaches the child unchanged');
+  assert.notEqual(owned.child, undefined, 'marker presence reaches the synthetic launch boundary');
   assert.equal(refused.status, 'BLOCKED');
   assert.equal(refused.runs.length, 1, 'child permission refusal stops rather than trying another case');
+  assert.deepEqual(Object.values(refused.cases).map((entry) => entry.status), Array(5).fill('UNVERIFIED'));
   assert.equal(fs.existsSync(owned.root), false);
   await assertPortClosed(owned.port);
   const environment = probe.nativeEnvironment('/fixture', 1234, { CLAUDECODE: 'keep', CLAUDE_CODE_NESTING_GUARD: 'keep-too' });
@@ -92,6 +98,25 @@ test('host and child refusals stop the probe, preserve guards and clean fixture 
   assert.equal(environment.ANTHROPIC_AUTH_TOKEN, 'fixture-dummy');
   assert.equal(probe.hostBlocked({ CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '90' }), true);
   assert.equal(probe.hostBlocked({}), false);
+});
+
+test('a synthetic native tool refusal stops the owned process and later cases without a marker precheck', async () => {
+  const owned = {};
+  const refused = await probe.runProbe({ binary: process.execPath, scratchpad: SCRATCHPAD,
+    hostEnvironment: { CLAUDECODE: 'preserved-marker' }, launch: fixtureLaunch('refuseTool', owned) });
+  assert.equal(refused.status, 'BLOCKED');
+  assert.equal(refused.runs.length, 1, 'actual synthetic tool refusal prevents the second native case');
+  assert.equal(owned.environment.CLAUDECODE, 'preserved-marker');
+  assert.notEqual(owned.child.exitCode ?? owned.child.signalCode, null, 'refused owned child is stopped');
+  assert.equal(fs.existsSync(owned.root), false);
+  await assertPortClosed(owned.port);
+  assert.deepEqual(Object.values(refused.cases).map((entry) => entry.status), Array(5).fill('UNVERIFIED'));
+  assert.equal(probe.nativeRefusalLine('bad'), false);
+  assert.equal(probe.nativeRefusalLine('null'), false);
+  assert.equal(probe.nativeRefusalLine('{"type":"system","permissionMode":"default"}'), false);
+  assert.equal(probe.nativeRefusalLine('{"type":"user","message":{"content":"synthetic text"}}'), false);
+  assert.equal(probe.nativeRefusalLine('{"type":"user"}'), false);
+  assert.equal(probe.nativeRefusalLine('{"type":"user","message":{"content":[null,{"type":"tool_result","is_error":false,"content":"permission"}]}}'), false);
 });
 
 test('output and debug bounds stop synthetic children and remove oversized fixture logs', async () => {
@@ -135,10 +160,10 @@ test('fixture protocol supports streamed replies and bounds model metadata', () 
   assert.equal(counters.models.other, 1, 'unknown model text is reduced to an allowlisted counter');
 });
 
-test('CLI validation and guarded executable invocation use only synthetic processes', async () => {
+test('CLI validation and inherited-budget refusal use only synthetic processes', async () => {
   await assert.rejects(probe.main(), /absolute existing binary/);
   const child = spawnGatewayProcess(null, process.execPath, [path.join(__dirname, 'native-budget-probe.js'), process.execPath, SCRATCHPAD], {
-    env: { ...process.env, CLAUDECODE: 'synthetic-guard' }, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, CLAUDECODE: 'synthetic-guard', CLAUDE_CODE_MAX_CONTEXT_TOKENS: '272000' }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk; });

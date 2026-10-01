@@ -79,6 +79,23 @@ function observeEvent(line, counters) {
   if (event.type === 'result') counters.completed = event.is_error === false;
 }
 
+function toolResultRefused(contentBlock) {
+  return contentBlock?.type === 'tool_result' && contentBlock.is_error === true
+    && /nested|cannot be launched|permission|not allowed/i.test(JSON.stringify(contentBlock.content));
+}
+
+function toolResultsRefused(content) {
+  if (!Array.isArray(content)) return false;
+  return content.some(toolResultRefused);
+}
+
+function nativeRefusalLine(line) {
+  let event;
+  try { event = JSON.parse(line); } catch { return false; }
+  if (event?.type !== 'user') return false;
+  return toolResultsRefused(event.message?.content);
+}
+
 function observeWindow(line, counters) {
   const match = line.match(/autocompact:.*tokens=(\d+).*threshold=(\d+).*effectiveWindow=(\d+)/);
   if (!match) return;
@@ -118,7 +135,7 @@ function nativeArguments(model, debugPath) {
 }
 
 function hostBlocked(environment) {
-  const controls = ['CLAUDECODE', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
+  const controls = ['CLAUDE_CODE_MAX_CONTEXT_TOKENS', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
     'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE', 'CLAUDE_CODE_DISABLE_AUTO_COMPACT', 'CLAUDE_CODE_DISABLE_COMPACT',
     'CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT', 'CLAUDE_CODE_DISABLE_1M_CONTEXT'];
   return controls.some((key) => Boolean(environment[key]));
@@ -155,7 +172,7 @@ async function runNativeCase({ binary, scratchpad, model, timeout = 120000, laun
     serveFixture(request, response, counters).catch(() => { response.writeHead(400); response.end(); });
   });
   try {
-    if (hostBlocked(hostEnvironment)) return { status: 'BLOCKED', reason: 'native guard or inherited budget override', counters };
+    if (hostBlocked(hostEnvironment)) return { status: 'BLOCKED', reason: 'inherited budget override', counters };
     const project = writeProject(root);
     const debugPath = path.join(root, 'native-debug.log');
     server.listen(0, '127.0.0.1');
@@ -169,9 +186,15 @@ async function runNativeCase({ binary, scratchpad, model, timeout = 120000, laun
       if (outputBytes > 2 * 1024 * 1024) void stopGatewayChild(child);
     });
     const lines = readline.createInterface({ input: child.stdout });
-    lines.on('line', (line) => observeEvent(line, counters));
+    lines.on('line', (line) => {
+      observeEvent(line, counters);
+      if (nativeRefusalLine(line)) { refusal = true; void stopGatewayChild(child); }
+    });
     child.stderr.on('data', (chunk) => {
-      if (/nested|cannot be launched|permission|not allowed/i.test(String(chunk))) refusal = true;
+      if (/nested|cannot be launched|permission|not allowed/i.test(String(chunk))) {
+        refusal = true;
+        void stopGatewayChild(child);
+      }
     });
     timer = setTimeout(() => { timedOut = true; void stopGatewayChild(child); }, timeout);
     child.stdin.on('error', () => {});
@@ -231,5 +254,5 @@ async function main() {
 
 if (require.main === module) main().catch(() => { process.stderr.write('Native fixture failed; no compatibility receipt.\n'); process.exitCode = 1; });
 
-module.exports = { initialReport, fixtureReply, streamCompletion, observeEvent, observeWindow, nativeArguments,
+module.exports = { initialReport, fixtureReply, streamCompletion, observeEvent, observeWindow, nativeRefusalLine, nativeArguments,
   nativeEnvironment, hostBlocked, runNativeCase, reportCases, runProbe, main };
