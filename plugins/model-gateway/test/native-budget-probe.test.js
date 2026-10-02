@@ -25,7 +25,7 @@ function fixtureLaunch(mode, owned) {
     const child = spawnGatewayProcess(null, process.execPath, [CLIENT, mode, ...argumentsList], options);
     owned.child = child;
     owned.launches ??= [];
-    owned.launches.push({ root: owned.root, port: owned.port, child });
+    owned.launches.push({ root: owned.root, port: owned.port, child, argumentsList, environment: options.env });
     return child;
   };
 }
@@ -50,7 +50,7 @@ test('synthetic client exercises case reporting, project-only cap and owned clea
   const custom = await syntheticRun('complete');
   const recognized = await syntheticRun('complete', 'claude-opus-5-5[1m]');
   const report = probe.reportCases(custom, recognized);
-  assert.deepEqual(Object.values(report).map((entry) => entry.status), ['PASS', 'PASS', 'PASS', 'PASS', 'PASS'], 'synthetic evidence classifies each case separately');
+  assert.deepEqual(Object.values(report).map((entry) => entry.status), ['UNVERIFIED', 'PASS', 'PASS', 'PASS', 'PASS'], 'debug target values alone cannot prove the project raw window');
   assert.equal(custom.counters.models['codex-auto'], 2, 'simulated frontmatter model reaches fixture upstream');
   assert.equal(custom.counters.compactions, 1);
   assert.equal(recognized.counters.compactions, 0);
@@ -190,7 +190,13 @@ test('an exact /context diagnostic uses separate count_tokens traffic and only s
   const owned = {};
   const result = await probe.runProbe({ binary: process.execPath, scratchpad: SCRATCHPAD, hostEnvironment: {},
     launch: fixtureLaunch('metadataOnly', owned) });
-  assert.equal(owned.launches.length, 4, 'two model cases each launch an isolated pressure flow and exact context prompt');
+  assert.equal(owned.launches.length, 4, 'two model cases each launch pressure and exact own-session context prompt');
+  assert.equal(owned.launches[0].root, owned.launches[1].root, 'context uses the pressure root before cleanup');
+  assert.equal(owned.launches[0].environment, owned.launches[1].environment, 'home, config and native guards are unchanged');
+  assert.equal(owned.launches[1].argumentsList[owned.launches[1].argumentsList.indexOf('--resume') + 1], '11111111-2222-4333-8444-555555555555');
+  assert.equal(result.runs[0].context.diagnostic, 'same-session');
+  assert.equal(result.runs[0].context.apiCountTokens, 42);
+  assert.equal(result.runs[0].context.pressureSource, 'UNVERIFIED', 'API recount cannot establish the loop pressure source');
   assert.equal(result.cases.projectEnv.status, 'PASS', 'native-shaped raw window can prove the project cap without debug prose');
   assert.equal(result.cases.recognizedClaude.status, 'PASS', 'native-shaped full raw window plus stripped model acceptance is required');
   assert.equal(result.cases.proactiveCompaction.status, 'UNVERIFIED', 'raw window and fake token counts cannot manufacture a native threshold receipt');
@@ -198,7 +204,9 @@ test('an exact /context diagnostic uses separate count_tokens traffic and only s
   assert.equal(context.countRequests, 1, 'count_tokens requests are counted separately');
   assert.equal(context.requests, 0, 'count_tokens never generates an Agent/main response');
   assert.equal(context.mainTurns, 0, 'count_tokens never advances main pressure');
-  assert.deepEqual(context.contextUsage, [{ model: 'gpt-6.1-sol', raw_max_tokens: 272000, total_tokens: 42, percentage: 0 }]);
+  assert.deepEqual(context.contextUsage, [{ model: 'gpt-6.1-sol', raw_max_tokens: 272000, total_tokens: 42, percentage: 0.125,
+    over_limit: { kind: 'compaction_window', tokens_over: 2 } }]);
+  assert.equal(JSON.stringify(result).includes('11111111-2222-4333-8444-555555555555'), false, 'session identifier stays transient');
   assert.equal(JSON.stringify(result).includes('fixture-secret'), false, 'rendered categories and memory paths never escape');
   assert.equal(result.runs[0].counters.agentAvailable, true);
   assert.equal(result.runs[0].counters.agentToolAvailable, true);
@@ -325,4 +333,89 @@ test('CLI validation and inherited-budget refusal use only synthetic processes',
   const invalid = spawnGatewayProcess(null, process.execPath, [path.join(__dirname, 'native-budget-probe.js')], { stdio: 'ignore' });
   const [invalidCode] = await once(invalid, 'close');
   assert.equal(invalidCode, 1, 'CLI failure never prints a passing receipt');
+});
+
+test('structural denials stop pressure or context and every following case, with owned cleanup', async () => {
+  for (const mode of ['systemDenial', 'resultDenial', 'systemDenialContext', 'resultDenialContext']) {
+    const owned = {};
+    const result = await probe.runProbe({ binary: process.execPath, scratchpad: SCRATCHPAD, hostEnvironment: {}, launch: fixtureLaunch(mode, owned) });
+    assert.equal(result.status, 'BLOCKED', mode);
+    assert.equal(owned.launches.length, mode.endsWith('Context') ? 2 : 1, 'structural denial stops every following launch');
+    assert.equal(result.runs.length, 1);
+    assert.equal(JSON.stringify(result).includes('fixture-secret'), false, 'denial identifiers, inputs and text never escape');
+    for (const launch of owned.launches) {
+      assert.equal(fs.existsSync(launch.root), false, 'denied fixture root is removed');
+      assert.notEqual(launch.child.exitCode ?? launch.child.signalCode, null, 'denied owned child exited');
+      await assertPortClosed(launch.port);
+    }
+  }
+});
+
+test('missing or unsafe own result session uses only a labeled fresh-window diagnostic', async () => {
+  for (const mode of ['noSession', 'invalidSession']) {
+    const owned = {};
+    const result = await probe.runProbe({ binary: process.execPath, scratchpad: SCRATCHPAD, hostEnvironment: {}, launch: fixtureLaunch(mode, owned) });
+    assert.equal(result.runs[0].context.diagnostic, 'fresh-window-only');
+    assert.equal(owned.launches[1].argumentsList.includes('--resume'), false, 'unsafe identifier never reaches CLI arguments');
+    assert.equal(owned.launches[1].argumentsList.includes('--continue'), false);
+    assert.equal(owned.launches[1].argumentsList.includes('--fork-session'), false);
+    assert.equal(result.cases.proactiveCompaction.thresholdStatus, 'UNVERIFIED', 'diagnostic does not prove a pricing or threshold guarantee');
+    assert.equal(JSON.stringify(result).includes('fixture-secret'), false);
+  }
+});
+
+test('HTTP method and path counts include unparseable and non-message traffic before JSON parsing', async () => {
+  const result = await syntheticRun('httpObservation');
+  assert.deepEqual(result.counters.httpRequests, {
+    GET: { messages: 0, count_tokens: 1, models: 2, other: 0 },
+    POST: { messages: 1, count_tokens: 0, models: 0, other: 0 },
+    other: { messages: 0, count_tokens: 0, models: 0, other: 1 },
+  }, 'all five requests are counted even though their bodies cannot parse');
+  assert.equal(result.counters.parseFailures, 5);
+  assert.equal(result.counters.requests, 0, 'unparseable model checks never manufacture Messages response observations');
+  assert.equal(JSON.stringify(result).includes('fixture-secret'), false, 'arbitrary paths and query strings never escape');
+});
+
+test('own task starts, worker model, result metadata and compaction trigger stay structural and allowlisted', async () => {
+  const result = await syntheticRun('complete');
+  const counters = result.counters;
+  assert.deepEqual(counters.fixtureTasksStarted, [true, true], 'fixed emitted fixture tool ids correlate native task-start signals');
+  assert.equal(counters.fixtureParentMessages, 2);
+  assert.equal(counters.workerModels['codex-auto'], 2);
+  assert.equal(counters.permissionDenials, 0);
+  assert.equal(counters.resultSubtype, 'success');
+  assert.equal(counters.resultTurns, 3);
+  assert.equal(counters.resultError, false);
+  assert.deepEqual(counters.compactionMetadata, [{ trigger: 'auto', pre_tokens: 240000 }]);
+  probe.observeEvent(JSON.stringify({ type: 'system', subtype: 'task_started', tool_use_id: 'fixture-secret' }), counters);
+  probe.observeEvent(JSON.stringify({ type: 'assistant', parent_tool_use_id: 'fixture-secret', message: { model: 'codex-auto' } }), counters);
+  assert.equal(counters.fixtureParentMessages, 2, 'foreign task identifiers cannot prove fixture worker launch');
+  probe.observeEvent(JSON.stringify({ type: 'assistant', parent_tool_use_id: 'tool_fixture_1', message: { model: 'fixture-secret' } }), counters);
+  assert.equal(counters.workerModels.other, 1, 'arbitrary worker model is reduced to other');
+  probe.observeEvent('{"type":"result","subtype":"fixture-secret","num_turns":-1,"is_error":"no","permission_denials":"fixture-secret"}', counters);
+  assert.equal(counters.permissionDenials, null, 'absent or invalid authoritative denial array stays unobserved');
+  assert.equal(counters.resultSubtype, null);
+  assert.equal(counters.resultTurns, null);
+  assert.equal(counters.resultError, null);
+  assert.equal(JSON.stringify(result).includes('fixture-secret'), false);
+});
+
+test('boundary occurrence has no exact-threshold authority and context over-limit fields reject arbitrary values', async () => {
+  const result = await syntheticRun('complete');
+  result.counters.windows = [];
+  result.counters.summaryRequests = 0;
+  assert.equal(probe.reportCases(result, result).proactiveCompaction.status, 'PASS', 'documented auto boundary and pre-count establish occurrence alone');
+  result.counters.compactionMetadata = [{ trigger: 'manual', pre_tokens: 240000 }];
+  assert.equal(probe.reportCases(result, result).proactiveCompaction.status, 'UNVERIFIED', 'manual compaction cannot prove proactive occurrence');
+  probe.observeEvent('{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"fixture-secret","pre_tokens":1}}', result.counters);
+  probe.observeEvent('{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":-1}}', result.counters);
+  assert.deepEqual(result.counters.compactionMetadata, [{ trigger: 'manual', pre_tokens: 240000 }, { trigger: 'auto' }]);
+  for (const overLimit of [{ kind: 'hard_limit', tokens_over: 8 }, { kind: 'fixture-secret', tokens_over: 2 }, { kind: 'hard_limit', tokens_over: -1 }]) {
+    probe.observeEvent(JSON.stringify({ type: 'assistant', context_usage: { model: 'gpt-6.1-sol', raw_max_tokens: 272000, total_tokens: 42,
+      percentage: 0.5, over_limit: overLimit } }), result.counters);
+  }
+  assert.deepEqual(result.counters.contextUsage[0].over_limit, { kind: 'hard_limit', tokens_over: 8 });
+  assert.equal(Object.hasOwn(result.counters.contextUsage[1], 'over_limit'), false);
+  assert.equal(Object.hasOwn(result.counters.contextUsage[2], 'over_limit'), false);
+  assert.equal(JSON.stringify(result).includes('fixture-secret'), false);
 });
