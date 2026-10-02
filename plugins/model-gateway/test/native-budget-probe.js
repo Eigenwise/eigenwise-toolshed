@@ -11,6 +11,8 @@ const MODELS = ['gpt-6.1-sol', 'codex-auto', 'claude-opus-5-5[1m]'];
 const UPSTREAM_MODELS = [...MODELS, 'claude-opus-5-5'];
 const CASES = ['projectEnv', 'bareMain', 'agentFrontmatter', 'proactiveCompaction', 'recognizedClaude'];
 const COMPACT_PROMPT = 'You are a helpful AI assistant tasked with summarizing conversations.';
+const FIXTURE_TOOL_IDS = ['tool_fixture_1', 'tool_fixture_2'];
+const RESULT_SUBTYPES = ['success', 'error_max_turns', 'error_max_budget_usd', 'error_during_execution', 'error_max_structured_output_retries'];
 
 function initialReport() {
   return Object.fromEntries(CASES.map((name) => [name, { status: 'UNVERIFIED' }]));
@@ -75,13 +77,25 @@ function fixtureReply(body, counters) {
   return completion(body.model, [{ type: 'text', text: 'fixture-done' }], 10);
 }
 
+function observeHttpRequest(request, counters) {
+  const method = ['GET', 'POST'].includes(request.method) ? request.method : 'other';
+  const match = /^\/v1\/(messages\/count_tokens|messages|models)(?:\/|\?|$)/.exec(request.url);
+  const pathClass = { messages: 'messages', 'messages/count_tokens': 'count_tokens', models: 'models' }[match?.[1]] || 'other';
+  counters.httpRequests[method][pathClass]++;
+}
+
+function parseFixtureBody(body, counters) {
+  try { return JSON.parse(body); } catch (error) { counters.parseFailures++; throw error; }
+}
+
 async function serveFixture(request, response, counters) {
+  observeHttpRequest(request, counters);
   let body = '';
   for await (const chunk of request) {
     body += chunk;
     if (body.length > 4 * 1024 * 1024) throw new Error('fixture request bound');
   }
-  const parsed = JSON.parse(body);
+  const parsed = parseFixtureBody(body, counters);
   if (/^\/v1\/messages\/count_tokens(?:\?|$)/.test(request.url)) {
     counters.countRequests++;
     response.setHeader('content-type', 'application/json');
@@ -103,12 +117,22 @@ function publicTokenCounts(usage, names) {
   return Object.fromEntries(names.filter((name) => nonnegativeTokenCount(usage[name])).map((name) => [name, usage[name]]));
 }
 
+function contextOverLimit(overLimit) {
+  if (!['hard_limit', 'compaction_window'].includes(overLimit?.kind)) return {};
+  if (!nonnegativeTokenCount(overLimit.tokens_over)) return {};
+  return { over_limit: { kind: overLimit.kind, tokens_over: overLimit.tokens_over } };
+}
+
 function observeContextUsage(usage, counters) {
   if (!UPSTREAM_MODELS.includes(usage.model)) return;
-  const counts = publicTokenCounts(usage, ['raw_max_tokens', 'total_tokens', 'percentage']);
-  if (!Object.hasOwn(counts, 'raw_max_tokens') || !Object.hasOwn(counts, 'total_tokens')) return;
+  const counts = publicTokenCounts(usage, ['raw_max_tokens', 'total_tokens']);
+  if (Object.keys(counts).length !== 2) return;
   if (counters.contextUsage.length >= 32) return;
-  counters.contextUsage.push({ model: usage.model, ...counts });
+  counters.contextUsage.push({ model: usage.model, ...counts, ...contextPercentage(usage.percentage), ...contextOverLimit(usage.over_limit) });
+}
+
+function contextPercentage(percentage) {
+  return Number.isFinite(percentage) && percentage >= 0 ? { percentage } : {};
 }
 
 function observeUsage(usage, counters) {
@@ -122,10 +146,24 @@ function observeAgentAvailability(event, counters) {
   counters.agentToolAvailable = Array.isArray(event.tools) ? event.tools.some((name) => name === 'Agent' || name === 'Task') : null;
 }
 
+function observeCompaction(metadata, counters) {
+  counters.compactions++;
+  if (counters.compactionMetadata.length >= 32) return;
+  if (!['manual', 'auto'].includes(metadata?.trigger)) return;
+  const counts = publicTokenCounts(metadata, ['pre_tokens']);
+  counters.compactionMetadata.push({ trigger: metadata.trigger, ...counts });
+}
+
 function observeSystem(event, counters) {
-  if (event.type !== 'system') return;
-  if (event.subtype === 'compact_boundary') counters.compactions++;
+  if (event.subtype === 'compact_boundary') observeCompaction(event.compact_metadata, counters);
   if (event.subtype === 'init') observeAgentAvailability(event, counters);
+  if (event.subtype === 'permission_denied') counters.permissionDeniedEvents++;
+  if (event.subtype === 'task_started') observeTaskStarted(event.tool_use_id, counters);
+}
+
+function observeTaskStarted(toolUseId, counters) {
+  if (!FIXTURE_TOOL_IDS.includes(toolUseId)) return;
+  counters.fixtureTasksStarted[FIXTURE_TOOL_IDS.indexOf(toolUseId)] = true;
 }
 
 function classifyToolError(contentBlock) {
@@ -156,19 +194,57 @@ function observeToolResults(content, counters) {
   }
 }
 
+function observeWorkerMessage(event, counters) {
+  if (!FIXTURE_TOOL_IDS.includes(event.parent_tool_use_id)) return;
+  counters.fixtureParentMessages++;
+  const model = UPSTREAM_MODELS.includes(event.message?.model) ? event.message.model : 'other';
+  counters.workerModels[model]++;
+}
+
 function observeAssistant(event, counters) {
   if (event.type !== 'assistant') return;
   if (event.context_usage) observeContextUsage(event.context_usage, counters);
   observeUsage(event.message?.usage, counters);
+  observeWorkerMessage(event, counters);
 }
 
-function observeEvent(line, counters) {
-  let event;
-  try { event = JSON.parse(line); } catch { return; }
-  observeSystem(event, counters);
-  observeAssistant(event, counters);
-  if (event.type === 'result') { counters.completed = event.is_error === false; observeUsage(event.usage, counters); }
-  if (event.type === 'user') observeToolResults(event.message?.content, counters);
+function safeSessionId(value) {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+function permissionDenialCount(denials) {
+  return Array.isArray(denials) ? denials.length : null;
+}
+
+function observeResult(event, counters, session) {
+  counters.completed = event.is_error === false;
+  counters.resultError = typeof event.is_error === 'boolean' ? event.is_error : null;
+  counters.resultSubtype = RESULT_SUBTYPES.includes(event.subtype) ? event.subtype : null;
+  counters.resultTurns = nonnegativeTokenCount(event.num_turns) ? event.num_turns : null;
+  counters.permissionDenials = permissionDenialCount(event.permission_denials);
+  observeUsage(event.usage, counters);
+  rememberSession(event.session_id, session);
+}
+
+function rememberSession(identifier, session) {
+  if (session && safeSessionId(identifier)) session.id = identifier;
+}
+
+function parseNativeEvent(line) {
+  try {
+    const event = JSON.parse(line);
+    return event && typeof event === 'object' ? event : {};
+  } catch { return {}; }
+}
+
+function observeEvent(line, counters, session) {
+  const event = parseNativeEvent(line);
+  const observers = { system: observeSystem, assistant: observeAssistant, result: observeResult, user: observeUser };
+  if (Object.hasOwn(observers, event.type)) observers[event.type](event, counters, session);
+}
+
+function observeUser(event, counters) {
+  observeToolResults(event.message?.content, counters);
 }
 
 function toolResultRefused(contentBlock) {
@@ -181,11 +257,17 @@ function toolResultsRefused(content) {
   return content.some(toolResultRefused);
 }
 
+function eventRefused(event) {
+  switch (event.type) {
+    case 'system': return event.subtype === 'permission_denied';
+    case 'result': return permissionDenialCount(event.permission_denials) > 0;
+    case 'user': return toolResultsRefused(event.message?.content);
+    default: return false;
+  }
+}
+
 function nativeRefusalLine(line) {
-  let event;
-  try { event = JSON.parse(line); } catch { return false; }
-  if (event?.type !== 'user') return false;
-  return toolResultsRefused(event.message?.content);
+  return eventRefused(parseNativeEvent(line));
 }
 
 function observeWindow(line, counters) {
@@ -242,39 +324,43 @@ function watchDebugBound(root, child) {
   });
 }
 
-async function removeFixture(root, server, child, debugWatcher) {
+async function stopNativeProcess(child, debugWatcher) {
   if (debugWatcher) debugWatcher.close();
   if (child) await stopGatewayChild(child);
+}
+
+async function removeFixture(root, server) {
   server.closeAllConnections();
   await new Promise((resolve) => server.close(resolve));
   fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
 
-async function runNativeCase({ binary, scratchpad, model, timeout = 120000, launch = spawnGatewayProcess,
-  hostEnvironment = process.env, prompt = 'Synthetic fixture only. Run budget-worker twice, then return fixture-done.' }) {
-  const root = fs.mkdtempSync(path.join(scratchpad, 'native-budget-'));
-  const counters = { requests: 0, countRequests: 0, summaryRequests: 0, mainTurns: 0, compactions: 0,
-    models: Object.fromEntries([...UPSTREAM_MODELS, 'other'].map((name) => [name, 0])), windows: [], contextUsage: [], nativeUsage: [],
+function initialCounters() {
+  const modelCounts = () => Object.fromEntries([...UPSTREAM_MODELS, 'other'].map((name) => [name, 0]));
+  const pathCounts = () => ({ messages: 0, count_tokens: 0, models: 0, other: 0 });
+  return { requests: 0, countRequests: 0, summaryRequests: 0, mainTurns: 0, compactions: 0,
+    httpRequests: { GET: pathCounts(), POST: pathCounts(), other: pathCounts() }, parseFailures: 0,
+    models: modelCounts(), workerModels: modelCounts(), windows: [], contextUsage: [], nativeUsage: [], compactionMetadata: [],
+    fixtureTasksStarted: [null, null], fixtureParentMessages: 0, permissionDeniedEvents: 0,
+    permissionDenials: null, resultSubtype: null, resultTurns: null, resultError: null,
     agentAvailable: null, agentToolAvailable: null, agentToolAdvertised: false, taskToolAdvertised: false,
     toolResults: 0, toolErrors: 0, toolRefusals: 0,
     toolErrorKinds: { unknown_tool: 0, unknown_subagent: 0, unsupported_model: 0, native_guard_refusal: 0, other: 0 }, completed: false };
+}
+
+async function runNativeProcess({ binary, launch, model, root, environment, prompt, timeout, session }, counters) {
   let child;
   let timer;
   let debugWatcher;
   let outputBytes = 0;
   let refusal = false;
   let timedOut = false;
-  const server = http.createServer((request, response) => {
-    serveFixture(request, response, counters).catch(() => { response.writeHead(400); response.end(); });
-  });
+  const debugPath = path.join(root, 'native-debug.log');
   try {
-    if (hostBlocked(hostEnvironment)) return { status: 'BLOCKED', reason: 'inherited budget override', counters };
-    const project = writeProject(root);
-    const debugPath = path.join(root, 'native-debug.log');
-    server.listen(0, '127.0.0.1');
-    await once(server, 'listening');
-    child = launch(null, binary, nativeArguments(model, debugPath), {
-      cwd: project, env: nativeEnvironment(root, server.address().port, hostEnvironment), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+    const argumentsList = nativeArguments(model, debugPath);
+    if (session.id) argumentsList.push('--resume', session.id);
+    child = launch(null, binary, argumentsList, {
+      cwd: path.join(root, 'project'), env: environment, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
     });
     debugWatcher = watchDebugBound(root, child);
     child.stdout.on('data', (chunk) => {
@@ -283,7 +369,7 @@ async function runNativeCase({ binary, scratchpad, model, timeout = 120000, laun
     });
     const lines = readline.createInterface({ input: child.stdout });
     lines.on('line', (line) => {
-      observeEvent(line, counters);
+      observeEvent(line, counters, session);
       if (nativeRefusalLine(line)) { refusal = true; void stopGatewayChild(child); }
     });
     child.stderr.on('data', (chunk) => {
@@ -302,8 +388,45 @@ async function runNativeCase({ binary, scratchpad, model, timeout = 120000, laun
     return { status: 'UNVERIFIED', reason: 'fixture launch or observation failed', counters };
   } finally {
     clearTimeout(timer);
-    await removeFixture(root, server, child, debugWatcher);
+    await stopNativeProcess(child, debugWatcher);
   }
+}
+
+async function runNativeCase({ binary, scratchpad, model, timeout = 120000, launch = spawnGatewayProcess,
+  hostEnvironment = process.env, contextDiagnostic = false,
+  prompt = 'Synthetic fixture only. Run budget-worker twice, then return fixture-done.' }) {
+  const root = fs.mkdtempSync(path.join(scratchpad, 'native-budget-'));
+  const deadline = Date.now() + timeout;
+  let counters = initialCounters();
+  const server = http.createServer((request, response) => {
+    serveFixture(request, response, counters).catch(() => { response.writeHead(400); response.end(); });
+  });
+  try {
+    if (hostBlocked(hostEnvironment)) return { status: 'BLOCKED', reason: 'inherited budget override', counters };
+    writeProject(root);
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const options = { binary, launch, model, root, environment: nativeEnvironment(root, server.address().port, hostEnvironment), session: {} };
+    const result = await runNativeProcess({ ...options, prompt, timeout: Math.min(90000, timeout) }, counters);
+    if (!contextDiagnostic || !nativeObserved(result)) return result;
+    return await runContextDiagnostic(options, result, deadline, (nextCounters) => { counters = nextCounters; });
+  } catch {
+    return { status: 'UNVERIFIED', reason: 'fixture launch or observation failed', counters };
+  } finally {
+    await removeFixture(root, server);
+  }
+}
+
+async function runContextDiagnostic(options, result, deadline, setCounters) {
+  const remaining = Math.min(30000, deadline - Date.now());
+  if (remaining <= 0) return result;
+  const counters = initialCounters();
+  setCounters(counters);
+  const diagnostic = options.session.id ? 'same-session' : 'fresh-window-only';
+  result.context = await runNativeProcess({ ...options, prompt: '/context', timeout: remaining }, counters);
+  Object.assign(result.context, { diagnostic, apiCountTokens: 42, pressureSource: 'UNVERIFIED' });
+  if (!nativeObserved(result.context)) result.status = result.context.status === 'BLOCKED' ? 'BLOCKED' : 'UNVERIFIED';
+  return result;
 }
 
 function windowSeen(result, effectiveWindow, threshold) {
@@ -338,33 +461,23 @@ function recognizedWindowObserved(result) {
 
 function reportCases(custom, recognized) {
   const report = initialReport();
-  report.projectEnv.status = nativeStatus(custom, windowSeen(custom, 252000, 239000)
-    || contextWindowSeen(custom, ['gpt-6.1-sol'], 272000));
+  report.projectEnv.status = nativeStatus(custom, contextWindowSeen(custom, ['gpt-6.1-sol'], 272000));
   report.bareMain.status = nativeStatus(custom, custom.counters.models['gpt-6.1-sol'] > 0);
   report.agentFrontmatter.status = nativeStatus(custom, custom.counters.models['codex-auto'] > 0);
-  report.proactiveCompaction.status = nativeStatus(custom, custom.counters.compactions > 0 && custom.counters.summaryRequests > 0
-    && custom.counters.windows.some((window) => window.threshold === 239000 && window.tokens >= window.threshold));
+  report.proactiveCompaction.status = nativeStatus(custom, custom.counters.compactionMetadata
+    .some((metadata) => metadata.trigger === 'auto' && nonnegativeTokenCount(metadata.pre_tokens)));
+  report.proactiveCompaction.thresholdStatus = 'UNVERIFIED';
+  report.proactiveCompaction.pressureSource = 'UNVERIFIED';
   report.recognizedClaude.status = nativeStatus(recognized, recognizedWindowObserved(recognized));
   return report;
 }
 
-async function runModelCase(options, model) {
-  const deadline = Date.now() + 120000;
-  const result = await runNativeCase({ ...options, model, timeout: 90000 });
-  if (!nativeObserved(result)) return result;
-  const remaining = Math.min(30000, deadline - Date.now());
-  if (remaining <= 0) return result;
-  result.context = await runNativeCase({ ...options, model, prompt: '/context', timeout: remaining });
-  if (!nativeObserved(result.context)) result.status = result.context.status === 'BLOCKED' ? 'BLOCKED' : 'UNVERIFIED';
-  return result;
-}
-
 async function runProbe(options) {
-  const custom = await runModelCase(options, MODELS[0]);
+  const custom = await runNativeCase({ ...options, model: MODELS[0], contextDiagnostic: true });
   if (custom.status !== 'OBSERVED' || custom.timedOut || custom.exitCode !== 0) {
     return { status: custom.status === 'OBSERVED' ? 'UNVERIFIED' : custom.status, cases: initialReport(), runs: [custom] };
   }
-  const recognized = await runModelCase(options, MODELS[2]);
+  const recognized = await runNativeCase({ ...options, model: MODELS[2], contextDiagnostic: true });
   return { status: recognized.status, cases: reportCases(custom, recognized), runs: [custom, recognized] };
 }
 
