@@ -3457,6 +3457,7 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
       deliveryRevision: opts.deliveryRevision,
       resolvedPaths: opts.resolvedPaths,
       verificationSupersession: opts.verificationSupersession,
+      worktree: opts.worktree,
       completingApplyDelivery,
       by,
       reason,

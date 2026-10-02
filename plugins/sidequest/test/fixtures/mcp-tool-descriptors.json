@@ -889,6 +889,9 @@
             "manual"
           ]
         },
+        "worktree": {
+          "type": "string"
+        },
         "deliveryRevision": {
           "type": "string",
           "pattern": "^[0-9a-fA-F]{7,64}$",
