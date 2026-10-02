@@ -315,9 +315,10 @@ the ticket.
    records. A fresh independently reviewed replacement is separate work. No caller-controlled route
    can reject the candidate: `rework` and every other direct route return
    `candidate_review_locked` without writing. A review that finds a defect records its evidence on
-   the review ticket and releases that review with `kind=oracle`. When that oracle accepts the
-   defect conclusion, Sidequest marks both binding halves `rejected`; after a fresh repair is
-   reviewed and integrated, `supersede_submission` closes the rejected source against the repair.
+   the review ticket and releases that review with `kind=oracle`. When the defect means the bound
+   candidate must not ship, record `outcome=rejected`; `accepted` approves the candidate, and
+   verdict text does not override the enum. After a fresh repair is reviewed and integrated,
+   `supersede_submission` closes the rejected source against the repair.
    Integration also needs the immutable terminal dispatch identities for the submitted source and
    completed review, and refuses when either is missing or both are the same agent. Resolve or
    explicitly accept every finding before versioning or pushing. A finding that needs repair leaves
