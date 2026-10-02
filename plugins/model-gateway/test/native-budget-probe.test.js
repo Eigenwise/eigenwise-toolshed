@@ -254,6 +254,64 @@ test('structured telemetry is numeric, allowlisted and bounded while unavailable
   assert.equal(JSON.stringify(counters).includes('private'), false);
 });
 
+test('synthetic Messages usage has explicit nullable fields and cumulative SSE totals', () => {
+  const counters = { requests: 0, mainTurns: 0, summaryRequests: 0, models: { 'gpt-6.1-sol': 0 } };
+  const message = probe.fixtureReply({ model: 'gpt-6.1-sol', system: '' }, counters);
+  const expected = { input_tokens: 238000, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+    cache_creation: null, inference_geo: null, output_tokens_details: null, server_tool_use: null, service_tier: null };
+  assert.deepEqual(message.usage, expected, 'complete synthetic Usage includes required cache and nullable fields');
+  const events = probe.streamCompletion(message).split('\n').filter((line) => line.startsWith('data: ')).map((line) => JSON.parse(line.slice(6)));
+  assert.deepEqual(events[0].message.usage, { ...expected, output_tokens: 0 }, 'message_start has zero output before content');
+  const delta = events.find((event) => event.type === 'message_delta');
+  assert.deepEqual(delta.usage, { input_tokens: 238000, output_tokens: 1, cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0, output_tokens_details: null, server_tool_use: null }, 'MessageDeltaUsage preserves cumulative input and output');
+  assert.equal(delta.usage.input_tokens + delta.usage.cache_creation_input_tokens + delta.usage.cache_read_input_tokens, 238000);
+});
+
+test('Agent availability observes the documented legacy Task init alias without inventing missing metadata', () => {
+  const counters = {};
+  probe.observeEvent('{"type":"system","subtype":"init","tools":["Task"],"agents":["budget-worker"]}', counters);
+  assert.equal(counters.agentToolAvailable, true, 'Task init alias proves advertised Agent availability');
+  probe.observeEvent('{"type":"system","subtype":"init","tools":["Agent"]}', counters);
+  assert.equal(counters.agentToolAvailable, true);
+  probe.observeEvent('{"type":"system","subtype":"init","tools":["private-tool"]}', counters);
+  assert.equal(counters.agentToolAvailable, false);
+  probe.observeEvent('{"type":"system","subtype":"init"}', counters);
+  assert.equal(counters.agentToolAvailable, null, 'absent init tools remain UNVERIFIED');
+});
+
+test('fixture emits only the Agent or Task schema advertised by the current request', () => {
+  const cases = [[], [{ name: 'private-tool', input_schema: { type: 'object' } }], [{ name: 'Agent' }],
+    [{ name: 'Agent', input_schema: { type: 'object' } }], [{ name: 'Task', input_schema: { type: 'object' } }]];
+  const expectedNames = [undefined, undefined, undefined, 'Agent', 'Task'];
+  for (const [index, tools] of cases.entries()) {
+    const counters = { requests: 0, mainTurns: 0, summaryRequests: 0, models: { 'gpt-6.1-sol': 0 } };
+    const message = probe.fixtureReply({ model: 'gpt-6.1-sol', system: '', tools }, counters);
+    assert.equal(message.content[0].name, expectedNames[index], 'tool_use name comes only from this request advertised known schema');
+    assert.equal(counters.agentToolAdvertised, expectedNames[index] === 'Agent');
+    assert.equal(counters.taskToolAdvertised, expectedNames[index] === 'Task');
+    const next = probe.fixtureReply({ model: 'gpt-6.1-sol', system: '', tools: [] }, counters);
+    assert.equal(next.content[0].type, 'text', 'previous request schema never authorizes an unavailable tool');
+    assert.equal(next.usage.input_tokens, 240000, 'absence of tools preserves synthetic pressure without claiming Agent execution');
+    assert.equal(JSON.stringify(counters).includes('private-tool'), false);
+  }
+});
+
+test('tool error classification retains only allowlisted counters and guard refusal takes precedence', async () => {
+  const result = await syntheticRun('noObservation');
+  const counters = result.counters;
+  const errors = ['Unknown tool: fixture-secret', 'Agent type fixture-secret not found', 'Model fixture-secret not supported',
+    'Permission denied: unknown tool fixture-secret', [{ type: 'text', text: 'fixture-secret failure' }]];
+  for (const content of errors) probe.observeEvent(JSON.stringify({ type: 'user', message: { content: [
+    { type: 'tool_result', is_error: true, content },
+  ] } }), counters);
+  assert.deepEqual(counters.toolErrorKinds, { unknown_tool: 1, unknown_subagent: 1, unsupported_model: 1, native_guard_refusal: 1, other: 1 });
+  assert.equal(counters.toolErrors, 5);
+  assert.equal(counters.toolRefusals, 1, 'unsupported fixture schemas never manufacture a native guard refusal');
+  assert.equal(JSON.stringify(counters).includes('fixture-secret'), false, 'error text and arbitrary identifiers never escape');
+  assert.equal(probe.reportCases(result, result).agentFrontmatter.status, 'UNVERIFIED');
+});
+
 test('CLI validation and inherited-budget refusal use only synthetic processes', async () => {
   await assert.rejects(probe.main(), /absolute existing binary/);
   const child = spawnGatewayProcess(null, process.execPath, [path.join(__dirname, 'native-budget-probe.js'), process.execPath, SCRATCHPAD], {
