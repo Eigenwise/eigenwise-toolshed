@@ -285,12 +285,13 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
 };
 function toolDescriptor(tool) {
   const inputSchema = compactSchema(tool.inputSchema);
-  for (const [property, description] of Object.entries(MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || {})) {
-    inputSchema.properties[property].description = description;
+  for (const [property, description2] of Object.entries(MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || {})) {
+    inputSchema.properties[property].description = description2;
   }
+  const description = Object.hasOwn(TOOL_DESCRIPTION_OVERRIDES, tool.name) ? TOOL_DESCRIPTION_OVERRIDES[tool.name] : conciseDescription(tool.description);
   return {
     name: tool.name,
-    description: Object.hasOwn(TOOL_DESCRIPTION_OVERRIDES, tool.name) ? TOOL_DESCRIPTION_OVERRIDES[tool.name] : conciseDescription(tool.description),
+    ...description ? { description } : {},
     inputSchema
   };
 }

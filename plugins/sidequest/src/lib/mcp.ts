@@ -333,11 +333,12 @@ function toolDescriptor(tool: ToolDefinition) {
   for (const [property, description] of Object.entries(MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || {})) {
     inputSchema.properties[property].description = description;
   }
+  const description = Object.hasOwn(TOOL_DESCRIPTION_OVERRIDES, tool.name)
+    ? TOOL_DESCRIPTION_OVERRIDES[tool.name]
+    : conciseDescription(tool.description);
   return {
     name: tool.name,
-    description: Object.hasOwn(TOOL_DESCRIPTION_OVERRIDES, tool.name)
-      ? TOOL_DESCRIPTION_OVERRIDES[tool.name]
-      : conciseDescription(tool.description),
+    ...(description ? { description } : {}),
     inputSchema,
   };
 }
