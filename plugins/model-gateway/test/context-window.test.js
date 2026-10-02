@@ -1131,12 +1131,12 @@ test('pin version comparison handles older, equal, newer, and missing minor vers
   assert.equal(comparePinVersions('other-opus-5', 'claude-opus-5-5[1m]'), null);
 });
 
-test('pins and doctor report when the CLI alias lags the shipped fallback', () => {
+test('a CLI alias that lags the shipped default loses to it, and pins and doctor name the lagging detection', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-lagging-pin-home-'));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-lagging-pin-project-'));
   const cliVersion = 'Claude Code 2.1.280';
   const cachePath = path.join(home, '.claude', 'model-gateway', 'detected-pins.json');
-  const lagNotice = 'Claude CLI opus alias lags: claude-opus-5[1m] is older than claude-opus-5-5[1m]. Run pin --opus claude-opus-5-5[1m] to update it.';
+  const lagLine = 'opus: claude-opus-5-5[1m] (shipped default; this CLI resolves claude-opus-5[1m], which it replaces)';
   fs.mkdirSync(path.dirname(cachePath), { recursive: true });
   fs.writeFileSync(cachePath, JSON.stringify({
     cliVersion,
@@ -1149,16 +1149,16 @@ test('pins and doctor report when the CLI alias lags the shipped fallback', () =
   try {
     const pins = spawnGatewayProcessSync(process.execPath, [CLI, 'pin'], { cwd, env, encoding: 'utf8' });
     assert.equal(pins.status, 0, pins.stderr);
-    assert.match(pins.stdout, new RegExp(lagNotice.replace(/[.[\]\\]/g, '\\$&')));
+    assert.match(pins.stdout, new RegExp(lagLine.replace(/[.[\]()\\]/g, '\\$&')));
+
+    const doctor = spawnGatewayProcessSync(process.execPath, [CLI, 'doctor'], { cwd, env, encoding: 'utf8' });
+    assert.match(doctor.stdout, new RegExp(`Claude ${lagLine.replace(/^opus:/, 'opus pin:')}`.replace(/[.[\]()\\]/g, '\\$&')));
 
     const set = spawnGatewayProcessSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { cwd, env, encoding: 'utf8' });
     assert.equal(set.status, 0, set.stderr);
     const overridden = spawnGatewayProcessSync(process.execPath, [CLI, 'pin'], { cwd, env, encoding: 'utf8' });
     assert.equal(overridden.status, 0, overridden.stderr);
-    assert.match(overridden.stdout, /Your override claude-opus-4-8\[1m\] overrides detected claude-opus-5\[1m\]\./);
-
-    const doctor = spawnGatewayProcessSync(process.execPath, [CLI, 'doctor'], { cwd, env, encoding: 'utf8' });
-    assert.match(doctor.stdout, new RegExp(lagNotice.replace(/[.[\]\\]/g, '\\$&')));
+    assert.match(overridden.stdout, /opus: claude-opus-4-8\[1m\] \(overridden; without it claude-opus-5-5\[1m\]\)/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });

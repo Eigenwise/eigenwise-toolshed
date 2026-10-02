@@ -8,6 +8,42 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.587.0 (2026-10-02)
+
+### Repository
+
+- crap.mjs captures coverage from every plugin suite the diff touches (SQ-3201)
+  Gateway, observability and quartermaster functions were scored 0% because only the sidequest and quartermaster suites ran. The summary line now names the suites it ran.
+
+### model-gateway 0.53.0 → 0.53.1
+
+#### Fixes
+
+- A Claude CLI alias that lags the shipped pin no longer pulls wired projects back to the older model (SQ-3205)
+  After 0.53.0 the first pin refresh rewrote every registered project from `claude-sonnet-5-5[1m]` back to `claude-sonnet-5[1m]`, because the CLI's detected sonnet alias always beat the shipped default. A detected pin now only wins when it's at least as new as the shipped default and isn't a retired shipped value. Otherwise the shipped default is the effective pin, and a project still on the older value gets rewritten forward. A saved `pin --<alias>` override still wins over both. `pin` and `doctor` print the lagging detection next to the shipped pin, and the old "alias lags, run pin --..." notice is gone since there's nothing to run anymore.
+- Prepare native budget compatibility checks (SQ-3248)
+  Add an isolated, parent-run native budget compatibility probe with bounded numeric observations and per-case results. Synthetic tests cover fixture traffic, refusal handling and cleanup. Missing native evidence stays unverified; no production budgeting or model settings change.
+- Complete native fixture usage and Agent alias observations (SQ-3253)
+  Correct synthetic Messages usage and cumulative streaming totals. Observe the legacy Task init alias, choose Agent or Task only from the incoming advertised schema, and retain allowlisted tool-error counters. Missing native Agent and compaction evidence stays unverified; production budgets and native guards are unchanged.
+- Observe native task launch and resumed context safely (SQ-3256)
+  Native budget verification now records structural task and permission signals, counts fixture requests before parsing, and resumes its own synthetic session for context diagnostics. Exact compaction thresholds and pricing guarantees remain unverified. Production budgeting is unchanged.
+
+### sidequest 5.5.0 → 5.6.0
+
+#### Features
+
+- Correct erroneous finalized review approvals (SQ-3252)
+  Add trusted main-thread MCP `verdict.correct` for an evidenced accepted-to-rejected correction of a finalized readonly bound review. Preserve the original verdict and completion, append correction history atomically, and reject both exact binding halves. Permit write-free exact retries and retained repair submission while keeping independent repair review and delivery gates.
+
+#### Fixes
+
+- Read-only PowerShell content writes resolve only their path (SQ-3202)
+  The read-only shell guard now takes the write target of Set-Content, Add-Content, Out-File and New-Item from -Path, -LiteralPath or -FilePath (else the first operand), so -Value text, -ItemType and -Encoding values no longer count as checkout writes. Fixture text naming git can be written to the ticket's verification directory again; writes inside the checkout stay refused, and the refusal and read-only agent definitions now name the verification directory carve-out.
+- Clarify candidate-addressed oracle outcomes (SQ-3254)
+  Clarify that `outcome=rejected` rejects a bound candidate that must not ship, while `accepted` approves it and verdict text cannot override the enum. Keep the fresh reviewed and integrated repair flow unchanged.
+- Repair correction descriptor and matcher regressions (SQ-3263)
+  Omit empty optional MCP descriptor descriptions to restore the existing payload reserve while keeping schemas and caller guidance unchanged. Refresh the served descriptor golden and check update, remove and verdict correction hook routing across combined matchers.
+
 ## v3.586.0 (2026-10-01)
 
 ### model-gateway 0.52.2 → 0.53.0

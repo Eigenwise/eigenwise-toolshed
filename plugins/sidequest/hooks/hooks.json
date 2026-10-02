@@ -85,7 +85,7 @@
         ]
       },
       {
-        "matcher": "mcp__plugin_sidequest_board__(update|remove)",
+        "matcher": "mcp__plugin_sidequest_board__(update|remove|verdict)",
         "hooks": [
           {
             "type": "command",
