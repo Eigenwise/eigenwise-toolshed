@@ -211,35 +211,74 @@ function submittedRangeCommits(submission: any): string[] {
 // lives in the row the submitting ticket owns. Everything else, including an active
 // claim, an unrelated source, a review pinned to a different candidate, and a range
 // that inherits only part of the rejected one, stays refused.
-function inheritedRejectedAdmission(slug: string, ticket: any, entryRef: string, rangeCommits: readonly string[]) {
-  const related = relatedTicketRefs(ticket).some((ref: string) => ref.toUpperCase() === String(entryRef).toUpperCase());
-  if (!related) return { ok: false as const, reason: 'not_related' };
-  const source = store.getTicket(slug, entryRef);
-  if (!source || !source.submission || source.id === ticket.id) return { ok: false as const, reason: 'source_unavailable' };
-  if (source.claim?.by) return { ok: false as const, reason: 'source_active' };
-  if (source.submission.integratedAt || source.submission.supersededBy) return { ok: false as const, reason: 'submission_integrated' };
-  const candidate = reviewCandidateFromSubmission(source.submission);
-  if (!candidate) return { ok: false as const, reason: 'candidate_unavailable' };
-  const relation = store.submissionReviewRelation(slug, source);
-  if (!relation) return { ok: false as const, reason: 'review_unbound' };
-  if (relation.conflict) return { ok: false as const, reason: 'review_conflict' };
-  if (relation.side !== 'both' || !relation.reviewTicket?.id || !relation.reviewTarget) return { ok: false as const, reason: 'mirror_only' };
-  if (String(relation.reviewTarget.outcome) !== 'rejected'
-    || effectiveOracleVerdictOutcome(relation.reviewTicket.oracle) !== 'rejected') {
-    return { ok: false as const, reason: 'not_rejected' };
-  }
-  if (!sameReviewCandidate(candidate, relation.reviewTarget.candidate)) return { ok: false as const, reason: 'stale_candidate' };
-  if (String(relation.mirror?.ticketId || '') !== String(relation.reviewTicket.id)
-    || String(relation.mirror?.outcome) !== 'rejected'
-    || !sameReviewCandidate(candidate, relation.mirror?.candidate)) {
-    return { ok: false as const, reason: 'mirror_mismatch' };
-  }
-  const inherited = submittedRangeCommits(source.submission);
+import type { CorrectionTicket } from './store/review-corrections';
+import type { ReviewCandidate, ReviewMirror } from './kernel/review-binding';
+
+type RepairTicket = { id: string; links?: readonly { type: string; ref: string }[] };
+type RepairSubmission = NonNullable<CorrectionTicket['submission']> & { commits?: string[] };
+type RepairSource = Pick<CorrectionTicket, 'id' | 'ref' | 'claim' | 'oracle'> & { submission?: RepairSubmission };
+type RepairReviewRelation = {
+  conflict: boolean; side: string; reviewTicket: RepairSource | null;
+  reviewTarget: ReviewMirror | null; mirror: ReviewMirror | null;
+};
+type RepairAdmissionRefusal = { ok: false; reason: string };
+
+function inheritedSourceRefusal(source: RepairSource, submission: RepairSubmission): RepairAdmissionRefusal | undefined {
+  if (source.claim?.by) return { ok: false, reason: 'source_active' };
+  if ([submission.integratedAt, submission.supersededBy].some(Boolean)) return { ok: false, reason: 'submission_integrated' };
+}
+
+function inheritedMirrorRefusal(mirror: ReviewMirror | null, review: RepairSource, candidate: ReviewCandidate): RepairAdmissionRefusal | undefined {
+  if (!mirror) return { ok: false, reason: 'mirror_mismatch' };
+  const matches = [mirror.ticketId === review.id, mirror.outcome === 'rejected', sameReviewCandidate(candidate, mirror.candidate)];
+  if (matches.includes(false)) return { ok: false, reason: 'mirror_mismatch' };
+}
+
+function inheritedRejectedOutcomeRefusal(review: RepairSource, target: ReviewMirror, mirror: ReviewMirror | null, candidate: ReviewCandidate): RepairAdmissionRefusal | undefined {
+  const rejected = [String(target.outcome) === 'rejected', effectiveOracleVerdictOutcome(review.oracle) === 'rejected'];
+  if (rejected.includes(false)) return { ok: false, reason: 'not_rejected' };
+  if (!sameReviewCandidate(candidate, target.candidate)) return { ok: false, reason: 'stale_candidate' };
+  return inheritedMirrorRefusal(mirror, review, candidate);
+}
+
+function inheritedBindingRefusal(relation: RepairReviewRelation, candidate: ReviewCandidate): RepairAdmissionRefusal | undefined {
+  const { reviewTicket, reviewTarget } = relation;
+  if (relation.side !== 'both' || !reviewTicket || !reviewTicket.id || !reviewTarget) return { ok: false, reason: 'mirror_only' };
+  return inheritedRejectedOutcomeRefusal(reviewTicket, reviewTarget, relation.mirror, candidate);
+}
+
+function inheritedReviewRefusal(relation: RepairReviewRelation | null, candidate: ReviewCandidate): RepairAdmissionRefusal | undefined {
+  if (!relation) return { ok: false, reason: 'review_unbound' };
+  if (relation.conflict) return { ok: false, reason: 'review_conflict' };
+  return inheritedBindingRefusal(relation, candidate);
+}
+
+function inheritedRangeAdmission(source: RepairSource, submission: RepairSubmission, candidate: ReviewCandidate, relation: RepairReviewRelation | null, rangeCommits: readonly string[]) {
+  const inherited = submittedRangeCommits(submission);
   const contained = new Set(rangeCommits.map((commit: string) => String(commit).toLowerCase()));
   if (!contained.has(String(candidate.value).toLowerCase()) || !inherited.every((commit: string) => contained.has(commit))) {
     return { ok: false as const, reason: 'partial_inheritance' };
   }
-  return { ok: true as const, ref: source.ref, commit: String(source.submission.commit), review: relation.reviewTicket.ref };
+  return { ok: true as const, ref: source.ref, commit: String(submission.commit), review: relation?.reviewTicket?.ref };
+}
+
+function rejectedSourceAdmission(slug: string, source: RepairSource, submission: RepairSubmission, rangeCommits: readonly string[]) {
+  const sourceRefusal = inheritedSourceRefusal(source, submission);
+  if (sourceRefusal) return sourceRefusal;
+  const candidate: ReviewCandidate | null = reviewCandidateFromSubmission(submission);
+  if (!candidate) return { ok: false as const, reason: 'candidate_unavailable' };
+  const relation: RepairReviewRelation | null = store.submissionReviewRelation(slug, source);
+  const reviewRefusal = inheritedReviewRefusal(relation, candidate);
+  if (reviewRefusal) return reviewRefusal;
+  return inheritedRangeAdmission(source, submission, candidate, relation, rangeCommits);
+}
+
+function inheritedRejectedAdmission(slug: string, ticket: RepairTicket, entryRef: string, rangeCommits: readonly string[]) {
+  const related = relatedTicketRefs(ticket).some((ref: string) => ref.toUpperCase() === String(entryRef).toUpperCase());
+  if (!related) return { ok: false as const, reason: 'not_related' };
+  const source: RepairSource | null = store.getTicket(slug, entryRef);
+  if (!source || !source.submission || source.id === ticket.id) return { ok: false as const, reason: 'source_unavailable' };
+  return rejectedSourceAdmission(slug, source, source.submission, rangeCommits);
 }
 
 function rejectedRelatedReleaseFragments(slug: string, ticket: any): string[] {
@@ -815,13 +854,14 @@ const tools: ToolDefinition[] = [
         outcome: {
           type: 'string',
           enum: ['accepted', 'rejected', 'inconclusive'],
-          description: 'Candidate-addressed. For a bound candidate review: rejected confirms the candidate must not ship; accepted approves the candidate, not the reviewer’s prose; inconclusive approves nothing. Text does not override outcome, and a finalized accepted cannot be reversed by another verdict; do not guess. For a non-review experiment round, outcome instead records which candidate approach won.',
+          description: 'Candidate-addressed. For a bound candidate review: rejected confirms the candidate must not ship; accepted approves the candidate, not the reviewer’s prose; inconclusive approves nothing. Text does not override outcome. A finalized accepted cannot be reversed by ordinary verdict; use correct for an evidenced main-thread correction. For a non-review experiment round, outcome records which candidate approach won.',
         },
         why: { type: 'string' },
         constraint: { type: 'string' },
-        by: { type: 'string' },
+        by: { type: 'string', description: 'Required with correct; audit provenance, not permission.' },
         correct: {
           type: 'object',
+          description: 'Main-thread MCP only: append accepted-to-rejected correction of a finalized readonly bound review. Requires outcome rejected, nonempty by/text/evidence, actual runtime identity, and an unclaimed terminal pending source. Read original at from list({ref: reviewRef}).ticket.oracle.verdict.at. Exact retry writes nothing; delivered or superseded sources refuse. Host-hook caller class is the trust boundary.',
           properties: {
             expectedOutcome: { type: 'string', enum: ['accepted'] },
             expectedVerdictAt: { type: 'string' },
@@ -967,7 +1007,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'rework',
-    description: 'Reject an unbound submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it. A candidate bound to a review is locked: this call refuses without writing, whatever by or reviewRef says. Record a failed review as evidence on the review ticket and release it with kind oracle. When that oracle accepts the defect conclusion, Sidequest records the bound candidate as rejected; only an integrated repair can then supersede it.',
+    description: 'Reject an unbound submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it. A candidate bound to a review is locked: this call refuses without writing, whatever by or reviewRef says. Record a failed review as evidence on the review ticket and release it with kind oracle. Use outcome rejected when the candidate must not ship. For a mistaken finalized accepted, the main thread uses verdict with correct; only an integrated independently reviewed repair can supersede the rejected candidate.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -1,7 +1,7 @@
 'use strict';
 
 import type { CorrectionTicket } from './review-corrections';
-import type { ReviewOutcome } from '../kernel/review-binding';
+import type { ReviewCandidate, ReviewOutcome } from '../kernel/review-binding';
 
 const { reviewCandidateFromSubmission, reviewOutcomeFromOracleVerdict, sameReviewCandidate } = require('../kernel/review-binding');
 
@@ -297,35 +297,43 @@ function appendStandingConstraint(log?: any, round?: any, constraint?: any) {
 }
 
 function boundOutcomeSource(slug: string, reviewTicket: CorrectionTicket): CorrectionTicket {
-  const target = reviewTicket.reviewTarget;
-  const source: CorrectionTicket | null = getTicket(slug, target?.ticketId);
-  if (!source?.submission) throw new Error(`review outcome could not verify the bound source for ${reviewTicket.ref}`);
-  const matches = [sameReviewCandidate(reviewCandidateFromSubmission(source.submission), target?.candidate),
-    !target?.ref || target.ref.toUpperCase() === source.ref.toUpperCase()];
+  const { reviewTarget: target = {} } = reviewTicket;
+  const source: CorrectionTicket | null = getTicket(slug, target.ticketId);
+  if (!source || !source.submission) throw new Error(`review outcome could not verify the bound source for ${reviewTicket.ref}`);
+  const matches = [sameReviewCandidate(reviewCandidateFromSubmission(source.submission), target.candidate),
+    !target.ref || target.ref.toUpperCase() === source.ref.toUpperCase()];
   if (matches.includes(false)) throw new Error(`review outcome could not verify the bound source for ${reviewTicket.ref}`);
   return source;
 }
 
+function mirrorCandidateMatches(candidate: ReviewCandidate | undefined, expected: ReviewCandidate | undefined): boolean {
+  return !candidate || sameReviewCandidate(candidate, expected);
+}
+
 function verifyOutcomeMirror(reviewTicket: CorrectionTicket, source: CorrectionTicket): void {
-  const mirror = source.submission?.review;
+  const { submission = {} } = source;
+  const { reviewTarget = {} } = reviewTicket;
+  const mirror = submission.review;
   if (!mirror) return;
   const matches = [!mirror.ticketId || mirror.ticketId === reviewTicket.id,
     !mirror.ref || mirror.ref.toUpperCase() === reviewTicket.ref.toUpperCase(),
-    !mirror.candidate || sameReviewCandidate(mirror.candidate, reviewTicket.reviewTarget?.candidate)];
+    mirrorCandidateMatches(mirror.candidate, reviewTarget.candidate)];
   if (matches.includes(false)) throw new Error(`review outcome could not verify the bound mirror for ${reviewTicket.ref}`);
 }
 
 function recordBoundReviewOutcome(slug: string, reviewTicket: CorrectionTicket, outcome: ReviewOutcome, fields: { correctedAt?: string } = {}) {
   const target = reviewTicket.reviewTarget;
-  if (!target?.ticketId || !target.candidate) return null;
+  if (!target) return null;
+  if (!target.ticketId || !target.candidate) return null;
   const sourceTicket = boundOutcomeSource(slug, reviewTicket);
   verifyOutcomeMirror(reviewTicket, sourceTicket);
-  const mirror = sourceTicket.submission?.review;
+  const { submission = {} } = sourceTicket;
+  const mirror = { ...submission.review };
   const now = new Date().toISOString();
   reviewTicket.reviewTarget = { ...target, outcome, ...fields };
-  sourceTicket.submission = { ...sourceTicket.submission,
+  sourceTicket.submission = { ...submission,
     review: { ...mirror, ticketId: reviewTicket.id, ref: reviewTicket.ref, candidate: target.candidate,
-      createdAt: mirror?.createdAt || now, outcome, ...fields },
+      createdAt: mirror.createdAt || now, outcome, ...fields },
   };
   sourceTicket.updatedAt = now;
   putTicket(slug, sourceTicket);

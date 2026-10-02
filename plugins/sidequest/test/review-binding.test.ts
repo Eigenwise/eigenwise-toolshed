@@ -885,6 +885,26 @@ test('an oracle rejection marks both binding halves rejected and permits a revie
   assert.equal(closed.submission.integration.outcome, 'superseded');
 });
 
+test('correction outcome writer preserves ordinary oracle handling of a null legacy mirror', async () => {
+  const { repository, slug, commit } = board('null-outcome-mirror');
+  const source = submittedSource(slug, commit, 'null-outcome-mirror');
+  const review = store.createTicket(slug, { title: 'null mirror review', category: 'review-audit' }, { ref: source.ref, commit });
+  const active = store.getTicket(slug, review.ref);
+  active.status = 'doing';
+  active.claim = { by: 'independent-reviewer', at: new Date().toISOString() };
+  active.dispatch = { launchSeq: 1, readonly: true, executor: 'sidequest-exec-dispatch-readonly' };
+  persist(slug, active);
+  const released = await tool('release').handler({ project: repository, ref: review.ref, by: 'independent-reviewer', kind: 'oracle', oracle: 'Does this candidate pass?' });
+  assert.equal(released.ok, true, released.message);
+  const legacy = store.getTicket(slug, source.ref);
+  legacy.submission.review = null;
+  persist(slug, legacy);
+  const verdict = tool('verdict').handler({ project: repository, ref: review.ref, text: 'Candidate passes.', outcome: 'accepted' });
+  assert.equal(verdict.ok, true, verdict.message);
+  assert.equal(store.getTicket(slug, source.ref).submission.review.outcome, 'accepted');
+  assert.equal(store.getTicket(slug, review.ref).reviewTarget.outcome, 'accepted');
+});
+
 async function finalizedCorrectionFixture(label: string) {
   const { repository, slug, commit } = board(`correction-${label}`);
   const source = submittedSource(slug, commit, label);
@@ -988,6 +1008,185 @@ test('correction retry after delivery or supersession refuses before idempotency
     const result = store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant);
     assert.equal(result.reason, terminal === 'integratedAt' ? 'source_delivered' : 'source_superseded');
     assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+  }
+});
+
+test('correction refuses forbidden review states before first correction and exact retry', async () => {
+  const { slug, source, review, input } = await finalizedCorrectionFixture('review-states');
+  const original = store.getTicket(slug, review.ref);
+  const states = [
+    { patch: { status: 'awaiting-oracle' }, reason: 'use_verdict' },
+    { patch: { status: 'todo' }, reason: 'review_nonfinalized' },
+    { patch: { claim: { by: 'live-reviewer' } }, reason: 'review_active' },
+    { patch: { dispatchNonce: 'live-token' }, reason: 'review_active' },
+    { patch: { dispatch: { ...original.dispatch, terminalAt: null } }, reason: 'review_active' },
+    { patch: { category: 'coding.normal' }, reason: 'review_unbound' },
+    { patch: { reviewTarget: undefined }, reason: 'review_unbound' },
+    { patch: { dispatch: { ...original.dispatch, readonly: false, executor: 'sidequest-exec-high' } }, reason: 'review_nonreadonly' },
+    { patch: { oracle: undefined }, reason: 'no_verdict' },
+    { patch: { oracle: null }, reason: 'no_verdict' },
+    { patch: { dispatch: null }, reason: 'review_nonreadonly' },
+    { patch: { oracle: { ...original.oracle, verdict: { ...original.oracle.verdict, outcome: 'rejected' } } }, reason: 'not_accepted' },
+    { patch: { oracle: { ...original.oracle, verdict: { ...original.oracle.verdict, outcome: 'inconclusive' } } }, reason: 'not_accepted' },
+    { patch: { oracle: { ...original.oracle, verdict: { outcome: 'accepted' } } }, reason: 'stale_expected' },
+  ];
+  for (const state of states) {
+    persist(slug, { ...original, ...state.patch });
+    const before = bindingBytes(slug, source.ref, review.ref);
+    assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant).reason, state.reason);
+    assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+  }
+  persist(slug, original);
+  assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant).ok, true);
+  const corrected = store.getTicket(slug, review.ref);
+  for (const state of states.slice(0, 5)) {
+    persist(slug, { ...corrected, ...state.patch });
+    const before = bindingBytes(slug, source.ref, review.ref);
+    assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant).reason, state.reason);
+    assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+  }
+});
+
+test('correction refuses unavailable active missing or nonpending source without writing', async () => {
+  const { slug, source, review, input } = await finalizedCorrectionFixture('source-states');
+  const original = store.getTicket(slug, source.ref);
+  const states = [
+    { patch: { claim: { by: 'live-source' } }, reason: 'source_active' },
+    { patch: { dispatchNonce: 'live-token' }, reason: 'source_active' },
+    { patch: { dispatch: { ...original.dispatch, terminalAt: null } }, reason: 'source_active' },
+    { patch: { submission: undefined }, reason: 'submission_required' },
+    { patch: { submission: null }, reason: 'submission_required' },
+    { patch: { submission: { ...original.submission, integratedAt: 'delivered' } }, reason: 'source_delivered' },
+    { patch: { submission: { ...original.submission, supersededBy: 'SQ-999' } }, reason: 'source_superseded' },
+  ];
+  for (const state of states) {
+    persist(slug, { ...original, ...state.patch });
+    const before = bindingBytes(slug, source.ref, review.ref);
+    assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant).reason, state.reason);
+    assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+  }
+  db.openDb(SIDEQUEST_HOME).prepare('DELETE FROM tickets WHERE id = ?').run(source.id);
+  const missing = bindingBytes(slug, source.ref, review.ref);
+  assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant).reason, 'source_unavailable');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), missing);
+  assert.equal(store.correctAcceptedReviewVerdict(slug, 'SQ-999999', input, correctionGrant).reason, 'not_found');
+});
+
+test('correction refuses one-sided mismatched and conflicting authoritative bindings', async () => {
+  const { slug, source, review, input } = await finalizedCorrectionFixture('binding-states');
+  const original = store.getTicket(slug, source.ref);
+  const mirror = original.submission.review;
+  const mirrors = [undefined,
+    { ...mirror, ticketId: 'foreign-review' }, { ...mirror, ref: 'SQ-999' },
+    { ...mirror, candidate: { ...mirror.candidate, value: 'f'.repeat(40) } },
+    { ...mirror, candidate: { ...mirror.candidate, observedAt: 'tampered' } },
+    { ...mirror, createdAt: undefined }, { ...mirror, outcome: 'planned' },
+    { ...mirror, correctedAt: 'premature-correction' },
+  ];
+  for (const changed of mirrors) {
+    persist(slug, { ...original, submission: { ...original.submission, review: changed } });
+    const before = bindingBytes(slug, source.ref, review.ref);
+    assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant).reason, 'binding_mismatch');
+    assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+  }
+  persist(slug, { ...original, submission: { ...original.submission, at: 'tampered' } });
+  const stale = bindingBytes(slug, source.ref, review.ref);
+  assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant).reason, 'binding_mismatch');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), stale);
+  persist(slug, original);
+  const second = reviewTicket(slug, 'conflicting-correction');
+  store.submissionReviewRelation(slug, store.getTicket(slug, source.ref));
+  persist(slug, { ...second, reviewTarget: review.reviewTarget });
+  const conflicting = bindingBytes(slug, source.ref, review.ref);
+  assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant).reason, 'binding_mismatch', 'transaction ignores warmed relation cache');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), conflicting);
+});
+
+test('correction retry requires unchanged correction timestamps and substantive rationale', async () => {
+  const { slug, source, review, input } = await finalizedCorrectionFixture('retry-state');
+  assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant).ok, true);
+  const original = store.getTicket(slug, source.ref);
+  const before = bindingBytes(slug, source.ref, review.ref);
+  assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, { ...input, text: 'different rationale' }, correctionGrant).reason, 'already_corrected');
+  assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, { ...input, why: 'different reason' }, correctionGrant).reason, 'already_corrected');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+  persist(slug, { ...original, submission: { ...original.submission, review: { ...original.submission.review, correctedAt: 'tampered' } } });
+  const inconsistent = bindingBytes(slug, source.ref, review.ref);
+  assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant).reason, 'binding_mismatch');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), inconsistent);
+});
+
+test('correction rolls back real SQLite write and deferred commit failures including cached authority', async () => {
+  const { slug, source, review, input } = await finalizedCorrectionFixture('sqlite-rollback');
+  const database = db.openDb(SIDEQUEST_HOME);
+  const before = bindingBytes(slug, source.ref, review.ref);
+  database.exec('CREATE TABLE correction_commit_guard (ticket_id TEXT, FOREIGN KEY(ticket_id) REFERENCES tickets(id) DEFERRABLE INITIALLY DEFERRED)');
+  const faults = ["SELECT RAISE(ABORT, 'injected correction write failure');", "INSERT INTO correction_commit_guard(ticket_id) VALUES ('missing-correction-parent');"];
+  for (const fault of faults) {
+    database.exec(`CREATE TRIGGER correction_failure AFTER UPDATE ON tickets WHEN NEW.id = '${review.id}' BEGIN ${fault} END`);
+    try {
+      store.submissionReviewRelation(slug, store.getTicket(slug, source.ref));
+      assert.throws(() => store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant), /correction write failure|FOREIGN KEY constraint failed/);
+      assert.equal(bindingBytes(slug, source.ref, review.ref), before, 'both rows, audit and comment rolled back');
+      assert.equal(store.submissionReviewRelation(slug, store.getTicket(slug, source.ref)).mirror.outcome, 'accepted', 'cache cannot retain a rejected half after rollback');
+      assert.equal(reviewBinding.effectiveOracleVerdictOutcome(store.getTicket(slug, review.ref).oracle), 'accepted');
+      assert.equal(database.prepare('SELECT COUNT(*) AS count FROM correction_commit_guard').get().count, 0);
+    } finally {
+      database.exec('DROP TRIGGER correction_failure');
+    }
+  }
+  assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant).ok, true, 'rolled-back state remains correctable');
+  assert.equal(store.submissionReviewRelation(slug, store.getTicket(slug, source.ref)).mirror.outcome, 'rejected');
+});
+
+test('correction canonical list keeps original timestamp and corrected review refuses redispatch', async () => {
+  const { repository, slug, source, review, input } = await finalizedCorrectionFixture('list-read');
+  const before = tool('list').handler({ project: repository, ref: review.ref });
+  assert.equal(before.ticket.oracle.verdict.at, input.expected.verdictAt);
+  assert.notEqual(before.ticket.comments.at(-1).at, input.expected.verdictAt);
+  assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant).ok, true);
+  const after = tool('list').handler({ project: repository, ref: review.ref });
+  assert.deepEqual(after.ticket.oracle.verdict, before.ticket.oracle.verdict);
+  assert.equal(after.ticket.oracle.corrections.length, 1);
+  const bytes = bindingBytes(slug, source.ref, review.ref);
+  assert.throws(() => store.prepareDispatch(slug, review.ref, { sessionId: 'correction-redispatch' }), /done|finalized|rejected/);
+  assert.equal(bindingBytes(slug, source.ref, review.ref), bytes);
+});
+
+test('correction MCP refuses malformed shapes and missing runtime then authorizes the main-thread grant', async () => {
+  const { repository, slug, source, review, input, commit } = await finalizedCorrectionFixture('mcp');
+  const correct = { expectedOutcome: 'accepted', expectedVerdictAt: input.expected.verdictAt, sourceRef: source.ref, commit, evidence: input.evidence };
+  const request = { project: repository, ref: review.ref, by: input.by, text: input.text, why: input.why, outcome: 'rejected', correct };
+  const malformed = [null, [], 'invalid',
+    { ...correct, expectedOutcome: 'rejected' }, { ...correct, expectedVerdictAt: 123 },
+    { ...correct, sourceRef: null }, { ...correct, evidence: {} }, { ...correct, commit: 123 },
+    { ...correct, commit: '' }, { ...correct, sourceRevision: { source: 'git', value: commit } },
+    { ...correct, commit: undefined, sourceRevision: null },
+    { expectedOutcome: 'accepted', expectedVerdictAt: input.expected.verdictAt, sourceRef: source.ref, evidence: input.evidence, sourceRevision: { source: 'notion', value: 123 } },
+  ];
+  const before = bindingBytes(slug, source.ref, review.ref);
+  for (const value of malformed) {
+    const result = tool('verdict').handler({ ...request, correct: value });
+    assert.equal(result.reason, 'invalid_correction');
+    assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+  }
+  const previousSession = process.env.CLAUDE_CODE_SESSION_ID;
+  const previousLegacySession = process.env.CLAUDE_SESSION_ID;
+  try {
+    delete process.env.CLAUDE_CODE_SESSION_ID;
+    delete process.env.CLAUDE_SESSION_ID;
+    assert.equal(tool('verdict').handler(request).reason, 'identity_unavailable');
+    assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+    process.env.CLAUDE_CODE_SESSION_ID = 'synthetic-trusted-main-correction';
+    const result = tool('verdict').handler(request);
+    assert.equal(result.ok, true, result.message);
+    assert.equal(result.correction.sessionId, 'synthetic-trusted-main-correction');
+    assert.equal(result.correction.by, input.by);
+  } finally {
+    if (previousSession === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = previousSession;
+    if (previousLegacySession === undefined) delete process.env.CLAUDE_SESSION_ID;
+    else process.env.CLAUDE_SESSION_ID = previousLegacySession;
   }
 });
 
