@@ -372,7 +372,7 @@ commit and submit. Integration waits for the bound review to reach a terminal `d
 No caller-controlled route rejects a bound candidate. `rework`, `recordSubmissionRejection`, raw MCP `rework`, CLI `rework`, and
 reconciliation of a matching pending rejection all return one pre-write `candidate_review_locked` refusal,
 whatever `by` or `reviewRef` claims, because MCP hands a handler nothing but caller-supplied JSON and no
-argument can prove an external release principal. A review that finds a defect records its evidence on the review ticket and releases that review with `kind=oracle`. When the oracle accepts the defect conclusion, Sidequest records `rejected` on both binding halves; if it rejects that conclusion, it records `accepted` and closes a readonly review through `verdict({ ref, outcome: "accepted", text, why })`.
+argument can prove an external release principal. A review that finds a defect records its evidence on the review ticket and releases that review with `kind=oracle`. When the defect means the bound candidate must not ship, record `outcome=rejected`; `accepted` approves the candidate, and verdict text does not override the enum. A finalized `accepted` cannot be reversed by another verdict; use a fresh independently reviewed repair, integrate it, then close the rejected source with `supersede_submission`.
 `verdict.outcome` is always the candidate's fate, never agreement with the reviewer's prose: `rejected` confirms
 the candidate must not ship, `accepted` approves the candidate, and `inconclusive` approves nothing. Text does
 not override outcome, and a finalized `accepted` cannot be reversed by another verdict; do not guess.
