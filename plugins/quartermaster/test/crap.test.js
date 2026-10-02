@@ -10,7 +10,7 @@ const { test } = require('node:test');
 const { COVERAGE_DIR_ENV, crapReport, crapScore, formatReport, PrerequisiteError, realDir, sameDir } = require('../lib/crap.js');
 
 const CLI = path.resolve(__dirname, '../bin/quartermaster.js');
-const { withBodySpans } = require('../lib/crap-core.cjs');
+const { SCANNED_SOURCE, withBodySpans } = require('../lib/crap-core.cjs');
 
 function fixtureProject(files) {
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-'));
@@ -946,4 +946,368 @@ test('an untouched component in a changed .tsx keeps its baseline row, because t
   assert.deepEqual(report.failures, [], 'SaleTotals is untouched, so its uncovered line is not this change\'s to gate');
   assert.equal(report.checked, 1, 'only packsLabel changed');
   assert.deepEqual(reads, ['.tsx', '.ts', '.tsx', '.ts'], 'the working tree and the base revision each get a TypeScript-reader pass');
+});
+
+// lizard 1.24.0 reports no row at all for a `function`, method or constructor whose parameter list holds a
+// call (`a = f(), b`); it reports only `plain`, `arrow` and `wrapper` for this source.
+const DROPPED_SOURCE = [
+  'function plain(x) {',
+  '  return x ? 1 : 2;',
+  '}',
+  'function load(path = resolve(), opts) {',
+  '  if (!path) return null;',
+  '  if (opts && opts.fresh) return read(path);',
+  '  return cached(path);',
+  '}',
+  'class Store {',
+  '  constructor(private db = open(), name: string) {',
+  '    if (db) this.db = db;',
+  '  }',
+  '  async fetch<T>(key = keyOf(), fallback?: T): Promise<T | undefined> {',
+  '    return this.db.get(key) ?? fallback;',
+  '  }',
+  '}',
+  'const arrow = (a = f(), b) => {',
+  '  if (a) return b;',
+  '  return 0;',
+  '};',
+  'function wrapper(items) {',
+  '  if (check(items.map((item) => item.id))) {',
+  '    return items.filter(pick(1)) ? 1 : 0;',
+  '  }',
+  '  return cond ? run(step()) : { done: true };',
+  '}',
+  'class Derived extends mixin(Base(1)) {',
+  '  method() {}',
+  '}',
+  '',
+].join('\n');
+
+const DROPPED_LIZARD_ROWS = [
+  { name: 'plain', complexity: 2, start: 1, end: 3 },
+  { name: 'arrow', complexity: 2, start: 17, end: 20 },
+  { name: 'wrapper', complexity: 5, start: 21, end: 26 },
+];
+
+function scannedRows(source, rows = DROPPED_LIZARD_ROWS, extraFiles = []) {
+  const entries = rows.map((row) => ({ file: 'src/dropped.ts', ordinal: 0, ...row }));
+  return withBodySpans(entries, () => source, extraFiles)
+    .filter((entry) => entry.source === SCANNED_SOURCE)
+    .map((entry) => `${entry.name}@${entry.start}-${entry.end} cc=${entry.complexity} ordinal=${entry.ordinal}`);
+}
+
+test('a function lizard dropped altogether gets a row read from its source, and calls, conditions and arrows get none', () => {
+  assert.deepEqual(scannedRows(DROPPED_SOURCE), [
+    'load@4-8 cc=4 ordinal=0',
+    'constructor@10-12 cc=2 ordinal=0',
+    'fetch@13-15 cc=2 ordinal=0',
+    // No parameter list holds a call here: lizard loses a plain function after a dropped one, so it is read too.
+    'method@28-28 cc=1 ordinal=0',
+  ]);
+});
+
+test('a file with no function lizard dropped is left as lizard measured it, plain functions without a row included', () => {
+  const source = 'function plain(x) {\n  return x ? 1 : 2;\n}\nconst tag = (x) => `${x}`;\nif (check(items.map((item) => item.id))) {\n  run(step());\n}\n';
+
+  assert.deepEqual(scannedRows(source, [], ['src/dropped.ts']), []);
+});
+
+test('a plain function lizard lost after a dropped one is read from its source', () => {
+  // lizard 1.24.0 reports nothing for this file: it loses `later` too once `current` is dropped.
+  const source = [
+    'function current(cache, now = Date.now()) {',
+    '  return now - cache >= 0 && now - cache < 5;',
+    '}',
+    'function later(query) {',
+    '  return query;',
+    '}',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [], ['src/dropped.ts']), ['current@1-3 cc=2 ordinal=0', 'later@4-6 cc=1 ordinal=0']);
+});
+
+test('a dropped function counts the branches of its own parameter defaults and leaves a nested function to its own row', () => {
+  const source = [
+    'function pick(a = f() || g(), b = h() ? 1 : 2) {',
+    '  const inner = (x) => x ? 1 : 2;',
+    '  if (a) return inner(b);',
+    '  return b;',
+    '}',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [], ['src/dropped.ts']), ['pick@1-5 cc=4 ordinal=0']);
+});
+
+test('a dropped function whose line holds a lizard row of its own name keeps that row, and a same-named one takes the next ordinal', () => {
+  const source = [
+    'function twice(a = f()) {',
+    '  if (a) return 1;',
+    '  return 0;',
+    '}',
+    'function twice(b = g()) {',
+    '  if (b) return 2;',
+    '  return 0;',
+    '}',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [{ name: 'twice', complexity: 2, start: 1, end: 4 }]), ['twice@5-8 cc=2 ordinal=1']);
+});
+
+test('a dropped function that starts on the line of another function\'s lizard row still gets a row of its own', () => {
+  // The owner's review input (sameLine): lizard 1.24.0 reports only `outer`, at line 1 with cc 1.
+  const source = [
+    'export function outer(q) { return function inner(a = f()) {',
+    '  if (!a) return 0;',
+    '  return q && a ? 2 : 3;',
+    '}; }',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [{ name: 'outer', complexity: 1, start: 1, end: 1 }]), ['inner@1-4 cc=4 ordinal=0']);
+});
+
+test('a definition lizard reports as (anonymous) on its line has that row and gets no second one from the source', () => {
+  // The owner's review input (arrowType): lizard names a function with an arrow-typed parameter "(anonymous)".
+  const source = [
+    'function f<T>(work: () => T, t = 5) {',
+    '  if (t > 1 && t < 9) return work();',
+    '  return t ? work() : work();',
+    '}',
+    '',
+  ].join('\n');
+  const rows = [{ file: 'src/dropped.ts', ordinal: 0, name: '(anonymous)', complexity: 4, start: 1, end: 4 }];
+
+  assert.deepEqual(scannedRows(source, rows), []);
+  assert.equal(withBodySpans(rows, () => source).length, 1);
+});
+
+for (const [label, callback] of [['function', 'function (x) { return x; }'], ['arrow', '(x) => x']]) {
+  test(`a named function lizard dropped is not hidden by a ${label} callback's (anonymous) row on its first line`, () => {
+    const source = [
+      `export function outer(a = f(), b) { const pick = list.find(${callback});`,
+      '  if (a) return 1;',
+      '  if (b) return 2;',
+      '  if (a && b) return 3;',
+      '  return a ? 4 : 5;',
+      '}',
+      '',
+    ].join('\n');
+    const rows = [{ name: '(anonymous)', complexity: 1, start: 1, end: 1 }];
+
+    assert.deepEqual(scannedRows(source, rows), ['outer@1-6 cc=6 ordinal=0']);
+  });
+}
+
+const CALL_FIRST_DEFAULT_BODY = ['  if (a) return 1;', '  if (b) return 2;', '  if (a && b) return 3;', '  return a ? 4 : 5;', '}', ''];
+const CALL_FIRST_DEFAULT_HEAD = 'export function retry(now = Date.now(), work = () => {}) {';
+
+test('a default arrow in the parameter list and a callback on the same line leave the dropped function its own row', () => {
+  // The owner's round-four input (callFirstDefault): lizard 1.24.0 gives `work` and (anonymous), both on line 1, and no row for `retry`.
+  const source = [`${CALL_FIRST_DEFAULT_HEAD} const pick = list.find((x) => x);`, ...CALL_FIRST_DEFAULT_BODY].join('\n');
+  const rows = [{ name: 'work', complexity: 1, start: 1, end: 1 }, { name: '(anonymous)', complexity: 1, start: 1, end: 1 }];
+
+  assert.deepEqual(scannedRows(source, rows), ['retry@1-6 cc=6 ordinal=0']);
+});
+
+test('the same function with its callback on the next line keeps its row too', () => {
+  const source = [CALL_FIRST_DEFAULT_HEAD, '  const pick = list.find((x) => x);', ...CALL_FIRST_DEFAULT_BODY].join('\n');
+  const rows = [{ name: 'work', complexity: 1, start: 1, end: 1 }, { name: '(anonymous)', complexity: 1, start: 2, end: 2 }];
+
+  assert.deepEqual(scannedRows(source, rows), ['retry@1-7 cc=6 ordinal=0']);
+});
+
+test('the real lizard backend does not let a default arrow and a same-line callback hide an uncovered function from the gate', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const source = [`${CALL_FIRST_DEFAULT_HEAD} const pick = list.find((x) => x);`, ...CALL_FIRST_DEFAULT_BODY].join('\n');
+  const projectDir = fs.realpathSync.native(
+    droppedProject(source, [[1, 0], [2, 0], [3, 0], [4, 0], [5, 0]], { '.claude/quartermaster/crap.json': JSON.stringify({ base: 'main', sources: ['src'] }) }),
+  );
+
+  const result = runCli([], projectDir);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stdout, /^src\/load\.js:1 retry cc=6 coverage=0% CRAP=42 source=source-scan$/m);
+});
+
+test('a regex whose character class holds a slash is one literal, so the function around it still gets its row', () => {
+  // The owner's review input: `[\\/]` is the usual path-separator class. `/\\+/g` is the control without a class.
+  const source = [
+    'export function normalize(p = cwd()) {',
+    '  if (!p) return null;',
+    "  return p.split(/[\\\\/]+/).join('/') || '.';",
+    '}',
+    'export function control(p = cwd()) {',
+    '  if (!p) return null;',
+    "  return p.split(/\\\\+/g).join('/') || '.';",
+    '}',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [], ['src/dropped.ts']), ['normalize@1-4 cc=3 ordinal=0', 'control@5-8 cc=3 ordinal=0']);
+});
+
+test('a dropped function expression is named after the variable or property it is assigned to, as lizard names it', () => {
+  const source = [
+    'const load = function (path = resolve()) {',
+    '  return path ? 1 : 0;',
+    '};',
+    'const handlers = {',
+    '  save: async function (data = serialize()) {',
+    '    return data || null;',
+    '  },',
+    '};',
+    'register(function* (steps = plan()) {',
+    '  yield steps && steps.next;',
+    '});',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [], ['src/dropped.ts']), ['load@1-3 cc=2 ordinal=0', 'save@5-7 cc=2 ordinal=0', '(anonymous)@9-11 cc=2 ordinal=0']);
+});
+
+test('a dropped generator or generic method is read from its source, and a getter lizard names `get size` keeps its own row', () => {
+  const source = [
+    'class Box {',
+    '  get size() {',
+    '    return this.items ? this.items.length : 0;',
+    '  }',
+    '  *entries<T>(pick = (value: T) => value) {',
+    '    return pick > (this.limit || 0) ? 1 : 0;',
+    '  }',
+    '}',
+    'function* walk(root = tree()) {',
+    '  if (root) yield root;',
+    '}',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(scannedRows(source, [{ name: 'get size', complexity: 2, start: 2, end: 4 }]), ['entries@5-7 cc=3 ordinal=0', 'walk@9-11 cc=2 ordinal=0']);
+});
+
+test('a file lizard gave no row at all is scanned when it is named, and only then', () => {
+  const source = 'export function only(path = resolve(), flag) {\n  if (flag) return path;\n  return null;\n}\n';
+
+  assert.deepEqual(scannedRows(source, []), []);
+  assert.deepEqual(scannedRows(source, [], ['src/dropped.ts']), ['only@1-4 cc=2 ordinal=0']);
+});
+
+function droppedProject(source, lcovLines, extraFiles = {}) {
+  const projectDir = fixtureProject({ 'README.md': 'base\n', ...extraFiles });
+  commitBase(projectDir);
+  fs.mkdirSync(path.join(projectDir, 'src'));
+  fs.writeFileSync(path.join(projectDir, 'src/load.js'), source, 'utf8');
+  fs.mkdirSync(path.join(projectDir, 'coverage'));
+  fs.writeFileSync(path.join(projectDir, 'coverage/lcov.info'), lcov(lcovLines, 'src/load.js'), 'utf8');
+  track(projectDir);
+  return projectDir;
+}
+
+const LOAD_SOURCE = [
+  'function load(path = resolve(), opts) {',
+  '  if (!path) return null;',
+  '  if (opts && opts.fresh) return read(path);',
+  '  return cached(path);',
+  '}',
+  '',
+].join('\n');
+
+test('an uncovered function lizard dropped fails the gate instead of passing unseen, even when it is the file\'s only function', () => {
+  const projectDir = droppedProject(LOAD_SOURCE, [[2, 0], [3, 0], [4, 0]]);
+
+  // lizard returns nothing for this file, which used to exit 2 with "reported zero functions".
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => '' });
+
+  const load = report.functions.find((entry) => entry.function === 'load');
+  assert.deepEqual([load.cc, load.coverage, load.crap, load.source], [4, 0, 20, 'source-scan']);
+  assert.deepEqual(report.failures.map((entry) => entry.function), ['load']);
+  assert.match(formatReport(report), /src\/load\.js:1 load cc=4 coverage=0% CRAP=20 source=source-scan\nCRAP gate failed/);
+});
+
+test('a covered function lizard dropped passes, and a file with another function it cannot see stays unverified', () => {
+  const covered = droppedProject(LOAD_SOURCE, [[2, 1], [3, 1], [4, 1]]);
+  assert.deepEqual(crapReport({ projectDir: covered, ratchet: 'main', runLizard: () => '' }).failures, []);
+
+  const withHiddenArrow = droppedProject(`${LOAD_SOURCE}const tag = (x) => \`\${x}\`;\n`, [[2, 1], [3, 1], [4, 1]]);
+  assert.throws(
+    () => crapReport({ projectDir: withHiddenArrow, ratchet: 'main', runLizard: () => '' }),
+    (error) => error instanceof PrerequisiteError && /lizard reported zero functions for src\/load\.js/.test(error.message),
+  );
+});
+
+test('an edit to a function lizard dropped counts as a change against the base revision, and an untouched one does not', () => {
+  const twoFunctions = `${LOAD_SOURCE}function other(a = f(), b) {\n  if (a) return b;\n  return 0;\n}\n`;
+  const projectDir = fixtureProject({ 'src/load.js': twoFunctions, 'coverage/lcov.info': lcov([[2, 0], [3, 0], [4, 0], [7, 0], [8, 0]], 'src/load.js') });
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/load.js'), twoFunctions.replace('return cached(path);', 'return cached(path) || null;'), 'utf8');
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => '' });
+
+  assert.equal(report.checked, 1, 'only load changed; other is the same function it was in the base revision');
+  assert.deepEqual(report.failures.map((entry) => entry.function), ['load']);
+});
+
+// The owner's review inputs (pathSep, paysFor). lizard 1.24.0 reports no row for either file, and the
+// `name(...) {` token pattern cannot see `root`, whose parameter list holds a call.
+const PATH_SEP_SOURCE = [
+  'export class Paths {',
+  '  root(dir = process.cwd()) {',
+  '    return dir;',
+  '  }',
+  '}',
+  'export function normalize(p = cwd()) {',
+  '  if (!p) return null;',
+  "  return p.split(/[\\\\/]+/).join('/') || '.';",
+  '}',
+  '',
+].join('\n');
+
+test('an uncovered function holding a path-separator regex is scored, not passed unseen beside a scanned method', () => {
+  const projectDir = droppedProject(PATH_SEP_SOURCE, [[2, 0], [3, 0], [4, 0], [6, 0], [7, 0], [8, 0], [9, 0]]);
+
+  const report = crapReport({ projectDir, ratchet: 'main', runLizard: () => '' });
+
+  assert.deepEqual(report.failures.map((entry) => [entry.function, entry.cc, entry.crap]), [['normalize', 3, 12]]);
+});
+
+// `1)` in the JSX text closes a group the source scan never saw open, so it cannot find where `Steps` ends.
+const PAYS_FOR_SOURCE = PATH_SEP_SOURCE.split('export function')[0] + [
+  'export function Steps(items = load()) {',
+  '  if (!items) return null;',
+  '  if (items.length && items.ready) return <ol><li>1) Open</li></ol>;',
+  '  return null;',
+  '}',
+  '',
+].join('\n');
+
+test('a scanned method cannot stand in for a function the source scan could not read elsewhere in the file', () => {
+  assert.deepEqual(scannedRows(PAYS_FOR_SOURCE, [], ['src/dropped.ts']), ['root@2-4 cc=1 ordinal=0']);
+  const projectDir = droppedProject(PAYS_FOR_SOURCE, [[2, 0], [3, 0], [4, 0], [6, 0], [7, 0], [8, 0], [9, 0], [10, 0]]);
+
+  assert.throws(
+    () => crapReport({ projectDir, ratchet: 'main', runLizard: () => '' }),
+    (error) => error instanceof PrerequisiteError && /lizard reported zero functions for src\/load\.js/.test(error.message),
+  );
+});
+
+test('the real lizard backend does not let a default-call parameter hide an uncovered function from the gate', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const projectDir = fs.realpathSync.native(
+    droppedProject(`function plain(x) {\n  return x ? 1 : 2;\n}\n${LOAD_SOURCE}`, [[2, 1], [6, 0], [7, 0], [8, 0]], {
+      '.claude/quartermaster/crap.json': JSON.stringify({ base: 'main', sources: ['src'] }),
+    }),
+  );
+
+  const result = runCli([], projectDir);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stdout, /^src\/load\.js:4 load cc=4 coverage=0% CRAP=20 source=source-scan$/m);
 });

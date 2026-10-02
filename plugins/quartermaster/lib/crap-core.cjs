@@ -42,8 +42,23 @@ function crapScore(complexity, coverage) {
   return complexity ** 2 * (1 - coverage) ** 3 + complexity;
 }
 
-function functionTokenCount(text) {
-  return text.match(/\bfunction\b|=>|\b[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{/g)?.length ?? 0;
+// The pattern the gate has always counted definitions by (`function`, `=>`, `name(...) {`), so a file lizard gave no row is held to no less than before.
+const DEFINITION = /\bfunction\b|=>|\b[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{/g;
+
+function lineAt(text, offset) {
+  return text.slice(0, offset).split('\n').length;
+}
+
+function spansLine(row, line) {
+  return row.start <= line && line <= row.end;
+}
+
+/**
+ * Whether some definition in `text` starts on a line none of `rows` spans. Each definition is checked on
+ * its own, so a row the source scan did read cannot stand in for one it could not read elsewhere in the file.
+ */
+function definitionOutsideRows(text, rows) {
+  return Array.from(text.matchAll(DEFINITION), (match) => lineAt(text, match.index)).some((line) => !rows.some((row) => spansLine(row, line)));
 }
 
 const SCRIPT_SOURCE = /\.[cm]?[jt]sx?$/i;
@@ -61,6 +76,8 @@ const TOKEN_PATTERNS = [[OPERATOR, 'punct'], [WORD, 'word']];
 const BRACE_STEP = new Map([['{', 1], ['}', -1]]);
 const ANGLE_STEP = new Map([['<', 1], ['>', -1]]);
 const RETURN_TYPE_STOP = new Set([';', ')', ']', '}']);
+// A `<...>` type-parameter list never reaches back past one of these.
+const TYPE_PARAMETERS_FENCE = new Set([...RETURN_TYPE_STOP, '(']);
 const EXPRESSION_STOP = new Set([',', ';', ')', ']', '}']);
 const OPERAND_CLOSERS = new Set([')', ']', '}']);
 // lizard's JavaScript-family conditions, except that `??` is one branch where lizard reads two ternaries.
@@ -70,13 +87,30 @@ const BRANCH_OPERATORS = new Set(['&&', '||', '??']);
 const OPTIONAL_MARK_BEFORE = new Set([':', ')', ',']);
 // `promise.catch(...)` is a method call, not a catch clause.
 const MEMBER_ACCESS = new Set(['.', '?.']);
-const NO_TOKEN = { value: undefined, kind: undefined, line: 0 };
+const SCANNED_SOURCE = 'source-scan';
+const ANONYMOUS = '(anonymous)';
+const ASSIGNMENT_MARKS = new Set(['=', ':']);
+// A paren group after one of these is a condition, an operand or a call, never a parameter list.
+const NOT_A_NAME = new Set(['if', 'for', 'while', 'switch', 'catch', 'with', 'return', 'typeof', 'void', 'delete', 'await', 'yield', 'in', 'of', 'else', 'do', 'case', 'throw', 'async']);
+const CALL_PREFIX = new Set(['.', '?.', 'new', 'extends']);
+const NO_TOKEN ={ value: undefined, kind: undefined, line: 0 };
 const NESTED_BODY_END = new Map([['=>', arrowBodyEnd], ['function', functionKeywordBodyEnd]]);
 
+/** A regex's character class may hold an unescaped `/`, so it is stepped over whole; one left open ends the search for a close. */
+function characterClassEnd(text, index) {
+  const close = closingOnLine(text, index, ']');
+  return close < 0 ? text.length : close;
+}
+
+/** The last index of what starts at `cursor` inside a literal: an escape pair, a regex's character class, or the character alone. */
+function literalUnitEnd(text, cursor, quote) {
+  if (text[cursor] === '\\') return cursor + 1;
+  return quote === '/' && text[cursor] === '[' ? characterClassEnd(text, cursor) : cursor;
+}
+
 function closingOnLine(text, index, quote) {
-  for (let cursor = index + 1; cursor < text.length && text[cursor] !== '\n'; cursor += 1) {
-    if (text[cursor] === '\\') cursor += 1;
-    else if (text[cursor] === quote) return cursor;
+  for (let cursor = index + 1; cursor < text.length && text[cursor] !== '\n'; cursor = literalUnitEnd(text, cursor, quote) + 1) {
+    if (text[cursor] === quote) return cursor;
   }
   return -1;
 }
@@ -308,13 +342,21 @@ function nameIndexOnLine(tokens, first, last, name) {
   return first;
 }
 
-function signatureAt(tokens, open, name) {
-  if (!parameterListCandidate(tokens, open, name)) return null;
+function functionSignature(tokens, open) {
   const close = matchingClose(tokens, open);
-  if (close < 0 || !hasNestedParen(tokens, open, close)) return null;
+  if (close < 0) return null;
   const start = bodyStart(tokens, close);
   const end = bodyEnd(tokens, start);
   return end < 0 ? null : { open, close, start, end };
+}
+
+function nestedParenSignature(tokens, open) {
+  const signature = functionSignature(tokens, open);
+  return signature && hasNestedParen(tokens, open, signature.close) ? signature : null;
+}
+
+function signatureAt(tokens, open, name) {
+  return parameterListCandidate(tokens, open, name) ? nestedParenSignature(tokens, open) : null;
 }
 
 /**
@@ -324,7 +366,7 @@ function signatureAt(tokens, open, name) {
  * The parameter list and body of such a function, when its parameter list opens on the row's start line.
  */
 function truncatedSignature(tokens, entry) {
-  const name = entry.name.replace(/^.*(?:::|\.)/, '');
+  const name = ownName(entry.name);
   const [first, last] = tokenRangeOnLine(tokens, entry.start);
   for (let open = nameIndexOnLine(tokens, first, last, name); open < last; open += 1) {
     const signature = signatureAt(tokens, open, name);
@@ -350,18 +392,159 @@ function fileTokens(cache, file, readText) {
   return cache.get(file);
 }
 
+/** The `<` opening the type-parameter list that closes at the `>` at `close`, or -1 when a fence comes first. */
+function typeParametersOpen(tokens, close) {
+  let depth = 0;
+  for (let cursor = close; cursor >= 0 && !TYPE_PARAMETERS_FENCE.has(tokens[cursor].value); cursor -= 1) {
+    depth -= ANGLE_STEP.get(tokens[cursor].value) || 0;
+    if (depth === 0) return cursor;
+  }
+  return -1;
+}
+
+/** `index` when it is no `>`, else the index before the `<...>` type-parameter list that ends there. */
+function beforeTypeParameters(tokens, index) {
+  const open = tokenAt(tokens, index).value === '>' ? typeParametersOpen(tokens, index) : -1;
+  return open < 0 ? index : open - 1;
+}
+
+/** lizard names a function expression after the variable or property it is assigned to. */
+function assignedName(tokens, keyword) {
+  const target = tokenAt(tokens, keyword - 1).value === 'async' ? keyword - 2 : keyword - 1;
+  const owner = tokenAt(tokens, target - 1);
+  return ASSIGNMENT_MARKS.has(tokenAt(tokens, target).value) && owner.kind === 'word' ? owner.value : ANONYMOUS;
+}
+
+/** The `function` keyword just before `index`, past a generator's `*`, or `index` itself when there is none. */
+function functionKeywordStart(tokens, index) {
+  if (tokenAt(tokens, index - 1).value === 'function') return index - 1;
+  return tokenAt(tokens, index - 1).value === '*' && tokenAt(tokens, index - 2).value === 'function' ? index - 2 : index;
+}
+
+/** A word naming the function whose parameter list follows it, rather than a keyword or a callee. */
+function definitionName(tokens, at) {
+  const token = tokenAt(tokens, at);
+  return token.kind === 'word' && !NOT_A_NAME.has(token.value) && !CALL_PREFIX.has(tokenAt(tokens, at - 1).value);
+}
+
+/** The token a function's row starts on and its name, for the paren at `open`; null when that paren is a call or a condition. */
+function definitionHead(tokens, open) {
+  const at = beforeTypeParameters(tokens, open - 1);
+  // `function (` and `function* (` have no name of their own, so the keyword sits right before where one would be.
+  const keyword = functionKeywordStart(tokens, at + 1);
+  if (keyword <= at) return { first: keyword, name: assignedName(tokens, keyword) };
+  return definitionName(tokens, at) ? { first: functionKeywordStart(tokens, at), name: tokenAt(tokens, at).value } : null;
+}
+
+/** lizard's name for a function can carry its owner (`exports.load`, `Store::fetch`) or accessor (`get size`); the source names it by the last word. */
+function ownName(name) {
+  return name.replace(/^.*(?:::|\.|\s)/, '');
+}
+
+function rowStart(line, name) {
+  return `${line}\u0000${name}`;
+}
+
 /**
- * Gives every JavaScript-family lizard row that stops inside its own parameter list the function's real
- * body and that body's branch count, so coverage, the source-text fingerprint and CRAP all read the
- * function lizard named. `readText` returns a file's source, or null when it cannot be read; that file's
- * rows stay as lizard gave them, so a truncated one finds no coverage and is reported unverified.
+ * lizard names a function whose parameter list holds an arrow type (`work: () => T`) "(anonymous)" and ends that
+ * row inside the list, so the row is this function's only when widening it lands on this parameter list. A
+ * callback's row on the line widens elsewhere, and a default arrow (`work = () => {}`) gets a row of its own name.
  */
-function withBodySpans(entries, readText) {
-  const tokensByFile = new Map();
-  return entries.map((entry) => {
-    const tokens = SCRIPT_SOURCE.test(entry.file) ? fileTokens(tokensByFile, entry.file, readText) : null;
-    return tokens ? widenedEntry(tokens, entry) : entry;
+function anonymousRowStandsIn(rowStarts, tokens, line, open) {
+  return rowStarts.has(rowStart(line, ANONYMOUS)) && truncatedSignature(tokens, { name: ANONYMOUS, start: line })?.open === open;
+}
+
+function bracedSignature(tokens, open, signatureOf) {
+  const signature = signatureOf(tokens, open);
+  return signature && tokens[signature.start].value === '{' ? signature : null;
+}
+
+/** Arrows are left out: lizard keeps a row for an arrow whose parameter list holds a call. */
+function scannedEntry(tokens, file, open, { rowStarts, signatureOf }) {
+  const head = definitionHead(tokens, open);
+  if (!head || rowStarts.has(rowStart(tokens[head.first].line, head.name))) return null;
+  const signature = bracedSignature(tokens, open, signatureOf);
+  if (!signature) return null;
+  const { close, start, end } = signature;
+  if (anonymousRowStandsIn(rowStarts, tokens, tokens[head.first].line, open)) return null;
+  const complexity = 1 + branchCount(tokens, open, close) + branchCount(tokens, start + 1, end);
+  return { file, name: head.name, complexity, start: tokens[head.first].line, end: tokens[end].line, source: SCANNED_SOURCE };
+}
+
+/** A row already stands for a definition when it starts on the definition's line under the same name, or as (anonymous) when its parameter list holds an arrow; another named function there does not. */
+function definitionsWithoutRow(tokens, file, rows, signatureOf) {
+  const scan = { rowStarts: new Set(rows.map((entry) => rowStart(entry.start, ownName(entry.name)))), signatureOf };
+  const found = [];
+  for (let open = 0; open < tokens.length; open += 1) {
+    const entry = tokens[open].value === '(' ? scannedEntry(tokens, file, open, scan) : null;
+    if (entry) found.push(entry);
+  }
+  return found;
+}
+
+/** One past the highest ordinal lizard gave each name. */
+function nextOrdinals(present) {
+  const next = new Map();
+  for (const entry of present) next.set(entry.name, Math.max(next.get(entry.name) || 0, entry.ordinal + 1));
+  return next;
+}
+
+/** Numbered after the rows lizard did give the same name, so no scanned row takes a lizard row's identity. */
+function withOrdinals(scanned, present) {
+  const nextOrdinal = nextOrdinals(present);
+  return scanned.map((entry) => {
+    const ordinal = nextOrdinal.get(entry.name) || 0;
+    nextOrdinal.set(entry.name, ordinal + 1);
+    return { ...entry, ordinal };
   });
 }
 
-module.exports = { crapScore, functionTokenCount, parseLizardCsv, splitCsvRow, withBodySpans };
+/**
+ * lizard reports no row at all for a `function`, method or constructor whose parameter list holds a call
+ * (`a = f(), b`), so that function is never scored. A definition with such a parameter list, unless a row
+ * of the same name (or an "(anonymous)" one) starts on its line, is read from the source instead. It has no lizard complexity to
+ * compare, so its own branch count stands alone. lizard is also left unable to read some plain functions
+ * after it, so once a dropped function is found, every other definition in the file without a row is read
+ * the same way.
+ */
+function scannedEntries(tokens, file, present) {
+  const dropped = definitionsWithoutRow(tokens, file, present, nestedParenSignature);
+  if (!dropped.length) return [];
+  const lost = definitionsWithoutRow(tokens, file, [...present, ...dropped], functionSignature);
+  return withOrdinals([...dropped, ...lost].sort((left, right) => left.start - right.start), present);
+}
+
+function groupByFile(entries) {
+  const byFile = new Map();
+  for (const entry of entries) {
+    if (byFile.has(entry.file)) byFile.get(entry.file).push(entry);
+    else byFile.set(entry.file, [entry]);
+  }
+  return byFile;
+}
+
+/**
+ * Gives every JavaScript-family lizard row that stops inside its own parameter list the function's real
+ * body and that body's branch count, so coverage, the source-text fingerprint and CRAP all read the
+ * function lizard named, and adds a row for each function lizard dropped altogether. `readText` returns
+ * a file's source, or null when it cannot be read; that file's rows stay as lizard gave them, so a
+ * truncated one finds no coverage and is reported unverified. `extraFiles` are files lizard gave no
+ * row at all, which a dropped function can leave.
+ */
+function withBodySpans(entries, readText, extraFiles = []) {
+  const tokensByFile = new Map();
+  const tokensOf = (file) => (SCRIPT_SOURCE.test(file) ? fileTokens(tokensByFile, file, readText) : null);
+  const widened = entries.map((entry) => {
+    const tokens = tokensOf(entry.file);
+    return tokens ? widenedEntry(tokens, entry) : entry;
+  });
+  const rowsByFile = groupByFile(entries);
+  const files = new Set([...rowsByFile.keys(), ...extraFiles]);
+  const scanned = [...files].flatMap((file) => {
+    const tokens = tokensOf(file);
+    return tokens ? scannedEntries(tokens, file, rowsByFile.get(file) ?? []) : [];
+  });
+  return [...widened, ...scanned];
+}
+
+module.exports = { SCANNED_SOURCE, crapScore, definitionOutsideRows, parseLizardCsv, splitCsvRow, withBodySpans };
