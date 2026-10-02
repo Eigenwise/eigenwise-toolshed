@@ -10,6 +10,7 @@ export type ReviewMirror = Readonly<{
   candidate?: ReviewCandidate;
   createdAt?: string;
   outcome?: ReviewOutcome;
+  correctedAt?: string;
 }>;
 
 // Which half of the binding survived. A candidate written before this store
@@ -219,6 +220,13 @@ export function reviewRelationRef(relation?: ReviewRelation | null): string {
 
 export function reviewOutcomeFromOracleVerdict(outcome: OracleVerdictOutcome): ReviewOutcome {
   return outcome;
+}
+
+export function effectiveOracleVerdictOutcome(oracle?: {
+  corrections?: readonly { to: OracleVerdictOutcome }[];
+  verdict?: { outcome: OracleVerdictOutcome };
+}): OracleVerdictOutcome | undefined {
+  return oracle?.corrections?.at(-1)?.to ?? oracle?.verdict?.outcome;
 }
 
 export function reviewRelationOutcome(relation?: ReviewRelation | null): string {

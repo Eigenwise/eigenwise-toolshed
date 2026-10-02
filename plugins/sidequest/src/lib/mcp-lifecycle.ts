@@ -59,7 +59,8 @@ const {
   state,
 } = require('./mcp-shared');
 const { sourceRevisionBaseline } = require('./source-revision-capability');
-const { reviewCandidateFromSubmission, sameReviewCandidate } = require('./kernel/review-binding.js');
+const { reviewCandidateFromSubmission, sameReviewCandidate, effectiveOracleVerdictOutcome } = require('./kernel/review-binding.js');
+const { correctReviewVerdict } = require('./mcp-review-correction.js');
 const { inheritedRejectedDuplicateGuidance, crossedWorktreeRefusalMessage } = require('./refusal-guidance.js');
 
 type ToolDefinition = {
@@ -224,7 +225,7 @@ function inheritedRejectedAdmission(slug: string, ticket: any, entryRef: string,
   if (relation.conflict) return { ok: false as const, reason: 'review_conflict' };
   if (relation.side !== 'both' || !relation.reviewTicket?.id || !relation.reviewTarget) return { ok: false as const, reason: 'mirror_only' };
   if (String(relation.reviewTarget.outcome) !== 'rejected'
-    || String(relation.reviewTicket.oracle?.verdict?.outcome || '') !== 'rejected') {
+    || effectiveOracleVerdictOutcome(relation.reviewTicket.oracle) !== 'rejected') {
     return { ok: false as const, reason: 'not_rejected' };
   }
   if (!sameReviewCandidate(candidate, relation.reviewTarget.candidate)) return { ok: false as const, reason: 'stale_candidate' };
@@ -818,11 +819,26 @@ const tools: ToolDefinition[] = [
         },
         why: { type: 'string' },
         constraint: { type: 'string' },
+        by: { type: 'string' },
+        correct: {
+          type: 'object',
+          properties: {
+            expectedOutcome: { type: 'string', enum: ['accepted'] },
+            expectedVerdictAt: { type: 'string' },
+            sourceRef: { type: 'string' },
+            commit: { type: 'string' },
+            sourceRevision: { type: 'object', properties: { source: { type: 'string' }, value: { type: 'string' } }, required: ['source', 'value'] },
+            evidence: { type: 'string' },
+          },
+          required: ['expectedOutcome', 'expectedVerdictAt', 'sourceRef', 'evidence'],
+          oneOf: [{ required: ['commit'], not: { required: ['sourceRevision'] } }, { required: ['sourceRevision'], not: { required: ['commit'] } }],
+        },
       },
       required: ['ref', 'text', 'outcome'],
     },
     handler(args) {
       const { slug } = resolveLifecycleProject(args.project, args, 'verdict');
+      if (args.correct !== undefined) return correctReviewVerdict(slug, args, runtimeSessionId());
       const result = store.applyExperimentVerdict(slug, args.ref, {
         text: args.text,
         outcome: args.outcome,

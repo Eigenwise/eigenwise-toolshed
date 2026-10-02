@@ -266,29 +266,47 @@ ${block}
 `
     );
   }
-  function recordBoundReviewOutcome(slug, reviewTicket, outcome) {
-    const target = reviewTicket?.reviewTarget;
-    if (!target?.ticketId || !target?.candidate) return null;
-    const sourceTicket = getTicket(slug, target.ticketId);
-    const sourceCandidate = reviewCandidateFromSubmission(sourceTicket?.submission);
-    if (!sourceTicket?.submission || target.ref && String(target.ref).toUpperCase() !== String(sourceTicket.ref || "").toUpperCase() || !sameReviewCandidate(sourceCandidate, target.candidate)) {
-      throw new Error(`review outcome could not verify the bound source for ${reviewTicket.ref}`);
-    }
-    const mirror = sourceTicket.submission.review;
-    if (mirror && (mirror.ticketId && String(mirror.ticketId) !== String(reviewTicket.id) || mirror.ref && String(mirror.ref).toUpperCase() !== String(reviewTicket.ref || "").toUpperCase() || mirror.candidate && !sameReviewCandidate(mirror.candidate, target.candidate))) {
-      throw new Error(`review outcome could not verify the bound mirror for ${reviewTicket.ref}`);
-    }
+  function boundOutcomeSource(slug, reviewTicket) {
+    const target = reviewTicket.reviewTarget;
+    const source = getTicket(slug, target?.ticketId);
+    if (!source?.submission) throw new Error(`review outcome could not verify the bound source for ${reviewTicket.ref}`);
+    const matches = [
+      sameReviewCandidate(reviewCandidateFromSubmission(source.submission), target?.candidate),
+      !target?.ref || target.ref.toUpperCase() === source.ref.toUpperCase()
+    ];
+    if (matches.includes(false)) throw new Error(`review outcome could not verify the bound source for ${reviewTicket.ref}`);
+    return source;
+  }
+  function verifyOutcomeMirror(reviewTicket, source) {
+    const mirror = source.submission?.review;
+    if (!mirror) return;
+    const matches = [
+      !mirror.ticketId || mirror.ticketId === reviewTicket.id,
+      !mirror.ref || mirror.ref.toUpperCase() === reviewTicket.ref.toUpperCase(),
+      !mirror.candidate || sameReviewCandidate(mirror.candidate, reviewTicket.reviewTarget?.candidate)
+    ];
+    if (matches.includes(false)) throw new Error(`review outcome could not verify the bound mirror for ${reviewTicket.ref}`);
+  }
+  function recordBoundReviewOutcome(slug, reviewTicket, outcome, fields = {}) {
+    const target = reviewTicket.reviewTarget;
+    if (!target?.ticketId || !target.candidate) return null;
+    const sourceTicket = boundOutcomeSource(slug, reviewTicket);
+    verifyOutcomeMirror(reviewTicket, sourceTicket);
+    const mirror = sourceTicket.submission?.review;
     const now = (/* @__PURE__ */ new Date()).toISOString();
-    reviewTicket.reviewTarget = Object.assign({}, target, { outcome });
-    sourceTicket.submission = Object.assign({}, sourceTicket.submission, {
+    reviewTicket.reviewTarget = { ...target, outcome, ...fields };
+    sourceTicket.submission = {
+      ...sourceTicket.submission,
       review: {
+        ...mirror,
         ticketId: reviewTicket.id,
         ref: reviewTicket.ref,
         candidate: target.candidate,
         createdAt: mirror?.createdAt || now,
-        outcome
+        outcome,
+        ...fields
       }
-    });
+    };
     sourceTicket.updatedAt = now;
     putTicket(slug, sourceTicket);
     return { sourceRef: sourceTicket.ref, outcome };
@@ -406,6 +424,7 @@ ${String(log).slice(entry.end)}`, result: { priorRound: target, overturningRound
     appendExperimentEntry,
     appendOverturnLine,
     applyExperimentVerdict,
+    recordBoundReviewOutcome,
     experimentPacket,
     ticketPlanInfo,
     writeOracleExperimentRound,

@@ -19,6 +19,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var review_binding_exports = {};
 __export(review_binding_exports, {
   completedReviewAttempt: () => completedReviewAttempt,
+  effectiveOracleVerdictOutcome: () => effectiveOracleVerdictOutcome,
   isReviewCommit: () => isReviewCommit,
   reviewCandidateFromSubmission: () => reviewCandidateFromSubmission,
   reviewLockMessage: () => reviewLockMessage,
@@ -143,6 +144,9 @@ function reviewRelationRef(relation) {
 function reviewOutcomeFromOracleVerdict(outcome) {
   return outcome;
 }
+function effectiveOracleVerdictOutcome(oracle) {
+  return oracle?.corrections?.at(-1)?.to ?? oracle?.verdict?.outcome;
+}
 function reviewRelationOutcome(relation) {
   return String(relation?.mirror?.outcome || relation?.reviewTarget?.outcome || "planned");
 }
@@ -153,6 +157,7 @@ function reviewLockMessage(operation, ticket, relation) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   completedReviewAttempt,
+  effectiveOracleVerdictOutcome,
   isReviewCommit,
   reviewCandidateFromSubmission,
   reviewLockMessage,

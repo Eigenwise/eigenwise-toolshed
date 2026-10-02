@@ -885,6 +885,112 @@ test('an oracle rejection marks both binding halves rejected and permits a revie
   assert.equal(closed.submission.integration.outcome, 'superseded');
 });
 
+async function finalizedCorrectionFixture(label: string) {
+  const { repository, slug, commit } = board(`correction-${label}`);
+  const source = submittedSource(slug, commit, label);
+  const review = store.createTicket(slug, { title: `correction ${label}`, category: 'review-audit', files: ['candidate.txt'] }, { ref: source.ref, commit });
+  const active = store.getTicket(slug, review.ref);
+  active.status = 'doing';
+  active.claim = { by: 'independent-reviewer', at: new Date().toISOString() };
+  active.dispatch = { launchSeq: 1, readonly: true, executor: 'sidequest-exec-dispatch-readonly', agentId: `correction-reviewer-${label}` };
+  persist(slug, active);
+  const released = await tool('release').handler({ project: repository, ref: review.ref, by: 'independent-reviewer', kind: 'oracle', reason: 'Synthetic pinned defect evidence', oracle: 'Does this candidate contain the recorded defect?' });
+  assert.equal(released.ok, true, released.message);
+  const verdict = tool('verdict').handler({ project: repository, ref: review.ref, text: 'Synthetic mistaken candidate approval', outcome: 'accepted' });
+  assert.equal(verdict.ok, true, verdict.message);
+  const finalized = store.getTicket(slug, review.ref);
+  finalized.oracle.verdict.at = '2026-09-01T01:00:00.000Z';
+  persist(slug, finalized);
+  const input = {
+    by: 'main-auditor', sessionId: 'authorized-main-session', text: 'The original candidate contains the defect.',
+    why: 'The accepted enum contradicted the pinned evidence.', evidence: 'Synthetic exact-candidate assertion failed.',
+    expected: { outcome: 'accepted' as const, verdictAt: finalized.oracle.verdict.at, sourceRef: source.ref, candidate: { source: 'git', value: commit } },
+  };
+  return { repository, slug, commit, source, review: finalized, input };
+}
+
+const correctionGrant = { allowAcceptedReviewCorrection: true };
+
+test('correction preserves original history and exact binding identities while rejecting both halves', async () => {
+  const { slug, source, review, input } = await finalizedCorrectionFixture('history');
+  const beforeSource = store.getTicket(slug, source.ref);
+  const beforeReview = store.getTicket(slug, review.ref);
+  const experiment = store.experimentPacket(slug, review.ref).packet;
+  const result = store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant);
+  assert.equal(result.ok, true, result.message);
+  const afterReview = store.getTicket(slug, review.ref);
+  const afterSource = store.getTicket(slug, source.ref);
+  assert.deepEqual(afterReview.oracle.verdict, beforeReview.oracle.verdict, 'the original accepted verdict bytes survive');
+  assert.deepEqual(afterReview.completion, beforeReview.completion, 'original completion is immutable');
+  assert.deepEqual(afterReview.comments.slice(0, -1), beforeReview.comments, 'original comments are immutable');
+  assert.equal(store.experimentPacket(slug, review.ref).packet, experiment, 'original experiment log is byte-identical');
+  assert.deepEqual(afterReview.reviewTarget, { ...beforeReview.reviewTarget, outcome: 'rejected', correctedAt: result.correction.at });
+  assert.deepEqual(afterSource.submission.review, { ...beforeSource.submission.review, outcome: 'rejected', correctedAt: result.correction.at });
+  assert.deepEqual(result.correction.candidate, beforeReview.reviewTarget.candidate, 'audit carries the exact bound candidate');
+  assert.equal(afterReview.comments.at(-1).id, result.correction.commentId);
+  assert.equal(afterReview.status, 'done');
+  assert.equal(reviewBinding.effectiveOracleVerdictOutcome(afterReview.oracle), 'rejected');
+  assert.equal(store.validateIntegrationSubmission(slug, source.ref, {}).reason, 'candidate_rejected', 'original delivery remains blocked');
+  const bytes = bindingBytes(slug, source.ref, review.ref);
+  const retry = store.correctAcceptedReviewVerdict(slug, review.ref, { ...input, by: 'reloaded-main', sessionId: 'new-main-session' }, correctionGrant);
+  assert.equal(retry.idempotent, true, 'a fresh authorized main session can retry');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), bytes, 'exact retry performs no writes');
+  const conflict = store.correctAcceptedReviewVerdict(slug, review.ref, { ...input, evidence: 'different evidence' }, correctionGrant);
+  assert.equal(conflict.reason, 'already_corrected');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), bytes, 'conflicting retry performs no writes');
+});
+
+test('correction checks original timestamp and candidate CAS before retry and preserves bytes on refusal', async () => {
+  const { slug, source, review, input } = await finalizedCorrectionFixture('cas');
+  const before = bindingBytes(slug, source.ref, review.ref);
+  const wrongExpectations = [
+    { ...input.expected, verdictAt: review.comments.at(-1).at },
+    { ...input.expected, verdictAt: '' },
+    { ...input.expected, sourceRef: 'SQ-999999' },
+    { ...input.expected, candidate: { source: 'git', value: 'f'.repeat(40) } },
+  ];
+  for (const expected of wrongExpectations) {
+    const result = store.correctAcceptedReviewVerdict(slug, review.ref, { ...input, expected }, correctionGrant);
+    assert.equal(result.reason, 'stale_expected', 'only the original oracle.verdict.at is a valid CAS');
+    assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+  }
+  assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant).ok, true);
+  const corrected = bindingBytes(slug, source.ref, review.ref);
+  const staleRetry = store.correctAcceptedReviewVerdict(slug, review.ref, { ...input, expected: wrongExpectations[0] }, correctionGrant);
+  assert.equal(staleRetry.reason, 'stale_expected', 'idempotency cannot bypass CAS');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), corrected);
+});
+
+test('correction refuses ungranted store calls and missing audit identity or evidence without writes', async () => {
+  const { slug, source, review, input } = await finalizedCorrectionFixture('authority');
+  const before = bindingBytes(slug, source.ref, review.ref);
+  assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, input).reason, 'correction_unauthorized');
+  const malformed = [
+    { input: { ...input, by: ' ' }, reason: 'identity_required' },
+    { input: { ...input, sessionId: '' }, reason: 'identity_unavailable' },
+    { input: { ...input, text: '' }, reason: 'invalid_correction' },
+    { input: { ...input, evidence: ' ' }, reason: 'evidence_required' },
+  ];
+  for (const entry of malformed) {
+    assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, entry.input, correctionGrant).reason, entry.reason);
+    assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+  }
+});
+
+test('correction retry after delivery or supersession refuses before idempotency', async () => {
+  for (const terminal of ['integratedAt', 'supersededBy']) {
+    const { slug, source, review, input } = await finalizedCorrectionFixture(`terminal-${terminal}`);
+    assert.equal(store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant).ok, true);
+    const delivered = store.getTicket(slug, source.ref);
+    delivered.submission[terminal] = 'synthetic-terminal';
+    persist(slug, delivered);
+    const before = bindingBytes(slug, source.ref, review.ref);
+    const result = store.correctAcceptedReviewVerdict(slug, review.ref, input, correctionGrant);
+    assert.equal(result.reason, terminal === 'integratedAt' ? 'source_delivered' : 'source_superseded');
+    assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+  }
+});
+
 test('an accepted oracle review continues to lock candidate supersession', async () => {
   const { repository, slug, commit: candidate } = board('oracle-acceptance');
   const source = submittedSource(slug, candidate, 'oracle-acceptance');

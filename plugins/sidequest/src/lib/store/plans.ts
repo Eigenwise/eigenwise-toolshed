@@ -1,5 +1,8 @@
 'use strict';
 
+import type { CorrectionTicket } from './review-corrections';
+import type { ReviewOutcome } from '../kernel/review-binding';
+
 const { reviewCandidateFromSubmission, reviewOutcomeFromOracleVerdict, sameReviewCandidate } = require('../kernel/review-binding');
 
 function createPlans(dependencies: any) {
@@ -293,32 +296,37 @@ function appendStandingConstraint(log?: any, round?: any, constraint?: any) {
   );
 }
 
-function recordBoundReviewOutcome(slug?: any, reviewTicket?: any, outcome?: any) {
-  const target = reviewTicket?.reviewTarget;
-  if (!target?.ticketId || !target?.candidate) return null;
-  const sourceTicket = getTicket(slug, target.ticketId);
-  const sourceCandidate = reviewCandidateFromSubmission(sourceTicket?.submission);
-  if (!sourceTicket?.submission || (target.ref && String(target.ref).toUpperCase() !== String(sourceTicket.ref || '').toUpperCase())
-    || !sameReviewCandidate(sourceCandidate, target.candidate)) {
-    throw new Error(`review outcome could not verify the bound source for ${reviewTicket.ref}`);
-  }
-  const mirror = sourceTicket.submission.review;
-  if (mirror && ((mirror.ticketId && String(mirror.ticketId) !== String(reviewTicket.id))
-    || (mirror.ref && String(mirror.ref).toUpperCase() !== String(reviewTicket.ref || '').toUpperCase())
-    || (mirror.candidate && !sameReviewCandidate(mirror.candidate, target.candidate)))) {
-    throw new Error(`review outcome could not verify the bound mirror for ${reviewTicket.ref}`);
-  }
+function boundOutcomeSource(slug: string, reviewTicket: CorrectionTicket): CorrectionTicket {
+  const target = reviewTicket.reviewTarget;
+  const source: CorrectionTicket | null = getTicket(slug, target?.ticketId);
+  if (!source?.submission) throw new Error(`review outcome could not verify the bound source for ${reviewTicket.ref}`);
+  const matches = [sameReviewCandidate(reviewCandidateFromSubmission(source.submission), target?.candidate),
+    !target?.ref || target.ref.toUpperCase() === source.ref.toUpperCase()];
+  if (matches.includes(false)) throw new Error(`review outcome could not verify the bound source for ${reviewTicket.ref}`);
+  return source;
+}
+
+function verifyOutcomeMirror(reviewTicket: CorrectionTicket, source: CorrectionTicket): void {
+  const mirror = source.submission?.review;
+  if (!mirror) return;
+  const matches = [!mirror.ticketId || mirror.ticketId === reviewTicket.id,
+    !mirror.ref || mirror.ref.toUpperCase() === reviewTicket.ref.toUpperCase(),
+    !mirror.candidate || sameReviewCandidate(mirror.candidate, reviewTicket.reviewTarget?.candidate)];
+  if (matches.includes(false)) throw new Error(`review outcome could not verify the bound mirror for ${reviewTicket.ref}`);
+}
+
+function recordBoundReviewOutcome(slug: string, reviewTicket: CorrectionTicket, outcome: ReviewOutcome, fields: { correctedAt?: string } = {}) {
+  const target = reviewTicket.reviewTarget;
+  if (!target?.ticketId || !target.candidate) return null;
+  const sourceTicket = boundOutcomeSource(slug, reviewTicket);
+  verifyOutcomeMirror(reviewTicket, sourceTicket);
+  const mirror = sourceTicket.submission?.review;
   const now = new Date().toISOString();
-  reviewTicket.reviewTarget = Object.assign({}, target, { outcome });
-  sourceTicket.submission = Object.assign({}, sourceTicket.submission, {
-    review: {
-      ticketId: reviewTicket.id,
-      ref: reviewTicket.ref,
-      candidate: target.candidate,
-      createdAt: mirror?.createdAt || now,
-      outcome,
-    },
-  });
+  reviewTicket.reviewTarget = { ...target, outcome, ...fields };
+  sourceTicket.submission = { ...sourceTicket.submission,
+    review: { ...mirror, ticketId: reviewTicket.id, ref: reviewTicket.ref, candidate: target.candidate,
+      createdAt: mirror?.createdAt || now, outcome, ...fields },
+  };
   sourceTicket.updatedAt = now;
   putTicket(slug, sourceTicket);
   return { sourceRef: sourceTicket.ref, outcome };
@@ -442,6 +450,7 @@ function experimentPacket(slug?: any, idOrRef?: any) {
     appendExperimentEntry,
     appendOverturnLine,
     applyExperimentVerdict,
+    recordBoundReviewOutcome,
     experimentPacket,
     ticketPlanInfo,
     writeOracleExperimentRound,
