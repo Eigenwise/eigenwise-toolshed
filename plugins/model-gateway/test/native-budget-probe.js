@@ -21,13 +21,15 @@ function frame(type, data) {
 }
 
 function completion(model, content, inputTokens) {
-  const message = { id: 'msg_fixture', type: 'message', role: 'assistant', model,
-    content, stop_reason: 'end_turn', usage: { input_tokens: inputTokens, output_tokens: 1 } };
-  return message;
+  return { id: 'msg_fixture', type: 'message', role: 'assistant', model,
+    content, stop_reason: 'end_turn', stop_sequence: null,
+    usage: { input_tokens: inputTokens, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0,
+      cache_creation: null, inference_geo: null, output_tokens_details: null, server_tool_use: null, service_tier: null } };
 }
 
 function streamCompletion(message) {
-  let output = frame('message_start', { type: 'message_start', message: { ...message, content: [], stop_reason: null } });
+  let output = frame('message_start', { type: 'message_start', message: { ...message, content: [], stop_reason: null,
+    usage: { ...message.usage, output_tokens: 0 } } });
   for (const [index, contentBlock] of message.content.entries()) {
     const isText = contentBlock.type === 'text';
     const initialContent = isText ? { type: 'text', text: '' } : { ...contentBlock, input: {} };
@@ -37,16 +39,28 @@ function streamCompletion(message) {
     output += frame('content_block_delta', { type: 'content_block_delta', index, delta });
     output += frame('content_block_stop', { type: 'content_block_stop', index });
   }
-  return output + frame('message_delta', { type: 'message_delta', delta: { stop_reason: message.stop_reason }, usage: { output_tokens: 1 } })
+  const { input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens_details, server_tool_use } = message.usage;
+  return output + frame('message_delta', { type: 'message_delta', delta: { stop_reason: message.stop_reason, stop_sequence: null },
+    usage: { input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens_details, server_tool_use } })
     + frame('message_stop', { type: 'message_stop' });
 }
 
-function mainReply(model, counters) {
+function advertisedAgentTool(body, counters) {
+  const tool = (body.tools || []).find((tool) => ['Agent', 'Task'].includes(tool.name) && tool.input_schema?.type === 'object');
+  counters.agentToolAdvertised ||= tool?.name === 'Agent';
+  counters.taskToolAdvertised ||= tool?.name === 'Task';
+  return tool;
+}
+
+function mainReply(body, counters) {
   counters.mainTurns++;
-  if (counters.mainTurns > 2) return completion(model, [{ type: 'text', text: 'fixture-done' }], 10);
+  const tool = advertisedAgentTool(body, counters);
+  const inputTokens = counters.mainTurns === 1 ? 238000 : 240000;
+  if (counters.mainTurns > 2) return completion(body.model, [{ type: 'text', text: 'fixture-done' }], 10);
+  if (!tool) return completion(body.model, [{ type: 'text', text: 'fixture-done' }], inputTokens);
   const content = [{ type: 'tool_use', id: `tool_fixture_${counters.mainTurns}`,
-    name: 'Agent', input: { subagent_type: 'budget-worker', description: 'Fixture worker', prompt: 'Return fixture-done.' } }];
-  const message = completion(model, content, counters.mainTurns === 1 ? 238000 : 240000);
+    name: tool.name, input: { subagent_type: 'budget-worker', description: 'Fixture worker', prompt: 'Return fixture-done.' } }];
+  const message = completion(body.model, content, inputTokens);
   message.stop_reason = 'tool_use';
   return message;
 }
@@ -57,7 +71,7 @@ function fixtureReply(body, counters) {
   counters.requests++;
   counters.summaryRequests += Number(compact);
   counters.models[model]++;
-  if (model !== 'other' && model !== 'codex-auto' && !compact) return mainReply(body.model, counters);
+  if (model !== 'other' && model !== 'codex-auto' && !compact) return mainReply(body, counters);
   return completion(body.model, [{ type: 'text', text: 'fixture-done' }], 10);
 }
 
@@ -105,7 +119,7 @@ function observeUsage(usage, counters) {
 
 function observeAgentAvailability(event, counters) {
   counters.agentAvailable = Array.isArray(event.agents) ? event.agents.includes('budget-worker') : null;
-  counters.agentToolAvailable = Array.isArray(event.tools) ? event.tools.includes('Agent') : null;
+  counters.agentToolAvailable = Array.isArray(event.tools) ? event.tools.some((name) => name === 'Agent' || name === 'Task') : null;
 }
 
 function observeSystem(event, counters) {
@@ -114,13 +128,31 @@ function observeSystem(event, counters) {
   if (event.subtype === 'init') observeAgentAvailability(event, counters);
 }
 
+function classifyToolError(contentBlock) {
+  if (toolResultRefused(contentBlock)) return 'native_guard_refusal';
+  const content = JSON.stringify(contentBlock.content);
+  const classifications = [
+    ['unknown_tool', /unknown tool|no such tool|tool[^\n]*not (?:found|available)/i],
+    ['unknown_subagent', /unknown (?:subagent|agent|worker)|(?:subagent|agent) type[^\n]*not found/i],
+    ['unsupported_model', /unsupported model|model[^\n]*(?:not supported|not available|not found)|unknown model/i],
+  ];
+  return classifications.find(([, pattern]) => pattern.test(content))?.[0] || 'other';
+}
+
+function observeToolError(contentBlock, counters) {
+  if (contentBlock.is_error !== true) return;
+  const classification = classifyToolError(contentBlock);
+  counters.toolErrors++;
+  counters.toolErrorKinds[classification]++;
+  counters.toolRefusals += Number(classification === 'native_guard_refusal');
+}
+
 function observeToolResults(content, counters) {
   if (!Array.isArray(content)) return;
   for (const contentBlock of content) {
     if (contentBlock?.type !== 'tool_result') continue;
     counters.toolResults++;
-    counters.toolErrors += Number(contentBlock.is_error === true);
-    counters.toolRefusals += Number(toolResultRefused(contentBlock));
+    observeToolError(contentBlock, counters);
   }
 }
 
@@ -223,7 +255,9 @@ async function runNativeCase({ binary, scratchpad, model, timeout = 120000, laun
   const root = fs.mkdtempSync(path.join(scratchpad, 'native-budget-'));
   const counters = { requests: 0, countRequests: 0, summaryRequests: 0, mainTurns: 0, compactions: 0,
     models: Object.fromEntries([...UPSTREAM_MODELS, 'other'].map((name) => [name, 0])), windows: [], contextUsage: [], nativeUsage: [],
-    agentAvailable: null, agentToolAvailable: null, toolResults: 0, toolErrors: 0, toolRefusals: 0, completed: false };
+    agentAvailable: null, agentToolAvailable: null, agentToolAdvertised: false, taskToolAdvertised: false,
+    toolResults: 0, toolErrors: 0, toolRefusals: 0,
+    toolErrorKinds: { unknown_tool: 0, unknown_subagent: 0, unsupported_model: 0, native_guard_refusal: 0, other: 0 }, completed: false };
   let child;
   let timer;
   let debugWatcher;

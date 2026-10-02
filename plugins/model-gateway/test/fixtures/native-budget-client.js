@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const assert = require('node:assert/strict');
 
 const [mode, ...argumentsList] = process.argv.slice(2);
 const model = argumentsList[argumentsList.indexOf('--model') + 1];
@@ -8,7 +9,10 @@ const debugPath = argumentsList[argumentsList.indexOf('--debug-file') + 1];
 
 async function request(modelName, system = '') {
   const response = await fetch(`${process.env.ANTHROPIC_BASE_URL}/v1/messages`, {
-    method: 'POST', body: JSON.stringify({ model: modelName, system, stream: false }),
+    method: 'POST', body: JSON.stringify({ model: modelName, system, stream: false,
+      tools: [{ name: 'Task', input_schema: { type: 'object', properties: {
+        subagent_type: { type: 'string' }, description: { type: 'string' }, prompt: { type: 'string' },
+      }, required: ['description', 'prompt'] } }] }),
   });
   if (response.status !== 200) throw new Error('synthetic request failed');
   return response.json();
@@ -16,10 +20,12 @@ async function request(modelName, system = '') {
 
 async function observeSyntheticRun() {
   const upstreamModel = model.replace('[1m]', '');
-  process.stdout.write('{"type":"system","subtype":"init","agents":["budget-worker"],"tools":["Agent"]}\n');
+  process.stdout.write('{"type":"system","subtype":"init","agents":["budget-worker"],"tools":["Task"]}\n');
   const first = await request(upstreamModel);
   await request('codex-auto');
   const second = await request(upstreamModel);
+  assert.equal(first.content[0].name, 'Task', 'synthetic client consumes its advertised Task schema');
+  assert.equal(second.content[0].name, 'Task');
   await request('codex-auto');
   const recognized = model === 'claude-opus-5-5[1m]';
   const threshold = recognized ? 967000 : 239000;
