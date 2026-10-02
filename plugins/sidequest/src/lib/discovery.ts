@@ -122,8 +122,11 @@ function isNewerVersion(candidate: [number, number, number], current: [number, n
 function newestGatewayCatalogCommand(): string | null {
   const registry = readJsonSafe(path.join(claudeHome(), 'plugins', 'installed_plugins.json'));
   if (!isRecord(registry) || !isRecord(registry.plugins)) return null;
-  const entries = registry.plugins['model-gateway@eigenwise-toolshed'];
-  if (!Array.isArray(entries)) return null;
+  // The gateway can be installed from any marketplace (a fork publishes it under its own name), so match the plugin
+  // name rather than one marketplace key, as the gateway's own launcher does.
+  const entries = Object.entries(registry.plugins)
+    .filter(([key, installs]) => key.startsWith('model-gateway@') && Array.isArray(installs))
+    .flatMap(([, installs]) => installs as unknown[]);
   let newest: { command: string; version: [number, number, number] } | null = null;
   for (const entry of entries) {
     if (!isRecord(entry) || typeof entry.installPath !== 'string') continue;

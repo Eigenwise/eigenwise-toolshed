@@ -98,8 +98,7 @@ function isNewerVersion(candidate, current) {
 function newestGatewayCatalogCommand() {
   const registry = readJsonSafe(import_node_path.default.join(claudeHome(), "plugins", "installed_plugins.json"));
   if (!isRecord(registry) || !isRecord(registry.plugins)) return null;
-  const entries = registry.plugins["model-gateway@eigenwise-toolshed"];
-  if (!Array.isArray(entries)) return null;
+  const entries = Object.entries(registry.plugins).filter(([key, installs]) => key.startsWith("model-gateway@") && Array.isArray(installs)).flatMap(([, installs]) => installs);
   let newest = null;
   for (const entry of entries) {
     if (!isRecord(entry) || typeof entry.installPath !== "string") continue;
