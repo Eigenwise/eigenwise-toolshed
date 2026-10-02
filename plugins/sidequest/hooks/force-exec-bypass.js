@@ -1006,19 +1006,29 @@ var CLOSEOUT_UPDATE_FIELDS = /* @__PURE__ */ new Set([
   "executorAttestationArtifact",
   "executorVerifyCwd"
 ]);
+var MAIN_THREAD_MUTATIONS = {
+  mcp__plugin_sidequest_board__update: {
+    matches: (input) => Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(input, field)),
+    denial: "sidequest: subagents cannot update closeout fields through MCP. Use scopeRequest for files, or ask the orchestrator to set other closeout flags from the main thread."
+  },
+  mcp__plugin_sidequest_board__remove: {
+    matches: (input) => input.force === true,
+    denial: "sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread."
+  },
+  mcp__plugin_sidequest_board__verdict: {
+    matches: (input) => Object.hasOwn(input, "correct"),
+    denial: "sidequest: subagents cannot correct finalized review verdicts. Ask the orchestrator to use verdict with correct from the main thread."
+  }
+};
 function executorLiveClaimMutationRefusal(input) {
   if (!isSubagentCaller(input)) return false;
-  const toolName = stringField(input, "tool_name");
   const toolInput = toolInputOf(input);
-  if (toolName === "mcp__plugin_sidequest_board__update" && toolInput && Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(toolInput, field))) {
-    writeDeny("PreToolUse", "sidequest: subagents cannot update closeout fields through MCP. Use scopeRequest for files, or ask the orchestrator to set other closeout flags from the main thread.");
-    return true;
-  }
-  if (toolName === "mcp__plugin_sidequest_board__remove" && toolInput && toolInput.force === true) {
-    writeDeny("PreToolUse", "sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.");
-    return true;
-  }
-  return false;
+  if (!toolInput) return false;
+  const rule = MAIN_THREAD_MUTATIONS[stringField(input, "tool_name")];
+  if (!rule) return false;
+  if (!rule.matches(toolInput)) return false;
+  writeDeny("PreToolUse", rule.denial);
+  return true;
 }
 function dispatchAgentName(input) {
   const toolInput = toolInputOf(input);

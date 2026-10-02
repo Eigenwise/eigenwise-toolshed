@@ -456,27 +456,30 @@ const CLOSEOUT_UPDATE_FIELDS = new Set([
   'executorVerify', 'executorVerifyKind', 'executorAttestationArtifact', 'executorVerifyCwd',
 ]);
 
+const MAIN_THREAD_MUTATIONS: Record<string, { matches: (input: Record<string, unknown>) => boolean; denial: string }> = {
+  mcp__plugin_sidequest_board__update: {
+    matches: (input) => Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(input, field)),
+    denial: 'sidequest: subagents cannot update closeout fields through MCP. Use scopeRequest for files, or ask the orchestrator to set other closeout flags from the main thread.',
+  },
+  mcp__plugin_sidequest_board__remove: {
+    matches: (input) => input.force === true,
+    denial: 'sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.',
+  },
+  mcp__plugin_sidequest_board__verdict: {
+    matches: (input) => Object.hasOwn(input, 'correct'),
+    denial: 'sidequest: subagents cannot correct finalized review verdicts. Ask the orchestrator to use verdict with correct from the main thread.',
+  },
+};
+
 function executorLiveClaimMutationRefusal(input: HookInput): boolean {
   if (!isSubagentCaller(input)) return false;
-  const toolName = stringField(input, 'tool_name');
   const toolInput = toolInputOf(input);
-  if (toolName === 'mcp__plugin_sidequest_board__update'
-    && toolInput
-    && Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(toolInput, field))) {
-    writeDeny('PreToolUse', 'sidequest: subagents cannot update closeout fields through MCP. Use scopeRequest for files, or ask the orchestrator to set other closeout flags from the main thread.');
-    return true;
-  }
-  // force:true is the only path that deletes a live-claimed ticket, so it is the
-  // executor's escape hatch (delete the ticket to shed the claim). The store
-  // refuses ungranted live-claim deletion, but deny it here too so a subagent
-  // can never mint the main-thread grant by riding the MCP remove handler.
-  if (toolName === 'mcp__plugin_sidequest_board__remove'
-    && toolInput
-    && toolInput.force === true) {
-    writeDeny('PreToolUse', 'sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.');
-    return true;
-  }
-  return false;
+  if (!toolInput) return false;
+  const rule = MAIN_THREAD_MUTATIONS[stringField(input, 'tool_name')];
+  if (!rule) return false;
+  if (!rule.matches(toolInput)) return false;
+  writeDeny('PreToolUse', rule.denial);
+  return true;
 }
 
 // Last resort for a single-ticket launch whose board record could not be read
