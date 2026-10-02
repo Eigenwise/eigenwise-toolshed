@@ -343,54 +343,117 @@ export function emptyChangedFunctionWarning({ changedMetrics, workingTreeIsClean
   return workingTreeIsClean ? 'Warning: no changed functions were found in a clean working tree; this CRAP result is vacuous.' : null;
 }
 
-async function captureCoverage() {
+const NPM_COMMAND = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const NODE_TEST_ARGUMENTS = ['--test', '--test-timeout=300000', 'test/*.test.js'];
+
+async function optionalJson(filePath) {
+  try {
+    return JSON.parse(await fs.readFile(filePath, 'utf8'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return {};
+    throw error;
+  }
+}
+
+async function suiteFor(plugin) {
+  const pluginRoot = path.join(repositoryRoot, 'plugins', plugin);
+  const { scripts = {} } = await optionalJson(path.join(pluginRoot, 'package.json'));
+  const script = ['test:full', 'test'].find((name) => scripts[name]);
+  if (script) return { plugin, cwd: pluginRoot, command: NPM_COMMAND, args: ['run', script] };
+  const testFiles = await fs.readdir(path.join(pluginRoot, 'test')).catch(() => []);
+  return testFiles.some((file) => file.endsWith('.test.js')) ? { plugin, cwd: pluginRoot, command: process.execPath, args: NODE_TEST_ARGUMENTS } : null;
+}
+
+export async function selectSuites(changedPaths) {
+  const plugins = new Set(changedPaths.map((changedPath) => /^plugins\/([^/]+)\//.exec(changedPath)?.[1]).filter(Boolean));
+  return (await Promise.all([...plugins].sort().map(suiteFor))).filter(Boolean);
+}
+
+function spawnSuite(suite, coverageDirectory) {
+  return spawnSync(suite.command, suite.args, { cwd: suite.cwd, env: { ...process.env, NODE_V8_COVERAGE: coverageDirectory }, stdio: 'inherit', shell: process.platform === 'win32' });
+}
+
+async function runSuites(suites, runSuite) {
   const coverageDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'toolshed-crap-'));
-  const command = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const result = spawnSync(command, ['run', 'test:full'], { cwd: sidequestRoot, env: { ...process.env, NODE_V8_COVERAGE: coverageDirectory }, stdio: 'inherit', shell: process.platform === 'win32' });
-  if (result.status !== 0) throw new Error(`npm run test:full failed with exit ${result.status ?? 'signal'}`);
-  const quartermasterTests = spawnSync(process.execPath, ['--test', '--test-timeout=120000', 'test/*.test.js'], { cwd: path.join(repositoryRoot, 'plugins', 'quartermaster'), env: { ...process.env, NODE_V8_COVERAGE: coverageDirectory }, stdio: 'inherit', shell: process.platform === 'win32' });
-  if (quartermasterTests.status !== 0) throw new Error(`Quartermaster tests failed with exit ${quartermasterTests.status ?? 'signal'}`);
+  for (const suite of suites) {
+    const { status } = runSuite(suite, coverageDirectory);
+    if (status !== 0) throw new Error(`${suite.plugin} tests failed with exit ${status ?? 'signal'}`);
+  }
   return coverageDirectory;
 }
 
+export async function captureCoverage(changedPaths, suppliedDirectory, runSuite = spawnSuite) {
+  if (suppliedDirectory) return { coverageDirectory: suppliedDirectory, suiteSummary: 'none, --coverage supplied' };
+  const suites = await selectSuites(changedPaths);
+  return { coverageDirectory: await runSuites(suites, runSuite), suiteSummary: suites.map((suite) => suite.plugin).join(', ') || 'none, no plugin changed' };
+}
+
+function changedPathContext(base) {
+  const allChangedEntries = diffEntries(base);
+  const changedEntries = diffEntries(base, 'plugins');
+  return {
+    allChangedPaths: allChangedEntries.map((entry) => entry.path),
+    changedEntries,
+    changedPaths: changedEntries.map((entry) => entry.path),
+  };
+}
+
+async function measureMetrics(changedPaths, coverageDirectory) {
+  const coverageScripts = await readCoverage(coverageDirectory);
+  const sources = (await sourcePaths()).filter((sourcePath) => changedPaths.includes(path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/')));
+  const lizardResult = spawnSync('lizard', ['--csv', ...sources], { cwd: repositoryRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
+  if (lizardResult.status !== 0) throw new Error(`lizard failed with exit ${lizardResult.status ?? 'signal'}`);
+  const lizardRecords = parseLizardCsv(lizardResult.stdout || '');
+  const lizardByPath = Map.groupBy([...lizardRecords, ...sources.map((sourcePath) => ({ file: sourcePath }))], (entry) => normalizedPath(entry.file));
+  return (await Promise.all(sources.map((sourcePath) => sourceMetrics(sourcePath, coverageScripts, lizardByPath.get(normalizedPath(sourcePath)))))).flat();
+}
+
+function metricStatus(metric) {
+  if (metric.unverified) return 'UNVERIFIED';
+  return metric.crap >= THRESHOLD ? 'FAIL' : 'PASS';
+}
+
+function writeMetricRows(metrics) {
+  metrics.sort((left, right) => left.relativePath.localeCompare(right.relativePath) || left.line - right.line);
+  for (const metric of metrics) process.stdout.write(`${metricStatus(metric)} ${metric.unverified ? formatUnverifiedMetric(metric) : formatMetric(metric)}\n`);
+}
+
+function writeGateResult({ base, changedMetrics, failures, unverified, suiteSummary }) {
+  if (failures.length || unverified.length) {
+    const errors = [...failures, ...unverified.map(formatUnverifiedMetric)];
+    process.stderr.write(`CRAP gate failed against ${base} (coverage suites: ${suiteSummary}):\n${errors.map((failure) => `- ${failure}`).join('\n')}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const summary = changedMetrics.length ? `${changedMetrics.length} changed or new functions scored below ${THRESHOLD}.` : 'no changed or new functions were scored.';
+  process.stdout.write(`CRAP gate passed against ${base} (coverage suites: ${suiteSummary}): ${summary}\n`);
+}
+
+export async function reportMetrics({ allChangedPaths, base, baseWasExplicit, changedEntries, changedPaths, metrics, options, suiteSummary }) {
+  const changedMetrics = await changedMetricsAgainstBase(metrics, changedEntries, base);
+  const unverified = changedMetrics.filter((metric) => metric.unverified);
+  const failures = changedMetrics.filter((metric) => !metric.unverified && metric.crap >= THRESHOLD).map(formatMetric);
+  writeMetricRows(options.all ? metrics : changedMetrics);
+  const warning = emptyChangedFunctionWarning({
+    changedMetrics,
+    workingTreeIsClean: !runGit(['status', '--porcelain']),
+    baseWasExplicit,
+    base,
+    allChangedPaths,
+    changedPaths,
+  });
+  if (warning) process.stderr.write(`${warning}\n`);
+  writeGateResult({ base, changedMetrics, failures, unverified, suiteSummary });
+  return { metrics, changedMetrics, failures, unverified };
+}
+
 export async function run(options = parseArguments(process.argv.slice(2))) {
-  const coverageDirectory = options.coverageDirectory ?? await captureCoverage();
+  const base = mergeBase(options.base);
+  const changes = changedPathContext(base);
+  const { coverageDirectory, suiteSummary } = await captureCoverage(changes.changedPaths, options.coverageDirectory);
   try {
-    const coverageScripts = await readCoverage(coverageDirectory);
-    const base = mergeBase(options.base);
-    const allChangedEntries = diffEntries(base);
-    const changedEntries = diffEntries(base, 'plugins');
-    const allChangedPaths = allChangedEntries.map((entry) => entry.path);
-    const changedPaths = changedEntries.map((entry) => entry.path);
-    const sources = (await sourcePaths()).filter((sourcePath) => changedPaths.includes(path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/')));
-    const lizardResult = spawnSync('lizard', ['--csv', ...sources], { cwd: repositoryRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
-    if (lizardResult.status !== 0) throw new Error(`lizard failed with exit ${lizardResult.status ?? 'signal'}`);
-    const lizardRecords = parseLizardCsv(lizardResult.stdout ?? '');
-    const lizardByPath = Map.groupBy(lizardRecords, (entry) => normalizedPath(entry.file));
-    const metrics = (await Promise.all(sources.map((sourcePath) => sourceMetrics(sourcePath, coverageScripts, lizardByPath.get(normalizedPath(sourcePath)) ?? [])))).flat();
-    const changedMetrics = await changedMetricsAgainstBase(metrics, changedEntries, base);
-    const unverified = changedMetrics.filter((metric) => metric.unverified);
-    const failures = changedMetrics.filter((metric) => !metric.unverified && metric.crap >= THRESHOLD).map(formatMetric);
-    const displayedMetrics = options.all ? metrics : changedMetrics;
-    displayedMetrics.sort((left, right) => left.relativePath.localeCompare(right.relativePath) || left.line - right.line).forEach((metric) => {
-      const status = metric.unverified ? 'UNVERIFIED' : metric.crap >= THRESHOLD ? 'FAIL' : 'PASS';
-      process.stdout.write(`${status} ${metric.unverified ? formatUnverifiedMetric(metric) : formatMetric(metric)}\n`);
-    });
-    const warning = emptyChangedFunctionWarning({
-      changedMetrics,
-      workingTreeIsClean: !runGit(['status', '--porcelain']),
-      baseWasExplicit: Boolean(options.base),
-      base,
-      allChangedPaths,
-      changedPaths,
-    });
-    if (warning) process.stderr.write(`${warning}\n`);
-    if (failures.length || unverified.length) {
-      const errors = [...failures, ...unverified.map(formatUnverifiedMetric)];
-      process.stderr.write(`CRAP gate failed against ${base}:\n${errors.map((failure) => `- ${failure}`).join('\n')}\n`);
-      process.exitCode = 1;
-    } else process.stdout.write(`CRAP gate passed against ${base}: ${changedMetrics.length ? `${changedMetrics.length} changed or new functions scored below ${THRESHOLD}.` : 'no changed or new functions were scored.'}\n`);
-    return { metrics, changedMetrics, failures, unverified };
+    const metrics = await measureMetrics(changes.changedPaths, coverageDirectory);
+    return reportMetrics({ ...changes, base, baseWasExplicit: Boolean(options.base), metrics, options, suiteSummary });
   } finally {
     if (!options.coverageDirectory) await fs.rm(coverageDirectory, { recursive: true, force: true });
   }

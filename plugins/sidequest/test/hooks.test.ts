@@ -2365,27 +2365,34 @@ test('pre-tool hook denies a subagent MCP remove carrying force (the delete-to-s
 // handler unblocked). This walks the live-claim mutation rules out of the source
 // and checks each one against the real manifest, so a rule added without a route
 // fails here instead of silently reaching the handler.
+type HookRoutingEntry = { matcher: string; hooks: Array<{ command: string }> };
+
+function routesForceExecBypass(entries: HookRoutingEntry[], toolName: string): boolean {
+  return entries.some((entry) => new RegExp(`^(?:${entry.matcher === '*' ? '.*' : entry.matcher})$`).test(toolName)
+    && entry.hooks.some((hook) => hook.command.includes('force-exec-bypass.js')));
+}
+
 test('hook manifest routes force-exec-bypass for every live-claim mutation rule tool name (SQ-3203)', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'hooks', 'force-exec-bypass.ts'), 'utf8');
-  const signature = source.match(/function executorLiveClaimMutationRefusal\([^)]*\)[^{]*{/);
-  assert.ok(signature, 'executorLiveClaimMutationRefusal must still exist in force-exec-bypass.ts');
-  let depth = 1;
-  let index = signature!.index! + signature![0].length;
-  while (depth > 0 && index < source.length) {
-    if (source[index] === '{') depth++;
-    else if (source[index] === '}') depth--;
-    index++;
-  }
-  const body = source.slice(signature!.index! + signature![0].length, index - 1);
-  const toolNames = [...body.matchAll(/toolName === '(mcp__plugin_sidequest_board__\w+)'/g)].map((match) => match[1]);
-  assert.ok(toolNames.length >= 2, 'expected at least the update and remove live-claim mutation rules');
+  const source: string = fs.readFileSync(path.join(__dirname, '..', 'src', 'hooks', 'force-exec-bypass.ts'), 'utf8');
+  const rules = source.match(/const MAIN_THREAD_MUTATIONS[^\n]* = \{([\s\S]*?)^\};/m);
+  assert.ok(rules, 'MAIN_THREAD_MUTATIONS must still define the main-thread-only rules');
+  const toolNames = [...rules![1]!.matchAll(/^  (mcp__plugin_sidequest_board__\w+):/gm)].map((match) => match[1]!);
+  assert.ok(toolNames.includes('mcp__plugin_sidequest_board__update'), 'the update authority rule must be checked');
+  assert.ok(toolNames.includes('mcp__plugin_sidequest_board__remove'), 'the remove authority rule must be checked');
+  assert.ok(toolNames.includes('mcp__plugin_sidequest_board__verdict'), 'the verdict correction authority rule must be checked');
 
   const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
-  const preToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> = config.hooks.PreToolUse;
+  const preToolUse: HookRoutingEntry[] = config.hooks.PreToolUse;
+  const command = 'node hooks/force-exec-bypass.js';
   for (const toolName of toolNames) {
-    const routed = preToolUse.some((entry) => new RegExp(`^(?:${entry.matcher === '*' ? '.*' : entry.matcher})$`).test(toolName)
-      && entry.hooks.some((hook) => hook.command.includes('force-exec-bypass.js')));
-    assert.ok(routed, `${toolName} has a live-claim mutation rule but no PreToolUse matcher in hooks.json runs force-exec-bypass.js for it`);
+    assert.ok(routesForceExecBypass(preToolUse, toolName), `${toolName} has an authority rule but no force-exec-bypass.js route`);
+    for (const matcher of ['*', toolNames.join('|'), 'mcp__plugin_sidequest_board__(?:update|remove|verdict)']) {
+      assert.ok(routesForceExecBypass([{ matcher, hooks: [{ command }] }], toolName), `${matcher} must route ${toolName}`);
+    }
+    assert.equal(routesForceExecBypass([{ matcher: `${toolName}_other`, hooks: [{ command }] }], toolName), false, 'a different tool must not route');
+    assert.equal(routesForceExecBypass([{ matcher: toolName, hooks: [{ command: 'node hooks/other.js' }] }], toolName), false, 'a matching tool without the guard must not route');
+    assert.equal(routesForceExecBypass([{ matcher: toolName, hooks: [] }], toolName), false, 'a matching tool without hooks must not route');
+    assert.equal(routesForceExecBypass([], toolName), false, 'an omitted tool route must fail');
   }
 });
 
@@ -5871,6 +5878,34 @@ test('read-only shell guard: a linked worktree cannot write into its main checko
   const reason = runReadOnlyShell(`echo x > "${path.join(root, 'leak.txt')}"`, linked)?.hookSpecificOutput?.permissionDecisionReason || '';
   assert.match(reason, /refusing a shell write inside the repository checkout/);
   assert.equal(runReadOnlyShell('git status', linked), null);
+});
+
+test('read-only shell guard: a content cmdlet writes only its path, so fixture text naming git reaches the evidence root (SQ-3202)', () => {
+  const root = readOnlyShellCheckout();
+  const evidence = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-readonly-evidence-'));
+  const fixture = "git(['checkout', 'main'])";
+  const evidenceFile = path.join(evidence, 'probe.ts');
+  const runPowerShell = (command: string) => runReadOnlyShell(command, root, stableReadOnlyDispatchName(), 'PowerShell');
+  for (const command of [
+    `Set-Content -Path "${evidenceFile}" -Value "${fixture}"`,
+    `Set-Content "${evidenceFile}" "${fixture}"`,
+    `New-Item -Path "${evidenceFile}" -ItemType File -Value "${fixture}"`,
+    `"${fixture}" | Out-File -Encoding utf8 -FilePath "${evidenceFile}"`,
+  ]) {
+    assert.equal(runPowerShell(command), null, command);
+  }
+  assert.equal(runReadOnlyShell(`node -e "require('fs').writeFileSync(process.argv[1], process.argv[2])" "${evidenceFile}" "${fixture}"`, root), null);
+
+  for (const command of [
+    `Set-Content -Path "${path.join(root, 'probe.ts')}" -Value "${fixture}"`,
+    `Set-Content probe.ts "${fixture}"`,
+    `"${fixture}" | Out-File -FilePath sub/probe.ts`,
+  ]) {
+    const reason = runPowerShell(command)?.hookSpecificOutput?.permissionDecisionReason || '';
+    assert.match(reason, /read-only executor, refusing a shell write inside the repository checkout/, command);
+    assert.match(reason, /Writes under the ticket's verification directory .* are permitted whatever the file says; move the fixture there/, command);
+  }
+  assert.equal(runReadOnlyShell('git checkout main', root)?.hookSpecificOutput?.permissionDecision, 'deny');
 });
 
 test('read-only executors never ship or spawn with bypassPermissions (GH-282)', () => {
