@@ -95,3 +95,9 @@ Two switches, either one stops publication:
 - `hold: true` in a fragment holds that one change. The rest of the window still ships.
 - A `.release/HOLD` file holds the whole window. Its contents are the reason, printed by the cut.
   A hotfix still runs during a HOLD, because an urgent fix has to be able to ship.
+
+## Toolshed support and task continuity
+
+Toolshed plugin code is free and MIT-licensed. Optional [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) donations support maintenance and are never required to install or use the plugins. Claude, configured model providers and external services may have their own costs.
+
+For durable task tracking, the independently installable [Sidequest](../plugins/sidequest/README.md) plugin keeps every task saved as a ticket through context compaction and new sessions. Record progress, decisions and next steps on the ticket so the next session can resume from them.

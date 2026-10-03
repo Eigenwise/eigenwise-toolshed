@@ -12,13 +12,15 @@ The same thing happens around model choice and measurement. Expensive models get
 
 Toolshed packages those jobs as six independent Claude Code plugins. Use one, a few, or all six. Quartermaster is the guided starting path when you want help choosing, installing, and checking the pieces that fit a project, and it draws on whatever plugins are available on the machine, not only these six.
 
+Sidequest makes it easy for every task recorded as a ticket to survive context compaction and new sessions. The task, instructions, status, and recorded discussion live on a local board, so Claude can pick the work up again after the chat context shrinks. Record decisions, progress, and next actions on the ticket to give the next session a useful starting point.
+
 ## The six plugins
 
 | Problem | Plugin | What it does |
 | --- | --- | --- |
 | A fresh session keeps exploring the same repository | [Codebase Mapper](./plugins/codebase-mapper) | Builds a small project map, loads it at session start, and refreshes the parts touched by changes. |
 | Project rules get forgotten or fill every context | [Live Rules](./plugins/live-rules) | Re-injects matching rules when they apply, so conditional guidance stays out of unrelated work. |
-| Side work gets lost, and parallel changes need a clear owner | [Sidequest](./plugins/sidequest) | Tracks work as tickets, claims changes before work starts, dispatches independent work, and gates results on verification before integration. |
+| Tasks get lost when context compacts or a new session starts | [Sidequest](./plugins/sidequest) | Keeps every recorded task on a local board across context compaction and sessions, assigns ownership, dispatches independent work, and gates results on verification before integration. |
 | You want the models and subscriptions you already have in Claude Code | [Model Gateway](./plugins/model-gateway) | Adds supported ChatGPT/Codex and Grok subscription models to Claude Code's `/model` picker through a local gateway. |
 | You cannot tell where time and tokens go | [Observability](./plugins/observability) | Records selected session and tool metadata locally, with per-project opt-in and optional sinks. |
 | Setup, updates, and missing capabilities keep pushing back | [Quartermaster](./plugins/quartermaster) | Recommends and installs plugins from any marketplace on the machine for setup, keeps active Toolshed installs current, checks health, and uses bounded session summaries to suggest one approved improvement at a time. |
@@ -85,7 +87,7 @@ Toolshed plugins run inside Claude Code and use its plugin marketplace, plugin s
 
 ## Support
 
-If these tools save you time, optional support is available through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise).
+Toolshed's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use a plugin. Claude and configured model providers may have their own usage costs.
 
 ## License
 

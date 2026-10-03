@@ -115,9 +115,13 @@ To get Remote Control without RC-compatibility, remove only `ANTHROPIC_BASE_URL`
 
 That project has no gateway models after the restart: gateway rows disappear from `/model` and typed gateway ids do not work either. A process-exported `ANTHROPIC_BASE_URL` still wins over the file edit. If you control the Claude Code CLI launch, correct or unset that value, then restart. If the host replaces it, use the supported Claude Code CLI on the wired project instead. Desktop routing is unsupported under forced overrides on Windows and macOS, and settings, parent, or User-scope edits cannot be promised to win.
 
+## Keep tasks across sessions
+
+For task continuity, the independent [Sidequest plugin](../sidequest/README.md) keeps every task saved as a ticket through context compaction and new sessions. Record progress and next actions on the ticket so Claude can resume the work.
+
 ## Support
 
-If Model Gateway saves you time, you can support its maintenance through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise).
+Model Gateway's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use the plugin. Claude and configured model providers may have their own usage costs.
 
 ## License
 
