@@ -45,13 +45,9 @@ Tell Claude the symptom and ask it to audit the live rules. The audit checks bot
 
 Migration can write and remove tracked project files at SessionStart as described above. Review those changes before committing. An explicit `LIVE_RULES_PATH` is never deleted by automatic migration, and verification failure leaves the legacy file for recovery.
 
-## Keep tasks across sessions
-
-For task continuity, the independent [Sidequest plugin](../sidequest/README.md) keeps every task saved as a ticket through context compaction and new sessions. Record progress and next actions on the ticket so Claude can resume the work.
-
 ## Support
 
-Live Rules' plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use the plugin. Claude and configured model providers may have their own usage costs.
+Live Rules' plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use the plugin.
 
 ## License
 

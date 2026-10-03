@@ -2,7 +2,7 @@
 
 `.release/unreleased/` is the queue of changes that have landed but are not published yet. The orchestrator normally prepares the release from `develop` at its selected revision (`HEAD` by default, or `--sha <rev>` to pin a descendant), with `--base-branch` available when another base is intentional. A reviewed promotion PR moves the prepared release to `main`. The fragment is the repository-owned record of what the board integrated.
 
-`cut.mjs` owns marketplace and plugin version bumps, changelogs, release tags, and fragment consumption. Ticket work records the fragment and does not hand-edit plugin or marketplace versions. See [`scripts/release/README.md`](../scripts/release/README.md) for the release lifecycle and recovery steps.
+`cut.mjs` owns marketplace and plugin version bumps, changelogs, and fragment consumption. In this repository's protected flow, `finalize.mjs` creates the release tags after the promotion PR merges and its exact main commit passes Test. Ticket work records the fragment and does not hand-edit plugin or marketplace versions. See [`scripts/release/README.md`](../scripts/release/README.md) for the release lifecycle and recovery steps.
 
 Write one with `node scripts/release/note.mjs`, never by hand if you can avoid it, because the script validates what it writes:
 
@@ -96,8 +96,6 @@ Two switches, either one stops publication:
 - A `.release/HOLD` file holds the whole window. Its contents are the reason, printed by the cut.
   A hotfix still runs during a HOLD, because an urgent fix has to be able to ship.
 
-## Toolshed support and task continuity
+## Support
 
-Toolshed plugin code is free and MIT-licensed. Optional [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) donations support maintenance and are never required to install or use the plugins. Claude, configured model providers and external services may have their own costs.
-
-For durable task tracking, the independently installable [Sidequest](../plugins/sidequest/README.md) plugin keeps every task saved as a ticket through context compaction and new sessions. Record progress, decisions and next steps on the ticket so the next session can resume from them.
+Optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support maintenance of the release-fragment tooling. Donations are never required to use the files in this directory.
