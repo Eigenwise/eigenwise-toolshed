@@ -34,7 +34,11 @@ test('published guidance excludes retired instructions', () => {
   assert.match(executorTemplate, /useful edits, a scoped commit, or meaningful verification expose an interpretive or correctness concern, keep the claim and worktree alive/);
   assert.match(executorTemplate, /newly supplied token-gated briefing and live board state as authoritative over an inherited transcript that says the ticket is terminal/);
   assert.match(executorTemplate, /wait for corrected evidence or a decision through `SendMessage` so the same executor can continue/);
-  assert.match(skill, /For work needing a decision, `SendMessage` the same agent; a resume keeps claim, token-file path, and worktree binding/);
+  assert.match(skill, /For work needing a decision, `SendMessage` the same agent\./);
+  assert.match(skill, /If its name fails, only the ORIGINAL matching host session may send once to authentic `dispatch\.agentId` or its exact original Agent-returned identifier/);
+  assert.match(skill, /never `claim\.by` or a guessed\/replacement address/);
+  assert.match(skill, /Missing\/mismatched identity stays continuation UNVERIFIED; preserve claim\/work/);
+  assert.match(skill, /A resume keeps claim, token-file path, and worktree binding/);
   assert.match(orchestration, /Correct the live worker before replacing it/);
   assert.match(skill, /Don't accept a green suite as proof of coverage; review execution evidence/);
   assert.match(executorTemplate, /Trace the actual call flow before implementing/);
