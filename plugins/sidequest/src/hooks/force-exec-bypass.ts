@@ -489,13 +489,21 @@ const LIVE_CLAIM_MUTATION_RULES: readonly LiveClaimMutationRule[] = [
     matches: (toolInput) => toolInput.force === true,
     message: 'sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.',
   },
+  {
+    toolName: 'mcp__plugin_sidequest_board__verdict',
+    // verdict with correct appends an accepted-to-rejected correction to a finalized
+    // review verdict, which only the main thread may do. Ordinary verdict calls stay
+    // open to the review executor that closes its own readonly review.
+    matches: (toolInput) => Object.hasOwn(toolInput, 'correct'),
+    message: 'sidequest: subagents cannot correct finalized review verdicts. Ask the orchestrator to use verdict with correct from the main thread.',
+  },
 ];
 
 function executorLiveClaimMutationRefusal(input: HookInput): boolean {
   if (!isSubagentCaller(input)) return false;
-  const toolName = stringField(input, 'tool_name');
   const toolInput = toolInputOf(input);
   if (!toolInput) return false;
+  const toolName = stringField(input, 'tool_name');
   const rule = LIVE_CLAIM_MUTATION_RULES.find((candidate) => candidate.toolName === toolName && candidate.matches(toolInput));
   if (!rule) return false;
   writeDeny('PreToolUse', rule.message);

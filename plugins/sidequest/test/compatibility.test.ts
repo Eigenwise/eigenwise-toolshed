@@ -90,6 +90,41 @@ function copyMarketplaceFiles(destination: string): void {
   });
 }
 
+test('MCP omits empty optional descriptor metadata without changing schemas or tool lookup', async () => {
+  type Descriptor = {
+    name: string;
+    description?: string;
+    inputSchema: { properties: Record<string, { type?: string | string[] }> };
+  };
+  type Response = { result?: { tools?: Descriptor[]; isError?: boolean; content?: Array<{ text: string }> } };
+  const server: {
+    toolDescriptors(): Descriptor[];
+    handleRequest(message: { jsonrpc: string; id: number; method: string; params?: { name: string; arguments: Record<string, unknown> } }): Promise<Response>;
+  } = require('../lib/mcp.js');
+  const descriptors = server.toolDescriptors();
+  const byName = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
+  for (const descriptor of descriptors) {
+    if (Object.hasOwn(descriptor, 'description')) {
+      assert.equal(typeof descriptor.description, 'string');
+      assert.notEqual(descriptor.description, '', `${descriptor.name} must omit empty metadata`);
+    }
+  }
+  const add = byName.get('add');
+  assert.ok(add);
+  assert.equal(Object.hasOwn(add, 'description'), false);
+  assert.equal(add.inputSchema.properties.description?.type, 'string', 'the ticket description input field must remain');
+  const listed = await server.handleRequest({ jsonrpc: '2.0', id: 31, method: 'tools/list' });
+  assert.ok(listed.result);
+  assert.deepEqual(listed.result.tools, descriptors, 'the transport must serve the same descriptors');
+  const called = await server.handleRequest({ jsonrpc: '2.0', id: 32, method: 'tools/call', params: { name: 'verdict', arguments: {} } });
+  assert.ok(called.result);
+  assert.equal(called.result.isError, true);
+  assert.ok(called.result.content);
+  const error = called.result.content[0];
+  assert.ok(error);
+  assert.match(error.text, /verdict: missing required/, 'a tool with omitted description must still resolve and validate its arguments');
+});
+
 test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   const descriptors = mcp.toolDescriptors() as Array<{
     name: string;

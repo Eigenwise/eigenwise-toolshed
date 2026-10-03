@@ -121,7 +121,7 @@ const {
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, ownedPinValues, pinLagNotice, pinProvenance, readPinOverrides, refreshDetectedPins, stalePinUpdates,
+  isValidPin, ourBaseUrls, ownedPinValues, pinProvenance, readPinOverrides, refreshDetectedPins, stalePinUpdates,
   writePinOverrides,
 } = require('./pins.js');
 
@@ -949,8 +949,6 @@ async function refreshDetectedPinsAndWiring(options = {}) {
 function reportEffectivePins(label = '', suffix = '') {
   for (const [alias, pin] of Object.entries(effectivePins())) {
     log(`${label}${alias}${suffix}: ${pin.value} (${pinProvenance(pin)})`);
-    const notice = pinLagNotice(alias, pin);
-    if (notice) log(notice);
   }
 }
 

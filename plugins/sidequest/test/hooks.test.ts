@@ -2419,7 +2419,7 @@ test('hooks.json routes every live-claim mutation tool to force-exec-bypass for 
   const toolNames = [...rules.slice(0, rules.indexOf('\n];')).matchAll(/toolName: ["'](mcp__[\w]+)["']/g)].map((match) => match[1]);
   assert.deepEqual(
     [...toolNames].sort(),
-    ['mcp__plugin_sidequest_board__remove', 'mcp__plugin_sidequest_board__scopeRequest', 'mcp__plugin_sidequest_board__update'],
+    ['mcp__plugin_sidequest_board__remove', 'mcp__plugin_sidequest_board__scopeRequest', 'mcp__plugin_sidequest_board__update', 'mcp__plugin_sidequest_board__verdict'],
     'the rule table changed: route the new tool in hooks.json and list it here',
   );
   for (const toolName of toolNames) {
@@ -2427,11 +2427,12 @@ test('hooks.json routes every live-claim mutation tool to force-exec-bypass for 
   }
 });
 
-test('an executor subagent cannot mint a scope grant or force-remove through the registered PreToolUse hooks', () => {
+test('an executor subagent cannot mint a scope grant, force-remove, or correct a verdict through the registered PreToolUse hooks', () => {
   const subagent = { agent_id: 'routed-grant-child', agent_type: 'sidequest:sidequest-exec-high', session_id: 'routed-grant-session' };
   const cases = [
     { tool_name: 'mcp__plugin_sidequest_board__scopeRequest', tool_input: { ref: 'SQ-1', by: 'orchestrator', grant: true }, reason: /subagents cannot grant a refused scope request/i },
     { tool_name: 'mcp__plugin_sidequest_board__remove', tool_input: { ref: 'SQ-1', force: true }, reason: /subagents cannot force-remove/i },
+    { tool_name: 'mcp__plugin_sidequest_board__verdict', tool_input: { ref: 'SQ-1', correct: true }, reason: /subagents cannot correct finalized review verdicts/i },
   ];
   for (const { tool_name, tool_input, reason } of cases) {
     const scripts = preToolUseScriptsFor(tool_name);
@@ -2440,6 +2441,43 @@ test('an executor subagent cannot mint a scope grant or force-remove through the
       .filter((output) => output?.hookSpecificOutput?.permissionDecision === 'deny');
     assert.equal(decisions.length, 1, `${tool_name}: exactly one registered hook denies it (ran ${scripts.map((script) => path.basename(script)).join(', ')})`);
     assert.match(decisions[0].hookSpecificOutput.permissionDecisionReason, reason);
+  }
+});
+
+// The tests above feed force-exec-bypass.js directly, so they cannot see whether
+// Claude Code's hooks.json actually routes a tool name to it (SQ-3203: it never
+// did for board__remove, so an executor's remove {force:true} reached the MCP
+// handler unblocked). This walks the live-claim mutation rules out of the source
+// and checks each one against the real manifest, so a rule added without a route
+// fails here instead of silently reaching the handler.
+type HookRoutingEntry = { matcher: string; hooks: Array<{ command: string }> };
+
+function routesForceExecBypass(entries: HookRoutingEntry[], toolName: string): boolean {
+  return entries.some((entry) => new RegExp(`^(?:${entry.matcher === '*' ? '.*' : entry.matcher})$`).test(toolName)
+    && entry.hooks.some((hook) => hook.command.includes('force-exec-bypass.js')));
+}
+
+test('hook manifest routes force-exec-bypass for every live-claim mutation rule tool name (SQ-3203)', () => {
+  const source: string = fs.readFileSync(path.join(__dirname, '..', 'src', 'hooks', 'force-exec-bypass.ts'), 'utf8');
+  const rules = source.match(/const LIVE_CLAIM_MUTATION_RULES[^\n]* = \[([\s\S]*?)^\];/m);
+  assert.ok(rules, 'LIVE_CLAIM_MUTATION_RULES must still define the main-thread-only rules');
+  const toolNames = [...rules![1]!.matchAll(/toolName: '(mcp__plugin_sidequest_board__\w+)'/g)].map((match) => match[1]!);
+  assert.ok(toolNames.includes('mcp__plugin_sidequest_board__update'), 'the update authority rule must be checked');
+  assert.ok(toolNames.includes('mcp__plugin_sidequest_board__remove'), 'the remove authority rule must be checked');
+  assert.ok(toolNames.includes('mcp__plugin_sidequest_board__verdict'), 'the verdict correction authority rule must be checked');
+
+  const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
+  const preToolUse: HookRoutingEntry[] = config.hooks.PreToolUse;
+  const command = 'node hooks/force-exec-bypass.js';
+  for (const toolName of toolNames) {
+    assert.ok(routesForceExecBypass(preToolUse, toolName), `${toolName} has an authority rule but no force-exec-bypass.js route`);
+    for (const matcher of ['*', toolNames.join('|'), 'mcp__plugin_sidequest_board__(?:update|scopeRequest|remove|verdict)']) {
+      assert.ok(routesForceExecBypass([{ matcher, hooks: [{ command }] }], toolName), `${matcher} must route ${toolName}`);
+    }
+    assert.equal(routesForceExecBypass([{ matcher: `${toolName}_other`, hooks: [{ command }] }], toolName), false, 'a different tool must not route');
+    assert.equal(routesForceExecBypass([{ matcher: toolName, hooks: [{ command: 'node hooks/other.js' }] }], toolName), false, 'a matching tool without the guard must not route');
+    assert.equal(routesForceExecBypass([{ matcher: toolName, hooks: [] }], toolName), false, 'a matching tool without hooks must not route');
+    assert.equal(routesForceExecBypass([], toolName), false, 'an omitted tool route must fail');
   }
 });
 
@@ -4909,8 +4947,8 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the Agent gate must be registered');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__dispatch'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the own-dispatch guard must cover the dispatch MCP tool');
-  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__(update|scopeRequest|remove)'
-    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the live-claim mutation guard must cover the update, scopeRequest and remove MCP tools');
+  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__(update|scopeRequest|remove|verdict)'
+    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the live-claim mutation guard must cover the update, scopeRequest, remove and verdict MCP tools');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => new RegExp(`^(?:${entry.matcher === '*' ? '.*' : entry.matcher})$`).test('mcp__plugin_sidequest_board__update')
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the closeout update guard must cover the update MCP tool');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => new RegExp(`^(?:${entry.matcher === '*' ? '.*' : entry.matcher})$`).test('mcp__plugin_sidequest_board__remove')
@@ -5927,6 +5965,34 @@ test('read-only shell guard: a linked worktree cannot write into its main checko
   const reason = runReadOnlyShell(`echo x > "${path.join(root, 'leak.txt')}"`, linked)?.hookSpecificOutput?.permissionDecisionReason || '';
   assert.match(reason, /refusing a shell write inside the repository checkout/);
   assert.equal(runReadOnlyShell('git status', linked), null);
+});
+
+test('read-only shell guard: a content cmdlet writes only its path, so fixture text naming git reaches the evidence root (SQ-3202)', () => {
+  const root = readOnlyShellCheckout();
+  const evidence = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-readonly-evidence-'));
+  const fixture = "git(['checkout', 'main'])";
+  const evidenceFile = path.join(evidence, 'probe.ts');
+  const runPowerShell = (command: string) => runReadOnlyShell(command, root, stableReadOnlyDispatchName(), 'PowerShell');
+  for (const command of [
+    `Set-Content -Path "${evidenceFile}" -Value "${fixture}"`,
+    `Set-Content "${evidenceFile}" "${fixture}"`,
+    `New-Item -Path "${evidenceFile}" -ItemType File -Value "${fixture}"`,
+    `"${fixture}" | Out-File -Encoding utf8 -FilePath "${evidenceFile}"`,
+  ]) {
+    assert.equal(runPowerShell(command), null, command);
+  }
+  assert.equal(runReadOnlyShell(`node -e "require('fs').writeFileSync(process.argv[1], process.argv[2])" "${evidenceFile}" "${fixture}"`, root), null);
+
+  for (const command of [
+    `Set-Content -Path "${path.join(root, 'probe.ts')}" -Value "${fixture}"`,
+    `Set-Content probe.ts "${fixture}"`,
+    `"${fixture}" | Out-File -FilePath sub/probe.ts`,
+  ]) {
+    const reason = runPowerShell(command)?.hookSpecificOutput?.permissionDecisionReason || '';
+    assert.match(reason, /read-only executor, refusing a shell write inside the repository checkout/, command);
+    assert.match(reason, /Writes under the ticket's verification directory .* are permitted whatever the file says; move the fixture there/, command);
+  }
+  assert.equal(runReadOnlyShell('git checkout main', root)?.hookSpecificOutput?.permissionDecision, 'deny');
 });
 
 test('read-only executors never ship or spawn with bypassPermissions (GH-282)', () => {

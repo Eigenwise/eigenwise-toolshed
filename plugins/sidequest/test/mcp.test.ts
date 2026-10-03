@@ -6234,6 +6234,59 @@ test('mutations queue FIFO per board without blocking another board', async () =
   }
 });
 
+test('correction is queued as a board mutation and tools list stays within 25400 bytes', async () => {
+  const verdict = mcp.TOOLS.find((candidate: { name: string }) => candidate.name === 'verdict');
+  const original = verdict.handler;
+  const started: string[] = [];
+  let releaseFirst: () => void = () => {};
+  verdict.handler = (args: { ref: string }) => {
+    started.push(args.ref);
+    if (args.ref === 'first-correction') return new Promise((resolve) => { releaseFirst = () => resolve({ ok: true }); });
+    return { ok: true };
+  };
+  const first = callToolRaw('verdict', { project: PROJ, ref: 'first-correction', text: 'first', outcome: 'rejected', correct: {} });
+  const second = callToolRaw('verdict', { project: PROJ, ref: 'second-correction', text: 'second', outcome: 'rejected', correct: {} });
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(started, ['first-correction'], 'second correction waits on the board mutation queue');
+    releaseFirst();
+    await Promise.all([first, second]);
+    assert.deepEqual(started, ['first-correction', 'second-correction']);
+    const response = await mcp.handleRequest({ jsonrpc: '2.0', id: 9321, method: 'tools/list' });
+    assert.ok(Buffer.byteLength(JSON.stringify(response.result.tools), 'utf8') <= 25400);
+  } finally {
+    releaseFirst();
+    await Promise.allSettled([first, second]);
+    verdict.handler = original;
+  }
+});
+
+test('correction refuses an untrusted installed version before its handler or board creation', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-correction-freshness-'));
+  const project = path.join(directory, 'project');
+  const claudeHome = path.join(directory, 'claude');
+  const pluginRoot = path.join(directory, 'loaded-sidequest');
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: '4.48.0' }));
+  fs.mkdirSync(path.join(claudeHome, 'plugins'), { recursive: true });
+  fs.writeFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({ plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: 'not-semver' }] } }));
+  const environment = { SIDEQUEST_CLAUDE_HOME: claudeHome, CLAUDE_PLUGIN_ROOT: pluginRoot, CLAUDE_PROJECT_DIR: project, CLAUDE_CODE_SESSION_ID: 'synthetic-correction-freshness' };
+  const previous = Object.fromEntries(Object.keys(environment).map((key) => [key, process.env[key]]));
+  try {
+    Object.assign(process.env, environment);
+    const result = await callToolRaw('verdict', { project, ref: 'SQ-1', text: 'correct', outcome: 'rejected', correct: {} });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /missing or malformed/);
+    assert.equal(store.findProject(project).ok, false);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('the real stdio server frames newline-delimited JSON-RPC', async () => {
   const BIN = path.join(__dirname, '..', 'bin', 'sidequest-mcp.js');
   const requests = [

@@ -157,9 +157,10 @@ function bindReviewTarget(slug: any, reviewTicket: any, requested: any, persistR
 // transaction(), which would make the transition's own boundary a reentrant
 // no-op and hand the atomicity guarantee to the caller. The binding owns its
 // boundary, so the source lock here is mutual exclusion only.
-function withSourceTicketLock(slug: any, sourceId: any, fn: any) {
+function withSourceTicketLock<Result>(slug: string, sourceId: string, fn: () => Result, requireLock = false) {
   const lock = ticketLockPath(slug, sourceId);
-  const locked = acquireLock(lock); // best-effort, matching the per-ticket update lock
+  const locked = acquireLock(lock);
+  if (requireLock && !locked) return { ok: false, reason: 'busy', message: 'The source ticket lock is busy.' };
   try {
     return fn();
   } finally {
@@ -1629,7 +1630,7 @@ function listActive(slug?: any) {
   return queryTickets(String(slug || ''), { archived: false });
 }
 
-  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, submissionReviewRelation, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, grantScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
+  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, submissionReviewRelation, withSourceTicketLock, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, grantScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
 }
 
 module.exports = { createTickets };
