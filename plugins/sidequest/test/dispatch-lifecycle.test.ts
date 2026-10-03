@@ -3027,6 +3027,53 @@ test('ordinary isolated dispatches preserve native worktree isolation', () => {
   assert.equal(store.releaseTicket(slug, ticket.ref, 'ordinary-isolation-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
+test('a working-tree deliverable refuses an isolated dispatch and prepares nothing', () => {
+  const ticket = store.createTicket(slug, { title: 'working-tree deliverable isolation fixture', category: 'dispatch.lifecycle', files: ['tracked.js'], workingTreeDelivery: true, source: 'test' });
+  assert.throws(
+    () => store.prepareDispatch(slug, ticket.ref, { sessionId: `working-tree-isolated-${Date.now()}`, sharedTree: false }),
+    /declares a working-tree deliverable and must run in the shared checkout\. Re-dispatch with sharedTree:true\./,
+  );
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
+});
+
+// Claims a native checkout, commits a sanctioned checkpoint in it and hands the ticket back.
+function releaseNativeCheckpoint(ticket: { ref: string }, agentId: string): { worktree: string; branch: string; checkpoint: string } {
+  const branch = `worktree-agent-${agentId}`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, agentId);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: agentId });
+  const executor = prepared.ticket.dispatchExecutor;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { sessionId: agentId, token: prepared.token, executor, agentName: agentId }).ok, true);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, agentId, worktree).ok, true);
+  execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+  markCheckoutInstance(worktree);
+  assert.equal(store.completeDispatchWorktreeCreation(slug, agentId, worktree, creationGeneration(slug, agentId, worktree)).ok, true);
+  assert.equal(store.bindDispatchAgent(agentId, executor, agentId, agentId, worktree).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'checkpoint-worker', { sessionId: agentId, token: prepared.token, executor }).ok, true);
+  fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 3;\n');
+  execFileSync('git', ['commit', '--quiet', '-am', 'shared-tree continuation checkpoint'], { cwd: worktree });
+  const checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8' }).trim();
+  assert.equal(store.recordSanctionedCommit(slug, ticket.ref, { by: 'checkpoint-worker', commit: checkpoint }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'checkpoint-worker', { status: 'todo', source: 'test', releaseKind: 'handback', releaseReason: 'Continue elsewhere.' }).ok, true);
+  return { worktree, branch, checkpoint };
+}
+
+test('a released checkpoint dispatched into the shared tree records why its retained checkout cannot resume there', () => {
+  const ticket = createFixture('shared-tree continuation fallback fixture');
+  const released = releaseNativeCheckpoint(ticket, `shared-continuation-${Date.now()}`);
+  try {
+    const shared = store.prepareDispatch(slug, ticket.ref, { sessionId: `${released.branch}-shared`, sharedTree: true });
+    assert.equal(shared.ticket.dispatch.sharedTree, true);
+    assert.equal(shared.ticket.dispatch.continuation, undefined);
+    assert.equal(shared.ticket.dispatch.continuationFallback.reason, 'continuation_checkpoint_requires_isolated_worktree');
+    assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: released.worktree, encoding: 'utf8' }).trim(), released.checkpoint, 'the retained checkout is left as it was');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'shared-continuation-cleanup', { status: 'todo', source: 'test', force: true });
+    execFileSync('git', ['worktree', 'remove', '--force', released.worktree], { cwd: PROJECT });
+    execFileSync('git', ['branch', '-D', released.branch], { cwd: PROJECT });
+  }
+});
+
 test('released handbacks carry registered native worktrees into continuation dispatches', () => {
   const ticket = createFixture('continuation checkpoint fixture');
   const sessionId = `continuation-${Date.now()}`;

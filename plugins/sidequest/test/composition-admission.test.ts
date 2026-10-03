@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { proveCompositionRange, type CompositionRangeInput, type CompositionSourceRange } from '../src/lib/store/composition-range';
-import { compositionIncludesSource, compositionSubmissionScope, exactCompositionSubmissionRefusal } from '../src/lib/store/composition-admission';
+import { compositionCaptureRefusal, compositionIncludesSource, compositionSubmissionScope, exactCompositionSubmissionRefusal } from '../src/lib/store/composition-admission';
 import type { CompositionAdmissionInput, CompositionExpected, CompositionAdmissionResult, CompositionTicket } from '../src/lib/store/composition-admission';
 const store = require('../lib/store.js');
 const mcp = require('../lib/mcp.js');
@@ -353,7 +353,27 @@ async function assertForeignLiveCompositionRefusal(role: string, file: string): 
   assert.equal(JSON.stringify(store.getTicket(project, rootTicket.ref)), before);
   assert.equal(JSON.stringify(store.getTicket(project, ticket.ref)), foreignBefore);
   assertOriginalProofsAndSources();
+  assertLiveTicketCannotJoinComposition(ticket.ref, String(committed.commit));
   assert.equal(store.releaseTicket(project, ticket.ref, by, { status: 'todo', source: 'test' }).ok, true);
+}
+
+// A claimed ticket can neither adopt a composition as its root nor lend itself as a source.
+function assertLiveTicketCannotJoinComposition(ref: string, commit: string): void {
+  const snapshot = () => JSON.stringify([store.getTicket(project, ref), store.getTicket(project, rootTicket.ref)]);
+  const grant = { allowCompositionAdmission: true };
+  const unlinked = snapshot();
+  assert.equal(store.admitComposition(project, ref, admissionInput, SESSION, grant).reason, 'root_active');
+  assert.equal(snapshot(), unlinked);
+  assert.equal(store.linkTickets(project, rootTicket.ref, 'related', ref).ok, true);
+  try {
+    const linked = snapshot();
+    const request = { ...admissionInput, sources: [...admissionInput.sources, { ref, commit, submittedAt: '' }] };
+    assert.equal(store.admitComposition(project, rootTicket.ref, request, SESSION, grant).reason, 'source_active');
+    assert.equal(snapshot(), linked);
+  } finally {
+    assert.equal(store.unlinkTickets(project, rootTicket.ref, ref).ok, true);
+  }
+  assertOriginalProofsAndSources();
 }
 
 for (const [role, file] of [['s', 'src/first.test.ts'], ['d', 'src/second.test.ts']] as const) {
@@ -371,6 +391,28 @@ test('composition admission: nested audit and authority extras are refused witho
   const mixed = await boardTool('update', { ref: rootTicket.ref, title: 'Must not change', admitComposition: admissionInput });
   assert.equal(mixed.reason, 'invalid_admission');
   assert.equal(JSON.stringify(store.getTicket(project, rootTicket.ref)), before);
+  assertOriginalProofsAndSources();
+});
+
+test('composition admission: root state, base and source membership refusals write nothing', () => {
+  const unsubmitted = fixtureTicket('Unsubmitted ticket that never dispatched', ['src/c.ts']);
+  const refusal = (ref: string, request: CompositionAdmissionInput) => store.admitComposition(project, ref, request, SESSION, { allowCompositionAdmission: true }).reason;
+  const before = JSON.stringify(store.getTicket(project, rootTicket.ref));
+  const unsubmittedSource = { ref: unsubmitted.ref, commit: candidate, submittedAt: '' };
+  assert.equal(refusal(rootTicket.ref, { ...admissionInput, sources: [] }), 'invalid_sources');
+  assert.equal(refusal(rootTicket.ref, { ...admissionInput, sources: [...admissionInput.sources, unsubmittedSource] }), 'source_unrelated');
+  assert.equal(refusal(rootTicket.ref, { ...admissionInput, base: candidate }), 'composition_base_mismatch');
+  assert.equal(refusal(unsubmitted.ref, admissionInput), 'root_not_released');
+  assert.equal(refusal(sourceARange.ref, admissionInput), 'root_submitted');
+  assert.equal(JSON.stringify(store.getTicket(project, rootTicket.ref)), before);
+  assert.equal(store.linkTickets(project, rootTicket.ref, 'related', unsubmitted.ref).ok, true);
+  try {
+    const linked = JSON.stringify(store.getTicket(project, rootTicket.ref));
+    assert.equal(refusal(rootTicket.ref, { ...admissionInput, sources: [...admissionInput.sources, unsubmittedSource] }), 'source_unavailable');
+    assert.equal(JSON.stringify(store.getTicket(project, rootTicket.ref)), linked);
+  } finally {
+    assert.equal(store.unlinkTickets(project, rootTicket.ref, unsubmitted.ref).ok, true);
+  }
   assertOriginalProofsAndSources();
 });
 
@@ -490,6 +532,17 @@ function assertExactCompositionSubmissionFacts(root: CompositionTicket): void {
   assert.equal(compositionIncludesSource(root, source, commits), true);
   assert.equal(compositionIncludesSource(root, source, [candidate]), false);
   assert.equal(compositionIncludesSource(root, root, commits), false);
+  assertOnlyTheConsumedGenerationAdmitsSources(root, source, commits);
+}
+
+function assertOnlyTheConsumedGenerationAdmitsSources(root: CompositionTicket, source: CompositionTicket, commits: readonly string[]): void {
+  assert.ok(root.compositionAdmission && root.dispatch);
+  const unconsumed: CompositionTicket = { ...root, compositionAdmission: { ...root.compositionAdmission, consumedBy: null } };
+  const otherGeneration: CompositionTicket = { ...root, dispatch: { ...root.dispatch, preparedAt: JSON.parse(rootReleasedSnapshot).preparedAt } };
+  for (const stale of [unconsumed, otherGeneration]) {
+    assert.equal(compositionSubmissionScope(stale), null);
+    assert.equal(compositionIncludesSource(stale, source, commits), false);
+  }
 }
 
 async function prepareCompositionVerifier(): Promise<string> {
@@ -517,6 +570,24 @@ async function recordCompositionNegativeControl(checkout: string, command: strin
   }
   assert.equal(gitIn(checkout, ['status', '--porcelain']), '');
   assertRetainedProofsAndSources();
+}
+
+// A capture of exact C still has to come from this generation's own native checkout instance.
+function assertCompositionCaptureCheckoutFences(root: CompositionTicket, checkout: string): void {
+  const fresh = { candidate: { source: 'git', value: candidate }, completedAt: new Date().toISOString(), cleanWorktree: true };
+  assert.equal(compositionCaptureRefusal(root, { ...fresh, worktree: checkout }), undefined);
+  assert.equal(compositionCaptureRefusal(root, { ...fresh, worktree: repository })?.reason, 'composition_capture_checkout_mismatch');
+  assert.equal(compositionCaptureRefusal(root, { ...fresh, worktree: oldRootCheckout })?.reason, 'composition_capture_checkout_mismatch');
+  assert.equal(compositionCaptureRefusal(root, { ...fresh, worktree: path.join(repository, 'missing-checkout') })?.reason, 'composition_capture_checkout_unavailable');
+  assert.equal(compositionCaptureRefusal(root, fresh)?.reason, 'composition_capture_checkout_unavailable');
+}
+
+// After submit the generation has no live nonce, so the active boundary refuses before any claim logic.
+function assertSubmittedGenerationCannotBeClaimed(): void {
+  const submitted = store.getTicket(project, rootTicket.ref);
+  const reclaimed = store.claimTicket(project, rootTicket.ref, 'composition-new-root', { token: oldRootToken, executor: submitted.dispatchExecutor, sessionId: SESSION });
+  assert.equal(reclaimed.reason, 'stale_generation', JSON.stringify(reclaimed));
+  assert.equal(JSON.stringify(store.getTicket(project, rootTicket.ref)), JSON.stringify(submitted));
 }
 
 async function captureAndSubmitComposition(checkout: string, command: string): Promise<void> {
@@ -621,9 +692,11 @@ test('composition admission: fresh native checkout capture full-range submit ind
   assert.equal(JSON.stringify(root.compositionAdmission.releasedDispatch), rootReleasedSnapshot);
   assert.equal(root.compositionAdmission.consumedBy.nonceDigest, createHash('sha256').update(root.dispatchNonce.replace(/[\s-]/g, '').toLowerCase()).digest('hex'));
   assertExactCompositionSubmissionFacts(root);
+  assertCompositionCaptureCheckoutFences(root, checkout);
   assertRetainedProofsAndSources();
   await recordCompositionNegativeControl(checkout, command);
   await captureAndSubmitComposition(checkout, command);
+  assertSubmittedGenerationCannotBeClaimed();
   const submitted = JSON.stringify(store.getTicket(project, rootTicket.ref));
   assert.throws(() => store.prepareDispatch(project, rootTicket.ref, { sharedTree: false, sessionId: SESSION, runtimeCwd: repository }), /admission_consumed/);
   assert.equal(JSON.stringify(store.getTicket(project, rootTicket.ref)), submitted, 'replay is write-free');
