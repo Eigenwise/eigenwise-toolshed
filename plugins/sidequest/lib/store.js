@@ -37,6 +37,7 @@ const { createStories } = require("./store/stories.js");
 const { createComments } = require("./store/comments.js");
 const { createPlans } = require("./store/plans.js");
 const { createReviewCorrections } = require("./store/review-corrections.js");
+const { createCompositionAdmissions } = require("./store/composition-admission.js");
 const { createReads } = require("./store/reads.js");
 const { createClaims } = require("./store/claims.js");
 const { createLocks } = require("./store/locks.js");
@@ -722,6 +723,8 @@ const {
   agentDispatchWorktrees,
   reconcileLaunchedDispatches
 } = dispatch = createDispatch({
+  withCompositionDispatchPreparation: (slug, ref, callback) => withCompositionDispatchPreparation(slug, ref, callback),
+  withCompositionGenerationLock: (slug, ref, callback) => withCompositionGenerationLock(slug, ref, callback),
   ARTIFACT_BASELINE_MAX_PATHS,
   normalizeCategoryId: (...args) => normalizeCategoryId(...args),
   projectRoutingEnabled,
@@ -1296,6 +1299,17 @@ const {
   stripLinksTo,
   withTicketLock
 });
+const { admitComposition, withCompositionDispatchPreparation, withCompositionGenerationLock } = createCompositionAdmissions({
+  getTicket,
+  listTickets,
+  submissionReviewRelation,
+  readMeta,
+  withTicketLock,
+  putTicket,
+  createComment,
+  invalidateStoreCaches,
+  dispatchTokenDigest: (nonce) => dispatchTokenDigest(nonce)
+});
 const { correctAcceptedReviewVerdict } = createReviewCorrections({
   getTicket,
   pendingSubmission: pendingSubmissionForTickets,
@@ -1452,7 +1466,8 @@ const {
   unregisterClaim,
   verifyCommandErrors,
   verifyCommandError,
-  withTicketLock
+  withTicketLock,
+  withCompositionGenerationLock
 });
 let refreshingRoutingProfileSeeds = false;
 const routingProfileSeedStates = /* @__PURE__ */ new Map();
@@ -1996,7 +2011,7 @@ function claimTicket(slug, idOrRef, by, opts) {
   by = String(by || "agent");
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: "not_found" };
-  const result = withTicketLock(slug, found.id, () => {
+  const result = withCompositionGenerationLock(slug, found.id, () => {
     const t2 = getTicket(slug, found.id);
     if (!t2) return { ok: false, reason: "not_found" };
     const candidateReview = submissionReviewRelation(slug, t2);
@@ -3539,6 +3554,7 @@ module.exports = {
   appendExperimentEntry,
   applyExperimentVerdict,
   correctAcceptedReviewVerdict,
+  admitComposition,
   appendOverturnLine,
   experimentPacket,
   listTickets,

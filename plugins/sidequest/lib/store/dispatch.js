@@ -5,6 +5,7 @@ const { resolveSuite } = require("../suite-resolver.js");
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationOutcome } = require("../kernel/review-binding");
 const { compareSemver } = require("../plugin-freshness.js");
 const { WHOLE_TREE_SCOPE } = require("../commit-scope.js");
+const { compositionCheckoutCommit, consumePreparedComposition } = require("./composition-admission.js");
 function unscopedWriteCannotAutoApprove(ticket, options) {
   const { dispatchReadOnly, normalizeFiles, autoApproveScope } = options;
   return !dispatchReadOnly(ticket) && !normalizeFiles(ticket?.files).length && (!Array.isArray(autoApproveScope) || !autoApproveScope.length);
@@ -1506,7 +1507,7 @@ function createDispatch(dependencies) {
     let priorTokenFile = null;
     let stagedTokenFile = null;
     try {
-      const prepared = withTicketLock(slug, found.id, () => {
+      const prepared = dependencies.withCompositionDispatchPreparation(slug, found.id, () => {
         const t = getTicket(slug, found.id);
         if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
         const current = dispatchState(t);
@@ -1515,7 +1516,7 @@ function createDispatch(dependencies) {
           const candidate = String(t.submission.commit || t.submission.sourceRevision?.value || "").trim();
           throw new Error(`prepare dispatch: ${t.ref} has a pending submission${candidate ? ` (${candidate})` : ""} waiting on integration, so it is parked for the publish transaction rather than for another executor. Integrate it (\`sidequest integrate ${t.ref} --by <who>\`), send it back for repair and dispatch the replacement (\`sidequest rework ${t.ref} --by ${t.submission.by || "<candidate-owner>"} --review <review-ticket-or-evidence> --reason "what needs repair"\`), or close it as abandoned (\`sidequest groom-close ${t.ref} --abandon-submission --reason "<evidence it never landed>"\`).`);
         }
-        if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by) && !checkoutBelongsToAnotherDispatchAgent(slug, projectPath, t, current)) {
+        if (!t.compositionAdmission && current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by) && !checkoutBelongsToAnotherDispatchAgent(slug, projectPath, t, current)) {
           const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
           const recovery2 = reclaimRetiredAttemptCheckout(slug, projectPath, t, recoveryFacts.state, {
             checkpointCommit: recoveryFacts.checkpointCommit
@@ -1544,7 +1545,7 @@ function createDispatch(dependencies) {
         const repeatFailure = repeatNoCommitDispatchError(t, current);
         const unboundAttemptsSkipped = skippedUnboundNoCommitAttempts(current);
         if (repeatFailure && opts.allowRepeatFailure !== true) throw new Error(repeatFailure);
-        const retainedContinuation = retainedWorktreeContinuationState(slug, t, current);
+        const retainedContinuation = t.compositionAdmission ? null : retainedWorktreeContinuationState(slug, t, current);
         if (t.claim && t.claim.by && !claimReclaimable(t)) {
           throw new Error(`prepare dispatch: ${t.ref} has a live claim by ${t.claim.by}. Release it (\`sidequest release ${t.ref} --by ${t.claim.by}\`) before dispatching again.`);
         }
@@ -1638,6 +1639,9 @@ function createDispatch(dependencies) {
           throw new Error(`prepare dispatch: ${t.ref} cannot pin the immutable candidate checkout. ${worktreeWarning}`);
         }
         if (worktreeWarning) sharedTree = true;
+        if (t.compositionAdmission && (sharedTree || readonly || nonRepoOutput || wholeTreeScope)) {
+          throw new Error(`prepare dispatch: ${t.ref} composition admission requires a scoped writable native isolated repository checkout.`);
+        }
         if (wholeTreeScope && sharedTree) throw new Error(unscopedSharedTreeRefusal(t.ref, effectiveFiles));
         if (t.workingTreeDelivery === true && !sharedTree) {
           throw new Error(`prepare dispatch: ${t.ref} declares a working-tree deliverable and must run in the shared checkout. Re-dispatch with sharedTree:true.`);
@@ -1703,7 +1707,7 @@ function createDispatch(dependencies) {
         delete t.storyContractDrift;
         const evidenceDirectory = ticketEvidenceDirectory(slug, t.ref, projectPath);
         fs.mkdirSync(evidenceDirectory, { recursive: true, mode: 448 });
-        const baseCommit = reviewTargetState?.candidate.source === "git" ? reviewTargetState.candidate.value : integrationTargetState ? integrationTargetCommit(readMeta(slug)?.path || "", integrationTargetState) : commitScope.headCommit(readMeta(slug)?.path || "");
+        const baseCommit = t.compositionAdmission?.base ?? (reviewTargetState?.candidate.source === "git" ? reviewTargetState.candidate.value : integrationTargetState ? integrationTargetCommit(readMeta(slug)?.path || "", integrationTargetState) : commitScope.headCommit(readMeta(slug)?.path || ""));
         const releasedContinuation = explicitBaseContinuation(retainedContinuation, explicitIntegrationTarget, integrationTargetState, baseCommit);
         const releaseTip = projectPath ? commitScope.unpublishedReleaseTip(
           projectPath,
@@ -1798,6 +1802,7 @@ function createDispatch(dependencies) {
           ...supersededTokens.length ? { supersededTokens: supersededTokens.slice(-8) } : {},
           ...recovery ? { recovery } : {}
         };
+        consumePreparedComposition(t, dispatchTokenDigest(t.dispatchNonce));
         stagedTokenFile = dispatchTokenFile(t);
         t.lifecycleAttempt = t.dispatch.lifecycleAttempt;
         stampDispatchEvent(t, "dispatch", now);
@@ -2215,97 +2220,194 @@ function createDispatch(dependencies) {
       binding: { suppliedSessionId: sessionId, suppliedWorktree: boundWorktree, ...occupied }
     } : null;
   }
+  function nativeCheckoutBindingRequest(slug, sessionId, worktree, attempt) {
+    const identity = nativeCheckoutCallbackIdentity(sessionId, worktree);
+    const meta = readMeta(slug);
+    if (!identity || !meta?.path) return null;
+    const repository = canonicalPath(meta.path);
+    return {
+      ...identity,
+      repository,
+      attempt: String(attempt || "").trim(),
+      checkoutAgentId: agentIdFromWorktreePath(repository, identity.worktree)
+    };
+  }
+  function existingNativeCheckoutOwner(ticket, request) {
+    const state = dispatchState(ticket);
+    if (!state || state.terminalAt) return false;
+    return holdsThisCheckout(state, request.sessionId, request.worktree) && checkoutOwnerArrival(state, request.checkoutAgentId, request.sessionId);
+  }
+  function nativeCheckoutBindingResponse(ticket, state, request) {
+    const baseline = String(compositionCheckoutCommit(state)).trim();
+    if (!baseline) return { ok: false, reason: "baseline_unavailable" };
+    return {
+      ok: true,
+      ref: ticket.ref,
+      attempt: state.preparedAt ?? "",
+      baseline,
+      repository: request.repository,
+      worktree: request.worktree,
+      creationCompleted: Boolean(state.worktreeCreationCompletedAt),
+      expectedGitDirectory: state.worktreeGitDirectory ?? null,
+      expectedCommonGitDirectory: state.worktreeCommonGitDirectory ?? null,
+      expectedCheckoutInstance: state.worktreeCheckoutInstance ?? null,
+      expectedRevision: state.worktreeObservedRevision ?? null
+    };
+  }
+  function existingNativeCheckoutBinding(slug, ticketId, request) {
+    const ticket = getTicket(slug, ticketId);
+    if (!ticket || !existingNativeCheckoutOwner(ticket, request)) return { ok: false, reason: "dispatch_binding_unavailable" };
+    const state = dispatchState(ticket);
+    if (request.attempt && request.attempt !== state.preparedAt) return { ok: false, reason: "stale_attempt" };
+    if (!request.attempt && !state.worktreeCreationCompletedAt) return { ok: false, reason: "missing_attempt" };
+    return nativeCheckoutBindingResponse(ticket, state, request);
+  }
+  function retainedCompositionCheckoutRefusal(ticket, worktree) {
+    const admission = ticket.compositionAdmission;
+    if (!admission) return;
+    if (admission.releasedDispatch.worktree && canonicalPath(admission.releasedDispatch.worktree) === worktree) {
+      return { ok: false, reason: "composition_checkout_reused" };
+    }
+    if (fs.existsSync(worktree)) return { ok: false, reason: "composition_checkout_occupied" };
+  }
+  function recordNativeCheckoutBinding(slug, ticket, state, request) {
+    const response = nativeCheckoutBindingResponse(ticket, state, request);
+    if (!response.ok) return response;
+    state.worktree = request.worktree;
+    state.worktreeBindingSource = "worktree-create";
+    state.worktreeBoundAt = (/* @__PURE__ */ new Date()).toISOString();
+    stampDispatchEvent(ticket, "worktree-create-binding", state.worktreeBoundAt);
+    putTicket(slug, ticket);
+    return {
+      ok: true,
+      ref: response.ref,
+      attempt: response.attempt,
+      baseline: response.baseline,
+      repository: response.repository,
+      worktree: response.worktree
+    };
+  }
+  function freshNativeCheckoutBinding(slug, ticketId, request) {
+    const ticket = getTicket(slug, ticketId);
+    const state = dispatchState(ticket);
+    if (!dispatchCreationCandidate(state, request.sessionId)) return { ok: false, reason: "already_bound" };
+    if (request.attempt && request.attempt !== state.preparedAt) return { ok: false, reason: "stale_attempt" };
+    return retainedCompositionCheckoutRefusal(ticket, request.worktree) ?? recordNativeCheckoutBinding(slug, ticket, state, request);
+  }
+  function bindAvailableNativeCheckout(slug, request, tickets) {
+    const candidate = tickets.find((ticket) => dispatchCreationCandidate(dispatchState(ticket), request.sessionId));
+    if (candidate) return dependencies.withCompositionGenerationLock(
+      slug,
+      candidate.id,
+      () => freshNativeCheckoutBinding(slug, candidate.id, request)
+    );
+    if (unlaunchedSessionDispatch(slug, request.sessionId)) return { ok: false, reason: "dispatch_launch_unrecorded" };
+    const candidates = tickets.map((candidate2) => ({ candidate: candidate2, state: dispatchState(candidate2) })).filter((candidate2) => Boolean(candidate2.state));
+    return { ...unavailableWorktreeBinding(slug, candidates, request.sessionId, request.worktree), ok: false };
+  }
   function bindDispatchWorktreeCreation(slug, sessionId, worktree, attempt) {
+    const request = nativeCheckoutBindingRequest(slug, sessionId, worktree, attempt);
+    if (!request) return { ok: false, reason: "missing_binding_facts" };
+    const tickets = listTickets(slug);
+    const existing = tickets.find((ticket) => existingNativeCheckoutOwner(ticket, request));
+    if (existing) return dependencies.withCompositionGenerationLock(
+      slug,
+      existing.id,
+      () => existingNativeCheckoutBinding(slug, existing.id, request)
+    );
+    const refusal = unbindableCheckoutHolder(slug, request.sessionId, request.worktree, request.checkoutAgentId);
+    if (refusal) return { ...refusal, ok: false };
+    return bindAvailableNativeCheckout(slug, request, tickets);
+  }
+  function nativeCheckoutCallbackIdentity(sessionId, worktree) {
     const normalizedSessionId = String(sessionId || "").trim();
     const target = String(worktree || "").trim();
-    const claimedAttempt = String(attempt || "").trim();
-    const meta = readMeta(slug);
-    if (!normalizedSessionId || !target || !meta?.path) return { ok: false, reason: "missing_binding_facts" };
-    const repository = canonicalPath(meta.path);
-    const boundWorktree = canonicalPath(target);
-    const bindingCandidates = listTickets(slug).map((candidate) => ({ candidate, state: dispatchState(candidate) })).filter(({ state }) => Boolean(state));
-    const checkoutAgentId = agentIdFromWorktreePath(repository, boundWorktree);
-    for (const candidate of listTickets(slug)) {
-      const state = dispatchState(candidate);
-      if (!holdsThisCheckout(state, normalizedSessionId, boundWorktree) || state.terminalAt) continue;
-      if (!checkoutOwnerArrival(state, checkoutAgentId, normalizedSessionId)) continue;
-      if (claimedAttempt && claimedAttempt !== String(state.preparedAt || "").trim()) return { ok: false, reason: "stale_attempt" };
-      if (!claimedAttempt && !state.worktreeCreationCompletedAt) return { ok: false, reason: "missing_attempt" };
-      const baseline = String(state.baseCommit || "").trim();
-      if (baseline) return {
-        ok: true,
-        ref: candidate.ref,
-        attempt: String(state.preparedAt || ""),
-        baseline,
-        repository,
-        worktree: boundWorktree,
-        creationCompleted: Boolean(state.worktreeCreationCompletedAt),
-        expectedGitDirectory: state.worktreeGitDirectory || null,
-        expectedCommonGitDirectory: state.worktreeCommonGitDirectory || null,
-        expectedCheckoutInstance: state.worktreeCheckoutInstance || null,
-        expectedRevision: state.worktreeObservedRevision || null
-      };
+    if (!normalizedSessionId || !target) return null;
+    return { sessionId: normalizedSessionId, worktree: canonicalPath(target) };
+  }
+  function launchedNativeCheckoutMatches(state, binding) {
+    if (!state) return false;
+    return [
+      state.sessionId === binding.sessionId,
+      state.sharedTree === false,
+      state.outcome === "launched",
+      !state.terminalAt,
+      state.worktreeBindingSource === "worktree-create",
+      Boolean(state.worktree),
+      canonicalPath(state.worktree ?? "") === binding.worktree
+    ].every(Boolean);
+  }
+  function createdCheckoutIdentityMatches(state, facts) {
+    return [
+      canonicalPath(state.worktreeGitDirectory ?? "") === facts.gitDirectory,
+      canonicalPath(state.worktreeCommonGitDirectory ?? "") === facts.commonGitDirectory,
+      state.worktreeCheckoutInstance === facts.checkoutInstance,
+      state.worktreeObservedRevision === facts.revision
+    ].every(Boolean);
+  }
+  function recordCreatedCheckoutIdentity(state, facts) {
+    state.worktreeGitDirectory = facts.gitDirectory;
+    state.worktreeCommonGitDirectory = facts.commonGitDirectory;
+    state.worktreeCheckoutInstance = facts.checkoutInstance;
+    state.worktreeObservedRevision = facts.revision;
+    state.worktreeCreationCompletedAt = (/* @__PURE__ */ new Date()).toISOString();
+  }
+  function recordNativeCheckoutCompletion(slug, ticket, current, facts) {
+    if (current.worktreeCreationCompletedAt) {
+      return createdCheckoutIdentityMatches(current, facts) ? { ok: true, alreadyCompleted: true } : { ok: false, reason: "worktree_identity_mismatch" };
     }
-    const unavailable = unbindableCheckoutHolder(slug, normalizedSessionId, boundWorktree, checkoutAgentId);
-    if (unavailable) return unavailable;
-    for (const candidate of listTickets(slug)) {
-      const state = dispatchState(candidate);
-      if (!dispatchCreationCandidate(state, normalizedSessionId)) continue;
-      if (claimedAttempt && claimedAttempt !== String(state.preparedAt || "").trim()) return { ok: false, reason: "stale_attempt" };
-      const result = withTicketLock(slug, candidate.id, () => {
-        const ticket = getTicket(slug, candidate.id);
-        const state2 = dispatchState(ticket);
-        if (!dispatchCreationCandidate(state2, normalizedSessionId)) return { ok: false, reason: "already_bound" };
-        const baseline = String(state2.baseCommit || "").trim();
-        if (!baseline) return { ok: false, reason: "baseline_unavailable" };
-        state2.worktree = boundWorktree;
-        state2.worktreeBindingSource = "worktree-create";
-        state2.worktreeBoundAt = (/* @__PURE__ */ new Date()).toISOString();
-        stampDispatchEvent(ticket, "worktree-create-binding", state2.worktreeBoundAt);
-        putTicket(slug, ticket);
-        return { ok: true, ref: ticket.ref, attempt: String(state2.preparedAt || ""), baseline, repository, worktree: boundWorktree };
-      });
-      if (result?.ok) return result;
+    recordCreatedCheckoutIdentity(current, facts);
+    stampDispatchEvent(ticket, "worktree-create-complete", current.worktreeCreationCompletedAt);
+    putTicket(slug, ticket);
+    return { ok: true, alreadyCompleted: false };
+  }
+  function compositionCheckoutWasReused(previous, worktree, facts) {
+    return [
+      previous.worktree && canonicalPath(previous.worktree) === worktree,
+      previous.worktreeGitDirectory && canonicalPath(previous.worktreeGitDirectory) === facts.gitDirectory,
+      previous.worktreeCheckoutInstance === facts.checkoutInstance
+    ].some(Boolean);
+  }
+  function cleanCompositionCheckoutRefusal(worktree) {
+    try {
+      if (gitOutput(worktree, ["status", "--porcelain"])) return { ok: false, reason: "composition_checkout_dirty" };
+    } catch {
+      return { ok: false, reason: "composition_checkout_unobservable" };
     }
-    if (unlaunchedSessionDispatch(slug, normalizedSessionId)) {
-      return { ok: false, reason: "dispatch_launch_unrecorded" };
-    }
-    return unavailableWorktreeBinding(slug, bindingCandidates, normalizedSessionId, boundWorktree);
+  }
+  function compositionCheckoutIdentityRefusal(ticket, worktree, facts) {
+    const admission = ticket.compositionAdmission;
+    if (!admission) return;
+    if (compositionCheckoutWasReused(admission.releasedDispatch, worktree, facts)) return { ok: false, reason: "composition_checkout_reused" };
+    return cleanCompositionCheckoutRefusal(worktree);
+  }
+  function nativeCheckoutCompletionFacts(slug, worktree, state) {
+    const facts = immutableWorktreeFacts(slug, worktree);
+    if (!facts) return { ok: false, reason: "invalid_worktree_binding" };
+    if (facts.revision !== String(compositionCheckoutCommit(state)).trim()) return { ok: false, reason: "worktree_revision_mismatch" };
+    return facts;
+  }
+  function completeNativeCheckoutForTicket(slug, id, binding, attempt) {
+    const ticket = getTicket(slug, id);
+    const current = dispatchState(ticket);
+    const generation = worktreeCallbackGenerationRefusal(current, attempt);
+    if (generation) return { ...generation, ok: false };
+    if (!launchedNativeCheckoutMatches(current, binding)) return { ok: false, reason: "dispatch_binding_unavailable" };
+    const facts = nativeCheckoutCompletionFacts(slug, binding.worktree, current);
+    if ("ok" in facts) return facts;
+    return compositionCheckoutIdentityRefusal(ticket, binding.worktree, facts) ?? recordNativeCheckoutCompletion(slug, ticket, current, facts);
   }
   function completeDispatchWorktreeCreation(slug, sessionId, worktree, attempt) {
     if (missingWorktreeCallbackAttempt(attempt)) return { ok: false, reason: "missing_attempt" };
-    const normalizedSessionId = String(sessionId || "").trim();
-    const target = String(worktree || "").trim();
-    if (!normalizedSessionId || !target) return { ok: false, reason: "missing_binding_facts" };
-    const boundWorktree = canonicalPath(target);
+    const binding = nativeCheckoutCallbackIdentity(sessionId, worktree);
+    if (!binding) return { ok: false, reason: "missing_binding_facts" };
     for (const candidate of listTickets(slug)) {
-      const state = dispatchState(candidate);
-      if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false || state.outcome !== "launched" || state.terminalAt || state.worktreeBindingSource !== "worktree-create" || !state.worktree || canonicalPath(state.worktree) !== boundWorktree) continue;
-      return withTicketLock(slug, candidate.id, () => {
-        const ticket = getTicket(slug, candidate.id);
-        const current = dispatchState(ticket);
-        const generation = worktreeCallbackGenerationRefusal(current, attempt);
-        if (generation) return generation;
-        if (!current || current.sessionId !== normalizedSessionId || current.sharedTree !== false || current.outcome !== "launched" || current.terminalAt || current.worktreeBindingSource !== "worktree-create" || !current.worktree || canonicalPath(current.worktree) !== boundWorktree) {
-          return { ok: false, reason: "dispatch_binding_unavailable" };
-        }
-        const facts = immutableWorktreeFacts(slug, boundWorktree);
-        if (!facts) return { ok: false, reason: "invalid_worktree_binding" };
-        const baseline = String(current.baseCommit || "").trim();
-        if (!baseline || facts.revision !== baseline) return { ok: false, reason: "worktree_revision_mismatch" };
-        if (current.worktreeCreationCompletedAt) {
-          const unchanged = canonicalPath(String(current.worktreeGitDirectory || "")) === facts.gitDirectory && canonicalPath(String(current.worktreeCommonGitDirectory || "")) === facts.commonGitDirectory && String(current.worktreeCheckoutInstance || "") === facts.checkoutInstance && String(current.worktreeObservedRevision || "") === facts.revision;
-          return unchanged ? { ok: true, alreadyCompleted: true } : { ok: false, reason: "worktree_identity_mismatch" };
-        }
-        current.worktreeGitDirectory = facts.gitDirectory;
-        current.worktreeCommonGitDirectory = facts.commonGitDirectory;
-        current.worktreeCheckoutInstance = facts.checkoutInstance;
-        current.worktreeObservedRevision = facts.revision;
-        current.worktreeCreationCompletedAt = (/* @__PURE__ */ new Date()).toISOString();
-        stampDispatchEvent(ticket, "worktree-create-complete", current.worktreeCreationCompletedAt);
-        putTicket(slug, ticket);
-        return { ok: true, alreadyCompleted: false };
-      });
+      if (!launchedNativeCheckoutMatches(dispatchState(candidate), binding)) continue;
+      return dependencies.withCompositionGenerationLock(
+        slug,
+        candidate.id,
+        () => completeNativeCheckoutForTicket(slug, candidate.id, binding, attempt)
+      );
     }
     return { ok: false, reason: "dispatch_binding_unavailable" };
   }
@@ -2440,7 +2542,7 @@ function createDispatch(dependencies) {
         return { ok: false, reason: "dispatch_binding_unavailable" };
       }
       const facts = immutableWorktreeFacts(slug, boundWorktree);
-      const baseline = String(state.baseCommit || "").trim();
+      const baseline = String(compositionCheckoutCommit(state)).trim();
       if (!state.worktreeCreationCompletedAt && facts && baseline && facts.revision === baseline) {
         state.worktreeGitDirectory = facts.gitDirectory;
         state.worktreeCommonGitDirectory = facts.commonGitDirectory;

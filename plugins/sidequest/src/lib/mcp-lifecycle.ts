@@ -62,6 +62,8 @@ const { sourceRevisionBaseline } = require('./source-revision-capability');
 const { reviewCandidateFromSubmission, sameReviewCandidate, effectiveOracleVerdictOutcome } = require('./kernel/review-binding.js');
 const { correctReviewVerdict } = require('./mcp-review-correction.js');
 const { inheritedRejectedDuplicateGuidance, crossedWorktreeRefusalMessage } = require('./refusal-guidance.js');
+import { compositionIncludesSource, compositionSubmissionScope } from './store/composition-admission';
+import type { CompositionTicket } from './store/composition-admission';
 
 type ToolDefinition = {
   name: string;
@@ -290,7 +292,15 @@ function rejectedRelatedReleaseFragments(slug: string, ticket: any): string[] {
   });
 }
 
-function ticketCommitScope(slug: string, ticket: any): string[] {
+function relatedSubmissionAdmission(slug: string, ticket: CompositionTicket, entryRef: string, rangeCommits: readonly string[]) {
+  const source: CompositionTicket | null = store.getTicket(slug, entryRef);
+  if (source && compositionIncludesSource(ticket, source, rangeCommits)) return { ok: true as const };
+  return inheritedRejectedAdmission(slug, ticket, entryRef, rangeCommits);
+}
+
+function ticketCommitScope(slug: string, ticket: CompositionTicket): string[] {
+  const compositionScope = compositionSubmissionScope(ticket);
+  if (compositionScope) return [...compositionScope];
   return [...new Set([
     ...commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref),
     ...rejectedRelatedReleaseFragments(slug, ticket),
@@ -498,7 +508,7 @@ function collectGitSubmissionFacts(options: any) {
       .filter((entry: any) => (Array.isArray(entry.submission.commits) && entry.submission.commits.length ? entry.submission.commits : [entry.submission.commit]).some((entryCommit: any) => range.commits.includes(entryCommit)))
     : [];
   const refusedOverlap = overlappingSubmissions
-    .map((entry: any) => ({ entry, admission: inheritedRejectedAdmission(slug, ticket, entry.ref, range.commits) }))
+    .map((entry: any) => ({ entry, admission: relatedSubmissionAdmission(slug, ticket, entry.ref, range.commits) }))
     .find((overlap: any) => !overlap.admission.ok) || null;
   const duplicate = range?.ok
     ? ticket.dispatch?.sharedTree === true
@@ -512,7 +522,7 @@ function collectGitSubmissionFacts(options: any) {
     admissionFacts: {
       // The stored-range check at integrate reads only this snapshot, so the rejected source fragment the range
       // inherits has to be admitted here too, or integrate refuses what submit accepted (GH-277).
-      admittedScope: [...new Set([...store.executionScope(slug, ticket), ...rejectedRelatedReleaseFragments(slug, ticket)])],
+      admittedScope: compositionSubmissionScope(ticket) ?? [...new Set([...store.executionScope(slug, ticket), ...rejectedRelatedReleaseFragments(slug, ticket)])],
       scope,
       baseline: range?.ok
         ? { candidateExists: true, containsCandidate: true }
@@ -1061,7 +1071,7 @@ const tools: ToolDefinition[] = [
             review: { type: 'boolean' },
           },
         },
-        base: { type: 'string', description: 'Optional prior submitted or integrated commit to exclude from this submission range. Set it equal to commit for a verified no-op submission.' },
+        base: { type: 'string', description: 'Optional prior submitted or integrated commit to exclude from an ordinary submission range; equal to commit only for a verified ordinary no-op. An admitted composition must keep its original BASE and submit the full BASE..C range.' },
         verify: { type: 'string' },
         gitRef: { type: 'string' },
         worktree: { type: 'string', description: 'Absolute path to this executor’s git worktree root. Required for isolated worktrees.' },

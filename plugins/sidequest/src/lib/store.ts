@@ -64,6 +64,7 @@ const { createStories } = require('./store/stories.js');
 const { createComments } = require('./store/comments.js');
 const { createPlans } = require('./store/plans.js');
 const { createReviewCorrections } = require('./store/review-corrections.js');
+const { createCompositionAdmissions } = require('./store/composition-admission.js');
 const { createReads } = require('./store/reads.js');
 const { createClaims } = require('./store/claims.js');
 const { createLocks } = require('./store/locks.js');
@@ -630,6 +631,8 @@ const {
   agentDispatchWorktrees,
   reconcileLaunchedDispatches,
 } = (dispatch = createDispatch({
+  withCompositionDispatchPreparation: (slug: string, ref: string, callback: () => unknown) => withCompositionDispatchPreparation(slug, ref, callback),
+  withCompositionGenerationLock: (slug: string, ref: string, callback: () => unknown) => withCompositionGenerationLock(slug, ref, callback),
   ARTIFACT_BASELINE_MAX_PATHS,
   normalizeCategoryId: (...args: any[]) => normalizeCategoryId(...args),
   projectRoutingEnabled,
@@ -1274,6 +1277,12 @@ const {
   withTicketLock,
 });
 
+const { admitComposition, withCompositionDispatchPreparation, withCompositionGenerationLock } = createCompositionAdmissions({
+  getTicket, listTickets, submissionReviewRelation, readMeta,
+  withTicketLock, putTicket, createComment, invalidateStoreCaches,
+  dispatchTokenDigest: (nonce: string) => dispatchTokenDigest(nonce),
+});
+
 const { correctAcceptedReviewVerdict } = createReviewCorrections({
   getTicket, pendingSubmission: pendingSubmissionForTickets, isReadOnlyExecutor, submissionReviewRelation,
   withSourceTicketLock, withTicketLock, createComment, recordBoundReviewOutcome, putTicket, invalidateStoreCaches,
@@ -1430,6 +1439,7 @@ const {
   verifyCommandErrors,
   verifyCommandError,
   withTicketLock,
+  withCompositionGenerationLock,
 });
 
 let refreshingRoutingProfileSeeds = false;
@@ -2107,7 +2117,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   by = String(by || 'agent');
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
-  const result = withTicketLock(slug, found.id, () => {
+  const result = withCompositionGenerationLock(slug, found.id, () => {
     const t = getTicket(slug, found.id); // fresh read, under the lock
     if (!t) return { ok: false, reason: 'not_found' };
     // A bound candidate is frozen for its review: reclaiming it would let the
@@ -3929,6 +3939,7 @@ module.exports = {
   appendExperimentEntry,
   applyExperimentVerdict,
   correctAcceptedReviewVerdict,
+  admitComposition,
   appendOverturnLine,
   experimentPacket,
   listTickets,

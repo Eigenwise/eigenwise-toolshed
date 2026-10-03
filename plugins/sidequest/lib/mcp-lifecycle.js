@@ -1,4 +1,5 @@
 "use strict";
+var import_composition_admission = require("./store/composition-admission");
 const {
   path,
   fs,
@@ -218,7 +219,14 @@ function rejectedRelatedReleaseFragments(slug, ticket) {
     return fragment ? [fragment] : [];
   });
 }
+function relatedSubmissionAdmission(slug, ticket, entryRef, rangeCommits) {
+  const source = store.getTicket(slug, entryRef);
+  if (source && (0, import_composition_admission.compositionIncludesSource)(ticket, source, rangeCommits)) return { ok: true };
+  return inheritedRejectedAdmission(slug, ticket, entryRef, rangeCommits);
+}
 function ticketCommitScope(slug, ticket) {
+  const compositionScope = (0, import_composition_admission.compositionSubmissionScope)(ticket);
+  if (compositionScope) return [...compositionScope];
   return [.../* @__PURE__ */ new Set([
     ...commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref),
     ...rejectedRelatedReleaseFragments(slug, ticket)
@@ -383,7 +391,7 @@ function collectGitSubmissionFacts(options) {
     if (missingFragment) requirements.push({ code: "missing_release_fragment", message: missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins), retryable: true });
   }
   const overlappingSubmissions = range?.ok && ticket.dispatch?.sharedTree !== true ? store.submissionsPayload(slug).tickets.filter((entry) => entry.ref !== ticket.ref).filter((entry) => (Array.isArray(entry.submission.commits) && entry.submission.commits.length ? entry.submission.commits : [entry.submission.commit]).some((entryCommit) => range.commits.includes(entryCommit))) : [];
-  const refusedOverlap = overlappingSubmissions.map((entry) => ({ entry, admission: inheritedRejectedAdmission(slug, ticket, entry.ref, range.commits) })).find((overlap) => !overlap.admission.ok) || null;
+  const refusedOverlap = overlappingSubmissions.map((entry) => ({ entry, admission: relatedSubmissionAdmission(slug, ticket, entry.ref, range.commits) })).find((overlap) => !overlap.admission.ok) || null;
   const duplicate = range?.ok ? ticket.dispatch?.sharedTree === true ? approvedBoundaries.find((boundary) => range.commits.includes(boundary.commit)) || null : refusedOverlap?.entry || null : null;
   return {
     target,
@@ -392,7 +400,7 @@ function collectGitSubmissionFacts(options) {
     admissionFacts: {
       // The stored-range check at integrate reads only this snapshot, so the rejected source fragment the range
       // inherits has to be admitted here too, or integrate refuses what submit accepted (GH-277).
-      admittedScope: [.../* @__PURE__ */ new Set([...store.executionScope(slug, ticket), ...rejectedRelatedReleaseFragments(slug, ticket)])],
+      admittedScope: (0, import_composition_admission.compositionSubmissionScope)(ticket) ?? [.../* @__PURE__ */ new Set([...store.executionScope(slug, ticket), ...rejectedRelatedReleaseFragments(slug, ticket)])],
       scope,
       baseline: range?.ok ? { candidateExists: true, containsCandidate: true } : { candidateExists: false, containsCandidate: false, diagnostic: surfaces.diagnostic },
       surfaces,
@@ -917,7 +925,7 @@ const tools = [
             review: { type: "boolean" }
           }
         },
-        base: { type: "string", description: "Optional prior submitted or integrated commit to exclude from this submission range. Set it equal to commit for a verified no-op submission." },
+        base: { type: "string", description: "Optional prior submitted or integrated commit to exclude from an ordinary submission range; equal to commit only for a verified ordinary no-op. An admitted composition must keep its original BASE and submit the full BASE..C range." },
         verify: { type: "string" },
         gitRef: { type: "string" },
         worktree: { type: "string", description: "Absolute path to this executor’s git worktree root. Required for isolated worktrees." },
