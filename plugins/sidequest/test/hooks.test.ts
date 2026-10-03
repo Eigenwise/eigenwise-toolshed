@@ -12,6 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('node:crypto');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
+const { createContext, runInContext } = require('node:vm');
 
 // A throwaway store home so the SubagentStop hook (which loads lib/store.js as a
 // subprocess and inherits this env) reads a fixture board, never the real one. The
@@ -5009,6 +5010,27 @@ test('subagent-stop: a held claim is classified regardless of claimed effort', (
     const ctx = runHook(SUBAGENT_STOP, stop);
     assert.match(ctx, new RegExp(`^exec WAITING: ${ticket.ref} ended a turn while holding its claim; it may resume\.`));
   }
+});
+
+test('subagent-stop: held claim guidance preserves pure pre-claim fallback classification', () => {
+  const context = createContext({
+    process,
+    __dirname: HOOKS,
+    require(moduleName: string): unknown {
+      if (moduleName === 'node:fs') {
+        return { readFileSync() { return ''; } };
+      }
+      return require(moduleName);
+    },
+  });
+  runInContext(fs.readFileSync(SUBAGENT_STOP, 'utf8'), context, {
+    filename: require('node:url').pathToFileURL(SUBAGENT_STOP).href,
+    timeout: 1000,
+  });
+  const verdict: (stopped: boolean, classification: { kind: string }) => string | null = runInContext('stoppedBeforeClaimVerdict', context);
+  assert.match(verdict(true, { kind: 'codex_dispatch' }), /^exec DIED before claiming;/);
+  assert.equal(verdict(false, { kind: 'codex_dispatch' }), null);
+  assert.equal(verdict(true, { kind: 'unknown' }), null);
 });
 
 test('subagent-stop: held claim uses only authentic original ID and session without lifecycle changes', () => {

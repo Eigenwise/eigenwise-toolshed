@@ -239,7 +239,9 @@ function unfinishedStopVerdict(
   }
   const terminal = terminalDispatchVerdict(store, terminalTickets);
   if (terminal) return terminal;
-  const held = claims.find((claim) => claim && claim.held && claim.status === 'doing');
+  const held = claims.find((claim) => {
+    return claim && claim.held && claim.status === 'doing';
+  });
   if (held) return heldClaimVerdict(store, held);
   return stoppedBeforeClaimVerdict(dispatchStopped, classification);
 }
