@@ -6,6 +6,8 @@ Model Gateway adds ChatGPT/Codex and Grok subscription models to Claude Code. Cl
 
 ## Install
 
+Model Gateway uses your supported ChatGPT/Codex or Grok subscription. The subscription and its usage limits belong to that provider; installing the plugin does not include provider access.
+
 Run these in Claude Code:
 
 ```text
@@ -117,7 +119,7 @@ That project has no gateway models after the restart: gateway rows disappear fro
 
 ## Support
 
-If Model Gateway saves you time, you can support its maintenance through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise).
+Model Gateway's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use the plugin.
 
 ## License
 
