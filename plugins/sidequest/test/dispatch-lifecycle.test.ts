@@ -2176,6 +2176,15 @@ test('a resumed live claim re-mints its token, re-binds the linked worktree, and
     fs.rmSync(prepared.ticket.dispatch.tokenFile);
     assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, prepared.ticket.dispatch.tokenFile).reason, 'token');
 
+    const refusedRecovery = (override: Record<string, string>) => store.recoverLiveClaimDispatch(slug, ticket.ref, {
+      by: claimHolder, executor, worktree, sessionId: resumedSession,
+      recoveryEvidence: 'A different caller asks to recover this live claim.', ...override,
+    });
+    const beforeRefusals = JSON.stringify(store.getTicket(slug, ticket.ref));
+    assert.equal(refusedRecovery({ by: 'another-live-worker' }).reason, 'not_claim_holder');
+    assert.equal(refusedRecovery({ executor: 'another-executor' }).reason, 'executor_mismatch');
+    assert.equal(JSON.stringify(store.getTicket(slug, ticket.ref)), beforeRefusals, 'a refused recovery writes nothing');
+
     const recovered = store.recoverLiveClaimDispatch(slug, ticket.ref, {
       by: claimHolder,
       executor,
@@ -2230,6 +2239,26 @@ test('a resumed live claim re-mints its token, re-binds the linked worktree, and
   } finally {
     store.releaseTicket(slug, ticket.ref, claimHolder, { status: 'todo', source: 'test', force: true });
     if (fs.existsSync(worktree)) execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+  }
+});
+
+test('live-claim recovery refuses a direct claim that has no live isolated dispatch and writes nothing', () => {
+  const ticket = createFixture('direct claim recovery fixture');
+  const owner = 'direct-claim-recovery-worker';
+  assert.equal(store.claimTicket(slug, ticket.ref, owner, {
+    direct: true,
+    reason: 'The recovery fixture needs a live claim without an isolated dispatch.',
+  }).ok, true);
+  try {
+    const before = JSON.stringify(store.getTicket(slug, ticket.ref));
+    const refused = store.recoverLiveClaimDispatch(slug, ticket.ref, {
+      by: owner, executor: 'sidequest-exec-high', worktree: PROJECT, sessionId: 'direct-claim-recovery-session',
+      recoveryEvidence: 'The direct claim holder asks to recover an isolated dispatch it never had.',
+    });
+    assert.equal(refused.reason, 'dispatch_unavailable', JSON.stringify(refused));
+    assert.equal(JSON.stringify(store.getTicket(slug, ticket.ref)), before, 'a refused recovery writes nothing');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, owner, { status: 'todo', source: 'test', force: true });
   }
 });
 

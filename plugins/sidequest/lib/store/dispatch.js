@@ -2213,14 +2213,20 @@ function createDispatch(dependencies) {
   function isLiveClaimedBy(ticket, by) {
     return ticket?.claim?.by === by;
   }
-  function liveClaimDispatchRefusal(ticket, state) {
-    if (state?.outcome === "claimed" && state.sharedTree === false && !state.terminalAt) return null;
-    return { ok: false, reason: "dispatch_unavailable", ticket, message: `${ticket.ref} does not have a live isolated claimed dispatch to recover.` };
+  function liveClaimHolderRefusal(ticket, idOrRef, by) {
+    return { ok: false, reason: "not_claim_holder", ticket, message: `${ticket?.ref || idOrRef} is not live-claimed by ${by}.` };
+  }
+  function isLiveIsolatedClaim(state) {
+    return state?.outcome === "claimed" && state.sharedTree === false && !state.terminalAt;
+  }
+  function claimRuntimeExecutor(ticket, executor) {
+    return ticket.claim.runtime?.executor || executor;
   }
   function liveClaimExecutorRefusal(ticket, state, executor) {
-    const runtimeExecutor = ticket.claim?.runtime?.executor || executor;
-    if (state?.executor === executor && runtimeExecutor === executor) return null;
-    return { ok: false, reason: "executor_mismatch", ticket, message: `${ticket.ref} requires executor ${state?.executor || "(unavailable)"}, not ${executor}.` };
+    if (state.executor !== executor || claimRuntimeExecutor(ticket, executor) !== executor) {
+      return { ok: false, reason: "executor_mismatch", ticket, message: `${ticket.ref} requires executor ${state.executor || "(unavailable)"}, not ${executor}.` };
+    }
+    return null;
   }
   function consumedCompositionRecoveryRefusal(ticket) {
     const consumed = consumedAdmissionRefusal(ticket);
@@ -2232,11 +2238,11 @@ function createDispatch(dependencies) {
     };
   }
   function liveClaimRecoveryRefusal(ticket, state, request, idOrRef) {
-    const ref = ticket?.ref || idOrRef;
-    if (!isLiveClaimedBy(ticket, request.by)) {
-      return { ok: false, reason: "not_claim_holder", ticket, message: `${ref} is not live-claimed by ${request.by}.` };
+    if (!isLiveClaimedBy(ticket, request.by)) return liveClaimHolderRefusal(ticket, idOrRef, request.by);
+    if (!isLiveIsolatedClaim(state)) {
+      return { ok: false, reason: "dispatch_unavailable", ticket, message: `${ticket.ref} does not have a live isolated claimed dispatch to recover.` };
     }
-    return liveClaimDispatchRefusal(ticket, state) || liveClaimExecutorRefusal(ticket, state, request.executor) || consumedCompositionRecoveryRefusal(ticket);
+    return liveClaimExecutorRefusal(ticket, state, request.executor) || consumedCompositionRecoveryRefusal(ticket);
   }
   function resumeLiveClaim(ticket, state, facts, request, now) {
     state.sessionId = request.sessionId;
