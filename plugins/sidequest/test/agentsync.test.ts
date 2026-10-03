@@ -1194,7 +1194,10 @@ test('briefings synchronize stale worktrees to their recorded integration target
     },
   }, 'sync-token', undefined, root);
 
-  assert.ok(briefing.includes(`git merge-base --is-ancestor ${commit} HEAD`));
+  assert.ok(briefing.includes(`sync-check ${commit}\``), 'the sync check is the dedicated command, not raw git');
+  assert.ok(!briefing.includes('git merge-base --is-ancestor'));
+  assert.match(briefing, /no `; echo \$\?` is needed/);
+  assert.match(briefing, /If it reports FAILED not-ancestor, run `git fetch/);
   assert.ok(briefing.includes(`git fetch "${root}" "main"`));
   assert.ok(briefing.includes(`git reset --hard ${commit}`));
   assert.doesNotMatch(briefing, /\[sidequest:worktree-sync\]/);
@@ -1224,11 +1227,74 @@ test('a dirty-worktree continuation proves the retained candidate before it trus
   }, 'recovery-base-token', undefined, root);
 
   assert.match(briefing, /Base ancestry alone never proves the retained candidate is here/);
-  assert.ok(briefing.includes(`\`git rev-parse HEAD\` must be ${retained}`));
-  assert.match(briefing, /must still list the retained changes with no unmerged \(`UU`/);
+  assert.ok(briefing.includes(`sync-check ${base} --head ${retained} --retained\``));
+  assert.ok(briefing.includes(`It requires HEAD to be ${retained} and \`git status --porcelain\` to still list the retained changes with no unmerged entries, and only then tests base ancestry`));
   assert.match(briefing, /stop and report that this checkout is not the retained candidate/);
-  assert.match(briefing, /Only then check `git merge-base --is-ancestor/);
-  assert.ok(!briefing.includes(`--is-ancestor ${base} HEAD\` and change nothing if it passes`));
+  assert.match(briefing, /Change nothing if it reports `ok`/);
+  assert.match(briefing, /If it reports `FAILED not-ancestor`, preserve before moving/);
+  assert.ok(!briefing.includes('git merge-base --is-ancestor'));
+});
+
+test('a live-claim continuation checks the source worktree and its retained commit through one command', () => {
+  const root = tmpDir();
+  const base = 'a'.repeat(40);
+  const retained = 'c'.repeat(40);
+  const sourceWorktree = path.join(root, 'live source');
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-422', title: 'Live resume', model: 'opus', effort: 'high', category: {},
+    dispatch: {
+      sharedTree: false,
+      baseCommit: base,
+      integrationTarget: { mode: 'local', branch: 'main' },
+      continuation: { mode: 'live_claim_resume', sourceWorktree, commit: retained },
+    },
+  }, 'live-resume-token', undefined, root);
+
+  assert.ok(briefing.includes(`sync-check ${base} --worktree "${sourceWorktree}" --head ${retained}\``));
+  assert.match(briefing, /If it reports FAILED, stop and report it\. Do not reset, rebase, or discard retained work/);
+  assert.ok(!briefing.includes('git merge-base --is-ancestor'));
+  assert.ok(!briefing.includes(`git -C ${sourceWorktree} merge-base`));
+});
+
+test('an explicit-base-move continuation proves the retained candidate through the same command', () => {
+  const root = tmpDir();
+  const base = 'a'.repeat(40);
+  const retained = 'c'.repeat(40);
+  const checkpointBase = 'd'.repeat(40);
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-423', title: 'Explicit move', model: 'opus', effort: 'high', category: {},
+    dispatch: {
+      sharedTree: false,
+      baseCommit: base,
+      integrationTarget: { mode: 'local', branch: 'main' },
+      continuation: {
+        mode: 'dirty_worktree_resume', commit: retained, baseCommit: checkpointBase, retainReason: 'the dispatch declined the retained base',
+      },
+    },
+  }, 'explicit-move-token', undefined, root);
+
+  assert.ok(briefing.includes(`sync-check ${base} --head ${retained} --retained\``));
+  assert.match(briefing, /`ok` and `FAILED not-ancestor` both prove the candidate/);
+  assert.ok(!briefing.includes('git merge-base --is-ancestor'));
+});
+
+test('a retained-checkpoint continuation runs the dedicated sync check before it rebases', () => {
+  const root = tmpDir();
+  const base = 'a'.repeat(40);
+  const checkpointBase = 'd'.repeat(40);
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-424', title: 'Checkpoint resume', model: 'opus', effort: 'high', category: {},
+    dispatch: {
+      sharedTree: false,
+      baseCommit: base,
+      integrationTarget: { mode: 'local', branch: 'main' },
+      continuation: { mode: 'retained_worktree_resume', commit: 'c'.repeat(40), baseCommit: checkpointBase },
+    },
+  }, 'checkpoint-token', undefined, root);
+
+  assert.ok(briefing.includes(`sync-check ${base}\``));
+  assert.match(briefing, /If it reports FAILED not-ancestor, run `git fetch .*` then `git rebase --onto /);
+  assert.ok(!briefing.includes('git merge-base --is-ancestor'));
 });
 
 test('small-ticket lifecycle retires three optional board round trips', () => {
@@ -1253,7 +1319,7 @@ test('small-ticket lifecycle retires three optional board round trips', () => {
   ].filter(Boolean);
 
   assert.equal(retiredRoundTrips.length, 0, 'stale-worktree, foreground verify-start, and duplicate closeout comments stay retired');
-  assert.match(briefing, /git merge-base --is-ancestor/);
+  assert.match(briefing, /sync-check [b]{40}`/);
   assert.match(briefing, /git reset --hard/);
   assert.match(briefing, /in the FOREGROUND with an explicit generous timeout of up to 600000 ms/);
   assert.match(briefing, /A backgrounded verify's completion does not wake you, so going idle on it parks the claim indefinitely/);
