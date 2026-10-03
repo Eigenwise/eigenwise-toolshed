@@ -28,12 +28,27 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var sync_check_exports = {};
 __export(sync_check_exports, {
-  syncCheck: () => syncCheck
+  SYNC_CHECK_RESULT: () => SYNC_CHECK_RESULT,
+  retainedSyncCheckStep: () => retainedSyncCheckStep,
+  syncCheck: () => syncCheck,
+  syncCheckCommand: () => syncCheckCommand
 });
 module.exports = __toCommonJS(sync_check_exports);
 var import_node_fs = __toESM(require("node:fs"));
 var import_git_process = require("./git-process");
 const UNMERGED_CODES = /* @__PURE__ */ new Set(["UU", "AA", "DU", "UD", "AU", "UA", "DD"]);
+const SYNC_CHECK_RESULT = "It prints one line and exits 0 for `sync-check: ok (...)` or 1 for `sync-check: FAILED <reason> (...)`; run it on its own and read that line, because no `; echo $?` is needed.";
+function syncCheckCommand(quotedLauncher, commit, flags = "") {
+  return "`" + ["node", quotedLauncher, "sync-check", commit + flags].join(" ") + "`";
+}
+function retainedSyncCheckStep(quotedLauncher, commit, retainedCommit) {
+  return [
+    "run " + syncCheckCommand(quotedLauncher, commit, " --head " + retainedCommit + " --retained") + ".",
+    "It requires HEAD to be " + retainedCommit + " and `git status --porcelain` to still list the retained changes with no unmerged entries, and only then tests base ancestry.",
+    SYNC_CHECK_RESULT,
+    "If it reports `FAILED head-mismatch`, `retained-changes-missing` or `unmerged`, stop and report that this checkout is not the retained candidate."
+  ].join(" ");
+}
 const short = (sha) => sha.slice(0, 7);
 const failed = (reason, detail) => ({ ok: false, line: `sync-check: FAILED ${reason} (${detail})` });
 function resolveCommit(cwd, revision) {
@@ -85,9 +100,15 @@ function gatherFacts(input) {
   const base = resolveCommit(cwd, input.commit);
   return base ? { input, cwd, head, base } : failed("unknown-revision", `${input.commit} is not a commit in ${cwd}`);
 }
+function okExtras(input) {
+  const extras = [];
+  if (input.head) extras.push("HEAD is the expected commit");
+  if (input.retained) extras.push("retained changes present, none unmerged");
+  return extras;
+}
 function okLine({ input, head, base }) {
-  const extras = [input.head && "HEAD is the expected commit", input.retained && "retained changes present, none unmerged"].filter(Boolean);
-  return { ok: true, line: `sync-check: ok (${short(base)} is an ancestor of HEAD ${short(head)}${extras.map((extra) => `; ${extra}`).join("")})` };
+  const detail = [`${short(base)} is an ancestor of HEAD ${short(head)}`, ...okExtras(input)].join("; ");
+  return { ok: true, line: `sync-check: ok (${detail})` };
 }
 function syncCheck(input) {
   const facts = gatherFacts(input);
@@ -100,5 +121,8 @@ function syncCheck(input) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
-  syncCheck
+  SYNC_CHECK_RESULT,
+  retainedSyncCheckStep,
+  syncCheck,
+  syncCheckCommand
 });

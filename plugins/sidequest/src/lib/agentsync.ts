@@ -61,6 +61,7 @@ const { compileContextProjection } = require('./context-packet.js');
 const { canonicalPreparedDispatchExecutor } = require('./prepared-dispatch.js');
 const { verificationRequirement } = require('./kernel/verification.js');
 const { scopeKey } = require('./scope-match.js');
+const { SYNC_CHECK_RESULT, syncCheckCommand, retainedSyncCheckStep } = require('./sync-check.js');
 
 type SyncOptions = { dir?: string; readOnlyDeniedTools?: any };
 type SyncResult = { written: number; removed: number; unchanged: number };
@@ -586,17 +587,8 @@ function ticketContinuationPacket(ticket?: any) {
   return `Continuation fallback: the previous released worktree was not carried (${String(fallback.reason).replace(/_/g, ' ')}). This dispatch uses a fresh worktree.${fallback.sourceWorktree ? ` Previous worktree: ${fallback.sourceWorktree}.` : ''}${evidence}${replay}`.trim();
 }
 
-// The sync check reports through its output line and exit code, never through a trailing `echo $?`, which an
-// isolated worktree's Bash guard refuses as a compound command it cannot prove stays in the worktree (GH-422).
-const SYNC_CHECK_RESULT = 'It prints one line and exits 0 for `sync-check: ok (...)` or 1 for `sync-check: FAILED <reason> (...)`; run it on its own and read that line, because no `; echo $?` is needed.';
-
-function syncCheckRun(commit: string, flags = ''): string {
-  return `\`node ${quotedShellArgument(dispatchLauncherPath())} sync-check ${commit}${flags}\``;
-}
-
-function retainedCandidateStep(commit: string, retainedCommit: string): string {
-  return `run ${syncCheckRun(commit, ` --head ${retainedCommit} --retained`)}. It requires HEAD to be ${retainedCommit} and \`git status --porcelain\` to still list the retained changes with no unmerged entries, and only then tests base ancestry. ${SYNC_CHECK_RESULT} If it reports \`FAILED head-mismatch\`, \`retained-changes-missing\` or \`unmerged\`, stop and report that this checkout is not the retained candidate.`;
-}
+const syncCheckRun = (commit: string, flags = ''): string => syncCheckCommand(quotedShellArgument(dispatchLauncherPath()), commit, flags);
+const retainedCandidateStep = (commit: string, retainedCommit: string): string => retainedSyncCheckStep(quotedShellArgument(dispatchLauncherPath()), commit, retainedCommit);
 
 // Base ancestry passes when the named base is older than the retained one, so the dirty-resume check
 // would leave the retained changes on a base the dispatch explicitly declined (GH-125).

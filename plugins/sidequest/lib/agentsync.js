@@ -13,6 +13,7 @@ const { compileContextProjection } = require("./context-packet.js");
 const { canonicalPreparedDispatchExecutor } = require("./prepared-dispatch.js");
 const { verificationRequirement } = require("./kernel/verification.js");
 const { scopeKey } = require("./scope-match.js");
+const { SYNC_CHECK_RESULT, syncCheckCommand, retainedSyncCheckStep } = require("./sync-check.js");
 const TEMPLATE_PATH = path.join(__dirname, "..", "scripts", "_exec-template.md");
 const LEGACY_MARKER = "<!-- generated-by: sidequest-agentsync -->";
 const MARKER = "<!-- generated-by: sidequest-agentsync gen2 -->";
@@ -401,13 +402,8 @@ function ticketContinuationPacket(ticket) {
   const evidence = cause ? ` Validation evidence: ${cause}.` : "";
   return `Continuation fallback: the previous released worktree was not carried (${String(fallback.reason).replace(/_/g, " ")}). This dispatch uses a fresh worktree.${fallback.sourceWorktree ? ` Previous worktree: ${fallback.sourceWorktree}.` : ""}${evidence}${replay}`.trim();
 }
-const SYNC_CHECK_RESULT = "It prints one line and exits 0 for `sync-check: ok (...)` or 1 for `sync-check: FAILED <reason> (...)`; run it on its own and read that line, because no `; echo $?` is needed.";
-function syncCheckRun(commit, flags = "") {
-  return `\`node ${quotedShellArgument(dispatchLauncherPath())} sync-check ${commit}${flags}\``;
-}
-function retainedCandidateStep(commit, retainedCommit) {
-  return `run ${syncCheckRun(commit, ` --head ${retainedCommit} --retained`)}. It requires HEAD to be ${retainedCommit} and \`git status --porcelain\` to still list the retained changes with no unmerged entries, and only then tests base ancestry. ${SYNC_CHECK_RESULT} If it reports \`FAILED head-mismatch\`, \`retained-changes-missing\` or \`unmerged\`, stop and report that this checkout is not the retained candidate.`;
-}
+const syncCheckRun = (commit, flags = "") => syncCheckCommand(quotedShellArgument(dispatchLauncherPath()), commit, flags);
+const retainedCandidateStep = (commit, retainedCommit) => retainedSyncCheckStep(quotedShellArgument(dispatchLauncherPath()), commit, retainedCommit);
 function explicitBaseMoveSync(continuation, checkpointBase, commit, root, branch) {
   if (!continuation.retainReason || !checkpointBase || checkpointBase === commit) return null;
   return [

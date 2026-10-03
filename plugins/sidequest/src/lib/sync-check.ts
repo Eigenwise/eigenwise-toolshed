@@ -23,6 +23,23 @@ interface SyncFacts {
 // The porcelain codes git reports for a path still in the middle of a merge or rebase.
 const UNMERGED_CODES = new Set(['UU', 'AA', 'DU', 'UD', 'AU', 'UA', 'DD']);
 
+// The briefing reads the check through its output line and exit code, never through a trailing `echo $?`, which
+// an isolated worktree's Bash guard refuses as a compound command it cannot prove stays in the worktree (GH-422).
+export const SYNC_CHECK_RESULT = 'It prints one line and exits 0 for `sync-check: ok (...)` or 1 for `sync-check: FAILED <reason> (...)`; run it on its own and read that line, because no `; echo $?` is needed.';
+
+export function syncCheckCommand(quotedLauncher: string, commit: string, flags = ''): string {
+  return '`' + ['node', quotedLauncher, 'sync-check', commit + flags].join(' ') + '`';
+}
+
+export function retainedSyncCheckStep(quotedLauncher: string, commit: string, retainedCommit: string): string {
+  return [
+    'run ' + syncCheckCommand(quotedLauncher, commit, ' --head ' + retainedCommit + ' --retained') + '.',
+    'It requires HEAD to be ' + retainedCommit + ' and `git status --porcelain` to still list the retained changes with no unmerged entries, and only then tests base ancestry.',
+    SYNC_CHECK_RESULT,
+    'If it reports `FAILED head-mismatch`, `retained-changes-missing` or `unmerged`, stop and report that this checkout is not the retained candidate.',
+  ].join(' ');
+}
+
 const short = (sha: string) => sha.slice(0, 7);
 const failed = (reason: string, detail: string): SyncCheckResult => ({ ok: false, line: `sync-check: FAILED ${reason} (${detail})` });
 
@@ -87,9 +104,16 @@ function gatherFacts(input: SyncCheckInput): SyncFacts | SyncCheckResult {
   return base ? { input, cwd, head, base } : failed('unknown-revision', `${input.commit} is not a commit in ${cwd}`);
 }
 
+function okExtras(input: SyncCheckInput): string[] {
+  const extras: string[] = [];
+  if (input.head) extras.push('HEAD is the expected commit');
+  if (input.retained) extras.push('retained changes present, none unmerged');
+  return extras;
+}
+
 function okLine({ input, head, base }: SyncFacts): SyncCheckResult {
-  const extras = [input.head && 'HEAD is the expected commit', input.retained && 'retained changes present, none unmerged'].filter(Boolean);
-  return { ok: true, line: `sync-check: ok (${short(base)} is an ancestor of HEAD ${short(head)}${extras.map((extra) => `; ${extra}`).join('')})` };
+  const detail = [`${short(base)} is an ancestor of HEAD ${short(head)}`, ...okExtras(input)].join('; ');
+  return { ok: true, line: `sync-check: ok (${detail})` };
 }
 
 export function syncCheck(input: SyncCheckInput): SyncCheckResult {
