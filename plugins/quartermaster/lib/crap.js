@@ -418,7 +418,7 @@ function unmeasuredLizardFiles(projectDir, sources, entries, changed, exclude) {
   return sources.flatMap((source) => sourceFiles(path.resolve(projectDir, source)))
     .filter((file) => changed.has(displayPath(projectDir, file)))
     .filter((file) => !isExcluded(file))
-    .filter((file) => functionTokenCount(fs.readFileSync(file, 'utf8')) && !measured.has(comparablePath(projectDir, file)))
+    .filter((file) => functionTokenCount(fs.readFileSync(file, 'utf8'), file) && !measured.has(comparablePath(projectDir, file)))
     .map((file) => displayPath(projectDir, file));
 }
 

@@ -42,10 +42,6 @@ function crapScore(complexity, coverage) {
   return complexity ** 2 * (1 - coverage) ** 3 + complexity;
 }
 
-function functionTokenCount(text) {
-  return text.match(/\bfunction\b|=>|\b[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{/g)?.length ?? 0;
-}
-
 const SCRIPT_SOURCE = /\.[cm]?[jt]sx?$/i;
 const OPENERS = new Set(['(', '[', '{']);
 const OPENER_FOR = new Map([[')', '('], [']', '['], ['}', '{']]);
@@ -182,6 +178,30 @@ function scriptTokens(text) {
 
 function tokenAt(tokens, index) {
   return tokens[index] || NO_TOKEN;
+}
+
+const FUNCTION_TOKENS = new Set(['function', '=>']);
+
+/** A word then `(`, the first `)`, then `{`: a declaration or method head, and also `if (x) {`, which this guard over-counts on purpose. */
+function opensBodyAfterWord(tokens, index) {
+  if (tokens[index].kind !== 'word' || tokenAt(tokens, index + 1).value !== '(') return false;
+  const close = tokens.findIndex((token, position) => position > index + 1 && token.value === ')');
+  return close >= 0 && tokenAt(tokens, close + 1).value === '{';
+}
+
+/** Languages the JavaScript-family scan cannot read keep the raw-text count, which can only over-count. */
+function rawFunctionTokenCount(text) {
+  return text.match(/\bfunction\b|=>|\b[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{/g)?.length ?? 0;
+}
+
+/**
+ * Function-like tokens in code. Comments and string or template text leave no token, so only a real
+ * `function`, `=>` or `name(...) {` counts; a template's `${...}` expression is code and still counts.
+ */
+function functionTokenCount(text, file) {
+  if (file !== undefined && !SCRIPT_SOURCE.test(file)) return rawFunctionTokenCount(text);
+  const tokens = scriptTokens(text);
+  return tokens.filter((token, index) => FUNCTION_TOKENS.has(token.value) || opensBodyAfterWord(tokens, index)).length;
 }
 
 /** The group depth after `value`, or -1 when it closes a group of another kind, which means this scan misread the source. */
