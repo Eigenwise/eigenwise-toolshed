@@ -65,8 +65,8 @@ test('a saved value beats CODEX_GATEWAY_CONTEXT_WINDOW, which beats the default,
 });
 
 test('context-window updates validate the backend and the token range', () => {
-  assert.deepEqual(contextWindowUpdate('--codex', '272000'), { backend: 'codex', value: 272000 });
-  assert.deepEqual(contextWindowUpdate('--claude', 'full'), { backend: 'claude', value: 'full' });
+  assert.deepEqual(contextWindowUpdate('--codex', '272000'), { backend: 'codex', field: 'window', value: 272000 });
+  assert.deepEqual(contextWindowUpdate('--claude', 'full'), { backend: 'claude', field: 'window', value: 'full' });
   assert.match(contextWindowUpdate('--codex', '184999').error, /from 185000 to 1000000/);
   assert.match(contextWindowUpdate('--claude', '99999').error, /from 100000 to 1000000/);
   assert.match(contextWindowUpdate('codex', '272000').error, /expects --claude, --codex, or --grok/);
@@ -85,7 +85,7 @@ test('the report labels the Codex cap with the 2x rule and names a session-wide 
     grok: { value: 400000, source: 'saved' },
   };
   assert.deepEqual(contextWindowReport(windows, { window: 325000, source: 'settings user' }), [
-    'claude: full (1M through the [1m] alias pins) [default]; autoCompactWindow 325000 from settings user caps this session; compacts near 292000',
+    'claude: full (1M through the [1m] alias pins) [default]; autoCompactWindow 325000 from settings user caps this session; native window 325000; exact compaction trigger unverified (native engine headroom applies)',
     'codex: 272000 cap [default]; compacts past 187000; OpenAI bills input above 272k tokens at 2x; the cap keeps every request, including compaction, under it',
     'grok: 400000 cap [saved]; compacts past 315000',
   ]);
@@ -94,7 +94,7 @@ test('the report labels the Codex cap with the 2x rule and names a session-wide 
     codex: { value: 'full', source: 'saved' },
     grok: { value: 'full', source: 'default' },
   }, null);
-  assert.equal(claude, 'claude: 500000 (autoCompactWindow in project-wired settings) [saved]; compacts near 467000');
+  assert.equal(claude, 'claude: 500000 (autoCompactWindow in project-wired settings) [saved]; native window 500000; exact compaction trigger unverified (native engine headroom applies)');
   assert.equal(codex, "codex: full (each model's backend window, compacting 40000 below it) [saved]; OpenAI bills input above 272k tokens at 2x; requests past 272k pay double");
   assert.equal(grok, "grok: full (each model's backend window, compacting 40000 below it) [default]");
 });
@@ -157,7 +157,7 @@ test('context-window writes a Claude cap into project-wired settings and refuses
 
   const shown = run('context-window');
   assert.equal(shown.status, 0);
-  assert.match(shown.stdout, /context window claude: 500000 \(autoCompactWindow in project-wired settings\) \[saved\]; compacts near 467000/);
+  assert.match(shown.stdout, /context window claude: 500000 \(autoCompactWindow in project-wired settings\) \[saved\]; native window 500000; exact compaction trigger unverified \(native engine headroom applies\)/);
 
   const laterProject = temporaryDirectory(t, 'model-gateway-context-later-');
   const runLater = (...args) => spawnGatewayProcessSync(process.execPath, [CLI, ...args], { cwd: laterProject, env, isolatedOverrides, encoding: 'utf8' });
@@ -203,4 +203,96 @@ test('a saved Codex cap reaches the shim\'s advertised max_input_tokens without 
     { id: 'claude-gpt-5.6-sol[1m]', max_input_tokens: 300000 },
     { id: 'claude-gpt-6-astra[1m]', max_input_tokens: 300000 },
   ]);
+});
+
+test('explicit context-window compact-at wins over legacy env without subtracting the reserve', () => {
+  const policy = runtime.resolveGatewayModelPolicy('claude-gpt-6.1-sol[1m]');
+  assert.equal(runtime.gatewayCompactTrigger(272000, 242000), 242000);
+  assert.equal(runtime.gatewayCompactTrigger(272000, null), 187000);
+  assert.equal(runtime.gatewayCompactTrigger(null, null), null);
+  assert.deepEqual(effectiveSentryPolicy(policy, 320000, 272000, 242000), { backendWindow: 920012, compactTrigger: 242000, source: 'compact-at' });
+  assert.deepEqual(effectiveSentryPolicy(policy, 320000, 272000, null), { backendWindow: 920012, compactTrigger: 187000, source: 'cap' });
+  assert.deepEqual(effectiveSentryPolicy(policy, 1, 272000, 300000), { backendWindow: 920012, compactTrigger: 272000, source: 'compact-at' });
+  assert.deepEqual(effectiveSentryPolicy(policy, 320000, null, 900000), { backendWindow: 920012, compactTrigger: 880012, source: 'derived' });
+  assert.deepEqual(effectiveSentryPolicy(runtime.resolveGatewayModelPolicy('claude-grok-4.5[1m]'), 1, null, 900000), { backendWindow: 500000, compactTrigger: 460000, source: 'derived' });
+});
+
+test('context-window compact-at validates positive whole counts and rejects unsupported Claude fields', (t) => {
+  assert.deepEqual(contextWindowUpdate('--codex-compact-at', '242000'), { backend: 'codex', field: 'compactAt', value: 242000 });
+  assert.deepEqual(contextWindowUpdate('--grok-compact-at', '1'), { backend: 'grok', field: 'compactAt', value: 1 });
+  assert.deepEqual(contextWindowUpdate('--codex-compact-at', 'cap'), { backend: 'codex', field: 'compactAt', value: null });
+  assert.match(contextWindowUpdate('--claude-compact-at', '242000').error, /unsupported compactAt.claude/);
+  assert.match(contextWindowUpdate('--codex-compact-at', '0').error, /positive whole token count/);
+  assert.match(contextWindowUpdate('--codex-compact-at', '-1').error, /positive whole token count/);
+  assert.match(contextWindowUpdate('--codex-compact-at', '1.5').error, /positive whole token count/);
+  assert.match(contextWindowUpdate('--codex-compact-at', 'Infinity').error, /positive whole token count/);
+  assert.match(contextWindowUpdate('--codex-compact-at', 'NaN').error, /positive whole token count/);
+  assert.match(contextWindowUpdate('--codex-compact-at', undefined).error, /positive whole token count/);
+  assert.equal(runtime.parseCompactAtValue(true), null);
+  const file = path.join(temporaryDirectory(t, 'model-gateway-invalid-compact-at-'), 'nested', 'context-window.json');
+  assert.throws(() => runtime.writeContextWindowSettings({ compactAt: { claude: 242000 } }, file), /unsupported compactAt.claude/);
+  assert.throws(() => runtime.writeContextWindowSettings({ compactAt: { codex: 0 } }, file), /invalid compactAt.codex/);
+  assert.throws(() => runtime.writeContextWindowSettings({ compactAt: { codex: '242000' } }, file), /invalid compactAt.codex/);
+  assert.throws(() => runtime.writeContextWindowSettings({ compactAt: { codex: null } }, file), /invalid compactAt.codex/);
+  assert.equal(fs.existsSync(path.dirname(file)), false);
+});
+
+test('context-window preserves saved compact-at across cap updates and removal restores legacy policy', (t) => {
+  const home = temporaryDirectory(t, 'model-gateway-explicit-context-home-');
+  const project = temporaryDirectory(t, 'model-gateway-explicit-context-project-');
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  const isolatedOverrides = { CODEX_GATEWAY_COMPACT_TRIGGER: '320000' };
+  const run = (...arguments_) => spawnGatewayProcessSync(process.execPath, [CLI, ...arguments_], { cwd: project, env, isolatedOverrides, encoding: 'utf8', timeout: 15000 });
+  const file = path.join(home, '.claude', 'model-gateway', 'context-window.json');
+  const saved = run('context-window', '--codex-compact-at', '242000', '--grok-compact-at', '900000');
+  assert.equal(saved.status, 0, saved.stderr);
+  assert.match(saved.stdout, /codex: 272000 cap \[default\]; requested compact-at 242000; backend window 920000; effective maximum 242000 \(compact-at\)/);
+  assert.match(saved.stdout, /grok: full.*requested compact-at 900000; backend window 500000; effective maximum 460000 \(derived\)/);
+  assert.match(saved.stdout, /CODEX_GATEWAY_COMPACT_TRIGGER=320000 ignored: compact-at is saved/);
+  assert.match(saved.stdout, /crossing turn and compaction request can still exceed 272k and pay double/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { compactAt: { codex: 242000, grok: 900000 } });
+  assert.deepEqual(runtime.readContextWindowSettings({ file, env: {} }).codex, { value: 272000, source: 'default', compactAt: 242000 });
+  const updated = run('context-window', '--codex', '300000');
+  assert.equal(updated.status, 0, updated.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { codex: 300000, compactAt: { codex: 242000, grok: 900000 } });
+  const before = fs.readFileSync(file, 'utf8');
+  assert.equal(run('context-window', '--codex', '400000', '--grok-compact-at', '1.5').status, 2);
+  assert.equal(run('context-window', '--claude-compact-at', '242000').status, 2);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  const removed = run('context-window', '--codex-compact-at', 'cap');
+  assert.equal(removed.status, 0, removed.stderr);
+  assert.match(removed.stdout, /codex: 300000 cap \[saved\]; compacts past 215000/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { codex: 300000, compactAt: { grok: 900000 } });
+  assert.equal(run('context-window', '--grok-compact-at', 'cap').status, 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { codex: 300000 });
+});
+
+test('startup context-window compact-at reaches the real catalog and sentry with honest effective limits', (t) => {
+  const home = temporaryDirectory(t, 'model-gateway-explicit-catalog-');
+  const file = path.join(home, '.claude', 'model-gateway', 'context-window.json');
+  runtime.writeContextWindowSettings({ codex: 272000, compactAt: { codex: 242000, grok: 900000 } }, file);
+  const script = `
+    const runtime = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'runtime.js'))});
+    const worker = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'request-worker.js'))});
+    const commands = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'commands.js'))});
+    process.stdout.write(JSON.stringify({
+      trigger: runtime.contextWindowCompactAt('codex'),
+      sentry: worker.effectiveSentryPolicy(runtime.resolveGatewayModelPolicy('claude-gpt-6.1-sol[1m]')),
+      catalog: commands.buildCatalog(['claude-gpt-6.1-sol[1m]', 'claude-grok-4.5[1m]']).models,
+      environment: process.env.CODEX_GATEWAY_COMPACT_TRIGGER,
+    }));
+  `;
+  const child = spawnGatewayProcessSync(process.execPath, ['-e', script], { env: { ...process.env, HOME: home, USERPROFILE: home }, isolatedOverrides: { CODEX_GATEWAY_COMPACT_TRIGGER: '320000' }, encoding: 'utf8', timeout: 15000 });
+  assert.equal(child.status, 0, child.stderr);
+  const result = JSON.parse(child.stdout);
+  assert.equal(result.trigger, 242000);
+  assert.deepEqual(result.sentry, { backendWindow: 920012, compactTrigger: 242000, source: 'compact-at' });
+  assert.equal(result.environment, '320000');
+  assert.equal(result.catalog[0].contextWindow, 272000);
+  assert.match(result.catalog[0].contextWindowNote, /requested compact-at 242000; backend window 920012; effective maximum 242000 \(compact-at\)/);
+  assert.match(result.catalog[0].contextWindowNote, /320000 ignored/);
+  assert.match(result.catalog[0].contextWindowNote, /can still exceed 272k/);
+  assert.match(result.catalog[1].contextWindowNote, /effective maximum 460000 \(derived\)/);
+  fs.writeFileSync(file, JSON.stringify({ compactAt: { claude: 242000 } }));
+  assert.throws(() => runtime.readContextWindowSettings({ file, env: {} }), /unsupported compactAt.claude/);
 });

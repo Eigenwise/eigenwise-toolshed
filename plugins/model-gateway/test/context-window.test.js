@@ -1607,7 +1607,7 @@ test('doctor describes project-local wiring as the default', () => {
       encoding: 'utf8',
     });
     assert.match(result.stdout, /wiring: effective none/);
-    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 272000 \| 1000000 \| 967000 \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 272000 \| 1000000 \| unverified \(native engine headroom\) \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
     assert.match(result.stdout, /default wiring target: this project's \.claude\/settings\.local\.json/);
     // Fresh HOME means an empty detected-pin cache, so this value is the shipped constant rather than
@@ -1655,9 +1655,9 @@ test('doctor reports the 1M Codex resolver aliases and a lower explicit cap', ()
       encoding: 'utf8',
     });
     assert.match(result.stdout, /model window policy: auto-compact cap 325000 \(settings project-local\)/);
-    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol\[1m\] \| 920012 \| 272000 \| 1000000 \| 292000 \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
-    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 272000 \| 1000000 \| 292000 \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
-    assert.match(result.stdout, /context window claude: full \(1M through the \[1m\] alias pins\) \[default\]; autoCompactWindow 325000 from settings project-local caps this session; compacts near 292000/);
+    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol\[1m\] \| 920012 \| 272000 \| 1000000 \| unverified \(native engine headroom\) \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 272000 \| 1000000 \| unverified \(native engine headroom\) \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
+    assert.match(result.stdout, /context window claude: full \(1M through the \[1m\] alias pins\) \[default\]; autoCompactWindow 325000 from settings project-local caps this session; native window 325000; exact compaction trigger unverified \(native engine headroom applies\)/);
     assert.match(result.stdout, /context window codex: 272000 cap \[default\]; compacts past 187000; OpenAI bills input above 272k tokens at 2x; the cap keeps every request, including compaction, under it/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
   } finally {
@@ -1685,7 +1685,7 @@ test('doctor warns when the configured Codex window resolves to the unknown-mode
       isolatedOverrides,
       encoding: 'utf8',
     });
-    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol \| 920012 \| 200000 \| 200000 \| 167000 \| synthetic-413 \| 115000 \(cap\) \| 2026-09-05/);
+    assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol \| 920012 \| 200000 \| 200000 \| unverified \(native engine headroom\) \| synthetic-413 \| 115000 \(cap\) \| 2026-09-05/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
