@@ -2668,6 +2668,31 @@ test('worktrees sweep --all-projects walks every registered project in slug orde
 });
 
 
+// The sweep deletes a moved tree only after reading it again, so a read that fails must block the
+// removal instead of passing as an empty tree (SQ-2958).
+test('the late read of a moved tree blocks removal when the tree or its HEAD cannot be read', async () => {
+  const { repository } = repositoryFixture();
+  const recorded = { links: [], copies: [] };
+  try {
+    const unreadable = await worktrees.lateContentInMovedWorktree(path.join(repository, 'missing-tree'), null, recorded, null, repository);
+    assert.match(unreadable.blocked, /^the moved tree could not be read again: .+/);
+    assert.equal(unreadable.head, null);
+
+    const moved = await worktrees.lateContentInMovedWorktree(repository, 'not-the-classified-head', recorded, null, repository);
+    assert.match(moved.blocked, /^the moved tree is at [0-9a-f]+, not the classified not-the/);
+
+    const head = git(repository, ['rev-parse', 'HEAD']);
+    const unborn = await worktrees.lateContentInMovedWorktree(repository, head, recorded, 'no-such-branch', repository);
+    assert.match(unborn.blocked, /^the moved tree's branch no-such-branch could not be read again: .+/);
+
+    const settled = await worktrees.lateContentInMovedWorktree(repository, head, recorded, 'main', repository);
+    assert.equal(settled.blocked, null);
+    assert.equal(settled.branchTip, head);
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test('worktrees status prints the storage summary as text and as JSON', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktrees-status-'));
   const previousHome = String(process.env.SIDEQUEST_HOME);

@@ -967,34 +967,6 @@ function closedTreeHeldEntries(stdout, destination, recorded, vacatedSource = nu
   const atRisk = closedTreeAtRiskEntries(stdout, recorded);
   return atRisk.length ? atRisk : closedTreeEscapingEntries(destination, stdout, recorded, vacatedSource);
 }
-function gitFailureText(result, command) {
-  return result.stderr || `${command} exited ${result.status}`;
-}
-async function lateContentInMovedWorktree(destination, classifiedHead, recorded, branch, vacatedSource, heldEntries = atRiskStatusEntries) {
-  const status = await git(destination, [...AT_RISK_STATUS_ARGUMENTS]);
-  if (!status.ok) return blockedMovedRead(`the moved tree could not be read again: ${gitFailureText(status, "git status")}`);
-  const held = heldEntries(status.stdout, destination, recorded, vacatedSource);
-  if (held.length) return blockedMovedRead(`the moved tree holds ${held.length} entries the classification did not see, starting with ${held[0].code} ${held[0].path}`);
-  return movedTreeHeadAndTip(destination, classifiedHead, branch);
-}
-function blockedMovedRead(blocked) {
-  return { blocked, head: null, branchTip: null };
-}
-function movedTreeHeldEntriesRule(classifiedReason) {
-  return classifiedReason === "ticket_closed_settled" ? closedTreeHeldEntries : atRiskStatusEntries;
-}
-async function movedTreeHeadAndTip(destination, classifiedHead, branch) {
-  const head = await git(destination, ["rev-parse", "HEAD"]);
-  if (!head.ok) return blockedMovedRead(`the moved tree's HEAD could not be read again: ${gitFailureText(head, "git rev-parse")}`);
-  if (classifiedHead && head.stdout !== classifiedHead) return blockedMovedRead(`the moved tree is at ${shortCommit(head.stdout)}, not the classified ${shortCommit(classifiedHead)}`);
-  return movedTreeBranchTip(destination, head.stdout, branch);
-}
-async function movedTreeBranchTip(destination, head, branch) {
-  if (!branch) return { blocked: null, head, branchTip: null };
-  const tip = await git(destination, ["rev-parse", "--verify", `refs/heads/${branch}`]);
-  if (!tip.ok) return blockedMovedRead(`the moved tree's branch ${branch} could not be read again: ${gitFailureText(tip, "git rev-parse")}`);
-  return { blocked: null, head, branchTip: tip.stdout };
-}
 function closedTreeIgnoredPaths(stdout, recorded) {
   return [...new Set(parseWorktreeStatus(stdout).filter((entry) => ignoredEntryJudgedByPath(entry, recorded)).flatMap((entry) => pathPrefixes(entry.path)))];
 }
@@ -1932,6 +1904,34 @@ function sweepProgress(entries, removed, status) {
     keptByReason
   };
 }
+function gitFailureText(result, command) {
+  return result.stderr || `${command} exited ${result.status}`;
+}
+async function lateContentInMovedWorktree(destination, classifiedHead, recorded, branch, vacatedSource, heldEntries = atRiskStatusEntries) {
+  const status = await git(destination, [...AT_RISK_STATUS_ARGUMENTS]);
+  if (!status.ok) return blockedMovedRead(`the moved tree could not be read again: ${gitFailureText(status, "git status")}`);
+  const held = heldEntries(status.stdout, destination, recorded, vacatedSource);
+  if (held.length) return blockedMovedRead(`the moved tree holds ${held.length} entries the classification did not see, starting with ${held[0].code} ${held[0].path}`);
+  return movedTreeHeadAndTip(destination, classifiedHead, branch);
+}
+function blockedMovedRead(blocked) {
+  return { blocked, head: null, branchTip: null };
+}
+function movedTreeHeldEntriesRule(classifiedReason) {
+  return classifiedReason === "ticket_closed_settled" ? closedTreeHeldEntries : atRiskStatusEntries;
+}
+async function movedTreeBranchTip(destination, head, branch) {
+  if (!branch) return { blocked: null, head, branchTip: null };
+  const tip = await git(destination, ["rev-parse", "--verify", `refs/heads/${branch}`]);
+  if (!tip.ok) return blockedMovedRead(`the moved tree's branch ${branch} could not be read again: ${gitFailureText(tip, "git rev-parse")}`);
+  return { blocked: null, head, branchTip: tip.stdout };
+}
+async function movedTreeHeadAndTip(destination, classifiedHead, branch) {
+  const head = await git(destination, ["rev-parse", "HEAD"]);
+  if (!head.ok) return blockedMovedRead(`the moved tree's HEAD could not be read again: ${head.stderr || `git rev-parse exited ${head.status}`}`);
+  if (classifiedHead && head.stdout !== classifiedHead) return blockedMovedRead(`the moved tree is at ${shortCommit(head.stdout)}, not the classified ${shortCommit(classifiedHead)}`);
+  return movedTreeBranchTip(destination, head.stdout, branch);
+}
 function reportSweepProgress(options, entries, removed, status) {
   if (typeof options.onProgress === "function") options.onProgress(sweepProgress(entries, removed, status));
 }
@@ -2220,4 +2220,4 @@ async function sweep(repo, tickets, options = {}) {
     failures
   };
 }
-module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, classifySweepCandidate, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks };
+module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, classifySweepCandidate, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks, lateContentInMovedWorktree };

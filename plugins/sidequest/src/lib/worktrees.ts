@@ -1351,58 +1351,6 @@ function closedTreeHeldEntries(stdout: string, destination: string, recorded: Re
   return atRisk.length ? atRisk : closedTreeEscapingEntries(destination, stdout, recorded, vacatedSource);
 }
 
-function gitFailureText(result: GitResult, command: string): string {
-  return result.stderr || `${command} exited ${result.status}`;
-}
-
-// The classification snapshot is already stale by the time the sweep acts on it: the reviewer
-// committed a gitignored nested repository from the progress callback and the tree was deleted with
-// its only commit (SQ-2958). So the moved tree is read again at the quarantine destination, where
-// its .git file still names its gitdir by absolute path — `git worktree prune` is what breaks that
-// read, which is why it runs last.
-// `heldEntries` is the rule the tree was classified by (closedTreeHeldEntries for ticket_closed_settled).
-async function lateContentInMovedWorktree(
-  destination: string,
-  classifiedHead: string | null,
-  recorded: RecordedDependencyPaths,
-  branch: string | null,
-  vacatedSource: string,
-  heldEntries: typeof atRiskStatusEntries = atRiskStatusEntries,
-): Promise<MovedTreeRead> {
-  const status = await git(destination, [...AT_RISK_STATUS_ARGUMENTS]);
-  if (!status.ok) return blockedMovedRead(`the moved tree could not be read again: ${gitFailureText(status, 'git status')}`);
-  const held = heldEntries(status.stdout, destination, recorded, vacatedSource);
-  if (held.length) return blockedMovedRead(`the moved tree holds ${held.length} entries the classification did not see, starting with ${held[0]!.code} ${held[0]!.path}`);
-  return movedTreeHeadAndTip(destination, classifiedHead, branch);
-}
-
-interface MovedTreeRead { blocked: string | null; head: string | null; branchTip: string | null }
-
-function blockedMovedRead(blocked: string): MovedTreeRead {
-  return { blocked, head: null, branchTip: null };
-}
-
-function movedTreeHeldEntriesRule(classifiedReason: string): typeof atRiskStatusEntries {
-  return classifiedReason === 'ticket_closed_settled' ? closedTreeHeldEntries : atRiskStatusEntries;
-}
-
-async function movedTreeHeadAndTip(destination: string, classifiedHead: string | null, branch: string | null): Promise<MovedTreeRead> {
-  const head = await git(destination, ['rev-parse', 'HEAD']);
-  if (!head.ok) return blockedMovedRead(`the moved tree's HEAD could not be read again: ${gitFailureText(head, 'git rev-parse')}`);
-  if (classifiedHead && head.stdout !== classifiedHead) return blockedMovedRead(`the moved tree is at ${shortCommit(head.stdout)}, not the classified ${shortCommit(classifiedHead)}`);
-  return movedTreeBranchTip(destination, head.stdout, branch);
-}
-
-async function movedTreeBranchTip(destination: string, head: string, branch: string | null): Promise<MovedTreeRead> {
-  if (!branch) return { blocked: null, head, branchTip: null };
-  // Deleting the moved copy's files can never be atomic, but losing a commit can be avoided: the tip
-  // read here is the old value the branch delete compares against, so a writer that follows the tree
-  // into quarantine and commits after this read moves the ref and keeps its branch (SQ-2962).
-  const tip = await git(destination, ['rev-parse', '--verify', `refs/heads/${branch}`]);
-  if (!tip.ok) return blockedMovedRead(`the moved tree's branch ${branch} could not be read again: ${gitFailureText(tip, 'git rev-parse')}`);
-  return { blocked: null, head, branchTip: tip.stdout };
-}
-
 function closedTreeIgnoredPaths(stdout: string, recorded: RecordedDependencyPaths): string[] {
   return [...new Set(parseWorktreeStatus(stdout)
     .filter((entry) => ignoredEntryJudgedByPath(entry, recorded))
@@ -2591,6 +2539,60 @@ function sweepProgress(entries: readonly SweepProgressEntry[], removed: readonly
   };
 }
 
+// lizard drops the function that follows a nested template literal, so the moved-tree reads avoid one
+// wherever a measured function follows.
+function gitFailureText(result: GitResult, command: string): string {
+  return result.stderr || `${command} exited ${result.status}`;
+}
+
+// The classification snapshot is already stale by the time the sweep acts on it: the reviewer
+// committed a gitignored nested repository from the progress callback and the tree was deleted with
+// its only commit (SQ-2958). So the moved tree is read again at the quarantine destination, where
+// its .git file still names its gitdir by absolute path — `git worktree prune` is what breaks that
+// read, which is why it runs last.
+// `heldEntries` is the rule the tree was classified by (closedTreeHeldEntries for ticket_closed_settled).
+async function lateContentInMovedWorktree(
+  destination: string,
+  classifiedHead: string | null,
+  recorded: RecordedDependencyPaths,
+  branch: string | null,
+  vacatedSource: string,
+  heldEntries: typeof atRiskStatusEntries = atRiskStatusEntries,
+): Promise<MovedTreeRead> {
+  const status = await git(destination, [...AT_RISK_STATUS_ARGUMENTS]);
+  if (!status.ok) return blockedMovedRead(`the moved tree could not be read again: ${gitFailureText(status, 'git status')}`);
+  const held = heldEntries(status.stdout, destination, recorded, vacatedSource);
+  if (held.length) return blockedMovedRead(`the moved tree holds ${held.length} entries the classification did not see, starting with ${held[0]!.code} ${held[0]!.path}`);
+  return movedTreeHeadAndTip(destination, classifiedHead, branch);
+}
+
+interface MovedTreeRead { blocked: string | null; head: string | null; branchTip: string | null }
+
+function blockedMovedRead(blocked: string): MovedTreeRead {
+  return { blocked, head: null, branchTip: null };
+}
+
+function movedTreeHeldEntriesRule(classifiedReason: string): typeof atRiskStatusEntries {
+  return classifiedReason === 'ticket_closed_settled' ? closedTreeHeldEntries : atRiskStatusEntries;
+}
+
+async function movedTreeBranchTip(destination: string, head: string, branch: string | null): Promise<MovedTreeRead> {
+  if (!branch) return { blocked: null, head, branchTip: null };
+  // Deleting the moved copy's files can never be atomic, but losing a commit can be avoided: the tip
+  // read here is the old value the branch delete compares against, so a writer that follows the tree
+  // into quarantine and commits after this read moves the ref and keeps its branch (SQ-2962).
+  const tip = await git(destination, ['rev-parse', '--verify', `refs/heads/${branch}`]);
+  if (!tip.ok) return blockedMovedRead(`the moved tree's branch ${branch} could not be read again: ${gitFailureText(tip, 'git rev-parse')}`);
+  return { blocked: null, head, branchTip: tip.stdout };
+}
+
+async function movedTreeHeadAndTip(destination: string, classifiedHead: string | null, branch: string | null): Promise<MovedTreeRead> {
+  const head = await git(destination, ['rev-parse', 'HEAD']);
+  if (!head.ok) return blockedMovedRead(`the moved tree's HEAD could not be read again: ${head.stderr || `git rev-parse exited ${head.status}`}`);
+  if (classifiedHead && head.stdout !== classifiedHead) return blockedMovedRead(`the moved tree is at ${shortCommit(head.stdout)}, not the classified ${shortCommit(classifiedHead)}`);
+  return movedTreeBranchTip(destination, head.stdout, branch);
+}
+
 function reportSweepProgress(options: SweepProgressOptions, entries: readonly SweepProgressEntry[], removed: readonly string[], status: SweepProgressStatus): void {
   if (typeof options.onProgress === 'function') options.onProgress(sweepProgress(entries, removed, status));
 }
@@ -2939,4 +2941,4 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   };
 }
 
-module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, classifySweepCandidate, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks };
+module.exports = { WORKTREE_SWEEP_CLASSIFICATION_ORDER, retainedBranchExplanation, retainedWorktreeResumeDecision, DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, DEFAULT_RECOVERY_RETENTION_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, copyDependencyPath, provisionGateDependencies, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, classifySweepCandidate, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, quarantineCandidate, storageStatus, sweep, dependencyLinkSafety, releaseQuarantinedDependencyLinks, lateContentInMovedWorktree };
