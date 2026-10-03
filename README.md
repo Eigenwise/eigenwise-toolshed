@@ -87,7 +87,7 @@ Toolshed plugins run inside Claude Code and use its plugin marketplace, plugin s
 
 ## Support
 
-If these tools save you time, optional support is available through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise).
+Toolshed's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use a plugin. Claude and configured model providers may have their own usage costs.
 
 ## License
 

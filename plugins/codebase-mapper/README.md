@@ -53,7 +53,7 @@ The hooks and scripts make no network requests to an Eigenwise service. Your ass
 
 ## Support
 
-Optional support is welcome through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise).
+Codebase Mapper's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use the plugin. Claude and configured model providers may have their own usage costs.
 
 ## License
 
