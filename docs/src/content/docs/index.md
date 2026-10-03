@@ -10,6 +10,7 @@ template: splash
   <div class="hero-links">
     <a href="./getting-started/">Get started</a>
     <a href="./getting-started/quartermaster/">Start with Quartermaster</a>
+    <a href="./getting-started/codebase-mapper/">Start with Codebase Mapper</a>
     <a href="./reference/">Browse the reference</a>
   </div>
 </section>
