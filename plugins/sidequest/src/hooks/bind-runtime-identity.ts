@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readStdin, stringField, isRecord, type HookInput } from './shared/input.js';
 import { runtimeModule } from './shared/paths.js';
-import { writeDeny } from './shared/output.js';
+import { writeDeny, writeToolUpdate } from './shared/output.js';
 import {
   bindObservedRuntimeIdentity,
   enclosingCheckout,
@@ -120,11 +120,44 @@ function rebindObservedCheckout(input: HookInput, agentId: string, executor: str
   bindObservedRuntimeIdentity(input, agentId, executor, checkoutRoot);
 }
 
+// The MCP server shares one runtime session id across every subagent, so it cannot tell an executor from the
+// orchestrator. Only this hook sees agent_id, so a subagent that omits `by` on rework gets the owner label its
+// own dispatch recorded, or a refusal naming the identities in conflict (GH-424). A main-thread call carries no
+// agent_id and falls through to the MCP default, the session id.
+function subagentReworkInput(input: HookInput, agentId: string): Record<string, unknown> | null {
+  const isRework = stringField(input, 'tool_name') === 'mcp__plugin_sidequest_board__rework';
+  if (!agentId || !isRework) return null;
+  return isRecord(input.tool_input) ? input.tool_input : null;
+}
+
+function reworkWithoutBy(input: HookInput, agentId: string): Record<string, unknown> | null {
+  const toolInput = subagentReworkInput(input, agentId);
+  return toolInput && !String(toolInput.by ?? '').trim() ? toolInput : null;
+}
+
+function defaultReworkBy(input: HookInput, agentId: string): boolean {
+  const toolInput = reworkWithoutBy(input, agentId);
+  if (!toolInput) return false;
+  const store = require(runtimeModule('store')) as {
+    dispatchCallerOwners: (identity: unknown) => Array<{ ref: string; by: string }>;
+  };
+  const owners = store.dispatchCallerOwners({ agentId, ref: toolInput.ref });
+  const labels = Array.from(new Set(owners.map((owner) => owner.by)));
+  if (labels.length === 1) {
+    writeToolUpdate({ ...toolInput, by: labels[0] });
+    return true;
+  }
+  const named = labels.length ? `owner labels ${labels.map((label) => `"${label}"`).join(' and ')}` : 'no dispatch with an owner label';
+  writeDeny('PreToolUse', `sidequest: rework omitted by and cannot default it: subagent ${agentId} has ${named}, while the main session id is a different identity. Pass by = the submitter's claim id.`);
+  return true;
+}
+
 function main(): void {
   const input = readStdin();
   if (!input) return;
   const agentId = stringField(input, 'agent_id', 'agentId');
   const executor = stringField(input, 'agent_type', 'agentType', 'subagent_type');
+  if (defaultReworkBy(input, agentId)) return;
   if (bindClaimRuntimeIdentity(input, agentId, executor)) return;
   const checkoutRoot = executorCheckoutRoot(input, agentId, executor);
   if (!checkoutRoot) return;

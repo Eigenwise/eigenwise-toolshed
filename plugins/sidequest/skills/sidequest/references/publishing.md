@@ -369,7 +369,9 @@ is recorded against the already-done ticket; it must not be described as remotel
 - For an **unbound** candidate that a review rejects or otherwise needs its original work redone,
   use `sidequest rework <ref> --by <candidate-owner> --review "<evidence>" --reason "<repair>"`.
   It preserves the candidate and rejection evidence while returning the ticket to `todo` for a
-  normal repair claim. The repair dispatch's briefing carries a "Pending rework" section naming
+  normal repair claim. Review or reason text over the field caps (1000 and 4000 chars) is stored whole as a
+  ticket comment and the field keeps a truncated summary ending in the comment id; it is never refused for
+  length. The MCP `rework` may omit `by` (see invocation-contracts.md). The repair dispatch's briefing carries a "Pending rework" section naming
   the rejected candidate, reason, and review above the comment thread, so do not restate the rework
   as a comment before dispatching.
 - Use `sidequest submit <ref> --clear -s todo` only for an actual integration bounce: delivery

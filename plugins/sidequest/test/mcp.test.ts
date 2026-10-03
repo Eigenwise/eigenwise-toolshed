@@ -421,7 +421,7 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.deepEqual(contextPage.inputSchema.required, ['handle', 'cursor', 'expectedRevision']);
   assert.equal(contextPage.inputSchema.properties.limit.maximum, 70 * 1024);
   const rework = resp.result.tools.find((tool: any) => tool.name === 'rework');
-  assert.deepEqual(rework.inputSchema.required, ['ref', 'by', 'review', 'reason']);
+  assert.deepEqual(rework.inputSchema.required, ['ref', 'review', 'reason']);
   assert.match(rework.description, /repair unbound/);
   assert.match(rework.description, /bound needs oracle/, 'rework advertises the bound-candidate oracle route');
   assert.ok(rework.inputSchema.properties.reviewRef, 'reviewRef stays accepted for compatibility');
@@ -1151,6 +1151,63 @@ test('MCP accepts curated natural aliases and names each accepted mapping', asyn
   });
   assert.deepEqual(added.acceptedAliases, ['accepted priority "medium" as "normal"']);
   assert.equal(store.getTicket(project, added.ref).priority, 'normal');
+});
+
+test('add accepts every ticket field update accepts, built from one schema (GH-424)', async () => {
+  const properties = (name: string) => Object.keys((mcp.toolDescriptors() as any[]).find((tool) => tool.name === name).inputSchema.properties);
+  // ref, status, and by describe an existing ticket, so they stay update-only; the rest of update must file at creation.
+  const missingOnAdd = properties('update').filter((field) => !['ref', 'status', 'by'].includes(field) && !properties('add').includes(field));
+  assert.deepEqual(missingOnAdd, [], 'a field valid on update must be valid on add');
+
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-add-parity-'))).slug;
+  const added = await callTool('add', {
+    project,
+    title: 'Filed with closeout declarations',
+    unclassified: true,
+    externalDeliverable: true,
+    workingTreeDelivery: true,
+    readonly: false,
+    highStakes: true,
+    contractWaiver: true,
+    anchors: 'plugins/sidequest/src/lib/mcp-tickets.ts',
+    verifyKind: 'manual',
+    verify: 'manual: the filer confirms the added fields',
+    verifyCwd: 'plugins/sidequest',
+  });
+  assert.equal(added.ok, true);
+  const stored = store.getTicket(project, added.ref);
+  assert.equal(stored.externalDeliverable, true);
+  assert.equal(stored.workingTreeDelivery, true);
+  assert.equal(stored.highStakes, true);
+  assert.equal(stored.contractWaiver, true);
+  assert.equal(stored.executorAnchors, 'plugins/sidequest/src/lib/mcp-tickets.ts');
+  assert.equal(stored.executorVerifyCwd, 'plugins/sidequest');
+  assert.equal(stored.executorVerifyKind, 'manual');
+
+  const needsWhy = await callToolRaw('add', { project, title: 'Score without a reason', complexity: 3 });
+  assert.equal(needsWhy.isError, true);
+  assert.match(needsWhy.content[0].text, /why is required with complexity \(min 20 chars\)\. Pass why: "<why this score fits>", or drop complexity and pass category\./);
+});
+
+test('link accepts dependsOn as the depends-on relation, as an argument or as the verb (GH-424)', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-link-depends-on-'))).slug;
+  const dependent = store.createTicket(project, { title: 'Dependent', source: 'test' });
+  const prerequisite = store.createTicket(project, { title: 'Prerequisite', source: 'test' });
+  const verbForm = store.createTicket(project, { title: 'Verb form dependent', source: 'test' });
+
+  const linked = await callTool('link', { project, from: dependent.ref, dependsOn: prerequisite.ref });
+  assert.equal(linked.ok, true);
+  assert.equal(linked.type, 'blocked-by');
+  assert.equal(linked.to, prerequisite.ref);
+  assert.deepEqual(linked.acceptedAliases, ['accepted dependsOn as verb "depends-on" + to']);
+  assert.ok(store.openBlockers(project, store.getTicket(project, dependent.ref)).includes(prerequisite.ref));
+
+  const asVerb = await callTool('link', { project, from: verbForm.ref, verb: 'dependsOn', to: prerequisite.ref });
+  assert.equal(asVerb.type, 'blocked-by');
+
+  const conflicting = await callToolRaw('link', { project, from: dependent.ref, dependsOn: prerequisite.ref, verb: 'blocks' });
+  assert.equal(conflicting.isError, true);
+  assert.match(conflicting.content[0].text, /dependsOn names the target of a depends-on link/);
 });
 
 test('MCP suggests a unique close argument and preserves unrelated unknown-argument errors', async () => {
