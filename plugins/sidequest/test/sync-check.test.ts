@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-const { syncCheck } = require('../lib/sync-check');
+// Loaded per call so a tree without lib/sync-check.js fails each test on its assertion, not the whole file on import.
+const syncCheck = (input: Record<string, unknown>): { ok: boolean; line: string } => require('../lib/sync-check').syncCheck(input);
 
 const CLI = path.resolve(__dirname, '..', 'bin', 'sidequest.js');
 
