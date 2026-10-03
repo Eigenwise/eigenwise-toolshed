@@ -2128,10 +2128,18 @@ function integrateSingletonArtifactSubmission(slug: string, idOrRef: string, opt
   return admitted.ok ? integrateArtifactSubmission(slug, admitted.ticket, opts) : admitted;
 }
 
+// Test-only fault seam for the fresh target resolution after admission, so a suite can prove the delivery
+// refusal leaves records and refs untouched. It is failure injection, not an observed race.
+function injectedIntegrationTargetFault(): void {
+  if (String(process.env.SIDEQUEST_TEST_INTEGRATION_TARGET_FAULT || '').trim() !== 'second-resolution') return;
+  throw new Error('injected integration target fault at the second resolution');
+}
+
 function integrationTargetRefusal(slug: string, ticket: CompositionTicket, repo: string, opts: { integrationBranch?: string }) {
   let target: { branch?: string } | null | undefined;
   try {
     target = deliveryIntegrationTarget(slug, ticketIntegrationTarget(slug, ticket), opts.integrationBranch);
+    injectedIntegrationTargetFault();
   } catch (error: unknown) {
     return { ok: false, reason: 'integration_target_unavailable', ticket, message: integrationGitError(error) };
   }

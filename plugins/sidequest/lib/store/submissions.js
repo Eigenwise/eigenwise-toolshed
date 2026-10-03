@@ -1747,10 +1747,15 @@ ${verify.outputTail}` : null
     const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true, integrationBranch: opts.integrationBranch });
     return admitted.ok ? integrateArtifactSubmission(slug, admitted.ticket, opts) : admitted;
   }
+  function injectedIntegrationTargetFault() {
+    if (String(process.env.SIDEQUEST_TEST_INTEGRATION_TARGET_FAULT || "").trim() !== "second-resolution") return;
+    throw new Error("injected integration target fault at the second resolution");
+  }
   function integrationTargetRefusal(slug, ticket, repo, opts) {
     let target;
     try {
       target = deliveryIntegrationTarget(slug, ticketIntegrationTarget(slug, ticket), opts.integrationBranch);
+      injectedIntegrationTargetFault();
     } catch (error) {
       return { ok: false, reason: "integration_target_unavailable", ticket, message: integrationGitError(error) };
     }
