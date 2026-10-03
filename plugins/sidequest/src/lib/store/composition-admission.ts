@@ -163,10 +163,15 @@ function latestCorrectionAt(review: CompositionTicket): string | undefined {
   return corrections.at(-1)?.at;
 }
 
+// An open review records no outcome yet; the board reads that as planned (reviewRelationOutcome).
+function bindingOutcome(binding: ReviewMirror | undefined): ReviewOutcome {
+  return binding?.outcome ?? 'planned';
+}
+
 function sourceBindingGenerationRefusal(source: CompositionTicket, review: CompositionTicket, expectedOutcome: ReviewOutcome): CompositionRefusal | undefined {
   const bindings = [source.submission?.review, review.reviewTarget];
   const correctedAt = latestCorrectionAt(review);
-  if (!bindings.every(binding => binding?.outcome === expectedOutcome)) return refuse('stale_source', `${source.ref}'s binding does not match the authoritative verdict.`);
+  if (!bindings.every(binding => bindingOutcome(binding) === expectedOutcome)) return refuse('stale_source', `${source.ref}'s binding does not match the authoritative verdict.`);
   if (!bindings.every(binding => binding?.correctedAt === correctedAt)) return refuse('stale_source', `${source.ref}'s binding does not match the authoritative correction generation.`);
 }
 

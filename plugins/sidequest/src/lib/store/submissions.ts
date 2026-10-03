@@ -2195,6 +2195,23 @@ function exactAssembledWave(slug: string | undefined, refs: string | readonly st
   return { ok: true, tickets, wave, participantRefs };
 }
 
+function uniqueParticipantRefs(refs: string | readonly string[] | undefined): string[] {
+  return Array.from(new Set((Array.isArray(refs) ? refs : [refs]).map((ref) => String(ref || '').trim()).filter(Boolean)));
+}
+
+// A multi-participant wave never takes the composition locks, so an admitted root inside one would skip its
+// source, review and generation revalidation.
+function compositionWaveRefusal(slug: string | undefined, refs: string | readonly string[] | undefined) {
+  const participants = uniqueParticipantRefs(refs);
+  if (participants.length < 2) return;
+  const root: CompositionTicket | undefined = participants.map((ref): CompositionTicket => getTicket(slug, ref)).find((ticket) => ticket?.compositionAdmission);
+  if (root) return { ok: false, reason: 'composition_wave_unsupported', ticket: root, message: `${root.ref} carries a composition admission and integrates only on its own, under its composition locks. Integrate it as a single ref.` };
+}
+
+function deliverSubmissionWave(slug?: string, refs?: string | readonly string[], opts?: WaveDeliveryOptions) {
+  return compositionWaveRefusal(slug, refs) ?? integrateSubmissionWave(slug, refs, opts);
+}
+
 function integrateSubmissionWave(slug?: string, refs?: string | readonly string[], opts?: WaveDeliveryOptions) {
   opts = opts || {};
   const assembled = exactAssembledWave(slug, refs);
@@ -3937,7 +3954,7 @@ function submissionsPayload(slug?: any) {
 }
 
 
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, pinnedVerificationRequirement, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave: deliverSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, pinnedVerificationRequirement, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
 }
 
 module.exports = { createSubmissions };

@@ -2305,7 +2305,7 @@ test('pre-tool hook gates MCP closeout updates by subagent caller, not executor 
       tool_input: { ref: 'SQ-2397', [field]: value },
     });
     assert.equal(output.hookSpecificOutput.permissionDecision, 'deny', String(field) + ' must be denied');
-    assert.match(output.hookSpecificOutput.permissionDecisionReason, /subagents cannot update closeout fields through MCP/i);
+    assert.match(output.hookSpecificOutput.permissionDecisionReason, /subagents cannot update closeout fields or admit a composition through MCP/i);
     assert.match(output.hookSpecificOutput.permissionDecisionReason, /scopeRequest.*orchestrator.*main thread/i);
   }
 

@@ -99,10 +99,13 @@ function latestCorrectionAt(review) {
   const corrections = review.oracle?.corrections ?? [];
   return corrections.at(-1)?.at;
 }
+function bindingOutcome(binding) {
+  return binding?.outcome ?? "planned";
+}
 function sourceBindingGenerationRefusal(source, review, expectedOutcome) {
   const bindings = [source.submission?.review, review.reviewTarget];
   const correctedAt = latestCorrectionAt(review);
-  if (!bindings.every((binding) => binding?.outcome === expectedOutcome)) return refuse("stale_source", `${source.ref}'s binding does not match the authoritative verdict.`);
+  if (!bindings.every((binding) => bindingOutcome(binding) === expectedOutcome)) return refuse("stale_source", `${source.ref}'s binding does not match the authoritative verdict.`);
   if (!bindings.every((binding) => binding?.correctedAt === correctedAt)) return refuse("stale_source", `${source.ref}'s binding does not match the authoritative correction generation.`);
 }
 function sourceReviewOutcomeRefusal(source, review) {

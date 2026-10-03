@@ -1806,6 +1806,18 @@ ${verify.outputTail}` : null
     }
     return { ok: true, tickets, wave, participantRefs };
   }
+  function uniqueParticipantRefs(refs) {
+    return Array.from(new Set((Array.isArray(refs) ? refs : [refs]).map((ref) => String(ref || "").trim()).filter(Boolean)));
+  }
+  function compositionWaveRefusal(slug, refs) {
+    const participants = uniqueParticipantRefs(refs);
+    if (participants.length < 2) return;
+    const root = participants.map((ref) => getTicket(slug, ref)).find((ticket) => ticket?.compositionAdmission);
+    if (root) return { ok: false, reason: "composition_wave_unsupported", ticket: root, message: `${root.ref} carries a composition admission and integrates only on its own, under its composition locks. Integrate it as a single ref.` };
+  }
+  function deliverSubmissionWave(slug, refs, opts) {
+    return compositionWaveRefusal(slug, refs) ?? integrateSubmissionWave(slug, refs, opts);
+  }
   function integrateSubmissionWave(slug, refs, opts) {
     opts = opts || {};
     const assembled = exactAssembledWave(slug, refs);
@@ -3369,6 +3381,6 @@ ${verify.outputTail}` : null
     }));
     return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || "merge" };
   }
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, pinnedVerificationRequirement, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, applyDeliveryAwaitingContentCommit, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave: deliverSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, pinnedVerificationRequirement, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
 }
 module.exports = { createSubmissions };

@@ -23,6 +23,8 @@ let rootReleasedSnapshot: string;
 let sourceSnapshots: readonly string[];
 let oldRootCheckout: string;
 let oldRootProof: string;
+let oldRootToken: string;
+let sourceReviewRef: string;
 const SESSION = 'composition-public-fixture-session';
 let requestNumber = 0;
 const fixtureWorktrees: string[] = [];
@@ -67,12 +69,20 @@ async function boardTool(name: string, arguments_: Record<string, unknown>): Pro
   return JSON.parse(response.result.content[0].text);
 }
 
+// A refusal may surface as an MCP error or a refused acknowledgement; callers assert its reason in the text.
+async function boardToolText(name: string, arguments_: Record<string, unknown>): Promise<string> {
+  const response = await mcp.handleRequest({ jsonrpc: '2.0', id: ++requestNumber, method: 'tools/call', params: { name, arguments: { project, ...arguments_ } } });
+  return String(response.result.content[0].text);
+}
+
 function gitIn(directory: string, arguments_: readonly string[]): string {
   return execFileSync('git', [...arguments_], { cwd: directory, encoding: 'utf8', timeout: 30_000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
+type ClaimProbe = { token: string; executor: string; checkout: string };
+
 function freshNativeCheckout(ref: string, by: string, role: string, probes: {
-  beforeBinding?: () => void; beforeCompletion?: (checkout: string, attempt: string) => void;
+  beforeBinding?: () => void; beforeCompletion?: (checkout: string, attempt: string) => void; beforeClaim?: (claim: ClaimProbe) => void;
 } = {}): string {
   const prepared = store.prepareDispatch(project, ref, { sharedTree: false, sessionId: SESSION, runtimeCwd: repository });
   assert.equal(store.recordDispatchLaunch(project, ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: SESSION }).ok, true);
@@ -90,6 +100,7 @@ function freshNativeCheckout(ref: string, by: string, role: string, probes: {
   assert.equal(store.bindDispatchWorktreeCreation(project, SESSION, checkout, bound.attempt).baseline, bound.baseline);
   const boundRuntime = store.bindDispatchAgent(SESSION, prepared.ticket.dispatchExecutor, worktrees.agentIdFromWorktreePath(repository, checkout), by, checkout);
   assert.equal(boundRuntime.ok, true, JSON.stringify(boundRuntime));
+  probes.beforeClaim?.({ token: prepared.token, executor: prepared.ticket.dispatchExecutor, checkout });
   assert.equal(store.claimTicket(project, ref, by, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: SESSION }).ok, true);
   return checkout;
 }
@@ -117,7 +128,7 @@ async function submitSource(ticket: CompositionTicket, file: string, role: strin
 
 async function prepareReleasedRoot(): Promise<void> {
   rootTicket = fixtureTicket('Released root adopts a composition now', ['src/first.test.ts', 'src/second.test.ts']);
-  oldRootCheckout = freshNativeCheckout(rootTicket.ref, 'composition-old-root', 'old-root');
+  oldRootCheckout = freshNativeCheckout(rootTicket.ref, 'composition-old-root', 'old-root', { beforeClaim: claim => { oldRootToken = claim.token; } });
   const live = store.getTicket(project, rootTicket.ref);
   oldRootProof = path.join(live.dispatch.evidenceDirectory, 'original-proof.txt');
   fs.writeFileSync(oldRootProof, 'Original released proof input, never fresh evidence.\n');
@@ -125,6 +136,28 @@ async function prepareReleasedRoot(): Promise<void> {
   rootTicket = store.getTicket(project, rootTicket.ref);
   rootReleasedSnapshot = JSON.stringify(rootTicket.dispatch);
   assert.notEqual(rootTicket.dispatch?.baseCommit, candidate);
+}
+
+// Source B keeps an open, unaccepted independent review so later tests can race its authoritative state.
+async function bindOpenSourceReview(range: CompositionSourceRange): Promise<string> {
+  const added = await boardTool('add', { title: `Independent review of pending ${range.ref}`, category: 'review-audit',
+    files: ['src/b.ts'], route: { model: 'sonnet', effort: 'high' }, reviewTarget: { ref: range.ref, commit: range.commit } });
+  assert.equal(added.ok, true, JSON.stringify(added));
+  return String(added.ref);
+}
+
+function setSourceReviewStatus(status: 'todo' | 'awaiting-oracle'): void {
+  store.updateTicket(project, sourceReviewRef, { status });
+  assert.equal(store.getTicket(project, sourceReviewRef).status, status);
+}
+
+async function whileSourceReviewChanged(check: () => unknown): Promise<void> {
+  setSourceReviewStatus('awaiting-oracle');
+  try {
+    await check();
+  } finally {
+    setSourceReviewStatus('todo');
+  }
 }
 
 function initializeAdmissionInput(): void {
@@ -158,6 +191,7 @@ before(async () => {
   sourceARange = await submitSource(sourceATicket, 'src/a.ts', 'a');
   sourceBRange = await submitSource(sourceBTicket, 'src/b.ts', 'b');
   await prepareReleasedRoot();
+  sourceReviewRef = await bindOpenSourceReview(sourceBRange);
   git(['checkout', '-b', 'root', sourceARange.commit]);
   git(['merge', '--no-ff', sourceBRange.commit, '-m', 'Compose complete source ranges']);
   compositionMerge = git(['rev-parse', 'HEAD']);
@@ -340,6 +374,23 @@ test('composition admission: nested audit and authority extras are refused witho
   assertOriginalProofsAndSources();
 });
 
+// The board's ticket lock is a file owned by a live pid, so holding it here makes the grant wait out its
+// bounded acquisition and report busy rather than writing around the referenced review.
+function assertHeldReviewLockRefusesGrant(request: CompositionAdmissionInput, before: string): void {
+  const review = JSON.stringify(store.getTicket(project, sourceReviewRef));
+  const lock = path.join(store.projectDir(project), 'tickets', `.${store.getTicket(project, sourceReviewRef).id}.lock`);
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, token: 'composition-fixture-held-review-lock' }), { flag: 'wx' });
+  try {
+    const busy: { ok: boolean; reason: string } = store.admitComposition(project, rootTicket.ref, request, SESSION, { allowCompositionAdmission: true });
+    assert.equal(busy.reason, 'busy', JSON.stringify(busy));
+  } finally {
+    fs.unlinkSync(lock);
+  }
+  assert.equal(JSON.stringify(store.getTicket(project, rootTicket.ref)), before);
+  assert.equal(JSON.stringify(store.getTicket(project, sourceReviewRef)), review);
+  assertOriginalProofsAndSources();
+}
+
 test('composition admission: existing MCP probe grants nothing, exact current main adoption and retry preserve sources and old proofs', async () => {
   const before = JSON.stringify(store.getTicket(project, rootTicket.ref));
   const probe = await admissionTool(admissionInput);
@@ -348,7 +399,15 @@ test('composition admission: existing MCP probe grants nothing, exact current ma
   assert.equal(JSON.stringify(store.getTicket(project, rootTicket.ref)), before, 'expected-less probe is write-free');
   const expected = expectedFromProbe(probe);
   assert.equal(expected.sources[0]?.reviewOutcome, null, 'unknown source acceptance stays unknown');
+  assert.equal(expected.sources[1]?.reviewTicketId, store.getTicket(project, sourceReviewRef).id, 'the probe names the authoritative bound review');
   const request = { ...admissionInput, expected };
+  await whileSourceReviewChanged(async () => {
+    const raced = await admissionTool(request);
+    assert.equal(raced.ok, false);
+    assert.equal(raced.reason, 'stale_source', JSON.stringify(raced));
+  });
+  assert.equal(JSON.stringify(store.getTicket(project, rootTicket.ref)), before, 'a review change between probe and grant writes nothing');
+  assertHeldReviewLockRefusesGrant(request, before);
   const admitted = await admissionTool(request);
   assert.equal(admitted.ok, true, JSON.stringify(admitted));
   assert.equal(admitted.admission.base, originalBase);
@@ -396,6 +455,24 @@ function assertCompositionCompletionRefusals(checkout: string, attempt: string):
   } finally {
     fs.unlinkSync(dirty);
   }
+  assertRetainedProofsAndSources();
+}
+
+// Provisioning callbacks and the claim must name this generation's preparedAt and nonce, and the claim
+// revalidates the bound source review under the composition locks.
+function assertCompositionClaimFences(claim: ClaimProbe): void {
+  const before = JSON.stringify(store.getTicket(project, rootTicket.ref));
+  const oldAttempt = JSON.parse(rootReleasedSnapshot).preparedAt;
+  assert.equal(store.recordDispatchWorktreeProvisioned(project, SESSION, claim.checkout, oldAttempt).reason, 'stale_attempt');
+  const options = { executor: claim.executor, sessionId: SESSION };
+  assert.equal(store.claimTicket(project, rootTicket.ref, 'composition-new-root', { ...options, token: oldRootToken }).reason, 'token');
+  setSourceReviewStatus('awaiting-oracle');
+  try {
+    assert.equal(store.claimTicket(project, rootTicket.ref, 'composition-new-root', { ...options, token: claim.token }).reason, 'stale_source');
+  } finally {
+    setSourceReviewStatus('todo');
+  }
+  assert.equal(JSON.stringify(store.getTicket(project, rootTicket.ref)), before);
   assertRetainedProofsAndSources();
 }
 
@@ -448,6 +525,11 @@ async function captureAndSubmitComposition(checkout: string, command: string): P
   const resolved = capture.captureCommand([], target);
   assert.equal(resolved.command, command, JSON.stringify(resolved));
   const current = store.getTicket(project, rootTicket.ref);
+  await whileSourceReviewChanged(async () => {
+    const raced = await capture.runCapturedVerification(resolved.command, target, checkout, fs, checkout);
+    assert.equal(raced.recorded?.reason, 'stale_source', JSON.stringify(raced));
+  });
+  assert.equal(JSON.stringify(store.getTicket(project, rootTicket.ref)), JSON.stringify(current), 'a refused capture records nothing');
   const verified = await capture.runCapturedVerification(resolved.command, target, checkout, fs, checkout);
   assert.equal(verified.refusal, null, JSON.stringify(verified));
   assert.equal(verified.capture.status, 'passed', JSON.stringify(verified));
@@ -456,13 +538,32 @@ async function captureAndSubmitComposition(checkout: string, command: string): P
   assert.equal(fresh.candidate.value, candidate);
   assert.equal(fresh.dispatchNonce, current.dispatchNonce);
   assert.notEqual(fresh.logPath, oldRootProof);
-  const submitted = await boardTool('submit', { ref: rootTicket.ref, by: 'composition-new-root', worktree: checkout,
-    commit: candidate, verify: command, body: 'Current isolated native holder captured exact C and submits the complete original range. Included sources remain pending.' });
+  const submission = { ref: rootTicket.ref, by: 'composition-new-root', worktree: checkout,
+    commit: candidate, verify: command, body: 'Current isolated native holder captured exact C and submits the complete original range. Included sources remain pending.' };
+  const captured = JSON.stringify(store.getTicket(project, rootTicket.ref));
+  await whileSourceReviewChanged(async () => assert.match(await boardToolText('submit', submission), /stale_source/));
+  assert.equal(JSON.stringify(store.getTicket(project, rootTicket.ref)), captured, 'a refused submit writes nothing');
+  const submitted = await boardTool('submit', submission);
   assert.equal(submitted.ok, true, JSON.stringify(submitted));
   const root: CompositionTicket = store.getTicket(project, rootTicket.ref);
   assert.equal(exactCompositionSubmissionRefusal(root, root.submission), undefined);
   assert.equal(root.submission?.base, originalBase);
   assert.equal(root.dispatch?.outcome, 'submitted');
+  assertRetainedProofsAndSources();
+}
+
+// A multi-participant wave would deliver without the composition locks, and a source review change after
+// the root's review still refuses delivery. Neither moves the target branch or writes the root.
+async function assertDeliveryBoundaryRefusals(): Promise<void> {
+  const reviewed = JSON.stringify(store.getTicket(project, rootTicket.ref));
+  const wave = store.integrateSubmissionWave(project, [rootTicket.ref, sourceBRange.ref], { mode: 'merge' });
+  assert.equal(wave.reason, 'composition_wave_unsupported', JSON.stringify(wave));
+  await whileSourceReviewChanged(async () => {
+    const raced = await boardTool('integrate', { ref: rootTicket.ref, by: 'composition-current-main', mode: 'merge' });
+    assert.equal(raced.reason, 'stale_source', JSON.stringify(raced));
+  });
+  assert.equal(JSON.stringify(store.getTicket(project, rootTicket.ref)), reviewed);
+  assert.equal(git(['rev-parse', 'HEAD']), originalBase);
   assertRetainedProofsAndSources();
 }
 
@@ -488,6 +589,7 @@ async function reviewAndDeliverComposition(): Promise<void> {
   assert.equal(relation.reviewTicket.status, 'done');
   assert.equal(relation.mirror.outcome, 'planned');
   assert.equal(relation.reviewTarget.candidate.value, candidate);
+  await assertDeliveryBoundaryRefusals();
   const integrated = await boardTool('integrate', { ref: rootTicket.ref, by: 'composition-current-main', mode: 'merge' });
   assert.equal(integrated.ok, true, JSON.stringify(integrated));
   git(['merge-base', '--is-ancestor', candidate, 'HEAD']);
@@ -505,6 +607,7 @@ test('composition admission: fresh native checkout capture full-range submit ind
   assert.equal(JSON.stringify(store.getTicket(project, rootTicket.ref)), before);
   const checkout = freshNativeCheckout(rootTicket.ref, 'composition-new-root', 'new-root', {
     beforeBinding: assertCompositionCreationRefusals, beforeCompletion: assertCompositionCompletionRefusals,
+    beforeClaim: assertCompositionClaimFences,
   });
   const root = store.getTicket(project, rootTicket.ref);
   assert.equal(root.dispatch.baseCommit, originalBase);
