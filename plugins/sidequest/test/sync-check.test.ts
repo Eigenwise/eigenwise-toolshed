@@ -11,8 +11,13 @@ const syncCheck = (input: Record<string, unknown>): { ok: boolean; line: string 
 
 const CLI = path.resolve(__dirname, '..', 'bin', 'sidequest.js');
 
+// Identity is pinned on every call: git refuses to merge, even into a conflict, when it cannot resolve one (a CI runner has none).
+function gitRun(cwd: string, args: string[]) {
+  return spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8', windowsHide: true });
+}
+
 function git(cwd: string, args: string[]): string {
-  const result = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8', windowsHide: true });
+  const result = gitRun(cwd, args);
   assert.equal(result.status, 0, `git ${args.join(' ')} failed: ${result.stderr}`);
   return result.stdout.trim();
 }
@@ -127,8 +132,8 @@ test('the retained-candidate variant refuses a checkout that is mid-merge', () =
   const { repo, first } = fixture();
   commitFile(repo, 'shared.txt', 'main\n');
   const head = git(repo, ['rev-parse', 'HEAD']);
-  const merge = spawnSync('git', ['merge', 'side'], { cwd: repo, encoding: 'utf8', windowsHide: true });
-  assert.notEqual(merge.status, 0, 'the fixture merge must conflict');
+  const merge = gitRun(repo, ['merge', 'side']);
+  assert.equal(merge.status, 1, `the fixture merge must stop on a conflict (exit 1), got ${merge.status}: ${merge.stderr}`);
   assert.match(git(repo, ['status', '--porcelain']), /^UU shared\.txt/m);
 
   const result = cli(['sync-check', first, '--head', head, '--retained'], repo);
