@@ -1,9 +1,11 @@
 ---
 title: Sidequest
-description: Plan, track, and deliver Claude Code work from a local board.
+description: Keep every recorded task through context compaction and new sessions, then review and deliver it from a local board.
 ---
 
 Sidequest gives Claude Code a local board for planned work. It groups tickets into stories, keeps the backlog visible, and runs delegated work through a repeatable review and delivery flow. That flow works for Git codebases and filesystem snapshots of non-Git documentation trees, vaults, and research collections.
+
+Every task saved as a ticket survives context compaction and new sessions. Its instructions, reproduction steps, status, and recorded discussion stay in the local Sidequest store, so Claude can retrieve the task after the chat context shrinks.
 
 ## Install
 
@@ -71,6 +73,18 @@ Claude lists what the request leaves unclear, sends the unknowns the code can an
 Review stays tied to the pinned contract. If two candidate fixes are rejected in the same defect chain, stop patching and replan before trying another candidate. A bound review and its source cannot be deleted, even with force. Keep the record and create a fresh independently reviewed replacement when needed; deletion does not repair older orphaned records.
 
 The board keeps the work visible while Claude and its executors handle the ticket lifecycle. A Git ticket submits a verified range; a non-Git ticket submits a verified project snapshot. Claude reports any unavailable capability or failed delivery instead of guessing around it.
+
+## Keep tasks through context compaction
+
+Save each task as a ticket with the outcome you want and enough information to pick it up again. As work proceeds, ask Claude to record decisions, progress, verification evidence, and the next action in the ticket description or comments.
+
+> Save this task in Sidequest with the current progress and next steps so we can continue after context compaction.
+
+After compaction or in a new session, ask:
+
+> Check the active Sidequest tickets for this project and continue from their recorded next steps.
+
+The board persists independently of the conversation. Details that matter for resuming the task need to be recorded on the ticket. You can also open its detail view to read the saved fields and discussion yourself.
 
 ## Use the dashboard
 

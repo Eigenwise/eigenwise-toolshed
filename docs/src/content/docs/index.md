@@ -31,8 +31,8 @@ template: splash
       <p><a href="./getting-started/live-rules/">Live Rules</a> loads project guidance when the matching work starts.</p>
     </article>
     <article class="shed-card card">
-      <h2>Side work gets lost</h2>
-      <p><a href="./getting-started/sidequest/">Sidequest</a> turns work into owned tickets, dispatches independent changes, and checks results before integration.</p>
+      <h2>Tasks get lost when context compacts</h2>
+      <p><a href="./getting-started/sidequest/">Sidequest</a> keeps every recorded task on a local board through context compaction and new sessions, dispatches independent changes, and checks results before integration.</p>
     </article>
     <article class="shed-card card">
       <h2>You want another model in Claude Code</h2>
