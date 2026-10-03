@@ -122,6 +122,75 @@ function heartbeatTestEnvironment(): NodeJS.ProcessEnv {
   };
 }
 
+function answerHeartbeats(server: import('node:child_process').ChildProcess, count: number, timeoutMilliseconds: number) {
+  return new Promise<void>((resolve, reject) => {
+    let buffer = '';
+    let answered = 0;
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`MCP server did not send ${count} heartbeats to its idle client`));
+    }, timeoutMilliseconds);
+    const output = server.stdout;
+    const onData = (chunk: Buffer | string) => {
+      buffer += String(chunk);
+      let newline = buffer.indexOf('\n');
+      while (newline !== -1) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        newline = buffer.indexOf('\n');
+        try {
+          const message: unknown = JSON.parse(line);
+          if (jsonRpcRecord(message) && message.method === 'ping') {
+            answered += 1;
+            server.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {} })}\n`);
+            if (answered === count) {
+              cleanup();
+              resolve();
+              return;
+            }
+          }
+        } catch (_) {}
+      }
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      output?.removeListener('data', onData);
+    };
+    output?.on('data', onData);
+  });
+}
+
+function collectStderr(server: import('node:child_process').ChildProcess) {
+  let text = '';
+  server.stderr?.setEncoding('utf8');
+  server.stderr?.on('data', (chunk: string) => { text += chunk; });
+  return () => text;
+}
+
+// The preload blocks the server's event loop right after the first ping goes out, so the client's answer
+// sits unread in stdin while the heartbeat deadline passes, as it does when a slow handler holds the loop.
+function blockedLoopEnvironment(blockMilliseconds: number) {
+  const preloadDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sidequest-mcp-block-'));
+  const preload = path.join(preloadDirectory, 'block-after-first-ping.js');
+  fs.writeFileSync(preload, [
+    'const write = process.stdout.write.bind(process.stdout);',
+    'let blocked = false;',
+    'process.stdout.write = (chunk, ...rest) => {',
+    '  const written = write(chunk, ...rest);',
+    '  if (!blocked && String(chunk).includes(\'"method":"ping"\')) {',
+    '    blocked = true;',
+    `    setImmediate(() => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${blockMilliseconds}));`,
+    '  }',
+    '  return written;',
+    '};',
+    '',
+  ].join('\n'));
+  return {
+    environment: { ...heartbeatTestEnvironment(), NODE_OPTIONS: `--require ${preload}` },
+    cleanup: () => fs.rmSync(preloadDirectory, { recursive: true, force: true }),
+  };
+}
+
 test('MCP server leaves sibling processes alone', async () => {
   const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sidequest-mcp-sibling-'));
   const siblingPath = path.join(temporaryDirectory, 'sidequest-mcp.js');
@@ -210,42 +279,7 @@ test('MCP server keeps an initialized client alive beyond its initialization dea
 
   try {
     server.stdout?.setEncoding('utf8');
-    let heartbeatCount = 0;
-    const answeredHeartbeats = new Promise<void>((resolve, reject) => {
-      let buffer = '';
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error('MCP server did not send four heartbeats to its idle client'));
-      }, 500);
-      const output = server.stdout;
-      const onData = (chunk: Buffer | string) => {
-        buffer += String(chunk);
-        let newline = buffer.indexOf('\n');
-        while (newline !== -1) {
-          const line = buffer.slice(0, newline);
-          buffer = buffer.slice(newline + 1);
-          newline = buffer.indexOf('\n');
-          try {
-            const message: unknown = JSON.parse(line);
-            if (jsonRpcRecord(message) && message.method === 'ping') {
-              heartbeatCount += 1;
-              server.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {} })}\n`);
-              if (heartbeatCount === 4) {
-                cleanup();
-                resolve();
-                return;
-              }
-            }
-          } catch (_) {}
-        }
-      };
-      const cleanup = () => {
-        clearTimeout(timeout);
-        output?.removeListener('data', onData);
-      };
-      output?.on('data', onData);
-    });
-
+    const answeredHeartbeats = answerHeartbeats(server, 4, 500);
     await initialize(server);
     server.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
     await answeredHeartbeats;
@@ -253,6 +287,42 @@ test('MCP server keeps an initialized client alive beyond its initialization dea
     const exit = waitForExit(server, 3_000);
     server.stdin?.end();
     assert.deepEqual(await exit, { code: 0, signal: null });
+  } finally {
+    if (server.exitCode === null) server.kill();
+  }
+});
+
+test('MCP server keeps a live client whose heartbeat answer is waiting in stdin when the deadline passes', async () => {
+  const blockedLoop = blockedLoopEnvironment(300);
+  const server = mcpServer(blockedLoop.environment);
+
+  try {
+    server.stdout?.setEncoding('utf8');
+    const answeredHeartbeats = answerHeartbeats(server, 2, 3_000);
+    await initialize(server);
+    server.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+    await answeredHeartbeats;
+    assert.equal(server.exitCode, null);
+    const exit = waitForExit(server, 3_000);
+    server.stdin?.end();
+    assert.deepEqual(await exit, { code: 0, signal: null });
+  } finally {
+    if (server.exitCode === null) server.kill();
+    blockedLoop.cleanup();
+  }
+});
+
+test('MCP server names the missed ping on stderr when it reaps an abandoned client', async () => {
+  const server = mcpServer(heartbeatTestEnvironment());
+
+  try {
+    const stderr = collectStderr(server);
+    server.stdout?.setEncoding('utf8');
+    await initialize(server);
+    server.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+    server.stdout?.pause();
+    assert.deepEqual(await waitForExit(server, 500), { code: 0, signal: null });
+    assert.match(stderr(), /^sidequest-mcp: no answer to ping sidequest-heartbeat-1 after \d+ms; shutting down$/m);
   } finally {
     if (server.exitCode === null) server.kill();
   }

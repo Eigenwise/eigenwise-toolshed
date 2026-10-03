@@ -5,7 +5,7 @@ const { writeBoardMcpLiveness, clearBoardMcpLiveness } = require("../lib/board-m
 writeBoardMcpLiveness(mcp.boardMcpSessionId(), process.env.CLAUDE_PROJECT_DIR || process.cwd());
 process.once("exit", clearBoardMcpLiveness);
 const CLIENT_HEARTBEAT_INTERVAL_MILLISECONDS = 6e4;
-const CLIENT_HEARTBEAT_TIMEOUT_MILLISECONDS = 1e4;
+const CLIENT_HEARTBEAT_TIMEOUT_MILLISECONDS = 3e4;
 const CLIENT_INITIALIZATION_DEADLINE_MILLISECONDS = 7e4;
 function positiveMilliseconds(value, fallback) {
   const parsed = Number(value);
@@ -92,17 +92,25 @@ function main() {
     }, timing.initializationDeadlineMilliseconds);
     initializationDeadline.unref();
   };
+  const reapIfUnanswered = (identifier, sentAt) => {
+    if (shuttingDown || pendingHeartbeatIdentifier !== identifier) return;
+    process.stderr.write(`sidequest-mcp: no answer to ping ${identifier} after ${Date.now() - sentAt}ms; shutting down
+`);
+    void shutdown();
+  };
   const scheduleClientHeartbeat = () => {
     if (shuttingDown || !clientInitialized || pendingHeartbeatIdentifier !== null) return;
     if (heartbeatTimer) clearTimeout(heartbeatTimer);
     heartbeatTimer = setTimeout(() => {
       heartbeatTimer = void 0;
       if (shuttingDown || !clientInitialized || pendingHeartbeatIdentifier !== null) return;
-      pendingHeartbeatIdentifier = `sidequest-heartbeat-${++heartbeatIdentifier}`;
-      writeMessage({ jsonrpc: "2.0", id: pendingHeartbeatIdentifier, method: "ping" });
+      const identifier = `sidequest-heartbeat-${++heartbeatIdentifier}`;
+      const sentAt = Date.now();
+      pendingHeartbeatIdentifier = identifier;
+      writeMessage({ jsonrpc: "2.0", id: identifier, method: "ping" });
       heartbeatTimeout = setTimeout(() => {
         heartbeatTimeout = void 0;
-        void shutdown();
+        setImmediate(() => reapIfUnanswered(identifier, sentAt));
       }, timing.timeoutMilliseconds);
       heartbeatTimeout.unref();
     }, timing.intervalMilliseconds);
