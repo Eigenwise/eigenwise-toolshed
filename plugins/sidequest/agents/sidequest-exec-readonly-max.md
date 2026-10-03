@@ -32,6 +32,19 @@ locations from ticket data before reading them. In an isolated worktree, Claude 
 command it "cannot show not to be git": split compound commands (`||`, jq or `~` text in quotes) into plain ones run
 from the worktree. A nested `claude -p` session is refused even there, so report that work to the orchestrator.
 
+**Shared heavy resource:** Serialize heavy commands on the parent-named shared resource, not entire tickets.
+Without the slot, continue independent reading, editing, and scoped commits. When ready to verify, record
+readiness and end the turn retaining your claim; wait for the parent's `SendMessage` naming the actual transfer.
+Do not poll or create a proxy waiter. The actual owner must acknowledge that its owned heavy command and
+descendants ended before the parent hands off. A terminal submit/done/release is sufficient when it really
+ends that owned work; an authenticated explicit mid-claim return is valid too. Never infer availability
+from elapsed time, process counts, failed sends, model labels, or absence. Heavy commands use at most two
+workers, finite owned deadlines, and descendant cleanup. This pause owns no running heavy command.
+
+**Instruction cursors:** Comment `since` is exclusive and only a read cursor, not proof that the instruction
+at its watermark was processed. A handoff includes the exact instruction/comment or directs bounded
+inclusive/all-comments recovery. Advance the processed cursor only after consuming the instructions.
+
 **Owned background work stays non-terminal:** If you launch or inherit harness-tracked background work the
 ticket needs to complete, do not end the turn or let the agent finish while that work is still running. Arm
 `Monitor` (or rely on the tracked completion notification). A `Monitor` timeout is not completion: if the
@@ -67,7 +80,15 @@ executors would collide on it, and a mid-wave map would describe a tree that has
 is the orchestrator's, once, after integration. If your change makes the map stale, say so in the final report.
 The orchestrator assigns release versions centrally, so repo bump guidance applies to its release; stop at the verified scoped commit and submit. A briefing marked `[sidequest-artifact-mode]` is the only exception: it records an active dispatch whose category and path are authorized for shared-tree artifacts. Leave verified changes in that declared scope in the shared tree, comment the evidence, and close with `done`. Do not commit or submit that artifact. A released executor never uses the control-plane grooming closure.
 
-**History budget and continuation:** Treat tool output as permanent context cost: every `Read` or `Grep` result stays in this run's history for later turns, and a whole-file dump can push a long run toward the ~200K context limit. Use scoped `Read` calls with `offset`/`limit`, `Grep` with `head_limit`, and files already in context instead of re-reading them. Around 100 tool rounds, do not limp onward: checkpoint verified declared-scope work in a scoped commit, write a progress comment headed `Continuation checkpoint` with the commit, exact files touched, next steps, and verification status (command plus passed, failed, or not run), then `release` the ticket to `todo` and end. Do not submit at a checkpoint. The orchestrator will redispatch a continuation with fresh context.
+**History budget and continuation:** Treat tool output as permanent context cost: every `Read` or `Grep` result stays in this run's history for later turns, and a whole-file dump can push a long run toward the ~200K context limit. Use scoped `Read` calls with `offset`/`limit`, `Grep` with `head_limit`, and files already in context instead of re-reading them. Size implementation plus final verification to fit comfortably before 75 tool rounds; otherwise split along actual cohesive boundaries before dispatch. Around 75 tool rounds, do not limp onward: checkpoint verified declared-scope work in a scoped commit, write a progress comment headed `Continuation checkpoint` with the commit, exact files touched, next steps, and verification status (command plus passed, failed, or not run), then `release` the ticket to `todo` and end. Do not submit at a checkpoint. The orchestrator will redispatch a continuation with fresh context. Do not automatically release/restart because a resource slot is held or invent executor death.
+
+**Measured quality:** Use the existing local quality owner. Where supported, scan measured complexity early
+so failing functions are fixed before expensive final coverage. Reuse fresh coverage from the candidate
+verifier only when the actual runner supports it for the same checked bytes. Missing analyzer or coverage
+stays UNVERIFIED. Never substitute tracked Lizard/proportional attribution, pin `quality:crap` as authority,
+or rerun a full suite merely to obtain already captured compatible coverage. Keep tooling and reports
+local and uncommitted; score each new or modified function strictly below CRAP 6, leaving untouched legacy
+functions outside scope.
 
 **Reference lookups:** Reference-heavy skills are not how executors look something up. Use a targeted `Read` for directly reachable material. For a bounded external question, file a `source-lookup` ticket; use `evidence-research` when sources need independent reconciliation.
 
@@ -97,13 +118,13 @@ Protocol for each ticket:
    changed tests failed their assertions; use `failure-kind=import` or `failure-kind=collection` when the revert
    stopped them loading, which is refused because it proves nothing about wrong behavior. High-stakes tickets keep
    their routed model and effort. Check the changed surface's consumers and suites relevant to the stated risk.
-   Require a review-audit only when a safety-sensitive contract names an untested seam that needs independent scrutiny.
+   Require a review-audit only for a contract-named seam the oracle cannot exercise or a required high-stakes review; distinct lenses need distinct named risks.
    On Windows with Node 22, use explicit test-file globs such as `plugins/<plugin>/test/*.test.js`, never a bare test
    directory.
 5. **Capture verification and submit, never publish.** For repo changes without the `[sidequest-artifact-mode]` briefing
    marker, call `mcp__plugin_sidequest_board__commit` with `ref`, `by`, `message`, and this worktree's absolute root.
    It commits only the declared scope and returns the hash. Pin it locally with
-   `git update-ref refs/sidequest/<ref> <hash>`. Run the ticket's exact verifier on that clean committed candidate,
+   `git update-ref refs/sidequest/<ref> <hash>`. Run the ticket's exact verifier on that clean committed candidate once for final capture; a changed candidate needs fresh verification,
    then post `[sidequest:verify-complete] <passed|failed_suite|toolchain_missing|could_not_run|timeout|manual|attestation|skipped|failed_check|no-op>: <evidence>` after it exits. Put the status first and the evidence after the colon. A bare
    `[sidequest:verify-complete]` remains valid; use `no-op` only for an intentionally clean declared scope. A passing
    check is evidence only when you state the changed behavior it exercised and how you know: name the assertion in the test that ran and was not skipped; for acquisition, install, download, or cache work, state that the state directory started empty. Do not claim broader coverage ran when it did not. Keep the useful result count and a

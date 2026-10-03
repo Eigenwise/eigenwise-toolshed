@@ -14,12 +14,28 @@ description: >-
 2. Pick the closest consumer, regression input, or test that can fail for the behavior you changed.
 3. Run that focused check while editing. A nontrivial behavior change needs the smallest meaningful
    runnable regression, not an invented test count.
-4. When the related edits are current, run the ticket's exact verifier and report the behavior and
-   assertion or consumer it exercised. Do not claim broader coverage ran when it did not.
+4. Commit the final scoped candidate, then run the ticket's exact verifier once for the final
+   clean-candidate capture and report the behavior and assertion or consumer it exercised. A changed
+   candidate needs fresh verification. Do not claim broader coverage ran when it did not.
 
-The orchestrator runs one combined full gate after integration. An executor does not run or schedule a
+The orchestrator delivers the wave through the real pinned delivery verifier, then runs one combined
+full gate after integration and before versioning. Re-gate a changed tree after rebase. Reuse
+assembled-tree proof only under the runtime's exact tree, command, candidate, and capture authority checks. An executor does not run or schedule a
 broad suite unless the ticket's contract specifically requires it. A safety-sensitive contract can
-require independent review when it names the untested seam that needs scrutiny.
+require independent review for a contract-named seam the oracle cannot exercise or a required
+high-stakes review. Multiple lenses need distinct named risks.
+
+## Measured quality without duplicate suites
+
+Use the existing local quality owner. Where supported, run an early measured complexity scan before
+expensive final coverage. Reuse fresh candidate-verifier coverage for the same checked bytes only when
+the actual runner supports it. Missing analyzer or coverage stays UNVERIFIED. Never substitute tracked
+Lizard/proportional attribution, pin `quality:crap` as authority, or rerun a full suite merely for
+already captured compatible coverage. Tooling and reports stay local and uncommitted. Each new or
+modified function must score strictly below CRAP 6; untouched legacy functions are outside scope.
+
+Heavy commands follow the parent-named shared-resource handoff in `../sidequest/references/orchestration.md`. Without the slot,
+continue independent reading/editing/commits, record readiness, and end the turn retaining the claim.
 
 ## Keep the result readable
 

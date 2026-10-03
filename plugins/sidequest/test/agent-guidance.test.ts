@@ -54,7 +54,7 @@ test('published guidance excludes retired instructions', () => {
   assert.match(verifyDiscipline, /smallest meaningful\s+runnable regression/);
   assert.match(userStory, /Named uncertainty or safety-sensitive seam/);
   assert.match(ticketAuthoring, /do not invent a test count/);
-  assert.match(orchestration, /read each submit report, then run one combined full gate for the wave/);
+  assert.match(orchestration, /read each submit report, deliver the exact candidates through the real pinned\s+delivery verifier, then run one combined full gate/);
   assert.match(orchestration, /No TaskStop after terminal evidence/);
   assert.match(orchestration, /TaskStop rule is authoritative in\s+`SKILL\.md`/);
   assert.match(skill, /TaskStop\(\{ task_id: "<agent name>" \}\)`\s+once/);
@@ -133,7 +133,7 @@ test('operating guidance uses live taxonomy and consistent recon boundaries', ()
 
 test('publishing consumes reports and oracles without an orchestrator diff review', () => {
   assert.match(publishing, /consume each submission report and the delivery and\s+merged-tree gate evidence/);
-  assert.match(publishing, /A deterministic singleton needs no bound review/);
+  assert.match(publishing, /A deterministic oracle that covers the contract needs no bound review, at any wave size/);
   assert.match(publishing, /Bind a `review-audit` ticket/);
   assert.match(publishing, /Do not inspect executor source or diffs/);
   assert.doesNotMatch(publishing, /Review the integrated diff/);
@@ -303,6 +303,90 @@ test("GH-339: TaskStop closeout guidance never names the executor's own launch, 
   );
   assert.doesNotMatch(normalBriefing, /TaskStop/);
   assert.doesNotMatch(normalBriefing, new RegExp(launchName));
+});
+
+test('wave publishing delivers before its single full gate and keeps exact proof authority', () => {
+  const deliveryStep = publishing.indexOf('6. **Assemble and deliver exact waves**');
+  const fullGateStep = publishing.indexOf('7. **Run one combined full merged-tree gate per wave**');
+  const versionStep = publishing.indexOf('9. **Validate the release window');
+  assert.ok(deliveryStep >= 0);
+  assert.ok(fullGateStep > deliveryStep);
+  assert.ok(versionStep > fullGateStep);
+  assert.match(publishing, /including a singleton/);
+  assert.match(publishing, /Preserve delivery's pinned verifier/);
+  assert.match(publishing, /changed tree after rebase requires a fresh full gate/);
+  assert.match(publishing, /runtime authorizes its exact tree, command, candidate, and capture identities/);
+  assert.doesNotMatch(publishing, /Seam check the batch|with 2\+ integrated commits/);
+  assert.doesNotMatch(orchestration, /full gate for the wave\. On\s+green, integrate|full gate for the wave, then\s+integrate/);
+  assert.match(userStory, /deliver the range, and run the merged-tree\s+full gate once for the wave before versioning/);
+  assert.match(verifyDiscipline, /clean-candidate capture/);
+  assert.match(verifyDiscipline, /full gate after integration and before versioning/);
+});
+
+test('candidate review admission names an untested risk and precedes delivery', () => {
+  assert.match(publishing, /only for a contract-named seam the oracle\s+cannot exercise or a required high-stakes review/);
+  assert.match(publishing, /Multiple lenses need distinct named risks/);
+  assert.match(publishing, /Bind required candidate reviews before step 6/);
+  assert.match(publishing, /immutable terminal dispatch identities for the submitted source and\s+completed review/);
+  assert.match(publishing, /candidate_review_locked/);
+  assert.doesNotMatch(publishing, /when the oracle is weak|consumers remain materially unchecked|lenses for high-stakes or multi-wave/);
+  assert.match(orchestration, /wave count alone adds no review/);
+  assert.match(userStory, /distinct named risks, never merely multiple waves/);
+});
+
+test('all shipped executor profiles budget final verification before the continuation boundary', () => {
+  const sources = agentsync.bundledExecutorSources() as Map<string, string>;
+  assert.equal(sources.size, 13);
+  assert.ok(sources.delete('sidequest-diagnostic-probe.md'));
+  assert.equal(sources.size, 12);
+  assert.equal(agentsync.EXECUTOR_CHECKPOINT_TOOL_ROUNDS, 75);
+  for (const [filename, source] of sources) {
+    assert.match(source, /Size implementation plus final verification to fit comfortably before 75 tool rounds/, filename);
+    assert.match(source, /Around 75 tool rounds/, filename);
+    assert.match(source, /split along actual cohesive boundaries before dispatch/, filename);
+    assert.doesNotMatch(source, /Around 100 tool rounds/, filename);
+  }
+  assert.doesNotMatch(orchestration, /100-tool-round|around 100 tool rounds/);
+});
+
+test('heavy resource handoffs preserve independent work and require the actual owner return', () => {
+  const sources = agentsync.bundledExecutorSources() as Map<string, string>;
+  assert.ok(sources.delete('sidequest-diagnostic-probe.md'));
+  assert.equal(sources.size, 12);
+  for (const [filename, source] of sources) {
+    assert.match(source, /Serialize heavy commands on the parent-named shared resource, not entire tickets/, filename);
+    assert.match(source, /continue independent reading, editing, and scoped commits/, filename);
+    assert.match(source, /readiness and end the turn retaining your claim/, filename);
+    assert.match(source, /actual owner must acknowledge that its owned heavy command and\s+descendants ended before the parent hands off/, filename);
+    assert.match(source, /authenticated explicit mid-claim return is valid too/, filename);
+    assert.match(source, /at most two\s+workers, finite owned deadlines, and descendant cleanup/, filename);
+    assert.match(source, /Never infer availability\s+from elapsed time, process counts, failed sends, model labels, or absence/, filename);
+  }
+  assert.doesNotMatch(orchestration, /Serialize tickets that\s+share one/);
+  assert.match(orchestration, /parent `SendMessage` naming the resource and next holder/);
+  assert.match(userStory, /serialize commands using it,\s+not entire tickets/);
+});
+
+test('exclusive comment watermarks never stand in for processed instructions', () => {
+  for (const source of [executorTemplate, orchestration, userStory]) {
+    assert.match(source, /`since` is exclusive and only a read cursor/);
+    assert.match(source, /exact instruction\/comment/);
+    assert.match(source, /bounded\s+inclusive\/all-comments\s+recovery/);
+    assert.match(source, /(?:Advance|advance)[\s\S]{0,80}processed cursor only after[\s\S]{0,40}consuming/i);
+  }
+});
+
+test('measured quality reuses compatible candidate coverage through the local owner', () => {
+  for (const source of [executorTemplate, verifyDiscipline]) {
+    assert.match(source, /existing local quality owner/);
+    assert.match(source, /(?:scan measured complexity early|early measured complexity scan)/);
+    assert.match(source, /same checked bytes/);
+    assert.match(source, /actual runner supports it/);
+    assert.match(source, /Missing analyzer or coverage\s+stays UNVERIFIED/);
+    assert.match(source, /Never substitute tracked\s+Lizard\/proportional attribution, pin `quality:crap` as authority/);
+    assert.match(source, /rerun a full suite merely[\s\S]{0,60}already captured compatible coverage/);
+    assert.match(source, /untouched legacy\s+functions (?:outside|are outside) scope/);
+  }
 });
 
 export {};
