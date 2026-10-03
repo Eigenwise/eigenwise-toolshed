@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.588.0 (2026-10-03)
+
+### codebase-mapper 2.15.8 → 2.15.9
+
+#### Fixes
+
+- Add Codebase Mapper directory icon and data-handling disclosure (SQ-3300) [`d7b1a78`](https://github.com/Eigenwise/eigenwise-toolshed/commit/d7b1a785baa6fa7034dd30c62fdbe9f5d68609f8)
+
 ## v3.587.0 (2026-10-02)
 
 ### Repository
