@@ -65,11 +65,12 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // verifyCwd (SQ-3118 / GitHub #259), deniedTools on board_config/category_edit (GH-222), and groomClose/integrate
 // deliveryRevision/resolvedPaths (GitHub #144, the only route that closes a candidate rebased or squash-merged
 // before it landed).
-// Rebasing #173 onto the wave-3 tree merges all of the above into one payload. Measured directly on that
-// merged tree: the tools/list payload is 23258 bytes. 25800 is the smallest round (hundred-byte) value that
-// keeps the 2500-byte reserve (2542 bytes of headroom). Re-measure here rather than inheriting this number
+// Rebasing #173 onto the wave-3 tree merges all of the above into one payload. Merging develop's finalized
+// review correction (verdict.correct, US-73) on top adds its own schema bytes. Measured directly on that
+// merged tree: the tools/list payload is 23369 bytes. 25900 is the smallest round (hundred-byte) value that
+// keeps the 2500-byte reserve (2531 bytes of headroom). Re-measure here rather than inheriting this number
 // if the payload changes again.
-const MCP_TOOLS_LIST_MAX_BYTES = 25800;
+const MCP_TOOLS_LIST_MAX_BYTES = 25900;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -107,12 +108,23 @@ const MUTATING_TOOLS = new Set([
 const GLOBAL_MUTATION_TOOLS = new Set(['category_add', 'category_edit', 'category_rm', 'global_fallback', 'profile_create', 'profile_edit', 'profile_retire', 'profile_repoint', 'profile_promote']);
 const mutationTails = new Map<string, Promise<void>>();
 
-function toolMutates(name?: any, args?: any) {
-  if (MUTATING_TOOLS.has(String(name))) return true;
-  if (name === 'new_board_profile') return args.profile !== undefined;
-  if (name === 'global_fallback') return args.model !== undefined || args.effort !== undefined;
-  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.deniedTools !== undefined || args.readOnlyDeniedTools !== undefined || args.generatedPairs !== undefined || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.worktreeBase !== undefined || args.notIntegratedSalvageAgeHours !== undefined || args.worktreeRecoveryRetentionAgeHours !== undefined || args.autoApproveTestScope !== undefined || args.autoApproveScope !== undefined || args.worktreeSetup !== undefined || args.worktreeDependencyPaths !== undefined;
-  return false;
+const CONDITIONAL_MUTATION_FIELDS: Record<string, readonly string[]> = {
+  verdict: ['correct'], new_board_profile: ['profile'], global_fallback: ['model', 'effort'],
+  board_config: ['name', 'alwaysInScope', 'deniedTools', 'readOnlyDeniedTools', 'generatedPairs', 'integrationMode',
+    'integrationBranch', 'worktreeIsolation', 'worktreeBase', 'notIntegratedSalvageAgeHours',
+    'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths'],
+};
+const NULL_NONMUTATING_BOARD_FIELDS = new Set(['alwaysInScope', 'integrationMode', 'integrationBranch']);
+
+function toolMutates(name: string, args: Record<string, unknown> = {}) {
+  if (MUTATING_TOOLS.has(name)) return true;
+  const fields = CONDITIONAL_MUTATION_FIELDS[name];
+  if (!fields) return false;
+  return fields.some((field) => {
+    if (args[field] === undefined) return false;
+    if (name === 'board_config' && args[field] === null) return !NULL_NONMUTATING_BOARD_FIELDS.has(field);
+    return true;
+  });
 }
 
 function mutationQueueKey(name?: any, args?: any) {
@@ -319,6 +331,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   },
   verdict: {
     outcome: 'Candidate, not reviewer prose.',
+    correct: 'Main-thread accepted-to-rejected correction; requires rejected/by/text. expectedVerdictAt: list({ref}).ticket.oracle.verdict.at. Exactly one commit or sourceRevision.',
   },
   scopeRequest: {
     grant: 'Grants every path this claim still has refused; pass no files. Refuses the claim holder’s own by.',
@@ -330,11 +343,12 @@ function toolDescriptor(tool: ToolDefinition) {
   for (const [property, description] of Object.entries(MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || {})) {
     inputSchema.properties[property].description = description;
   }
+  const description = Object.hasOwn(TOOL_DESCRIPTION_OVERRIDES, tool.name)
+    ? TOOL_DESCRIPTION_OVERRIDES[tool.name]
+    : conciseDescription(tool.description);
   return {
     name: tool.name,
-    description: Object.hasOwn(TOOL_DESCRIPTION_OVERRIDES, tool.name)
-      ? TOOL_DESCRIPTION_OVERRIDES[tool.name]
-      : conciseDescription(tool.description),
+    ...(description ? { description } : {}),
     inputSchema,
   };
 }

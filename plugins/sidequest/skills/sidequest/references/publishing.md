@@ -129,9 +129,11 @@ File the repair so all of this holds before dispatching it:
 
 - Link it `related` to the rejected source (`sidequest link <repair> related <source>`). Without that link
   the overlap is refused; an unrelated submitted range is never inherited.
-- The source's candidate needs an oracle-confirmed rejection: a bound `review-audit` ticket whose verdict
-  rejected that exact candidate. A source-side `submission.review` mirror alone is not authority, and a
-  rejection pinned to a different commit than the submission now records does not count.
+- The source's candidate needs an effective oracle-confirmed rejection: a bound `review-audit` ticket whose
+  verdict rejected that exact candidate, or whose mistaken finalized acceptance has an authorized
+  [MCP `verdict.correct`](invocation-contracts.md) rejection. Both binding halves must agree. A source-side
+  `submission.review` mirror alone is not authority, and a rejection pinned to a different commit than the
+  submission now records does not count.
 - Declare the union of the inherited paths and the repair's own, including paths the rejected candidate
   deleted or added and the repair never touches. Scope admission covers every path in the range.
 - The rejected range is inherited whole. A range carrying only part of it is refused.
@@ -315,9 +317,11 @@ the ticket.
    records. A fresh independently reviewed replacement is separate work. No caller-controlled route
    can reject the candidate: `rework` and every other direct route return
    `candidate_review_locked` without writing. A review that finds a defect records its evidence on
-   the review ticket and releases that review with `kind=oracle`. When that oracle accepts the
-   defect conclusion, Sidequest marks both binding halves `rejected`; after a fresh repair is
-   reviewed and integrated, `supersede_submission` closes the rejected source against the repair.
+   the review ticket and releases that review with `kind=oracle`. When the defect means the bound
+   candidate must not ship, record `outcome=rejected`; `accepted` approves the candidate, and
+   verdict text does not override the enum. For a mistaken finalized `accepted`, the main thread uses MCP
+   `verdict` with `correct` under the [correction contract](invocation-contracts.md). After a fresh repair
+   is reviewed and integrated, `supersede_submission` closes the rejected source against the repair.
    Integration also needs the immutable terminal dispatch identities for the submitted source and
    completed review, and refuses when either is missing or both are the same agent. Resolve or
    explicitly accept every finding before versioning or pushing. A finding that needs repair leaves

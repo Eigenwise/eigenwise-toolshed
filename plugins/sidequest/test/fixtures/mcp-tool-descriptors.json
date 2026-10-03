@@ -1,7 +1,6 @@
 [
   {
     "name": "context_page",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -75,7 +74,6 @@
   },
   {
     "name": "pulse",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -111,7 +109,6 @@
   },
   {
     "name": "story",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -148,7 +145,6 @@
   },
   {
     "name": "story_contract",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -240,7 +236,6 @@
   },
   {
     "name": "add",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -408,7 +403,6 @@
   },
   {
     "name": "update",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -618,7 +612,6 @@
   },
   {
     "name": "remove",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -639,7 +632,6 @@
   },
   {
     "name": "archive",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -657,7 +649,6 @@
   },
   {
     "name": "unarchive",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -726,7 +717,6 @@
   },
   {
     "name": "checkpoint",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -778,7 +768,6 @@
   },
   {
     "name": "sweepClaims",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -790,7 +779,6 @@
   },
   {
     "name": "next",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1029,7 +1017,6 @@
   },
   {
     "name": "verdict",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1056,6 +1043,76 @@
         },
         "constraint": {
           "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "correct": {
+          "type": "object",
+          "properties": {
+            "expectedOutcome": {
+              "type": "string",
+              "enum": [
+                "accepted"
+              ]
+            },
+            "expectedVerdictAt": {
+              "type": "string"
+            },
+            "sourceRef": {
+              "type": "string"
+            },
+            "commit": {
+              "type": "string"
+            },
+            "sourceRevision": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "source",
+                "value"
+              ]
+            },
+            "evidence": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "expectedOutcome",
+            "expectedVerdictAt",
+            "sourceRef",
+            "evidence"
+          ],
+          "oneOf": [
+            {
+              "required": [
+                "commit"
+              ],
+              "not": {
+                "required": [
+                  "sourceRevision"
+                ]
+              }
+            },
+            {
+              "required": [
+                "sourceRevision"
+              ],
+              "not": {
+                "required": [
+                  "commit"
+                ]
+              }
+            }
+          ],
+          "description": "Main-thread accepted-to-rejected correction; requires rejected/by/text. expectedVerdictAt: list({ref}).ticket.oracle.verdict.at. Exactly one commit or sourceRevision."
         }
       },
       "required": [
@@ -1067,7 +1124,6 @@
   },
   {
     "name": "scopeRequest",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1100,7 +1156,6 @@
   },
   {
     "name": "commit",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1405,7 +1460,6 @@
   },
   {
     "name": "comment",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1430,7 +1484,6 @@
   },
   {
     "name": "plan",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1489,7 +1542,6 @@
   },
   {
     "name": "link",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1520,7 +1572,6 @@
   },
   {
     "name": "unlink",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1542,7 +1593,6 @@
   },
   {
     "name": "assign",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1613,7 +1663,6 @@
   },
   {
     "name": "profile_list",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1625,7 +1674,6 @@
   },
   {
     "name": "profile_get",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1640,7 +1688,6 @@
   },
   {
     "name": "profile_create",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1664,7 +1711,6 @@
   },
   {
     "name": "profile_edit",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1685,7 +1731,6 @@
   },
   {
     "name": "profile_retire",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1700,7 +1745,6 @@
   },
   {
     "name": "profile_use",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1722,7 +1766,6 @@
   },
   {
     "name": "profile_repoint",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1747,7 +1790,6 @@
   },
   {
     "name": "profile_promote",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1783,7 +1825,6 @@
   },
   {
     "name": "new_board_profile",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1795,7 +1836,6 @@
   },
   {
     "name": "route_recipe",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1816,7 +1856,6 @@
   },
   {
     "name": "category_list",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1843,7 +1882,6 @@
   },
   {
     "name": "category_add",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1914,7 +1952,6 @@
   },
   {
     "name": "category_edit",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1992,7 +2029,6 @@
   },
   {
     "name": "category_detach",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2011,7 +2047,6 @@
   },
   {
     "name": "category_relink",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2030,7 +2065,6 @@
   },
   {
     "name": "global_fallback",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2055,7 +2089,6 @@
   },
   {
     "name": "category_rm",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2179,7 +2212,6 @@
   },
   {
     "name": "models",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2194,7 +2226,6 @@
   },
   {
     "name": "projects",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2206,7 +2237,6 @@
   },
   {
     "name": "archive_board",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2221,7 +2251,6 @@
   },
   {
     "name": "unarchive_board",
-    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {

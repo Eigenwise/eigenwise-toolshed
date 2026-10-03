@@ -63,6 +63,7 @@ const { createWorkers } = require('./store/workers.js');
 const { createStories } = require('./store/stories.js');
 const { createComments } = require('./store/comments.js');
 const { createPlans } = require('./store/plans.js');
+const { createReviewCorrections } = require('./store/review-corrections.js');
 const { createReads } = require('./store/reads.js');
 const { createClaims } = require('./store/claims.js');
 const { createLocks } = require('./store/locks.js');
@@ -1163,6 +1164,7 @@ const {
   appendExperimentEntry,
   appendOverturnLine,
   applyExperimentVerdict,
+  recordBoundReviewOutcome,
   experimentPacket,
   ticketPlanInfo,
   writeOracleExperimentRound,
@@ -1195,6 +1197,7 @@ const {
   readOnlyOverrideActive,
   dispatchReadOnly,
   submissionReviewRelation,
+  withSourceTicketLock,
   createTicket,
   normalizeLabels,
   normalizeFiles,
@@ -1270,6 +1273,11 @@ const {
   upperRef,
   stripLinksTo,
   withTicketLock,
+});
+
+const { correctAcceptedReviewVerdict } = createReviewCorrections({
+  getTicket, pendingSubmission: pendingSubmissionForTickets, isReadOnlyExecutor, submissionReviewRelation,
+  withSourceTicketLock, withTicketLock, createComment, recordBoundReviewOutcome, putTicket, invalidateStoreCaches,
 });
 
 function pendingSubmissionForTickets(...args: any[]) {
@@ -3921,6 +3929,7 @@ module.exports = {
   ticketPlanInfo,
   appendExperimentEntry,
   applyExperimentVerdict,
+  correctAcceptedReviewVerdict,
   appendOverturnLine,
   experimentPacket,
   listTickets,

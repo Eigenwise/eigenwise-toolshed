@@ -6067,6 +6067,59 @@ function rejectThroughOracle(reviewRef: string, commit: string, label: string) {
   assert.strictEqual(verdict.ok, true, verdict.message);
 }
 
+test('correction admits a real retained repair range while its independent review still gates delivery', async () => {
+  await withInheritedRejectedFixture('correction-admission', async (fixture) => {
+    const source = await submitInheritedSource(fixture);
+    source.dispatch.terminalAt = new Date().toISOString();
+    source.dispatch.outcome = 'submitted';
+    persist(source);
+    const review = bindCandidateReview(source.ref, fixture.sourceCommit, fixture.label);
+    const readonlyReview = store.getTicket(slug, review.ref);
+    readonlyReview.dispatch.readonly = true;
+    readonlyReview.dispatch.agentId = 'synthetic-original-independent-reviewer';
+    persist(readonlyReview);
+    assert.equal(store.releaseTicket(slug, review.ref, `${fixture.label}-reviewer`, { releaseKind: 'oracle', oracle: 'Does the pinned defect reject this candidate?' }).ok, true);
+    assert.equal(store.applyExperimentVerdict(slug, review.ref, { text: 'Synthetic erroneous approval', outcome: 'accepted' }).ok, true);
+    assert.equal(store.linkTickets(slug, fixture.repair.ref, 'related', source.ref).ok, true);
+    const beforeCorrection = await sq2972Submit(fixture.repair.ref, `${fixture.label}-repair`, fixture.repairCommit);
+    assert.equal(beforeCorrection.reason, 'duplicate_submission');
+    assert.equal(store.getTicket(slug, fixture.repair.ref).claim.by, `${fixture.label}-repair`, 'retained repair holder survives refusal');
+    const finalized = store.getTicket(slug, review.ref);
+    const correction = store.correctAcceptedReviewVerdict(slug, review.ref, {
+      by: 'synthetic-main', sessionId: 'synthetic-main-session', text: 'The candidate must not ship.', evidence: 'Synthetic pinned defect reproduced.',
+      expected: { outcome: 'accepted', verdictAt: finalized.oracle.verdict.at, sourceRef: source.ref, candidate: { source: 'git', value: fixture.sourceCommit } },
+    }, { allowAcceptedReviewCorrection: true });
+    assert.equal(correction.ok, true, correction.message);
+    const claimedSource = store.getTicket(slug, source.ref);
+    claimedSource.claim = { by: 'synthetic-active-source', at: new Date().toISOString() };
+    persist(claimedSource);
+    const activeSourceRefusal = await sq2972Submit(fixture.repair.ref, `${fixture.label}-repair`, fixture.repairCommit);
+    assert.equal(activeSourceRefusal.reason, 'duplicate_submission', 'effective rejection never bypasses a live source claim');
+    assert.equal(store.getTicket(slug, fixture.repair.ref).claim.by, `${fixture.label}-repair`);
+    claimedSource.claim = null;
+    persist(claimedSource);
+    const admitted = await sq2972Submit(fixture.repair.ref, `${fixture.label}-repair`, fixture.repairCommit);
+    assert.equal(admitted.ok, true, admitted.message);
+    const submittedRepair = store.getTicket(slug, fixture.repair.ref);
+    assert.deepEqual(submittedRepair.submission.commits, [fixture.sourceCommit, fixture.repairCommit]);
+    submittedRepair.dispatch = { terminalAt: new Date().toISOString(), outcome: 'submitted', attempts: [{ terminalAt: new Date().toISOString(), outcome: 'submitted', commit: fixture.repairCommit, agentId: 'synthetic-repair-worker' }] };
+    persist(submittedRepair);
+    const repairReview = bindCandidateReview(fixture.repair.ref, fixture.repairCommit, 'correction-repair');
+    assert.equal(store.validateIntegrationSubmission(slug, fixture.repair.ref, {}).reason, 'candidate_review_required', 'original correction never approves the repair');
+    const independent = store.getTicket(slug, repairReview.ref);
+    independent.dispatch.readonly = true;
+    independent.dispatch.agentId = 'synthetic-new-independent-reviewer';
+    persist(independent);
+    assert.equal(store.releaseTicket(slug, repairReview.ref, 'correction-repair-reviewer', { releaseKind: 'oracle', oracle: 'Does the repair candidate pass its independent review?' }).ok, true);
+    assert.equal(store.applyExperimentVerdict(slug, repairReview.ref, { text: 'Synthetic independent repair approval', outcome: 'accepted' }).ok, true);
+    assert.notEqual(store.validateIntegrationSubmission(slug, fixture.repair.ref, {}).reason, 'candidate_review_required');
+    assert.equal(store.getTicket(slug, repairReview.ref).reviewTarget.outcome, 'accepted');
+    assert.equal(store.getTicket(slug, review.ref).reviewTarget.outcome, 'rejected');
+    assert.equal(store.pendingSubmission(store.getTicket(slug, fixture.repair.ref)), true, 'no automatic delivery');
+    assert.equal(store.validateIntegrationSubmission(slug, source.ref, {}).reason, 'candidate_rejected');
+  });
+});
+
 test('SQ-2972: only an oracle-rejected related source admits inherited commits, and the admitted range stays whole', async () => {
   await withInheritedRejectedFixture('classification', async (fixture: any) => {
     const source = await submitInheritedSource(fixture);
