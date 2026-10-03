@@ -1,6 +1,6 @@
 {
   "name": "sidequest",
-  "version": "5.6.0",
+  "version": "5.6.1",
   "description": "A local work board and orchestration loop for Claude Code. Every task saved as a ticket survives context compaction and new sessions, with instructions, status, and recorded discussion kept on the board. Categories route tickets to a model and effort; token-gated executors return verified work for review and integration. A self-hosted Kanban dashboard spans your projects.",
   "author": {
     "name": "Eigenwise",
