@@ -8,6 +8,9 @@
   },
   "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/codebase-mapper",
   "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+  "privacyPolicyUrl": "https://github.com/Eigenwise/eigenwise-toolshed/blob/main/plugins/codebase-mapper/PRIVACY.md",
+  "documentationUrl": "https://eigenwise.github.io/eigenwise-toolshed/getting-started/codebase-mapper/",
+  "supportUrl": "https://github.com/Eigenwise/eigenwise-toolshed/issues",
   "license": "MIT",
   "keywords": [
     "documentation",
