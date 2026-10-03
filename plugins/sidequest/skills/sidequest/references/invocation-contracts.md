@@ -23,8 +23,18 @@ this file only covers what the schema has no way to say.
 - **`integrate` verification waiver**: `skipVerify: true` also requires `verificationWaiver` with `authority`,
   `reason`, `affectedGate`, and either a bounded `scope` or future `expiresAt`. Sidequest validates and stores
   the waiver Diagnostic with the integration result; a bare `skipVerify` is refused.
-- **`add`**: `complexity` is the legacy ambiguity fallback and requires `why` alongside it. Stamp
-  `category` from the live taxonomy instead whenever one fits.
+- **`add`**: `complexity` is the legacy ambiguity fallback and requires `why` alongside it (min 20 chars).
+  Stamp `category` from the live taxonomy instead whenever one fits. `add` takes every ticket field `update`
+  takes except `status`, `by`, and `ref`, which only describe an existing ticket, so `externalDeliverable`,
+  `workingTreeDelivery`, `readonly`, and the verifier fields work at filing time. `unclassified` is `add`-only.
+- **`by` on control-plane calls**: `rework`, `supersede_submission`, and `groomClose` default an omitted `by`
+  to your session id. A subagent calling `rework` without `by` gets the owner label its own dispatch recorded, or
+  a refusal naming the labels in conflict. `rework` still requires the candidate owner, so the default only
+  passes when that is you; otherwise pass `by` as the submitter. Every other tool, `claim`, `done`, `release`,
+  `submit`, `commit`, `checkpoint`, `scopeRequest`, `integrate`, and `next`, still needs an explicit `by`.
+- **`rework` text over its cap**: `review` (1000 chars) and `reason` (4000 chars) are never refused for
+  length. The full text is stored as a ticket comment attributed to `by`, and the field keeps a truncated
+  summary ending in `[full text: comment <id>]`. Read the comment for the whole finding.
 - **`groomClose`**: one tool, three purposes, each with a different gate. `deliveryCommit` closes it as a
   delivery and the commit must already be reachable from the integration target recorded when that ticket was
   prepared. A later board-target or checkout change does not retarget the ticket. `integration: true` closes
@@ -40,6 +50,8 @@ the response carries `acceptedAliases` naming the substitution.
 - `add`: `story` for `storyId`
 - `comment`: `message` or `m` for `body`
 - `link`: `ref` for `from`, `type` for `verb`, `target` for `to`
+- `link`: `dependsOn` is the depends-on relation, either as the verb or as `{ from: "SQ-4", dependsOn: "SQ-3" }`
+  in place of `verb` and `to`
 - `story_log`: `append` for `entry`
 - `unlink`: `from` for `a`, `to` for `b`
 - any tool taking a priority: `priority: "medium"` is coerced to `"normal"` (`medium` is an effort value,

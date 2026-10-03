@@ -3191,6 +3191,20 @@ function gatedClaimHolder(ticket?: any) {
   return ticket?.claim?.by ? String(ticket.claim.by) : '<your claim id>';
 }
 
+// The owner label the board already holds for a subagent caller: the claim holder, or the submitter once submit
+// released the claim, on every dispatch bound to its agent id. A hook defaults an omitted `by` from it, and
+// refuses unless exactly one label comes back (GH-424).
+function dispatchCallerOwners(identity?: any) {
+  const agentId = String(identity?.agentId || '').trim();
+  const ref = String(identity?.ref || '').trim().toUpperCase();
+  if (!agentId) return [];
+  return listProjects({ all: true })
+    .flatMap((project: any) => listTickets(project.slug))
+    .filter((ticket: any) => dispatchState(ticket)?.agentId === agentId && (!ref || String(ticket.ref).toUpperCase() === ref))
+    .map((ticket: any) => ({ ref: ticket.ref, by: String(ticket.claim?.by || ticket.submission?.by || '').trim() }))
+    .filter((owner: any) => owner.by);
+}
+
 function dispatchIsolationExpectation(identity?: any) {
   const sessionId = String(identity?.sessionId || '').trim();
   const executor = String(identity?.executor || '').trim();
@@ -4546,6 +4560,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     dispatchIdentityDiagnosis,
     crossedWorktreeBinding,
     dispatchIsolationExpectation,
+    dispatchCallerOwners,
     dispatchUnboundClaim,
     boardVerificationEvidencePath,
     dispatchEvidenceDirectory,

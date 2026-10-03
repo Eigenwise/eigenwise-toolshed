@@ -111,7 +111,7 @@ const tools: ToolDefinition[] = [
           },
         },
       },
-      required: ['ref', 'by', 'supersededBy', 'reason'],
+      required: ['ref', 'supersededBy', 'reason'],
     },
     handler(args) {
       const { slug } = resolveLifecycleProject(args.project, args, 'supersede_submission');

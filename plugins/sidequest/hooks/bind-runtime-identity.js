@@ -144,6 +144,17 @@ function writeDeny(hookEventName, permissionDecisionReason) {
     }
   });
 }
+function writeToolUpdate(updatedInput, systemMessage) {
+  const context = systemMessage ? projectedText("PreToolUse", systemMessage) : "";
+  writeJson({
+    ...context ? { systemMessage: context } : {},
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      updatedInput,
+      ...context ? { additionalContext: context } : {}
+    }
+  });
+}
 
 // src/hooks/shared/runtime-identity.ts
 var import_node_fs2 = __toESM(require("node:fs"));
@@ -274,11 +285,35 @@ function rebindObservedCheckout(input, agentId, executor, checkoutRoot) {
   if (found?.terminal || found?.identityBound) return;
   bindObservedRuntimeIdentity(input, agentId, executor, checkoutRoot);
 }
+function subagentReworkInput(input, agentId) {
+  const isRework = stringField(input, "tool_name") === "mcp__plugin_sidequest_board__rework";
+  if (!agentId || !isRework) return null;
+  return isRecord(input.tool_input) ? input.tool_input : null;
+}
+function reworkWithoutBy(input, agentId) {
+  const toolInput = subagentReworkInput(input, agentId);
+  return toolInput && !String(toolInput.by ?? "").trim() ? toolInput : null;
+}
+function defaultReworkBy(input, agentId) {
+  const toolInput = reworkWithoutBy(input, agentId);
+  if (!toolInput) return false;
+  const store = require(runtimeModule("store"));
+  const owners = store.dispatchCallerOwners({ agentId, ref: toolInput.ref });
+  const labels = Array.from(new Set(owners.map((owner) => owner.by)));
+  if (labels.length === 1) {
+    writeToolUpdate({ ...toolInput, by: labels[0] });
+    return true;
+  }
+  const named = labels.length ? `owner labels ${labels.map((label) => `"${label}"`).join(" and ")}` : "no dispatch with an owner label";
+  writeDeny("PreToolUse", `sidequest: rework omitted by and cannot default it: subagent ${agentId} has ${named}, while the main session id is a different identity. Pass by = the submitter's claim id.`);
+  return true;
+}
 function main() {
   const input = readStdin();
   if (!input) return;
   const agentId = stringField(input, "agent_id", "agentId");
   const executor = stringField(input, "agent_type", "agentType", "subagent_type");
+  if (defaultReworkBy(input, agentId)) return;
   if (bindClaimRuntimeIdentity(input, agentId, executor)) return;
   const checkoutRoot = executorCheckoutRoot(input, agentId, executor);
   if (!checkoutRoot) return;

@@ -869,12 +869,12 @@ const tools = [
       properties: {
         ref: { type: "string" },
         project: PROJECT_PROP,
-        by: { type: "string" },
+        by: { type: "string", description: "The candidate owner. Omitted, it defaults to the caller: a bound executor's claim id, else the main session id. The owner check still judges the default." },
         review: { type: "string" },
         reviewRef: { type: "string", description: "Accepted for compatibility and ignored; it grants no authority over a bound candidate." },
         reason: { type: "string" }
       },
-      required: ["ref", "by", "review", "reason"]
+      required: ["ref", "review", "reason"]
     },
     handler(args) {
       const { slug } = resolveLifecycleProject(args.project, args, "rework");
