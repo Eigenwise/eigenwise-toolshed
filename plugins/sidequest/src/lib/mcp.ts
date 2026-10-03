@@ -60,14 +60,17 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 24000 for VERIFICATION_WAIVER_PROP's type: 'object' (SQ-2 / GitHub #109): an MCP host that
 // enforces the declared schema type refused a top-level verificationWaiver because the property listed
 // `properties` without `type: 'object'`. +91 bytes compacted, while preserving the 2.5KB reserve.
-// Raised from 24100 for add/update verifyCwd (SQ-3118 / GitHub #259): +60 bytes compacted, while preserving
-// the 2.5KB reserve. A nested workspace's gate had no other way to run from its own directory.
-// Raised from 24200 for deniedTools on board_config and category_edit (GH-222): +114 bytes compacted. The two
-// changes landed in one wave, so the cap moved once for both while preserving the 2.5KB reserve.
-// Raised from 24300 for groomClose/integrate deliveryRevision and resolvedPaths (GitHub #144), the only route
-// that closes a candidate rebased or squash-merged before it landed: +980 bytes compacted, measured on the
-// wave-3 tree with SQ-3118 and GH-222 already in, so the 2.5KB reserve still holds.
-const MCP_TOOLS_LIST_MAX_BYTES = 25400;
+// From a shared 24100 baseline, two branches independently raised this constant: fix/sq13-addfiles-scope-grant
+// (GitHub #173) for update.addFiles/removeFiles and scopeRequest.grant, and develop fix wave 3 for add/update
+// verifyCwd (SQ-3118 / GitHub #259), deniedTools on board_config/category_edit (GH-222), and groomClose/integrate
+// deliveryRevision/resolvedPaths (GitHub #144, the only route that closes a candidate rebased or squash-merged
+// before it landed).
+// Rebasing #173 onto the wave-3 tree merges all of the above into one payload. Merging develop's finalized
+// review correction (verdict.correct, US-73) on top adds its own schema bytes. Measured directly on that
+// merged tree: the tools/list payload is 23369 bytes. 25900 is the smallest round (hundred-byte) value that
+// keeps the 2500-byte reserve (2531 bytes of headroom). Re-measure here rather than inheriting this number
+// if the payload changes again.
+const MCP_TOOLS_LIST_MAX_BYTES = 25900;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -291,7 +294,11 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   },
   add: { complexity: 'Legacy score; why required.', verify: ATTESTATION_VERIFY_CONTRACT },
   claim: { force: 'Operator-only.' },
-  update: { verify: ATTESTATION_VERIFY_CONTRACT },
+  update: {
+    verify: ATTESTATION_VERIFY_CONTRACT,
+    addFiles: 'Appends, keeps rest. Refused with files. Applied before removeFiles.',
+    removeFiles: 'Drops only these, keeps rest. Refused with files, and for a path this ticket does not declare. An isolated live dispatch loses them at once; a shared-tree one keeps them until redispatch.',
+  },
   supersede_submission: { supersededBy: 'Repair ticket ref, not a commit.' },
   comments: {
     since: 'Comment id or ISO timestamp.',
@@ -325,6 +332,9 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   verdict: {
     outcome: 'Candidate, not reviewer prose.',
     correct: 'Main-thread accepted-to-rejected correction; requires rejected/by/text. expectedVerdictAt: list({ref}).ticket.oracle.verdict.at. Exactly one commit or sourceRevision.',
+  },
+  scopeRequest: {
+    grant: 'Grants every path this claim still has refused; pass no files. Refuses the claim holder’s own by.',
   },
 };
 
