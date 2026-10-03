@@ -1838,7 +1838,7 @@ type DispatchOptions = StoredRecord;
 type DispatchTokenFiles = { prior: string | null; staged: string | null };
 type InstallFacts = { installPath: string | null; identity: string | null; version: string | null };
 type DispatchPreflight = {
-  projectPath: string | undefined; preparedCompatibility: StoredRecord | null; servingCompatibilityWarning: string | null;
+  projectPath: string; preparedCompatibility: StoredRecord | null; servingCompatibilityWarning: string | null;
   pythonIoEncoding: { written: boolean }; sourceRevisionAdapterSwitch: StoredRecord; snapshotPreflight: StoredRecord | null;
 };
 type GuardedDispatch = {
@@ -1876,7 +1876,7 @@ function undeclaredScopeRefusal(slug: string, ticket: StoredRecord, opts: Dispat
   return noDeclaredFileScope && opts.allowUnscoped !== true ? undeclaredWriteScopeRefusal(ticket.ref) : null;
 }
 
-function dispatchTicketRefusal(slug: string, found: StoredRecord, opts: DispatchOptions, projectPath: string | undefined): string | null {
+function dispatchTicketRefusal(slug: string, found: StoredRecord, opts: DispatchOptions, projectPath: string): string | null {
   return dispatchWorktreeOverrideRefusal(found, opts.worktree, projectPath)
     || executorClaimDispatchRefusal(slug, opts.sessionId)
     || undeclaredScopeRefusal(slug, found, opts)
@@ -1889,7 +1889,7 @@ function dispatchableTicket(slug: string, idOrRef: string, opts: DispatchOptions
   // independently of whatever MCP roster this conversation happens to have
   // loaded, so a claim-first spawn spec is worthless unless the target
   // project actually has a runnable, board-MCP-capable install (SQ-1017).
-  const projectPath: string | undefined = readMeta(slug)?.path;
+  const projectPath: string = readMeta(slug)?.path;
   const found = getTicket(slug, idOrRef);
   if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
   const refusal = dispatchTicketRefusal(slug, found, opts, projectPath);
@@ -1917,7 +1917,7 @@ function assertServingNotOlder(ref: string, preparedCompatibility: StoredRecord 
   throw new Error(`prepare dispatch: ${ref} refused; serving Sidequest ${serving.version || 'unknown'} is older than prepared ${plugin.version || 'unknown'}. Restart Claude Code so the board serves the prepared build, then dispatch again.`);
 }
 
-function preparedInstallCompatibility(found: StoredRecord, projectPath: string | undefined) {
+function preparedInstallCompatibility(found: StoredRecord, projectPath: string) {
   const installCheck = projectPath ? assertSidequestInstall(projectPath) : null;
   const plugin = installFacts(installCheck);
   const serving = installFacts(servingInstall());
@@ -1939,7 +1939,7 @@ function supersedeEvidencedAttempt(slug: string, found: StoredRecord, opts: Disp
   if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${found.ref} has no unbound dispatch attempt to supersede (${superseded.reason}).`}`);
 }
 
-function preparedDispatchEnvironment(slug: string, found: StoredRecord, idOrRef: string, projectPath: string | undefined) {
+function preparedDispatchEnvironment(slug: string, found: StoredRecord, idOrRef: string, projectPath: string) {
   const pythonIoEncoding = projectPath ? ensurePythonIoEncoding(projectPath) : { written: false };
   const sourceRevisionAdapterSwitch = takeSourceRevisionAdapterSwitch(slug);
   const captureFilesystemSnapshot = withTicketLock(slug, found.id, () => {
@@ -1977,7 +1977,7 @@ function unclaimedRetiredIsolatedAttempt(t: StoredRecord, current: StoredRecord)
 
 // A composition admission adopts exact C into a genuinely new checkout, so it never reclaims or resumes the
 // released attempt's retained checkout: that checkout and its proofs stay untouched.
-function reclaimsRetiredCheckout(slug: string, projectPath: string | undefined, t: StoredRecord, current: StoredRecord): boolean {
+function reclaimsRetiredCheckout(slug: string, projectPath: string, t: StoredRecord, current: StoredRecord): boolean {
   if (t.compositionAdmission) return false;
   return unclaimedRetiredIsolatedAttempt(t, current) && !checkoutBelongsToAnotherDispatchAgent(slug, projectPath, t, current);
 }
@@ -2004,7 +2004,7 @@ function assertRetainedRecoveryContinues(slug: string, t: StoredRecord, current:
   }
 }
 
-function reclaimRetiredCheckout(slug: string, projectPath: string | undefined, t: StoredRecord, current: StoredRecord): CrossBoundWorktree | null {
+function reclaimRetiredCheckout(slug: string, projectPath: string, t: StoredRecord, current: StoredRecord): CrossBoundWorktree | null {
   if (!reclaimsRetiredCheckout(slug, projectPath, t, current)) return null;
   const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
   const recovery = reclaimRetiredAttemptCheckout(slug, projectPath, t, recoveryFacts.state, {
@@ -2103,7 +2103,7 @@ function applyRecoveryFallback(t: StoredRecord, current: StoredRecord, currentRo
   });
 }
 
-function guardLockedDispatch(slug: string, t: StoredRecord, current: StoredRecord, opts: DispatchOptions, projectPath: string | undefined) {
+function guardLockedDispatch(slug: string, t: StoredRecord, current: StoredRecord, opts: DispatchOptions, projectPath: string) {
   assertNoPendingSubmission(t);
   const crossBoundWorktree = reclaimRetiredCheckout(slug, projectPath, t, current);
   assertNoLiveRuntimeAttempt(t, current, opts);
@@ -2167,7 +2167,7 @@ function liveDispatchToken(t: StoredRecord, current: StoredRecord): boolean {
   return Boolean(current) && !current.terminalAt && Boolean(t.dispatchNonce);
 }
 
-function supersedeLiveToken(projectPath: string | undefined, t: StoredRecord, current: StoredRecord, supersededTokens: StoredRecord[], now: string): void {
+function supersedeLiveToken(projectPath: string, t: StoredRecord, current: StoredRecord, supersededTokens: StoredRecord[], now: string): void {
   if (!liveDispatchToken(t, current)) return;
   if (current.outcome === 'prepared' && current.sharedTree === false) {
     reclaimUnclaimedDispatchWorktree(projectPath, current);
@@ -2274,13 +2274,13 @@ function sharedTreeScopeRefusal(t: StoredRecord, isolation: DispatchIsolation, e
   return null;
 }
 
-function dispatchRuntimeRefusal(slug: string, t: StoredRecord, sharedTree: boolean, projectPath: string | undefined, opts: DispatchOptions): string | null {
+function dispatchRuntimeRefusal(slug: string, t: StoredRecord, sharedTree: boolean, projectPath: string, opts: DispatchOptions): string | null {
   return sharedTree
     ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd)
     : isolatedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd, slug, opts.sessionId);
 }
 
-function assertDispatchCheckoutShape(slug: string, t: StoredRecord, isolation: DispatchIsolation, effectiveFiles: readonly string[], projectPath: string | undefined, opts: DispatchOptions): void {
+function assertDispatchCheckoutShape(slug: string, t: StoredRecord, isolation: DispatchIsolation, effectiveFiles: readonly string[], projectPath: string, opts: DispatchOptions): void {
   assertCompositionCheckout(t, isolation);
   const refusal = sharedTreeScopeRefusal(t, isolation, effectiveFiles) || dispatchRuntimeRefusal(slug, t, isolation.sharedTree, projectPath, opts);
   if (refusal) throw new Error(refusal);
@@ -2316,7 +2316,7 @@ function workingTreeDirtyBaseline(dirtyBaselineCapture: StoredRecord | null, wor
   return workingTreeDelivery ? dirtyBaselineCapture?.baseline || null : null;
 }
 
-function dispatchDirtyBaselines(slug: string, sharedTree: boolean, artifactMode: boolean, artifactScope: string | null, workingTreeDelivery: boolean): DirtyBaselines {
+function dispatchDirtyBaselines(slug: string, sharedTree: boolean, artifactMode: boolean, artifactScope: string | null | undefined, workingTreeDelivery: boolean): DirtyBaselines {
   const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
   const dirtyBaselineCapture = sharedTree && !artifactMode ? captureDirtyBaseline(slug) : null;
   return { artifactDirtyBaseline, dirtyBaselineCapture, workingTreeDirtyBaseline: workingTreeDirtyBaseline(dirtyBaselineCapture, workingTreeDelivery) };
@@ -2456,7 +2456,7 @@ function publishBranchRef(slug: string, integrationTargetState: StoredRecord | n
 // class of confusion, and the window is minutes. The prepare/finalize flow
 // cannot produce this state: preparation creates no tag at all, and finalize
 // only tags a commit the remote publish branch already carries.
-function assertPublishedReleaseBaseline(slug: string, t: StoredRecord, projectPath: string | undefined, baseCommit: string, integrationTargetState: StoredRecord | null): void {
+function assertPublishedReleaseBaseline(slug: string, t: StoredRecord, projectPath: string, baseCommit: string, integrationTargetState: StoredRecord | null): void {
   const releaseTip = projectPath ? commitScope.unpublishedReleaseTip(projectPath, baseCommit, publishBranchRef(slug, integrationTargetState)) : null;
   if (releaseTip) {
     throw new Error(`prepare dispatch: ${t.ref} refused; baseline ${releaseTip.commit} is an unpublished release commit, tagged ${releaseTip.tags.join(', ')} and not yet on the remote branch. A direct release cut tags its commit before running its suites, so this is either a direct cut still in flight or one that failed and left its commit live. The prepare/finalize flow never reaches this state: preparation creates no tag, and finalize only tags a commit the remote branch already has. Wait for the cut to finish and push, or tear it down (delete those tags and reset the branch), then dispatch again.`);

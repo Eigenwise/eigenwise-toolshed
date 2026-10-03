@@ -56,9 +56,12 @@ function rootAdmissionRefusal(root, input) {
   if (root.submission) return refuse("root_submitted", "Rework the root through the ordinary protocol before adopting a composition.");
   return releasedRootRangeRefusal(root, input);
 }
+function submittedTerminalGeneration(dispatch) {
+  return Boolean(dispatch?.terminalAt) && dispatch?.outcome === "submitted";
+}
 function terminalSourceRefusal(source) {
   if ([source.claim?.by, source.dispatchNonce].some(Boolean)) return refuse("source_active", `${source.ref} is claimed or actively dispatched.`);
-  if (![source.dispatch?.terminalAt, source.dispatch?.outcome === "submitted"].every(Boolean)) return refuse("source_unavailable", `${source.ref} needs its terminal submitted generation.`);
+  if (!submittedTerminalGeneration(source.dispatch)) return refuse("source_unavailable", `${source.ref} needs its terminal submitted generation.`);
   if (source.status === "done") return refuse("source_delivered", `${source.ref} is already done.`);
 }
 function sourceCandidateRefusal(source, input, submission) {
@@ -76,32 +79,36 @@ function sourceRelationRefusal(source, relation) {
   if (relation.conflict || relation.side !== "both") return refuse("stale_source", `${source.ref} has an incomplete or conflicting authoritative review binding.`);
   return sourceReviewIdentityRefusal(source, relation);
 }
+function reviewTargetBindsSource(target, source, candidate) {
+  return [target?.ticketId === source.id, target?.ref === source.ref, (0, import_review_binding.sameReviewCandidate)(target?.candidate, candidate)].every(Boolean);
+}
+function sourceMirrorBindsReview(mirror, review, candidate) {
+  return [mirror?.ticketId === review.id, mirror?.ref === review.ref, (0, import_review_binding.sameReviewCandidate)(mirror?.candidate, candidate)].every(Boolean);
+}
+function reviewBindsExactSource(source, review) {
+  const candidate = { source: "git", value: source.submission?.commit };
+  return reviewTargetBindsSource(review.reviewTarget, source, candidate) && sourceMirrorBindsReview(source.submission?.review, review, candidate);
+}
 function sourceReviewIdentityRefusal(source, relation) {
   const review = relation.reviewTicket;
   if (!review) return refuse("stale_source", `${source.ref}'s bound review is unavailable.`);
-  const target = review.reviewTarget;
-  const mirror = source.submission?.review;
-  const candidate = { source: "git", value: source.submission?.commit };
-  const matching = [
-    target?.ticketId === source.id,
-    target?.ref === source.ref,
-    mirror?.ticketId === review.id,
-    mirror?.ref === review.ref,
-    (0, import_review_binding.sameReviewCandidate)(target?.candidate, candidate),
-    (0, import_review_binding.sameReviewCandidate)(mirror?.candidate, candidate)
-  ];
-  if (matching.includes(false)) return refuse("stale_source", `${source.ref}'s review no longer binds its exact source and candidate.`);
+  if (!reviewBindsExactSource(source, review)) return refuse("stale_source", `${source.ref}'s review no longer binds its exact source and candidate.`);
   return sourceReviewOutcomeRefusal(source, review);
+}
+function latestCorrectionAt(review) {
+  const corrections = review.oracle?.corrections ?? [];
+  return corrections.at(-1)?.at;
+}
+function sourceBindingGenerationRefusal(source, review, expectedOutcome) {
+  const bindings = [source.submission?.review, review.reviewTarget];
+  const correctedAt = latestCorrectionAt(review);
+  if (!bindings.every((binding) => binding?.outcome === expectedOutcome)) return refuse("stale_source", `${source.ref}'s binding does not match the authoritative verdict.`);
+  if (!bindings.every((binding) => binding?.correctedAt === correctedAt)) return refuse("stale_source", `${source.ref}'s binding does not match the authoritative correction generation.`);
 }
 function sourceReviewOutcomeRefusal(source, review) {
   const outcome = (0, import_review_binding.effectiveOracleVerdictOutcome)(review.oracle);
   if (outcome === "rejected") return refuse("source_rejected", `${source.ref}'s authoritative review rejected the candidate.`);
-  const mirror = source.submission?.review;
-  const target = review.reviewTarget;
-  const correctedAt = review.oracle?.corrections?.at(-1)?.at;
-  const expectedOutcome = outcome ?? "planned";
-  if (mirror?.outcome !== expectedOutcome || target?.outcome !== expectedOutcome) return refuse("stale_source", `${source.ref}'s binding does not match the authoritative verdict.`);
-  if (mirror?.correctedAt !== correctedAt || target?.correctedAt !== correctedAt) return refuse("stale_source", `${source.ref}'s binding does not match the authoritative correction generation.`);
+  return sourceBindingGenerationRefusal(source, review, outcome ?? "planned");
 }
 function hasRecordedCompositionRange(submission) {
   return [submission.base, submission.commit, submission.commits?.length, submission.admittedScope?.length].every(Boolean);
@@ -111,35 +118,44 @@ function sourceRange(source) {
   if (!submission || !hasRecordedCompositionRange(submission)) throw new Error(`${source.ref} has no complete recorded composition range.`);
   return { ref: source.ref, base: submission.base, commit: submission.commit, commits: submission.commits, admittedScope: submission.admittedScope };
 }
-function sourceObservation(source, input, relation) {
+function sourceSnapshot(source, relation) {
   const review = relation?.reviewTicket;
-  const range = sourceRange(source);
+  return contextRevision({
+    id: source.id,
+    submission: source.submission,
+    dispatch: source.dispatch,
+    review: review && {
+      id: review.id,
+      status: review.status,
+      target: review.reviewTarget,
+      oracle: review.oracle,
+      dispatch: review.dispatch
+    },
+    binding: relation && { conflict: relation.conflict, side: relation.side }
+  });
+}
+function mirroredReviewOutcome(source) {
+  return source.submission?.review?.outcome ?? null;
+}
+function observedReviewGeneration(review) {
+  return { reviewTicketId: review?.id ?? null, correctedAt: review ? latestCorrectionAt(review) ?? null : null };
+}
+function sourceObservation(source, input, relation) {
+  const review = relation?.reviewTicket ?? null;
   return {
     ...input,
-    range,
-    reviewTicketId: review?.id ?? null,
-    reviewOutcome: source.submission?.review?.outcome ?? null,
-    correctedAt: review?.oracle?.corrections?.at(-1)?.at ?? null,
-    snapshot: contextRevision({
-      id: source.id,
-      submission: source.submission,
-      dispatch: source.dispatch,
-      review: review && {
-        id: review.id,
-        status: review.status,
-        target: review.reviewTarget,
-        oracle: review.oracle,
-        dispatch: review.dispatch
-      },
-      binding: relation && { conflict: relation.conflict, side: relation.side }
-    })
+    range: sourceRange(source),
+    ...observedReviewGeneration(review),
+    reviewOutcome: mirroredReviewOutcome(source),
+    snapshot: sourceSnapshot(source, relation)
   };
 }
 function rootGeneration(root) {
+  const dispatch = root.dispatch ?? {};
   return {
-    attemptCount: root.dispatch?.attempts?.length ?? 0,
-    releasedAt: root.dispatch?.terminalAt ?? "",
-    preparedAt: root.dispatch?.preparedAt ?? ""
+    attemptCount: (dispatch.attempts ?? []).length,
+    releasedAt: dispatch.terminalAt ?? "",
+    preparedAt: dispatch.preparedAt ?? ""
   };
 }
 function expectedSource(observation) {
@@ -186,9 +202,12 @@ function existingAdmissionResult(root, input) {
   if (contextRevision(previousInput) !== contextRevision(input)) return refuse("admission_exists", "A different immutable composition admission already exists.");
   return { ok: true, idempotent: true, admission: previous };
 }
+function distinctNonRootRefs(refs, rootRef) {
+  return refs.length > 0 && new Set(refs).size === refs.length && !refs.includes(rootRef);
+}
 function uniqueSourcesRefusal(root, inputs) {
   const refs = inputs.map((input) => input.ref);
-  if (!refs.length || new Set(refs).size !== refs.length || refs.includes(root.ref)) return refuse("invalid_sources", "Composition requires distinct related sources, excluding the root.");
+  if (!distinctNonRootRefs(refs, root.ref)) return refuse("invalid_sources", "Composition requires distinct related sources, excluding the root.");
   const related = new Set(root.links?.filter((link) => link.type === "related").map((link) => link.ref));
   if (refs.some((ref) => !related.has(ref))) return refuse("source_unrelated", "Every composition source must have an existing related root link.");
 }
@@ -209,14 +228,19 @@ function candidateFragmentRefusal(repository, root, candidate) {
   }).trim();
   if (present !== fragment) return refuse("missing_release_fragment", `Exact candidate must already contain ${fragment}.`);
 }
+function submittedOwnershipCommits(submission) {
+  if (!submission) return [];
+  return [submission.commit ?? "", ...submission.commits ?? []];
+}
+function attemptOwnershipCommits(attempt) {
+  return [attempt.commit ?? "", ...attempt.sanctionedCommits ?? []];
+}
+function dispatchOwnershipCommits(dispatch) {
+  if (!dispatch) return [];
+  return [...dispatch.sanctionedCommits ?? [], ...(dispatch.attempts ?? []).flatMap(attemptOwnershipCommits)];
+}
 function recordedOwnershipCommits(ticket) {
-  return [
-    ticket.submission?.commit ?? "",
-    ...ticket.submission?.commits ?? [],
-    ticket.checkpoint?.commit ?? "",
-    ...ticket.dispatch?.sanctionedCommits ?? [],
-    ...(ticket.dispatch?.attempts ?? []).flatMap((attempt) => [attempt.commit ?? "", ...attempt.sanctionedCommits ?? []])
-  ];
+  return [...submittedOwnershipCommits(ticket.submission), ticket.checkpoint?.commit ?? "", ...dispatchOwnershipCommits(ticket.dispatch)];
 }
 function foreignCommitRefusal(root, tickets, commits, sources) {
   const permitted = /* @__PURE__ */ new Set([root.ref, ...sources.map((source) => source.ref)]);
@@ -226,56 +250,69 @@ function foreignCommitRefusal(root, tickets, commits, sources) {
 function originalRootScope(root) {
   return (0, import_commit_scope.ticketCommitScope)(root.dispatch?.declaredFiles ?? root.files ?? [], root.files, root.ref);
 }
+function admittedRootScope(root) {
+  return root.compositionAdmission?.originalRootScope ?? originalRootScope(root);
+}
+function reviewEscapedLocks(relation, locked) {
+  const review = relation?.reviewTicket;
+  return review ? !locked.includes(review.id) : false;
+}
 function ownFragmentRefusal(root, paths) {
   const rootFragment = (0, import_commit_scope.ticketReleaseFragment)(root.ref);
   if (paths.some((file) => file.startsWith(".release/unreleased/") && file !== rootFragment)) {
     return refuse("foreign_release_fragment", "Root own changes cannot attribute another ticket's release fragment to the root.");
   }
 }
+function dispatchNamesConsumedGeneration(current, admission, consumedBy) {
+  const fence = current.compositionAdmission;
+  return [
+    fence?.id === admission.id,
+    current.preparedAt === consumedBy.preparedAt,
+    current.baseCommit === admission.base,
+    fence?.rangeBase === admission.base,
+    compositionCheckoutCommit(current) === admission.candidate,
+    current.sharedTree === false,
+    consumedBy.attempt === admission.expected.attemptCount + 1,
+    fence?.nonceDigest === consumedBy.nonceDigest
+  ].every(Boolean);
+}
 function consumedGenerationRefusal(root) {
   const admission = root.compositionAdmission;
   if (!admission?.consumedBy) return refuse("admission_unconsumed", "Composition requires its genuinely consumed prepared generation.");
-  const current = root.dispatch;
-  const matches = [
-    current?.compositionAdmission?.id === admission.id,
-    current?.preparedAt === admission.consumedBy.preparedAt,
-    current?.baseCommit === admission.base,
-    current?.compositionAdmission?.rangeBase === admission.base,
-    compositionCheckoutCommit(current ?? {}) === admission.candidate,
-    current?.sharedTree === false,
-    admission.consumedBy.attempt === admission.expected.attemptCount + 1,
-    current?.compositionAdmission?.nonceDigest === admission.consumedBy.nonceDigest
-  ];
-  if (matches.includes(false)) return refuse("stale_generation", "Composition admission does not name this exact isolated dispatch generation.");
+  if (!dispatchNamesConsumedGeneration(root.dispatch ?? {}, admission, admission.consumedBy)) return refuse("stale_generation", "Composition admission does not name this exact isolated dispatch generation.");
 }
 function terminalCompositionRefusal(root) {
   const generation = consumedGenerationRefusal(root);
   if (generation) return generation;
-  const terminal = [!root.claim?.by, !root.dispatchNonce, Boolean(root.dispatch?.terminalAt), root.dispatch?.outcome === "submitted"];
+  const terminal = [!root.claim?.by, !root.dispatchNonce, submittedTerminalGeneration(root.dispatch)];
   if (terminal.includes(false)) return refuse("stale_generation", "Composition delivery requires its genuine claim-free submitted generation.");
   return exactCompositionSubmissionRefusal(root, root.submission);
+}
+function submitsExactComposition(admission, submission) {
+  const expectedCommits = [...admission.ownCommits, ...admission.sourceRanges.flatMap((source) => source.commits)].sort();
+  const recordedCommits = [...submission.commits ?? []].sort();
+  return [
+    submission.commit === admission.candidate,
+    submission.base === admission.base,
+    contextRevision(recordedCommits) === contextRevision(expectedCommits)
+  ].every(Boolean);
 }
 function exactCompositionSubmissionRefusal(root, submission) {
   const admission = root.compositionAdmission;
   if (!admission) return;
-  const expectedCommits = [...admission.ownCommits, ...admission.sourceRanges.flatMap((source) => source.commits)].sort();
-  const recordedCommits = [...submission?.commits ?? []].sort();
-  const exact = [
-    submission?.commit === admission.candidate,
-    submission?.base === admission.base,
-    contextRevision(recordedCommits) === contextRevision(expectedCommits)
-  ];
-  if (exact.includes(false)) return refuse("composition_submission_mismatch", "Composition must submit exact C and the complete original BASE..C range.");
+  if (!submitsExactComposition(admission, submission ?? {})) return refuse("composition_submission_mismatch", "Composition must submit exact C and the complete original BASE..C range.");
+}
+function capturedInGeneration(root, capture) {
+  return Date.parse(capture.completedAt ?? "") >= Date.parse(root.dispatch?.preparedAt ?? "");
+}
+function capturedCleanCandidate(capture, candidate) {
+  return capture.cleanWorktree === true && capture.candidate?.source === "git" && capture.candidate?.value === candidate;
 }
 function compositionCaptureMetadataRefusal(root, capture) {
-  const preparedAt = Date.parse(root.dispatch?.preparedAt ?? "");
-  const completedAt = Date.parse(capture.completedAt ?? "");
   const matches = [
     Boolean(root.claim?.by),
-    capture.cleanWorktree === true,
-    capture.candidate?.source === "git",
-    capture.candidate?.value === root.compositionAdmission?.candidate,
-    completedAt >= preparedAt
+    capturedInGeneration(root, capture),
+    capturedCleanCandidate(capture, root.compositionAdmission?.candidate)
   ];
   if (matches.includes(false)) return refuse("composition_capture_mismatch", "Composition capture must be fresh, clean, holder-owned, and bound to exact C in its new generation.");
 }
@@ -288,16 +325,18 @@ function checkoutGitIdentity(worktree, argument) {
     stdio: ["ignore", "pipe", "pipe"]
   }).trim();
 }
+function captureUsesDispatchCheckout(dispatch, worktree) {
+  const actualWorktree = (0, import_worktree.canonicalPath)(checkoutGitIdentity(worktree, "--show-toplevel"));
+  const gitDirectory = (0, import_worktree.canonicalPath)(checkoutGitIdentity(worktree, "--absolute-git-dir"));
+  return [
+    actualWorktree === (0, import_worktree.canonicalPath)(dispatch.worktree ?? ""),
+    gitDirectory === (0, import_worktree.canonicalPath)(dispatch.worktreeGitDirectory ?? ""),
+    (0, import_worktree.checkoutInstanceIdentity)(gitDirectory) === dispatch.worktreeCheckoutInstance
+  ].every(Boolean);
+}
 function compositionCaptureCheckoutRefusal(root, worktree) {
   try {
-    const actualWorktree = (0, import_worktree.canonicalPath)(checkoutGitIdentity(worktree, "--show-toplevel"));
-    const gitDirectory = (0, import_worktree.canonicalPath)(checkoutGitIdentity(worktree, "--absolute-git-dir"));
-    const matches = [
-      actualWorktree === (0, import_worktree.canonicalPath)(root.dispatch?.worktree ?? ""),
-      gitDirectory === (0, import_worktree.canonicalPath)(root.dispatch?.worktreeGitDirectory ?? ""),
-      (0, import_worktree.checkoutInstanceIdentity)(gitDirectory) === root.dispatch?.worktreeCheckoutInstance
-    ];
-    if (matches.includes(false)) return refuse("composition_capture_checkout_mismatch", "Composition capture belongs to a different native checkout instance.");
+    if (!captureUsesDispatchCheckout(root.dispatch ?? {}, worktree)) return refuse("composition_capture_checkout_mismatch", "Composition capture belongs to a different native checkout instance.");
   } catch {
     return refuse("composition_capture_checkout_unavailable", "Composition capture requires its observable genuine new native checkout.");
   }
@@ -334,13 +373,17 @@ function consumePreparedComposition(root, nonceDigest) {
   const admission = root.compositionAdmission;
   if (!admission) return;
   if (admission.consumedBy) throw new Error("Composition admission was already consumed. A new dispatch cannot replay it.");
-  if (!root.dispatch?.preparedAt || !nonceDigest) throw new Error("Composition consumption requires the new prepared generation and nonce digest.");
+  fencePreparedGeneration(root, admission, nonceDigest);
+}
+function fencePreparedGeneration(root, admission, nonceDigest) {
+  const dispatch = root.dispatch;
+  if (!dispatch?.preparedAt || !nonceDigest) throw new Error("Composition consumption requires the new prepared generation and nonce digest.");
   root.compositionAdmission = { ...admission, consumedBy: {
-    attempt: (root.dispatch.attempts?.length ?? 0) + 1,
-    preparedAt: root.dispatch.preparedAt,
+    attempt: (dispatch.attempts ?? []).length + 1,
+    preparedAt: dispatch.preparedAt,
     nonceDigest
   } };
-  root.dispatch.compositionAdmission = { id: admission.id, checkoutCommit: admission.candidate, rangeBase: admission.base, nonceDigest };
+  dispatch.compositionAdmission = { id: admission.id, checkoutCommit: admission.candidate, rangeBase: admission.base, nonceDigest };
 }
 function createCompositionAdmissions(dependencies) {
   function observeSources(slug, root, input, locked) {
@@ -363,7 +406,7 @@ function createCompositionAdmissions(dependencies) {
   }
   function observeSourceReview(slug, source, input, locked) {
     const relation = dependencies.submissionReviewRelation(slug, source);
-    if (relation?.reviewTicket && !locked.includes(relation.reviewTicket.id)) return refuse("stale_source", "Source review identity changed while acquiring composition locks. Probe again.");
+    if (reviewEscapedLocks(relation, locked)) return refuse("stale_source", "Source review identity changed while acquiring composition locks. Probe again.");
     const failure = sourceRelationRefusal(source, relation) || sourceScopeRefusal(dependencies.readMeta(slug).path, source);
     if (failure) return failure;
     return sourceObservation(source, input, relation);
@@ -372,7 +415,7 @@ function createCompositionAdmissions(dependencies) {
     const repository = dependencies.readMeta(slug).path;
     const proof = (0, import_composition_range.proveCompositionRange)(repository, {
       ...input,
-      rootScope: root.compositionAdmission?.originalRootScope ?? originalRootScope(root),
+      rootScope: admittedRootScope(root),
       sources: observed.sources.map((source) => source.range)
     });
     if (!proof.ok) return proof;
@@ -443,8 +486,9 @@ function createCompositionAdmissions(dependencies) {
     const admission = root.compositionAdmission;
     if (!admission) return refuse("admission_unavailable", "Composition admission disappeared while acquiring its locks.");
     if (admission.consumedBy) return refuse("admission_consumed", "Composition admission was already consumed. A new dispatch cannot replay it.");
-    const rootFailure = rootAdmissionRefusal(root, admission);
-    if (rootFailure) return rootFailure;
+    return rootAdmissionRefusal(root, admission) || observedAdmissionRefusal(slug, root, admission, locked);
+  }
+  function observedAdmissionRefusal(slug, root, admission, locked) {
     const sources = observeSources(slug, root, admission, locked);
     if (!Array.isArray(sources)) return sources;
     const observed = { ...rootGeneration(root), sources };
@@ -478,14 +522,14 @@ function createCompositionAdmissions(dependencies) {
     }
     return proveCandidate(slug, root, admission, { ...admission.expected, sources });
   }
-  function activeCompositionRefusal(slug, root, locked) {
-    const generation = consumedGenerationRefusal(root);
-    if (generation) return generation;
+  function currentNonceRefusal(root) {
     if (!root.dispatchNonce) return refuse("stale_generation", "An active composition boundary requires its genuine new dispatch nonce.");
     if (dependencies.dispatchTokenDigest(root.dispatchNonce) !== root.compositionAdmission?.consumedBy?.nonceDigest) {
       return refuse("stale_generation", "Composition admission belongs to a different dispatch nonce.");
     }
-    return consumedSourceRefusal(slug, root, locked);
+  }
+  function activeCompositionRefusal(slug, root, locked) {
+    return consumedGenerationRefusal(root) || currentNonceRefusal(root) || consumedSourceRefusal(slug, root, locked);
   }
   function submittedCompositionRefusal(slug, root, identities) {
     const relation = dependencies.submissionReviewRelation(slug, root);
@@ -497,20 +541,22 @@ function createCompositionAdmissions(dependencies) {
     if (boundary === "active") return activeCompositionRefusal(slug, root, identities);
     return submittedCompositionRefusal(slug, root, identities);
   }
-  function useUnderCompositionLocks(slug, ref, identities, boundary, callback) {
+  function useUnderCompositionLocks(slug, ref, identities, use, callback) {
     dependencies.invalidateStoreCaches();
     const root = dependencies.getTicket(slug, ref);
     if (!root) return refuse("not_found", "Composition root disappeared while acquiring its locks.");
-    const refusal = compositionBoundaryRefusal(slug, root, identities, boundary);
+    const refusal = compositionBoundaryRefusal(slug, root, identities, use.boundary);
     if (refusal) return refusal;
+    const consumerRefusal = use.refusal?.(root);
+    if (consumerRefusal) return { ...consumerRefusal, ticket: root };
     return callback();
   }
-  function withCompositionGenerationLock(slug, ref, callback, boundary = "active") {
+  function withCompositionGenerationLock(slug, ref, callback, use = { boundary: "active" }) {
     const root = dependencies.getTicket(slug, ref);
     if (!root?.compositionAdmission) return dependencies.withTicketLock(slug, root?.id ?? ref, callback);
     const identities = lockIdentities(slug, root, root.compositionAdmission);
     try {
-      return withCompositionLocks(slug, identities, () => useUnderCompositionLocks(slug, ref, identities, boundary, callback));
+      return withCompositionLocks(slug, identities, () => useUnderCompositionLocks(slug, ref, identities, use, callback));
     } finally {
       dependencies.invalidateStoreCaches();
     }

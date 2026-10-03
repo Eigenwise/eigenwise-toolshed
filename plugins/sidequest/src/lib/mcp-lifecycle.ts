@@ -438,7 +438,7 @@ function submitWorktreeRefusal(slug: string, ticket: any, root: string, args: an
   return crossing ? { reason: 'crossed_worktree_binding', message: crossedWorktreeRefusalMessage('submit', crossing) } : null;
 }
 
-type IntegrationTargetRecord = { upstream?: string; branch?: string };
+type IntegrationTargetRecord = { upstream?: string; branch?: string; mode?: string };
 type SubmittingTicket = CompositionTicket & { dispatch?: CompositionDispatch & { integrationTarget?: IntegrationTargetRecord | string | null } };
 type SubmissionRequirement = { code: string; message: string; retryable: boolean };
 type SubmissionRange = {
