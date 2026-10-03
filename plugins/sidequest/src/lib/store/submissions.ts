@@ -11,12 +11,35 @@ const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = 
 const { isInScope, scopedPaths } = require('../scope-match');
 const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyDeliveryContentCommitGuidance, landedWithoutSubmissionGuidance } = require('../refusal-guidance.js');
 const worktrees = require('../worktrees.js');
+const { exactCompositionSubmissionRefusal, compositionCaptureRefusal } = require('./composition-admission.js');
 import type { VerificationResult } from '../kernel/verification.js';
 import type { CandidateInvalidation } from '../kernel/wave.js';
+import type { CompositionTicket } from './composition-admission.js';
+import type { CompositionRefusal } from './composition-range.js';
 
 function createSubmissions(dependencies: any) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, deliveryIntegrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, deliveryIntegrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock: withIndependentTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
+  let heldCompositionDelivery: { slug: string; id: string } | null = null;
+
+  function withTicketLock<Result>(slug: string, id: string, callback: () => Result): Result | { ok: false; reason: 'busy'; ticket?: never } {
+    const owned = heldCompositionDelivery;
+    if (owned && owned.slug === slug && owned.id === id) return callback();
+    return withIndependentTicketLock(slug, id, callback);
+  }
+
+  function deliverUnderCompositionLocks<Result>(slug: string, ticket: CompositionTicket, callback: () => Result): Result | CompositionRefusal | { ok: false; reason: 'busy' } {
+    if (!ticket.compositionAdmission) return callback();
+    return dependencies.withCompositionGenerationLock(slug, ticket.id, () => {
+      const previous = heldCompositionDelivery;
+      heldCompositionDelivery = { slug, id: ticket.id };
+      try {
+        return callback();
+      } finally {
+        heldCompositionDelivery = previous;
+      }
+    }, 'submitted');
+  }
 
 const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
 const SUBMISSION_GITREF_MAX = 200;
@@ -678,9 +701,11 @@ function amendedVerifierCaptureMessage(ticket: any, pinnedCommand: string, captu
 function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
-  return withTicketLock(slug, found.id, () => {
+  return dependencies.withCompositionGenerationLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     if (!ticket) return { ok: false, reason: 'not_found' };
+    const compositionFailure = compositionCaptureRefusal(ticket, capture);
+    if (compositionFailure) return { ...compositionFailure, ticket };
     const pinnedAtDispatch = dispatchPinnedRequirement(ticket);
     const requirement = pinnedVerificationRequirement(ticket);
     const capturedCommand = String(capture?.command || '');
@@ -2120,7 +2145,7 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
   if (!lockLease) return deliveryInProgress(ticket);
   try {
     lockLease.refresh();
-    return integrateSubmissionUnlocked(slug, idOrRef, opts);
+    return deliverUnderCompositionLocks(slug, ticket, () => integrateSubmissionUnlocked(slug, idOrRef, opts));
   } finally {
     lockLease.refresh();
     releaseLock(lock, lockLease);
@@ -2673,7 +2698,7 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   if (submissionComment && !submissionComment.ok) throw new Error(`submission comment ${submissionComment.reason}`);
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
-  return withTicketLock(slug, found.id, () => {
+  return dependencies.withCompositionGenerationLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) return { ok: false, reason: 'not_found' };
     // Review start freezes the candidate: no amendment, no replacement submit.
@@ -2710,6 +2735,8 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       ? String(submissionOptions.worktree).trim().slice(0, SUBMISSION_WORKTREE_MAX)
       : null;
     const range = sourceRevision ? null : submissionRangeMetadata(submissionOptions.range, commit);
+    const compositionFailure = exactCompositionSubmissionRefusal(t, { commit, base: range?.base, commits: range?.commits });
+    if (compositionFailure) return { ...compositionFailure, ticket: t };
     const pinnedBaseline = sourceRevisionBaseline(t);
     const resolvedSourceRevisionFacts = sourceRevision
       ? (isSourceRevisionAdapterFacts(submissionOptions.admissionFacts)

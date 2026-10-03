@@ -337,6 +337,14 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 
 For an isolated repository dispatch, a configured `worktreeBase` of `local-main` or `origin-main` selects that base for read-only and writer tickets alike. `auto` intentionally keeps a read-only ticket on the checkout that prepared it; writers retain automatic integration-target selection. An explicit local or remote dispatch target overrides the board setting. Shared-tree artifacts and non-repository output stay on the current tree. A bound Git review candidate overrides every configured or explicit integration target.
 
+## Current exact-composition adoption
+
+A main-thread orchestrator can use existing `update.admitComposition` to adopt exact immutable candidate C for a genuinely released root. The admission is a current attestation with `historicalCheckout:false`; historical checkout ownership remains unverified. Keep original BASE and the full BASE..C range. Every commit belongs exactly once to a complete pending related source range or to the root's own changes within its original scope. A source's authoritative review and correction generation is part of the locked CAS. Admission changes no source submission, review outcome, acceptance, or delivery status.
+
+Call admission separately from ordinary updates. First omit `expected` to read its write-free bounded observation, then retry with that exact expected root/source snapshot. Keep the released checkout and old proofs untouched. The fresh writable native isolated dispatch starts a new checkout at C, preserves original BASE in `dispatch.baseCommit`, and consumes the admission once with its new attempt, preparation timestamp, and genuine nonce digest. A reused checkout or grant cannot continue this flow.
+
+Use the ordinary verifier update and current-holder evidence contract, then normal claim, controls, fresh capture, and full-range submit. Bind an independent exact-C review only after submission. The ordinary review provenance and delivery gates still apply, including a genuine readonly review completed with `done` where the current gate accepts that completion. Adoption supplies no review verdict, capture, historical ownership, or delivery waiver. The included source tickets remain pending through root delivery.
+
 ## Bookend supervision
 
 After dispatch, leave a ticket alone until it submits: no pulse, comment read, worktree peek, or proxy
