@@ -233,6 +233,7 @@ test('context-window compact-at validates positive whole counts and rejects unsu
   assert.throws(() => runtime.writeContextWindowSettings({ compactAt: { claude: 242000 } }, file), /unsupported compactAt.claude/);
   assert.throws(() => runtime.writeContextWindowSettings({ compactAt: { codex: 0 } }, file), /invalid compactAt.codex/);
   assert.throws(() => runtime.writeContextWindowSettings({ compactAt: { codex: '242000' } }, file), /invalid compactAt.codex/);
+  assert.throws(() => runtime.writeContextWindowSettings({ compactAt: { codex: null } }, file), /invalid compactAt.codex/);
   assert.equal(fs.existsSync(path.dirname(file)), false);
 });
 

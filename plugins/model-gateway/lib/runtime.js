@@ -177,7 +177,7 @@ function validateCompactAtSettings(compactAt = {}) {
     if (!COMPACT_AT_BACKENDS.includes(backend)) {
       throw new Error(`unsupported compactAt.${backend}: direct compaction maxima are supported for Codex and Grok only; use --claude <tokens|full> for the native window`);
     }
-    if (value !== parseCompactAtValue(value)) throw new Error(`invalid compactAt.${backend}: use a positive whole token count`);
+    if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`invalid compactAt.${backend}: use a positive whole token count`);
   }
 }
 
