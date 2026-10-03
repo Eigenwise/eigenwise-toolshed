@@ -200,20 +200,25 @@ test('full-suite prefixed capture serializes siblings, preserves coverage, and l
     executorVerifyKind: 'command',
     executorVerify: command,
   });
+  const spawnedCaptures: ReturnType<typeof runCaptureProcess>[] = [];
 
   try {
     assert.deepEqual(fs.readdirSync(coverageDirectory), [], 'caller coverage starts empty');
     const first = runCaptureProcess(command, project, ticket.ref, { environment });
+    spawnedCaptures.push(first);
     await waitForFile(started);
     for (const scopedCommand of ['node scoped.js', 'npm --prefix "." run test:files']) {
       const scopedTicket = store.createTicket(boardProject.slug, { title: 'scoped capture', executorVerifyKind: 'command', executorVerify: scopedCommand });
-      const scoped = await runCaptureProcess(scopedCommand, project, scopedTicket.ref);
+      const scopedCapture = runCaptureProcess(scopedCommand, project, scopedTicket.ref);
+      spawnedCaptures.push(scopedCapture);
+      const scoped = await scopedCapture;
       assert.equal(scoped.status, 0, scoped.output);
       assert.doesNotMatch(scoped.output, /capture-slot|waiting for/);
       assert.equal(readRecordedCaptures(project, scopedTicket.ref)[0].queuePosition, undefined);
       assert.equal(fs.existsSync(path.join(captureSlotDirectory(project), 'active')), true, 'the full-suite owner still holds the slot');
     }
     const second = runCaptureProcess(command, project, ticket.ref, { environment });
+    spawnedCaptures.push(second);
     const [firstResult, secondResult] = await Promise.all([first, second]);
 
     assert.equal(firstResult.status, 0, firstResult.output);
@@ -229,6 +234,7 @@ test('full-suite prefixed capture serializes siblings, preserves coverage, and l
     const coverageScripts = fs.readdirSync(coverageDirectory).flatMap((file: string) => JSON.parse(fs.readFileSync(path.join(coverageDirectory, file), 'utf8')).result);
     assert.ok(coverageScripts.some((script: { url: string }) => script.url.endsWith('/blocker.js')), 'V8 coverage includes the actual verifier script');
   } finally {
+    await Promise.allSettled(spawnedCaptures);
     // Both captures above ran as separate child processes with this directory as
     // their own cwd. Node's 'close' event fires once their stdio pipes end, but on
     // Windows the OS can hold the directory busy for a few more ms while that same
