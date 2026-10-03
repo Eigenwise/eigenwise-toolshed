@@ -113,6 +113,10 @@ Environment variables are optional:
 - [Toolshed plugin reference](https://eigenwise.github.io/eigenwise-toolshed/reference/quartermaster/)
 - [Repository](https://github.com/Eigenwise/eigenwise-toolshed)
 
+## Keep tasks across sessions
+
+For task continuity, the independent [Sidequest plugin](../sidequest/README.md) keeps every task saved as a ticket through context compaction and new sessions. Record progress and next actions on the ticket so Claude can resume the work.
+
 ## Support
 
 Quartermaster's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use the plugin. Claude and configured model providers may have their own usage costs.
