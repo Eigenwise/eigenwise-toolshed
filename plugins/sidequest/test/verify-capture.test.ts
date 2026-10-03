@@ -245,9 +245,11 @@ test('full-suite prefixed capture keeps exact command, candidate, dispatch nonce
   const fixture = setupIsolatedDispatch('full-suite-identity');
   const command = 'npm --prefix "." run test:full';
   try {
-    fs.writeFileSync(path.join(fixture.worktree, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node -e "process.exit(0)"' } }));
-    execFileSync('git', ['add', 'package.json'], { cwd: fixture.worktree, windowsHide: true });
-    execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'full-suite fixture'], { cwd: fixture.worktree, windowsHide: true });
+    for (const directory of [fixture.project, fixture.worktree]) {
+      fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node -e "process.exit(0)"' } }));
+      execFileSync('git', ['add', 'package.json'], { cwd: directory, windowsHide: true });
+      execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'full-suite fixture'], { cwd: directory, windowsHide: true });
+    }
     store.updateTicket(fixture.slug, fixture.ticket.ref, { executorVerify: command });
     const wrongCommand = await runCaptureProcess('npm run test:full', fixture.project, fixture.ticket.ref, { cwd: fixture.worktree });
     assert.equal(wrongCommand.status, 2, wrongCommand.output);
