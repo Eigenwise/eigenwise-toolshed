@@ -209,7 +209,7 @@ test('sweep reports an observed classification before its final result', async (
     assert.deepEqual(progress.filter((update) => update.phase === 'classifying').map((update) => update.observed), [0, 1]);
     const observed = progress.find((update) => update.phase === 'classifying' && update.observed === 1);
     assert.equal(worktrees.canonicalPath(observed.current), worktrees.canonicalPath(worktree));
-    assert.equal(observed.reason, 'ticket_done');
+    assert.equal(observed.reason, 'ticket_closed_settled');
     assert.equal(progress.at(-1).phase, 'complete');
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
@@ -628,7 +628,7 @@ test('sweep classifies unleased worktrees by data at risk', async () => {
     const cleanLegacy = entryFor(cleanLegacyWorktree);
     const untrackedLegacy = entryFor(untrackedLegacyWorktree);
 
-    assert.equal(entryFor(boundWorktree).reason, 'ticket_done');
+    assert.equal(entryFor(boundWorktree).reason, 'ticket_closed_settled');
     assert.equal(cleanLegacy.action, 'remove');
     assert.equal(cleanLegacy.reason, 'branch_reachable');
     assert.equal(cleanLegacy.clean, true);
@@ -732,7 +732,7 @@ test('sweep reclaims a clean worktree after a bound checkout is recreated at the
     const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget });
     const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
     assert.equal(entry.action, 'remove');
-    assert.equal(entry.reason, 'ticket_done');
+    assert.equal(entry.reason, 'ticket_closed_settled');
     assert.match(entry.leaseDecision, /checkout instance/);
     assert.equal(fs.existsSync(worktree), false);
   } finally {
@@ -1158,15 +1158,71 @@ test('sweep quarantines a clean tree whose node_modules hides a nested repositor
   }
 });
 
-test('sweep quarantines a clean tree holding an installed node_modules next to other ignored content', async () => {
-  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
-  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-node-modules-plus-quarantine-'));
-  const worktree = createAgentWorktree(repository, worktreeRoot, 'node-modules-plus');
-  const ticket = integratedTicket('SQ-NODE-MODULES-PLUS', 'node-modules-plus', worktree, baseCommit);
+// GH-439 (SQ-51): every finished executor tree holds ignored build output, and the sweep read it as
+// data, so a done ticket's tree waited 7 days as untracked_recent and 14 more in quarantine while the
+// worktree store filled the disk. The ticket answers first now.
+function excludeBuildOutput(repository: string): void {
+  fs.appendFileSync(path.join(repository, '.git', 'info', 'exclude'), '.next/\ncoverage/\n*.tsbuildinfo\n');
+}
+
+function writeBuildOutput(worktree: string): void {
   fs.mkdirSync(path.join(worktree, 'node_modules', 'installed'), { recursive: true });
   fs.writeFileSync(path.join(worktree, 'node_modules', 'installed', 'index.js'), 'module.exports = 1;\n');
-  fs.mkdirSync(path.join(worktree, 'nested-clean'));
-  fs.writeFileSync(path.join(worktree, 'nested-clean', 'notes.txt'), 'ignored, and only here\n');
+  fs.mkdirSync(path.join(worktree, '.next', 'cache'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, '.next', 'cache', 'chunk.js'), 'compiled\n');
+  fs.mkdirSync(path.join(worktree, 'coverage'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'coverage', 'lcov.info'), 'TN:\n');
+  fs.writeFileSync(path.join(worktree, 'tsconfig.tsbuildinfo'), '{}\n');
+  fs.mkdirSync(path.join(worktree, 'nested-clean'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'nested-clean', 'notes.txt'), 'ignored build notes\n');
+}
+
+function releasedTicketFor(ref: string, agentId: string, worktree: string, baseCommit: string) {
+  const ticket: any = integratedTicket(ref, agentId, worktree, baseCommit);
+  ticket.status = 'todo';
+  ticket.dispatch.outcome = 'released';
+  ticket.dispatch.attempts = [{ terminalAt: ticket.dispatch.terminalAt, terminalSource: ticket.dispatch.terminalSource, outcome: 'released' }];
+  return ticket;
+}
+
+test('sweep removes a done ticket tree at once when its only untracked content is gitignored build output', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  excludeBuildOutput(repository);
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-closed-settled-quarantine-'));
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'closed-settled');
+  const ticket = integratedTicket('SQ-CLOSED-SETTLED', 'closed-settled', worktree, baseCommit);
+  writeBuildOutput(worktree);
+  try {
+    const status = git(worktree, ['status', '--porcelain', '--ignored', '--untracked-files=all']);
+    for (const ignored of ['node_modules/installed/index.js', '.next/cache/chunk.js', 'coverage/lcov.info', 'tsconfig.tsbuildinfo']) {
+      assert.ok(status.split('\n').includes(`!! ${ignored}`), `${ignored} is ignored build output`);
+    }
+
+    // No minAgeMs: the default 3 h would call this fresh tree too_young if age were asked first.
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, integrationTarget, quarantineDir });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.reason, 'ticket_closed_settled');
+    assert.equal(entry.action, 'remove');
+    assert.equal(fs.existsSync(worktree), false);
+    assert.deepEqual(result.quarantined, []);
+    assert.deepEqual(fs.readdirSync(quarantineDir), [], 'the moved copy was deleted, not parked');
+    assert.deepEqual(result.failures, []);
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(quarantineDir, { recursive: true, force: true });
+  }
+});
+
+test('sweep still quarantines a done ticket tree holding an untracked file that is not ignored', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  excludeBuildOutput(repository);
+  const quarantineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-closed-untracked-quarantine-'));
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'closed-untracked');
+  const ticket = integratedTicket('SQ-CLOSED-UNTRACKED', 'closed-untracked', worktree, baseCommit);
+  writeBuildOutput(worktree);
+  fs.writeFileSync(path.join(worktree, 'forgotten.txt'), 'never committed, never ignored\n');
   const oldTimestamp = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
   fs.utimesSync(worktree, oldTimestamp, oldTimestamp);
   try {
@@ -1175,12 +1231,236 @@ test('sweep quarantines a clean tree holding an installed node_modules next to o
 
     assert.equal(entry.action, 'quarantine');
     assert.equal(entry.reason, 'untracked_quarantined');
-    assert.equal(fs.readFileSync(path.join(entry.quarantine, 'nested-clean', 'notes.txt'), 'utf8'), 'ignored, and only here\n');
+    assert.deepEqual(result.removed, []);
+    assert.equal(fs.readFileSync(path.join(entry.quarantine, 'forgotten.txt'), 'utf8'), 'never committed, never ignored\n');
     assert.equal(fs.existsSync(path.join(entry.quarantine, 'node_modules', 'installed', 'index.js')), true, 'the cache travels with the tree');
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
     fs.rmSync(repository, { recursive: true, force: true });
     fs.rmSync(quarantineDir, { recursive: true, force: true });
+  }
+});
+
+test('sweep keeps a done ticket tree whose HEAD nothing settles', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  excludeBuildOutput(repository);
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'closed-unsettled');
+  commitInWorktree(worktree, 'unsettled-candidate');
+  const ticket = integratedTicket('SQ-CLOSED-UNSETTLED', 'closed-unsettled', worktree, baseCommit);
+  writeBuildOutput(worktree);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget: localMainTarget });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.action, 'keep');
+    assert.equal(entry.reason, 'untracked_recent', 'neither main, a pin, nor the dispatch base holds its commit, so its build output is judged as data');
+    assert.equal(fs.existsSync(path.join(worktree, 'unsettled-candidate.txt')), true);
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('sweep keeps an open ticket tree that holds only gitignored build output', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  excludeBuildOutput(repository);
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'open-ticket');
+  const ticket: any = integratedTicket('SQ-OPEN-TICKET', 'open-ticket', worktree, baseCommit);
+  ticket.status = 'doing';
+  writeBuildOutput(worktree);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.action, 'keep');
+    assert.equal(entry.reason, 'active_ticket');
+    assert.equal(fs.existsSync(path.join(worktree, '.next', 'cache', 'chunk.js')), true);
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('sweep keeps a done ticket tree while its claim is still live', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  excludeBuildOutput(repository);
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'closed-live-claim');
+  const ticket: any = integratedTicket('SQ-CLOSED-LIVE', 'closed-live-claim', worktree, baseCommit);
+  ticket.claimLive = true;
+  writeBuildOutput(worktree);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entry.action, 'keep');
+    assert.equal(entry.reason, 'live_session');
+    assert.equal(fs.existsSync(worktree), true);
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+// remove deletes the ticket before its close cleanup runs, so it hands the sweep the removed ticket
+// itself; without that marker the tree reads as unowned and waits out too_young.
+test('sweep removes a removed ticket tree that the remove path describes', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  excludeBuildOutput(repository);
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'removed-ticket');
+  const ticket: any = integratedTicket('SQ-REMOVED', 'removed-ticket', worktree, baseCommit);
+  ticket.status = 'todo';
+  ticket.removed = true;
+  writeBuildOutput(worktree);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, integrationTarget, ticketRef: 'SQ-REMOVED', minAgeMs: 0 });
+
+    assert.equal(result.entries.length, 1);
+    assert.equal(result.entries[0].reason, 'ticket_closed_settled');
+    assert.equal(fs.existsSync(worktree), false);
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+// A released ticket's tree is what a continuation resumes (retained_worktree_resume), so the board's
+// own pin settles a done ticket's commit but not a released one's.
+test('sweep settles a done ticket commit by its refs/sidequest pin and keeps a released checkpoint for its continuation', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  excludeBuildOutput(repository);
+  const doneTree = createAgentWorktree(repository, worktreeRoot, 'pinned-done');
+  const releasedTree = createAgentWorktree(repository, worktreeRoot, 'pinned-released');
+  const releasedAtBase = createAgentWorktree(repository, worktreeRoot, 'released-at-base');
+  commitInWorktree(doneTree, 'done-candidate');
+  commitInWorktree(releasedTree, 'released-checkpoint');
+  git(repository, ['update-ref', 'refs/sidequest/SQ-PINNED-DONE', git(doneTree, ['rev-parse', 'HEAD'])]);
+  git(repository, ['update-ref', 'refs/sidequest/SQ-PINNED-RELEASED', git(releasedTree, ['rev-parse', 'HEAD'])]);
+  for (const tree of [doneTree, releasedTree, releasedAtBase]) writeBuildOutput(tree);
+  const tickets = [
+    integratedTicket('SQ-PINNED-DONE', 'pinned-done', doneTree, baseCommit),
+    releasedTicketFor('SQ-PINNED-RELEASED', 'pinned-released', releasedTree, baseCommit),
+    releasedTicketFor('SQ-RELEASED-AT-BASE', 'released-at-base', releasedAtBase, baseCommit),
+  ];
+  try {
+    const result = await worktrees.sweep(repository, tickets, { execute: true, minAgeMs: 0, integrationTarget: localMainTarget });
+    const entryFor = (tree: string) => result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(tree));
+
+    assert.equal(entryFor(doneTree).reason, 'ticket_closed_settled');
+    assert.equal(fs.existsSync(doneTree), false);
+    assert.deepEqual(result.retainedBranches.map((retained: any) => retained.branch), ['worktree-agent-pinned-done'], 'the unintegrated branch outlives its tree');
+    assert.equal(entryFor(releasedTree).action, 'keep');
+    assert.equal(entryFor(releasedTree).reason, 'active_ticket');
+    assert.equal(fs.existsSync(releasedTree), true, 'the continuation still has its checkpoint tree');
+    assert.equal(entryFor(releasedAtBase).reason, 'ticket_closed_settled');
+    assert.equal(fs.existsSync(releasedAtBase), false, 'a release that committed nothing leaves nothing to resume');
+  } finally {
+    for (const tree of [doneTree, releasedTree, releasedAtBase]) {
+      if (fs.existsSync(tree)) git(repository, ['worktree', 'remove', '--force', tree]);
+    }
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+// A bounded session sweep used to take the oldest trees first, so 285 old ambiguous trees spent every
+// budget and no newly finished tree was ever reached (GH-439).
+test('a bounded sweep takes a closed ticket tree before an older tree no ticket owns', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  excludeBuildOutput(repository);
+  const unowned = createAgentWorktree(repository, worktreeRoot, 'old-unowned', false);
+  const closed = createAgentWorktree(repository, worktreeRoot, 'new-closed');
+  const ticket = integratedTicket('SQ-NEW-CLOSED', 'new-closed', closed, baseCommit);
+  writeBuildOutput(closed);
+  const oldTimestamp = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(unowned, oldTimestamp, oldTimestamp);
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget, maxCandidates: 1 });
+
+    assert.deepEqual(result.entries.map((entry: any) => worktrees.canonicalPath(entry.path)), [worktrees.canonicalPath(closed)]);
+    assert.equal(result.entries[0].reason, 'ticket_closed_settled');
+    assert.equal(result.remainingCandidates, 1);
+    assert.equal(fs.existsSync(closed), false);
+    assert.equal(fs.existsSync(unowned), true, 'the older tree waits for the next run');
+  } finally {
+    for (const tree of [unowned, closed]) {
+      if (fs.existsSync(tree)) git(repository, ['worktree', 'remove', '--force', tree]);
+    }
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+// One hung `git status` used to hold the whole sweep, and 400 trees were read one after another.
+// The shim stands in for git on PATH: it records how many status reads overlap and never answers
+// for the two hang-* trees, so the sweep must read four at a time and give up on those two alone.
+test('a sweep reads git status four trees at a time and gives up on a hung read alone', { skip: process.platform === 'win32' && 'POSIX shell shim' }, async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const shimDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-status-shim-'));
+  const logDirectory = path.join(shimDirectory, 'log');
+  fs.mkdirSync(logDirectory);
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  fs.writeFileSync(path.join(shimDirectory, 'git'), [
+    '#!/bin/sh',
+    `real='${realGit}'`,
+    `log='${logDirectory}'`,
+    'case " $* " in',
+    '  *" status "*)',
+    '    mark="$log/inflight.$$"',
+    '    : > "$mark"',
+    '    ls "$log" | grep -c "^inflight\\." >> "$log/overlap"',
+    '    case "$(pwd -P)" in',
+    '      */agent-hang-*)',
+    '        echo $$ >> "$log/hung"',
+    '        trap \'kill "$sleeper" 2>/dev/null; rm -f "$mark"; exit 143\' TERM',
+    '        sleep 30 & sleeper=$!',
+    '        wait "$sleeper"',
+    '        exit 1 ;;',
+    '    esac',
+    '    sleep 0.2',
+    '    "$real" "$@"',
+    '    code=$?',
+    '    rm -f "$mark"',
+    '    exit $code ;;',
+    'esac',
+    'exec "$real" "$@"',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  const trees: string[] = [];
+  const tickets: any[] = [];
+  for (let index = 0; index < 18; index += 1) trees.push(createAgentWorktree(repository, worktreeRoot, `plain-${index}`, false));
+  const hungUnowned = createAgentWorktree(repository, worktreeRoot, 'hang-unowned', false);
+  const hungClosed = createAgentWorktree(repository, worktreeRoot, 'hang-closed');
+  tickets.push(integratedTicket('SQ-HANG-CLOSED', 'hang-closed', hungClosed, baseCommit));
+  trees.push(hungUnowned, hungClosed);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${shimDirectory}${path.delimiter}${originalPath}`;
+  try {
+    const started = Date.now();
+    const result = await worktrees.sweep(repository, tickets, { execute: false, minAgeMs: 0, integrationTarget, statusTimeoutMs: 2000 });
+    const elapsedMs = Date.now() - started;
+    process.env.PATH = originalPath;
+    const entryFor = (tree: string) => result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(tree));
+    const overlap = fs.readFileSync(path.join(logDirectory, 'overlap'), 'utf8').trim().split('\n').map(Number);
+    const hung = fs.readFileSync(path.join(logDirectory, 'hung'), 'utf8').trim().split('\n').map(Number);
+
+    assert.equal(overlap.length, 20, 'one status read per tree');
+    assert.ok(Math.max(...overlap) <= 4, `at most four status reads at once, saw ${Math.max(...overlap)}`);
+    assert.ok(Math.max(...overlap) > 1, 'the reads did overlap');
+    assert.equal(entryFor(hungUnowned).reason, 'status_unknown');
+    assert.equal(entryFor(hungClosed).reason, 'status_unknown', 'the closed-ticket path keeps a tree whose status it could not read');
+    assert.equal(result.statusTimedOut, 2);
+    assert.equal(result.counts.statusTimedOut, 2);
+    assert.ok(elapsedMs < 25_000, `two hung reads cost their 2 s limit, not the shim's 30 s sleep (took ${elapsedMs} ms)`);
+    assert.equal(hung.length, 2);
+    for (const pid of hung) {
+      assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, `hung status ${pid} was killed and reaped`);
+    }
+    assert.deepEqual(fs.readdirSync(logDirectory).filter((name) => name.startsWith('inflight.')), [], 'every status child finished');
+  } finally {
+    process.env.PATH = originalPath;
+    for (const tree of trees) {
+      if (fs.existsSync(tree)) git(repository, ['worktree', 'remove', '--force', tree]);
+    }
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(shimDirectory, { recursive: true, force: true });
   }
 });
 
@@ -1203,7 +1483,7 @@ test('sweep removes a finished tree whose only ignored links resolve inside it',
     const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
 
     assert.equal(entry.clean, true);
-    assert.equal(entry.reason, 'ticket_done');
+    assert.equal(entry.reason, 'ticket_closed_settled');
     assert.equal(entry.action, 'remove');
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
@@ -1235,7 +1515,7 @@ test('sweep removes a finished tree whose only ignored link is a directory symli
     const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
 
     assert.equal(entry.clean, true);
-    assert.equal(entry.reason, 'ticket_done');
+    assert.equal(entry.reason, 'ticket_closed_settled');
     assert.equal(entry.action, 'remove');
   } finally {
     // The junction (and, through it, the in-tree link it resolves to) has to come off before
@@ -1279,7 +1559,7 @@ test('an executing sweep removes a finished tree whose unrecorded absolute in-tr
     const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
 
     assert.equal(entry.action, 'remove');
-    assert.equal(entry.reason, 'ticket_done');
+    assert.equal(entry.reason, 'ticket_closed_settled');
     assert.deepEqual(result.quarantined, []);
     assert.equal(result.removed.some((removed: string) => worktrees.canonicalPath(removed) === worktrees.canonicalPath(worktree)), true);
     assert.equal(fs.existsSync(worktree), false);
@@ -1393,7 +1673,7 @@ test('sweep parks a tree whose gitignored nested repository was committed while 
     assert.equal(git(path.join(entry.quarantine, 'nested-clean'), ['rev-parse', 'HEAD']), nestedHead);
     assert.equal(fs.readFileSync(path.join(entry.quarantine, 'nested-clean', 'unfinished.txt'), 'utf8'), 'work only this nested repository has\n');
     const quarantine = result.quarantined.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
-    assert.match(quarantine.message, /^classified ticket_done, but /, 'the tree was classified for deletion before the nested repository existed');
+    assert.match(quarantine.message, /^classified ticket_closed_settled, but /, 'the tree was classified for deletion before the nested repository existed');
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
     fs.rmSync(repository, { recursive: true, force: true });
@@ -1624,7 +1904,7 @@ test('sweep keeps a pinned review candidate and its unique content after removin
     const entry = result.entries.find((candidateEntry: any) => worktrees.canonicalPath(candidateEntry.path) === worktrees.canonicalPath(worktree));
 
     assert.equal(entry.action, 'remove');
-    assert.equal(entry.reason, 'ticket_done');
+    assert.equal(entry.reason, 'ticket_closed_settled');
     assert.equal(entry.branch, null, 'a detached review checkout has no branch of its own');
     assert.equal(fs.existsSync(worktree), false, 'the review worktree and its private HEAD are gone');
     assert.deepEqual(containingRefs(), ['refs/sidequest/SQ-REVIEW'], 'the pin still holds the candidate after the sweep');
@@ -1744,7 +2024,7 @@ test('sweep parks a detached checkout whose only ref disappeared while the sweep
     assert.equal(entry.action, 'quarantine');
     assert.equal(entry.reason, 'detached_head_unpinned');
     assert.deepEqual(result.removed, []);
-    assert.match(quarantine.message, /^classified ticket_done, but its detached HEAD /, 'the report says the classification was overruled at the destination');
+    assert.match(quarantine.message, /^classified ticket_closed_settled, but its detached HEAD /, 'the report says the classification was overruled at the destination');
     assert.equal(fs.readFileSync(path.join(entry.quarantine, 'candidate.txt'), 'utf8'), 'candidate\n', 'and the parked tree still holds what that commit carried');
     assert.deepEqual(refsContaining(repository, commit), [], 'no rescue ref was invented to hold the commit');
     assert.deepEqual(result.failures, []);

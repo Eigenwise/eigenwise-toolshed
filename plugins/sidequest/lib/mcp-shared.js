@@ -264,6 +264,31 @@ function closeDispatchExecutor(ticket) {
   const executor = store.canonicalPreparedDispatchExecutor(ticket);
   if (executor) agentsync.cleanupNativeAgents({ name: executor });
 }
+function claimHeldLive(ticket) {
+  return Boolean(ticket?.claim?.by && !store.claimReclaimable(ticket));
+}
+function isolatedDispatchWorktree(dispatch) {
+  return Boolean(dispatch?.worktree && dispatch.sharedTree === false && !dispatch.continuation);
+}
+function closedTicketCleanupApplies(slug, ticket) {
+  return isolatedDispatchWorktree(ticket?.dispatch) && store.boardConfig(slug)?.worktreeIsolation !== false;
+}
+function closeCleanupTickets(ticket, claimWasLive, extraTicket) {
+  return [...store.worktreeGcTickets(), ...extraTicket ? [extraTicket] : []].map((candidate) => candidate.ref === ticket.ref && claimWasLive ? { ...candidate, claimLive: true } : candidate);
+}
+async function cleanupClosedTicketWorktree(slug, projectPath, ticket, claimWasLive = false, extraTicket = null) {
+  try {
+    if (!closedTicketCleanupApplies(slug, ticket)) return;
+    await worktrees.sweep(projectPath, closeCleanupTickets(ticket, claimWasLive, extraTicket), {
+      execute: true,
+      currentPath: store.nearestRepoRoot(process.cwd()),
+      integrationTarget: store.ticketIntegrationTarget(slug, ticket),
+      minAgeMs: 0,
+      ticketRef: ticket.ref
+    });
+  } catch (_) {
+  }
+}
 function mutationAck(project, result, changed) {
   const ticket = result.ticket;
   const out = { ok: !!result.ok, project };
@@ -997,6 +1022,8 @@ module.exports = {
   compactSchema,
   LIST_RESULT_MAX_BYTES,
   closeDispatchExecutor,
+  claimHeldLive,
+  cleanupClosedTicketWorktree,
   mutationAck,
   integrationBranchAck,
   outOfScopeComment,

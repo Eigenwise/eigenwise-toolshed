@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { worktreeRemovalFailureNotice } from '../src/hooks/shared/worktree-sweep.js';
 import { deferralNotice } from '../src/hooks/shared/sweep-handoff.js';
-const { worktreeSweepEntryLine, worktreeSweepProgressLine } = require('../src/bin/sidequest-cmd-collaboration.ts');
+const { worktreeSweepEntryLine, worktreeSweepProgressLine, worktreeSweepReasonSummary } = require('../src/bin/sidequest-cmd-collaboration.ts');
 
 const removalFailure = { path: 'C:\\worktrees\\agent-locked', message: 'Invalid argument' };
 
@@ -120,4 +120,18 @@ test('manual worktree sweep progress names the classification candidate and reas
   });
 
   assert.equal(line, 'worktrees sweep: classifying 3/8: C:/worktrees/agent-slow (legacy_unreclaimed); planned 0, removed 0');
+});
+
+// GH-439: a 150-tree `worktrees sweep --yes` scrolled every row past and ended on the last failure,
+// so the run closes with one count per reason, most frequent first.
+test('a manual sweep ends with its count per classification reason', () => {
+  const line = worktreeSweepReasonSummary([
+    { reason: 'ticket_closed_settled' },
+    { reason: 'status_unknown' },
+    { reason: 'ticket_closed_settled' },
+    { reason: 'active_ticket' },
+  ]);
+
+  assert.equal(line, '  by reason: ticket_closed_settled 2, active_ticket 1, status_unknown 1');
+  assert.equal(worktreeSweepReasonSummary([]), '  by reason: no candidates');
 });

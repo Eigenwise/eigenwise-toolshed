@@ -156,8 +156,42 @@ export function drainReport(cwd: string): string[] | null {
   }
 }
 
+// A SessionEnd sweep has no session left to tell, so it adds to whatever report the next start drains.
+export function appendReport(cwd: string, notices: string[]): void {
+  if (!notices.length) return;
+  writeReport(cwd, [...pendingReportNotices(cwd), ...notices]);
+}
+
+function pendingReportNotices(cwd: string): string[] {
+  try {
+    const notices = JSON.parse(fs.readFileSync(reportFile(cwd), 'utf8'))?.notices;
+    return Array.isArray(notices) ? notices.map((notice: unknown) => String(notice)) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
 function sweepCwd(data: HookInput): string {
   return stringField(data, 'cwd', 'project_dir', 'projectDir') || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+}
+
+// SessionEnd gets about 1.5 s whatever its declared timeout says, and an inline sweep was cancelled
+// on every exit that ran past it (SQ-51, GH-400). The worker owns the sweep and the session's
+// unregistration; the hook only starts it. False means nothing was started.
+export function detachSessionEndSweep(data: HookInput): boolean {
+  try {
+    const child = spawn(process.execPath, [
+      path.join(pluginRoot(), 'hooks', 'sweep-worktrees.js'),
+      '--cwd', sweepCwd(data),
+      '--session', stringField(data, 'session_id', 'sessionId'),
+      '--mode', 'session-end',
+    ], { detached: true, stdio: 'ignore', windowsHide: true });
+    child.once('error', () => {});
+    child.unref();
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 // Always runs the sweep in a detached child and waits only up to the deadline. The

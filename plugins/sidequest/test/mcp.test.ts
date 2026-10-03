@@ -2380,6 +2380,58 @@ test('MCP delivery reclaims a terminal isolated worktree immediately', async (co
   assert.equal(fs.existsSync(worktree), false);
 });
 
+// GH-439: only integrate reclaimed a tree at close, so every other close left a tree full of build
+// output for a session sweep that a backlog of older trees could starve. Every close reclaims the
+// ticket's own tree now, except while the closer is the executor still running inside it.
+function closeCleanupFixture(title: string, by: string) {
+  const primary = createGitWorktree();
+  const project = store.ensureProject(primary).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main', worktreeBase: 'local-main' });
+  fs.appendFileSync(path.join(primary, '.git', 'info', 'exclude'), 'node_modules/\n.next/\ncoverage/\n*.tsbuildinfo\n');
+  const ticket = store.createTicket(project, {
+    title, files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'exercise close-time cleanup of a tree that holds build output',
+  });
+  const worktree = prepareIsolatedWorktreeDispatch(project, primary, ticket, by);
+  fs.mkdirSync(path.join(worktree, 'node_modules', 'installed'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'node_modules', 'installed', 'index.js'), 'module.exports = 1;\n');
+  fs.mkdirSync(path.join(worktree, '.next', 'cache'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, '.next', 'cache', 'chunk.js'), 'compiled\n');
+  fs.mkdirSync(path.join(worktree, 'coverage'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'coverage', 'lcov.info'), 'TN:\n');
+  fs.writeFileSync(path.join(worktree, 'tsconfig.tsbuildinfo'), '{}\n');
+  return { primary, project, ticket, worktree };
+}
+
+test('MCP release leaves the live executor its tree, and groomClose reclaims the tree with its build output', async (context: any) => {
+  const by = 'close-cleanup-worker';
+  const { primary, project, ticket, worktree } = closeCleanupFixture('reclaim a groomed tree', by);
+  context.after(() => removeTestWorktree(primary, worktree));
+
+  const released = await callTool('release', { project, ref: ticket.ref, by, reason: 'Handing the decision back.', kind: 'handback', status: 'todo' });
+  assert.equal(released.ok, true, released.message || released.reason);
+  assert.equal(fs.existsSync(worktree), true, 'the releasing executor still runs inside its tree');
+
+  const closed = await callTool('groomClose', { project, ref: ticket.ref, reason: 'The work is no longer needed.' });
+  assert.equal(closed.ok, true, closed.message || closed.reason);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'done');
+  assert.equal(fs.existsSync(worktree), false, 'groomClose reclaimed the closed tree in the same call');
+  assert.equal(gitAt(primary, ['worktree', 'list']).includes(worktree), false, 'and left it unregistered');
+});
+
+test('MCP remove reclaims a released ticket tree that holds only build output', async (context: any) => {
+  const by = 'remove-cleanup-worker';
+  const { primary, project, ticket, worktree } = closeCleanupFixture('reclaim a removed tree', by);
+  context.after(() => removeTestWorktree(primary, worktree));
+  const released = await callTool('release', { project, ref: ticket.ref, by, reason: 'Handing the decision back.', kind: 'handback', status: 'todo' });
+  assert.equal(released.ok, true, released.message || released.reason);
+
+  const removed = await callTool('remove', { project, ref: ticket.ref });
+  assert.equal(removed.ok, true, removed.message || removed.reason);
+  assert.equal(store.getTicket(project, ticket.ref), null);
+  assert.equal(fs.existsSync(worktree), false, 'remove reclaimed the tree of the ticket it deleted');
+});
+
 test('MCP integrate accepts its worker lock across runtime sessions and refuses another worker', async (context: any) => {
   const primary = createGitWorktree();
   const project = store.ensureProject(primary).slug;

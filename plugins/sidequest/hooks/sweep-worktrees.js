@@ -131,6 +131,18 @@ function writeReport(cwd, notices) {
   } catch (_) {
   }
 }
+function appendReport(cwd, notices) {
+  if (!notices.length) return;
+  writeReport(cwd, [...pendingReportNotices(cwd), ...notices]);
+}
+function pendingReportNotices(cwd) {
+  try {
+    const notices = JSON.parse(import_node_fs2.default.readFileSync(reportFile(cwd), "utf8"))?.notices;
+    return Array.isArray(notices) ? notices.map((notice) => String(notice)) : [];
+  } catch (_) {
+    return [];
+  }
+}
 
 // src/hooks/shared/worktree-sweep.ts
 var MAX_PROJECTS_PER_START = 3;
@@ -231,8 +243,75 @@ function currentProject(data, store) {
     sessionPath: sessionWorktreePath(start)
   };
 }
+function unregisterSweepSession(data) {
+  const id = sessionId(data);
+  if (!id) return;
+  const state = readState();
+  if (state.sessions) delete state.sessions[id];
+  if (state.reportedOrphans) delete state.reportedOrphans[id];
+  writeState(state);
+}
 function liveSessionPaths() {
   return Object.values(readState().sessions || {});
+}
+function sweepLockFile() {
+  return import_node_path3.default.join(import_node_path3.default.dirname(stateFile()), "worktree-sweep.lock");
+}
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+function lockHolderAlive(file) {
+  let holder = 0;
+  try {
+    holder = Number(import_node_fs3.default.readFileSync(file, "utf8"));
+  } catch (_) {
+  }
+  return Number.isInteger(holder) && holder > 0 && processAlive(holder);
+}
+function createSweepLock(file) {
+  try {
+    import_node_fs3.default.mkdirSync(import_node_path3.default.dirname(file), { recursive: true });
+    import_node_fs3.default.writeFileSync(file, String(process.pid), { flag: "wx" });
+    return "acquired";
+  } catch (error) {
+    return error?.code === "EEXIST" ? "held" : "unwritable";
+  }
+}
+function removeStaleSweepLock(file) {
+  try {
+    if (!lockHolderAlive(file)) import_node_fs3.default.rmSync(file, { force: true });
+  } catch (_) {
+  }
+}
+function releaseSweepLock(file) {
+  try {
+    if (import_node_fs3.default.readFileSync(file, "utf8") === String(process.pid)) import_node_fs3.default.rmSync(file, { force: true });
+  } catch (_) {
+  }
+}
+function acquireSweepLock(file) {
+  let outcome = createSweepLock(file);
+  if (outcome === "held") {
+    removeStaleSweepLock(file);
+    outcome = createSweepLock(file);
+  }
+  if (outcome === "held") return null;
+  return outcome === "acquired" ? () => releaseSweepLock(file) : () => {
+  };
+}
+async function withWorktreeSweepLock(sweep) {
+  const release = acquireSweepLock(sweepLockFile());
+  if (!release) return [];
+  try {
+    return await sweep();
+  } finally {
+    release();
+  }
 }
 function abbreviated(value) {
   return value.length <= MAX_ORPHAN_SUBJECT_LENGTH ? value : `${value.slice(0, MAX_ORPHAN_SUBJECT_LENGTH - 1)}…`;
@@ -389,16 +468,26 @@ function migrateLegacyExecAgentNotices() {
 async function sessionStartMaintenance(data) {
   const notices = migrateLegacyExecAgentNotices();
   try {
-    notices.push(...await sweepWorktrees(data, true));
+    notices.push(...await withWorktreeSweepLock(() => sweepWorktrees(data, true)));
   } catch (error) {
     notices.push(`sidequest: worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   return notices;
 }
+async function sessionEndSweep(data) {
+  try {
+    appendReport(String(data.cwd), await withWorktreeSweepLock(() => sweepWorktrees(data, false)));
+  } catch (error) {
+    appendReport(String(data.cwd), [`sidequest: session-end worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`]);
+  } finally {
+    unregisterSweepSession(data);
+  }
+}
 async function main() {
   const cwd = argument("cwd") || process.cwd();
-  const notices = await sessionStartMaintenance({ cwd, session_id: argument("session") });
-  writeReport(cwd, notices);
+  const data = { cwd, session_id: argument("session") };
+  if (argument("mode") === "session-end") return sessionEndSweep(data);
+  writeReport(cwd, await sessionStartMaintenance(data));
 }
 main().catch((error) => {
   writeReport(argument("cwd") || process.cwd(), [

@@ -57,7 +57,14 @@ const {
   verifyEmbedsWorktreeRoot,
   withoutCategories,
   snapshotContextRetrieval,
+  cleanupClosedTicketWorktree,
+  claimHeldLive,
 } = require('./mcp-shared');
+
+function liveClaimRemovalRefusal(ticket: any, force: unknown) {
+  if (!ticket.claim?.by || store.claimReclaimable(ticket) || force) return null;
+  return { ok: false, reason: 'claimed', ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
+}
 
 function sameBasenameSiblingDetails(project: string, ticket: any, projectPath: string, tool: string) {
   const details = store.scopeConsumerWarningDetails(ticket, projectPath);
@@ -377,9 +384,8 @@ const tools: ToolDefinition[] = [
       const { slug, meta } = resolveProject(args.project);
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`remove: no ticket "${args.ref}" on ${meta.name}.`);
-      if (ticket.claim && ticket.claim.by && !store.claimReclaimable(ticket) && !args.force) {
-        return { ok: false, reason: 'claimed', ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
-      }
+      const refusal = liveClaimRemovalRefusal(ticket, args.force);
+      if (refusal) return refusal;
       const ref = ticket.ref;
       // force:true reaches here only on the main thread: the PreToolUse hook denies
       // a subagent remove carrying force. So the live-claim deletion grant rides the
@@ -387,7 +393,9 @@ const tools: ToolDefinition[] = [
       if (!store.deleteTicket(slug, ticket.id, { allowLiveClaimDeletion: args.force === true })) {
         throw new Error(`remove: could not delete "${ticket.ref}" from ${meta.name}.`);
       }
-      return { ok: true, ref };
+      // Refusals above stay synchronous throws; only the deleted ticket's tree cleanup is awaited.
+      return cleanupClosedTicketWorktree(slug, meta.path, ticket, claimHeldLive(ticket), { ...ticket, removed: true, claimLive: false })
+        .then(() => ({ ok: true, ref }));
     },
   },
   {

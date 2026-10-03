@@ -371,6 +371,48 @@ function closeDispatchExecutor(ticket?: any) {
   if (executor) agentsync.cleanupNativeAgents({ name: executor });
 }
 
+// A claim holder that closes its own ticket (done, release) is still running inside the tree it
+// closes, and deleting a running agent's working directory breaks its SubagentStop hook. So a claim
+// that was live when the close began keeps the tree for the session sweep, which runs after the
+// executor exits; a claim the store already calls reclaimable is nobody's live work.
+function claimHeldLive(ticket?: any): boolean {
+  return Boolean(ticket?.claim?.by && !store.claimReclaimable(ticket));
+}
+
+function isolatedDispatchWorktree(dispatch: any): boolean {
+  return Boolean(dispatch?.worktree && dispatch.sharedTree === false && !dispatch.continuation);
+}
+
+function closedTicketCleanupApplies(slug: string, ticket: any): boolean {
+  return isolatedDispatchWorktree(ticket?.dispatch) && store.boardConfig(slug)?.worktreeIsolation !== false;
+}
+
+// remove deletes the ticket before its cleanup runs, so it passes the deleted ticket in as
+// `extraTicket`; without it the tree would read as unowned.
+function closeCleanupTickets(ticket: any, claimWasLive: boolean, extraTicket: any): any[] {
+  return [...store.worktreeGcTickets(), ...(extraTicket ? [extraTicket] : [])].map((candidate: any) => (
+    candidate.ref === ticket.ref && claimWasLive ? { ...candidate, claimLive: true } : candidate
+  ));
+}
+
+// Every ticket close (integrate, groomClose, done, release, remove) reclaims that ticket's own
+// worktree at zero age under the sweep's rules, so a finished tree does not wait for a session sweep
+// that may never reach it (SQ-51, GH-439). The session sweep stays the backstop.
+async function cleanupClosedTicketWorktree(slug: string, projectPath: string, ticket: any, claimWasLive: boolean = false, extraTicket: any = null): Promise<void> {
+  try {
+    if (!closedTicketCleanupApplies(slug, ticket)) return;
+    await worktrees.sweep(projectPath, closeCleanupTickets(ticket, claimWasLive, extraTicket), {
+      execute: true,
+      currentPath: store.nearestRepoRoot(process.cwd()),
+      integrationTarget: store.ticketIntegrationTarget(slug, ticket),
+      minAgeMs: 0,
+      ticketRef: ticket.ref,
+    });
+  } catch (_) {
+    // The close has already been durably recorded. The session sweep remains the backstop.
+  }
+}
+
 function mutationAck(project?: any, result?: any, changed?: any) {
   const ticket = result.ticket;
   const out: any = { ok: !!result.ok, project };
@@ -1131,6 +1173,8 @@ module.exports = {
   compactSchema,
   LIST_RESULT_MAX_BYTES,
   closeDispatchExecutor,
+  claimHeldLive,
+  cleanupClosedTicketWorktree,
   mutationAck,
   integrationBranchAck,
   outOfScopeComment,

@@ -86,6 +86,19 @@ function printSweepResult(result, name, minAgeHours, recoveryRetentionAgeHours) 
   if (result.remainingCandidates) console.log(`  ${result.remainingCandidates} candidate(s) remain past this run's limit; re-run to continue.`);
   for (const failure of result.failures) console.log(`  ERROR ${failure.path || "prune"}: ${failure.message}`);
 }
+function worktreeSweepReasonSummary(entries) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    const reason = String(entry.reason || "unknown");
+    counts.set(reason, (counts.get(reason) || 0) + 1);
+  }
+  const ordered = [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+  return `  by reason: ${ordered.map(([reason, count]) => `${reason} ${count}`).join(", ") || "no candidates"}`;
+}
+function printSweepSummary(result) {
+  if (result.statusTimedOut) console.log(`  git status timed out on ${result.statusTimedOut} tree(s); they were kept as status_unknown.`);
+  console.log(worktreeSweepReasonSummary(result.entries));
+}
 async function cmdWorktrees(opts, positional) {
   const action = String(positional[0] || "").toLowerCase();
   if (action && !["status", "sweep"].includes(action) || !action && !opts.sweep) {
@@ -117,6 +130,7 @@ async function cmdWorktrees(opts, positional) {
     }
   };
   const targets = opts["all-projects"] ? store.listProjects({ all: true }).filter((project) => project && project.slug && project.path && existsSync(project.path)).sort((left, right) => String(left.slug).localeCompare(String(right.slug))).map((project) => ({ slug: project.slug, name: project.name || project.slug, path: project.path })) : [{ slug, name: meta.name, path: meta.path }];
+  const startedAt = Date.now();
   const results = [];
   for (const [index, target] of targets.entries()) {
     let result;
@@ -142,8 +156,9 @@ async function cmdWorktrees(opts, positional) {
     }
     results.push(Object.assign({ project: target.slug }, result));
   }
+  const wallTimeMs = Date.now() - startedAt;
   if (opts.json) {
-    process.stdout.write(JSON.stringify(opts["all-projects"] ? { projects: results } : results[0], null, 2) + "\n");
+    process.stdout.write(JSON.stringify(opts["all-projects"] ? { projects: results, wallTimeMs } : { ...results[0], wallTimeMs }, null, 2) + "\n");
     if (results.some((entry) => entry.failures?.length)) process.exitCode = 1;
     return;
   }
@@ -153,7 +168,9 @@ async function cmdWorktrees(opts, positional) {
       continue;
     }
     printSweepResult(result, targets[index].name, minAgeHours, recoveryRetentionAgeHours);
+    printSweepSummary(result);
   }
+  console.log(`worktrees sweep: finished in ${(wallTimeMs / 1e3).toFixed(1)}s`);
   if (results.some((entry) => entry.failures?.length)) process.exitCode = 1;
 }
 async function cmdRecoverShared(opts) {
@@ -487,4 +504,4 @@ async function cmdUnarchive(opts, positional) {
     console.log(`✗ unarchive: no ticket "${idOrRef}" in ${meta.name}`);
   }
 }
-module.exports = { cmdSweepClaims, cmdWorktrees, worktreeSweepEntryLine, worktreeSweepProgressLine, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive };
+module.exports = { cmdSweepClaims, cmdWorktrees, worktreeSweepEntryLine, worktreeSweepProgressLine, worktreeSweepReasonSummary, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive };
