@@ -62,6 +62,11 @@ When you approve it, setup writes `.claude/quartermaster/crap.json` and a live r
 node "<quartermaster plugin root>/bin/quartermaster.js" crap
 ```
 
+A function with complexity 6 or more fails at any coverage, so the failure line says to split it
+rather than add tests. Add `--cc-only` to check just that: it needs only lizard, runs no coverage
+command, and finishes in seconds. If your local `develop`, `main` or `master` is behind its upstream,
+the gate warns on stderr and suggests `--base <branch>@{upstream}`.
+
 The gate measures the Git checkout it runs in, so a linked worktree is measured in place instead of
 the main checkout, and a run from a subdirectory still reads the project's `crap.json`. Each run gives
 its coverage command a fresh `QUARTERMASTER_COVERAGE_DIR` to write `lcov.info` into, so concurrent runs

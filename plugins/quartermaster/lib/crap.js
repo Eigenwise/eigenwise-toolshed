@@ -106,10 +106,7 @@ function readSource(projectDir, filePath) {
   }
 }
 
-/** A named function rather than an inline callback, so V8 coverage can attribute its ranges to it. */
-function measuredFunction(entry, coverage, projectDir) {
-  const file = displayPath(projectDir, entry.file);
-  const lines = coverage.get(comparablePath(projectDir, entry.file));
+function lineCoverage(entry, lines) {
   let executable = 0;
   let covered = 0;
   for (let line = entry.start; line <= entry.end; line += 1) {
@@ -119,17 +116,32 @@ function measuredFunction(entry, coverage, projectDir) {
       if (hits > 0) covered += 1;
     }
   }
-  const coverageRatio = executable ? covered / executable : 0;
+  return { ratio: executable ? covered / executable : 0, unmeasured: executable === 0 };
+}
+
+/**
+ * Without coverage (--cc-only) a function is scored as if every line were covered: CRAP at full coverage
+ * is exactly cc, the lowest CRAP the function can ever have, so the ceiling check stays the one it always was.
+ */
+function coverageOf(entry, coverage, projectDir) {
+  if (!coverage) return { ratio: 1, unmeasured: false };
+  return lineCoverage(entry, coverage.get(comparablePath(projectDir, entry.file)));
+}
+
+/** A named function rather than an inline callback, so V8 coverage can attribute its ranges to it. */
+function measuredFunction(entry, coverage, projectDir) {
+  const file = displayPath(projectDir, entry.file);
+  const { ratio, unmeasured } = coverageOf(entry, coverage, projectDir);
   return {
     file,
     line: entry.start,
     function: entry.name,
     ordinal: entry.ordinal,
     cc: entry.complexity,
-    coverage: rounded(coverageRatio, 4),
-    crap: rounded(crapScore(entry.complexity, coverageRatio), 2),
+    coverage: coverage ? rounded(ratio, 4) : null,
+    crap: rounded(crapScore(entry.complexity, ratio), 2),
     fingerprint: fingerprint(projectDir, file, entry.start, entry.end),
-    unmeasured: executable === 0,
+    unmeasured,
     source: entry.source,
   };
 }
@@ -501,8 +513,29 @@ function complexityEntries(workDir, options, settings) {
   return lizardRows(settings.runLizard, { cwd: workDir, sources: settings.sources, exclude: settings.exclude });
 }
 
-function baselineFor(workDir, settings, functions) {
-  const baseReference = settings.baseReference ?? defaultBase(workDir);
+/** A local base behind its upstream makes already-merged work read as changed; no upstream, or an unreadable one, is no news. */
+function commitsBehindUpstream(workDir, baseReference) {
+  const count = tryGit(workDir, ['rev-list', '--count', `${baseReference}..${baseReference}@{upstream}`]);
+  return Number(count) || 0;
+}
+
+function baseWarnings(workDir, baseReference, baseline) {
+  const behind = baseline ? commitsBehindUpstream(workDir, baseReference) : 0;
+  if (!behind) return [];
+  return [`local base ${baseReference} is ${behind} commit${behind === 1 ? '' : 's'} behind its upstream, so work already merged there can read as changed; pass --base ${baseReference}@{upstream}, or fetch and fast-forward ${baseReference}`];
+}
+
+function baseReferenceFor(workDir, settings) {
+  return settings.baseReference ?? defaultBase(workDir);
+}
+
+/** The ceiling needs no coverage in --cc-only, so neither the coverage command nor the lcov is touched. */
+function coverageFor(options, settings, workDir) {
+  if (options.ccOnly) return null;
+  return coverageByFile(acquireLcovText(workDir, settings), workDir);
+}
+
+function baselineFor(workDir, baseReference, functions, settings) {
   if (baseReference === 'HEAD') return null;
   return baselineFunctions({ projectDir: workDir, baseReference, files: new Set(functions.map((entry) => entry.file)), exclude: settings.exclude, runLizard: settings.runLizard });
 }
@@ -527,9 +560,16 @@ function byCrapThenPlace(left, right) {
   return right.crap - left.crap || left.file.localeCompare(right.file) || left.line - right.line;
 }
 
-function gateResult(workDir, functions, candidates, baseline, usedDeprecatedRatchet) {
+function gateResult(workDir, functions, candidates, baseline, extra) {
   const failures = candidates.filter((entry) => entry.crap >= DEFAULT_MAX).sort(byCrapThenPlace).map((entry) => ({ ...entry, reason: 'ceiling' }));
-  return { root: workDir, functions: functions.sort(byCrapThenPlace), failures, max: DEFAULT_MAX, checked: candidates.length, unmeasured: 0, base: baseline?.base ?? null, usedDeprecatedRatchet };
+  return { root: workDir, functions: functions.sort(byCrapThenPlace), failures, max: DEFAULT_MAX, checked: candidates.length, unmeasured: 0, base: baseline?.base ?? null, ...extra };
+}
+
+/** Coverage is read from nowhere in this mode, so naming a coverage source would be silently ignored. */
+function assertCcOnlyOptions(options) {
+  if (options.ccOnly && (options.lcov || options.coverageCommand)) {
+    throw new PrerequisiteError('--cc-only runs no coverage, so --lcov and --coverage-command do not apply', 'drop --cc-only, or drop --lcov and --coverage-command');
+  }
 }
 
 /**
@@ -541,14 +581,17 @@ function crapReport(options) {
   const projectDir = path.resolve(options.projectDir ?? process.cwd());
   const projectPathGiven = Boolean(options.projectPathGiven);
   const workDir = resolveWorkDir({ projectDir, cwd: options.cwd, projectPathGiven });
+  assertCcOnlyOptions(options);
   const settings = gateSettings(options, readConfig(projectPathGiven ? projectDir : workDir));
-  const lcovText = acquireLcovText(workDir, settings);
+  const coverage = coverageFor(options, settings, workDir);
   const lizardEntries = complexityEntries(workDir, options, settings);
-  const functions = measure(lizardEntries, coverageByFile(lcovText, workDir), workDir);
-  const baseline = baselineFor(workDir, settings, functions);
+  const functions = measure(lizardEntries, coverage, workDir);
+  const baseReference = baseReferenceFor(workDir, settings);
+  const baseline = baselineFor(workDir, baseReference, functions, settings);
   const candidates = changedFunctions(functions, baseline);
   assertMeasured(workDir, settings, { lizardEntries, changed: changedFiles(baseline, functions), candidates });
-  return gateResult(workDir, functions, candidates, baseline, settings.usedDeprecatedRatchet);
+  const extra = { usedDeprecatedRatchet: settings.usedDeprecatedRatchet, ccOnly: Boolean(options.ccOnly), warnings: baseWarnings(workDir, baseReference, baseline) };
+  return gateResult(workDir, functions, candidates, baseline, extra);
 }
 
 /** Only file types lizard has more than one reader for name the measurement, so ordinary lines stay unchanged. */
@@ -556,9 +599,19 @@ function readerNote(entry) {
   return entry.source === LIZARD_SOURCE ? '' : ` source=${entry.source}`;
 }
 
+const CC_NOTE = 'fails at any coverage (CRAP is never below cc)';
+
+/** At cc at or above the ceiling no test can help, so the line tells the agent to split the function rather than add coverage. */
+function failureLine(entry, ccOnly) {
+  const place = `${entry.file}:${entry.line} ${entry.function} cc=${entry.cc}`;
+  if (ccOnly) return `${place} ${CC_NOTE}${readerNote(entry)}`;
+  const measured = `${place} coverage=${Math.round(entry.coverage * 100)}% CRAP=${entry.crap}${readerNote(entry)}`;
+  return entry.cc >= DEFAULT_MAX ? `${measured} - cc ${DEFAULT_MAX} or more ${CC_NOTE}: split the function, more tests will not help` : measured;
+}
+
 function formatReport(report) {
-  const lines = report.failures.map((entry) => `${entry.file}:${entry.line} ${entry.function} cc=${entry.cc} coverage=${Math.round(entry.coverage * 100)}% CRAP=${entry.crap}${readerNote(entry)}`);
-  lines.push(`CRAP gate ${report.failures.length ? 'failed' : 'passed'}: ${report.failures.length} of ${report.checked} changed or new functions at or above ${report.max}`);
+  const lines = report.failures.map((entry) => failureLine(entry, report.ccOnly));
+  lines.push(`CRAP gate${report.ccOnly ? ' (cc-only, no coverage)' : ''} ${report.failures.length ? 'failed' : 'passed'}: ${report.failures.length} of ${report.checked} changed or new functions at or above ${report.max}`);
   return `${lines.join('\n')}\n`;
 }
 
