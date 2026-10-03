@@ -168,26 +168,22 @@ the board transition, never that work shipped: salvage and close it per `referen
 
 ## Route execution; keep the loop tight
 
-Before routing, the orchestrator decides what improvement is worth making, its benefit, approach, and
-boundaries. Gather evidence with read-only tools or native `Explore`, then ticket that plan and route
-implementation. Routes select execution capacity, not product or tradeoff decisions.
-A direct claim is limited to the INLINE-SAFE allowlist and its 20+ character reason; it cannot retroactively
-legitimize prior inline investigation. Executors own their tickets; investigations return **compressed findings** (~1–2k tokens)
-as comments, not transcripts. Routed implementation uses a freshly dispatched executor.
-`Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness utilities; Explore is a quick
-sweep only, deep or fan-out investigation is a `codebase-exploration` spike; other delegation needs a
-ticket.
+Use read-only recon to pin the improvement, benefit, approach, and boundaries before routing;
+routes select execution capacity, not product decisions. Investigations return compressed findings
+(~1–2k tokens) as comments. Dispatch implementation fresh; executors own their tickets.
+Direct claims require an INLINE-SAFE reason (20+ characters); they cannot legitimize prior investigation.
+Use native `Explore` only for quick sweeps. Deep/fan-out investigation needs `codebase-exploration`;
+only `Explore`, `claude-code-guide`, and `statusline-setup` are ticket-free harness utilities.
 
-**The shape is a LOOP, not a hand-off**: spawn a wave → executors return terse reports and
-submit verified commits → read each thread, use scoped verification for each ticket, then run the
-full suite once while publishing the wave in one transaction → re-plan, spawn the next. Don't accept a green suite as proof of coverage; review execution evidence. Prevent
-executor mini-sessions from the spawn side: **the ticket is the spec**. The ticket carries the selected
-outcome, benefit, approach, boundaries, and enough implementation detail to act; scope the spawn prompt only
-with logistics, with the ticket contract traveling in full and unnarrowed;
-**Executors keep useful work**: keep claim, checkpoint evidence, and await `SendMessage`
-steering for questions or failed checks. Release only for confirmed death or unsalvageable blockers; **batch small same-model tickets into ONE executor**
-(different models never batch); **parallel fan-out spawns one executor per ticket in a single
-message** when the wave justifies it.
+**Loop:** spawn a wave, read executor reports and verified submissions, run each ticket's scoped
+verification, then publish with one full-suite gate. Re-plan for the next wave.
+Don't accept a green suite as proof of coverage; review execution evidence.
+**The ticket is the spec:** include outcome, benefit, approach, boundaries, and implementation detail.
+Spawn prompts add logistics; carry the full ticket contract without narrowing it.
+**Keep useful work:** retain claims and checkpoints, await `SendMessage` steering for questions or
+failed checks, and release only on confirmed death or unsalvageable blockers.
+Batch small same-model tickets in one executor, never mix models. Parallel waves spawn one executor
+per ticket in a single message.
 
 **Ready** = unclaimed, unblocked, not done, not archived — `sidequest ready --json
 --brief` lists exactly this set, partitioned into **parallel-safe waves** by declared file scope.
