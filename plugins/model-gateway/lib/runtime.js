@@ -128,6 +128,7 @@ const CODEX_CONTEXT_WINDOWS = MODEL_WINDOW_POLICY;
 // model ids from both, and no request header tells them apart.
 const CONTEXT_WINDOW_PATH = path.join(STATE, 'context-window.json');
 const CONTEXT_WINDOW_BACKENDS = Object.freeze(['claude', 'codex', 'grok']);
+const COMPACT_AT_BACKENDS = Object.freeze(['codex', 'grok']);
 const DEFAULT_CONTEXT_WINDOWS = Object.freeze({ claude: 'full', codex: 272000, grok: 'full' });
 const CODEX_BILLING_RULE = 'OpenAI bills input above 272k tokens at 2x';
 const CODEX_DOUBLE_BILLING_THRESHOLD = 272000;
@@ -165,28 +166,84 @@ function readSavedContextWindows(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
 }
 
+function parseCompactAtValue(value) {
+  if (!['string', 'number'].includes(typeof value)) return null;
+  const tokens = Number(value);
+  return Number.isSafeInteger(tokens) && tokens > 0 ? tokens : null;
+}
+
+function validateCompactAtSettings(compactAt = {}) {
+  for (const [backend, value] of Object.entries(compactAt)) {
+    if (!COMPACT_AT_BACKENDS.includes(backend)) {
+      throw new Error(`unsupported compactAt.${backend}: direct compaction maxima are supported for Codex and Grok only; use --claude <tokens|full> for the native window`);
+    }
+    if (value !== parseCompactAtValue(value)) throw new Error(`invalid compactAt.${backend}: use a positive whole token count`);
+  }
+}
+
+function resolveContextWindowSetting(backend, saved, env) {
+  const setting = resolveContextWindow(backend, saved, env);
+  const compactAt = saved?.compactAt?.[backend];
+  if (compactAt !== undefined) setting.compactAt = parseCompactAtValue(compactAt);
+  return setting;
+}
+
 function readContextWindowSettings({ file = CONTEXT_WINDOW_PATH, env = process.env } = {}) {
   const saved = readSavedContextWindows(file);
-  return Object.fromEntries(CONTEXT_WINDOW_BACKENDS.map((backend) => [backend, resolveContextWindow(backend, saved, env)]));
+  validateCompactAtSettings(saved?.compactAt);
+  return Object.fromEntries(CONTEXT_WINDOW_BACKENDS.map((backend) => [backend, resolveContextWindowSetting(backend, saved, env)]));
 }
 
 function writeContextWindowSettings(values, file = CONTEXT_WINDOW_PATH) {
+  validateCompactAtSettings(values.compactAt);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   writeFileAtomically(file, JSON.stringify(values, null, 2) + '\n');
 }
 
 const CONTEXT_WINDOWS = readContextWindowSettings();
+const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
 
 function contextWindowCap(backend, windows = CONTEXT_WINDOWS) {
   const value = windows[backend]?.value;
   return Number.isInteger(value) ? value : null;
 }
 
-function capCompactTrigger(cap) {
-  return cap - CAP_COMPACTION_MARGIN;
+function contextWindowCompactAt(backend, windows = CONTEXT_WINDOWS) {
+  return windows[backend]?.compactAt ?? null;
 }
 
-function codexBillingNote(cap) {
+function gatewayCompactTrigger(cap, compactAt) {
+  if (compactAt !== null && compactAt !== undefined) return Math.min(compactAt, cap ?? Infinity);
+  return cap ? cap - CAP_COMPACTION_MARGIN : null;
+}
+
+function gatewayCompactionCandidates(compactTrigger, cap, compactAt) {
+  if (compactAt !== null) return [{ compactTrigger: gatewayCompactTrigger(cap, compactAt), source: 'compact-at' }];
+  const triggers = [];
+  if (Number.isFinite(compactTrigger) && compactTrigger > 0) triggers.push({ compactTrigger, source: 'env' });
+  if (cap) triggers.push({ compactTrigger: gatewayCompactTrigger(cap, null), source: 'cap' });
+  return triggers;
+}
+
+function sentryBackendWindow(policy) {
+  const backendWindow = policy.backendWindow;
+  if (!Number.isFinite(backendWindow) || backendWindow <= CODEX_COMPACT_HEADROOM) {
+    throw new Error(`model-gateway: invalid sentry backend window for ${policy.backendId}`);
+  }
+  return backendWindow;
+}
+
+function effectiveSentryPolicy(policy, compactTrigger = configuredCompactTrigger, cap = contextWindowCap(policy?.backend), compactAt = contextWindowCompactAt(policy?.backend)) {
+  if (policy?.sentry !== 'synthetic-413') return null;
+  const backendWindow = sentryBackendWindow(policy);
+  const triggers = [{ compactTrigger: backendWindow - CODEX_COMPACT_HEADROOM, source: 'derived' },
+    ...gatewayCompactionCandidates(compactTrigger, cap, compactAt)];
+  const [lowest] = triggers.sort((left, right) => left.compactTrigger - right.compactTrigger);
+  return { backendWindow, ...lowest };
+}
+
+function codexBillingNote(cap, compactAt = null) {
+  if (compactAt !== null) return `${CODEX_BILLING_RULE}; the crossing turn and compaction request can still exceed 272k and pay double`;
   return cap && cap <= CODEX_DOUBLE_BILLING_THRESHOLD
     ? `${CODEX_BILLING_RULE}; the cap keeps every request, including compaction, under it`
     : `${CODEX_BILLING_RULE}; requests past 272k pay double`;
@@ -430,7 +487,8 @@ module.exports = {
   PROJECT_WIRING_REGISTRY_PATH, RETIRED_SHIPPED_PINS, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_FAILURE_PATH, SHIM_PORT, SOCKET_PATH, STATE,
   STATIC_ENV_BLOCK, STABLE_COMMAND_PATH, TRACE_HEADERS, WIRING_CONFIG_PATH, WIN, CLI_PATH, CLAUDE_CONFIG_DIR, mkdirs,
   CAP_COMPACTION_MARGIN, CODEX_COMPACT_HEADROOM, CONTEXT_WINDOW_BACKENDS, CONTEXT_WINDOW_MAX, CONTEXT_WINDOW_MIN,
-  CONTEXT_WINDOW_PATH, DEFAULT_CONTEXT_WINDOWS, capCompactTrigger, codexBillingNote, contextWindowCap,
+  CONTEXT_WINDOW_PATH, DEFAULT_CONTEXT_WINDOWS, COMPACT_AT_BACKENDS, gatewayCompactTrigger, codexBillingNote, contextWindowCap,
+  contextWindowCompactAt, effectiveSentryPolicy, parseCompactAtValue,
   parseContextWindowValue, readContextWindowSettings, writeContextWindowSettings,
   canReplaceInstalledCliPath, codexClientModelId, codexContextWindow, codexContextWindowModelId,
   codexReadinessMessage,
