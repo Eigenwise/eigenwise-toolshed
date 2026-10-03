@@ -5011,6 +5011,135 @@ test('subagent-stop: a held claim is classified regardless of claimed effort', (
   }
 });
 
+test('subagent-stop: held claim uses only authentic original ID and session without lifecycle changes', () => {
+  const sessionId = `held-original-${++sqSeq}`;
+  const ticket = addStopTicket('held original guidance');
+  const holder = 'distinct-holder-label';
+  const stop = claimStopTicket(ticket, sessionId, holder);
+  const before = store.getTicket(slug, ticket.ref);
+  const output = runHookOutput(SUBAGENT_STOP, stop);
+  const context = output.hookSpecificOutput.additionalContext;
+  assert.match(context, /^exec WAITING:/);
+  assert.ok(context.includes(`only original session ${JSON.stringify(sessionId)} may SendMessage once to exact ID ${JSON.stringify(stop.agent_id)}`), 'the exact original ID and recorded same-session fence must survive the output budget');
+  assert.doesNotMatch(context, new RegExp(holder), 'claim holder is never the address');
+  assert.doesNotMatch(context, new RegExp(stop.agent_name), 'a name is not the raw-ID fallback');
+  assert.match(context, /continuation UNVERIFIED, preserve claim\/work/);
+  assert.match(context, /Queued\/failed\/absent\/completed isn't death; original response\/activity proves resumed/);
+  assert.match(context, /User Pause retries stops sends/, 'a user pause overrides the conditional send');
+  assert.match(context, /Never use claim.by\/guess\/replace\/restart terminal/);
+  assert.ok(Buffer.byteLength(context) <= 512);
+  assert.deepStrictEqual(Object.keys(output), ['hookSpecificOutput'], 'guidance has no auto-send or host continuation command');
+  assert.deepStrictEqual(Object.keys(output.hookSpecificOutput), ['hookEventName', 'additionalContext']);
+  const after = store.getTicket(slug, ticket.ref);
+  assert.deepStrictEqual(after.claim, before.claim, 'held claim is unchanged');
+  assert.equal(after.dispatchNonce, before.dispatchNonce, 'nonce is unchanged');
+  assert.equal(after.dispatch.outcome, before.dispatch.outcome, 'turn-stop is not death');
+  assert.equal(after.dispatch.terminalAt, before.dispatch.terminalAt, 'turn-stop has no terminal mutation');
+});
+
+function claimNameOnlyStopTicket(sessionId: string, holder: string) {
+  const ticket = addStopTicket('held name-only guidance');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
+  const agentName = `name-only-${ticket.id}`;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor, agentName,
+  }).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, holder, {
+    sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  return { ticket, stop: { session_id: sessionId, agent_type: prepared.ticket.dispatchExecutor, agent_name: agentName } };
+}
+
+test('subagent-stop: held claim with name-only identity keeps raw-ID continuation unverified', () => {
+  const sessionId = `held-name-only-${++sqSeq}`;
+  const { ticket, stop } = claimNameOnlyStopTicket(sessionId, 'label-is-not-an-address');
+  const before = store.getTicket(slug, ticket.ref);
+  const context = runHook(SUBAGENT_STOP, stop);
+  assert.match(context, /^exec WAITING:/);
+  assert.match(context, /Continuation UNVERIFIED: no recorded original ID\/session; preserve claim\/work/);
+  assert.doesNotMatch(context, /SendMessage once|label-is-not-an-address/);
+  const after = store.getTicket(slug, ticket.ref);
+  assert.deepStrictEqual(after.claim, before.claim);
+  assert.equal(after.dispatchNonce, before.dispatchNonce);
+  assert.equal(after.dispatch.outcome, before.dispatch.outcome);
+});
+
+test('subagent-stop: held claim with missing recorded session keeps authentic ID unverified', () => {
+  const ticket = addStopTicket('held missing-session guidance');
+  const stop = claimStopTicket(ticket, `held-missing-session-${++sqSeq}`, 'missing-session-holder');
+  const current = store.getTicket(slug, ticket.ref);
+  delete current.dispatch.sessionId;
+  db.putRow(database, 'tickets', {
+    id: current.id, project: slug, ref: current.ref, status: current.status,
+    archived: current.archived ? 1 : 0, ord: current.order, claim_by: current.claim.by, data: current,
+  });
+  const context = runHook(SUBAGENT_STOP, stop);
+  assert.match(context, /^exec WAITING:/);
+  assert.match(context, /Continuation UNVERIFIED: no recorded original ID\/session; preserve claim\/work/);
+  assert.doesNotMatch(context, /SendMessage once|exact ID/);
+  const after = store.getTicket(slug, ticket.ref);
+  assert.deepStrictEqual(after.claim, current.claim);
+  assert.equal(after.dispatchNonce, current.dispatchNonce);
+  assert.equal(after.dispatch.outcome, current.dispatch.outcome);
+  assert.equal(after.dispatch.terminalAt, current.dispatch.terminalAt);
+});
+
+test('subagent-stop: held claim with mismatched or unknown current session exposes no handle', () => {
+  const ticket = addStopTicket('held session fence');
+  const stop = claimStopTicket(ticket, `held-session-${++sqSeq}`, 'session-fenced-holder');
+  const before = store.getTicket(slug, ticket.ref);
+  assert.equal(runHook(SUBAGENT_STOP, { ...stop, session_id: 'different-original-host' }), '', 'another session cannot use the original handle');
+  assert.equal(runHook(SUBAGENT_STOP, { ...stop, session_id: '' }, { CLAUDE_CODE_SESSION_ID: '', CLAUDE_SESSION_ID: '' }), '', 'unknown current session cannot use the original handle');
+  assert.deepStrictEqual(store.getTicket(slug, ticket.ref), before, 'unmatched hook payload changes no board state');
+});
+
+test('subagent-stop: held claim label-only identity is never an address substitute', () => {
+  const ticket = addStopTicket('held label-only guidance');
+  const stop = claimStopTicket(ticket, `held-label-only-${++sqSeq}`, 'label-only-holder');
+  const before = store.getTicket(slug, ticket.ref);
+  assert.equal(runHook(SUBAGENT_STOP, { ...stop, agent_id: '', agent_name: before.claim.by }), '');
+  assert.deepStrictEqual(store.getTicket(slug, ticket.ref), before, 'claim.by cannot identify a dispatch to send or stop');
+});
+
+test('subagent-stop: held claim terminal release forbids restarting the original executor', () => {
+  const ticket = addStopTicket('held terminal guidance');
+  const holder = 'terminal-held-holder';
+  const stop = claimStopTicket(ticket, `held-terminal-${++sqSeq}`, holder);
+  assert.equal(store.releaseTicket(slug, ticket.ref, holder, { status: 'todo' }).ok, true);
+  const before = store.getTicket(slug, ticket.ref);
+  const context = runHook(SUBAGENT_STOP, stop);
+  assert.match(context, /^exec FINISHED after terminal release:/);
+  assert.doesNotMatch(context, /SendMessage|exec WAITING|exact ID/);
+  const after = store.getTicket(slug, ticket.ref);
+  assert.equal(after.claim, null);
+  assert.equal(after.dispatchNonce, before.dispatchNonce);
+  assert.equal(after.dispatch.outcome, before.dispatch.outcome);
+  assert.equal(after.dispatch.terminalAt, before.dispatch.terminalAt);
+});
+
+test('subagent-stop: held claim with a recorded terminal dispatch never permits an ID send', () => {
+  for (const outcome of ['died', 'failed', 'unknown']) {
+    const ticket = addStopTicket(`held terminal ${outcome} guidance`);
+    const stop = claimStopTicket(ticket, `held-terminal-record-${++sqSeq}`, 'recorded-terminal-holder');
+    const current = store.getTicket(slug, ticket.ref);
+    current.dispatch.outcome = outcome;
+    current.dispatch.terminalAt = new Date().toISOString();
+    current.dispatch.terminalSource = 'subagent-stop';
+    db.putRow(database, 'tickets', {
+      id: current.id, project: slug, ref: current.ref, status: current.status,
+      archived: current.archived ? 1 : 0, ord: current.order, claim_by: current.claim.by, data: current,
+    });
+    const context = runHook(SUBAGENT_STOP, stop);
+    assert.match(context, outcome === 'unknown' ? /Terminal executor: never restart/ : /^exec DIED:/);
+    assert.doesNotMatch(context, /SendMessage once|exact ID/);
+    const after = store.getTicket(slug, ticket.ref);
+    assert.deepStrictEqual(after.claim, current.claim);
+    assert.equal(after.dispatchNonce, current.dispatchNonce);
+    assert.equal(after.dispatch.outcome, outcome);
+    assert.equal(after.dispatch.terminalAt, current.dispatch.terminalAt);
+  }
+});
+
 test('subagent-stop: stop_hook_active suppresses the note (no self-continuation loop)', () => {
   const sess = `sess-active-${++sqSeq}`;
   const t = addTicket('over-threshold ticket, but re-entrant fire');

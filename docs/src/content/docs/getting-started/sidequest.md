@@ -128,6 +128,8 @@ For substantial changes, Claude can turn the request into a story with linked ti
 
 Sidequest keeps ticket activity visible in the board. Ask Claude to check active work after a restart or when you need help with a ticket that was started in another session.
 
+An executor can end a turn while still holding its claim. If its board-derived name fails, the original matching Claude session can send one continuation message to the authentic recorded `dispatch.agentId`, or the exact identifier returned by that original Agent launch. A claim holder label is never an address. If the original ID or session is missing or mismatched, continuation stays unverified and the claim/work are preserved. Your **Pause retries** decision stops retries. Queued/resuming messages alone don't prove resumed work; the original executor must actually respond or act. Unknown, completed, absent, or failed-send host results don't prove death or permit takeover. Terminal executors stay stopped. This guidance adds no automatic sends or recovery authority.
+
 Executors share the orchestrator's context window settings. Claude executors run at the full 1M window, and Codex executors are capped at 272k tokens because OpenAI bills input above that at 2x. The `models` tool output and the dashboard's model pickers show each discovered model's window next to it. To change the numbers, see [Context window and cost](../model-gateway/#context-window-and-cost) in the Model Gateway guide.
 
 CI watch alerts exclude completed runs marked `skipped` or `neutral`. Neither conclusion proves that the required checks passed; release verification still needs successful checks on the exact commit.
