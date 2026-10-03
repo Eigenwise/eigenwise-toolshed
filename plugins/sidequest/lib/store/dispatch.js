@@ -5,7 +5,7 @@ const { resolveSuite } = require("../suite-resolver.js");
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationOutcome } = require("../kernel/review-binding");
 const { compareSemver } = require("../plugin-freshness.js");
 const { WHOLE_TREE_SCOPE } = require("../commit-scope.js");
-const { compositionCheckoutCommit, consumePreparedComposition } = require("./composition-admission.js");
+const { compositionCheckoutCommit, consumePreparedComposition, consumedAdmissionRefusal } = require("./composition-admission.js");
 function unscopedWriteCannotAutoApprove(ticket, options) {
   const { dispatchReadOnly, normalizeFiles, autoApproveScope } = options;
   return !dispatchReadOnly(ticket) && !normalizeFiles(ticket?.files).length && (!Array.isArray(autoApproveScope) || !autoApproveScope.length);
@@ -2198,68 +2198,97 @@ function createDispatch(dependencies) {
     });
     return { ok: true, ticket: briefed || ticket, token: receivedToken };
   }
+  function trimmedRecoveryText(value) {
+    return String(value || "").trim();
+  }
+  function liveClaimRecoveryRequest(opts = {}) {
+    return {
+      by: trimmedRecoveryText(opts.by),
+      executor: trimmedRecoveryText(opts.executor),
+      worktree: trimmedRecoveryText(opts.worktree),
+      evidence: trimmedRecoveryText(opts.recoveryEvidence),
+      sessionId: trimmedRecoveryText(opts.sessionId)
+    };
+  }
+  function isLiveClaimedBy(ticket, by) {
+    return ticket?.claim?.by === by;
+  }
+  function liveClaimDispatchRefusal(ticket, state) {
+    if (state?.outcome === "claimed" && state.sharedTree === false && !state.terminalAt) return null;
+    return { ok: false, reason: "dispatch_unavailable", ticket, message: `${ticket.ref} does not have a live isolated claimed dispatch to recover.` };
+  }
+  function liveClaimExecutorRefusal(ticket, state, executor) {
+    const runtimeExecutor = ticket.claim?.runtime?.executor || executor;
+    if (state?.executor === executor && runtimeExecutor === executor) return null;
+    return { ok: false, reason: "executor_mismatch", ticket, message: `${ticket.ref} requires executor ${state?.executor || "(unavailable)"}, not ${executor}.` };
+  }
+  function consumedCompositionRecoveryRefusal(ticket) {
+    const consumed = consumedAdmissionRefusal(ticket);
+    return consumed && {
+      ok: false,
+      reason: consumed.reason,
+      ticket,
+      message: `${ticket.ref}: ${consumed.message} Live-claim recovery would re-mint the dispatch nonce that consumed it, so it is refused and nothing was written. The live claim holder keeps its existing dispatch token and bound native checkout; this composition generation cannot be re-minted or redispatched.`
+    };
+  }
+  function liveClaimRecoveryRefusal(ticket, state, request, idOrRef) {
+    const ref = ticket?.ref || idOrRef;
+    if (!isLiveClaimedBy(ticket, request.by)) {
+      return { ok: false, reason: "not_claim_holder", ticket, message: `${ref} is not live-claimed by ${request.by}.` };
+    }
+    return liveClaimDispatchRefusal(ticket, state) || liveClaimExecutorRefusal(ticket, state, request.executor) || consumedCompositionRecoveryRefusal(ticket);
+  }
+  function resumeLiveClaim(ticket, state, facts, request, now) {
+    state.sessionId = request.sessionId;
+    state.agentId = null;
+    state.continuation = {
+      mode: "live_claim_resume",
+      ticketRef: ticket.ref,
+      sourceWorktree: facts.worktree,
+      baseCommit: state.baseCommit,
+      commit: facts.revision
+    };
+    bindCheckoutFacts(state, facts);
+    state.worktreeBindingSource = "live-claim-recovery";
+    state.worktreeBoundAt = now;
+    state.resumedAt = now;
+    state.liveClaimRecovery = { at: now, by: request.by, executor: request.executor, evidence: request.evidence };
+    ticket.dispatchNonce = mintDispatchToken();
+    state.tokenPrefix = dispatchTokenPrefix(ticket.dispatchNonce);
+    writeDispatchTokenFile(ticket);
+    syncClaimRuntimeIdentity(ticket, state);
+    stampDispatchEvent(ticket, "live-claim-recovery", now);
+  }
+  function recoverLockedLiveClaim(slug, id, idOrRef, request, lockKeys) {
+    const ticket = getTicket(slug, id);
+    const state = dispatchState(ticket);
+    const refusal = liveClaimRecoveryRefusal(ticket, state, request, idOrRef);
+    if (refusal) return refusal;
+    const facts = immutableWorktreeFacts(slug, request.worktree);
+    if (!facts) {
+      return { ok: false, reason: "invalid_worktree", ticket, message: `${ticket.ref} recovery requires a linked worktree from this board project.` };
+    }
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const rebind = liveClaimRebind(slug, ticket, state, facts, lockKeys, now);
+    if (!rebind.ok) return { ok: false, reason: rebind.reason, ticket, message: rebind.message };
+    resumeLiveClaim(ticket, state, facts, request, now);
+    putTicket(slug, ticket);
+    return {
+      ok: true,
+      ticket,
+      token: ticket.dispatchNonce,
+      recovery: Object.assign({ kind: "live_claim_resume", at: now, worktree: facts.worktree }, rebind.recovery)
+    };
+  }
   function recoverLiveClaimDispatch(slug, idOrRef, opts) {
-    const by = String(opts?.by || "").trim();
-    const executor = String(opts?.executor || "").trim();
-    const worktree = String(opts?.worktree || "").trim();
-    const evidence = String(opts?.recoveryEvidence || "").trim();
-    const sessionId = String(opts?.sessionId || "").trim();
+    const request = liveClaimRecoveryRequest(opts);
     const found = getTicket(slug, idOrRef);
     if (!found) return { ok: false, reason: "not_found" };
-    if (!by || !executor || !worktree || !evidence || !sessionId) {
+    if (Object.values(request).some((value) => !value)) {
       return { ok: false, reason: "missing_recovery_facts", message: "Live-claim recovery requires claimHolder, executor, worktree, recoveryEvidence, and a connected session." };
     }
-    const lockKeys = recoveryLockKeys(slug, found, worktree);
-    return withLockedTickets(lockKeys, () => {
-      const ticket = getTicket(slug, found.id);
-      const state = dispatchState(ticket);
-      if (!ticket?.claim?.by || ticket.claim.by !== by) {
-        return { ok: false, reason: "not_claim_holder", ticket, message: `${ticket?.ref || idOrRef} is not live-claimed by ${by}.` };
-      }
-      if (!state || state.terminalAt || state.sharedTree !== false || state.outcome !== "claimed") {
-        return { ok: false, reason: "dispatch_unavailable", ticket, message: `${ticket.ref} does not have a live isolated claimed dispatch to recover.` };
-      }
-      if (state.executor !== executor || ticket.claim.runtime?.executor && ticket.claim.runtime.executor !== executor) {
-        return { ok: false, reason: "executor_mismatch", ticket, message: `${ticket.ref} requires executor ${state.executor || "(unavailable)"}, not ${executor}.` };
-      }
-      const facts = immutableWorktreeFacts(slug, worktree);
-      if (!facts) {
-        return { ok: false, reason: "invalid_worktree", ticket, message: `${ticket.ref} recovery requires a linked worktree from this board project.` };
-      }
-      const now = (/* @__PURE__ */ new Date()).toISOString();
-      const rebind = liveClaimRebind(slug, ticket, state, facts, lockKeys, now);
-      if (!rebind.ok) return { ok: false, reason: rebind.reason, ticket, message: rebind.message };
-      state.sessionId = sessionId;
-      state.agentId = null;
-      state.continuation = {
-        mode: "live_claim_resume",
-        ticketRef: ticket.ref,
-        sourceWorktree: facts.worktree,
-        baseCommit: state.baseCommit,
-        commit: facts.revision
-      };
-      state.worktree = facts.worktree;
-      state.worktreeGitDirectory = facts.gitDirectory;
-      state.worktreeCommonGitDirectory = facts.commonGitDirectory;
-      state.worktreeCheckoutInstance = facts.checkoutInstance;
-      state.worktreeObservedRevision = facts.revision;
-      state.worktreeBindingSource = "live-claim-recovery";
-      state.worktreeBoundAt = now;
-      state.resumedAt = now;
-      state.liveClaimRecovery = { at: now, by, executor, evidence };
-      ticket.dispatchNonce = mintDispatchToken();
-      state.tokenPrefix = dispatchTokenPrefix(ticket.dispatchNonce);
-      writeDispatchTokenFile(ticket);
-      syncClaimRuntimeIdentity(ticket, state);
-      stampDispatchEvent(ticket, "live-claim-recovery", now);
-      putTicket(slug, ticket);
-      return {
-        ok: true,
-        ticket,
-        token: ticket.dispatchNonce,
-        recovery: Object.assign({ kind: "live_claim_resume", at: now, worktree: facts.worktree }, rebind.recovery)
-      };
-    });
+    const lockKeys = recoveryLockKeys(slug, found, request.worktree);
+    return withLockedTickets(lockKeys, () => recoverLockedLiveClaim(slug, found.id, idOrRef, request, lockKeys));
   }
   function recordDispatchLaunch(slug, idOrRef, opts) {
     opts = opts || {};

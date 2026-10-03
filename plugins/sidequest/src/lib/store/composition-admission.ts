@@ -343,6 +343,11 @@ function consumedGenerationRefusal(root: CompositionTicket): CompositionRefusal 
   if (!dispatchNamesConsumedGeneration(root.dispatch ?? {}, admission, admission.consumedBy)) return refuse('stale_generation', 'Composition admission does not name this exact isolated dispatch generation.');
 }
 
+// The consumed grant is bound to one dispatch nonce, so neither a redispatch nor a live-claim recovery may mint another.
+export function consumedAdmissionRefusal(root: CompositionTicket): CompositionRefusal | undefined {
+  if (root.compositionAdmission?.consumedBy) return refuse('admission_consumed', 'Composition admission was already consumed. A new dispatch cannot replay it.');
+}
+
 function terminalCompositionRefusal(root: CompositionTicket): CompositionRefusal | undefined {
   const generation = consumedGenerationRefusal(root);
   if (generation) return generation;
@@ -548,8 +553,7 @@ export function createCompositionAdmissions(dependencies: Dependencies) {
   function dispatchAdmissionRefusal(slug: string, root: CompositionTicket, locked: readonly string[]): Extract<CompositionAdmissionResult, { ok: false }> | undefined {
     const admission = root.compositionAdmission;
     if (!admission) return refuse('admission_unavailable', 'Composition admission disappeared while acquiring its locks.');
-    if (admission.consumedBy) return refuse('admission_consumed', 'Composition admission was already consumed. A new dispatch cannot replay it.');
-    return rootAdmissionRefusal(root, admission) || observedAdmissionRefusal(slug, root, admission, locked);
+    return consumedAdmissionRefusal(root) || rootAdmissionRefusal(root, admission) || observedAdmissionRefusal(slug, root, admission, locked);
   }
 
   function observedAdmissionRefusal(slug: string, root: CompositionTicket, admission: CompositionAdmission, locked: readonly string[]): Extract<CompositionAdmissionResult, { ok: false }> | undefined {

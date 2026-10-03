@@ -23,6 +23,7 @@ __export(composition_admission_exports, {
   compositionIncludesSource: () => compositionIncludesSource,
   compositionSubmissionScope: () => compositionSubmissionScope,
   consumePreparedComposition: () => consumePreparedComposition,
+  consumedAdmissionRefusal: () => consumedAdmissionRefusal,
   createCompositionAdmissions: () => createCompositionAdmissions,
   exactCompositionSubmissionRefusal: () => exactCompositionSubmissionRefusal
 });
@@ -284,6 +285,9 @@ function consumedGenerationRefusal(root) {
   if (!admission?.consumedBy) return refuse("admission_unconsumed", "Composition requires its genuinely consumed prepared generation.");
   if (!dispatchNamesConsumedGeneration(root.dispatch ?? {}, admission, admission.consumedBy)) return refuse("stale_generation", "Composition admission does not name this exact isolated dispatch generation.");
 }
+function consumedAdmissionRefusal(root) {
+  if (root.compositionAdmission?.consumedBy) return refuse("admission_consumed", "Composition admission was already consumed. A new dispatch cannot replay it.");
+}
 function terminalCompositionRefusal(root) {
   const generation = consumedGenerationRefusal(root);
   if (generation) return generation;
@@ -488,8 +492,7 @@ function createCompositionAdmissions(dependencies) {
   function dispatchAdmissionRefusal(slug, root, locked) {
     const admission = root.compositionAdmission;
     if (!admission) return refuse("admission_unavailable", "Composition admission disappeared while acquiring its locks.");
-    if (admission.consumedBy) return refuse("admission_consumed", "Composition admission was already consumed. A new dispatch cannot replay it.");
-    return rootAdmissionRefusal(root, admission) || observedAdmissionRefusal(slug, root, admission, locked);
+    return consumedAdmissionRefusal(root) || rootAdmissionRefusal(root, admission) || observedAdmissionRefusal(slug, root, admission, locked);
   }
   function observedAdmissionRefusal(slug, root, admission, locked) {
     const sources = observeSources(slug, root, admission, locked);
@@ -585,6 +588,7 @@ function createCompositionAdmissions(dependencies) {
   compositionIncludesSource,
   compositionSubmissionScope,
   consumePreparedComposition,
+  consumedAdmissionRefusal,
   createCompositionAdmissions,
   exactCompositionSubmissionRefusal
 });

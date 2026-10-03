@@ -671,6 +671,26 @@ async function reviewAndDeliverComposition(): Promise<void> {
   assertRetainedProofsAndSources();
 }
 
+// The index bytes are read before any git command, and only read-only plumbing runs, so a refresh cannot rewrite them.
+function compositionRecoveryWitness(checkout: string): string {
+  const indexFile = gitIn(checkout, ['rev-parse', '--path-format=absolute', '--git-path', 'index']);
+  const index = createHash('sha256').update(fs.readFileSync(indexFile)).digest('hex');
+  const root = store.getTicket(project, rootTicket.ref);
+  return JSON.stringify({ index, tickets: store.listTickets(project), token: fs.readFileSync(root.dispatch.tokenFile, 'utf8'),
+    proof: fs.readFileSync(oldRootProof, 'utf8'), head: gitIn(checkout, ['rev-parse', 'HEAD']),
+    branch: gitIn(checkout, ['symbolic-ref', 'HEAD']), staged: gitIn(checkout, ['ls-files', '--stage']) });
+}
+
+// Same-holder recovery would re-mint the nonce the consumed admission names, stranding the claim as stale_generation.
+async function assertConsumedCompositionRecoveryRefusal(checkout: string): Promise<void> {
+  const before = compositionRecoveryWitness(checkout);
+  const refused = await boardToolText('dispatch', { ref: rootTicket.ref, claimHolder: 'composition-new-root', worktree: checkout,
+    recoveryEvidence: 'composition-new-root holds the live claim in this bound native checkout and asks for its token to be re-minted.' });
+  assert.match(refused, /Composition admission was already consumed\. A new dispatch cannot replay it\. Live-claim recovery would re-mint the dispatch nonce/);
+  assert.equal(compositionRecoveryWitness(checkout), before, 'a refused composition recovery writes nothing');
+  assertRetainedProofsAndSources();
+}
+
 test('composition admission: fresh native checkout capture full-range submit independent review and delivery preserve sources, consumption cannot replay', async () => {
   const command = await prepareCompositionVerifier();
   const before = JSON.stringify(store.getTicket(project, rootTicket.ref));
@@ -680,6 +700,7 @@ test('composition admission: fresh native checkout capture full-range submit ind
     beforeBinding: assertCompositionCreationRefusals, beforeCompletion: assertCompositionCompletionRefusals,
     beforeClaim: assertCompositionClaimFences,
   });
+  await assertConsumedCompositionRecoveryRefusal(checkout);
   const root = store.getTicket(project, rootTicket.ref);
   assert.equal(root.dispatch.baseCommit, originalBase);
   assert.equal(root.dispatch.compositionAdmission.rangeBase, originalBase);
