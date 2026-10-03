@@ -451,34 +451,62 @@ function toolInputOf(input: HookInput): Record<string, unknown> | null {
 }
 
 const CLOSEOUT_UPDATE_FIELDS = new Set([
-  'files', 'status', 'readonly', 'readonlyOverride', 'workingTreeDelivery',
+  'files', 'addFiles', 'removeFiles', 'status', 'readonly', 'readonlyOverride', 'workingTreeDelivery',
   'externalDeliverable', 'verify', 'verifyKind', 'attestationArtifact', 'verifyCwd',
   'executorVerify', 'executorVerifyKind', 'executorAttestationArtifact', 'executorVerifyCwd',
 ]);
 
-const MAIN_THREAD_MUTATIONS: Record<string, { matches: (input: Record<string, unknown>) => boolean; denial: string }> = {
-  mcp__plugin_sidequest_board__update: {
-    matches: (input) => Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(input, field)),
-    denial: 'sidequest: subagents cannot update closeout fields through MCP. Use scopeRequest for files, or ask the orchestrator to set other closeout flags from the main thread.',
-  },
-  mcp__plugin_sidequest_board__remove: {
-    matches: (input) => input.force === true,
-    denial: 'sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.',
-  },
-  mcp__plugin_sidequest_board__verdict: {
-    matches: (input) => Object.hasOwn(input, 'correct'),
-    denial: 'sidequest: subagents cannot correct finalized review verdicts. Ask the orchestrator to use verdict with correct from the main thread.',
-  },
+type LiveClaimMutationRule = {
+  toolName: string;
+  matches(toolInput: Record<string, unknown>): boolean;
+  message: string;
 };
+
+// One rule per MCP tool that can mutate a live claim's closeout state. Keyed
+// by tool name so the refusal check below is a lookup, not a branch chain.
+const LIVE_CLAIM_MUTATION_RULES: readonly LiveClaimMutationRule[] = [
+  {
+    toolName: 'mcp__plugin_sidequest_board__update',
+    matches: (toolInput) => Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(toolInput, field)),
+    message: 'sidequest: subagents cannot update closeout fields through MCP. Use scopeRequest for files, or ask the orchestrator to set other closeout flags from the main thread.',
+  },
+  {
+    toolName: 'mcp__plugin_sidequest_board__scopeRequest',
+    // scopeRequest with grant:true widens declaredFiles for a refusal the ticket
+    // already recorded, which is a live-claim mutation just like the update fields
+    // above. Without this, a subagent could pass by:'orchestrator' to mint the
+    // grant itself; the store's by-mismatch check only catches the claim holder's
+    // own by, not an impersonated one.
+    matches: (toolInput) => toolInput.grant === true,
+    message: 'sidequest: subagents cannot grant a refused scope request through MCP. Ask the orchestrator to grant it from the main thread.',
+  },
+  {
+    toolName: 'mcp__plugin_sidequest_board__remove',
+    // force:true is the only path that deletes a live-claimed ticket, so it is the
+    // executor's escape hatch (delete the ticket to shed the claim). The store
+    // refuses ungranted live-claim deletion, but deny it here too so a subagent
+    // can never mint the main-thread grant by riding the MCP remove handler.
+    matches: (toolInput) => toolInput.force === true,
+    message: 'sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.',
+  },
+  {
+    toolName: 'mcp__plugin_sidequest_board__verdict',
+    // verdict with correct appends an accepted-to-rejected correction to a finalized
+    // review verdict, which only the main thread may do. Ordinary verdict calls stay
+    // open to the review executor that closes its own readonly review.
+    matches: (toolInput) => Object.hasOwn(toolInput, 'correct'),
+    message: 'sidequest: subagents cannot correct finalized review verdicts. Ask the orchestrator to use verdict with correct from the main thread.',
+  },
+];
 
 function executorLiveClaimMutationRefusal(input: HookInput): boolean {
   if (!isSubagentCaller(input)) return false;
   const toolInput = toolInputOf(input);
   if (!toolInput) return false;
-  const rule = MAIN_THREAD_MUTATIONS[stringField(input, 'tool_name')];
+  const toolName = stringField(input, 'tool_name');
+  const rule = LIVE_CLAIM_MUTATION_RULES.find((candidate) => candidate.toolName === toolName && candidate.matches(toolInput));
   if (!rule) return false;
-  if (!rule.matches(toolInput)) return false;
-  writeDeny('PreToolUse', rule.denial);
+  writeDeny('PreToolUse', rule.message);
   return true;
 }
 

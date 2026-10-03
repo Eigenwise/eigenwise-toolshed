@@ -1079,7 +1079,7 @@ test('tool-surface contract leaves arbitrary in-process store access out of scop
   assert.strictEqual(claim(ordinaryDispatch, 'ordinary-mutation-worker').ok, true);
   const ordinaryPatch = {
     description: store.SHARED_TREE_ARTIFACT_MARKER,
-    files: [],
+    files: ['.claude/.codebase-info', '.claude/.codebase-info/extra.md'],
   };
   assert.throws(
     () => store.updateTicket(slug, ordinary.ref, ordinaryPatch),
@@ -1096,7 +1096,7 @@ test('tool-surface contract leaves arbitrary in-process store access out of scop
   writeProjectFile('.claude/.codebase-info/pinned.md', 'pinned authority\n');
   const artifactPatch = {
     description: 'The marker was removed after dispatch.',
-    files: [],
+    files: ['.claude/.codebase-info', '.claude/.codebase-info/extra.md'],
   };
   assert.throws(
     () => store.updateTicket(slug, artifact.ref, artifactPatch),
