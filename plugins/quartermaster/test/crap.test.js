@@ -947,3 +947,62 @@ test('an untouched component in a changed .tsx keeps its baseline row, because t
   assert.equal(report.checked, 1, 'only packsLabel changed');
   assert.deepEqual(reads, ['.tsx', '.ts', '.tsx', '.ts'], 'the working tree and the base revision each get a TypeScript-reader pass');
 });
+
+function gateOnChangedCard(after) {
+  const projectDir = fixtureProject({
+    'src/card.ts': 'export const card = { color: "red" };\n',
+    'coverage/lcov.info': lcov([]),
+  });
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/card.ts'), after, 'utf8');
+  return () => crapReport({ projectDir, ratchet: 'main', runLizard: () => csv([]) });
+}
+
+for (const [label, comment] of [
+  ['the word function', '// The height is a function of the widest label.'],
+  ['an arrow', '/* maps a => b */'],
+  ['a call followed by a brace', '// fits(width) { is how the old code read'],
+  ['a multi-line block comment', '/*\n * function (x) => y\n */'],
+]) {
+  test(`a comment with ${label} is not a function the gate must measure`, () => {
+    const report = gateOnChangedCard(`${comment}\nexport const card = { color: "blue" };\n`)();
+    assert.deepEqual(report.failures, []);
+    assert.equal(report.checked, 0);
+  });
+}
+
+for (const [label, literal] of [
+  ['function in a string', '"the function of a label"'],
+  ['an arrow in a string', "'a => b'"],
+  ['a call and brace in a template', '`fits(width) { and function`'],
+]) {
+  test(`${label} is not a function the gate must measure`, () => {
+    const report = gateOnChangedCard(`export const card = { label: ${literal} };\n`)();
+    assert.deepEqual(report.failures, []);
+    assert.equal(report.checked, 0);
+  });
+}
+
+test('an arrow inside a template literal expression is code and stays fail-closed when lizard misses it', () => {
+  assert.throws(
+    gateOnChangedCard('export const card = { label: `size ${[1].map((x) => x)}` };\n'),
+    (error) => error instanceof PrerequisiteError && /lizard reported zero functions for src\/card\.ts/.test(error.message),
+  );
+});
+
+test('a real function after a comment that mentions function stays fail-closed when lizard misses it', () => {
+  assert.throws(
+    gateOnChangedCard('// not a function here\nexport function size(x) { return x; }\n'),
+    (error) => error instanceof PrerequisiteError && /lizard reported zero functions for src\/card\.ts/.test(error.message),
+  );
+});
+
+test('a source file the JavaScript scan cannot read keeps counting raw function-like tokens', () => {
+  const projectDir = fixtureProject({ 'src/tool.py': 'x = 1\n', 'coverage/lcov.info': lcov([]) });
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/tool.py'), "x = 'a => b'\n", 'utf8');
+  assert.throws(
+    () => crapReport({ projectDir, ratchet: 'main', runLizard: () => csv([]) }),
+    (error) => error instanceof PrerequisiteError && /lizard reported zero functions for src\/tool\.py/.test(error.message),
+  );
+});
