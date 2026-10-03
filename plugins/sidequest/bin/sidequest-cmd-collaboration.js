@@ -123,9 +123,18 @@ function integrationTargetOrFallback(projectSlug) {
     return null;
   }
 }
+function sweepableProject(project) {
+  return project && project.slug && project.path && existsSync(project.path);
+}
+function compareProjectSlugs(left, right) {
+  return String(left.slug).localeCompare(String(right.slug));
+}
+function sweepTargetOf(project) {
+  return { slug: project.slug, name: project.name || project.slug, path: project.path };
+}
 function sweepTargets(opts, slug, meta) {
   if (!opts["all-projects"]) return [{ slug, name: meta.name, path: meta.path }];
-  return store.listProjects({ all: true }).filter((project) => project && project.slug && project.path && existsSync(project.path)).sort((left, right) => String(left.slug).localeCompare(String(right.slug))).map((project) => ({ slug: project.slug, name: project.name || project.slug, path: project.path }));
+  return store.listProjects({ all: true }).filter(sweepableProject).sort(compareProjectSlugs).map(sweepTargetOf);
 }
 function sweepOptions(opts, hours, target, index) {
   return {

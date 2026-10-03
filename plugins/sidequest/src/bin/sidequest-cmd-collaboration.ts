@@ -170,12 +170,21 @@ function integrationTargetOrFallback(projectSlug: string): any {
   }
 }
 
+function sweepableProject(project: any): boolean {
+  return project && project.slug && project.path && existsSync(project.path);
+}
+
+function compareProjectSlugs(left: any, right: any): number {
+  return String(left.slug).localeCompare(String(right.slug));
+}
+
+function sweepTargetOf(project: any): any {
+  return { slug: project.slug, name: project.name || project.slug, path: project.path };
+}
+
 function sweepTargets(opts: any, slug: string, meta: any): any[] {
   if (!opts['all-projects']) return [{ slug, name: meta.name, path: meta.path }];
-  return store.listProjects({ all: true })
-    .filter((project: any) => project && project.slug && project.path && existsSync(project.path))
-    .sort((left: any, right: any) => String(left.slug).localeCompare(String(right.slug)))
-    .map((project: any) => ({ slug: project.slug, name: project.name || project.slug, path: project.path }));
+  return store.listProjects({ all: true }).filter(sweepableProject).sort(compareProjectSlugs).map(sweepTargetOf);
 }
 
 function sweepOptions(opts: any, hours: any, target: any, index: number): any {
