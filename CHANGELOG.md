@@ -8,6 +8,52 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.589.0 (2026-10-03)
+
+### codebase-mapper 2.15.9 → 2.15.10
+
+#### Fixes
+
+- Explain task continuity and optional donations across Toolshed (SQ-3304) [`b702891`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b702891f)
+  Make durable Sidequest tickets across context compaction and new sessions explicit in READMEs, guides and listing metadata. Clarify free MIT-licensed code, optional donations and separate provider costs in every plugin README.
+
+### live-rules 2.11.1 → 2.11.2
+
+#### Fixes
+
+- Explain task continuity and optional donations across Toolshed (SQ-3304) [`b702891`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b702891f)
+  Make durable Sidequest tickets across context compaction and new sessions explicit in READMEs, guides and listing metadata. Clarify free MIT-licensed code, optional donations and separate provider costs in every plugin README.
+
+### model-gateway 0.53.1 → 0.53.2
+
+#### Fixes
+
+- Explain task continuity and optional donations across Toolshed (SQ-3304) [`b702891`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b702891f)
+  Make durable Sidequest tickets across context compaction and new sessions explicit in READMEs, guides and listing metadata. Clarify free MIT-licensed code, optional donations and separate provider costs in every plugin README.
+
+### observability 0.8.1 → 0.8.2
+
+#### Fixes
+
+- Explain task continuity and optional donations across Toolshed (SQ-3304) [`b702891`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b702891f)
+  Make durable Sidequest tickets across context compaction and new sessions explicit in READMEs, guides and listing metadata. Clarify free MIT-licensed code, optional donations and separate provider costs in every plugin README.
+
+### quartermaster 0.11.9 → 0.11.10
+
+#### Fixes
+
+- Explain task continuity and optional donations across Toolshed (SQ-3304) [`b702891`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b702891f)
+  Make durable Sidequest tickets across context compaction and new sessions explicit in READMEs, guides and listing metadata. Clarify free MIT-licensed code, optional donations and separate provider costs in every plugin README.
+- Make directory-alias verification portable on Windows (SQ-3306) [`736c299`](https://github.com/Eigenwise/eigenwise-toolshed/commit/736c299c)
+  Use a directory junction for the Windows realpath fixture while preserving its alias-resolution assertions. The full Quartermaster suite can run without directory-symlink privilege.
+
+### sidequest 5.6.0 → 5.6.1
+
+#### Fixes
+
+- Explain task continuity and optional donations across Toolshed (SQ-3304) [`b702891`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b702891f)
+  Make durable Sidequest tickets across context compaction and new sessions explicit in READMEs, guides and listing metadata. Clarify free MIT-licensed code, optional donations and separate provider costs in every plugin README.
+
 ## v3.588.0 (2026-10-03)
 
 ### codebase-mapper 2.15.8 → 2.15.9

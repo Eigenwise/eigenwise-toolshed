@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.10 (2026-10-03)
+
+Released in v3.589.0, up from 0.11.9.
+
+### Fixes
+
+- Explain task continuity and optional donations across Toolshed (SQ-3304) [`b702891`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b702891f)
+  Make durable Sidequest tickets across context compaction and new sessions explicit in READMEs, guides and listing metadata. Clarify free MIT-licensed code, optional donations and separate provider costs in every plugin README.
+- Make directory-alias verification portable on Windows (SQ-3306) [`736c299`](https://github.com/Eigenwise/eigenwise-toolshed/commit/736c299c)
+  Use a directory junction for the Windows realpath fixture while preserving its alias-resolution assertions. The full Quartermaster suite can run without directory-symlink privilege.
+
 ## 0.11.9 (2026-09-30)
 
 Released in v3.585.0, up from 0.11.8.
