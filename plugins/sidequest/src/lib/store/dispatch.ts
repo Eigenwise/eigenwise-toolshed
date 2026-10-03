@@ -2823,22 +2823,30 @@ function existingNativeCheckoutOwner(ticket: CompositionTicket, request: NativeC
     && checkoutOwnerArrival(state, request.checkoutAgentId, request.sessionId);
 }
 
+function createdCheckoutExpectations(state: NativeCheckoutCreation): Pick<NativeCheckoutBinding, 'expectedGitDirectory' | 'expectedCommonGitDirectory' | 'expectedCheckoutInstance' | 'expectedRevision'> {
+  return { expectedGitDirectory: state.worktreeGitDirectory ?? null, expectedCommonGitDirectory: state.worktreeCommonGitDirectory ?? null,
+    expectedCheckoutInstance: state.worktreeCheckoutInstance ?? null, expectedRevision: state.worktreeObservedRevision ?? null };
+}
+
 function nativeCheckoutBindingResponse(ticket: CompositionTicket, state: NativeCheckoutCreation, request: NativeCheckoutBindingRequest): NativeCheckoutBindingResult {
   const baseline = String(compositionCheckoutCommit(state)).trim();
   if (!baseline) return { ok: false, reason: 'baseline_unavailable' };
   return { ok: true, ref: ticket.ref, attempt: state.preparedAt ?? '', baseline,
     repository: request.repository, worktree: request.worktree, creationCompleted: Boolean(state.worktreeCreationCompletedAt),
-    expectedGitDirectory: state.worktreeGitDirectory ?? null, expectedCommonGitDirectory: state.worktreeCommonGitDirectory ?? null,
-    expectedCheckoutInstance: state.worktreeCheckoutInstance ?? null, expectedRevision: state.worktreeObservedRevision ?? null };
+    ...createdCheckoutExpectations(state) };
+}
+
+// An already-bound checkout replays only its own prepared attempt, or completes without one after creation finished.
+function nativeCallbackAttemptRefusal(attempt: string, state: NativeCheckoutCreation): NativeCheckoutBindingResult | undefined {
+  if (attempt && attempt !== state.preparedAt) return { ok: false, reason: 'stale_attempt' };
+  if (!attempt && !state.worktreeCreationCompletedAt) return { ok: false, reason: 'missing_attempt' };
 }
 
 function existingNativeCheckoutBinding(slug: string, ticketId: string, request: NativeCheckoutBindingRequest): NativeCheckoutBindingResult {
   const ticket: CompositionTicket = getTicket(slug, ticketId);
   if (!ticket || !existingNativeCheckoutOwner(ticket, request)) return { ok: false, reason: 'dispatch_binding_unavailable' };
   const state: NativeCheckoutCreation = dispatchState(ticket);
-  if (request.attempt && request.attempt !== state.preparedAt) return { ok: false, reason: 'stale_attempt' };
-  if (!request.attempt && !state.worktreeCreationCompletedAt) return { ok: false, reason: 'missing_attempt' };
-  return nativeCheckoutBindingResponse(ticket, state, request);
+  return nativeCallbackAttemptRefusal(request.attempt, state) ?? nativeCheckoutBindingResponse(ticket, state, request);
 }
 
 function retainedCompositionCheckoutRefusal(ticket: CompositionTicket, worktree: string): NativeCheckoutBindingResult | undefined {
@@ -3112,6 +3120,49 @@ function recordDispatchWorktreeDependencyLink(slug?: any, sessionId?: any, workt
   return { ok: false, reason: 'dispatch_binding_unavailable' };
 }
 
+function recordRecoveredCheckoutIdentity(slug: string, state: NativeCheckoutCreation, worktree: string): void {
+  if (state.worktreeCreationCompletedAt) return;
+  const facts: NativeCheckoutFacts | null = immutableWorktreeFacts(slug, worktree);
+  const checkoutCommit = String(compositionCheckoutCommit(state)).trim();
+  if (facts && checkoutCommit && facts.revision === checkoutCommit) recordCreatedCheckoutIdentity(state, facts);
+}
+
+// A hook that failed before its checkout existed must not leave the attempt naming a path it never
+// created: whatever sits there later is someone else's, and retry cleanup would reclaim it (SQ-3132).
+function holdOrReleaseUncreatedCheckout(slug: string, ticket: CompositionTicket, state: NativeCheckoutCreation, sessionId: string, created?: boolean) {
+  if (created !== false) return;
+  const held = holdUncreatedFailureForSibling(slug, ticket, state, sessionId);
+  if (held) return held;
+  releaseCrossedCreationBinding(state, null, new Date().toISOString(), 'worktree_create_failed');
+}
+
+type ExecutorDispatchedTicket = CompositionTicket & { dispatchExecutor?: string | null };
+
+function terminalizeFailedCheckoutCreation(slug: string, ticket: ExecutorDispatchedTicket, error: unknown): void {
+  setDispatchTerminal(ticket, 'failed', 'worktree-create-recovery', {
+    slug,
+    error,
+    failureShape: 'worktree_create_failed',
+  });
+  ticket.dispatchNonce = null;
+  ticket.dispatchExecutor = null;
+  stampDispatchEvent(ticket, 'worktree-create-recovery');
+  putTicket(slug, ticket);
+}
+
+function recoverLaunchedCheckout(slug: string, id: string, binding: { sessionId: string; worktree: string }, error: unknown, attempt?: string, options?: { created?: boolean }) {
+  const ticket: ExecutorDispatchedTicket = getTicket(slug, id);
+  const state: NativeCheckoutCreation | undefined = dispatchState(ticket);
+  const generation = worktreeCallbackGenerationRefusal(state, attempt);
+  if (generation) return generation;
+  if (!launchedNativeCheckoutMatches(state, binding)) return { ok: false, reason: 'dispatch_binding_unavailable' };
+  recordRecoveredCheckoutIdentity(slug, state, binding.worktree);
+  const held = holdOrReleaseUncreatedCheckout(slug, ticket, state, binding.sessionId, options?.created);
+  if (held) return held;
+  terminalizeFailedCheckoutCreation(slug, ticket, error);
+  return { ok: true, ticket };
+}
+
 // Recovery is the hook's failure path, and it is generation-scoped for the same reason the recorders are:
 // a retired hook that caught its own correct `stale_attempt` used to land here and terminalize the live
 // replacement, clearing its nonce and marking it failed while the hook's own stderr said the live attempt
@@ -3130,43 +3181,7 @@ function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?:
       && state.worktree && canonicalPath(state.worktree) === boundWorktree);
   });
   if (matches.length !== 1) return { ok: false, reason: matches.length ? 'ambiguous_binding' : 'dispatch_binding_unavailable' };
-  const terminal = withTicketLock(slug, matches[0].id, () => {
-    const ticket = getTicket(slug, matches[0].id);
-    const state = dispatchState(ticket);
-    const generation = worktreeCallbackGenerationRefusal(state, attempt);
-    if (generation) return generation;
-    if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false
-      || state.outcome !== 'launched' || state.terminalAt || state.worktreeBindingSource !== 'worktree-create'
-      || !state.worktree || canonicalPath(state.worktree) !== boundWorktree) {
-      return { ok: false, reason: 'dispatch_binding_unavailable' };
-    }
-    const facts = immutableWorktreeFacts(slug, boundWorktree);
-    const baseline = String(compositionCheckoutCommit(state)).trim();
-    if (!state.worktreeCreationCompletedAt && facts && baseline && facts.revision === baseline) {
-      state.worktreeGitDirectory = facts.gitDirectory;
-      state.worktreeCommonGitDirectory = facts.commonGitDirectory;
-      state.worktreeCheckoutInstance = facts.checkoutInstance;
-      state.worktreeObservedRevision = facts.revision;
-      state.worktreeCreationCompletedAt = new Date().toISOString();
-    }
-    // A hook that failed before its checkout existed must not leave the attempt naming a path it never
-    // created: whatever sits there later is someone else's, and retry cleanup would reclaim it (SQ-3132).
-    if (options?.created === false) {
-      const held = holdUncreatedFailureForSibling(slug, ticket, state, normalizedSessionId);
-      if (held) return held;
-      releaseCrossedCreationBinding(state, null, new Date().toISOString(), 'worktree_create_failed');
-    }
-    setDispatchTerminal(ticket, 'failed', 'worktree-create-recovery', {
-      slug,
-      error,
-      failureShape: 'worktree_create_failed',
-    });
-    ticket.dispatchNonce = null;
-    ticket.dispatchExecutor = null;
-    stampDispatchEvent(ticket, 'worktree-create-recovery');
-    putTicket(slug, ticket);
-    return { ok: true, ticket };
-  });
+  const terminal = withTicketLock(slug, matches[0].id, () => recoverLaunchedCheckout(slug, matches[0].id, { sessionId: normalizedSessionId, worktree: boundWorktree }, error, attempt, options));
   if (!terminal?.ok || terminal.heldFor) return terminal;
   const cleanup = reclaimRetiredAttemptCheckout(slug, meta.path, terminal.ticket, dispatchState(terminal.ticket));
   return { ok: true, ticket: terminal.ticket, cleanup };

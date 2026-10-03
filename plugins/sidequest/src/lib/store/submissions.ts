@@ -38,7 +38,7 @@ function createSubmissions(dependencies: any) {
       } finally {
         heldCompositionDelivery = previous;
       }
-    }, 'submitted');
+    }, { boundary: 'submitted' });
   }
 
 const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
@@ -704,8 +704,6 @@ function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
   return dependencies.withCompositionGenerationLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     if (!ticket) return { ok: false, reason: 'not_found' };
-    const compositionFailure = compositionCaptureRefusal(ticket, capture);
-    if (compositionFailure) return { ...compositionFailure, ticket };
     const pinnedAtDispatch = dispatchPinnedRequirement(ticket);
     const requirement = pinnedVerificationRequirement(ticket);
     const capturedCommand = String(capture?.command || '');
@@ -754,7 +752,7 @@ function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
     ticket.updatedAt = new Date().toISOString();
     putTicket(slug, ticket);
     return { ok: true, ticket, capture: verified };
-  });
+  }, { boundary: 'active', refusal: (root: CompositionTicket) => compositionCaptureRefusal(root, capture) });
 }
 
 function skippedVerification(requirement: any, waiver: any) {
@@ -2119,28 +2117,41 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   const preflight = validateIntegrationSubmission(slug, idOrRef, { integrationBranch: opts.integrationBranch });
   if (!preflight.ok) return preflight;
-  const ticket = preflight.ticket;
-  if (!submissionUsesGit(ticket)) {
-    const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
-    if (!assembled.ok) return assembled;
-    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true, integrationBranch: opts.integrationBranch });
-    return admitted.ok ? integrateArtifactSubmission(slug, admitted.ticket, opts) : admitted;
-  }
-  const project = readMeta(slug);
-  const repo = project?.path;
-  let target: any;
+  if (!submissionUsesGit(preflight.ticket)) return integrateSingletonArtifactSubmission(slug, idOrRef, opts);
+  return integrateGitSubmission(slug, idOrRef, opts, preflight.ticket);
+}
+
+function integrateSingletonArtifactSubmission(slug: string, idOrRef: string, opts: { integrationBranch?: string }) {
+  const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
+  if (!assembled.ok) return assembled;
+  const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true, integrationBranch: opts.integrationBranch });
+  return admitted.ok ? integrateArtifactSubmission(slug, admitted.ticket, opts) : admitted;
+}
+
+function integrationTargetRefusal(slug: string, ticket: CompositionTicket, repo: string, opts: { integrationBranch?: string }) {
+  let target: { branch?: string } | null | undefined;
   try {
     target = deliveryIntegrationTarget(slug, ticketIntegrationTarget(slug, ticket), opts.integrationBranch);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return { ok: false, reason: 'integration_target_unavailable', ticket, message: integrationGitError(error) };
   }
   if (!repo || !target?.branch) return { ok: false, reason: 'integration_target_unavailable', ticket };
+}
+
+function integrateGitSubmission(slug: string, idOrRef: string, opts: { integrationBranch?: string }, ticket: CompositionTicket) {
+  const repo: string = readMeta(slug)?.path ?? '';
+  const targetRefusal = integrationTargetRefusal(slug, ticket, repo, opts);
+  if (targetRefusal) return targetRefusal;
   let lock: string;
   try {
     lock = deliveryLockPath(repo);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return { ok: false, reason: 'integration_target_unavailable', ticket, message: integrationGitError(error) };
   }
+  return integrateUnderDeliveryLease(slug, idOrRef, opts, ticket, lock);
+}
+
+function integrateUnderDeliveryLease(slug: string, idOrRef: string, opts: { integrationBranch?: string }, ticket: CompositionTicket, lock: string) {
   const lockLease = acquireLock(lock, { wait: false });
   if (!lockLease) return deliveryInProgress(ticket);
   try {
@@ -2694,8 +2705,7 @@ function submissionAdmissionDecision(slug: any, ticket: any, by: string, opts: a
 function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   opts = opts || {};
   by = String(by || 'agent');
-  const submissionComment = opts.submissionComment ? prepareComment(opts.submissionComment) : null;
-  if (submissionComment && !submissionComment.ok) throw new Error(`submission comment ${submissionComment.reason}`);
+  const submissionComment = preparedSubmissionComment(opts);
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
   return dependencies.withCompositionGenerationLock(slug, found.id, () => {
@@ -2735,8 +2745,6 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       ? String(submissionOptions.worktree).trim().slice(0, SUBMISSION_WORKTREE_MAX)
       : null;
     const range = sourceRevision ? null : submissionRangeMetadata(submissionOptions.range, commit);
-    const compositionFailure = exactCompositionSubmissionRefusal(t, { commit, base: range?.base, commits: range?.commits });
-    if (compositionFailure) return { ...compositionFailure, ticket: t };
     const pinnedBaseline = sourceRevisionBaseline(t);
     const resolvedSourceRevisionFacts = sourceRevision
       ? (isSourceRevisionAdapterFacts(submissionOptions.admissionFacts)
@@ -2849,7 +2857,21 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (comment) queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
     const advisories = [(submissionComment as any)?.advisory, workingPathAdvisory].filter(Boolean);
     return { ok: true, ticket: t, comment, ...(advisories.length ? { advisory: advisories.join(' ') } : {}) };
-  });
+  }, { boundary: 'active', refusal: (root: CompositionTicket & { submissionRetry?: object | null }) => compositionSubmissionRefusal(root, opts) });
+}
+
+// Hydrates the locked root's own retry checkpoint, so a retried submit is held to the same exact C and BASE..C.
+function compositionSubmissionRefusal(root: CompositionTicket & { submissionRetry?: object | null }, opts: object): CompositionRefusal | undefined {
+  const submissionOptions = hydratedSubmissionOptions(opts, root.submissionRetry || null);
+  const commit = String(submissionOptions.commit || '').trim().toLowerCase();
+  const range = submissionRangeMetadata(submissionOptions.range, commit);
+  return exactCompositionSubmissionRefusal(root, { commit, base: range?.base, commits: range?.commits });
+}
+
+function preparedSubmissionComment(opts: { submissionComment?: unknown }) {
+  const submissionComment = opts.submissionComment ? prepareComment(opts.submissionComment) : null;
+  if (submissionComment && !submissionComment.ok) throw new Error(`submission comment ${submissionComment.reason}`);
+  return submissionComment;
 }
 
 function workingTreeVerification(ticket: any, candidate: any, verify?: any) {
