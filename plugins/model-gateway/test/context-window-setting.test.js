@@ -157,7 +157,7 @@ test('context-window writes a Claude cap into project-wired settings and refuses
 
   const shown = run('context-window');
   assert.equal(shown.status, 0);
-  assert.match(shown.stdout, /context window claude: 500000 \(autoCompactWindow in project-wired settings\) \[saved\]; native window 500000; exact compaction trigger unverified (native engine headroom applies)/);
+  assert.match(shown.stdout, /context window claude: 500000 \(autoCompactWindow in project-wired settings\) \[saved\]; native window 500000; exact compaction trigger unverified \(native engine headroom applies\)/);
 
   const laterProject = temporaryDirectory(t, 'model-gateway-context-later-');
   const runLater = (...args) => spawnGatewayProcessSync(process.execPath, [CLI, ...args], { cwd: laterProject, env, isolatedOverrides, encoding: 'utf8' });
