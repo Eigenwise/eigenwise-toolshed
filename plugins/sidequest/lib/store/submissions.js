@@ -10,9 +10,28 @@ const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = 
 const { isInScope, scopedPaths } = require("../scope-match");
 const { manualCandidateDeliveryGuidance, candidateReviewRequiredGuidance, applyDeliveryContentCommitGuidance, landedWithoutSubmissionGuidance } = require("../refusal-guidance.js");
 const worktrees = require("../worktrees.js");
+const { exactCompositionSubmissionRefusal, compositionCaptureRefusal } = require("./composition-admission.js");
 function createSubmissions(dependencies) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, deliveryIntegrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, integrationTargetCommit, ticketIntegrationTarget, ticketIntegrationTargets, deliveryIntegrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, os, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock: withIndependentTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
+  let heldCompositionDelivery = null;
+  function withTicketLock(slug, id, callback) {
+    const owned = heldCompositionDelivery;
+    if (owned && owned.slug === slug && owned.id === id) return callback();
+    return withIndependentTicketLock(slug, id, callback);
+  }
+  function deliverUnderCompositionLocks(slug, ticket, callback) {
+    if (!ticket.compositionAdmission) return callback();
+    return dependencies.withCompositionGenerationLock(slug, ticket.id, () => {
+      const previous = heldCompositionDelivery;
+      heldCompositionDelivery = { slug, id: ticket.id };
+      try {
+        return callback();
+      } finally {
+        heldCompositionDelivery = previous;
+      }
+    }, { boundary: "submitted" });
+  }
   const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
   const SUBMISSION_GITREF_MAX = 200;
   const SUBMISSION_WORKTREE_MAX = 500;
@@ -541,7 +560,7 @@ Checkpoint current work, release the claim, and re-dispatch; the recovery dispat
   function recordVerificationCapture(slug, idOrRef, capture) {
     const found = getTicket(slug, idOrRef);
     if (!found) return { ok: false, reason: "not_found" };
-    return withTicketLock(slug, found.id, () => {
+    return dependencies.withCompositionGenerationLock(slug, found.id, () => {
       const ticket = getTicket(slug, found.id);
       if (!ticket) return { ok: false, reason: "not_found" };
       const pinnedAtDispatch = dispatchPinnedRequirement(ticket);
@@ -591,7 +610,7 @@ ${captureCommandDetails(pinnedCommand, capturedCommand)}`;
       ticket.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
       putTicket(slug, ticket);
       return { ok: true, ticket, capture: verified };
-    });
+    }, { boundary: "active", refusal: (root) => compositionCaptureRefusal(root, capture) });
   }
   function skippedVerification(requirement, waiver) {
     const validated = validateVerificationWaiver(waiver);
@@ -1719,15 +1738,16 @@ ${verify.outputTail}` : null
     opts = opts || {};
     const preflight = validateIntegrationSubmission(slug, idOrRef, { integrationBranch: opts.integrationBranch });
     if (!preflight.ok) return preflight;
-    const ticket = preflight.ticket;
-    if (!submissionUsesGit(ticket)) {
-      const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
-      if (!assembled.ok) return assembled;
-      const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true, integrationBranch: opts.integrationBranch });
-      return admitted.ok ? integrateArtifactSubmission(slug, admitted.ticket, opts) : admitted;
-    }
-    const project = readMeta(slug);
-    const repo = project?.path;
+    if (!submissionUsesGit(preflight.ticket)) return integrateSingletonArtifactSubmission(slug, idOrRef, opts);
+    return integrateGitSubmission(slug, idOrRef, opts, preflight.ticket);
+  }
+  function integrateSingletonArtifactSubmission(slug, idOrRef, opts) {
+    const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
+    if (!assembled.ok) return assembled;
+    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true, integrationBranch: opts.integrationBranch });
+    return admitted.ok ? integrateArtifactSubmission(slug, admitted.ticket, opts) : admitted;
+  }
+  function integrationTargetRefusal(slug, ticket, repo, opts) {
     let target;
     try {
       target = deliveryIntegrationTarget(slug, ticketIntegrationTarget(slug, ticket), opts.integrationBranch);
@@ -1735,17 +1755,25 @@ ${verify.outputTail}` : null
       return { ok: false, reason: "integration_target_unavailable", ticket, message: integrationGitError(error) };
     }
     if (!repo || !target?.branch) return { ok: false, reason: "integration_target_unavailable", ticket };
+  }
+  function integrateGitSubmission(slug, idOrRef, opts, ticket) {
+    const repo = readMeta(slug)?.path ?? "";
+    const targetRefusal = integrationTargetRefusal(slug, ticket, repo, opts);
+    if (targetRefusal) return targetRefusal;
     let lock;
     try {
       lock = deliveryLockPath(repo);
     } catch (error) {
       return { ok: false, reason: "integration_target_unavailable", ticket, message: integrationGitError(error) };
     }
+    return integrateUnderDeliveryLease(slug, idOrRef, opts, ticket, lock);
+  }
+  function integrateUnderDeliveryLease(slug, idOrRef, opts, ticket, lock) {
     const lockLease = acquireLock(lock, { wait: false });
     if (!lockLease) return deliveryInProgress(ticket);
     try {
       lockLease.refresh();
-      return integrateSubmissionUnlocked(slug, idOrRef, opts);
+      return deliverUnderCompositionLocks(slug, ticket, () => integrateSubmissionUnlocked(slug, idOrRef, opts));
     } finally {
       lockLease.refresh();
       releaseLock(lock, lockLease);
@@ -2253,11 +2281,10 @@ ${verify.outputTail}` : null
   function submitTicket(slug, idOrRef, by, opts) {
     opts = opts || {};
     by = String(by || "agent");
-    const submissionComment = opts.submissionComment ? prepareComment(opts.submissionComment) : null;
-    if (submissionComment && !submissionComment.ok) throw new Error(`submission comment ${submissionComment.reason}`);
+    const submissionComment = preparedSubmissionComment(opts);
     const found = getTicket(slug, idOrRef);
     if (!found) return { ok: false, reason: "not_found" };
-    return withTicketLock(slug, found.id, () => {
+    return dependencies.withCompositionGenerationLock(slug, found.id, () => {
       const t = getTicket(slug, found.id);
       if (!t) return { ok: false, reason: "not_found" };
       const reviewLock = candidateReviewLocked(slug, t, "submit");
@@ -2387,7 +2414,18 @@ ${verify.outputTail}` : null
       if (comment) queueEventNotification(slug, t, "comment", comment.source, { commentBody: comment.body });
       const advisories = [submissionComment?.advisory, workingPathAdvisory].filter(Boolean);
       return { ok: true, ticket: t, comment, ...advisories.length ? { advisory: advisories.join(" ") } : {} };
-    });
+    }, { boundary: "active", refusal: (root) => compositionSubmissionRefusal(root, opts) });
+  }
+  function compositionSubmissionRefusal(root, opts) {
+    const submissionOptions = hydratedSubmissionOptions(opts, root.submissionRetry || null);
+    const commit = String(submissionOptions.commit || "").trim().toLowerCase();
+    const range = submissionRangeMetadata(submissionOptions.range, commit);
+    return exactCompositionSubmissionRefusal(root, { commit, base: range?.base, commits: range?.commits });
+  }
+  function preparedSubmissionComment(opts) {
+    const submissionComment = opts.submissionComment ? prepareComment(opts.submissionComment) : null;
+    if (submissionComment && !submissionComment.ok) throw new Error(`submission comment ${submissionComment.reason}`);
+    return submissionComment;
   }
   function workingTreeVerification(ticket, candidate, verify) {
     const requirement = pinnedVerificationRequirement(ticket);

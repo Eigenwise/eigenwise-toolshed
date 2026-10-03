@@ -162,6 +162,14 @@ You don't have to ask for the board. On a project with a working board, Claude i
 
 In a git repository root with no board yet, that first work request gets one line instead: the first `add` creates the board and dispatch works right away through the default profile. Nothing is created until then, and temp folders, the Sidequest home, `~/.claude`, and folders that aren't a git root stay silent.
 
+### Adopting an existing exact composition
+
+If a released root needs to verify an existing commit that combines its own changes with pending source submissions, ask the main Claude thread to adopt that exact composition. Sidequest's MCP `update.admitComposition` records current authority for the immutable commit. It leaves historical checkout ownership unverified, preserves the released dispatch and old proofs, and leaves the source tickets unchanged.
+
+Claude first requests a write-free snapshot, then retries with the root's released generation and each source's exact submission and authoritative review/correction snapshot. Every commit from the original base to the candidate must belong to a complete named source range or to the root's declared own changes. Hidden commits, another ticket's recorded work, changed source state, and root changes outside its original scope refuse adoption.
+
+A new isolated native checkout starts at the candidate; the original base remains the submission floor. The grant belongs to one fresh dispatch, with its own attempt, timestamp, and nonce. Claude still needs ordinary controls, fresh verification output and capture, a full-range submission, independent review of that exact candidate after submission, and normal delivery. A later dispatch cannot replay the consumed grant. Shared-tree execution and old proof artifacts cannot supply the new verification.
+
 ### Boards in sibling repositories
 
 If you run one session from a parent directory holding several independent repos, each registered as its own board, an executor working a sibling repo's ticket doesn't have to name the board on its lifecycle calls. Sidequest resolves the board from the executor's own binding: a call that carries a `worktree` (commit, submit, checkpoint) is matched to the worktree its dispatch reserved for it, and a call without one (comment, release, done, plan, scope requests) is matched to the claim owner named by `by`. Reads that carry neither, like `pulse`, stay on the session's own board, so the executor briefing tells executors to pass `project` on every call. Nothing else selects a board, so a caller without a claim stays on the session's own board and gets that board's usual refusal. Passing `project` explicitly still wins, and two boards that both fit the same binding are refused by name rather than picked for you.
