@@ -289,6 +289,11 @@ async function cleanupClosedTicketWorktree(slug, projectPath, ticket, claimWasLi
   } catch (_) {
   }
 }
+async function closeExecutorAndReclaimTree(slug, projectPath, res, ticket, reclaim = true) {
+  if (!res.ok) return;
+  closeDispatchExecutor(ticket);
+  if (reclaim) await cleanupClosedTicketWorktree(slug, projectPath, res.ticket, claimHeldLive(ticket));
+}
 function mutationAck(project, result, changed) {
   const ticket = result.ticket;
   const out = { ok: !!result.ok, project };
@@ -1024,6 +1029,7 @@ module.exports = {
   closeDispatchExecutor,
   claimHeldLive,
   cleanupClosedTicketWorktree,
+  closeExecutorAndReclaimTree,
   mutationAck,
   integrationBranchAck,
   outOfScopeComment,

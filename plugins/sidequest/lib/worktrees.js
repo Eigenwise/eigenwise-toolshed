@@ -159,6 +159,10 @@ const QUARANTINE_RETRY_INTERVAL_MS = 24 * 60 * 60 * 1e3;
 const SWEEP_CLASSIFICATION_CONCURRENCY = 4;
 const DEFAULT_STATUS_TIMEOUT_MS = 6e4;
 const GIT_TIMEOUT_MS = 12e4;
+function expireGitDeadline(child, deadline, message) {
+  deadline.message = message;
+  child.kill();
+}
 function git(cwd, args, input, environment, timeoutMs = GIT_TIMEOUT_MS) {
   return new Promise((resolve) => {
     const child = spawn("git", ["-c", "core.editor=true", ...args], {
@@ -167,23 +171,19 @@ function git(cwd, args, input, environment, timeoutMs = GIT_TIMEOUT_MS) {
       windowsHide: true,
       stdio: [input == null ? "ignore" : "pipe", "pipe", "pipe"]
     });
-    let timeout = null;
-    const timer = setTimeout(() => {
-      timeout = `git ${args[0]} timed out after ${timeoutMs}ms`;
-      child.kill();
-    }, timeoutMs);
+    const deadline = { message: null };
+    const timer = setTimeout(expireGitDeadline, timeoutMs, child, deadline, `git ${args[0]} timed out after ${timeoutMs}ms`);
     const stdout = [];
     const stderr = [];
     child.stdout.on("data", (chunk) => stdout.push(chunk));
     child.stderr.on("data", (chunk) => stderr.push(chunk));
     if (input != null) child.stdin.end(input);
     child.once("error", (error) => {
-      clearTimeout(timer);
       resolve({ ok: false, status: null, stdout: "", stderr: String(error.message || "").trim() });
     });
     child.once("close", (status) => {
       clearTimeout(timer);
-      resolve(gitCloseResult(status, stdout, stderr, timeout));
+      resolve(gitCloseResult(status, stdout, stderr, deadline.message));
     });
   });
 }
@@ -197,17 +197,16 @@ function gitCloseResult(status, stdout, stderr, timeout) {
   };
 }
 async function mapWithConcurrency(items, limit, map) {
-  const results = new Array(items.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      results[index] = await map(items[index]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
+  const queue = { next: 0, results: new Array(items.length) };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => drainMapQueue(items, queue, map)));
+  return queue.results;
+}
+async function drainMapQueue(items, queue, map) {
+  while (queue.next < items.length) {
+    const index = queue.next;
+    queue.next += 1;
+    queue.results[index] = await map(items[index]);
+  }
 }
 function pathIsInside(root, candidate) {
   const relative = path.relative(root, candidate);
@@ -905,12 +904,14 @@ function sweepClassificationContext(options, facts) {
   };
 }
 async function sweepCandidateOrder(candidates, tickets) {
-  const aged = await Promise.all(candidates.map(async (entry) => ({
-    entry,
-    ageMs: await worktreeAge(entry.worktree) ?? 0,
-    closed: closedTicketCandidate(tickets, entry)
-  })));
-  return aged.sort((left, right) => Number(right.closed) - Number(left.closed) || right.ageMs - left.ageMs || String(left.entry.worktree).localeCompare(String(right.entry.worktree)));
+  const aged = await Promise.all(candidates.map((entry) => sweepOrderedCandidate(entry, tickets)));
+  return aged.sort(compareSweepCandidates);
+}
+async function sweepOrderedCandidate(entry, tickets) {
+  return { entry, ageMs: await worktreeAge(entry.worktree) ?? 0, closed: closedTicketCandidate(tickets, entry) };
+}
+function compareSweepCandidates(left, right) {
+  return Number(right.closed) - Number(left.closed) || right.ageMs - left.ageMs || String(left.entry.worktree).localeCompare(String(right.entry.worktree));
 }
 async function classifySweepCandidate(repo, tickets, entry, context) {
   if (entry.orphanDirectory) return classifyOrphanDirectory(tickets, entry, context.livePaths, context.minAgeMs);
@@ -962,7 +963,7 @@ function closedTreeEscapingEntries(worktree, stdout, recorded, vacatedSource = n
   const escaping = closedTreeIgnoredPaths(stdout, recorded).find((relativePath) => !pathStaysInside(trustedRoots, path.join(worktree, relativePath)));
   return escaping ? [{ code: "!!", path: escaping }] : [];
 }
-function closedTreeHeldEntries(stdout, destination, recorded, vacatedSource) {
+function closedTreeHeldEntries(stdout, destination, recorded, vacatedSource = null) {
   const atRisk = closedTreeAtRiskEntries(stdout, recorded);
   return atRisk.length ? atRisk : closedTreeEscapingEntries(destination, stdout, recorded, vacatedSource);
 }

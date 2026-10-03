@@ -65,6 +65,137 @@ function printStorage(storage) {
   const total = [storage.worktrees.bytes, storage.quarantine.bytes].filter((bytes) => bytes != null).reduce((sum, bytes) => sum + bytes, 0);
   console.log(`  total: ${formatBytes(total)}`);
 }
+function sweepReasonCounts(entries) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    const reason = String(entry.reason || "unknown");
+    counts.set(reason, (counts.get(reason) || 0) + 1);
+  }
+  return counts;
+}
+function compareReasonCounts(left, right) {
+  return right[1] - left[1] || left[0].localeCompare(right[0]);
+}
+function reasonCountText(pair) {
+  return `${pair[0]} ${pair[1]}`;
+}
+function worktreeSweepReasonSummary(entries) {
+  const ordered = [...sweepReasonCounts(entries).entries()].sort(compareReasonCounts);
+  return `  by reason: ${ordered.map(reasonCountText).join(", ") || "no candidates"}`;
+}
+function printSweepSummary(result) {
+  if (result.statusTimedOut) console.log(`  git status timed out on ${result.statusTimedOut} tree(s); they were kept as status_unknown.`);
+  console.log(worktreeSweepReasonSummary(result.entries));
+}
+function requireWorktreesAction(action, opts) {
+  if (action && !["status", "sweep"].includes(action) || !action && !opts.sweep) {
+    fail("worktrees: use `sidequest worktrees status` or `sidequest worktrees sweep` to inspect worktree storage.");
+  }
+}
+async function printWorktreesStatus(opts, slug, meta) {
+  const storage = await worktrees.storageStatus();
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ project: slug, storage }, null, 2) + "\n");
+    return;
+  }
+  console.log(`worktree storage for ${meta.name}`);
+  printStorage(storage);
+}
+function nonNegativeHours(value, fallback, flag) {
+  const hours = value == null ? fallback : Number(value);
+  if (!Number.isFinite(hours) || hours < 0) fail(`worktrees sweep: --${flag} must be a non-negative number.`);
+  return hours;
+}
+function sweepHours(opts, slug) {
+  const minAgeHours = nonNegativeHours(opts["min-age-hours"], 3, "min-age-hours");
+  const config = store.boardConfig(slug) || {};
+  const recoveryRetentionAgeHours = nonNegativeHours(
+    opts["recovery-retention-age-hours"],
+    Number(config.worktreeRecoveryRetentionAgeHours || 14 * 24),
+    "recovery-retention-age-hours"
+  );
+  return { minAgeHours, recoveryRetentionAgeHours };
+}
+function integrationTargetOrFallback(projectSlug) {
+  try {
+    return store.integrationTarget(projectSlug);
+  } catch (_) {
+    return null;
+  }
+}
+function sweepTargets(opts, slug, meta) {
+  if (!opts["all-projects"]) return [{ slug, name: meta.name, path: meta.path }];
+  return store.listProjects({ all: true }).filter((project) => project && project.slug && project.path && existsSync(project.path)).sort((left, right) => String(left.slug).localeCompare(String(right.slug))).map((project) => ({ slug: project.slug, name: project.name || project.slug, path: project.path }));
+}
+function sweepOptions(opts, hours, target, index) {
+  return {
+    execute: !!opts.yes && !opts["dry-run"],
+    currentPath: store.nearestRepoRoot(process.cwd()),
+    integrationTarget: integrationTargetOrFallback(target.slug),
+    minAgeMs: hours.minAgeHours * 60 * 60 * 1e3,
+    recoveryRetentionAgeMs: hours.recoveryRetentionAgeHours * 60 * 60 * 1e3,
+    // The store lives in one shared home, so measuring it once per run is
+    // enough; repeating the walk per project is just slower.
+    includeStoreUsage: index === 0,
+    onProgress: (progress) => {
+      const output = `${worktreeSweepProgressLine(progress)}
+`;
+      (opts.json ? process.stderr : process.stdout).write(output);
+    }
+  };
+}
+function sweepTargetFailure(opts, target, error) {
+  const message = error && error.message || String(error);
+  if (!opts["all-projects"]) fail(`worktrees: ${message}`);
+  return { project: target.slug, failures: [{ path: target.path, message }] };
+}
+async function sweepTarget(opts, hours, target, index) {
+  let result;
+  try {
+    result = await worktrees.sweep(target.path, store.worktreeGcTickets(), sweepOptions(opts, hours, target, index));
+  } catch (error) {
+    result = sweepTargetFailure(opts, target, error);
+  }
+  return Object.assign({ project: target.slug }, result);
+}
+function printSweepJson(opts, results, wallTimeMs) {
+  const report = opts["all-projects"] ? { projects: results, wallTimeMs } : { ...results[0], wallTimeMs };
+  process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+}
+function printSweepText(results, targets, hours) {
+  for (const [index, result] of results.entries()) {
+    if (!result.entries) {
+      for (const failure of result.failures) console.log(`worktrees sweep: skipped ${targets[index].name}: ${failure.message}`);
+      continue;
+    }
+    printSweepResult(result, targets[index].name, hours.minAgeHours, hours.recoveryRetentionAgeHours);
+    printSweepSummary(result);
+  }
+}
+function printSweepFinished(wallTimeMs) {
+  console.log(`worktrees sweep: finished in ${(wallTimeMs / 1e3).toFixed(1)}s`);
+}
+function setSweepExitCode(results) {
+  if (results.some((entry) => entry.failures?.length)) process.exitCode = 1;
+}
+async function cmdWorktrees(opts, positional) {
+  const action = String(positional[0] || "").toLowerCase();
+  requireWorktreesAction(action, opts);
+  const { slug, meta } = await resolveProject(opts);
+  if (action === "status") return printWorktreesStatus(opts, slug, meta);
+  const hours = sweepHours(opts, slug);
+  const targets = sweepTargets(opts, slug, meta);
+  const startedAt = Date.now();
+  const results = [];
+  for (const [index, target] of targets.entries()) results.push(await sweepTarget(opts, hours, target, index));
+  const wallTimeMs = Date.now() - startedAt;
+  if (opts.json) printSweepJson(opts, results, wallTimeMs);
+  else {
+    printSweepText(results, targets, hours);
+    printSweepFinished(wallTimeMs);
+  }
+  setSweepExitCode(results);
+}
 function printSweepResult(result, name, minAgeHours, recoveryRetentionAgeHours) {
   console.log(`worktrees sweep: ${result.dryRun ? "dry run" : "executed"} for ${name} (minimum age ${minAgeHours}h; quarantine retention ${recoveryRetentionAgeHours}h by age alone)`);
   if (result.upstreamFallback) console.log(`  the configured integration ref is unavailable; settled checks used the fallback ${result.upstream}.`);
@@ -85,93 +216,6 @@ function printSweepResult(result, name, minAgeHours, recoveryRetentionAgeHours) 
   if (result.prunedOrphanBranches.length) console.log(`  pruned ${result.counts.prunedOrphanBranches} orphan worktree branch(es).`);
   if (result.remainingCandidates) console.log(`  ${result.remainingCandidates} candidate(s) remain past this run's limit; re-run to continue.`);
   for (const failure of result.failures) console.log(`  ERROR ${failure.path || "prune"}: ${failure.message}`);
-}
-function worktreeSweepReasonSummary(entries) {
-  const counts = /* @__PURE__ */ new Map();
-  for (const entry of entries) {
-    const reason = String(entry.reason || "unknown");
-    counts.set(reason, (counts.get(reason) || 0) + 1);
-  }
-  const ordered = [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
-  return `  by reason: ${ordered.map(([reason, count]) => `${reason} ${count}`).join(", ") || "no candidates"}`;
-}
-function printSweepSummary(result) {
-  if (result.statusTimedOut) console.log(`  git status timed out on ${result.statusTimedOut} tree(s); they were kept as status_unknown.`);
-  console.log(worktreeSweepReasonSummary(result.entries));
-}
-async function cmdWorktrees(opts, positional) {
-  const action = String(positional[0] || "").toLowerCase();
-  if (action && !["status", "sweep"].includes(action) || !action && !opts.sweep) {
-    fail("worktrees: use `sidequest worktrees status` or `sidequest worktrees sweep` to inspect worktree storage.");
-  }
-  const { slug, meta } = await resolveProject(opts);
-  if (action === "status") {
-    const storage = await worktrees.storageStatus();
-    if (opts.json) {
-      process.stdout.write(JSON.stringify({ project: slug, storage }, null, 2) + "\n");
-      return;
-    }
-    console.log(`worktree storage for ${meta.name}`);
-    printStorage(storage);
-    return;
-  }
-  const minAgeHours = opts["min-age-hours"] == null ? 3 : Number(opts["min-age-hours"]);
-  if (!Number.isFinite(minAgeHours) || minAgeHours < 0) fail("worktrees sweep: --min-age-hours must be a non-negative number.");
-  const config = store.boardConfig(slug) || {};
-  const recoveryRetentionAgeHours = opts["recovery-retention-age-hours"] == null ? Number(config.worktreeRecoveryRetentionAgeHours || 14 * 24) : Number(opts["recovery-retention-age-hours"]);
-  if (!Number.isFinite(recoveryRetentionAgeHours) || recoveryRetentionAgeHours < 0) {
-    fail("worktrees sweep: --recovery-retention-age-hours must be a non-negative number.");
-  }
-  const integrationTargetOrFallback = (projectSlug) => {
-    try {
-      return store.integrationTarget(projectSlug);
-    } catch (_) {
-      return null;
-    }
-  };
-  const targets = opts["all-projects"] ? store.listProjects({ all: true }).filter((project) => project && project.slug && project.path && existsSync(project.path)).sort((left, right) => String(left.slug).localeCompare(String(right.slug))).map((project) => ({ slug: project.slug, name: project.name || project.slug, path: project.path })) : [{ slug, name: meta.name, path: meta.path }];
-  const startedAt = Date.now();
-  const results = [];
-  for (const [index, target] of targets.entries()) {
-    let result;
-    try {
-      result = await worktrees.sweep(target.path, store.worktreeGcTickets(), {
-        execute: !!opts.yes && !opts["dry-run"],
-        currentPath: store.nearestRepoRoot(process.cwd()),
-        integrationTarget: integrationTargetOrFallback(target.slug),
-        minAgeMs: minAgeHours * 60 * 60 * 1e3,
-        recoveryRetentionAgeMs: recoveryRetentionAgeHours * 60 * 60 * 1e3,
-        // The store lives in one shared home, so measuring it once per run is
-        // enough; repeating the walk per project is just slower.
-        includeStoreUsage: index === 0,
-        onProgress: (progress) => {
-          const output = `${worktreeSweepProgressLine(progress)}
-`;
-          (opts.json ? process.stderr : process.stdout).write(output);
-        }
-      });
-    } catch (error) {
-      if (!opts["all-projects"]) fail(`worktrees: ${error && error.message || error}`);
-      result = { project: target.slug, failures: [{ path: target.path, message: error && error.message || String(error) }] };
-    }
-    results.push(Object.assign({ project: target.slug }, result));
-  }
-  const wallTimeMs = Date.now() - startedAt;
-  if (opts.json) {
-    process.stdout.write(JSON.stringify(opts["all-projects"] ? { projects: results, wallTimeMs } : { ...results[0], wallTimeMs }, null, 2) + "\n");
-    if (results.some((entry) => entry.failures?.length)) process.exitCode = 1;
-    return;
-  }
-  for (const [index, result] of results.entries()) {
-    if (!result.entries) {
-      for (const failure of result.failures) console.log(`worktrees sweep: skipped ${targets[index].name}: ${failure.message}`);
-      continue;
-    }
-    printSweepResult(result, targets[index].name, minAgeHours, recoveryRetentionAgeHours);
-    printSweepSummary(result);
-  }
-  console.log(`worktrees sweep: finished in ${(wallTimeMs / 1e3).toFixed(1)}s`);
-  if (results.some((entry) => entry.failures?.length)) process.exitCode = 1;
 }
 async function cmdRecoverShared(opts) {
   const { meta } = await resolveProject(opts);

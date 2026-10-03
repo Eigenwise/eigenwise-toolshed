@@ -159,16 +159,7 @@ export function drainReport(cwd: string): string[] | null {
 // A SessionEnd sweep has no session left to tell, so it adds to whatever report the next start drains.
 export function appendReport(cwd: string, notices: string[]): void {
   if (!notices.length) return;
-  writeReport(cwd, [...pendingReportNotices(cwd), ...notices]);
-}
-
-function pendingReportNotices(cwd: string): string[] {
-  try {
-    const notices = JSON.parse(fs.readFileSync(reportFile(cwd), 'utf8'))?.notices;
-    return Array.isArray(notices) ? notices.map((notice: unknown) => String(notice)) : [];
-  } catch (_) {
-    return [];
-  }
+  writeReport(cwd, [...(drainReport(cwd) || []), ...notices]);
 }
 
 function sweepCwd(data: HookInput): string {

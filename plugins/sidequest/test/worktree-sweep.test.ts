@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { worktreeRemovalFailureNotice } from '../src/hooks/shared/worktree-sweep.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { withWorktreeSweepLock, worktreeRemovalFailureNotice } from '../src/hooks/shared/worktree-sweep.js';
 import { deferralNotice } from '../src/hooks/shared/sweep-handoff.js';
 const { worktreeSweepEntryLine, worktreeSweepProgressLine, worktreeSweepReasonSummary } = require('../src/bin/sidequest-cmd-collaboration.ts');
 
@@ -134,4 +137,49 @@ test('a manual sweep ends with its count per classification reason', () => {
 
   assert.equal(line, '  by reason: ticket_closed_settled 2, active_ticket 1, status_unknown 1');
   assert.equal(worktreeSweepReasonSummary([]), '  by reason: no candidates');
+});
+
+// A SessionEnd sweep and the next SessionStart sweep run back to back on /clear; the lock keeps
+// them from quarantining the same trees twice (SQ-51).
+async function sweepUnderLockFile(lockContents: string | null): Promise<{ result: string[]; ran: boolean; lockAfter: string | null }> {
+  const previousHome = process.env.SIDEQUEST_HOME;
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-lock-'));
+  const lockFile = path.join(home, 'worktree-sweep.lock');
+  process.env.SIDEQUEST_HOME = home;
+  try {
+    if (lockContents !== null) fs.writeFileSync(lockFile, lockContents);
+    let ran = false;
+    const result = await withWorktreeSweepLock(async () => {
+      ran = true;
+      return ['swept'];
+    });
+    return { result, ran, lockAfter: fs.existsSync(lockFile) ? fs.readFileSync(lockFile, 'utf8') : null };
+  } finally {
+    process.env.SIDEQUEST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+test('a sweep lock held by a live process skips the sweep and leaves the lock alone', async () => {
+  const held = await sweepUnderLockFile(String(process.pid));
+
+  assert.equal(held.ran, false);
+  assert.deepEqual(held.result, []);
+  assert.equal(held.lockAfter, String(process.pid));
+});
+
+test('a sweep lock left by a dead process is cleared and the sweep runs', async () => {
+  const stale = await sweepUnderLockFile('99999999');
+
+  assert.equal(stale.ran, true);
+  assert.deepEqual(stale.result, ['swept']);
+  assert.equal(stale.lockAfter, null);
+});
+
+test('a sweep lock with unreadable contents is cleared and the sweep runs', async () => {
+  const garbage = await sweepUnderLockFile('not a pid');
+
+  assert.equal(garbage.ran, true);
+  assert.deepEqual(garbage.result, ['swept']);
+  assert.equal(garbage.lockAfter, null);
 });

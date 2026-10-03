@@ -413,6 +413,15 @@ async function cleanupClosedTicketWorktree(slug: string, projectPath: string, ti
   }
 }
 
+// done, release and groomClose end the executor that held the ticket and then reclaim its tree.
+// `reclaim` is false for an integrating groomClose, which advances the integration branch before
+// it sweeps.
+async function closeExecutorAndReclaimTree(slug: string, projectPath: string, res: any, ticket: any, reclaim: boolean = true): Promise<void> {
+  if (!res.ok) return;
+  closeDispatchExecutor(ticket);
+  if (reclaim) await cleanupClosedTicketWorktree(slug, projectPath, res.ticket, claimHeldLive(ticket));
+}
+
 function mutationAck(project?: any, result?: any, changed?: any) {
   const ticket = result.ticket;
   const out: any = { ok: !!result.ok, project };
@@ -1175,6 +1184,7 @@ module.exports = {
   closeDispatchExecutor,
   claimHeldLive,
   cleanupClosedTicketWorktree,
+  closeExecutorAndReclaimTree,
   mutationAck,
   integrationBranchAck,
   outOfScopeComment,

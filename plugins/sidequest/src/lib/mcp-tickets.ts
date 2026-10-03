@@ -66,6 +66,12 @@ function liveClaimRemovalRefusal(ticket: any, force: unknown) {
   return { ok: false, reason: 'claimed', ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
 }
 
+// Refusals stay synchronous throws in the handler; only the deleted ticket's tree cleanup is awaited.
+async function removedTicketAck(slug: string, projectPath: string, ticket: any): Promise<{ ok: true; ref: string }> {
+  await cleanupClosedTicketWorktree(slug, projectPath, ticket, claimHeldLive(ticket), { ...ticket, removed: true, claimLive: false });
+  return { ok: true, ref: ticket.ref };
+}
+
 function sameBasenameSiblingDetails(project: string, ticket: any, projectPath: string, tool: string) {
   const details = store.scopeConsumerWarningDetails(ticket, projectPath);
   if (!details.length) return {};
@@ -386,16 +392,13 @@ const tools: ToolDefinition[] = [
       if (!ticket) throw new Error(`remove: no ticket "${args.ref}" on ${meta.name}.`);
       const refusal = liveClaimRemovalRefusal(ticket, args.force);
       if (refusal) return refusal;
-      const ref = ticket.ref;
       // force:true reaches here only on the main thread: the PreToolUse hook denies
       // a subagent remove carrying force. So the live-claim deletion grant rides the
       // force flag, which the handler above already required for a live claim.
       if (!store.deleteTicket(slug, ticket.id, { allowLiveClaimDeletion: args.force === true })) {
         throw new Error(`remove: could not delete "${ticket.ref}" from ${meta.name}.`);
       }
-      // Refusals above stay synchronous throws; only the deleted ticket's tree cleanup is awaited.
-      return cleanupClosedTicketWorktree(slug, meta.path, ticket, claimHeldLive(ticket), { ...ticket, removed: true, claimLive: false })
-        .then(() => ({ ok: true, ref }));
+      return removedTicketAck(slug, meta.path, ticket);
     },
   },
   {

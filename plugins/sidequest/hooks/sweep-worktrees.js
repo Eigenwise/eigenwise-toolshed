@@ -124,6 +124,12 @@ function writeSweepProgress(cwd, progress) {
   } catch (_) {
   }
 }
+function clearSweepProgress(cwd) {
+  try {
+    import_node_fs2.default.rmSync(progressFile(cwd), { force: true });
+  } catch (_) {
+  }
+}
 function writeReport(cwd, notices) {
   try {
     import_node_fs2.default.mkdirSync(stateDirectory(), { recursive: true });
@@ -131,17 +137,27 @@ function writeReport(cwd, notices) {
   } catch (_) {
   }
 }
-function appendReport(cwd, notices) {
-  if (!notices.length) return;
-  writeReport(cwd, [...pendingReportNotices(cwd), ...notices]);
-}
-function pendingReportNotices(cwd) {
+function drainReport(cwd) {
+  const file = reportFile(cwd);
+  let raw;
   try {
-    const notices = JSON.parse(import_node_fs2.default.readFileSync(reportFile(cwd), "utf8"))?.notices;
-    return Array.isArray(notices) ? notices.map((notice) => String(notice)) : [];
+    raw = import_node_fs2.default.readFileSync(file, "utf8");
+  } catch (_) {
+    return null;
+  }
+  import_node_fs2.default.rmSync(file, { force: true });
+  clearSweepProgress(cwd);
+  try {
+    const parsed = JSON.parse(raw);
+    const notices = parsed?.notices;
+    return Array.isArray(notices) ? notices.map((notice) => String(notice)).filter(Boolean) : [];
   } catch (_) {
     return [];
   }
+}
+function appendReport(cwd, notices) {
+  if (!notices.length) return;
+  writeReport(cwd, [...drainReport(cwd) || [], ...notices]);
 }
 
 // src/hooks/shared/worktree-sweep.ts

@@ -261,8 +261,16 @@ interface GitResult {
   timedOut?: boolean;
 }
 
+interface GitDeadline { message: string | null }
+
+function expireGitDeadline(child: any, deadline: GitDeadline, message: string): void {
+  deadline.message = message;
+  child.kill();
+}
+
 // The timer kills the child but the result still waits for its `close`, so a timed-out git is
-// reaped like any other instead of being left behind as an exited child.
+// reaped like any other instead of being left behind as an exited child. `close` also follows a
+// spawn error, which is where the timer is cleared.
 function git(cwd: string, args: string[], input?: string, environment?: NodeJS.ProcessEnv, timeoutMs = GIT_TIMEOUT_MS): Promise<GitResult> {
   return new Promise((resolve) => {
     const child = spawn('git', ['-c', 'core.editor=true', ...args], {
@@ -271,23 +279,19 @@ function git(cwd: string, args: string[], input?: string, environment?: NodeJS.P
       windowsHide: true,
       stdio: [input == null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
-    let timeout: string | null = null;
-    const timer = setTimeout(() => {
-      timeout = `git ${args[0]} timed out after ${timeoutMs}ms`;
-      child.kill();
-    }, timeoutMs);
+    const deadline: GitDeadline = { message: null };
+    const timer = setTimeout(expireGitDeadline, timeoutMs, child, deadline, `git ${args[0]} timed out after ${timeoutMs}ms`);
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
     if (input != null) child.stdin.end(input);
     child.once('error', (error: NodeJS.ErrnoException) => {
-      clearTimeout(timer);
       resolve({ ok: false, status: null, stdout: '', stderr: String(error.message || '').trim() });
     });
     child.once('close', (status: number | null) => {
       clearTimeout(timer);
-      resolve(gitCloseResult(status, stdout, stderr, timeout));
+      resolve(gitCloseResult(status, stdout, stderr, deadline.message));
     });
   });
 }
@@ -303,18 +307,18 @@ function gitCloseResult(status: number | null, stdout: Buffer[], stderr: Buffer[
 }
 
 // Results keep the order of `items`; at most `limit` of them are in flight at once.
-async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, map: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      results[index] = await map(items[index]!);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
+async function mapWithConcurrency(items: readonly any[], limit: number, map: (item: any) => Promise<any>): Promise<any[]> {
+  const queue = { next: 0, results: new Array(items.length) };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => drainMapQueue(items, queue, map)));
+  return queue.results;
+}
+
+async function drainMapQueue(items: readonly any[], queue: { next: number; results: any[] }, map: (item: any) => Promise<any>): Promise<void> {
+  while (queue.next < items.length) {
+    const index = queue.next;
+    queue.next += 1;
+    queue.results[index] = await map(items[index]);
+  }
 }
 
 function pathIsInside(root: string, candidate: string): boolean {
@@ -1240,15 +1244,21 @@ function sweepClassificationContext(options: any, facts: Omit<SweepClassificatio
 // worktrees has to drain from the back of the queue, or it re-examines the same young ones every
 // session (SQ-2924), and it has to reach a newly finished tree before old ambiguous ones spend the
 // budget (SQ-51).
-async function sweepCandidateOrder(candidates: any[], tickets: any[]): Promise<Array<{ entry: any; ageMs: number; closed: boolean }>> {
-  const aged = await Promise.all(candidates.map(async (entry: any) => ({
-    entry,
-    ageMs: (await worktreeAge(entry.worktree)) ?? 0,
-    closed: closedTicketCandidate(tickets, entry),
-  })));
-  return aged.sort((left, right) => Number(right.closed) - Number(left.closed)
+interface SweepOrderedCandidate { entry: any; ageMs: number; closed: boolean }
+
+async function sweepCandidateOrder(candidates: any[], tickets: any[]): Promise<SweepOrderedCandidate[]> {
+  const aged = await Promise.all(candidates.map((entry: any) => sweepOrderedCandidate(entry, tickets)));
+  return aged.sort(compareSweepCandidates);
+}
+
+async function sweepOrderedCandidate(entry: any, tickets: any[]): Promise<SweepOrderedCandidate> {
+  return { entry, ageMs: (await worktreeAge(entry.worktree)) ?? 0, closed: closedTicketCandidate(tickets, entry) };
+}
+
+function compareSweepCandidates(left: SweepOrderedCandidate, right: SweepOrderedCandidate): number {
+  return Number(right.closed) - Number(left.closed)
     || right.ageMs - left.ageMs
-    || String(left.entry.worktree).localeCompare(String(right.entry.worktree)));
+    || String(left.entry.worktree).localeCompare(String(right.entry.worktree));
 }
 
 async function classifySweepCandidate(repo: string, tickets: any[], entry: any, context: SweepClassificationContext): Promise<any> {
@@ -1336,7 +1346,7 @@ function closedTreeEscapingEntries(worktree: string, stdout: string, recorded: R
 
 // The moved copy of a ticket_closed_settled tree is read again by the rule that classified it, so its
 // build output does not park it, while anything else that appeared since still does.
-function closedTreeHeldEntries(stdout: string, destination: string, recorded: RecordedDependencyPaths, vacatedSource: string): WorktreeStatusEntry[] {
+function closedTreeHeldEntries(stdout: string, destination: string, recorded: RecordedDependencyPaths, vacatedSource: string | null = null): WorktreeStatusEntry[] {
   const atRisk = closedTreeAtRiskEntries(stdout, recorded);
   return atRisk.length ? atRisk : closedTreeEscapingEntries(destination, stdout, recorded, vacatedSource);
 }
@@ -2089,7 +2099,7 @@ async function lateContentInMovedWorktree(
   recorded: RecordedDependencyPaths,
   branch: string | null,
   vacatedSource: string,
-  heldEntries: HeldEntriesRule = atRiskStatusEntries,
+  heldEntries: typeof atRiskStatusEntries = atRiskStatusEntries,
 ): Promise<MovedTreeRead> {
   const status = await git(destination, [...AT_RISK_STATUS_ARGUMENTS]);
   if (!status.ok) return blockedMovedRead(`the moved tree could not be read again: ${status.stderr || `git status exited ${status.status}`}`);
@@ -2098,14 +2108,13 @@ async function lateContentInMovedWorktree(
   return movedTreeHeadAndTip(destination, classifiedHead, branch);
 }
 
-type MovedTreeRead = { blocked: string | null; head: string | null; branchTip: string | null };
-type HeldEntriesRule = (stdout: string, destination: string, recorded: RecordedDependencyPaths, vacatedSource: string) => WorktreeStatusEntry[];
+interface MovedTreeRead { blocked: string | null; head: string | null; branchTip: string | null }
 
 function blockedMovedRead(blocked: string): MovedTreeRead {
   return { blocked, head: null, branchTip: null };
 }
 
-function movedTreeHeldEntriesRule(classifiedReason: string): HeldEntriesRule {
+function movedTreeHeldEntriesRule(classifiedReason: string): typeof atRiskStatusEntries {
   return classifiedReason === 'ticket_closed_settled' ? closedTreeHeldEntries : atRiskStatusEntries;
 }
 

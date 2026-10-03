@@ -63,6 +63,10 @@ function liveClaimRemovalRefusal(ticket, force) {
   if (!ticket.claim?.by || store.claimReclaimable(ticket) || force) return null;
   return { ok: false, reason: "claimed", ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
 }
+async function removedTicketAck(slug, projectPath, ticket) {
+  await cleanupClosedTicketWorktree(slug, projectPath, ticket, claimHeldLive(ticket), { ...ticket, removed: true, claimLive: false });
+  return { ok: true, ref: ticket.ref };
+}
 function sameBasenameSiblingDetails(project, ticket, projectPath, tool) {
   const details = store.scopeConsumerWarningDetails(ticket, projectPath);
   if (!details.length) return {};
@@ -362,11 +366,10 @@ const tools = [
       if (!ticket) throw new Error(`remove: no ticket "${args.ref}" on ${meta.name}.`);
       const refusal = liveClaimRemovalRefusal(ticket, args.force);
       if (refusal) return refusal;
-      const ref = ticket.ref;
       if (!store.deleteTicket(slug, ticket.id, { allowLiveClaimDeletion: args.force === true })) {
         throw new Error(`remove: could not delete "${ticket.ref}" from ${meta.name}.`);
       }
-      return cleanupClosedTicketWorktree(slug, meta.path, ticket, claimHeldLive(ticket), { ...ticket, removed: true, claimLive: false }).then(() => ({ ok: true, ref }));
+      return removedTicketAck(slug, meta.path, ticket);
     }
   },
   {

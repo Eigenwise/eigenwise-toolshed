@@ -54,8 +54,8 @@ const {
   requiredReleaseReason,
   worktreeRoot,
   verifyEmbedsWorktreeRoot,
-  cleanupClosedTicketWorktree,
-  claimHeldLive,
+  cleanupClosedTicketWorktree: cleanupDeliveredWorktree,
+  closeExecutorAndReclaimTree,
   withoutCategories,
   CATEGORY_TAXONOMY_WARNING,
   state,
@@ -664,10 +664,7 @@ const tools: ToolDefinition[] = [
           res.message = `${res.message} ${noOp.detail}`;
         }
       }
-      if (res.ok) {
-        closeDispatchExecutor(ticket);
-        await cleanupClosedTicketWorktree(slug, meta.path, res.ticket, claimHeldLive(ticket));
-      }
+      await closeExecutorAndReclaimTree(slug, meta.path, res, ticket);
       return mutationAck(slug, res);
     },
   },
@@ -752,30 +749,26 @@ const tools: ToolDefinition[] = [
         resolvedPaths: args.resolvedPaths,
         verificationSupersession,
       });
-      if (res.ok) {
-        closeDispatchExecutor(ticket);
-        if (args.integration) {
-          // Advance before sweeping: a local integration branch that just moved
-          // makes this ticket's worktree reachable, which the sweep collects on.
-          try {
-            const integrationTarget = store.ticketIntegrationTarget(slug, res.ticket);
-            res.integrationBranch = await worktrees.advanceIntegrationBranch(meta.path, {
-              integrationTarget,
-              submissionCommit: res.ticket.submission ? res.ticket.submission.commit : null,
-              submissionWorktree: res.ticket.submission ? res.ticket.submission.worktree : null,
-            });
-            res.worktreeSweep = await worktrees.sweep(meta.path, store.worktreeGcTickets(), {
-              execute: true,
-              currentPath: store.nearestRepoRoot(process.cwd()),
-              integrationTarget,
-              minAgeMs: 0,
-              ticketRef: res.ticket.ref,
-            });
-          } catch (error: any) {
-            res.worktreeSweep = { failures: [{ path: null, message: (error && error.message) || String(error) }] };
-          }
-        } else {
-          await cleanupClosedTicketWorktree(slug, meta.path, res.ticket, claimHeldLive(ticket));
+      await closeExecutorAndReclaimTree(slug, meta.path, res, ticket, !args.integration);
+      if (res.ok && args.integration) {
+        // Advance before sweeping: a local integration branch that just moved
+        // makes this ticket's worktree reachable, which the sweep collects on.
+        try {
+          const integrationTarget = store.ticketIntegrationTarget(slug, res.ticket);
+          res.integrationBranch = await worktrees.advanceIntegrationBranch(meta.path, {
+            integrationTarget,
+            submissionCommit: res.ticket.submission ? res.ticket.submission.commit : null,
+            submissionWorktree: res.ticket.submission ? res.ticket.submission.worktree : null,
+          });
+          res.worktreeSweep = await worktrees.sweep(meta.path, store.worktreeGcTickets(), {
+            execute: true,
+            currentPath: store.nearestRepoRoot(process.cwd()),
+            integrationTarget,
+            minAgeMs: 0,
+            ticketRef: res.ticket.ref,
+          });
+        } catch (error: any) {
+          res.worktreeSweep = { failures: [{ path: null, message: (error && error.message) || String(error) }] };
         }
       }
       return mutationAck(slug, res, res.ok
@@ -828,10 +821,7 @@ const tools: ToolDefinition[] = [
         source: 'mcp',
         sessionId: sessionOf(args),
       });
-      if (res.ok) {
-        closeDispatchExecutor(ticket);
-        await cleanupClosedTicketWorktree(slug, meta.path, res.ticket, claimHeldLive(ticket));
-      }
+      await closeExecutorAndReclaimTree(slug, meta.path, res, ticket);
       return mutationAck(slug, res);
     },
   },
@@ -1214,7 +1204,7 @@ const tools: ToolDefinition[] = [
         for (const [index, closure] of closures.entries()) {
           if (!closure.ok) continue;
           closeDispatchExecutor(closure.ticket);
-          await cleanupClosedTicketWorktree(slug, meta.path, closure.ticket, Boolean(ticketsBeforeClosure[index]?.claim?.by));
+          await cleanupDeliveredWorktree(slug, meta.path, closure.ticket, Boolean(ticketsBeforeClosure[index]?.claim?.by));
         }
         return deliveredAck(slug, failedClosure || closures[0], delivery.integration, {
           verify: delivery.integration.verify,
@@ -1285,7 +1275,7 @@ const tools: ToolDefinition[] = [
         });
         if (closed.ok) {
           closeDispatchExecutor(recorded.ticket);
-          await cleanupClosedTicketWorktree(slug, meta.path, closed.ticket, Boolean(deliveryTicket?.claim?.by));
+          await cleanupDeliveredWorktree(slug, meta.path, closed.ticket, Boolean(deliveryTicket?.claim?.by));
         }
         return deliveredAck(slug, closed, recorded.integration, {
           verify: recorded.integration.verify,
@@ -1334,7 +1324,7 @@ const tools: ToolDefinition[] = [
       });
       if (closed.ok) {
         closeDispatchExecutor(delivery.ticket);
-        await cleanupClosedTicketWorktree(slug, meta.path, closed.ticket, Boolean(deliveryTicket?.claim?.by));
+        await cleanupDeliveredWorktree(slug, meta.path, closed.ticket, Boolean(deliveryTicket?.claim?.by));
       }
       return deliveredAck(slug, closed, integration, {
         verify: verification.verify,

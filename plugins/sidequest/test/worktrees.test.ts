@@ -2631,6 +2631,9 @@ test('worktrees sweep --all-projects walks every registered project in slug orde
   };
   const alpha = namedRepository('alpha');
   const zulu = namedRepository('zulu');
+  // A project whose repository is gone must be skipped by name without stopping the walk (GH-439).
+  const broken = namedRepository('broken');
+  fs.rmSync(path.join(broken, '.git'), { recursive: true, force: true });
   const alphaWorktree = createAgentWorktree(alpha, path.join(alpha, '.claude', 'worktrees'), 'alpha-stale', false);
   const zuluWorktree = createAgentWorktree(zulu, path.join(zulu, '.claude', 'worktrees'), 'zulu-stale', false);
   const printed: string[] = [];
@@ -2641,12 +2644,19 @@ test('worktrees sweep --all-projects walks every registered project in slug orde
     console.log = previousLog;
     const output = printed.join('\n');
     const alphaHeading = output.indexOf('worktrees sweep: executed for alpha');
+    const brokenSkip = output.indexOf('worktrees sweep: skipped broken:');
     const zuluHeading = output.indexOf('worktrees sweep: executed for zulu');
 
     assert.ok(alphaHeading >= 0, `alpha was swept:\n${output}`);
-    assert.ok(zuluHeading > alphaHeading, `zulu was swept after alpha:\n${output}`);
+    assert.ok(brokenSkip > alphaHeading, `broken was skipped after alpha:\n${output}`);
+    assert.ok(zuluHeading > brokenSkip, `zulu was swept after broken:\n${output}`);
     assert.equal(fs.existsSync(alphaWorktree), false);
     assert.equal(fs.existsSync(zuluWorktree), false);
+    assert.equal(process.exitCode, 1, 'a project that failed to sweep fails the run');
+    // GH-439: the run ends on its per-reason count, then the wall time, however many rows scrolled by.
+    const [byReason = '', finished = ''] = printed.slice(-2);
+    assert.match(byReason, /^ {2}by reason: /);
+    assert.match(finished, /^worktrees sweep: finished in \d+\.\ds$/);
   } finally {
     console.log = previousLog;
     process.exitCode = 0;
@@ -2657,6 +2667,39 @@ test('worktrees sweep --all-projects walks every registered project in slug orde
   }
 });
 
+
+test('worktrees status prints the storage summary as text and as JSON', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktrees-status-'));
+  const previousHome = String(process.env.SIDEQUEST_HOME);
+  process.env.SIDEQUEST_HOME = home;
+  const store = require('../src/lib/store.ts');
+  const { cmdWorktrees } = require('../src/bin/sidequest-cmd-collaboration.ts');
+  const repository = path.join(home, 'repositories', 'status-project');
+  fs.mkdirSync(repository, { recursive: true });
+  git(repository, ['init', '-b', 'main']);
+  const slug = store.ensureProject(repository).slug;
+  const printed: string[] = [];
+  const written: string[] = [];
+  const previousLog = console.log;
+  const previousWrite = process.stdout.write;
+  console.log = (...parts: unknown[]) => { printed.push(parts.map(String).join(' ')); };
+  try {
+    await cmdWorktrees({ project: repository }, ['status']);
+    process.stdout.write = ((chunk: unknown) => { written.push(String(chunk)); return true; }) as typeof process.stdout.write;
+    await cmdWorktrees({ project: repository, json: true }, ['status']);
+    process.stdout.write = previousWrite;
+
+    assert.match(printed.join('\n'), /^worktree storage for status-project/);
+    const report = JSON.parse(written.join(''));
+    assert.equal(report.project, slug);
+    assert.ok(report.storage.worktrees, 'the JSON report carries the storage summary');
+  } finally {
+    console.log = previousLog;
+    process.stdout.write = previousWrite;
+    process.env.SIDEQUEST_HOME = previousHome;
+    try { fs.rmSync(home, { recursive: true, force: true }); } catch (_) {}
+  }
+});
 
 test('sweep keeps a unique commit when an upstream name is ambiguous', async () => {
   const { repository, worktreeRoot } = repositoryFixture();
