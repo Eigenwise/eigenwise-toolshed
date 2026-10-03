@@ -9,6 +9,7 @@ const work = require('../lib/work');
 const commitScope = require('../lib/commit-scope');
 const worktrees = require('../lib/worktrees');
 const tempCleanup = require('../lib/temp-cleanup');
+const { syncCheck } = require('../lib/sync-check');
 const execNames = require('../lib/exec-names');
 const { claimRefusalMessage } = require('../lib/refusal-guidance');
 const { assertSidequestInstall, assertDispatchTransport } = require('../lib/dispatch-preflight');
@@ -101,6 +102,14 @@ async function cmdBriefing(opts: any, positional: any) {
   }
   const briefing = agentsync.withProjectIdentity(agentsync.renderTicketBriefing(result.ticket, result.token, slug, meta.path), meta.path);
   process.stdout.write(agentsync.transportExecutorBriefing(briefing, result.ticket, slug, meta.path));
+}
+
+function cmdSyncCheck(opts: any, positional: any) {
+  const commit = positional[0];
+  if (!commit) fail('sync-check: pass the base commit, e.g. sidequest sync-check <commit> [--worktree <path>] [--head <commit>] [--retained].');
+  const result = syncCheck({ commit, worktree: opts.worktree, head: opts.head, retained: Boolean(opts.retained) });
+  console.log(result.line);
+  process.exitCode = result.ok ? 0 : 1;
 }
 
 async function cmdTempCleanup(opts: any, positional: any) {
@@ -408,4 +417,4 @@ async function cmdMerge(opts: any, positional: any) {
 
 // Count non-archived tickets that belong to a given story.
 
-module.exports = { cmdDispatch, cmdBriefing, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge };
+module.exports = { cmdDispatch, cmdBriefing, cmdSyncCheck,cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge };

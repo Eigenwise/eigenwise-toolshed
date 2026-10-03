@@ -13,6 +13,7 @@ const { compileContextProjection } = require("./context-packet.js");
 const { canonicalPreparedDispatchExecutor } = require("./prepared-dispatch.js");
 const { verificationRequirement } = require("./kernel/verification.js");
 const { scopeKey } = require("./scope-match.js");
+const { SYNC_CHECK_RESULT, syncCheckCommand, retainedSyncCheckStep } = require("./sync-check.js");
 const TEMPLATE_PATH = path.join(__dirname, "..", "scripts", "_exec-template.md");
 const LEGACY_MARKER = "<!-- generated-by: sidequest-agentsync -->";
 const MARKER = "<!-- generated-by: sidequest-agentsync gen2 -->";
@@ -401,11 +402,13 @@ function ticketContinuationPacket(ticket) {
   const evidence = cause ? ` Validation evidence: ${cause}.` : "";
   return `Continuation fallback: the previous released worktree was not carried (${String(fallback.reason).replace(/_/g, " ")}). This dispatch uses a fresh worktree.${fallback.sourceWorktree ? ` Previous worktree: ${fallback.sourceWorktree}.` : ""}${evidence}${replay}`.trim();
 }
+const syncCheckRun = (commit, flags = "") => syncCheckCommand(quotedShellArgument(dispatchLauncherPath()), commit, flags);
+const retainedCandidateStep = (commit, retainedCommit) => retainedSyncCheckStep(quotedShellArgument(dispatchLauncherPath()), commit, retainedCommit);
 function explicitBaseMoveSync(continuation, checkpointBase, commit, root, branch) {
   if (!continuation.retainReason || !checkpointBase || checkpointBase === commit) return null;
   return [
     `Worktree synchronization (run before work): ${continuation.retainReason}.`,
-    `Confirm the candidate first: \`git rev-parse HEAD\` must be ${continuation.commit} and \`git status --porcelain\` must still list the retained changes with no unmerged entries. If not, stop and report that this checkout is not the retained candidate.`,
+    `Confirm the candidate first: ${retainedCandidateStep(commit, continuation.commit)} The base is about to move, so \`ok\` and \`FAILED not-ancestor\` both prove the candidate.`,
     `Then preserve before moving: commit every retained change on this worktree's own branch with \`git add -A && git commit\`, confirm \`git status --porcelain\` is empty, then run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` and \`git rebase --onto ${commit} ${checkpointBase}\`.`,
     "Never check out or discard over the retained changes, and never use `git stash`. If the commit or the rebase fails, stop and report it rather than resolving toward either side."
   ].join(" ");
@@ -433,39 +436,39 @@ function ticketWorktreeSync(ticket, projectPath) {
   const checkpointBase = String(continuation?.baseCommit || "").trim();
   if (continuation?.mode === "live_claim_resume" && continuation.sourceWorktree && continuation.commit) {
     return [
-      `Worktree synchronization (run before work): check \`git -C ${continuation.sourceWorktree} rev-parse HEAD\` equals \`${continuation.commit}\` and \`git -C ${continuation.sourceWorktree} merge-base --is-ancestor ${commit} HEAD\`.`,
-      "If either check fails, stop and report it. Do not reset, rebase, or discard retained work."
+      `Worktree synchronization (run before work): run ${syncCheckRun(commit, ` --worktree ${quotedShellArgument(continuation.sourceWorktree)} --head ${continuation.commit}`)}. It requires HEAD in that worktree to equal \`${continuation.commit}\` and ${commit} to be an ancestor of it. ${SYNC_CHECK_RESULT}`,
+      "If it reports FAILED, stop and report it. Do not reset, rebase, or discard retained work."
     ].join(" ");
   }
   const checkpoint = continuation?.mode === "retained_worktree_resume" && checkpointBase && continuation.commit;
   if (checkpoint) {
     return [
-      `Worktree synchronization (run before work): check \`git merge-base --is-ancestor ${commit} HEAD\`.`,
-      `If it fails, run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` then \`git rebase --onto ${commit} ${checkpointBase}\`.`,
+      `Worktree synchronization (run before work): run ${syncCheckRun(commit)}. ${SYNC_CHECK_RESULT}`,
+      `If it reports FAILED not-ancestor, run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` then \`git rebase --onto ${commit} ${checkpointBase}\`.`,
       "If the rebase conflicts, stop and report the conflict. Do not reset the retained checkpoint or resolve toward either side."
     ].join(" ");
   }
   if (continuation?.mode === "dirty_worktree_resume") {
     const explicitMove = explicitBaseMoveSync(continuation, checkpointBase, commit, root, branch);
     if (explicitMove) return explicitMove;
-    const candidateCheck = `Worktree synchronization (run before work): this worktree holds uncommitted work retained from the previous attempt. Base ancestry alone never proves the retained candidate is here, so confirm the candidate first: \`git rev-parse HEAD\` must be ${continuation.commit} and \`git status --porcelain\` must still list the retained changes with no unmerged (\`UU\`, \`AA\`, \`DU\`, \`UD\`, \`AU\`, \`UA\`, \`DD\`) entries. If any of that fails, stop and report that this checkout is not the retained candidate. Only then check \`git merge-base --is-ancestor ${commit} HEAD\`, and change nothing if it passes.`;
+    const candidateCheck = `Worktree synchronization (run before work): this worktree holds uncommitted work retained from the previous attempt. Base ancestry alone never proves the retained candidate is here, so prove the candidate first, then the base: ${retainedCandidateStep(commit, continuation.commit)} Change nothing if it reports \`ok\`.`;
     if (!checkpointBase) {
       return [
         candidateCheck,
-        "If it fails, stop and report that the retained base was not recorded. Do not move the base or discard anything: the retained changes exist nowhere else."
+        "If it reports `FAILED not-ancestor`, stop and report that the retained base was not recorded. Do not move the base or discard anything: the retained changes exist nowhere else."
       ].join(" ");
     }
     return [
       candidateCheck,
-      `If it fails, preserve before moving: commit every retained change on this worktree's own branch with \`git add -A && git commit\`, confirm \`git status --porcelain\` is empty and \`git show --stat HEAD\` lists every file you expected, then run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` and \`git rebase --onto ${commit} ${checkpointBase}\`.`,
+      `If it reports \`FAILED not-ancestor\`, preserve before moving: commit every retained change on this worktree's own branch with \`git add -A && git commit\`, confirm \`git status --porcelain\` is empty and \`git show --stat HEAD\` lists every file you expected, then run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` and \`git rebase --onto ${commit} ${checkpointBase}\`.`,
       "Never check out or discard over the retained changes, and never use `git stash`: the stash stack is shared across worktrees and concurrent sessions on this machine, so a pop can take an entry that is not yours.",
       "Rebase, never merge. Cutting a release deletes the `.release/unreleased/*.md` fragments it consumed, and merging an older base forward resurrects them, which re-ships changelog entries for already-released work.",
       "If the commit, the rebase, or either verification fails, stop and report it rather than moving the base with unpreserved work in the tree."
     ].join(" ");
   }
   return [
-    `Worktree synchronization (run before work): check \`git merge-base --is-ancestor ${commit} HEAD\`.`,
-    `If it fails, run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` then \`git reset --hard ${commit}\`.`,
+    `Worktree synchronization (run before work): run ${syncCheckRun(commit)}. ${SYNC_CHECK_RESULT}`,
+    `If it reports FAILED not-ancestor, run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` then \`git reset --hard ${commit}\`.`,
     "If fetching or resetting fails, stop and report the failure instead of working from the stale base."
   ].join(" ");
 }
