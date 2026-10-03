@@ -25,7 +25,7 @@ Tell Claude the outcome you want:
 
 > Plan the checkout refresh as a Sidequest story and show me the backlog.
 
-Claude can create the story, split it into tickets, connect dependencies, and classify the work from the board's configured categories. Review the backlog, then ask Claude to dispatch the ready tickets. Claude handles routing, executor startup, verification, and ticket updates.
+Claude can create the story, split it into tickets, connect dependencies, and classify the work from the board's configured categories. Review the backlog, then ask Claude to dispatch the ready tickets. Claude handles routing, executor startup, verification, and ticket updates. Dispatch uses the model access you configure; any paid subscription or API usage follows that provider's pricing and limits.
 
 When work is ready, ask Claude to review and integrate it:
 
@@ -73,7 +73,7 @@ For worktree storage, recovery, and command details, see the [generated referenc
 
 ## Support
 
-Sidequest's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use the plugin. Claude and configured model providers may have their own usage costs.
+Sidequest's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use the plugin.
 
 ## License
 

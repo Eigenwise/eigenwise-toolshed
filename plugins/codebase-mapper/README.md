@@ -51,13 +51,9 @@ The bundled Node.js hooks read the local project map and hook metadata, inject m
 
 The hooks and scripts make no network requests to an Eigenwise service. Your assistant still processes map and project content through the model provider and tools you configure. Optional Sidequest dispatch follows that separate plugin's executor configuration. The privacy statement describes local storage, retention, and these boundaries.
 
-## Keep tasks across sessions
-
-For task continuity, the independent [Sidequest plugin](../sidequest/README.md) keeps every task saved as a ticket through context compaction and new sessions. Record progress and next actions on the ticket so Claude can resume the work.
-
 ## Support
 
-Codebase Mapper's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use the plugin. Claude and configured model providers may have their own usage costs.
+Codebase Mapper's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use the plugin.
 
 ## License
 
