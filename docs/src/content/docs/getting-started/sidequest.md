@@ -26,11 +26,13 @@ Each board belongs to one project folder. When you work in a Git repository, Sid
 2. Describe the outcome you want and ask Claude to plan it as Sidequest work. For example: `Plan the checkout refresh as a Sidequest story and show me the backlog.` If work belongs on a feature branch, name that branch in the request.
 3. Review the proposed tickets, dependencies, and scope in the board. Adjust the plan before work starts.
 4. Ask Claude to dispatch the ready tickets. Claude chooses the configured route, starts the work, and reports verification results. Dispatch freezes each ticket's intended target branch, so two concurrent feature branches get separate targets without changing the board default. Integration keeps that recorded target through submission and delivery; a group with different targets stops before changing either branch.
-5. When a ticket is ready, ask Claude to review and integrate it if the checks pass. Larger or higher-risk work may need an extra review before integration.
+5. When a ticket is ready, ask Claude to integrate it if its checks pass. Independent review is required only for a contract-named seam the check cannot exercise or a required high-stakes review. Multiple review lenses need distinct named risks; wave count alone adds no review.
 
 Each ticket carries a focused check that decides whether its work is ready. Claude records that check against
-the final candidate and reports what passed, failed, or needs your decision. After integration, Claude runs
-one combined full gate for the assembled work. The agent-facing reference covers capture, evidence, and
+the final clean committed candidate once and reports what passed, failed, or needs your decision.
+Delivery still runs its real pinned verifier. After delivery, Claude runs one combined full merged-tree
+gate per wave before versioning, including a singleton. A changed tree after rebase needs a fresh gate.
+Assembled-tree proof is reused only when Sidequest's runtime authorizes its exact identities. The agent-facing reference covers capture, evidence, and
 delivery mechanics.
 
 Integration always happens in your local checkout: Claude merges the work into the local target branch and
@@ -39,6 +41,26 @@ Claude take afterwards. When the project has an `origin` remote, Sidequest addit
 `origin/<branch>` as evidence about what already landed, which is how it recognizes work that someone merged
 outside the board. That only affects what counts as proof; the merge and the check still run locally, and a
 recorded delivery always names the branch that actually carried it.
+
+Heavy commands share a named resource slot, with at most two workers, finite deadlines, and cleanup of
+child processes. Other executors keep reading, editing, and committing independently. Once ready to
+verify, they record readiness and pause with their claim intact. The actual owner acknowledges that its
+command and descendants ended, then the parent explicitly hands the slot to the next holder. A real
+terminal closeout or an authenticated mid-claim return can supply that acknowledgement; elapsed time
+and process counts cannot. No polling or automatic restart is needed.
+
+Handoffs carry the actual instruction or recover it from bounded comments. An exclusive `since` cursor
+only says where a read starts; the processed cursor advances after the instructions are consumed.
+
+Tickets should fit implementation plus final verification comfortably before about 75 tool rounds.
+Larger work is split along cohesive boundaries. A Continuation checkpoint commits progress, records
+remaining work and verification status, and releases for a fresh dispatch. A resource pause keeps the claim.
+
+Quality uses the existing local owner: early measured complexity where supported, then trustworthy fresh
+coverage for the same candidate bytes. Compatible candidate coverage is reused through the runner's
+supported path rather than another full suite. Each new or modified function must score CRAP below 6;
+untouched legacy functions stay outside scope. Missing analyzer or coverage is UNVERIFIED, and measurement
+tooling and reports stay local and uncommitted.
 
 ### Choose the planning depth
 

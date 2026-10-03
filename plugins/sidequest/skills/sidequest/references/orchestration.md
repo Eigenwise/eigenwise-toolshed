@@ -74,6 +74,9 @@ scoped test or reproduction for its declared files; reserve full-suite green for
 ship ticket. Shrink until the complexity drops — a piece still scoring 7+ is usually a small design
 ticket plus a mechanical application ticket.
 
+**Size implementation plus final verification to fit comfortably before 75 tool rounds.** Otherwise split
+along actual cohesive boundaries before dispatch; a resource pause does not release or restart an executor.
+
 **Ticket detail follows the decision and remaining uncertainty.** Every ticket needs the selected outcome,
 anchors, expected behavior, boundaries, and precise verification commands needed to implement the pinned plan.
 If finishing would need facts the contract does not carry, gather only the facts that could change the decision,
@@ -102,8 +105,8 @@ Set the acceptance boundary before splitting fixes:
   separate tickets before one matrix covers the lifecycle.
 - **Skip an audit wave when the done-oracle is deterministic.** If the ticket's executable
   acceptance commands or test suite pass, do not append a `review-audit` + fix wave by default.
-  Audit when the work has no deterministic done-oracle, a weak oracle leaves material uncertainty, or
-  high-stakes flags demand independent scrutiny. The integrator consumes the submission report and gate
+  Bind review only for a contract-named seam the oracle cannot exercise or a required high-stakes review.
+  Distinct review lenses need distinct named risks; wave count alone adds no review. The integrator consumes the submission report and gate
   evidence; it does not inspect the implementation diff.
 - **Keep one implementation ticket open through a required independent review.** Attach findings as
   comments on the open implementation claim and correct them there. Submit only after that required
@@ -136,7 +139,7 @@ replacement claim reports the checkpoint as `resumed` while its TTL is live.
 
 Keep the two checkpoint names exact. A **live review checkpoint** uses the `checkpoint` operation and
 holds the claim so the same executor remains addressable. A **Continuation checkpoint** is the
-100-tool-round handoff: commit, comment, release to `todo`, then start a fresh executor with a fresh
+75-tool-round handoff: commit, comment, release to `todo`, then start a fresh executor with a fresh
 dispatch. Only the continuation flow releases during a healthy handoff.
 
 ### Scope expansion without a bounce
@@ -163,8 +166,8 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   is session-random.
 - **One wave at a time.** `ready --json --brief` partitions the set into parallel-safe waves by declared file scope and named contract edges. MCP `ready` returns the same wave data with a count plus ref/title rows by default; use `full:true` only when a ticket record is needed. A ticket can declare free-form `produces`, `changes`, and `consumes` metadata for interfaces it touches; a produce/consume or change/change match sequences otherwise disjoint tickets. Read `waveDependencies` for the named reason before spawning. `contractWaiver:true` is an explicit reviewed override, so use it only after checking the real integration seam. Before spawning a wave, assess the runtime
   resources each ticket needs: fixed ports, domains, shared databases, existing servers, and files
-  outside the declared scopes. Worktrees isolate files, not those resources. Serialize tickets that
-  share one, and name the orchestrator/worker ownership before launch. Spawn wave 1, wait, re-run
+  outside the declared scopes. Worktrees isolate files, not those resources. Serialize commands on a
+  named shared resource, not entire tickets; name the parent and current holder before launch. Spawn wave 1, wait, re-run
   `ready`, repeat.
 - **Workers record operational state in the canonical closeout payload.** The orchestrator owns wave admission and shared-resource
   coordination; each worker owns its ticket. A submission's `body` carries the report, while its automatic terminal marker stays short. A `done` completion comment carries the report directly. Record conflicts found,
@@ -172,13 +175,15 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   verification output there. Tickets with no declared scope never mechanically conflict, so eyeball whether
   they'd edit the same files before parallelizing them.
 - **Integrate and verify by wave.** Each executor runs its scoped verification before submission.
-  When the quiet wave lands, read each submit report, then run one combined full gate for the wave. On
-  green, integrate. The oracle is the review: never open source or inspect diffs to re-review executor
+  When the wave submits, read each submit report, deliver the exact candidates through the real pinned
+  delivery verifier, then run one combined full gate for the merged tree before versioning. A changed
+  tree after rebase needs a fresh gate. Assembled-tree proof is reusable only when the runtime
+  authorizes its exact tree, command, candidate, and capture identities. The oracle is the review: never open source or inspect diffs to re-review executor
   work. When a named safety-sensitive seam needs independent scrutiny, dispatch a `review-audit` for that
   seam; do not turn the orchestrator into the reviewer.
 - **Executor prompts stay lean and cannot narrow the ticket**: add only the ref, worker id, claim/done commands, stamped effort/model, and logistics the ticket does not carry. The ticket contract is authoritative and must travel in full, unchanged scope. If the plan changed, update the ticket before dispatching. **Anti-pattern: dispatch narrower than ticket.** In a sample ticket, the ticket required extracting the done block across every lesson route and two commits, while the dispatch limited work to intervals as a reference. The executor bounced correctly, then the orchestrator had to re-plan. Never create that contradiction.
 - **Read bounded briefing comments from the newest end.** A brief can carry a compact newest-first comment packet instead of the full thread. Read compact `comments` pages first, following their cursor only when needed. Read the full chronological thread only when the brief flags a decision or constraint in omitted history; otherwise the latest packet and compact pages carry the current handoff.
-- **Resume Continuation checkpoints with a fresh dispatch.** Executors create a Continuation checkpoint around 100 tool rounds by committing verified declared-scope work, writing a `Continuation checkpoint` comment with the commit, files touched, next steps, and verification state, then releasing to `todo`. On a natural wakeup, use `pulse` and the latest comment to confirm that header, commit, and no live claim. Read the checkpoint before `dispatch <ref>`, then spawn its returned continuation unchanged so it gets a fresh token and context. The dispatch validates the registered retained worktree against the repository before carrying it forward, replays a retained checkpoint onto an advanced integration target, and reports its exact Git validation evidence if it must fall back. A rebase conflict stops the executor for escalation, without resetting the retained checkpoint or resolving toward either side. A live claim means the checkpoint has not completed, so do not launch beside it; use the normal salvage path if that worker stopped.
+- **Resume Continuation checkpoints with a fresh dispatch.** Executors create a Continuation checkpoint around 75 tool rounds by committing verified declared-scope work, writing a `Continuation checkpoint` comment with the commit, files touched, next steps, and verification state, then releasing to `todo`. On a natural wakeup, use `pulse` and the latest comment to confirm that header, commit, and no live claim. Read the checkpoint before `dispatch <ref>`, then spawn its returned continuation unchanged so it gets a fresh token and context. The dispatch validates the registered retained worktree against the repository before carrying it forward, replays a retained checkpoint onto an advanced integration target, and reports its exact Git validation evidence if it must fall back. A rebase conflict stops the executor for escalation, without resetting the retained checkpoint or resolving toward either side. A live claim means the checkpoint has not completed, so do not launch beside it; use the normal salvage path if that worker stopped.
 - **Record wave links from board results.** Never write an `SQ-n` ref you did not read back from a board response. File related tickets first, collect their returned refs, then use `update` or, preferably, `link` (`blocks`, `depends-on`, or `related`) to record relationships. Links are board data, so they stay correct without prose cross-references.
 - **Read liveness from the board, not notifications.** Notifications wake the orchestrator but do not prove executor state. An idle notification can describe a working, dead, or already-finished executor, so read board truth before acting, only on a notification or user prompt, never right after spawning: use `pulse <ref>` for the ticket's `{claim:{by,at,ageMs}|null, comments, lastComment, git:{commit,dirty}|null}` state, or `changes --since <iso>` for the `{tickets:[...]}` delta across several tickets, sorted oldest first. A process list (`tasklist`/`ps`) is never evidence about a dispatch.
 - **Read completion from the board.** An executor stop notification wakes the orchestrator; its terminal
@@ -333,6 +338,23 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 - Parallelism costs tokens and orchestration overhead — a couple of parallel investigations or an
   executor wave where sizes justify it, not a swarm for everything.
 
+## Shared-resource handoff
+
+A non-owner continues independent read/edit/commit work. Once ready for the resource, it records readiness
+and ends the turn retaining its claim, with no polling, proxy waiter, automatic release/restart, or
+invented executor death. Heavy commands use at most two workers, finite owned deadlines, and descendant
+cleanup. An owner with a required command still running keeps ownership and supervises it to completion.
+
+Transfer needs the actual owner's acknowledgement that its owned heavy command and descendants ended,
+then an explicit parent `SendMessage` naming the resource and next holder. Terminal submit/done/release
+is sufficient evidence when it really ends the owner's work; an authenticated explicit mid-claim return
+is valid too. Never infer availability from elapsed time, process counts, failed sends, model labels,
+or absence. Ticket liveness and resource ownership are separate.
+
+Comment `since` is exclusive and only a read cursor, not proof that the instruction at the watermark
+was processed. Handoff messages include the exact instruction/comment or direct bounded inclusive/all-comments
+recovery. Advance a processed cursor only after consuming the instructions; do not change the API semantics.
+
 ## Worktree base selection
 
 For an isolated repository dispatch, a configured `worktreeBase` of `local-main` or `origin-main` selects that base for read-only and writer tickets alike. `auto` intentionally keeps a read-only ticket on the checkout that prepared it; writers retain automatic integration-target selection. An explicit local or remote dispatch target overrides the board setting. Shared-tree artifacts and non-repository output stay on the current tree. A bound Git review candidate overrides every configured or explicit integration target.
@@ -340,8 +362,9 @@ For an isolated repository dispatch, a configured `worktreeBase` of `local-main`
 ## Bookend supervision
 
 After dispatch, leave a ticket alone until it submits: no pulse, comment read, worktree peek, or proxy
-waiting. At integration, read the submit report and run the one combined full gate for the wave, then
-integrate on green. The executable oracle is the review, so do not open source or inspect diffs to
+waiting. At integration, read the submit report, deliver through the real pinned verifier, then run
+one combined full gate for the merged wave before versioning. Re-gate a changed tree after rebase; do
+not reuse assembled-tree proof without the runtime's exact authority checks. The executable oracle is the review, so do not open source or inspect diffs to
 re-review executor work. File a separately routed `review-audit` only when the contract names a
 safety-sensitive seam the oracle cannot exercise.
 
