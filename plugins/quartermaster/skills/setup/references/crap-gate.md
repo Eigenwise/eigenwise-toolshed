@@ -40,6 +40,27 @@ The source-text key is file-scoped: a function moved untouched from one file to 
 baseline copy and answers to the ceiling like anything else new. Cover it, shrink it, or land the move
 first and rerun the gate against the branch that already has it.
 
+## Complexity 6 or more fails at any coverage
+
+CRAP is never below cc: at full coverage the score is exactly cc. So a changed or new function with
+cc 6 or more fails whatever its tests cover. When the full gate fails such a function it says so on
+that line (`cc 6 or more fails at any coverage`); split the function instead of adding tests.
+
+`--cc-only` is the fast check for that. It runs lizard only: no coverage command, no lcov. It uses the
+same changed-function selection and base as the full gate and fails every changed or new function
+with cc 6 or more, one line each (`cc=<n> fails at any coverage (CRAP is never below cc)`). Exit
+codes match the full gate: 1 for a failure, 2 for a missing prerequisite. It rejects `--lcov` and
+`--coverage-command`, and it ignores `coverageCommand` in the config. Run it while splitting a
+function, then run the full gate once at the end.
+
+## Stale local base
+
+The default base is the first local `develop`, `main` or `master`, never `origin/<branch>`, because a
+fork's origin can be stale. A local base that lags its upstream makes already-merged work read as
+changed. When `git rev-list --count <base>..<base>@{upstream}` is above zero, the gate prints a
+one-line warning on stderr naming how many commits the base is behind. Pass `--base <base>@{upstream}`
+or fetch and fast-forward the base. The warning never fails the gate.
+
 ## Prerequisite
 
 Quartermaster needs [lizard](https://github.com/terryyin/lizard) to measure complexity. It never
@@ -160,6 +181,6 @@ description: Keep changed code within the CRAP ceiling
 priority: 85
 ---
 Before calling a change done, run `node "<quartermaster plugin root>/bin/quartermaster.js" crap`.
-Keep every new or modified function strictly below 6. Cover it or split it. Untouched legacy functions are out of scope.
+Keep every new or modified function strictly below 6. Cover it or split it; a function with cc 6 or more fails at any coverage, so split it (`crap --cc-only` checks that without coverage). Untouched legacy functions are out of scope.
 Exit 2 means a prerequisite or measurement is missing. Follow the printed install or measurement hint, then rerun the gate. Do not skip it.
 ```

@@ -138,7 +138,140 @@ test('gates only new or modified functions at the strict threshold', () => {
 
   assert.deepEqual(report.failures.map((entry) => entry.function), ['run']);
   assert.equal(report.checked, 3);
-  assert.equal(formatReport(report), 'src/app.js:4 run cc=6 coverage=100% CRAP=6\nCRAP gate failed: 1 of 3 changed or new functions at or above 6\n');
+  assert.equal(formatReport(report), 'src/app.js:4 run cc=6 coverage=100% CRAP=6 - cc 6 or more fails at any coverage (CRAP is never below cc): split the function, more tests will not help\nCRAP gate failed: 1 of 3 changed or new functions at or above 6\n');
+});
+
+test('the full gate gives the split-it note only to a failure whose cc alone reaches the ceiling', () => {
+  const projectDir = fixtureProject({
+    'src/app.js': 'function tangled(value) { return value; }\nfunction untested(value) { return value; }\n',
+    'coverage/lcov.info': lcov([[1, 1], [2, 0]]),
+  });
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/app.js'), 'function tangled(value) { return value + 1; }\nfunction untested(value) { return value + 1; }\n', 'utf8');
+
+  const report = crapReport({
+    projectDir,
+    base: 'main',
+    runLizard: () => csv([{ complexity: 7, name: 'tangled', start: 1, end: 1 }, { complexity: 3, name: 'untested', start: 2, end: 2 }]),
+  });
+
+  const lines = formatReport(report).split('\n');
+  assert.equal(lines[0], 'src/app.js:2 untested cc=3 coverage=0% CRAP=12', 'a low-cc function is failed by coverage, so more tests do help it');
+  assert.match(lines[1], /^src\/app\.js:1 tangled cc=7 coverage=100% CRAP=7 - cc 6 or more fails at any coverage/);
+});
+
+/** The coverage command leaves a marker file the moment it is spawned, so its absence proves it never ran. */
+function ccOnlyFixture() {
+  const stub = coverageStub(["fs.writeFileSync(path.join(__dirname, 'spawned'), 'yes');", 'process.exit(0);']);
+  const projectDir = fixtureProject({
+    'src/app.js': 'function keep(value) { return value; }\nfunction grow(value) { return value; }\n',
+    '.claude/quartermaster/crap.json': JSON.stringify({ coverageCommand: stub.command, base: 'main' }),
+  });
+  commitBase(projectDir);
+  return { projectDir, spawnedMarker: path.join(stub.dir, 'spawned') };
+}
+
+function changeGrow(projectDir) {
+  fs.writeFileSync(path.join(projectDir, 'src/app.js'), 'function keep(value) { return value; }\nfunction grow(value) { return value + 1; }\n', 'utf8');
+}
+
+test('--cc-only passes changed functions under six, ignores an unchanged function over it, and spawns no coverage command', () => {
+  const { projectDir, spawnedMarker } = ccOnlyFixture();
+  changeGrow(projectDir);
+
+  const report = crapReport({
+    projectDir,
+    ccOnly: true,
+    runLizard: () => csv([{ complexity: 40, name: 'keep', start: 1, end: 1 }, { complexity: 5, name: 'grow', start: 2, end: 2 }]),
+  });
+
+  assert.deepEqual(report.failures, []);
+  assert.equal(report.checked, 1, 'only grow changed; keep is over the ceiling but untouched');
+  assert.equal(fs.existsSync(spawnedMarker), false, 'the configured coverage command must not be spawned');
+  assert.equal(formatReport(report), 'CRAP gate (cc-only, no coverage) passed: 0 of 1 changed or new functions at or above 6\n');
+});
+
+test('--cc-only fails a changed function at cc six with the note, with no lcov on disk and no coverage command run', () => {
+  const { projectDir, spawnedMarker } = ccOnlyFixture();
+  changeGrow(projectDir);
+
+  const report = crapReport({
+    projectDir,
+    ccOnly: true,
+    runLizard: () => csv([{ complexity: 2, name: 'keep', start: 1, end: 1 }, { complexity: 6, name: 'grow', start: 2, end: 2 }]),
+  });
+
+  assert.deepEqual(report.failures.map((entry) => entry.function), ['grow']);
+  assert.equal(fs.existsSync(spawnedMarker), false, 'the configured coverage command must not be spawned');
+  assert.equal(formatReport(report), 'src/app.js:2 grow cc=6 fails at any coverage (CRAP is never below cc)\nCRAP gate (cc-only, no coverage) failed: 1 of 1 changed or new functions at or above 6\n');
+});
+
+test('the CLI --cc-only exits 1 on a cc six failure, 0 when the changed code is under it, and 2 beside a coverage flag', (t) => {
+  // The base revision's functions come from the real lizard, because --complexity only replaces today's rows.
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const { projectDir, spawnedMarker } = ccOnlyFixture();
+  changeGrow(projectDir);
+  const withCsv = (complexity) => {
+    fs.writeFileSync(path.join(projectDir, 'complexity.csv'), csv([{ complexity: 1, name: 'keep', start: 1, end: 1 }, { complexity, name: 'grow', start: 2, end: 2 }]), 'utf8');
+    return runCli(['--cc-only', '--complexity', 'complexity.csv'], projectDir);
+  };
+
+  const failing = withCsv(9);
+  assert.equal(failing.status, 1, failing.stderr);
+  assert.match(failing.stdout, /grow cc=9 fails at any coverage \(CRAP is never below cc\)/);
+
+  const passing = withCsv(5);
+  assert.equal(passing.status, 0, passing.stderr);
+
+  const conflicting = runCli(['--cc-only', '--complexity', 'complexity.csv', '--lcov', 'coverage/lcov.info'], projectDir);
+  assert.equal(conflicting.status, 2, conflicting.stderr);
+  assert.match(conflicting.stderr, /--cc-only runs no coverage/);
+  assert.equal(fs.existsSync(spawnedMarker), false, 'no run of the three spawned the coverage command');
+});
+
+/** A clone whose local main tracks origin/main, with `originAhead` extra commits fetched but not merged. */
+function cloneBehindOrigin(originAhead) {
+  const origin = fixtureProject({
+    'complexity.csv': csv([{ complexity: 1, name: 'subject', start: 1, end: 1 }]),
+    'coverage/lcov.info': lcov([[1, 1]]),
+  });
+  commitBase(origin);
+  const clone = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-clone-')), 'work');
+  gitIn(origin, ['clone', origin, clone]);
+  for (let count = 1; count <= originAhead; count += 1) {
+    gitIn(origin, ['commit', '--allow-empty', '-m', `ahead ${count}`]);
+  }
+  gitIn(clone, ['fetch', 'origin']);
+  return clone;
+}
+
+test('a local base behind its upstream warns on stderr with the way out, and an up-to-date base prints nothing', () => {
+  const behind = runCli(['--complexity', 'complexity.csv'], cloneBehindOrigin(2));
+  assert.equal(behind.status, 0, behind.stderr);
+  assert.match(behind.stderr, /warning: local base main is 2 commits behind its upstream/);
+  assert.match(behind.stderr, /--base main@\{upstream\}, or fetch and fast-forward main/);
+
+  const single = runCli(['--complexity', 'complexity.csv'], cloneBehindOrigin(1));
+  assert.match(single.stderr, /local base main is 1 commit behind/);
+
+  const current = runCli(['--complexity', 'complexity.csv'], cloneBehindOrigin(0));
+  assert.equal(current.status, 0, current.stderr);
+  assert.doesNotMatch(current.stderr, /behind/);
+});
+
+test('naming the upstream as the base, or a base with no upstream, never warns', () => {
+  const clone = cloneBehindOrigin(2);
+  const viaUpstream = runCli(['--complexity', 'complexity.csv', '--base', 'main@{upstream}'], clone);
+  assert.equal(viaUpstream.status, 0, viaUpstream.stderr);
+  assert.doesNotMatch(viaUpstream.stderr, /behind/);
+
+  gitIn(clone, ['branch', '--unset-upstream', 'main']);
+  const noUpstream = runCli(['--complexity', 'complexity.csv'], clone);
+  assert.equal(noUpstream.status, 0, noUpstream.stderr);
+  assert.doesNotMatch(noUpstream.stderr, /behind/);
 });
 
 test('accepts a modified function whose score falls below six', () => {
@@ -232,7 +365,7 @@ test('a byte-identical copy of an over-ceiling function is new code and fails', 
 
   assert.deepEqual(report.failures.map((entry) => entry.line), [6], 'the original copy keeps the only baseline row there was');
   assert.equal(report.checked, 1);
-  assert.equal(formatReport(report), 'src/util.js:6 helper cc=10 coverage=100% CRAP=10\nCRAP gate failed: 1 of 1 changed or new functions at or above 6\n');
+  assert.equal(formatReport(report), 'src/util.js:6 helper cc=10 coverage=100% CRAP=10 - cc 6 or more fails at any coverage (CRAP is never below cc): split the function, more tests will not help\nCRAP gate failed: 1 of 1 changed or new functions at or above 6\n');
 });
 
 test('a third same-named function over the ceiling is new code the baseline cannot account for', () => {
@@ -272,7 +405,7 @@ test('a third same-named function over the ceiling is new code the baseline cann
   assert.deepEqual(report.failures.map((entry) => `${entry.line}:${entry.crap}`), ['10:7']);
   assert.equal(report.checked, 2, 'the rewritten second and the added third are judged; the untouched first is not');
   assert.equal(atLine(report, 1).crap, 10, 'the untouched first copy is over the ceiling and out of the gate');
-  assert.equal(formatReport(report), 'src/app.js:10 run cc=7 coverage=100% CRAP=7\nCRAP gate failed: 1 of 2 changed or new functions at or above 6\n');
+  assert.equal(formatReport(report), 'src/app.js:10 run cc=7 coverage=100% CRAP=7 - cc 6 or more fails at any coverage (CRAP is never below cc): split the function, more tests will not help\nCRAP gate failed: 1 of 2 changed or new functions at or above 6\n');
 });
 
 test('a byte-identical arrow keeps its baseline row after neighbours push it down the file', () => {
@@ -772,7 +905,7 @@ test('an uncovered function lizard truncated at its signature fails on the compl
   const route = report.functions.find((entry) => entry.function === 'route');
   assert.deepEqual([route.cc, route.coverage, route.crap], [9, 0, 90]);
   assert.deepEqual(report.failures.map((entry) => entry.function), ['route']);
-  assert.match(formatReport(report), /route cc=9 coverage=0% CRAP=90\nCRAP gate failed/);
+  assert.match(formatReport(report), /route cc=9 coverage=0% CRAP=90 - cc 6 or more fails at any coverage[^\n]*\nCRAP gate failed/);
 });
 
 test('a widened body counts its own branches and leaves each nested function to its own row', () => {
@@ -854,7 +987,7 @@ test('the real lizard backend fails the uncovered route its reader cuts off at a
   const result = runCli([], projectDir);
 
   assert.equal(result.status, 1, result.stderr);
-  assert.match(result.stdout, /src\/route\.js:1 route cc=9 coverage=0% CRAP=90\n/);
+  assert.match(result.stdout, /src\/route\.js:1 route cc=9 coverage=0% CRAP=90 - cc 6 or more fails at any coverage[^\n]*\n/);
   assert.match(result.stdout, /CRAP gate failed/);
 });
 
