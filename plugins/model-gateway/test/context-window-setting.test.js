@@ -27,13 +27,11 @@ function temporaryDirectory(t, prefix) {
   return directory;
 }
 
-test('a 272000 Codex cap compacts past 187000 so the compaction turn stays at or under the cap', () => {
+test('a 272000 Codex cap retains the 187000 legacy trigger and warns about crossing-turn billing', () => {
   const policy = runtime.resolveGatewayModelPolicy('claude-gpt-5.6-sol[1m]');
   const sentry = effectiveSentryPolicy(policy, Number.NaN, 272000);
   assert.deepEqual(sentry, { backendWindow: 920012, compactTrigger: 187000, source: 'cap' });
-  // Turn k passes the trigger by one turn of growth, the compaction turn adds another turn and the prompt.
-  const largestCompactionTurn = sentry.compactTrigger + 2 * runtime.CODEX_COMPACT_HEADROOM + 5000;
-  assert.equal(largestCompactionTurn, 272000);
+  assert.equal(runtime.codexBillingNote(272000), 'OpenAI bills input above 272k tokens at 2x; the crossing turn and compaction request can still exceed 272k and pay double');
   assert.equal(effectiveSentryPolicy(policy, 150000, 272000).source, 'env');
   assert.equal(effectiveSentryPolicy(runtime.resolveGatewayModelPolicy('claude-opus-5-5[1m]'), Number.NaN, 272000), null);
 });
@@ -86,7 +84,7 @@ test('the report labels the Codex cap with the 2x rule and names a session-wide 
   };
   assert.deepEqual(contextWindowReport(windows, { window: 325000, source: 'settings user' }), [
     'claude: full (1M through the [1m] alias pins) [default]; autoCompactWindow 325000 from settings user caps this session; native window 325000; exact compaction trigger unverified (native engine headroom applies)',
-    'codex: 272000 cap [default]; compacts past 187000; OpenAI bills input above 272k tokens at 2x; the cap keeps every request, including compaction, under it',
+    'codex: 272000 cap [default]; compacts past 187000; OpenAI bills input above 272k tokens at 2x; the crossing turn and compaction request can still exceed 272k and pay double',
     'grok: 400000 cap [saved]; compacts past 315000',
   ]);
   const [claude, codex, grok] = contextWindowReport({
@@ -128,7 +126,7 @@ test('the catalog carries each discovered row\'s window and the Codex billing no
     {
       id: 'claude-gpt-5.6-sol[1m]',
       contextWindow: 272000,
-      contextWindowNote: 'compacts past 187000; OpenAI bills input above 272k tokens at 2x; the cap keeps every request, including compaction, under it',
+      contextWindowNote: 'compacts past 187000; OpenAI bills input above 272k tokens at 2x; the crossing turn and compaction request can still exceed 272k and pay double',
     },
     { id: 'claude-grok-4.5[1m]', contextWindow: 500000, contextWindowNote: undefined },
   ]);
@@ -259,12 +257,13 @@ test('context-window preserves saved compact-at across cap updates and removal r
   assert.equal(run('context-window', '--codex', '400000', '--grok-compact-at', '1.5').status, 2);
   assert.equal(run('context-window', '--claude-compact-at', '242000').status, 2);
   assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.equal(run('context-window', '--codex', '272000').status, 0);
   const removed = run('context-window', '--codex-compact-at', 'cap');
   assert.equal(removed.status, 0, removed.stderr);
-  assert.match(removed.stdout, /codex: 300000 cap \[saved\]; compacts past 215000/);
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { codex: 300000, compactAt: { grok: 900000 } });
+  assert.match(removed.stdout, /codex: 272000 cap \[saved\]; compacts past 187000; OpenAI bills input above 272k tokens at 2x; the crossing turn and compaction request can still exceed 272k and pay double/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { codex: 272000, compactAt: { grok: 900000 } });
   assert.equal(run('context-window', '--grok-compact-at', 'cap').status, 0);
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { codex: 300000 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { codex: 272000 });
 });
 
 test('startup context-window compact-at reaches the real catalog and sentry with honest effective limits', (t) => {

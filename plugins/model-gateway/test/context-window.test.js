@@ -1658,7 +1658,7 @@ test('doctor reports the 1M Codex resolver aliases and a lower explicit cap', ()
     assert.match(result.stdout, /gpt-5\.6-sol \| claude-gpt-5\.6-sol\[1m\] \| 920012 \| 272000 \| 1000000 \| unverified \(native engine headroom\) \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
     assert.match(result.stdout, /gpt-6-astra \| claude-gpt-6-astra\[1m\] \| 920012 \| 272000 \| 1000000 \| unverified \(native engine headroom\) \| synthetic-413 \| 187000 \(cap\) \| 2026-09-05/);
     assert.match(result.stdout, /context window claude: full \(1M through the \[1m\] alias pins\) \[default\]; autoCompactWindow 325000 from settings project-local caps this session; native window 325000; exact compaction trigger unverified \(native engine headroom applies\)/);
-    assert.match(result.stdout, /context window codex: 272000 cap \[default\]; compacts past 187000; OpenAI bills input above 272k tokens at 2x; the cap keeps every request, including compaction, under it/);
+    assert.match(result.stdout, /context window codex: 272000 cap \[default\]; compacts past 187000; OpenAI bills input above 272k tokens at 2x; the crossing turn and compaction request can still exceed 272k and pay double/);
     assert.doesNotMatch(result.stderr, /200000-token unknown-model default/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });

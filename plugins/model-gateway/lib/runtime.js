@@ -140,7 +140,8 @@ const COMPACTION_PROMPT_TOKENS = 5000;
 // so a cap is enforced by the gateway's synthetic-413 sentry. The sentry refuses turn k+1 once turn k's input
 // passed the trigger, so turn k can already be one turn of growth past it, and the compaction turn that follows
 // resends all of that plus one more turn and the compaction prompt. Cap C therefore compacts past
-// C - 2 * 40000 - 5000: 272000 compacts past 187000, and no request, compaction included, exceeds 272000.
+// C - 2 * 40000 - 5000: 272000 compacts past 187000. Turn growth is unbounded, so this reserve
+// cannot guarantee that crossing turns or compaction requests stay below the cap.
 const CAP_COMPACTION_MARGIN = 2 * CODEX_COMPACT_HEADROOM + COMPACTION_PROMPT_TOKENS;
 const CONTEXT_WINDOW_MAX = 1000000;
 // Claude caps go into Claude Code's own autoCompactWindow, which takes 100k-1M. A gateway cap has to leave the
@@ -245,7 +246,7 @@ function effectiveSentryPolicy(policy, compactTrigger = configuredCompactTrigger
 function codexBillingNote(cap, compactAt = null) {
   if (compactAt !== null) return `${CODEX_BILLING_RULE}; the crossing turn and compaction request can still exceed 272k and pay double`;
   return cap && cap <= CODEX_DOUBLE_BILLING_THRESHOLD
-    ? `${CODEX_BILLING_RULE}; the cap keeps every request, including compaction, under it`
+    ? `${CODEX_BILLING_RULE}; the crossing turn and compaction request can still exceed 272k and pay double`
     : `${CODEX_BILLING_RULE}; requests past 272k pay double`;
 }
 
