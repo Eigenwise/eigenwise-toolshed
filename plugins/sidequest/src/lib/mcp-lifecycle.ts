@@ -664,7 +664,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'checkpoint',
-    description: 'Record a verified live review candidate without releasing the claim or ending the dispatch. Use the returned checkpoint id in linked review findings.',
+    description: 'Retain verified live candidate/evidence while claim and dispatch stay active. Advisory checkpoint only, not final acceptance; immutable reviewTarget binds after terminal submission.',
     inputSchema: {
       type: 'object',
       properties: {

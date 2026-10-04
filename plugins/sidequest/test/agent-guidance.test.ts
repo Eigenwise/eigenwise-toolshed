@@ -389,4 +389,51 @@ test('measured quality reuses compatible candidate coverage through the local ow
   }
 });
 
+test('adaptive preflight checks feasibility before cost and keeps deterministic fixes lightweight', () => {
+  assert.match(skill, /before expensive implementation or tests/);
+  assert.match(ticketAuthoring, /shared authority and callers/);
+  assert.match(ticketAuthoring, /touched-function complexity and measurement/);
+  assert.match(ticketAuthoring, /native baseline\/candidate ownership/);
+  assert.match(ticketAuthoring, /actual timeout\/resource fit/);
+  assert.match(ticketAuthoring, /observed behavior, callers and real coverage\/source identity/);
+  assert.match(ticketAuthoring, /Inspect transitive\s+test-file imports/);
+  assert.match(ticketAuthoring, /`--test-name-pattern` does not stop top-level imports/);
+  assert.match(ticketAuthoring, /Never fabricate a passing\s+capture or accept a timed-out command because later log text says green/);
+  assert.match(ticketAuthoring, /Quartermaster owns setup only, never scoring or recurring audits/);
+  assert.match(skill, /Small\s+deterministic fixes keep one owner and a focused check/);
+  assert.match(userStory, /no mandatory planning panel/);
+  assert.match(readonlyGuidance, /named architectural risk or contested approach worth the cost/);
+});
+
+test('live advice is an authorized readonly snapshot role, never premature candidate acceptance', () => {
+  assert.match(readonlyGuidance, /authorized source paths\/snapshot, inspection limits and\s+budget/);
+  assert.match(readonlyGuidance, /communicate directly through available native\s+messaging to their authentic host identities/);
+  assert.match(readonlyGuidance, /actual inspected file hashes/);
+  assert.match(readonlyGuidance, /An advisor has no write, acceptance, release or resource-transfer authority/);
+  assert.match(readonlyGuidance, /report the missing capability/);
+  assert.match(readonlyGuidance, /immutable `reviewTarget`/);
+  assert.match(readonlyGuidance, /Reuse byte-identical inspected material; check the settled delta, unresolved findings and authentic/);
+  assert.match(orchestration, /Formal final acceptance starts only after terminal submission and immutable binding/);
+  assert.doesNotMatch(orchestration, /A clean review lets the implementation executor submit/);
+  assert.doesNotMatch(readonlyGuidance, /Never review a working tree, a live claim/);
+  for (const [filename, source] of agentsync.bundledExecutorSources()) {
+    if (filename === 'sidequest-diagnostic-probe.md') continue;
+    assert.match(source, /Only an orchestrator-assigned bounded readonly advisory role/, filename);
+    assert.match(source, /Never review your own work or candidate\./, filename);
+    assert.match(source, /terminal immutable candidate/, filename);
+  }
+});
+
+test('continuous execution freezes trustworthy measurement and pauses only the blocked step', () => {
+  assert.match(ticketAuthoring, /Preauthorize those steps, pause only the genuinely blocked step/);
+  assert.match(ticketAuthoring, /continue unaffected source work/);
+  assert.match(executorTemplate, /One producer owns patch/);
+  assert.match(executorTemplate, /not routine checkpoint\/ack loops/);
+  assert.match(verifyDiscipline, /freeze its inputs and validate source, coverage and executed\/source-map byte identity/);
+  assert.match(verifyDiscipline, /Keep source fixed throughout an immutable capture/);
+  assert.match(verifyDiscipline, /Focused real coverage may run separately from the normal final gate/);
+  assert.match(verifyDiscipline, /never fabricate passing receipts or weaken standards/);
+  assert.match(verifyDiscipline, /without a duplicate suite merely for reviewer identity/);
+});
+
 export {};

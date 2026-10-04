@@ -34,6 +34,14 @@ Lizard/proportional attribution, pin `quality:crap` as authority, or rerun a ful
 already captured compatible coverage. Tooling and reports stay local and uncommitted. Each new or
 modified function must score strictly below CRAP 6; untouched legacy functions are outside scope.
 
+Before a long run, freeze its inputs and validate source, coverage and executed/source-map byte identity.
+Check native baseline/candidate ownership, clean-state prerequisites, finite deadline and actual
+resource fit first. Focused real coverage may run separately from the normal final gate when the local
+owner supports it. Keep source fixed throughout an immutable capture; changed inputs need a fresh run.
+Report failed checks or missing support honestly, never fabricate passing receipts or weaken standards.
+Consume the quality owner's evidence; Quartermaster remains setup-only. Reuse genuine compatible
+execution evidence at final review without a duplicate suite merely for reviewer identity.
+
 Heavy commands follow the parent-named shared-resource handoff in `../sidequest/references/orchestration.md`. Without the slot,
 continue independent reading/editing/commits, record readiness, and end the turn retaining the claim.
 
