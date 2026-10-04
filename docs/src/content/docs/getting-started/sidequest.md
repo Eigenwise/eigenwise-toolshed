@@ -28,11 +28,13 @@ Each board belongs to one project folder. When you work in a Git repository, Sid
 2. Describe the outcome you want and ask Claude to plan it as Sidequest work. For example: `Plan the checkout refresh as a Sidequest story and show me the backlog.` If work belongs on a feature branch, name that branch in the request.
 3. Review the proposed tickets, dependencies, and scope in the board. Adjust the plan before work starts.
 4. Ask Claude to dispatch the ready tickets. Claude chooses the configured route, starts the work, and reports verification results. Dispatch freezes each ticket's intended target branch, so two concurrent feature branches get separate targets without changing the board default. Integration keeps that recorded target through submission and delivery; a group with different targets stops before changing either branch.
-5. When a ticket is ready, ask Claude to review and integrate it if the checks pass. Larger or higher-risk work may need an extra review before integration.
+5. When a ticket is ready, ask Claude to integrate it if its checks pass. Independent review is required only for a contract-named seam the check cannot exercise or a required high-stakes review. Multiple review lenses need distinct named risks; wave count alone adds no review.
 
 Each ticket carries a focused check that decides whether its work is ready. Claude records that check against
-the final candidate and reports what passed, failed, or needs your decision. After integration, Claude runs
-one combined full gate for the assembled work. The agent-facing reference covers capture, evidence, and
+the final clean committed candidate once and reports what passed, failed, or needs your decision.
+Delivery still runs its real pinned verifier. After delivery, Claude runs one combined full merged-tree
+gate per wave before versioning, including a singleton. A changed tree after rebase needs a fresh gate.
+Assembled-tree proof is reused only when Sidequest's runtime authorizes its exact identities. The agent-facing reference covers capture, evidence, and
 delivery mechanics.
 
 Integration always happens in your local checkout: Claude merges the work into the local target branch and
@@ -42,9 +44,44 @@ Claude take afterwards. When the project has an `origin` remote, Sidequest addit
 outside the board. That only affects what counts as proof; the merge and the check still run locally, and a
 recorded delivery always names the branch that actually carried it.
 
+Heavy commands share a named resource slot, within a two-core budget and at most two workers, finite deadlines, and cleanup of
+child processes. Other executors keep reading, editing, and committing independently. Once ready to
+verify, they record readiness and pause with their claim intact. The actual owner acknowledges that its
+command and descendants ended, then the parent explicitly hands the slot to the next holder. A real
+terminal closeout or an authenticated mid-claim return can supply that acknowledgement; elapsed time
+and process counts cannot. No polling or automatic restart is needed.
+
+Handoffs carry the actual instruction or recover it from bounded comments. An exclusive `since` cursor
+only says where a read starts; the processed cursor advances after the instructions are consumed.
+
+Tickets should fit implementation plus final verification comfortably before about 75 tool rounds.
+Larger work is split along cohesive boundaries. A Continuation checkpoint commits progress, records
+remaining work and verification status, and releases for a fresh dispatch. A resource pause keeps the claim.
+
+Quality uses the existing local owner: early measured complexity where supported, then trustworthy fresh
+coverage for the same candidate bytes. Compatible candidate coverage is reused through the runner's
+supported path rather than another full suite. Each new or modified function must score CRAP below 6;
+untouched legacy functions stay outside scope. Missing analyzer or coverage is UNVERIFIED, and measurement
+tooling and reports stay local and uncommitted. Before a long measurement run, freeze its inputs and
+check source/coverage identity, native ownership and deadline fit. Supported focused real coverage can
+run separately from the normal final gate. Source stays fixed during immutable capture; failed or
+unsupported measurement stays visible.
+
 ### Choose the planning depth
 
 Use the lightest planning that fits. Exact small changes and operational asks can stay lightweight. Substantial or ambiguous work starts with a visible surgical contract: the outcome, non-goals, smallest authority needed, scope, bounded oracle (the check that decides whether it worked), and review limit. Claude settles why an improvement is worth making, its approach, and its boundary before dispatch. Research can supply facts and bounded alternatives. Executors implement that plan with normal local coding judgment and report evidence when a pinned choice cannot work.
+
+For substantial or safety-sensitive changes, Claude first checks feasibility before expensive coding or
+tests: shared authority and callers, the smallest existing seam, measured-quality support, genuine
+native baseline/candidate ownership, a runnable check and its actual timeout/resource fit. Small
+deterministic fixes keep one owner and a focused check. A plan advisor is useful only for a named
+architectural risk or contested approach worth its cost. Quartermaster handles setup; the dedicated
+quality owner supplies measurements.
+
+Ordinary next steps within the pinned contract are preauthorized. One producer owns the patch, focused
+regressions, measurement, final capture and submission. A blocked resource or authority decision pauses
+that step while unaffected source work continues. Messages carry real decisions and findings, without
+routine checkpoint or acknowledgement relays.
 
 Claude lists what the request leaves unclear, sends the unknowns the code can answer to parallel read-only sub-agents, and asks one batched question round only for what that investigation could not settle, with the findings attached to each question. If the approach is genuinely contested, it may offer bounded agent proposals instead. `Do your thing`, `use your judgment`, and similar phrases delegate decisions for the current feature or story, not for future work.
 
@@ -142,6 +179,8 @@ For substantial changes, Claude can turn the request into a story with linked ti
 
 Sidequest keeps ticket activity visible in the board. Ask Claude to check active work after a restart or when you need help with a ticket that was started in another session.
 
+An executor can end a turn while still holding its claim. If its board-derived name fails, the original matching Claude session can send one continuation message to the authentic recorded `dispatch.agentId`, or the exact identifier returned by that original Agent launch. A claim holder label is never an address. If the original ID or session is missing or mismatched, continuation stays unverified and the claim/work are preserved. Your **Pause retries** decision stops retries. Queued/resuming messages alone don't prove resumed work; the original executor must actually respond or act. Unknown, completed, absent, or failed-send host results don't prove death or permit takeover. Terminal executors stay stopped. This guidance adds no automatic sends or recovery authority.
+
 Executors share the orchestrator's context window settings. Claude executors run at the full 1M window, and Codex executors are capped at 272k tokens because OpenAI bills input above that at 2x. The `models` tool output and the dashboard's model pickers show each discovered model's window next to it. To change the numbers, see [Context window and cost](../model-gateway/#context-window-and-cost) in the Model Gateway guide.
 
 CI watch alerts exclude completed runs marked `skipped` or `neutral`. Neither conclusion proves that the required checks passed; release verification still needs successful checks on the exact commit.
@@ -151,6 +190,14 @@ CI watch alerts exclude completed runs marked `skipped` or `neutral`. Neither co
 You don't have to ask for the board. On a project with a working board, Claude is told at session start that it has standing authorization to file tickets and dispatch them for multi-file changes, work at an unknown location, and investigations, without offering first. The first prompt that looks like a work request (a change verb like fix, add, or refactor, or anything longer than a greeting) gets a one-time reminder to ticket and dispatch. If Claude then keeps editing inline, a short nudge tells it to file the ticket and dispatch now. Edits, Bash, and PowerShell commands count toward that nudge; test and build runs (`npm test`, `node --test`, `node -e`, `npm run build`) and plain reads don't. A board call quiets the nudge only until your next prompt. All of this is advice to Claude and never blocks a tool call. Quick one- or two-file edits at a known location, direct questions, and operational requests stay inline.
 
 In a git repository root with no board yet, that first work request gets one line instead: the first `add` creates the board and dispatch works right away through the default profile. Nothing is created until then, and temp folders, the Sidequest home, `~/.claude`, and folders that aren't a git root stay silent.
+
+### Adopting an existing exact composition
+
+If a released root needs to verify an existing commit that combines its own changes with pending source submissions, ask the main Claude thread to adopt that exact composition. Sidequest's MCP `update.admitComposition` records current authority for the immutable commit. It leaves historical checkout ownership unverified, preserves the released dispatch and old proofs, and leaves the source tickets unchanged.
+
+Claude first requests a write-free snapshot, then retries with the root's released generation and each source's exact submission and authoritative review/correction snapshot. Every commit from the original base to the candidate must belong to a complete named source range or to the root's declared own changes. Hidden commits, another ticket's recorded work, changed source state, and root changes outside its original scope refuse adoption.
+
+A new isolated native checkout starts at the candidate; the original base remains the submission floor. The grant belongs to one fresh dispatch, with its own attempt, timestamp, and nonce. Claude still needs ordinary controls, fresh verification output and capture, a full-range submission, independent review of that exact candidate after submission, and normal delivery. A later dispatch cannot replay the consumed grant, and live-claim recovery won't re-mint the root's token either: the executor holding the claim keeps its existing token and checkout. Shared-tree execution and old proof artifacts cannot supply the new verification. The adopted root integrates on its own, never inside a multi-ticket wave, and a source review that changes after the grant blocks its next claim, capture, submit, or delivery.
 
 ### Boards in sibling repositories
 
@@ -184,7 +231,17 @@ An explicit per-ticket route can use a different provider when the ticket is eff
 
 When a category's route can't run right now (ChatGPT sign-in missing, gateway readiness unavailable, the model gone from the catalog), dispatch uses the category's own `fallback`, even when that's a Claude model. The dispatch result's `fallbackReason` and the executor briefing both say which fallback ran and why the primary couldn't, including the gateway's login or setup command. The global fallback never crosses providers, so a Codex category with no fallback of its own is refused with that same reason. A discovered model whose provider isn't served by Model Gateway (anything but Codex or Grok) still runs as its own id, but Claude Code's Agent tool only takes `sonnet`, `opus`, `haiku`, or `fable` as a model. So Sidequest writes executor definitions named `sidequest-exec-model-<slug>-<effort>` (plus `-readonly-model-` twins) into your user agents folder, each pinning the full id, and spawns them with no model. Only the model and effort pairs some category route or fallback actually uses (on any board on this machine) get a file, and the `-readonly-model-` twin only exists for readonly categories. Session start writes those and removes the rest, so changing a route swaps the files. A dispatch that routes somewhere no category does, like a ticket route override, writes its own file right before the spawn. Your own agent files are never touched.
 
-- A candidate review starts from the submitted ticket and its immutable candidate, never a working tree. Ask Claude to bind the review to that submission.
+- An explicitly assigned readonly advisor can discuss a bounded architectural/feasibility question directly
+  with its builder through available native messaging and inspect authorized source snapshots while
+  implementation and tests proceed. Its ticket names paths, limits and budget; findings record the
+  actual inspected hashes. Moving-draft advice never accepts a candidate or releases ownership. Claude
+  selects a suitable live category without changing profiles and reports missing messaging/category
+  support. This does not permit arbitrary source peeking or self-review.
+- A candidate review starts from the submitted ticket and its immutable candidate, never a working tree.
+  Ask Claude to bind the review to that submission. Final review reuses byte-identical inspected material,
+  checks the settled delta, unresolved findings and real execution identities, and consumes genuine
+  compatible capture evidence without rerunning a suite merely for reviewer identity. Existing exact
+  candidate and independent-review guards still decide acceptance.
 - A repository audit names the directory or subsystem to inspect. It reports concrete delete, reuse, standard-library, native-platform, YAGNI, and shrinking opportunities with source locations. It does not edit code.
 - A shortcut debt scan reads source comments, including `whittle:` markers. Each result gives the file and line, known ceiling, observable upgrade trigger, and replacement. A missing ceiling or trigger remains a finding.
 

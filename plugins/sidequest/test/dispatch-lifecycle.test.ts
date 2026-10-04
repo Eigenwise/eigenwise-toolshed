@@ -2176,6 +2176,15 @@ test('a resumed live claim re-mints its token, re-binds the linked worktree, and
     fs.rmSync(prepared.ticket.dispatch.tokenFile);
     assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, prepared.ticket.dispatch.tokenFile).reason, 'token');
 
+    const refusedRecovery = (override: Record<string, string>) => store.recoverLiveClaimDispatch(slug, ticket.ref, {
+      by: claimHolder, executor, worktree, sessionId: resumedSession,
+      recoveryEvidence: 'A different caller asks to recover this live claim.', ...override,
+    });
+    const beforeRefusals = JSON.stringify(store.getTicket(slug, ticket.ref));
+    assert.equal(refusedRecovery({ by: 'another-live-worker' }).reason, 'not_claim_holder');
+    assert.equal(refusedRecovery({ executor: 'another-executor' }).reason, 'executor_mismatch');
+    assert.equal(JSON.stringify(store.getTicket(slug, ticket.ref)), beforeRefusals, 'a refused recovery writes nothing');
+
     const recovered = store.recoverLiveClaimDispatch(slug, ticket.ref, {
       by: claimHolder,
       executor,
@@ -2230,6 +2239,26 @@ test('a resumed live claim re-mints its token, re-binds the linked worktree, and
   } finally {
     store.releaseTicket(slug, ticket.ref, claimHolder, { status: 'todo', source: 'test', force: true });
     if (fs.existsSync(worktree)) execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+  }
+});
+
+test('live-claim recovery refuses a direct claim that has no live isolated dispatch and writes nothing', () => {
+  const ticket = createFixture('direct claim recovery fixture');
+  const owner = 'direct-claim-recovery-worker';
+  assert.equal(store.claimTicket(slug, ticket.ref, owner, {
+    direct: true,
+    reason: 'The recovery fixture needs a live claim without an isolated dispatch.',
+  }).ok, true);
+  try {
+    const before = JSON.stringify(store.getTicket(slug, ticket.ref));
+    const refused = store.recoverLiveClaimDispatch(slug, ticket.ref, {
+      by: owner, executor: 'sidequest-exec-high', worktree: PROJECT, sessionId: 'direct-claim-recovery-session',
+      recoveryEvidence: 'The direct claim holder asks to recover an isolated dispatch it never had.',
+    });
+    assert.equal(refused.reason, 'dispatch_unavailable', JSON.stringify(refused));
+    assert.equal(JSON.stringify(store.getTicket(slug, ticket.ref)), before, 'a refused recovery writes nothing');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, owner, { status: 'todo', source: 'test', force: true });
   }
 });
 
@@ -3025,6 +3054,53 @@ test('ordinary isolated dispatches preserve native worktree isolation', () => {
   assert.match(briefing, new RegExp(`git reset --hard ${prepared.ticket.dispatch.baseCommit}`));
   assert.doesNotMatch(briefing, /git rebase --onto/);
   assert.equal(store.releaseTicket(slug, ticket.ref, 'ordinary-isolation-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+});
+
+test('a working-tree deliverable refuses an isolated dispatch and prepares nothing', () => {
+  const ticket = store.createTicket(slug, { title: 'working-tree deliverable isolation fixture', category: 'dispatch.lifecycle', files: ['tracked.js'], workingTreeDelivery: true, source: 'test' });
+  assert.throws(
+    () => store.prepareDispatch(slug, ticket.ref, { sessionId: `working-tree-isolated-${Date.now()}`, sharedTree: false }),
+    /declares a working-tree deliverable and must run in the shared checkout\. Re-dispatch with sharedTree:true\./,
+  );
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
+});
+
+// Claims a native checkout, commits a sanctioned checkpoint in it and hands the ticket back.
+function releaseNativeCheckpoint(ticket: { ref: string }, agentId: string): { worktree: string; branch: string; checkpoint: string } {
+  const branch = `worktree-agent-${agentId}`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, agentId);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: agentId });
+  const executor = prepared.ticket.dispatchExecutor;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { sessionId: agentId, token: prepared.token, executor, agentName: agentId }).ok, true);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, agentId, worktree).ok, true);
+  execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+  markCheckoutInstance(worktree);
+  assert.equal(store.completeDispatchWorktreeCreation(slug, agentId, worktree, creationGeneration(slug, agentId, worktree)).ok, true);
+  assert.equal(store.bindDispatchAgent(agentId, executor, agentId, agentId, worktree).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'checkpoint-worker', { sessionId: agentId, token: prepared.token, executor }).ok, true);
+  fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 3;\n');
+  execFileSync('git', ['commit', '--quiet', '-am', 'shared-tree continuation checkpoint'], { cwd: worktree });
+  const checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8' }).trim();
+  assert.equal(store.recordSanctionedCommit(slug, ticket.ref, { by: 'checkpoint-worker', commit: checkpoint }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'checkpoint-worker', { status: 'todo', source: 'test', releaseKind: 'handback', releaseReason: 'Continue elsewhere.' }).ok, true);
+  return { worktree, branch, checkpoint };
+}
+
+test('a released checkpoint dispatched into the shared tree records why its retained checkout cannot resume there', () => {
+  const ticket = createFixture('shared-tree continuation fallback fixture');
+  const released = releaseNativeCheckpoint(ticket, `shared-continuation-${Date.now()}`);
+  try {
+    const shared = store.prepareDispatch(slug, ticket.ref, { sessionId: `${released.branch}-shared`, sharedTree: true });
+    assert.equal(shared.ticket.dispatch.sharedTree, true);
+    assert.equal(shared.ticket.dispatch.continuation, undefined);
+    assert.equal(shared.ticket.dispatch.continuationFallback.reason, 'continuation_checkpoint_requires_isolated_worktree');
+    assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: released.worktree, encoding: 'utf8' }).trim(), released.checkpoint, 'the retained checkout is left as it was');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'shared-continuation-cleanup', { status: 'todo', source: 'test', force: true });
+    execFileSync('git', ['worktree', 'remove', '--force', released.worktree], { cwd: PROJECT });
+    execFileSync('git', ['branch', '-D', released.branch], { cwd: PROJECT });
+  }
 });
 
 test('released handbacks carry registered native worktrees into continuation dispatches', () => {
