@@ -445,6 +445,19 @@ test('CLI submit admits a root-naming pinned verifier only after its completed c
   assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).submission.verify, fixture.command);
 });
 
+test('CLI completed capture submission clears through the original submit --clear phase', async (): Promise<void> => {
+  const fixture = rootNamingVerifierFixture('cli-clear');
+  await captureRootNamingVerifier(fixture, PROJECT_DIR);
+  const submitted = runCli(['submit', fixture.ticket.ref, '--by', fixture.by, '--commit', fixture.candidate, '--verify', fixture.command, '--json']);
+  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  const cleared = runCli(['submit', fixture.ticket.ref, '--by', fixture.by, '--clear', '--json']);
+  assert.strictEqual(cleared.status, 0, cleared.stderr + cleared.stdout);
+  assert.strictEqual(JSON.parse(cleared.stdout).ok, true);
+  const ticket = store.getTicket(slug, fixture.ticket.ref);
+  assert.strictEqual(ticket.submission, null, 'submit --clear removes the recorded captured candidate');
+  assert.strictEqual(ticket.status, 'doing', 'submit --clear preserves status when --status is omitted');
+});
+
 test('a completed capture does not admit a changed root-naming verify command', async () => {
   const fixture = rootNamingVerifierFixture('changed-command');
   await captureRootNamingVerifier(fixture, PROJECT_DIR);
