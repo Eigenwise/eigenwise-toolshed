@@ -22,6 +22,22 @@ Sidequest is local. The dashboard runs on your machine and ticket data stays in 
 
 Each board belongs to one project folder. When you work in a Git repository, Sidequest creates its board the first time Claude uses the board there. A folder that is not a Git repository, such as a notes vault, gets a board only when you name it: ask Claude to add it by its absolute path, or pass `--project <absolute path>` on the command line. Sidequest never makes a board for a missing folder, a folder in your system temp directory, or anything under `~/.claude` (including Sidequest's own storage), and it tells you which rule refused the path. If a registered project's folder is later moved or deleted, the board stays and the projects list marks it as missing so you can archive it yourself.
 
+## Check your first saved task
+
+Start with one small task you actually need to finish. Ask Claude:
+
+> Save this as a Sidequest ticket. Record the result I want, the current progress, decisions, the last check and its result, and one concrete next action. Show me the ticket reference so I can find it again. Keep it on the backlog for now.
+
+Open the ticket and confirm those details are there. If the task has an executable check, record its exact command and last result; put prose acceptance criteria in the description or comments.
+
+Start a new Claude Code session in the same project, then ask:
+
+> Read Sidequest ticket SQ-N and its full recorded discussion. Tell me the saved next action before continuing.
+
+Replace `SQ-N` with the reference Claude gave you. Confirm the answer against the ticket, then ask Claude to continue that action. A detail that was never recorded needs to be supplied again.
+
+Once this save-and-read check works, use the story workflow below when the task needs planning or delegated implementation.
+
 ## Your first workflow
 
 1. Open the board with `/sidequest:board`, or tell Claude to show your Sidequest board.

@@ -21,6 +21,8 @@ Open the board with `/sidequest:board`, or tell Claude to show it. The dashboard
 
 ## Start with Claude
 
+For a small first task, [save a checkpoint and read it in a new session](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/#check-your-first-saved-task) before trying a full story.
+
 Tell Claude the outcome you want:
 
 > Plan the checkout refresh as a Sidequest story and show me the backlog.
