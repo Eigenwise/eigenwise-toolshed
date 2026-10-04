@@ -276,7 +276,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   story: '',
   story_contract: '',
   story_log: 'Story log.',
-  checkpoint: '',
+  checkpoint: 'Advisory; review binds after submit.',
   sweepClaims: '',
   next: '',
   scopeRequest: '',

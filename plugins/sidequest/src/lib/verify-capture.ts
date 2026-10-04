@@ -78,7 +78,7 @@ async function runVerifyCapture(command: string, cwd = process.cwd(), timeoutMil
 }
 
 function isFullSuiteCommand(command: string): boolean {
-  return /(?:^|[\s&;()])npm\s+run\s+test:full(?:\s|$)/.test(command);
+  return /(?:^|[\s&;()])npm(?:\.cmd|\.exe)?\s+(?:(?:--(?:prefix|workspace)|-w)(?:=|\s+)(?:"[^"]+"|'[^']+'|[^\s&;|()]+)\s+|(?:--workspaces|-ws)\s+)*run\s+(?:test:full|quality:crap)(?:\s|$)/.test(command);
 }
 
 function repositoryRoot(directory: string): string {
