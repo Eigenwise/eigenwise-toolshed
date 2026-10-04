@@ -83,11 +83,11 @@ Marketplace auto-update is optional. Enable it for the Eigenwise Toolshed market
 
 ## Compatibility
 
-Toolshed plugins run inside Claude Code and use its plugin marketplace, plugin scopes, and reload commands. Quartermaster's local scripts use Node.js and the Node standard library. Model Gateway also needs the provider access and local process setup described in its guide. No plugin activation opts a project into telemetry, a gateway, or Sidequest routing by itself.
+Toolshed plugins run inside Claude Code and use its plugin marketplace, plugin scopes, and reload commands. Quartermaster's local scripts use Node.js and the Node standard library. Model Gateway also needs the supported provider subscription and local process setup described in its guide. The plugin does not include that subscription. No plugin activation opts a project into telemetry, a gateway, or Sidequest routing by itself.
 
 ## Support
 
-Toolshed's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use a plugin. Claude and configured model providers may have their own usage costs.
+Toolshed's plugin code is free and MIT-licensed. If it saves you time, optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support its maintenance. Donations are never required to install or use a plugin.
 
 ## License
 
