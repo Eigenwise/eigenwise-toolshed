@@ -5,6 +5,17 @@ delegation rule (gather enough evidence with read-only tools or native `Explore`
 route implementation by default, batch small same-model tickets, and fan out over independent waves) lives
 in the main skill — this file is the detail on the bigger shapes.
 
+## Contents
+
+- [Improvement authority](#improvement-authority) and [decomposition](#decomposition-in-depth)
+- [Inline-safe work](#inline-safe-direct-work) and [acceptance/advice](#acceptance-evidence-and-audit-gates)
+- [Fan-out](#fan-out-mechanics), [resources](#shared-resource-handoff) and [worktree bases](#worktree-base-selection)
+- [Bookend supervision and immutable review](#bookend-supervision)
+- [Checkpoints](#natural-orchestrator-checkpoints), [touch budget](#small-ticket-touch-budget) and [lead load](#orchestration-load-keep-the-lead-responsive)
+- [Research](#discovery-and-research) and [agent teams](#agent-teams-claude_code_experimental_agent_teams)
+- [Background permissions](#background-fan-out-and-the-permission-allowlist)
+- [Instant dispatch](#instant-ticket-executor-dispatch) and [routed dispatch](#routed-agent-dispatch)
+
 ## Improvement authority
 
 The orchestrator decides whether an improvement is worth making, its concrete benefit, the approach, and
@@ -108,39 +119,31 @@ Set the acceptance boundary before splitting fixes:
   Bind review only for a contract-named seam the oracle cannot exercise or a required high-stakes review.
   Distinct review lenses need distinct named risks; wave count alone adds no review. The integrator consumes the submission report and gate
   evidence; it does not inspect the implementation diff.
-- **Keep one implementation ticket open through a required independent review.** Attach findings as
-  comments on the open implementation claim and correct them there. Submit only after that required
-  review is clean, rather than closing each narrow step and filing a follow-up fix chain.
+- **Keep one producer through live advice.** A declared readonly advisor can report bounded draft
+  findings while the producer implements and tests; see `readonly-guidance.md`. Correct useful findings
+  in that claim. Formal final acceptance starts only after terminal submission and immutable binding.
 - **Record stable facts once.** Put local-only git, artifact lifecycle, and frozen acceptance wording
   in the ticket or board record that owns them. Executors consume that source instead of receiving
   the same steering repeatedly.
 
 When full-suite failures move between runs but each failing test passes alone, reproduce under load and inspect runner concurrency or shared resources. Do not add sleeps, retries, or looser assertions. Accept the runner fix only after several consecutive green runs.
 
-### Live review checkpoints
+### Live advice and retained checkpoints
 
-Use a **live review checkpoint** when an implementation needs an independent review before submission:
+Use `readonly-guidance.md` for authorized builder/advisor collaboration. Ordinary source work and
+focused checks proceed under the pinned contract without checkpoint/acknowledgement relays. Pause only
+the step lacking a scope, resource or authority decision. Moving-draft inspection records actual
+hashes and limits; it neither accepts a candidate nor ends ownership. Final independent review binds
+the terminal submitted candidate, reuses byte-identical inspected material, and checks the settled
+delta, unresolved findings and real execution identity. No duplicate suite merely for reviewer identity.
 
-1. The implementation executor verifies the candidate, then calls `checkpoint` with its commit or
-   absolute worktree path, verification evidence, and the same `by` identity that holds the claim.
-2. The board returns a checkpoint id, keeps the claim and dispatch active, and writes a durable
-   `Live review checkpoint` comment. Link each review ticket to the implementation ticket. Review
-   findings go on the implementation thread and name that checkpoint id.
-3. A clean review lets the implementation executor submit. Findings resume the same named executor
-   with `SendMessage`; it corrects, reverifies, and creates a new live review checkpoint for the new
-   candidate. The healthy gated relay is implement → checkpoint → review → correct → submit.
-
-A live review checkpoint lasts 60 minutes by default and accepts an explicit TTL from 1 minute to 24
-hours. `pulse` and `changes` report `active`, `resumed`, `recoverable`, `expired`, `submitted`, or
-`completed`. Expired evidence stays on the ticket but needs a fresh verification checkpoint before a
-review gate can pass. If the executor is dead, salvage its commit or declared-scope diff, release the
-claim, and redispatch. The stored checkpoint and its automatic comment survive that recovery, and the
-replacement claim reports the checkpoint as `resumed` while its TTL is live.
-
-Keep the two checkpoint names exact. A **live review checkpoint** uses the `checkpoint` operation and
-holds the claim so the same executor remains addressable. A **Continuation checkpoint** is the
-75-tool-round handoff: commit, comment, release to `todo`, then start a fresh executor with a fresh
-dispatch. Only the continuation flow releases during a healthy handoff.
+A **live review checkpoint** uses `checkpoint` to retain a commit or worktree/evidence pointer while
+keeping the claim addressable. It is optional recovery evidence, not a formal review binding or
+acceptance gate. It lasts 60 minutes by default (explicit TTL: 1 minute to 24 hours); expired evidence
+stays recorded but cannot prove fresh execution. If its executor dies, salvage before release and
+redispatch under the normal liveness rules. A **Continuation checkpoint** is the 75-tool-round handoff:
+commit, comment, release to `todo`, then a fresh executor/dispatch. Only that continuation flow releases
+during a healthy handoff; a draft checkpoint never authorizes ownership release.
 
 ### Scope expansion without a bounce
 
@@ -344,7 +347,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
 A non-owner continues independent read/edit/commit work. Once ready for the resource, it records readiness
 and ends the turn retaining its claim, with no polling, proxy waiter, automatic release/restart, or
 invented executor death. Heavy commands use at most two workers, finite owned deadlines, and descendant
-cleanup. An owner with a required command still running keeps ownership and supervises it to completion.
+cleanup, within the two-core heavy budget. An owner with a required command still running keeps ownership and supervises it to completion.
 
 Transfer needs the actual owner's acknowledgement that its owned heavy command and descendants ended,
 then an explicit parent `SendMessage` naming the resource and next holder. Terminal submit/done/release
@@ -362,8 +365,10 @@ For an isolated repository dispatch, a configured `worktreeBase` of `local-main`
 
 ## Bookend supervision
 
-After dispatch, leave a ticket alone until it submits: no pulse, comment read, worktree peek, or proxy
-waiting. At integration, read the submit report, deliver through the real pinned verifier, then run
+After dispatch, avoid routine pulse/comment reads, arbitrary worktree peeks and proxy waiting.
+Explicitly assigned builders and readonly advisors can inspect authorized snapshots and message directly
+under `readonly-guidance.md`; this does not authorize orchestrator peeking or self-review. At integration,
+read the submit report, deliver through the real pinned verifier, then run
 one combined full gate for the merged wave before versioning. Re-gate a changed tree after rebase; do
 not reuse assembled-tree proof without the runtime's exact authority checks. The executable oracle is the review, so do not open source or inspect diffs to
 re-review executor work. File a separately routed `review-audit` only when the contract names a

@@ -703,6 +703,7 @@
   },
   {
     "name": "checkpoint",
+    "description": "Advisory; review binds after submit.",
     "inputSchema": {
       "type": "object",
       "properties": {

@@ -7,9 +7,8 @@ description: >-
 
 # sidequest
 
-A Trello-light quest log: tickets in a central store under `~/.claude/sidequest`, a live
-Kanban dashboard, one CLI (`bin/sidequest.js`), matching MCP tools. Detail lives in reference files
-— **read them only when the situation calls for it**:
+A central ticket store (`~/.claude/sidequest`), live Kanban dashboard, CLI (`bin/sidequest.js`) and
+matching MCP tools. Read references only when needed:
 
 - `references/orchestration.md` — decomposition depth, fan-out waves, checkpoints, background
   execution, cost levers, agent teams.
@@ -22,7 +21,10 @@ Kanban dashboard, one CLI (`bin/sidequest.js`), matching MCP tools. Detail lives
 
 ## Plan substantial work on the board first
 
-Before dispatching substantial or ambiguous work, pin a contract; see `user-story`.
+Before dispatching substantial or ambiguous work, pin a contract; see `user-story`. Check feasibility
+before expensive implementation or tests for substantial/safety-sensitive work
+(`references/ticket-authoring.md`). Small deterministic fixes keep one owner and a focused check;
+a plan advisor needs a named architectural risk or contested approach, no mandatory panel.
 
 For substantial work:
 
@@ -31,15 +33,12 @@ For substantial work:
    needs concurrent read-only investigation tickets, **one investigation ticket per independent item**;
    findings pin a separate fix wave. One combined ticket is only for exactly one item or a provably single
    defect. “Feels coupled” is not evidence: file planning first.
-1. **Ticket shape.** If a written spec pins shared types/interfaces, file boundaries, and
-   per-piece verification, 3+ independently checkable pieces use contract-first fan-out: pin the
-   contract in ticket descriptions or a short planning ticket, then one parallel wave on
-   category-appropriate routes and integrate once per wave. **Wave mode REQUIRES a Sidequest story** first
-   (`sidequest story add`, then `--story US-n` per piece): file the complete backlog under it and pin
-   the execution contract on it. A story is Sidequest's own `US-n` grouping, not a Claude Code feature.
-   One-ticket mode stays story-less; use stories for shared outcomes or dependencies. Cut along affected surfaces: store, CLI, MCP surface, skill/docs, and applicable full test directory.
-   Tickets carry anchors, contract, and a scoped verify. Use directory scope for the blast radius; details:
-   `references/ticket-authoring.md`.
+1. **Ticket shape.** For 3+ independently checkable pieces, pin shared types/interfaces, file boundaries
+   and per-piece verification, then dispatch a category-routed wave. **Wave mode REQUIRES a Sidequest
+   story**: file the complete backlog and execution contract under Sidequest's `US-n` grouping.
+   One-ticket mode stays story-less; stories hold shared outcomes/dependencies. Cut along affected
+   store, CLI, MCP, skill/docs and test surfaces. Tickets carry anchors, contract and scoped verify;
+   use directory scope for blast radius (`references/ticket-authoring.md`).
 2. **Link dependencies** (`link SQ-4 depends-on SQ-3`); shape a story as design → wave(s) →
    integrate so `ready` serializes the phases.
 3. **File the whole planned wave backlog before dispatching.** Give every ticket scope, dependencies, and
@@ -114,11 +113,10 @@ Read-only files or changes warn before dispatch. Resolve or override.
 
 ## File a ticket
 
-`sidequest add -t "Contact form does not send" -d "..." -p high -l bug --category <id>` — read the
-live taxonomy (`category_list` MCP / `sidequest category list --json`), choose by description, and
-stamp `--category`; use its fallback only when no category fits. `--complexity` is legacy ambiguity
-fallback; never set `--model`/`--effort`. Use `--file`, `--story`, `--anchors`, and exact `--verify` as
-needed; scope and authoring details: `references/ticket-authoring.md`.
+`sidequest add -t "Contact form does not send" -d "..." --category <id>` — read the live taxonomy
+(`category_list` MCP / `sidequest category list --json`), choose by description and persist its ID.
+Use the fallback only when no category fits. `--complexity` is legacy ambiguity fallback;
+never set `--model`/`--effort`. Scope, anchors, stories and exact verify: `references/ticket-authoring.md`.
 
 Descriptions/comments render markdown. Use real newlines, never literal `\n`. Mid-task side issue? File
 it with `mcp__plugin_sidequest_board__add`, then keep going. Filing a ticket is not a request to work it.
@@ -148,7 +146,7 @@ optionally `--status todo`).
   resume a prior executor and spawn a fresh one for the same ticket.
 - **Read the thread before working a ticket** (`sidequest comments <ref>`). Default reads retain all
   metadata; pass `--full` only for needed elided bodies.
-- **Claims release on observed death, not age**: use `pulse`, never a clock. For work needing a decision, `SendMessage` the same agent. If its name fails, only the ORIGINAL matching host session may send once to authentic `dispatch.agentId` or its exact original Agent-returned identifier; never `claim.by` or a guessed/replacement address. Honor user Pause retries. Missing/mismatched identity stays continuation UNVERIFIED; preserve claim/work. Require the original executor's response/activity before calling it resumed; queued/unknown/completed/absent/failed-send is not death. Never restart terminal executors (references/orchestration.md). A resume keeps claim, token-file path, and worktree binding. On `matches no dispatch record`, the holder calls MCP `dispatch` with `recoveryEvidence`, `claimHolder`, and `worktree` to re-mint and re-bind. On confirmed death, salvage, release, replace. **Died before its first claim** (no claim to release): from the session that prepared it, MCP `dispatch` with `recoveryEvidence` retires it and prepares the replacement; `retireOnly:true` stops there. Other sessions wait for the printed deadline (references/orchestration.md).
+- **Claims release on observed death, not age**: use `pulse`, never a clock. For work needing a decision, `SendMessage` the same agent. If its name fails, only the ORIGINAL matching host session may send once to authentic `dispatch.agentId` or its exact original Agent-returned identifier; never `claim.by` or a guessed/replacement address. Honor user Pause retries. Missing/mismatched identity stays continuation UNVERIFIED; preserve claim/work. A resume keeps claim, token-file path, and worktree binding. Require authentic response/activity; queued/unknown/completed/absent/failed-send is not death. Never restart terminal executors. Confirmed death requires salvage before replacement. Lost binding and died-before-claim recovery, including preparing-session authority and deadlines: `references/orchestration.md`.
 - Agents report automatically. **Never use `TaskOutput`** for a Sidequest task ID or launch name. Liveness comes only from `pulse <ref>` and `changes --since`, read on a notification or user prompt, never right after spawning; a process list is never dispatch evidence. **No TaskStop after terminal evidence**: an executor ends its own run at submit, done, or release. `TaskStop({ task_id: "<agent name>" })` once is host cleanup only for one `pulse` still shows alive after its ticket went terminal (host action, not Sidequest). Never stop a live claim, retained continuation, or candidate awaiting integration; never wake a completed executor or build a cleanup loop. **Never proxy-wait** with a shell/`Monitor`/cron task for an executor or artifact (a one-shot local readiness watch is fine).
 
 **Repository publishing is the orchestrator's, alone.** Executors stop at verified local commits and
@@ -160,8 +158,11 @@ released without a pending submission. The orchestrator is the integrator: choos
 `sidequest integrate <ref> --by <who> --mode apply|replay|merge` from the board default, then run the
 publish transaction (lock → delivery → merged-tree gate → central version → review → push → reachability → `done`):
 `references/publishing.md`.
-**BOOKEND SUPERVISION.** Between dispatch and submission, do nothing with that ticket: no pulses,
-comment reads, or peeks. At integration, read the submit report, deliver the range, and run the
+**BOOKEND SUPERVISION.** Between dispatch and submission, avoid routine pulses, comment reads and
+peeks. Explicitly assigned builders and readonly advisors may exchange direct native messages and
+inspect authorized snapshots under `references/readonly-guidance.md`. Draft findings are advisory,
+never acceptance or claim release; this does not authorize orchestrator source peeking or self-review.
+At integration, read the submit report, deliver the range, and run the
 merged-tree gate once per wave. Judge by that oracle and the submit report, never by reading diffs. When sized risk or a weak oracle needs independent review, bind a routed `review-audit` ticket with `reviewTarget`; never re-review yourself. Never mark a submitted ticket done without
 integrating it; never re-dispatch one (refused as `submitted`). A dead executor's `done` only proves
 the board transition, never that work shipped: salvage and close it per `references/publishing.md`.
@@ -178,16 +179,13 @@ as comments, not transcripts. Routed implementation uses a freshly dispatched ex
 sweep only, deep or fan-out investigation is a `codebase-exploration` spike; other delegation needs a
 ticket.
 
-**The shape is a LOOP, not a hand-off**: spawn a wave → executors return terse reports and
-submit verified commits → read each thread, use scoped verification for each ticket, then run the
-full suite once while publishing the wave in one transaction → re-plan, spawn the next. Don't accept a green suite as proof of coverage; review execution evidence. Prevent
-executor mini-sessions from the spawn side: **the ticket is the spec**. The ticket carries the selected
-outcome, benefit, approach, boundaries, and enough implementation detail to act; scope the spawn prompt only
-with logistics, with the ticket contract traveling in full and unnarrowed;
-**Executors keep useful work**: keep claim, checkpoint evidence, and await `SendMessage`
-steering for questions or failed checks. Release only for confirmed death or unsalvageable blockers; **batch small same-model tickets into ONE executor**
-(different models never batch); **parallel fan-out spawns one executor per ticket in a single
-message** when the wave justifies it.
+**The shape is a LOOP, not a hand-off**: spawn → verified submissions → consume reports and execution
+evidence → publish one wave with its combined full gate → re-plan. Don't accept a green suite as proof of coverage; review execution evidence.
+**The ticket is the spec**: pin outcome, benefit, approach, boundaries and enough implementation detail;
+spawn logistics cannot narrow that contract. **Executors keep useful work**: keep claim/checkpoint and
+await `SendMessage` steering for questions or failed checks; release only for confirmed death or
+unsalvageable blockers. Batch small same-model tickets into ONE executor (never mixed models).
+Parallel fan-out spawns one executor per ticket in a single message when justified.
 
 **Ready** = unclaimed, unblocked, not done, not archived — `sidequest ready --json
 --brief` lists exactly this set, partitioned into **parallel-safe waves** by declared file scope.
