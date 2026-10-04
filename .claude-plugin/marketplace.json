@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.590.0",
+  "version": "3.591.0",
   "plugins": [
     {
       "name": "observability",
@@ -57,7 +57,7 @@
       "name": "sidequest",
       "source": "./plugins/sidequest",
       "description": "A local work board and orchestration loop for Claude Code. Every task saved as a ticket survives context compaction and new sessions, with instructions, status, and recorded discussion kept on the board. Categories route tickets to a model and effort; token-gated executors return verified work for review and integration. A self-hosted Kanban dashboard spans your projects.",
-      "version": "5.7.0",
+      "version": "5.7.1",
       "author": {
         "name": "Eigenwise"
       },
