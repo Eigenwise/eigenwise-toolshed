@@ -1,6 +1,6 @@
 # Release and publishing
 
-Last Updated: 2026-10-03
+Last Updated: 2026-10-04
 
 The marketplace manifests on `main` are delivery. Executors include release fragments with their submitted changes. The orchestrator runs `node scripts/release/cut.mjs --prepare --push`, merges the printed promotion PR, then runs `node scripts/release/finalize.mjs --push` to verify and publish the release tags; the printed sync-back PR returns the release commit to `develop`. Plugin bumps ship with the changes rather than waiting for a later GitHub Release.
 
@@ -14,7 +14,7 @@ Release tooling covers note, plan, cut, guard, hold, and commit operations. `.re
 
 CI gates are split across:
 
-- `.github/workflows/test.yml`, including the manifest-derived plugin matrix and affected-plugin selection. It triggers on `main` pushes and pull requests.
+- `.github/workflows/test.yml`, including the manifest-derived plugin matrix and affected-plugin selection. It triggers on `main` pushes and pull requests. `scripts/release/lib/affected-suites.mjs` classifies the target-base diff: marketplace version-only and release-owned metadata changes avoid unrelated full suites while focused manifest, fragment and supported-suite checks remain required. Runtime-consumed plugin versions, plugin READMEs/changelogs, source, tests, dependencies, hooks and agent surfaces retain that plugin's suite. Shared runners/workflows, unknown paths, failed base/diff reads and non-ordinary metadata conservatively select all suites. Both OS commands, matrix rows and aggregate checks remain. A metadata push atop source already changed against the target base still selects that source's suite.
 - `.github/workflows/release-guard.yml`, which validates the publish ref.
 - `.github/workflows/release.yml` (Publish GitHub Release), which triggers on `v*` tags, a daily schedule, and manual dispatch, and creates at most one GitHub Release per UTC day: a capped tag-push run exits successfully without publishing, and the daily catch-up publishes the newest unreleased `v*` tag with generated notes covering every intermediate version. `cut.mjs` reports a capped run as `githubRelease.status === 'deferred'` instead of failing.
 - `.github/workflows/docs.yml`, which builds and deploys the Astro docs site.
