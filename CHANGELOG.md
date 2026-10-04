@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.591.0 (2026-10-04)
+
+### sidequest 5.7.0 → 5.7.1
+
+#### Fixes
+
+- Add a first saved-task checkpoint guide (SQ-3347) [`2451aac`](https://github.com/Eigenwise/eigenwise-toolshed/commit/2451aac4d1947eed6d5669022df6d667f459e9fd)
+  Explain saving one real task and retrieving its recorded discussion in a new session; link the walkthrough from Sidequest's README. Documentation only, no new runtime or adoption claim.
+
 ## v3.590.0 (2026-10-04)
 
 ### Repository
