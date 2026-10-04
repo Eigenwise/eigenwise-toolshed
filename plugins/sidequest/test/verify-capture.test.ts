@@ -183,6 +183,8 @@ test('full-suite prefixed capture serializes siblings, preserves coverage, and l
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-capture-slot-'));
   const coverageDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-full-suite-coverage-'));
   const environment = { ...process.env, NODE_V8_COVERAGE: coverageDirectory };
+  // The outer run may be a full-suite capture that exported the count; scoped.js must see only what the wrapper under test adds.
+  const { SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT: _inheritedCount, ...scopedEnvironment } = process.env;
   const started = path.join(project, 'started');
   const observedSiblingCaptures = path.join(project, 'observed-sibling-captures');
   const observedCoverage = path.join(project, 'observed-coverage');
@@ -209,7 +211,7 @@ test('full-suite prefixed capture serializes siblings, preserves coverage, and l
     await waitForFile(started);
     for (const scopedCommand of ['node scoped.js', 'npm --prefix "." run test:files']) {
       const scopedTicket = store.createTicket(boardProject.slug, { title: 'scoped capture', executorVerifyKind: 'command', executorVerify: scopedCommand });
-      const scopedCapture = runCaptureProcess(scopedCommand, project, scopedTicket.ref);
+      const scopedCapture = runCaptureProcess(scopedCommand, project, scopedTicket.ref, { environment: scopedEnvironment });
       spawnedCaptures.push(scopedCapture);
       const scoped = await scopedCapture;
       assert.equal(scoped.status, 0, scoped.output);
