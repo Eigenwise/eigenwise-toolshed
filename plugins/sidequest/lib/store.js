@@ -17,7 +17,7 @@ const {
   isFilesystemSnapshotLimitError,
   isFilesystemSnapshotChildError
 } = sourceRevisionCapability;
-const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } = require("./category-defaults.js");
+const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, categoryWithCurrentCodexRoutes, starterRoutingProfilesFor } = require("./category-defaults.js");
 const commitScope = require("./commit-scope.js");
 const { commitPaths } = commitScope;
 const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, agentIdFromWorktreePath, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, retainedWorktreeResumeDecision } = require("./worktrees.js");
@@ -36,6 +36,8 @@ const { createWorkers } = require("./store/workers.js");
 const { createStories } = require("./store/stories.js");
 const { createComments } = require("./store/comments.js");
 const { createPlans } = require("./store/plans.js");
+const { createReviewCorrections } = require("./store/review-corrections.js");
+const { createCompositionAdmissions } = require("./store/composition-admission.js");
 const { createReads } = require("./store/reads.js");
 const { createClaims } = require("./store/claims.js");
 const { createLocks } = require("./store/locks.js");
@@ -193,6 +195,9 @@ function setProjectNotify(...args) {
 function setProjectRouting(...args) {
   return projectsLayer.setProjectRouting(...args);
 }
+function takeSourceRevisionAdapterSwitch(slug) {
+  return projectsLayer.takeSourceRevisionAdapterSwitch(slug);
+}
 function projectRoutingEnabled(...args) {
   return projectsLayer.projectRoutingEnabled(...args);
 }
@@ -228,6 +233,9 @@ function listProjectsFlaggingMissingPaths(...args) {
 }
 function registerProject(...args) {
   return projectsLayer.registerProject(...args);
+}
+function boardRootRefusal(...args) {
+  return projectsLayer.boardRootRefusal(...args);
 }
 function findProject(...args) {
   return projectsLayer.findProject(...args);
@@ -444,9 +452,14 @@ function staleWorktreeCwdWarning(...args) {
 function dispatchUncertaintyWarnings(...args) {
   return warningsLayer.dispatchUncertaintyWarnings(...args);
 }
+function sourceRevisionAdapterSwitchWarnings(ticket) {
+  const adapterSwitch = ticket?.dispatch?.sourceRevisionAdapterSwitch;
+  if (!adapterSwitch) return [];
+  return [`Dispatch information: this board switched its source revision adapter from ${adapterSwitch.from} to ${adapterSwitch.to} at ${adapterSwitch.at}, because a .git now exists at or above its path. This and later dispatches take git baselines instead of filesystem snapshots.`];
+}
 function dispatchWarnings(ticket, slug) {
   const project = !slug && process.env.CLAUDE_PROJECT_DIR ? findProject(process.env.CLAUDE_PROJECT_DIR) : null;
-  return warningsLayer.dispatchWarnings(ticket, slug || (project?.ok ? project.slug : null));
+  return [...warningsLayer.dispatchWarnings(ticket, slug || (project?.ok ? project.slug : null)), ...sourceRevisionAdapterSwitchWarnings(ticket)];
 }
 function dispatchDeclaredFiles(...args) {
   return warningsLayer.dispatchDeclaredFiles(...args);
@@ -710,6 +723,8 @@ const {
   agentDispatchWorktrees,
   reconcileLaunchedDispatches
 } = dispatch = createDispatch({
+  withCompositionDispatchPreparation: (slug, ref, callback) => withCompositionDispatchPreparation(slug, ref, callback),
+  withCompositionGenerationLock: (slug, ref, callback) => withCompositionGenerationLock(slug, ref, callback),
   ARTIFACT_BASELINE_MAX_PATHS,
   normalizeCategoryId: (...args) => normalizeCategoryId(...args),
   projectRoutingEnabled,
@@ -750,6 +765,7 @@ const {
   dispatchReadOnly: (...args) => dispatchReadOnly(...args),
   dispatchFilesystemSnapshotPreflight,
   dispatchBaselineForProject,
+  takeSourceRevisionAdapterSwitch,
   dispatchVerifyCommandError: (...args) => dispatchVerifyCommandError(...args),
   dispatchRouteRefusal: (...args) => dispatchRouteRefusal(...args),
   dispatchRouteState: (...args) => dispatchRouteState(...args),
@@ -1176,6 +1192,7 @@ const {
   appendExperimentEntry,
   appendOverturnLine,
   applyExperimentVerdict,
+  recordBoundReviewOutcome,
   experimentPacket,
   ticketPlanInfo,
   writeOracleExperimentRound,
@@ -1206,6 +1223,7 @@ const {
   readOnlyOverrideActive,
   dispatchReadOnly,
   submissionReviewRelation,
+  withSourceTicketLock,
   createTicket,
   normalizeLabels,
   normalizeFiles,
@@ -1280,6 +1298,29 @@ const {
   upperRef,
   stripLinksTo,
   withTicketLock
+});
+const { admitComposition, withCompositionDispatchPreparation, withCompositionGenerationLock } = createCompositionAdmissions({
+  getTicket,
+  listTickets,
+  submissionReviewRelation,
+  readMeta,
+  withTicketLock,
+  putTicket,
+  createComment,
+  invalidateStoreCaches,
+  dispatchTokenDigest: (nonce) => dispatchTokenDigest(nonce)
+});
+const { correctAcceptedReviewVerdict } = createReviewCorrections({
+  getTicket,
+  pendingSubmission: pendingSubmissionForTickets,
+  isReadOnlyExecutor,
+  submissionReviewRelation,
+  withSourceTicketLock,
+  withTicketLock,
+  createComment,
+  recordBoundReviewOutcome,
+  putTicket,
+  invalidateStoreCaches
 });
 function pendingSubmissionForTickets(...args) {
   return pendingSubmission(...args);
@@ -1425,7 +1466,8 @@ const {
   unregisterClaim,
   verifyCommandErrors,
   verifyCommandError,
-  withTicketLock
+  withTicketLock,
+  withCompositionGenerationLock
 });
 let refreshingRoutingProfileSeeds = false;
 const routingProfileSeedStates = /* @__PURE__ */ new Map();
@@ -1471,55 +1513,54 @@ function refreshRoutingProfileSeeds(handle) {
   });
   invalidateStoreCaches();
 }
-function categoryNeedingReadonlyFlag(readonlyIds, data, rowId) {
+function rewrittenStoredCategory(rewrite, data, categoryId) {
   let category;
   try {
     category = JSON.parse(data);
   } catch (_) {
     return null;
   }
-  if (!readonlyIds.has(rowId ?? category?.id) || category?.readonly !== void 0) return null;
-  return category;
+  return category ? rewrite(category, categoryId) : null;
 }
-function readonlyCategorySeedsAreStale(handle, readonlyIds) {
-  for (const row of handle.prepare("SELECT data FROM routing_profile_entries").all()) {
-    if (categoryNeedingReadonlyFlag(readonlyIds, row.data)) return true;
+function storedCategoriesNeedRewrite(handle, rewrite) {
+  return handle.prepare("SELECT category_id, data FROM routing_profile_entries").all().some((row) => rewrittenStoredCategory(rewrite, row.data, row.category_id)) || handle.prepare("SELECT id, data FROM project_categories").all().some((row) => rewrittenStoredCategory(rewrite, row.data, row.id));
+}
+function rewriteProfileEntries(handle, rewrite, outcome) {
+  const update = handle.prepare("UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?");
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  for (const row of handle.prepare("SELECT profile_id, category_id, data FROM routing_profile_entries").all()) {
+    const category = rewrittenStoredCategory(rewrite, row.data, row.category_id);
+    if (!category) continue;
+    update.run(JSON.stringify(category), now, row.profile_id, row.category_id);
+    for (const pointer of handle.prepare("SELECT project FROM project_routing_profiles WHERE profile_id = ?").all(row.profile_id)) outcome.affectedProjects.add(String(pointer.project));
+    outcome.rewrittenIds.add(String(row.category_id));
   }
-  for (const row of handle.prepare("SELECT id, data FROM project_categories").all()) {
-    if (categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id)) return true;
+}
+function rewriteProjectCategories(handle, rewrite, outcome) {
+  const update = handle.prepare("UPDATE project_categories SET data = ? WHERE project = ? AND id = ?");
+  for (const row of handle.prepare("SELECT project, id, data FROM project_categories").all()) {
+    const category = rewrittenStoredCategory(rewrite, row.data, row.id);
+    if (!category) continue;
+    update.run(JSON.stringify(category), row.project, row.id);
+    outcome.affectedProjects.add(String(row.project));
+    outcome.rewrittenIds.add(String(row.id));
   }
-  return false;
+}
+function rewriteStoredCategories(handle, rewrite) {
+  if (!storedCategoriesNeedRewrite(handle, rewrite)) return;
+  withinTransaction(handle, () => {
+    const outcome = { affectedProjects: /* @__PURE__ */ new Set(), rewrittenIds: /* @__PURE__ */ new Set() };
+    rewriteProfileEntries(handle, rewrite, outcome);
+    rewriteProjectCategories(handle, rewrite, outcome);
+    if (outcome.rewrittenIds.size) refreshPreparedDispatches(handle, [...outcome.affectedProjects], [...outcome.rewrittenIds]);
+  });
 }
 function refreshReadonlyCategorySeeds(handle) {
   const readonlyIds = /* @__PURE__ */ new Set([
     ...DEFAULT_CATEGORIES.filter((category) => category.readonly === true).map((category) => category.id),
     "hand-analysis"
   ]);
-  if (!readonlyCategorySeedsAreStale(handle, readonlyIds)) return;
-  const affected = /* @__PURE__ */ new Set();
-  let changed = false;
-  withinTransaction(handle, () => {
-    const updateProfileEntry = handle.prepare("UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?");
-    const updateProjectEntry = handle.prepare("UPDATE project_categories SET data = ? WHERE project = ? AND id = ?");
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    for (const row of handle.prepare("SELECT profile_id, category_id, data FROM routing_profile_entries").all()) {
-      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data);
-      if (!category) continue;
-      category.readonly = true;
-      updateProfileEntry.run(JSON.stringify(category), now, row.profile_id, row.category_id);
-      for (const project of handle.prepare("SELECT project FROM project_routing_profiles WHERE profile_id = ?").all(row.profile_id)) affected.add(String(project.project));
-      changed = true;
-    }
-    for (const row of handle.prepare("SELECT project, id, data FROM project_categories").all()) {
-      const category = categoryNeedingReadonlyFlag(readonlyIds, row.data, row.id);
-      if (!category) continue;
-      category.readonly = true;
-      updateProjectEntry.run(JSON.stringify(category), row.project, row.id);
-      affected.add(String(row.project));
-      changed = true;
-    }
-    if (changed) refreshPreparedDispatches(handle, [...affected], [...readonlyIds]);
-  });
+  rewriteStoredCategories(handle, (category, categoryId) => readonlyIds.has(categoryId) && category.readonly === void 0 ? { ...category, readonly: true } : null);
 }
 function refreshRoutingProfileSeedsForCatalogState(handle, root) {
   const currentState = catalogStateFingerprint();
@@ -1535,6 +1576,7 @@ function database() {
     migrateIfNeeded(handle, root);
     dbByHome.set(root, handle);
     refreshReadonlyCategorySeeds(handle);
+    rewriteStoredCategories(handle, categoryWithCurrentCodexRoutes);
     pruneOversizedNotificationsOnce();
   }
   if (!refreshingRoutingProfileSeeds) {
@@ -1969,57 +2011,57 @@ function claimTicket(slug, idOrRef, by, opts) {
   by = String(by || "agent");
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: "not_found" };
-  const result = withTicketLock(slug, found.id, () => {
-    const t2 = getTicket(slug, found.id);
-    if (!t2) return { ok: false, reason: "not_found" };
-    const candidateReview = submissionReviewRelation(slug, t2);
+  const result = withCompositionGenerationLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return { ok: false, reason: "not_found" };
+    const candidateReview = submissionReviewRelation(slug, t);
     if (candidateReview) {
       return {
         ok: false,
         reason: "candidate_review_locked",
-        ticket: t2,
-        message: reviewLockMessage("claim", t2, candidateReview)
+        ticket: t,
+        message: reviewLockMessage("claim", t, candidateReview)
       };
     }
     const delay = testClaimLockDelayMs();
     if (delay) busyWait(delay);
     const directClaimReason = directReason(opts.reason);
-    if (opts.direct && isRoutedTicket(t2) && !directClaimReason) return { ok: false, reason: "direct_reason_required", ticket: t2 };
-    if (opts.direct && isRoutedTicket(t2) && !directReasonAllowed(directClaimReason)) return { ok: false, reason: "direct_not_allowed", ticket: t2, expectedExecutor: expectedClaimExecutor(t2) };
+    if (opts.direct && isRoutedTicket(t) && !directClaimReason) return { ok: false, reason: "direct_reason_required", ticket: t };
+    if (opts.direct && isRoutedTicket(t) && !directReasonAllowed(directClaimReason)) return { ok: false, reason: "direct_not_allowed", ticket: t, expectedExecutor: expectedClaimExecutor(t) };
     const admission = claimAdmission(slug, found.id, opts);
     if (!admission.ok) return admission;
-    const currentDispatch = dispatchState(t2);
+    const currentDispatch = dispatchState(t);
     if (currentDispatch?.reducedAgentSchema === true && !currentDispatch.terminalAt && (!String(currentDispatch.agentId || "").trim() || !reducedPermissionModeSupported(currentDispatch.observedPermissionMode))) {
       return {
         ok: false,
         reason: "reduced_runtime_unverified",
-        ticket: t2,
-        message: `claim: refused ${t2.ref}; this reduced Agent-schema dispatch needs hook-reported agent_id and permission_mode ("auto" or "bypassPermissions") before it can claim. Stop without claiming or changing permissions; caller-supplied fields cannot replace hook evidence.`
+        ticket: t,
+        message: `claim: refused ${t.ref}; this reduced Agent-schema dispatch needs hook-reported agent_id and permission_mode ("auto" or "bypassPermissions") before it can claim. Stop without claiming or changing permissions; caller-supplied fields cannot replace hook evidence.`
       };
     }
     const terminalDispatch = Boolean(currentDispatch?.terminalAt && currentDispatch?.outcome);
-    if (opts.direct && t2.dispatchNonce && !terminalDispatch) return { ok: false, reason: "direct_conflict", ticket: t2 };
-    if (opts.direct && t2.dispatchNonce && terminalDispatch && !opts.force) return { ok: false, reason: "terminal_claim_takeover_required", ticket: t2 };
-    if (!opts.direct && isRoutedTicket(t2) && !t2.dispatchNonce) return { ok: false, reason: "dispatch_required", ticket: t2 };
+    if (opts.direct && t.dispatchNonce && !terminalDispatch) return { ok: false, reason: "direct_conflict", ticket: t };
+    if (opts.direct && t.dispatchNonce && terminalDispatch && !opts.force) return { ok: false, reason: "terminal_claim_takeover_required", ticket: t };
+    if (!opts.direct && isRoutedTicket(t) && !t.dispatchNonce) return { ok: false, reason: "dispatch_required", ticket: t };
     let compatibilityAdvisory = null;
-    if (currentDispatch?.preparedCompatibility?.pluginInstall && t2.dispatchNonce) {
+    if (currentDispatch?.preparedCompatibility?.pluginInstall && t.dispatchNonce) {
       const currentInstall = checkSidequestInstall(readMeta(slug)?.path || "");
       if (preparedCompatibilityHasProvenMismatch(currentDispatch, currentInstall)) {
-        const retired = retirePreparedCompatibilityStaleAttempt(slug, t2);
+        const retired = retirePreparedCompatibilityStaleAttempt(slug, t);
         return {
           ok: false,
           reason: "prepared_compatibility_stale",
           ticket: retired,
-          message: `claim: refused ${t2.ref}; its prepared Sidequest install snapshot is stale, so this dispatch attempt was retired. Stop without claiming; the orchestrator can dispatch a fresh token.`
+          message: `claim: refused ${t.ref}; its prepared Sidequest install snapshot is stale, so this dispatch attempt was retired. Stop without claiming; the orchestrator can dispatch a fresh token.`
         };
       }
       compatibilityAdvisory = preparedCompatibilityWarning(currentDispatch, currentInstall);
     }
-    if (t2.status === "done") return { ok: false, reason: "done", ticket: t2 };
+    if (t.status === "done") return { ok: false, reason: "done", ticket: t };
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const lifecycleAuthority = { actor: by, operation: "claim", sessionId: opts.sessionId || null };
     const directExecution = opts.direct || !currentDispatch;
-    let activeAttempt = directExecution ? lifecycleAttemptFromFacts(slug, t2, lifecycleAuthority, "dispatch", true) : lifecycleAttemptFromFacts(slug, t2, lifecycleAuthority, "dispatch", false);
+    let activeAttempt = directExecution ? lifecycleAttemptFromFacts(slug, t, lifecycleAuthority, "dispatch", true) : lifecycleAttemptFromFacts(slug, t, lifecycleAuthority, "dispatch", false);
     if (!directExecution && opts.requireBoundAgent && currentDispatch && activeAttempt.state === "prepared") {
       const boundAttempt = bindDispatchClaimToken(currentDispatch, activeAttempt, opts.sessionId, opts.executor, now);
       if (boundAttempt) activeAttempt = boundAttempt;
@@ -2040,30 +2082,30 @@ function claimTicket(slug, idOrRef, by, opts) {
         tokenPrefix: dispatchTokenPrefix(admission.token),
         at: now
       };
-      stampDispatchEvent(t2, opts.source || "claim", now);
-      putTicket(slug, t2);
-      queueEventNotification(slug, t2, t2.lastEventType, t2.lastEventSource);
+      stampDispatchEvent(t, opts.source || "claim", now);
+      putTicket(slug, t);
+      queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
       return {
         ok: false,
         reason: "unbound_dispatch",
-        ticket: t2,
-        message: `claim: refused ${t2.ref}; this runtime presented the current token and executor but did not bind to the prepared dispatch. ${by} may immediately release this attempt with kind technical_blocker, using this refusal as the command/output evidence and the same session identity when one was supplied, then stop.`
+        ticket: t,
+        message: `claim: refused ${t.ref}; this runtime presented the current token and executor but did not bind to the prepared dispatch. ${by} may immediately release this attempt with kind technical_blocker, using this refusal as the command/output evidence and the same session identity when one was supplied, then stop.`
       };
     }
-    if (currentDispatch?.resumedAt && isolatedDispatchWorktreeMissing(currentDispatch)) return { ok: false, reason: "worktree_missing", ticket: t2 };
-    if (pendingSubmission(t2) && !opts.force) return { ok: false, reason: "submitted", ticket: t2, submission: t2.submission };
-    const held2 = t2.claim;
-    if (held2 && held2.by && held2.by !== by && !claimReclaimable(t2) && !opts.force) {
-      return { ok: false, reason: "claimed", ticket: t2, claim: held2 };
+    if (currentDispatch?.resumedAt && isolatedDispatchWorktreeMissing(currentDispatch)) return { ok: false, reason: "worktree_missing", ticket: t };
+    if (pendingSubmission(t) && !opts.force) return { ok: false, reason: "submitted", ticket: t, submission: t.submission };
+    const held = t.claim;
+    if (held && held.by && held.by !== by && !claimReclaimable(t) && !opts.force) {
+      return { ok: false, reason: "claimed", ticket: t, claim: held };
     }
-    const runtimeClaim = !opts.direct && !opts.force ? liveRuntimeClaim(slug, t2, by) : null;
+    const runtimeClaim = !opts.direct && !opts.force ? liveRuntimeClaim(slug, t, by) : null;
     if (runtimeClaim) {
       return {
         ok: false,
         reason: "runtime_claimed",
-        ticket: t2,
+        ticket: t,
         claim: runtimeClaim.claim,
-        message: `claim: refused ${t2.ref}; this runtime already holds ${runtimeClaim.ref}. One runtime may hold one live ticket claim. The orchestration session must dispatch any review or follow-up.`
+        message: `claim: refused ${t.ref}; this runtime already holds ${runtimeClaim.ref}. One runtime may hold one live ticket claim. The orchestration session must dispatch any review or follow-up.`
       };
     }
     const claimRuntime = currentDispatch ? {
@@ -2077,17 +2119,17 @@ function claimTicket(slug, idOrRef, by, opts) {
       agentId: null,
       agentName: null
     } : null;
-    t2.claim = {
+    t.claim = {
       by,
       at: now,
       generation: crypto.randomUUID(),
       ...claimRuntime ? { runtime: claimRuntime } : {}
     };
-    if (opts.direct && opts.force && terminalDispatch && held2?.by && held2.by !== by) {
-      t2.claimTakeover = {
+    if (opts.direct && opts.force && terminalDispatch && held?.by && held.by !== by) {
+      t.claimTakeover = {
         by,
         at: now,
-        previousBy: held2.by,
+        previousBy: held.by,
         evidence: {
           outcome: currentDispatch.outcome,
           terminalAt: currentDispatch.terminalAt,
@@ -2095,61 +2137,64 @@ function claimTicket(slug, idOrRef, by, opts) {
         }
       };
     }
-    if (t2.storyId && !Number.isInteger(t2.dispatch?.storyLogRevision)) {
-      const story = getStory(slug, t2.storyId);
-      if (story) t2.storyLogSeenSeq = Number(story.logRevision) || 0;
+    if (t.storyId && !Number.isInteger(t.dispatch?.storyLogRevision)) {
+      const story = getStory(slug, t.storyId);
+      if (story) t.storyLogSeenSeq = Number(story.logRevision) || 0;
     }
-    t2.claimRelease = null;
-    if (opts.direct && isRoutedTicket(t2)) {
-      t2.directClaim = {
+    t.claimRelease = null;
+    if (opts.direct && isRoutedTicket(t)) {
+      t.directClaim = {
         by,
         at: now,
-        model: t2.model,
-        effort: t2.effort,
+        model: t.model,
+        effort: t.effort,
         executor: opts.executor ? String(opts.executor) : null,
         source: opts.source ? String(opts.source) : "store",
         reason: directReason(opts.reason)
       };
     }
-    const state = dispatchState(t2);
+    const state = dispatchState(t);
     if (state) {
       delete state.failedClaimSurrender;
       state.sessionId = opts.sessionId ? String(opts.sessionId) : state.sessionId || null;
       state.claimedAt = now;
       state.outcome = "claimed";
     }
-    const previousStatus = t2.status;
+    const previousStatus = t.status;
     const preClaimAttempt = activeAttempt;
     if (directExecution && preClaimAttempt.state !== "prepared" && preClaimAttempt.state !== "claimed") {
-      return { ok: false, reason: "invalid_transition", ticket: t2, message: "Cannot directly claim an attempt after execution started." };
+      return { ok: false, reason: "invalid_transition", ticket: t, message: "Cannot directly claim an attempt after execution started." };
     }
     if (!directExecution && preClaimAttempt.state !== "bound" && preClaimAttempt.state !== "claimed") {
-      return { ok: false, reason: "invalid_transition", ticket: t2, message: "Cannot claim a dispatched attempt before it is bound." };
+      return { ok: false, reason: "invalid_transition", ticket: t, message: "Cannot claim a dispatched attempt before it is bound." };
     }
     const claimedAttempt = preClaimAttempt.state === "claimed" ? preClaimAttempt : transitionAttempt(preClaimAttempt, directExecution ? "claim_direct" : "claim");
     const claimDiagnostic = attemptDiagnostic(claimedAttempt);
-    if (claimDiagnostic) return { ok: false, reason: claimDiagnostic.code, ticket: t2, message: claimDiagnostic.message };
-    recordLifecycleAttempt(t2, claimedAttempt);
-    if (opts.status !== false) t2.status = coerceStatus(opts.status || "doing", t2.status);
-    if (t2.status !== previousStatus) t2.statusTransition = { from: previousStatus, to: t2.status, at: now };
-    if (state) stampDispatchEvent(t2, opts.source || "cli", now);
+    if (claimDiagnostic) return { ok: false, reason: claimDiagnostic.code, ticket: t, message: claimDiagnostic.message };
+    recordLifecycleAttempt(t, claimedAttempt);
+    if (opts.status !== false) t.status = coerceStatus(opts.status || "doing", t.status);
+    if (t.status !== previousStatus) t.statusTransition = { from: previousStatus, to: t.status, at: now };
+    if (state) stampDispatchEvent(t, opts.source || "cli", now);
     else {
-      t2.lastEventType = "status";
-      t2.lastEventSource = opts.source ? String(opts.source) : "cli";
-      t2.updatedAt = now;
+      t.lastEventType = "status";
+      t.lastEventSource = opts.source ? String(opts.source) : "cli";
+      t.updatedAt = now;
     }
-    putTicket(slug, t2);
-    if (opts.sessionId) registerWorker(opts.sessionId, slug, t2.id, by);
-    queueEventNotification(slug, t2, t2.lastEventType, t2.lastEventSource);
-    return { ok: true, ticket: t2, ...compatibilityAdvisory ? { advisory: compatibilityAdvisory } : {} };
+    putTicket(slug, t);
+    if (opts.sessionId) registerWorker(opts.sessionId, slug, t.id, by);
+    queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
+    return { ok: true, ticket: t, ...compatibilityAdvisory ? { advisory: compatibilityAdvisory } : {} };
   });
-  if (result.reason !== "busy" || opts.force) return result;
-  const t = getTicket(slug, found.id);
-  const held = t && t.claim;
-  if (held && held.by && held.by !== by && !claimReclaimable(t)) {
-    return { ok: false, reason: "claimed", ticket: t, claim: held };
-  }
-  return result;
+  return lockedClaimOutcome(slug, found.id, by, result, opts.force);
+}
+function heldByAnotherLiveClaimant(ticket, by) {
+  const claimant = ticket?.claim?.by;
+  return Boolean(claimant) && claimant !== by && !claimReclaimable(ticket);
+}
+function lockedClaimOutcome(slug, ticketId, by, result, force) {
+  if (result.reason !== "busy" || force) return result;
+  const ticket = getTicket(slug, ticketId);
+  return heldByAnotherLiveClaimant(ticket, by) ? { ok: false, reason: "claimed", ticket, claim: ticket.claim } : result;
 }
 function nullableText(value) {
   const text = value == null ? "" : String(value).trim();
@@ -2188,6 +2233,10 @@ function failedClaimCanSurrender(ticket, dispatch2, by, opts) {
 function boundReviewLeftScopeUnused(dispatch2, completionDelta, declaredFiles) {
   if (dispatch2?.reviewTarget?.candidate?.source !== "git" || !completionDelta?.ok) return false;
   return ![...completionDelta.working, ...completionDelta.committed].some((file) => commitScope.isInScope(file, declaredFiles));
+}
+function readOnlyChangesOutsideArtifactRoots(slug, ticket, changedPaths) {
+  const artifactRoots = normalizeArtifactRoots(getCategory(ticketCategory(ticket), { project: slug })?.artifactRoots);
+  return { artifactRoots, paths: changedPaths.filter((file) => !commitScope.isInScope(file, artifactRoots)) };
 }
 function releaseTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
@@ -2263,16 +2312,17 @@ function releaseTicket(slug, idOrRef, by, opts) {
         sharedTreeCommittedScope = dispatch2?.sharedTree === true && scopedCommitted.length > 0;
         const scopedWorking = completionDelta.working.filter((file) => commitScope.isInScope(file, declaredFiles));
         const sharedTreeReadOnly = activeReadOnlyDispatch && dispatch2?.sharedTree === true;
-        const scopedChanges = activeReadOnlyDispatch && !sharedTreeReadOnly ? Array.from(/* @__PURE__ */ new Set([...scopedWorking, ...scopedCommitted])) : [];
-        if (scopedChanges.length) {
-          const paths = scopedChanges.sort();
+        const readOnlyChanges = activeReadOnlyDispatch && !sharedTreeReadOnly ? readOnlyChangesOutsideArtifactRoots(slug, t, Array.from(/* @__PURE__ */ new Set([...scopedWorking, ...scopedCommitted]))) : { artifactRoots: [], paths: [] };
+        if (readOnlyChanges.paths.length) {
+          const paths = readOnlyChanges.paths.sort();
           const mode = activeReadOnlyDispatch ? "read-only dispatch" : "declared scope";
           return {
             ok: false,
             reason: "done_scope_violation",
-            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths inside its declared scope since dispatch base: ${paths.join(", ")}. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
+            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths inside its declared scope and outside its category artifactRoots [${readOnlyChanges.artifactRoots.join(", ")}] since dispatch base: ${paths.join(", ")}. Paths under those artifactRoots are the only writes a read-only dispatch may close with. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
             ticket: t,
-            unscopedPaths: paths
+            unscopedPaths: paths,
+            artifactRoots: readOnlyChanges.artifactRoots
           };
         }
       }
@@ -3486,6 +3536,7 @@ module.exports = {
   listProjects,
   listProjectsFlaggingMissingPaths,
   registerProject,
+  boardRootRefusal,
   explicitProjectRoot,
   findProject,
   archiveProject,
@@ -3505,6 +3556,8 @@ module.exports = {
   ticketPlanInfo,
   appendExperimentEntry,
   applyExperimentVerdict,
+  correctAcceptedReviewVerdict,
+  admitComposition,
   appendOverturnLine,
   experimentPacket,
   listTickets,

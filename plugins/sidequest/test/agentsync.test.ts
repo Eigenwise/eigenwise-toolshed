@@ -16,7 +16,7 @@ process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 const agentsync = require('../lib/agentsync.js');
 
 const TERRA = { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' };
-const SOL = { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' };
+const SOL = { slug: 'codex-gpt-6-1-sol', id: 'claude-gpt-6.1-sol[1m]', label: 'GPT-6.1 Sol' };
 const PROJECT_ONLY = { slug: 'codex-gpt-5-6-project-only', id: 'claude-gpt-5.6-project-only[1m]', label: 'GPT-5.6 Project Only' };
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -828,7 +828,7 @@ test('sync writes route-independent generated executors', () => {
   const body = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch.md'), 'utf8');
   assert.match(body, /^model: claude-codex-auto$/m);
   assert.ok(body.includes(agentsync.MARKER));
-  assert.equal(agentsync.EXECUTOR_CHECKPOINT_TOOL_ROUNDS, 100);
+  assert.equal(agentsync.EXECUTOR_CHECKPOINT_TOOL_ROUNDS, 75);
   assert.doesNotMatch(body, /verified milestone/);
   assert.doesNotMatch(body, /sidequest submit <ref>/);
   assert.doesNotMatch(body, /\{\{[A-Z_]+\}\}/);
@@ -1639,17 +1639,17 @@ test('workflow recipes reject an invalid Codex marker before spawning', () => {
 
 test('routeMarker rejects values outside the gateway grammar', () => {
   for (const effort of EFFORTS) {
-    assert.equal(agentsync.routeMarker('gpt-5.6-sol', effort), `[sidequest-route model=gpt-5.6-sol effort=${effort}]`);
+    assert.equal(agentsync.routeMarker('gpt-6.1-sol', effort), `[sidequest-route model=gpt-6.1-sol effort=${effort}]`);
   }
-  assert.equal(agentsync.routeMarker('gpt-5.6-sol', 'high', 'SQ-1234'), '[sidequest-route model=gpt-5.6-sol effort=high ticket=SQ-1234]');
+  assert.equal(agentsync.routeMarker('gpt-6.1-sol', 'high', 'SQ-1234'), '[sidequest-route model=gpt-6.1-sol effort=high ticket=SQ-1234]');
   for (const bad of ['', 'UPPER', 'has space', 'has]bracket', '-leading', 'x'.repeat(70)]) {
     assert.throws(() => agentsync.routeMarker(bad, 'high'), /model id is not marker-safe/);
   }
   for (const bad of ['', 'highest', 'HIGH', ' has-space', 'high\nlow']) {
-    assert.throws(() => agentsync.routeMarker('gpt-5.6-sol', bad), /effort is not marker-safe/);
+    assert.throws(() => agentsync.routeMarker('gpt-6.1-sol', bad), /effort is not marker-safe/);
   }
   for (const bad of ['', '1234', 'SQ 1234', 'SQ-1234\nnext', 'x'.repeat(65)]) {
-    assert.throws(() => agentsync.routeMarker('gpt-5.6-sol', 'high', bad), /ticket ref is not marker-safe/);
+    assert.throws(() => agentsync.routeMarker('gpt-6.1-sol', 'high', bad), /ticket ref is not marker-safe/);
   }
 });
 

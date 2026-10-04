@@ -25,6 +25,27 @@ A settled feature gets one authored contract. Use two or three bounded proposals
 is genuinely contested. An exact small edit keeps the lightweight path: record its outcome and oracle,
 then use one ticket.
 
+For substantial or safety-sensitive changes, do a short architecture/feasibility preflight before
+expensive implementation or tests. Trace shared authority and callers, choose the smallest existing
+seam, and consume the dedicated quality owner's real touched-function complexity and measurement
+support. Check genuine native baseline/candidate ownership, protected state and dirty prerequisites,
+the runnable done-oracle, and its actual timeout/resource fit. Missing measurement stays UNVERIFIED;
+Quartermaster owns setup only, never scoring or recurring audits. Leave untouched legacy code outside
+measurement scope and preserve standards.
+
+Choose verifiers by observed behavior, callers and real coverage/source identity. Inspect transitive
+test-file imports before choosing files or names: `--test-name-pattern` does not stop top-level imports
+from registering other suites. A narrow selection can avoid unrelated fan-out while preserving full
+measured coverage for touched functions and required final acceptance. Never fabricate a passing
+capture or accept a timed-out command because later log text says green; preserve deadlines and
+protected assertions.
+
+Pin ordinary next steps within the contract: one producer owns patch, focused regressions, measurement,
+clean-candidate capture and submit. Preauthorize those steps, pause only the genuinely blocked step,
+and continue unaffected source work. Resource availability and authority changes still need their real
+owner's decision. For live advice, name the architectural risk, authorized snapshot/paths, inspection
+limits and budget under `readonly-guidance.md`; ask for a plan advisor only when that risk merits it.
+
 Ask the user once, in one batch, only for choices that change user-visible behavior, compatibility,
 migration, public API, dependency, or expensive-to-reverse scope. Explicit current-feature delegation
 ("do your thing", "use your judgment", or "whatever you think") lets the author decide and record the

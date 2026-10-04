@@ -40,18 +40,25 @@ const FILESYSTEM_SNAPSHOT_SOURCE = "filesystem-snapshot";
 const FILESYSTEM_SNAPSHOT_MAX_PATHS = 500;
 const FILESYSTEM_SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024;
 const FILESYSTEM_SNAPSHOT_MAX_ELAPSED_MS = 1e4;
+const NO_WALK_FACTS = Object.freeze({ skipped: [], skippedTotal: 0, counted: [] });
+function snapshotLimitMessage(bound, observed, cap, blockingPath) {
+  const reading = blockingPath ? ` while reading ${blockingPath}` : "";
+  return `filesystem snapshot ${bound} exceeded: observed ${observed}, cap ${cap}${reading}`;
+}
 class FilesystemSnapshotLimitError extends Error {
   bound;
   observed;
   cap;
   path;
-  constructor(bound, observed, cap, blockingPath = null) {
-    super(`filesystem snapshot ${bound} exceeded: observed ${observed}, cap ${cap}${blockingPath ? ` while reading ${blockingPath}` : ""}`);
+  walk;
+  constructor(bound, observed, cap, blockingPath = null, walk = NO_WALK_FACTS) {
+    super(snapshotLimitMessage(bound, observed, cap, blockingPath));
     this.name = "FilesystemSnapshotLimitError";
     this.bound = bound;
     this.observed = observed;
     this.cap = cap;
     this.path = blockingPath;
+    this.walk = walk;
   }
 }
 function isFilesystemSnapshotLimitError(error) {
@@ -142,7 +149,7 @@ function filesystemSnapshotRevision(projectPath, observedAt = (/* @__PURE__ */ n
   if (!root || !Number.isFinite(Date.parse(observedAt))) return null;
   const result = snapshotChildResult(root, options);
   if ("limit" in result) {
-    throw new FilesystemSnapshotLimitError(result.limit.bound, result.limit.observed, result.limit.cap);
+    throw new FilesystemSnapshotLimitError(result.limit.bound, result.limit.observed, result.limit.cap, null, result.limit);
   }
   if (!("digest" in result)) return null;
   return Object.freeze({

@@ -25,9 +25,9 @@ fs.writeFileSync(path.join(catalogDir, 'catalog.json'), JSON.stringify({
     message: 'Codex readiness confirms the local gateway is ready.',
   },
   models: [{
-    slug: 'codex-gpt-5-6-sol',
-    id: 'claude-gpt-5.6-sol[1m]',
-    label: 'GPT-5.6 Sol',
+    slug: 'codex-gpt-6-1-sol',
+    id: 'claude-gpt-6.1-sol[1m]',
+    label: 'GPT-6.1 Sol',
   }, {
     slug: 'codex-gpt-5-6-terra',
     id: 'claude-gpt-5.6-terra[1m]',
@@ -40,6 +40,7 @@ process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY;
 
 const store = require('../lib/store.js');
 const mcp = require('../lib/mcp.js');
+const db = require('../lib/db.js');
 const { makeMcpCaller } = require('./_helpers.js');
 const { callTool } = makeMcpCaller(mcp);
 const slug = store.ensureProject(PROJECT).slug;
@@ -52,7 +53,7 @@ store.setCategory({
   name: 'Quota fixture',
   description: 'Bounded launch-time quota recovery fixture.',
   route: { model: 'fable', effort: 'xhigh' },
-  fallback: { model: 'codex-gpt-5-6-sol', effort: 'max' },
+  fallback: { model: 'codex-gpt-6-1-sol', effort: 'max' },
   contract: 'Use the prepared route and claim token.',
   enabled: true,
 });
@@ -128,7 +129,7 @@ test('Claude quota matcher recognizes current and versioned family limits', () =
   });
   assert.equal(versionedRecovery.ok, true);
   assert.equal(versionedRecovery.recovery.failedModel, 'fable');
-  assert.equal(store.getTicket(slug, versionedTicket.ref).model, 'codex-gpt-5-6-sol');
+  assert.equal(store.getTicket(slug, versionedTicket.ref).model, 'codex-gpt-6-1-sol');
 
   assert.equal(store.claudeQuotaFailure('The deployment reached its rate limit.'), null);
 });
@@ -158,25 +159,25 @@ test('known Fable quota failure prepares the exact category fallback and preserv
     failedModel: 'fable',
     failedEffort: 'xhigh',
     fallbackSource: 'category fallback',
-    model: 'codex-gpt-5-6-sol',
+    model: 'codex-gpt-6-1-sol',
     effort: 'max',
     signature: "You've reached your Fable limit",
     at: recovered.recovery.at,
   });
 
   let current = store.getTicket(slug, ticket.ref);
-  assert.equal(current.model, 'codex-gpt-5-6-sol');
+  assert.equal(current.model, 'codex-gpt-6-1-sol');
   assert.equal(current.effort, 'max');
   assert.equal(current.exec.backend, 'codex');
   // The replacement launch advertises the model that will actually run, and its
   // name counts past the attempt that burned the quota.
-  assert.equal(current.dispatch.description, `GPT-5.6 Sol, max · ${ticket.title}`);
+  assert.equal(current.dispatch.description, `GPT-6.1 Sol, max · ${ticket.title}`);
   assert.equal(current.dispatch.launchName, `${ticket.ref.toLowerCase()}-store-quota-recovery-sol-max-2`);
   assert.deepEqual(current.category.route, { model: 'fable', effort: 'xhigh' });
-  assert.deepEqual(current.category.fallback, { model: 'codex-gpt-5-6-sol', effort: 'max' });
+  assert.deepEqual(current.category.fallback, { model: 'codex-gpt-6-1-sol', effort: 'max' });
   const pulse = store.pulsePayload(slug, ticket.ref);
-  assert.deepEqual(pulse.dispatch.route, { model: 'codex-gpt-5-6-sol', effort: 'max' });
-  assert.equal(current.dispatch.route.marker, 'gpt-5.6-sol');
+  assert.deepEqual(pulse.dispatch.route, { model: 'codex-gpt-6-1-sol', effort: 'max' });
+  assert.equal(current.dispatch.route.marker, 'gpt-6.1-sol');
   assert.equal(pulse.dispatch.attempts.length, 1);
   assert.equal(pulse.dispatch.attempts[0].outcome, 'quota_exhausted');
   assert.equal(pulse.dispatch.attempts[0].failure.signature, "You've reached your Fable limit");
@@ -219,7 +220,7 @@ test('known Fable quota failure prepares the exact category fallback and preserv
   });
   assert.equal(claimed.ok, true);
   current = store.getTicket(slug, ticket.ref);
-  assert.equal(current.model, 'codex-gpt-5-6-sol');
+  assert.equal(current.model, 'codex-gpt-6-1-sol');
   assert.equal(current.effort, 'max');
 
   assert.equal(store.releaseTicket(slug, ticket.ref, 'quota-store-worker', { status: 'todo', source: 'test' }).ok, true);
@@ -227,6 +228,30 @@ test('known Fable quota failure prepares the exact category fallback and preserv
   assert.equal(current.model, 'fable');
   assert.equal(current.effort, 'xhigh');
   assert.deepEqual(store.getCategory('quota.fixture').route, { model: 'fable', effort: 'xhigh' });
+});
+
+// Current writers mark a dispatch terminal whenever they clear its token, so a live quota recovery without
+// one only exists in an older persisted record. Redispatch must still apply the category fallback to it
+// instead of returning to the model that ran out of quota.
+test('a persisted quota recovery without its token re-prepares on the category fallback', () => {
+  const ticket = createFixture('tokenless quota recovery');
+  const launched = launch(ticket, 'quota-tokenless-primary');
+  const recovered = store.recoverDispatchQuotaFailure(slug, ticket.ref, {
+    token: launched.prepared.token,
+    executor: launched.prepared.ticket.dispatchExecutor,
+    error: "Agent launch failed: You've reached your Fable limit.",
+  });
+  assert.equal(recovered.ok, true);
+  const tokenless = { ...store.getTicket(slug, ticket.ref), dispatchNonce: null, model: 'fable', effort: 'xhigh' };
+  db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', { id: tokenless.id, project: slug, ref: tokenless.ref, status: tokenless.status, archived: 0, ord: tokenless.order, claim_by: null, data: tokenless });
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.terminalAt, null);
+
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: 'quota-tokenless-next' });
+  assert.equal(prepared.reused, undefined);
+  assert.notEqual(prepared.token, recovered.token);
+  assert.equal(prepared.ticket.model, 'codex-gpt-6-1-sol');
+  assert.equal(prepared.ticket.effort, 'max');
+  assert.equal(prepared.ticket.exec.backend, 'codex');
 });
 
 test('quota recovery cannot prepare a ticket parked before launch', () => {
@@ -279,7 +304,7 @@ test('PostToolUseFailure ignores generic errors and prepares quota fallback for 
   assert.equal(cliDispatch.recovery.failedModel, 'fable');
   assert.equal(cliDispatch.effort, 'max');
   assert.equal(cliDispatch.exec.backend, 'codex');
-  assert.match(cliDispatch.spawn.prompt, /\[sidequest-route model=gpt-5\.6-sol effort=max ticket=SQ-\d+\]/);
+  assert.match(cliDispatch.spawn.prompt, /\[sidequest-route model=gpt-6\.1-sol effort=max ticket=SQ-\d+\]/);
   assert.equal(store.getTicket(slug, ticket.ref).dispatch.sessionId, 'quota-cli-adopted');
 
   const mcpRuntimeSessionId = 'quota-mcp-runtime-session';
@@ -292,7 +317,7 @@ test('PostToolUseFailure ignores generic errors and prepares quota fallback for 
       full: true,
     });
     assert.equal(mcpDispatch.token, cliDispatch.token);
-    assert.equal(mcpDispatch.recovery.model, 'codex-gpt-5-6-sol');
+    assert.equal(mcpDispatch.recovery.model, 'codex-gpt-6-1-sol');
     assert.equal(mcpDispatch.spawn.subagent_type, 'sidequest:sidequest-exec-dispatch');
     assert.equal(store.getTicket(slug, ticket.ref).dispatch.sessionId, mcpRuntimeSessionId);
   } finally {
@@ -371,11 +396,11 @@ test('every seeded Opus category recovers to its explicit Codex fallback without
     }],
     ['coding.hard', {
       route: { model: 'opus', effort: 'xhigh' },
-      fallback: { model: 'codex-gpt-5-6-sol', effort: 'xhigh' },
+      fallback: { model: 'codex-gpt-6-1-sol', effort: 'xhigh' },
     }],
     ['spike-investigation', {
       route: { model: 'opus', effort: 'high' },
-      fallback: { model: 'codex-gpt-5-6-sol', effort: 'high' },
+      fallback: { model: 'codex-gpt-6-1-sol', effort: 'high' },
     }],
     ['visual-evaluation', {
       route: { model: 'opus', effort: 'medium' },
@@ -422,11 +447,11 @@ test('every seeded Opus category recovers to its explicit Codex fallback without
 
   store.setProjectCategory(slug, 'debugging', 'OVERRIDE', {
     route: { model: 'sonnet', effort: 'medium' },
-    fallback: { model: 'codex-gpt-5-6-sol', effort: 'medium' },
+    fallback: { model: 'codex-gpt-6-1-sol', effort: 'medium' },
   });
   const overridden = store.getCategory('debugging', { project: slug });
   assert.deepEqual(overridden.route, { model: 'sonnet', effort: 'medium' });
-  assert.deepEqual(overridden.fallback, { model: 'codex-gpt-5-6-sol', effort: 'medium' });
+  assert.deepEqual(overridden.fallback, { model: 'codex-gpt-6-1-sol', effort: 'medium' });
   assert.equal(store.claudeQuotaFailure('Agent launch failed: network unavailable'), null);
 });
 

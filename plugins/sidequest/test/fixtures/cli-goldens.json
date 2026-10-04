@@ -8,7 +8,8 @@
       "sidequest — a Trello-light quest log for Claude Code",
       "Usage:",
       "sidequest add ",
-      "sidequest dispatch "
+      "sidequest dispatch ",
+      "record an advisory checkpoint while claim and dispatch stay active; no final acceptance"
     ],
     "stderr": ""
   },

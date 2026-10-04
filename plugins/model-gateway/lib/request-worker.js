@@ -31,7 +31,7 @@ const {
   REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT, SOCKET_PATH,
   MODEL_WINDOW_POLICY, STATE, syncGatewayDiscoveryCache, TRACE_HEADERS,
   codexContextWindow, codexContextWindowModelId, codexReadinessMessage, gatewayAdvertisedWindow, gatewayClientModelId, mkdirs,
-  resolveGatewayModelPolicy,
+  resolveGatewayModelPolicy, CODEX_COMPACT_HEADROOM, effectiveSentryPolicy,
 } = require('./runtime.js');
 
 const execFileAsync = promisify(execFile);
@@ -216,7 +216,7 @@ function displayName(id, backend = 'codex') {
 const PLAN_TOOLS = ['EnterPlanMode', 'ExitPlanMode'];
 
 const DEFAULT_MODELS = [
-  'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra',
+  'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-6-astra',
 ];
 const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 
@@ -273,27 +273,6 @@ function statelessBackendThreadRefusal(payload) {
 }
 
 const SENTRY_ENABLED = process.env.CODEX_GATEWAY_SENTRY !== '0';
-const configuredCompactTrigger = Number(process.env.CODEX_GATEWAY_COMPACT_TRIGGER);
-const CODEX_COMPACT_HEADROOM = 40000;
-
-function sentryBackendWindow(policy) {
-  const backendWindow = policy.backendWindow;
-  if (!Number.isFinite(backendWindow) || backendWindow <= CODEX_COMPACT_HEADROOM) {
-    throw new Error(`model-gateway: invalid sentry backend window for ${policy.backendId}`);
-  }
-  return backendWindow;
-}
-
-function effectiveSentryPolicy(policy, compactTrigger = configuredCompactTrigger) {
-  if (policy?.sentry !== 'synthetic-413') return null;
-  const backendWindow = sentryBackendWindow(policy);
-  const derivedTrigger = backendWindow - CODEX_COMPACT_HEADROOM;
-  const useConfiguredTrigger = Number.isFinite(compactTrigger) && compactTrigger > 0 && compactTrigger <= derivedTrigger;
-  return useConfiguredTrigger
-    ? { backendWindow, compactTrigger, source: 'env' }
-    : { backendWindow, compactTrigger: derivedTrigger, source: 'derived' };
-}
-
 function sentryPolicyFor(model) {
   return effectiveSentryPolicy(resolveGatewayModelPolicy(model));
 }

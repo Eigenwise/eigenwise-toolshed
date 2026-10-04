@@ -47,8 +47,8 @@ previous cache, and `status` reports `fallback catalog (proxy unreachable)`.
 
 Updating Toolshed never wires a project. Only `setup` or `env --write-project` run inside a project wires it.
 
-- `claude-gpt-*[1m]` uses your ChatGPT/Codex subscription. `MODEL_WINDOW_POLICY` in Model Gateway's runtime is the authority for every gateway picker row. GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured rows; other Codex proxy rows use its explicit unmeasured 920k default until measured.
-- A `[1m]` alias gives Claude Code a 1M client window, but a lower explicit `autoCompactWindow` still wins. The optional `325000` setting is a cap, and with that cap the client compacts around `292000`. The alias is removed before forwarding to the backend and does not promise a 1M backend input limit. Use `/context` to inspect the selected model and effective cap.
+- `claude-gpt-*[1m]` uses your ChatGPT/Codex subscription. `MODEL_WINDOW_POLICY` in Model Gateway's runtime is the authority for every gateway picker row. GPT-6.1 Sol, GPT-5.6 Sol, Terra, Luna, and GPT-6 Astra are measured rows; other Codex proxy rows use its explicit unmeasured 920k default until measured. GPT-6.1 Sol is the default Codex model; GPT-6 Astra is reserved for frontier or high-stakes tickets.
+- A `[1m]` alias gives Claude Code a 1M client window, but a lower explicit `autoCompactWindow` still wins. An `autoCompactWindow` is one number for the whole session, so it caps Claude rows too; the Codex cost cap lives in `context-window` instead (see [Context window and cost](#context-window-and-cost)). The alias is removed before forwarding to the backend and does not promise a 1M backend input limit. Use `/context` to inspect the selected model and effective cap.
 - `claude-grok-4.5[1m]` uses your Grok subscription when the Grok CLI is installed and signed in. Its measured backend window is 500k. The shared synthetic-413 sentry returns Claude Code's compaction signal 40k tokens before that backend limit if the client has not compacted first. The alias is removed before requests reach the backend.
 - Claude models keep using Anthropic.
 
@@ -81,6 +81,43 @@ Claude Desktop has its own native Gateway configuration, separate from the Claud
 
 This is a Desktop-side restriction, not a Model Gateway bug, and there is no supported workaround: no Anthropic-named alias to disguise a Codex or Grok route, no binary patch, no credential or auth substitution, no TLS interception, no global env or hosts trick. The Claude Code CLI remains the verified way to use gateway models. VS Code success has been reported by users but is not independently verified here. This limitation is specific to the installed Desktop version and can be revisited if a future release removes the model-family filter.
 
+## Context window and cost
+
+Claude keeps its native 1M window. OpenAI bills Codex input above 272k tokens at 2x. Model Gateway saves one policy per backend in `~/.claude/model-gateway/context-window.json`, shared by the orchestrator and executors. Existing installations keep their current policy until you configure a change.
+
+| Backend | Default window | Compaction |
+| --- | --- | --- |
+| Claude | `full` | Native 1M window through `[1m]` aliases; native engine headroom applies |
+| Codex | `272000` | Legacy trigger 187000 unless you save a direct maximum |
+| Grok | `full` | Backend window minus 40000 unless you save a lower direct maximum |
+
+Show or set windows:
+
+```sh
+node ~/.claude/model-gateway/model-gateway.js context-window
+node ~/.claude/model-gateway/model-gateway.js context-window --claude full --codex 272000 --grok full
+```
+
+The window flags still accept `full` or their supported whole token counts up to 1,000,000. `CODEX_GATEWAY_CONTEXT_WINDOW` applies only when no Codex window is saved. `/v1/models` advertises the window cap and keeps `[1m]` picker ids. Claude Code's discovery cache retains only model ids and names, so the gateway's synthetic-413 sentry enforces Codex and Grok compaction.
+
+Set a direct Codex or Grok maximum before compaction:
+
+```sh
+node ~/.claude/model-gateway/model-gateway.js context-window --codex-compact-at 242000
+node ~/.claude/model-gateway/model-gateway.js context-window --grok-compact-at 400000
+node ~/.claude/model-gateway/model-gateway.js context-window --codex-compact-at cap
+```
+
+These flags save positive whole token counts in `compactAt.codex` or `compactAt.grok`. `cap` removes that explicit entry and restores the legacy policy. Changing a window preserves saved maxima. The 242000 example leaves the Codex 272000 cap unchanged. Explicit maxima have no hidden 85000 subtraction: the effective trigger is limited by the requested number, the window cap when present, and the actual backend window minus 40000. `status`, `doctor`, and catalog notes report requested and effective numbers, the backend window, and the limiting source. A saved maximum overrides `CODEX_GATEWAY_COMPACT_TRIGGER`; its ignored value is reported without changing the environment.
+
+A direct maximum is a compaction trigger, with one-turn detection delay. The gateway records input usage after each response and sends a synthetic overflow on the next request when usage passed the trigger. The crossing turn and the compaction request can still exceed 272k and pay double, including with 242000 configured. This setting gives no per-request price guarantee.
+
+With no explicit maximum, the legacy cap policy still subtracts 85000 (two budgeted 40000-token turns plus a 5000-token compaction prompt). Thus Codex's default trigger stays 187000. Gateway window caps keep their existing 185000 minimum; direct maxima have no 100000 floor. The actual provider capacity remains authoritative.
+
+Claude's supported separate number remains `--claude <tokens|full>`, synced through existing project-wired `autoCompactWindow` settings. A numeric value requires a project wired at project scope. Gateway-owned values are synced; unrelated user-owned values stay untouched. A lower session-wide native window can also bound gateway models. Current native engine headroom and the exact direct Claude trigger are unverified, so `--claude-compact-at` and `compactAt.claude` are refused without writing. Same-model main/subagent thresholds are unverified; this policy applies one number per backend and uses no role guessing.
+
+Configuration is read at gateway startup. After deliberately changing it, stop the gateway and run `ensure`; restart open Claude Code sessions for native-window or picker changes. Updating or installing the plugin alone never adopts the 242000 example.
+
 ## Daily use
 
 There are no routine Model Gateway commands to remember. The shim supervisor checks the proxy's `/v1/models` endpoint while it runs and confirms a failed probe through a fresh connection before recovering an unavailable proxy with bounded backoff. It leaves a healthy proxy alone. If a session survives a plugin update, its older plugin copy leaves the newer shim running and asks you to reload plugins or restart Claude Code. Claude handles setup, updates, authentication checks, model discovery, and settings repair through the skill.
@@ -91,7 +128,7 @@ Setup and updates wait up to 42 seconds (the 30-second drain timeout plus 12) fo
 
 `status`, `doctor` and `ensure` share one probe of the shim, so they print the same state: `running-ours` (with the version it serves), `running-foreign` (a listener from another install, or one whose owner can't be identified), `starting`, or `stopped`. `ensure` treats a `running-ours` shim at the installed version as done, and gives a `starting` one its startup window instead of binding a second supervisor against it. While a proxy the supervisor just started is still warming up (it holds its port before `/v1/models` answers), recovery waits up to 30 seconds before replacing it. On Windows the port owner is read from `netstat`'s address and PID columns, so a German or French UI language no longer hides it and upgrades replace the running shim.
 
-When the gateway disappears or restarts, ask Claude to run `doctor`. It names `~/.claude/model-gateway/logs/lifecycle.jsonl` and says whether it found an observed supervisor, worker, or proxy exit. The bounded records include PIDs, orderly setup/stop/restart requests, signals, and recovery outcomes. A force-killed supervisor or OS termination can leave no final record, so a missing exit entry does not prove an orderly shutdown. If the Claude CLI alias resolves an older native model than the shipped fallback, `doctor` and `pin` name the newer id and the exact persistent override command; detection stays unchanged until you choose it.
+When the gateway disappears or restarts, ask Claude to run `doctor`. It names `~/.claude/model-gateway/logs/lifecycle.jsonl` and says whether it found an observed supervisor, worker, or proxy exit. The bounded records include PIDs, orderly setup/stop/restart requests, signals, and recovery outcomes. A force-killed supervisor or OS termination can leave no final record, so a missing exit entry does not prove an orderly shutdown. If the Claude CLI alias resolves an older native model than the shipped fallback, the shipped fallback wins, and `doctor` and `pin` name the older id the CLI resolved next to it. A saved `pin --<alias>` override still wins over both.
 
 `doctor` can report `upstream-unavailable` for 30 seconds after a final Codex inference fails, and the message names the failure's HTTP status, when it happened, and when the hold ends. It is passive evidence, independent of telemetry consent: a completed successful Codex response clears it. An attributed OpenAI 401, 403, or 429 rejection enters `upstream-blocked`. A 401 or 403 stays until `setup` or a completed successful Codex response clears it. A 429 block expires: `upstreamBlocked.expiresAt` comes from the 429's Retry-After, else claude-code-proxy's usage-limit reset header, else 60 seconds, and the `doctor` message names that time. It lifts by itself then, or sooner on a completed successful Codex response, and a later rejected request can latch it again. When Codex completes a turn with no output at all, claude-code-proxy reports a 503 "Codex completed without producing output"; the shim answers that turn as an empty `end_turn` so the session moves on instead of retrying into the same empty answer. Sidequest reads a cached catalog, but while that catalog says Codex isn't ready it asks the gateway again every 30 seconds, so a transient failure stops blocking dispatch within about a minute of the last failed request.
 

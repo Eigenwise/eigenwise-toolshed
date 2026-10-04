@@ -37,7 +37,7 @@ fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.str
   source: 'model-gateway',
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
   models: [
-    { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' },
+    { slug: 'codex-gpt-6-1-sol', id: 'claude-gpt-6.1-sol[1m]', label: 'GPT-6.1 Sol' },
     { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' },
     { slug: 'codex-gpt-5-6-luna', id: 'claude-gpt-5.6-luna[1m]', label: 'GPT-5.6 Luna' },
   ],

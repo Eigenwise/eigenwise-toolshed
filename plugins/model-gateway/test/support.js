@@ -410,4 +410,4 @@ async function startCountingProxy(t) {
   return { url: `http://127.0.0.1:${port}`, connectionCount: () => connectionCount, targets: () => [...targets] };
 }
 
-module.exports = { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startCountingProxy, startGateway };
+module.exports = { gatewayTestEnvironment, spawnGatewayProcess, spawnGatewayProcessSync, startCountingProxy, startGateway, stopGatewayChild };

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { isRecord, readStdin, stringField, type HookInput } from './shared/input.js';
 import { writeContext, writeDeny, writeToolUpdate } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
-import { readSessionState, sessionStateFile, writeSessionState } from './shared/session-state.js';
+import { readSessionState, sessionStateFile, writeSessionState, type SessionState } from './shared/session-state.js';
 // Dependency-free, so bundling it keeps launch naming identical in the hook and
 // in the store even when the installed lib is mid-upgrade.
 import { canonicalExecutorName, dispatchLaunchName, DIAGNOSTIC_PROBE_NAME, isReadOnlyExecutor } from '../lib/exec-names.js';
@@ -341,21 +341,35 @@ function matchesDeniedWork(records: DeniedWorkRecord[], toolInput: Record<string
     || (record.promptPrefix !== '' && record.promptPrefix === promptPrefix));
 }
 
+// The inline-work nudge clears boardInteraction on each new prompt; the Explore cap stays lifted for the whole session.
+function boardTouchedThisSession(sessionId: string): boolean {
+  const inlineWork = readSessionState(sessionStateFile('inline-work', sessionId));
+  return Boolean(inlineWork.boardInteraction || inlineWork.boardTouchedEarlier);
+}
+
+function exploreDenial(sessionId: string, state: SessionState, toolInput: Record<string, unknown>, priorPasses: number): string {
+  if (matchesDeniedWork(deniedWorkRecords(state), toolInput)) {
+    return 'sidequest: this Explore spawn matches work a generic Agent was already denied for. The block applied to the work, not the agent type. File a spike ticket (usually codebase-exploration), route it, dispatch it, then spawn the returned executor; rerouting denied work through Explore is a violation.';
+  }
+  if (priorPasses < EXPLORE_FREE_SPAWNS || boardTouchedThisSession(sessionId)) return '';
+  return `sidequest: Explore spawn ${priorPasses + 1} this session with no board interaction. Explore inherits the session model; investigation at this scale belongs on the board, where a codebase-exploration spike runs a cheaper route. File the spike, route it, dispatch it, then spawn the returned executor.`;
+}
+
 function guardMainSessionExplore(input: HookInput, toolInput: Record<string, unknown>): void {
   const sessionId = guardSessionId(input);
   if (!sessionId || dispatchAdmission(input).status !== 'routed') return;
   const file = sessionStateFile('explore-fanout', sessionId);
   const state = readSessionState(file);
-  if (matchesDeniedWork(deniedWorkRecords(state), toolInput)) {
-    writeDeny('PreToolUse', 'sidequest: this Explore spawn matches work a generic Agent was already denied for. The block applied to the work, not the agent type. File a spike ticket (usually codebase-exploration), route it, dispatch it, then spawn the returned executor; rerouting denied work through Explore is a violation.');
-    return;
-  }
   const priorPasses = Number(state.explorePasses) || 0;
-  const boardInteraction = Boolean(readSessionState(sessionStateFile('inline-work', sessionId)).boardInteraction);
-  if (priorPasses >= EXPLORE_FREE_SPAWNS && !boardInteraction) {
-    writeDeny('PreToolUse', `sidequest: Explore spawn ${priorPasses + 1} this session with no board interaction. Explore inherits the session model; investigation at this scale belongs on the board, where a codebase-exploration spike runs a cheaper route. File the spike, route it, dispatch it, then spawn the returned executor.`);
+  const denial = exploreDenial(sessionId, state, toolInput, priorPasses);
+  if (denial) {
+    writeDeny('PreToolUse', denial);
     return;
   }
+  recordExplorePass(file, state, priorPasses);
+}
+
+function recordExplorePass(file: string, state: SessionState, priorPasses: number): void {
   state.explorePasses = priorPasses + 1;
   writeSessionState(file, state);
   if (priorPasses < EXPLORE_FREE_SPAWNS) {
@@ -438,31 +452,34 @@ function toolInputOf(input: HookInput): Record<string, unknown> | null {
 
 const CLOSEOUT_UPDATE_FIELDS = new Set([
   'files', 'status', 'readonly', 'readonlyOverride', 'workingTreeDelivery',
-  'externalDeliverable', 'verify', 'verifyKind', 'attestationArtifact', 'verifyCwd',
+  'externalDeliverable', 'verify', 'verifyKind', 'attestationArtifact', 'verifyCwd', 'admitComposition',
   'executorVerify', 'executorVerifyKind', 'executorAttestationArtifact', 'executorVerifyCwd',
 ]);
 
+const MAIN_THREAD_MUTATIONS: Record<string, { matches: (input: Record<string, unknown>) => boolean; denial: string }> = {
+  mcp__plugin_sidequest_board__update: {
+    matches: (input) => Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(input, field)),
+    denial: 'sidequest: subagents cannot update closeout fields or admit a composition through MCP. Use scopeRequest for files, or ask the orchestrator to set closeout fields or use update.admitComposition from the main thread.',
+  },
+  mcp__plugin_sidequest_board__remove: {
+    matches: (input) => input.force === true,
+    denial: 'sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.',
+  },
+  mcp__plugin_sidequest_board__verdict: {
+    matches: (input) => Object.hasOwn(input, 'correct'),
+    denial: 'sidequest: subagents cannot correct finalized review verdicts. Ask the orchestrator to use verdict with correct from the main thread.',
+  },
+};
+
 function executorLiveClaimMutationRefusal(input: HookInput): boolean {
   if (!isSubagentCaller(input)) return false;
-  const toolName = stringField(input, 'tool_name');
   const toolInput = toolInputOf(input);
-  if (toolName === 'mcp__plugin_sidequest_board__update'
-    && toolInput
-    && Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(toolInput, field))) {
-    writeDeny('PreToolUse', 'sidequest: subagents cannot update closeout fields through MCP. Use scopeRequest for files, or ask the orchestrator to set other closeout flags from the main thread.');
-    return true;
-  }
-  // force:true is the only path that deletes a live-claimed ticket, so it is the
-  // executor's escape hatch (delete the ticket to shed the claim). The store
-  // refuses ungranted live-claim deletion, but deny it here too so a subagent
-  // can never mint the main-thread grant by riding the MCP remove handler.
-  if (toolName === 'mcp__plugin_sidequest_board__remove'
-    && toolInput
-    && toolInput.force === true) {
-    writeDeny('PreToolUse', 'sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.');
-    return true;
-  }
-  return false;
+  if (!toolInput) return false;
+  const rule = MAIN_THREAD_MUTATIONS[stringField(input, 'tool_name')];
+  if (!rule) return false;
+  if (!rule.matches(toolInput)) return false;
+  writeDeny('PreToolUse', rule.denial);
+  return true;
 }
 
 // Last resort for a single-ticket launch whose board record could not be read

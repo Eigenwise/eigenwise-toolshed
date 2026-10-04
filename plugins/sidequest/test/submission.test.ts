@@ -2277,6 +2277,180 @@ test('SQ-3144: integrate refuses a checkout that does not descend from the recor
   }
 });
 
+function integrateWithFailedFreshTarget(ref: string) {
+  process.env.SIDEQUEST_TEST_INTEGRATION_TARGET_FAULT = 'second-resolution';
+  try {
+    return store.integrateSubmission(slug, ref, { mode: 'merge' });
+  } finally {
+    delete process.env.SIDEQUEST_TEST_INTEGRATION_TARGET_FAULT;
+  }
+}
+
+// Deterministic failure injection at the fresh target resolution that runs after admission.
+test('a failed fresh integration target resolution refuses delivery without writes, then the ordinary path delivers', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  try {
+    const { t, recorded, commit } = sq3144SubmittedOnRecordedBranch('target-fault');
+    git(['checkout', '-f', recorded]);
+    const recordedHead = git(['rev-parse', recorded]);
+    const worktreeState = git(['status', '--porcelain']);
+    const before = JSON.stringify(store.getTicket(slug, t.ref));
+
+    const refused = integrateWithFailedFreshTarget(t.ref);
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'integration_target_unavailable');
+    assert.match(refused.message, /injected integration target fault at the second resolution/);
+    assert.strictEqual(git(['rev-parse', recorded]), recordedHead, 'the target branch does not move');
+    assert.strictEqual(git(['status', '--porcelain']), worktreeState, 'index and working tree are untouched');
+    assert.strictEqual(JSON.stringify(store.getTicket(slug, t.ref)), before, 'the ticket and submission are unchanged');
+
+    const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, recorded]), '');
+    const closed = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${commit} into ${recorded}.`]);
+    assert.strictEqual(closed.status, 0, closed.stderr + closed.stdout);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+  }
+});
+
+// GH-340: long-running services keep rewriting files in the registered checkout. Integrate refuses only
+// dirt the delivery would write, including a rename's source, and reports the rest as ignored.
+function gh340SubmittedCandidate(label: string, files: string[], writeCandidate: (ticket: { ref: string }) => void) {
+  const stamp = `${process.pid}-${Date.now()}`;
+  const target = `gh340-${label}-${stamp}`;
+  git(['checkout', '-f', '-B', target, 'origin/main']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: target });
+  const t = addTicket(`GH-340 ${label}`, { files, category: 'submission.fixture' });
+  const sessionId = `gh340-${label}-${stamp}`;
+  const prepared = store.prepareDispatch(slug, t.ref, { sessionId, sharedTree: true, integrationBranch: target, integrationMode: 'local' });
+  assert.strictEqual(store.claimTicket(slug, t.ref, `${label}-worker`, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+  }).ok, true);
+  git(['checkout', '-f', '-B', `gh340-candidate-${label}-${stamp}`, target]);
+  writeCandidate(t);
+  git(['add', '-A']);
+  git(['commit', '-m', `${label} candidate`]);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+  const submitted = runCli(['submit', t.ref, '--by', `${label}-worker`, '--commit', commit]);
+  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  git(['checkout', '-f', target]);
+  return { t, target, commit };
+}
+
+function gh340WriteLibFile(file: string) {
+  return () => {
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, file), 'candidate\n');
+  };
+}
+
+function withGh340Board(run: () => void) {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  try {
+    run();
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+  }
+}
+
+test('GH-340: integrate delivers when every dirty path is outside the delivery and lists them as ignored', () => {
+  withGh340Board(() => {
+    const { t, target, commit } = gh340SubmittedCandidate('disjoint', ['lib/gh340-disjoint.js'], gh340WriteLibFile('lib/gh340-disjoint.js'));
+    fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'rewritten by a running service\n');
+    fs.writeFileSync(path.join(PROJECT_DIR, 'gh340-service.json'), '{"tick":1}\n');
+
+    const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.deepStrictEqual(delivered.integration.ignoredDirtyPaths.slice().sort(), ['README.md', 'gh340-service.json']);
+    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, target]), '');
+    assert.strictEqual(fs.readFileSync(path.join(PROJECT_DIR, 'README.md'), 'utf8'), 'rewritten by a running service\n');
+    assert.strictEqual(fs.readFileSync(path.join(PROJECT_DIR, 'gh340-service.json'), 'utf8'), '{"tick":1}\n');
+  });
+});
+
+test('GH-340: integrate still refuses a dirty path the delivery writes and names only that path', () => {
+  withGh340Board(() => {
+    const { t, target } = gh340SubmittedCandidate('intersect', ['lib/gh340-intersect.js'], gh340WriteLibFile('lib/gh340-intersect.js'));
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'gh340-intersect.js'), 'operator copy\n');
+    fs.writeFileSync(path.join(PROJECT_DIR, 'gh340-service.json'), '{"tick":2}\n');
+    const headBefore = git(['rev-parse', target]);
+
+    const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+
+    assert.strictEqual(refused.reason, 'integration_target_dirty', refused.message);
+    assert.deepStrictEqual(refused.checkoutState, ['? lib/gh340-intersect.js']);
+    assert.deepStrictEqual(refused.ignoredDirtyPaths, ['gh340-service.json']);
+    assert.match(refused.message, /: lib\/gh340-intersect\.js\. Commit, stash, or remove those paths.* 1 other dirty path\(s\) sit outside the delivery and were ignorable\./);
+    assert.doesNotMatch(refused.message, /gh340-service\.json/);
+    assert.strictEqual(git(['rev-parse', target]), headBefore);
+    assert.strictEqual(fs.readFileSync(path.join(PROJECT_DIR, 'lib', 'gh340-intersect.js'), 'utf8'), 'operator copy\n');
+  });
+});
+
+test('GH-340: integrate refuses an unstaged edit to a file the delivery renames away', () => {
+  withGh340Board(() => {
+    const { t, target } = gh340SubmittedCandidate('rename', ['README.md', 'docs/README.md'], () => {
+      fs.mkdirSync(path.join(PROJECT_DIR, 'docs'), { recursive: true });
+      git(['mv', 'README.md', 'docs/README.md']);
+    });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'rewritten by a running service\n');
+    const headBefore = git(['rev-parse', target]);
+
+    const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+
+    assert.strictEqual(refused.reason, 'integration_target_dirty', refused.message);
+    assert.strictEqual(refused.checkoutState.length, 1);
+    assert.match(refused.checkoutState[0], /^1 \.M .* README\.md$/);
+    assert.match(refused.message, /: README\.md\. Commit, stash/);
+    assert.strictEqual(git(['rev-parse', target]), headBefore);
+    assert.strictEqual(fs.readFileSync(path.join(PROJECT_DIR, 'README.md'), 'utf8'), 'rewritten by a running service\n');
+  });
+});
+
+// GH-156: integrate on a per-ticket integrationBranch refused wave_invalidated while the
+// message showed the assembled baseline equal to the candidate's. Equal baselines are the
+// healthy fast-forward case and must deliver.
+test('GH-156: integrate delivers a candidate whose parent is the checked-out target head', () => {
+  withGh340Board(() => {
+    const { t, target, commit } = gh340SubmittedCandidate('gh156-parent', ['lib/gh156-parent.js'], gh340WriteLibFile('lib/gh156-parent.js'));
+    const submittedBaseline = store.getTicket(slug, t.ref).submission.baseline.revision.value;
+    assert.strictEqual(submittedBaseline, git(['rev-parse', `${commit}^`]));
+    assert.strictEqual(git(['rev-parse', target]), submittedBaseline, 'the target head is the candidate parent');
+
+    const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, target]), '');
+    assert.strictEqual(store.getTicket(slug, t.ref).submission.wave.baseline.revision.value, submittedBaseline);
+  });
+});
+
+// GH-156 (5.3.2 report): the ticket's real work lived outside the repo, so its candidate
+// carried nothing but its own release fragment, and none of its declared files. That is
+// a legitimate delivery.
+test('GH-156: integrate delivers a candidate that changes only its own release fragment', () => {
+  withGh340Board(() => {
+    const { t, target, commit } = gh340SubmittedCandidate('gh156-fragment', ['docs/gh156-never-written.md'], (ticket) => {
+      fs.mkdirSync(path.join(PROJECT_DIR, '.release', 'unreleased'), { recursive: true });
+      fs.writeFileSync(path.join(PROJECT_DIR, '.release', 'unreleased', `${ticket.ref}.md`), '- external work delivered\n');
+    });
+    assert.deepStrictEqual(store.getTicket(slug, t.ref).submission.changedPaths, [`.release/unreleased/${t.ref}.md`]);
+
+    const delivered = store.integrateSubmission(slug, t.ref, { mode: 'merge' });
+
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.strictEqual(git(['merge-base', '--is-ancestor', commit, target]), '');
+  });
+});
+
 test('legacy root scope cannot bypass integration and names explicit transitions', () => {
   cleanBranch();
   const ticket = addTicket('legacy root scope snapshot', { files: ['lib/legacy.js'] });
@@ -5930,6 +6104,59 @@ function rejectThroughOracle(reviewRef: string, commit: string, label: string) {
   });
   assert.strictEqual(verdict.ok, true, verdict.message);
 }
+
+test('correction admits a real retained repair range while its independent review still gates delivery', async () => {
+  await withInheritedRejectedFixture('correction-admission', async (fixture) => {
+    const source = await submitInheritedSource(fixture);
+    source.dispatch.terminalAt = new Date().toISOString();
+    source.dispatch.outcome = 'submitted';
+    persist(source);
+    const review = bindCandidateReview(source.ref, fixture.sourceCommit, fixture.label);
+    const readonlyReview = store.getTicket(slug, review.ref);
+    readonlyReview.dispatch.readonly = true;
+    readonlyReview.dispatch.agentId = 'synthetic-original-independent-reviewer';
+    persist(readonlyReview);
+    assert.equal(store.releaseTicket(slug, review.ref, `${fixture.label}-reviewer`, { releaseKind: 'oracle', oracle: 'Does the pinned defect reject this candidate?' }).ok, true);
+    assert.equal(store.applyExperimentVerdict(slug, review.ref, { text: 'Synthetic erroneous approval', outcome: 'accepted' }).ok, true);
+    assert.equal(store.linkTickets(slug, fixture.repair.ref, 'related', source.ref).ok, true);
+    const beforeCorrection = await sq2972Submit(fixture.repair.ref, `${fixture.label}-repair`, fixture.repairCommit);
+    assert.equal(beforeCorrection.reason, 'duplicate_submission');
+    assert.equal(store.getTicket(slug, fixture.repair.ref).claim.by, `${fixture.label}-repair`, 'retained repair holder survives refusal');
+    const finalized = store.getTicket(slug, review.ref);
+    const correction = store.correctAcceptedReviewVerdict(slug, review.ref, {
+      by: 'synthetic-main', sessionId: 'synthetic-main-session', text: 'The candidate must not ship.', evidence: 'Synthetic pinned defect reproduced.',
+      expected: { outcome: 'accepted', verdictAt: finalized.oracle.verdict.at, sourceRef: source.ref, candidate: { source: 'git', value: fixture.sourceCommit } },
+    }, { allowAcceptedReviewCorrection: true });
+    assert.equal(correction.ok, true, correction.message);
+    const claimedSource = store.getTicket(slug, source.ref);
+    claimedSource.claim = { by: 'synthetic-active-source', at: new Date().toISOString() };
+    persist(claimedSource);
+    const activeSourceRefusal = await sq2972Submit(fixture.repair.ref, `${fixture.label}-repair`, fixture.repairCommit);
+    assert.equal(activeSourceRefusal.reason, 'duplicate_submission', 'effective rejection never bypasses a live source claim');
+    assert.equal(store.getTicket(slug, fixture.repair.ref).claim.by, `${fixture.label}-repair`);
+    claimedSource.claim = null;
+    persist(claimedSource);
+    const admitted = await sq2972Submit(fixture.repair.ref, `${fixture.label}-repair`, fixture.repairCommit);
+    assert.equal(admitted.ok, true, admitted.message);
+    const submittedRepair = store.getTicket(slug, fixture.repair.ref);
+    assert.deepEqual(submittedRepair.submission.commits, [fixture.sourceCommit, fixture.repairCommit]);
+    submittedRepair.dispatch = { terminalAt: new Date().toISOString(), outcome: 'submitted', attempts: [{ terminalAt: new Date().toISOString(), outcome: 'submitted', commit: fixture.repairCommit, agentId: 'synthetic-repair-worker' }] };
+    persist(submittedRepair);
+    const repairReview = bindCandidateReview(fixture.repair.ref, fixture.repairCommit, 'correction-repair');
+    assert.equal(store.validateIntegrationSubmission(slug, fixture.repair.ref, {}).reason, 'candidate_review_required', 'original correction never approves the repair');
+    const independent = store.getTicket(slug, repairReview.ref);
+    independent.dispatch.readonly = true;
+    independent.dispatch.agentId = 'synthetic-new-independent-reviewer';
+    persist(independent);
+    assert.equal(store.releaseTicket(slug, repairReview.ref, 'correction-repair-reviewer', { releaseKind: 'oracle', oracle: 'Does the repair candidate pass its independent review?' }).ok, true);
+    assert.equal(store.applyExperimentVerdict(slug, repairReview.ref, { text: 'Synthetic independent repair approval', outcome: 'accepted' }).ok, true);
+    assert.notEqual(store.validateIntegrationSubmission(slug, fixture.repair.ref, {}).reason, 'candidate_review_required');
+    assert.equal(store.getTicket(slug, repairReview.ref).reviewTarget.outcome, 'accepted');
+    assert.equal(store.getTicket(slug, review.ref).reviewTarget.outcome, 'rejected');
+    assert.equal(store.pendingSubmission(store.getTicket(slug, fixture.repair.ref)), true, 'no automatic delivery');
+    assert.equal(store.validateIntegrationSubmission(slug, source.ref, {}).reason, 'candidate_rejected');
+  });
+});
 
 test('SQ-2972: only an oracle-rejected related source admits inherited commits, and the admitted range stays whole', async () => {
   await withInheritedRejectedFixture('classification', async (fixture: any) => {

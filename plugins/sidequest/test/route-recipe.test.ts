@@ -22,7 +22,7 @@ fs.writeFileSync(path.join(discovery, 'model-gateway', 'catalog.json'), JSON.str
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
   models: [
     { slug: 'codex-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'Codex Terra' },
-    { slug: 'codex-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'Codex Sol' },
+    { slug: 'codex-sol', id: 'claude-gpt-6.1-sol[1m]', label: 'Codex Sol' },
   ],
 }));
 const env = Object.assign({}, process.env, {
@@ -94,7 +94,7 @@ test('route resolves a ticket override without changing its sibling recipe', () 
   const overrideRecipe = jsonCli('route', 'workflow-override', '--ticket', overridden.body.ticket.ref);
   assert.equal(overrideRecipe.result.status, 0, overrideRecipe.result.stderr);
   assert.deepEqual(overrideRecipe.body.route, { model: 'codex-sol', effort: 'high' });
-  assert.equal(overrideRecipe.body.agent.promptPrefix, '[sidequest-route model=gpt-5.6-sol effort=high]\n\n');
+  assert.equal(overrideRecipe.body.agent.promptPrefix, '[sidequest-route model=gpt-6.1-sol effort=high]\n\n');
   assert.deepEqual(overrideRecipe.body.ticket, {
     ref: overridden.body.ticket.ref,
     route: { model: 'codex-sol', effort: 'high' },

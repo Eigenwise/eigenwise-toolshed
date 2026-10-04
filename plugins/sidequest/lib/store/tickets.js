@@ -170,9 +170,10 @@ function createTickets(dependencies) {
     }
     return reviewTicket;
   }
-  function withSourceTicketLock(slug, sourceId, fn) {
+  function withSourceTicketLock(slug, sourceId, fn, requireLock = false) {
     const lock = ticketLockPath(slug, sourceId);
     const locked = acquireLock(lock);
+    if (requireLock && !locked) return { ok: false, reason: "busy", message: "The source ticket lock is busy." };
     try {
       return fn();
     } finally {
@@ -627,6 +628,11 @@ function createTickets(dependencies) {
     const refusals = rulings.filter((ruling) => ruling.reason);
     return refusals.length ? ` Not auto-approved: ${refusals.map((ruling) => `${ruling.file}: ${ruling.reason}`).join("; ")}.` : "";
   }
+  function liveWholeTreeScope(ticket) {
+    const dispatch = dispatchState(ticket);
+    const bound = dispatch && !dispatch.terminalAt ? dispatch.declaredFiles : null;
+    return Array.isArray(bound) && bound.includes(commitScope.WHOLE_TREE_SCOPE) ? [commitScope.WHOLE_TREE_SCOPE] : [];
+  }
   function requestScope(slug, idOrRef, by, files, opts) {
     opts = opts || {};
     by = String(by || "agent");
@@ -657,7 +663,7 @@ function createTickets(dependencies) {
       }
       const foreignReleaseFragments = commitScope.foreignReleaseFragmentScopePaths(requested, t.ref);
       const isForeignReleaseFragmentScope = (file) => foreignReleaseFragments.some((fragment) => commitScope.isInScope(file, [fragment]) && commitScope.isInScope(fragment, [file]));
-      const scope = commitScope.ticketCommitScope(effectiveScope(slug, t), t.files, t.ref);
+      const scope = commitScope.ticketCommitScope([...effectiveScope(slug, t), ...liveWholeTreeScope(t)], t.files, t.ref);
       const additions = requested.filter((file) => !isForeignReleaseFragmentScope(file) && !commitScope.isInScope(file, scope));
       const covered = requested.filter((file) => !isForeignReleaseFragmentScope(file) && commitScope.isInScope(file, scope));
       const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -1215,6 +1221,6 @@ function createTickets(dependencies) {
   function listActive(slug) {
     return queryTickets(String(slug || ""), { archived: false });
   }
-  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, submissionReviewRelation, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
+  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, submissionReviewRelation, withSourceTicketLock, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
 }
 module.exports = { createTickets };
