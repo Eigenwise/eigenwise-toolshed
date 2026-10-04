@@ -1,6 +1,9 @@
 'use strict';
 
 import type { Diagnostic } from './index.js';
+import type { SubmissionVerification } from './submission.js';
+import { sameCanonicalPath } from './worktree.js';
+import path from 'node:path';
 
 export const VERIFICATION_KINDS = ['suite', 'command', 'document', 'link', 'schema', 'manual', 'attestation', 'review', 'custom'] as const;
 export type VerificationKind = (typeof VERIFICATION_KINDS)[number];
@@ -181,46 +184,82 @@ function missingCaptureInstruction(command: string, directCaptureInvocation: str
   return `A direct claim has no dispatch briefing: from the checkout holding that candidate, run ${directCaptureInvocation} (it loads the pinned command from the ticket and records the capture), then resubmit.`;
 }
 
-export function commandVerificationResult(requirement: VerificationRequirement, evidence: string, captures: readonly CompletedVerificationCapture[], ticket: string, candidate: VerificationCandidate, dispatchNonce: string, directCaptureInvocation = '') {
-  const command = requirement.command || '';
-  if (evidence !== command) {
-    const message = 'verification must match the declared executor verify command and the prepared command verifier; executors cannot replace the required command.';
-    return Object.freeze({
-      result: Object.freeze({ kind: requirement.kind, status: 'failed_check' as const, evidence: message, command, failureIdentities: Object.freeze(['verification:evidence-mismatch']) }),
-      expectedEvidence: command,
-      diagnostic: Object.freeze({ code: 'executor_verify_mismatch', message, retryable: true }),
-    });
+function comparableVerificationPaths(verify: string, root: string): { command: string; root: string } {
+  const normalize = (value: string): string => value.replace(/[\\/]+/g, '/').replace(/\/+$/, '');
+  const checkout = normalize(path.resolve(root));
+  const command = normalize(verify);
+  return /^[a-z]:\//i.test(checkout)
+    ? { command: command.toLowerCase(), root: checkout.toLowerCase() }
+    : { command, root: checkout };
+}
+
+function commandNamesCheckout(command: string, root: string): boolean {
+  let offset = command.indexOf(root);
+  while (offset !== -1) {
+    const next = command.charAt(offset + root.length);
+    if (!next || next === '/' || !/[a-z0-9._-]/i.test(next)) return true;
+    offset = command.indexOf(root, offset + root.length);
   }
-  const matchingCapture = (capture: CompletedVerificationCapture) => capture.ticket === ticket
-    && capture.command === command
-    && capture.status === 'passed'
-    && capture.candidate.source === candidate.source
-    && capture.candidate.value === candidate.value
-    && capture.dispatchNonce === dispatchNonce;
-  const provesCandidate = (capture: CompletedVerificationCapture) => capture.candidate.source === 'working-tree' || capture.cleanWorktree === true;
-  const completedCapture = captures.find((capture) => matchingCapture(capture) && provesCandidate(capture));
-  if (!completedCapture) {
-    const dirtyCapture = captures.find((capture) => matchingCapture(capture) && capture.cleanWorktree === false);
-    const message = dirtyCapture
-      ? `Verification capture ${dirtyCapture.id} for ${ticket}, ${captureAttemptLabel(dispatchNonce)}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)} ran over a dirty worktree. Commit or discard the changes, then run the pinned verifier again before resubmitting.`
-      : `No completed passed verification capture exists for ${ticket}, ${captureAttemptLabel(dispatchNonce)}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)}. ${missingCaptureInstruction(command, directCaptureInvocation)}`;
-    return Object.freeze({
-      result: Object.freeze({ kind: requirement.kind, status: 'failed_check' as const, evidence: message, command, failureIdentities: Object.freeze([dirtyCapture ? 'verification:dirty-worktree-capture' : 'verification:capture-required']) }),
-      expectedEvidence: null,
-      diagnostic: Object.freeze({ code: dirtyCapture ? 'verification_capture_dirty_worktree' : 'verification_capture_required', message, retryable: true }),
-    });
-  }
+  return false;
+}
+
+export function verifyEmbedsWorktreeRoot(verify: unknown, root: string): boolean {
+  if (typeof verify !== 'string' || !verify || !root) return false;
+  const comparable = comparableVerificationPaths(verify, root);
+  return commandNamesCheckout(comparable.command, comparable.root);
+}
+
+function captureMatchesExecution(capture: CompletedVerificationCapture, ticket: string, command: string, dispatchNonce: string): boolean {
+  return capture.ticket === ticket && capture.command === command
+    && capture.status === 'passed' && capture.dispatchNonce === dispatchNonce;
+}
+
+function captureMatchesRoot(capture: CompletedVerificationCapture, root: string): boolean {
+  if (!root) return true;
+  return Boolean(capture.worktree) && sameCanonicalPath(capture.worktree || '', root);
+}
+
+function captureMatchesCandidate(capture: CompletedVerificationCapture, candidate: VerificationCandidate, root: string): boolean {
+  return capture.candidate.source === candidate.source && capture.candidate.value === candidate.value
+    && captureMatchesRoot(capture, root);
+}
+
+function failedCommandVerification(requirement: VerificationRequirement, command: string, message: string, identity: string, code: string, expectedEvidence: string | null): SubmissionVerification {
   return Object.freeze({
-    result: Object.freeze({
-      kind: requirement.kind,
-      status: 'passed' as const,
-      evidence: command,
-      command,
-      logPath: completedCapture.logPath || null,
-      exitCode: completedCapture.exitCode ?? null,
-    }),
-    expectedEvidence: command,
+    result: Object.freeze({ kind: requirement.kind, status: 'failed_check', evidence: message, command, failureIdentities: Object.freeze([identity]) }),
+    expectedEvidence,
+    diagnostic: Object.freeze({ code, message, retryable: true }),
   });
+}
+
+function missingCommandCaptureMessage(ticket: string, command: string, candidate: VerificationCandidate, dispatchNonce: string, directCaptureInvocation: string, dirtyCapture: CompletedVerificationCapture | undefined): string {
+  if (dirtyCapture) return `Verification capture ${dirtyCapture.id} for ${ticket}, ${captureAttemptLabel(dispatchNonce)}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)} ran over a dirty worktree. Commit or discard the changes, then run the pinned verifier again before resubmitting.`;
+  return `No completed passed verification capture exists for ${ticket}, ${captureAttemptLabel(dispatchNonce)}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)}. ${missingCaptureInstruction(command, directCaptureInvocation)}`;
+}
+
+function passedCommandVerification(requirement: VerificationRequirement, command: string, capture: CompletedVerificationCapture): SubmissionVerification {
+  return Object.freeze({ result: Object.freeze({
+    kind: requirement.kind, status: 'passed', evidence: command, command,
+    logPath: capture.logPath || null, exitCode: capture.exitCode ?? null,
+  }), expectedEvidence: command });
+}
+
+export function commandVerificationResult(requirement: VerificationRequirement, evidence: string, captures: readonly CompletedVerificationCapture[], ticket: string, candidate: VerificationCandidate, dispatchNonce: string, directCaptureInvocation = '', root = ''): SubmissionVerification {
+  const command = requirement.command || '';
+  if (evidence !== command) return failedCommandVerification(requirement, command,
+    'verification must match the declared executor verify command and the prepared command verifier; executors cannot replace the required command.',
+    'verification:evidence-mismatch', 'executor_verify_mismatch', command);
+  const matchingCapture = (capture: CompletedVerificationCapture): boolean => captureMatchesExecution(capture, ticket, command, dispatchNonce)
+    && captureMatchesCandidate(capture, candidate, root);
+  const provesCandidate = (capture: CompletedVerificationCapture): boolean => capture.candidate.source === 'working-tree' || capture.cleanWorktree === true;
+  const completedCapture = captures.find((capture): boolean => matchingCapture(capture) && provesCandidate(capture));
+  if (completedCapture) return passedCommandVerification(requirement, command, completedCapture);
+  const dirtyCapture = captures.find((capture): boolean => matchingCapture(capture) && capture.cleanWorktree === false);
+  const message = missingCommandCaptureMessage(ticket, command, candidate, dispatchNonce, directCaptureInvocation, dirtyCapture);
+  const failure = dirtyCapture
+    ? { identity: 'verification:dirty-worktree-capture', code: 'verification_capture_dirty_worktree' }
+    : { identity: 'verification:capture-required', code: 'verification_capture_required' };
+  return failedCommandVerification(requirement, command, message, failure.identity, failure.code, null);
 }
 
 export function captureVerificationResult(requirement: VerificationRequirement, capture: Capture): VerificationResult {

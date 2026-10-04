@@ -1,4 +1,7 @@
 "use strict";
+var import_source_revision_capability = require("../source-revision-capability.js");
+var import_verification = require("../kernel/verification.js");
+var import_refusal_guidance = require("../refusal-guidance.js");
 const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require("../kernel/verification.js");
 const { runProcessVerification } = require("../ports/process.js");
 const { isFullSuiteCommand, runFullSuiteVerification } = require("../verify-capture.js");
@@ -2174,126 +2177,204 @@ ${verify.outputTail}` : null
       return { ok: false, message: error?.message || String(error) };
     }
   }
-  function submissionVerificationResult(ticket, sourceRevision, verify, candidateCommit, directCaptureInvocation) {
+  function evidenceSubmissionVerification(kind, evidence, error, status, identity, command) {
+    if (error) return { result: { kind, status: "failed_check", evidence: error, failureIdentities: [identity] }, expectedEvidence: null, diagnostic: { code: "invalid_verify", message: error, retryable: true } };
+    return { result: { kind, status, evidence, ...command === void 0 ? {} : { command } }, expectedEvidence: null };
+  }
+  function attestedSubmissionVerification(evidence, artifact) {
+    const error = attestationErrors(evidence, artifact)[0] || null;
+    return evidenceSubmissionVerification("attestation", evidence, error, "attestation", "attestation:evidence-contract");
+  }
+  function manualSubmissionVerification(requirement, evidence) {
+    const error = evidence ? null : "manual verification requires evidence from the prepared verifier contract";
+    return evidenceSubmissionVerification("manual", evidence, error, "manual", "manual:evidence-required", requirement.command || null);
+  }
+  function legacySubmissionVerification(requirement, evidence) {
+    if (!evidence) return { result: { kind: "custom", status: "passed", evidence: requirement.evidenceContract }, expectedEvidence: null };
+    const error = verifyCommandError(evidence);
+    if (error) return evidenceSubmissionVerification("custom", evidence, error, "passed", "custom:invalid-fallback");
+    if (manualVerify(evidence)) return { result: { kind: "custom", status: "manual", evidence }, expectedEvidence: null };
+    return null;
+  }
+  function isLegacyVerification(requirement) {
+    return requirement.kind === "custom" && requirement.evidenceContract === "legacy project verifier was not recorded";
+  }
+  function capturedSubmissionVerification(ticket, requirement, evidence, commit, directCaptureInvocation, root) {
+    const captures = recordedVerificationCaptures(ticket);
+    return commandVerificationResult(
+      requirement,
+      evidence,
+      captures,
+      ticket.ref,
+      { source: "git", value: String(commit || "").trim().toLowerCase() },
+      String(ticket.dispatchNonce || ""),
+      directCaptureInvocation,
+      root
+    );
+  }
+  function rootBoundSubmissionVerification(ticket, evidence, root, verification) {
+    if (!verification.diagnostic || !(0, import_verification.verifyEmbedsWorktreeRoot)(evidence, root)) return verification;
+    const message = (0, import_refusal_guidance.worktreeBoundVerifyRefusalMessage)(ticket.ref, "verify") + " " + verification.diagnostic.code + ": " + verification.diagnostic.message;
+    return { ...verification, result: { ...verification.result, evidence: message }, diagnostic: { ...verification.diagnostic, message } };
+  }
+  function commandSubmissionVerification(ticket, requirement, evidence, commit, directCaptureInvocation, root) {
+    const command = requirement.command || "";
+    const error = evidence === command ? verifyCommandError(command) : null;
+    if (error) return { result: { kind: requirement.kind, status: "could_not_run", evidence: error, command, failureIdentities: ["could_not_run:invalid-command"] }, expectedEvidence: command, diagnostic: { code: "invalid_verify", message: error, retryable: true } };
+    return rootBoundSubmissionVerification(ticket, evidence, root, capturedSubmissionVerification(ticket, requirement, evidence, commit, directCaptureInvocation, root));
+  }
+  function declaredSubmissionVerification(ticket, requirement, evidence, commit, directCaptureInvocation, root) {
+    const legacy = isLegacyVerification(requirement) ? legacySubmissionVerification(requirement, evidence) : null;
+    if (legacy) return legacy;
+    if (requirement.command) return commandSubmissionVerification(ticket, requirement, evidence, commit, directCaptureInvocation, root);
+    return evidenceSubmissionVerification(requirement.kind, evidence, evidence ? null : `required ${requirement.kind} verification evidence is missing`, "passed", `${requirement.kind}:evidence-required`);
+  }
+  function nonExecutableRootSubmissionVerification(ticket, requirement, evidence, root) {
+    if (requirement.command && ["command", "suite"].includes(requirement.kind)) return null;
+    if (!(0, import_verification.verifyEmbedsWorktreeRoot)(evidence, root)) return null;
+    const message = (0, import_refusal_guidance.worktreeBoundVerifyRefusalMessage)(ticket.ref, "verify");
+    return {
+      result: { kind: requirement.kind, status: "failed_check", evidence: message, failureIdentities: ["verification:worktree-bound-evidence"] },
+      expectedEvidence: null,
+      diagnostic: { code: "worktree_bound_verify", message, retryable: true }
+    };
+  }
+  function submissionVerificationResult(ticket, sourceRevision, verify, candidateCommit, directCaptureInvocation = "", root = "") {
     const requirement = pinnedVerificationRequirement(ticket);
     const evidence = String(verify || "").trim();
-    if (requirement.kind === "attestation" || sourceRevision != null) {
-      const artifact = sourceRevision ? sourceRevision.value : requirement.artifact;
-      const error2 = attestationErrors(evidence, artifact)[0];
-      const result2 = error2 ? { kind: "attestation", status: "failed_check", evidence: error2, failureIdentities: ["attestation:evidence-contract"] } : { kind: "attestation", status: "attestation", evidence };
-      return { result: result2, expectedEvidence: null, ...error2 ? { diagnostic: { code: "invalid_verify", message: error2, retryable: true } } : {} };
-    }
-    if (requirement.kind === "manual") {
-      const error2 = evidence ? null : "manual verification requires evidence from the prepared verifier contract";
-      const result2 = error2 ? { kind: "manual", status: "failed_check", evidence: error2, failureIdentities: ["manual:evidence-required"] } : { kind: "manual", status: "manual", evidence, command: requirement.command || null };
-      return { result: result2, expectedEvidence: null, ...error2 ? { diagnostic: { code: "invalid_verify", message: error2, retryable: true } } : {} };
-    }
-    if (requirement.kind === "custom" && requirement.evidenceContract === "legacy project verifier was not recorded" && evidence) {
-      const error2 = verifyCommandError(evidence);
-      if (error2) {
-        return {
-          result: { kind: "custom", status: "failed_check", evidence: error2, failureIdentities: ["custom:invalid-fallback"] },
-          expectedEvidence: null,
-          diagnostic: { code: "invalid_verify", message: error2, retryable: true }
-        };
-      }
-      if (manualVerify(evidence)) return { result: { kind: "custom", status: "manual", evidence }, expectedEvidence: null };
-    }
-    if (requirement.command && evidence !== requirement.command) {
-      return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
-        source: "git",
-        value: String(candidateCommit || "").trim().toLowerCase()
-      }, String(ticket.dispatchNonce || ""), directCaptureInvocation);
-    }
-    if (requirement.command) {
-      const error2 = verifyCommandError(requirement.command);
-      if (error2) {
-        return {
-          result: { kind: requirement.kind, status: "could_not_run", evidence: error2, command: requirement.command, failureIdentities: ["could_not_run:invalid-command"] },
-          expectedEvidence: requirement.command,
-          diagnostic: { code: "invalid_verify", message: error2, retryable: true }
-        };
-      }
-      return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
-        source: "git",
-        value: String(candidateCommit || "").trim().toLowerCase()
-      }, String(ticket.dispatchNonce || ""), directCaptureInvocation);
-    }
-    if (requirement.kind === "custom" && requirement.evidenceContract === "legacy project verifier was not recorded" && !evidence) {
-      return { result: { kind: "custom", status: "passed", evidence: requirement.evidenceContract }, expectedEvidence: null };
-    }
-    const error = evidence ? null : `required ${requirement.kind} verification evidence is missing`;
-    const result = error ? { kind: requirement.kind, status: "failed_check", evidence: error, failureIdentities: [`${requirement.kind}:evidence-required`] } : { kind: requirement.kind, status: "passed", evidence };
-    return { result, expectedEvidence: null, ...error ? { diagnostic: { code: "invalid_verify", message: error, retryable: true } } : {} };
+    if (sourceRevision) return attestedSubmissionVerification(evidence, sourceRevision.value);
+    const rootRefusal = nonExecutableRootSubmissionVerification(ticket, requirement, evidence, root);
+    if (rootRefusal) return rootRefusal;
+    const specialVerification = {
+      attestation: () => attestedSubmissionVerification(evidence, requirement.artifact),
+      manual: () => manualSubmissionVerification(requirement, evidence)
+    };
+    const verifyKind = specialVerification[requirement.kind];
+    if (verifyKind) return verifyKind();
+    return declaredSubmissionVerification(ticket, requirement, evidence, candidateCommit, directCaptureInvocation, root);
   }
-  function submissionAdmissionDecision(slug, ticket, by, opts, sourceRevision, pinnedBaseline, range, verify, changedSurfaces) {
-    const adapterFacts = opts.admissionFacts || {};
-    const sourceRevisionFacts = sourceRevision && isSourceRevisionAdapterFacts(opts.admissionFacts) ? opts.admissionFacts : null;
-    const sourceRevisionResolution = sourceRevisionFacts?.baseline || null;
-    const verification = submissionVerificationResult(ticket, sourceRevision, verify, opts.commit, directClaimCaptureInvocation(slug, ticket));
-    const completion = sourceRevision ? { ok: true } : completionTreeCheck(slug, ticket, { explicitNoOp: range?.noOp === true });
-    const admitted = adapterFacts.admittedScope || executionScope(slug, ticket);
-    const scope = adapterFacts.scope || commitScope.ticketCommitScope(admitted, ticket.files, ticket.ref);
-    const descendantPaths = sourceRevision ? { ok: true, paths: [] } : sharedTreeDescendantPaths(slug, ticket, range, scope);
-    const staleDescendantPaths = descendantPaths.ok && Array.isArray(descendantPaths.paths) ? descendantPaths.paths : [];
-    const submittedSurfaces = sourceRevision ? changedSurfaces : range?.changedPaths || [];
+  function sourceRevisionAdmissionFacts(sourceRevision, options) {
+    return sourceRevision && (0, import_source_revision_capability.isSourceRevisionAdapterFacts)(options.admissionFacts) ? options.admissionFacts : null;
+  }
+  function candidateAdmissionScope(slug, ticket, facts) {
+    const admitted = facts.admittedScope || executionScope(slug, ticket);
+    const scope = facts.scope || commitScope.ticketCommitScope(admitted, ticket.files, ticket.ref);
+    return { admitted, scope };
+  }
+  function completionAdmission(slug, ticket, sourceRevision, range) {
+    if (sourceRevision) return { complete: true };
+    const completion = completionTreeCheck(slug, ticket, { explicitNoOp: range?.noOp === true });
+    return completion.ok ? { complete: true } : { complete: false, diagnostic: { code: completion.reason, message: completion.message, retryable: true } };
+  }
+  function admissionDescendantPaths(slug, ticket, sourceRevision, range, scope) {
+    return sourceRevision ? { ok: true, paths: [] } : sharedTreeDescendantPaths(slug, ticket, range, scope);
+  }
+  function staleDescendantPaths(descendants) {
+    return descendants.ok && Array.isArray(descendants.paths) ? descendants.paths : [];
+  }
+  function descendantAdmissionRequirements(ticket, descendants) {
+    if (!descendants.ok) return [{ code: "shared_tree_candidate_history_unavailable", message: `submit: could not inspect newer shared-tree commits for ${ticket.ref}: ${descendants.message}. Preserve the candidate and retry after Git history is available.`, retryable: true }];
+    const paths = staleDescendantPaths(descendants);
+    if (!paths.length) return [];
+    return [{ code: "stale_shared_tree_candidate", message: `submit: refused ${ticket.ref}; newer shared-tree commits changed this candidate's admitted paths: ${paths.join(", ")}. Commit and verify a replacement candidate against the current integration tip before submitting.`, retryable: true }];
+  }
+  function admissionWorkingPaths(slug, ticket, range, options) {
     const inherited = inheritedDirtyPaths(slug, ticket);
-    const reportedPaths = submissionUnscopedPaths(opts.unscopedPaths);
+    const reportedPaths = submissionUnscopedPaths(options.unscopedPaths);
     const inheritedPaths = reportedPaths.filter((file) => inherited.has(dirtyPathKey(file)));
     const unsubmittedWorkingPaths = sharedTreeUnsubmittedWorkingPaths(ticket, range, reportedPaths, inherited);
     const excludedWorkingPaths = new Set([...inheritedPaths, ...unsubmittedWorkingPaths].map(dirtyPathKey));
     const gatedPaths = reportedPaths.filter((file) => !excludedWorkingPaths.has(dirtyPathKey(file)));
-    const readiness = submissionReadiness({ unscopedPaths: gatedPaths });
+    return { inheritedPaths, unsubmittedWorkingPaths, gatedPaths };
+  }
+  function admittedCommitIdentities(range, commit) {
+    if (range?.commits?.length) return range.commits;
+    return [String(commit || "").trim().toLowerCase()];
+  }
+  function rejectedGitCandidate(rejected, submittedCommits2) {
+    return rejected.map((entry) => String(entry.commit || "").trim().toLowerCase()).find((candidate) => Boolean(candidate) && submittedCommits2.some((submittedCommit) => candidate === submittedCommit || candidate.startsWith(submittedCommit) || submittedCommit.startsWith(candidate)));
+  }
+  function duplicateAdmissionFacts(ticket, facts, sourceRevision, range, commit) {
+    if (facts.duplicate) return facts.duplicate;
     const rejected = rejectionHistory(ticket);
-    const rejectedSource = sourceRevision && rejected.find((entry) => sameSourceRevision(entry.sourceRevision, sourceRevision));
-    const submittedCommits2 = range?.commits?.length ? range.commits : [String(opts.commit || "").trim().toLowerCase()];
-    const rejectedCommit = !sourceRevision && rejected.map((entry) => String(entry?.commit || "").trim().toLowerCase()).find((candidate) => candidate && submittedCommits2.some((submittedCommit) => candidate === submittedCommit || candidate.startsWith(submittedCommit) || submittedCommit.startsWith(candidate)));
-    const duplicate = adapterFacts.duplicate || (rejectedSource ? { identity: `${sourceRevision.source}:${sourceRevision.value}`, diagnostic: { code: "rejected_submission_reused", message: `submit: refused ${ticket.ref}; source revision ${sourceRevision.source}:${sourceRevision.value} was previously rejected. Submit a different immutable revision.`, retryable: false } } : rejectedCommit ? { identity: rejectedCommit, diagnostic: { code: "rejected_submission_reused", message: `submit: refused ${ticket.ref}; admitted range contains previously rejected commit ${rejectedCommit}. Create and verify a range without any rejected commit before submitting.`, retryable: false } } : { identity: null });
+    if (sourceRevision) return rejectedSourceAdmission(ticket, sourceRevision, rejected);
+    const rejectedCommit = rejectedGitCandidate(rejected, admittedCommitIdentities(range, commit));
+    if (!rejectedCommit) return { identity: null };
+    return { identity: rejectedCommit, diagnostic: { code: "rejected_submission_reused", message: `submit: refused ${ticket.ref}; admitted range contains previously rejected commit ${rejectedCommit}. Create and verify a range without any rejected commit before submitting.`, retryable: false } };
+  }
+  function rejectedSourceAdmission(ticket, sourceRevision, rejected) {
+    const duplicate = rejected.find((entry) => sameSourceRevision(entry.sourceRevision, sourceRevision));
+    if (!duplicate) return { identity: null };
+    return { identity: `${sourceRevision.source}:${sourceRevision.value}`, diagnostic: { code: "rejected_submission_reused", message: `submit: refused ${ticket.ref}; source revision ${sourceRevision.source}:${sourceRevision.value} was previously rejected. Submit a different immutable revision.`, retryable: false } };
+  }
+  function claimReleaseAdmissionDiagnostic(ticket) {
+    if (ticket.claim || !ticket.claimRelease) return void 0;
+    return { code: "not_claimed", message: autoReleasedClaimMessage(ticket.ref, ticket.claimRelease), retryable: true };
+  }
+  function submissionAdmissionAuthority(ticket, by, options) {
+    return {
+      authority: { actor: by, operation: "submit" },
+      claimOwner: ticket.claim ? String(ticket.claim.by).trim() || null : null,
+      submittedOwner: ticket.submission ? String(ticket.submission.by).trim() || null : null,
+      claimReleaseDiagnostic: claimReleaseAdmissionDiagnostic(ticket),
+      terminal: ticket.status === "done",
+      allowSubmittedOwner: options.force === true
+    };
+  }
+  function sourceRevisionBaselineFacts(facts) {
+    if (!facts) return { candidateExists: null, containsCandidate: null };
+    return {
+      candidateExists: facts.baseline ? facts.baseline.candidateExists : null,
+      containsCandidate: facts.baseline ? facts.baseline.containsCandidate : null,
+      candidate: facts.candidate,
+      dispatchBaseline: facts.dispatchBaseline
+    };
+  }
+  function candidateBaseline(sourceRevision, sourceFacts, adapterFacts) {
+    return sourceRevision ? sourceRevisionBaselineFacts(sourceFacts) : adapterFacts.baseline || { candidateExists: true, containsCandidate: true };
+  }
+  function submittedCandidateSurfaces(sourceRevision, changedSurfaces, range) {
+    if (sourceRevision) return changedSurfaces;
+    return range?.changedPaths || [];
+  }
+  function candidateAdmissionSurfaces(scope, changed, facts) {
+    const collectedSurfaces = facts.surfaces || { pending: [] };
+    return { declared: scope, admitted: scope, changed, pending: [], ...collectedSurfaces };
+  }
+  function readinessAdmissionRequirements(ticket, gatedPaths) {
+    const readiness = submissionReadiness({ unscopedPaths: gatedPaths });
+    if (readiness.ok) return [];
+    return [{ code: String(readiness.reason), message: `submit: refused ${ticket.ref}; ${readiness.message} Request scope only for work this ticket owns. Commit only approved scope; never stash, revert, or include foreign paths.`, retryable: true }];
+  }
+  function submissionCandidate(sourceRevision, commit) {
+    return sourceRevision || { source: "git", value: String(commit || "").trim().toLowerCase(), observedAt: (/* @__PURE__ */ new Date()).toISOString() };
+  }
+  function actualSubmissionRoot(options) {
+    return options.admissionFacts?.verificationRoot || options.worktree || "";
+  }
+  function submissionAdmissionDecision(slug, ticket, by, options, sourceRevision, pinnedBaseline, range, verify, changedSurfaces) {
+    const adapterFacts = options.admissionFacts || {};
+    const sourceFacts = sourceRevisionAdmissionFacts(sourceRevision, options);
+    const verification = submissionVerificationResult(ticket, sourceRevision, verify, options.commit, directClaimCaptureInvocation(slug, ticket), actualSubmissionRoot(options));
+    const completion = completionAdmission(slug, ticket, sourceRevision, range);
+    const { admitted, scope } = candidateAdmissionScope(slug, ticket, adapterFacts);
+    const descendants = admissionDescendantPaths(slug, ticket, sourceRevision, range, scope);
+    const submittedSurfaces = submittedCandidateSurfaces(sourceRevision, changedSurfaces, range);
+    const workingPaths = admissionWorkingPaths(slug, ticket, range, options);
+    const duplicate = duplicateAdmissionFacts(ticket, adapterFacts, sourceRevision, range, options.commit);
     const decision = decideSubmissionAdmission({
       ticket,
-      authority: {
-        authority: { actor: by, operation: "submit" },
-        claimOwner: String(ticket.claim?.by || "").trim() || null,
-        submittedOwner: String(ticket.submission?.by || "").trim() || null,
-        ...ticket.claim || !ticket.claimRelease ? {} : {
-          claimReleaseDiagnostic: {
-            code: "not_claimed",
-            message: autoReleasedClaimMessage(ticket.ref, ticket.claimRelease),
-            retryable: true
-          }
-        },
-        terminal: ticket.status === "done",
-        allowSubmittedOwner: opts.force === true
-      },
-      completion: { complete: completion.ok, ...completion.ok ? {} : { diagnostic: { code: completion.reason, message: completion.message, retryable: true } } },
+      authority: submissionAdmissionAuthority(ticket, by, options),
+      completion,
       verification,
-      candidate: sourceRevision || { source: "git", value: String(opts.commit || "").trim().toLowerCase(), observedAt: (/* @__PURE__ */ new Date()).toISOString() },
-      baseline: sourceRevision ? {
-        candidateExists: sourceRevisionResolution?.candidateExists ?? null,
-        containsCandidate: sourceRevisionResolution?.containsCandidate ?? null,
-        ...sourceRevisionFacts ? {
-          candidate: sourceRevisionFacts.candidate,
-          dispatchBaseline: sourceRevisionFacts.dispatchBaseline
-        } : {}
-      } : adapterFacts.baseline || { candidateExists: true, containsCandidate: true },
+      candidate: submissionCandidate(sourceRevision, options.commit),
+      baseline: candidateBaseline(sourceRevision, sourceFacts, adapterFacts),
       sourceBaseline: sourceRevision ? pinnedBaseline : null,
-      surfaces: { declared: scope, admitted: scope, changed: submittedSurfaces, pending: adapterFacts.surfaces?.pending || [], ...adapterFacts.surfaces || {} },
+      surfaces: candidateAdmissionSurfaces(scope, submittedSurfaces, adapterFacts),
       duplicate,
-      requirements: [
-        ...adapterFacts.requirements || [],
-        ...descendantPaths.ok ? staleDescendantPaths.length ? [{
-          code: "stale_shared_tree_candidate",
-          message: `submit: refused ${ticket.ref}; newer shared-tree commits changed this candidate's admitted paths: ${staleDescendantPaths.join(", ")}. Commit and verify a replacement candidate against the current integration tip before submitting.`,
-          retryable: true
-        }] : [] : [{
-          code: "shared_tree_candidate_history_unavailable",
-          message: `submit: could not inspect newer shared-tree commits for ${ticket.ref}: ${descendantPaths.message}. Preserve the candidate and retry after Git history is available.`,
-          retryable: true
-        }],
-        ...readiness.ok ? [] : [{ code: readiness.reason, message: `submit: refused ${ticket.ref}; ${readiness.message} Request scope only for work this ticket owns. Commit only approved scope; never stash, revert, or include foreign paths.`, retryable: true }]
-      ]
+      requirements: [...adapterFacts.requirements || [], ...descendantAdmissionRequirements(ticket, descendants), ...readinessAdmissionRequirements(ticket, workingPaths.gatedPaths)]
     });
-    return { decision, verification, admittedScope: admitted, inheritedPaths, unsubmittedWorkingPaths, gatedPaths };
+    return { decision, verification, admittedScope: admitted, ...workingPaths };
   }
   function submitTicket(slug, idOrRef, by, opts) {
     opts = opts || {};

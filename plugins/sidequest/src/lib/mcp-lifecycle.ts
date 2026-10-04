@@ -431,9 +431,6 @@ function commitWorktreeRefusal(slug: string, ticket: any, root: string) {
 // board server's directory rather than the executor's tree, and every worktree-less submit would read as a
 // crossing.
 function submitWorktreeRefusal(slug: string, ticket: any, root: string, args: any) {
-  if (verifyEmbedsWorktreeRoot(args.verify, root)) {
-    throw new Error(`submit: refused ${ticket.ref}; verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
-  }
   const crossing = args.worktree == null ? null : store.crossedWorktreeBinding(slug, ticket, root);
   return crossing ? { reason: 'crossed_worktree_binding', message: crossedWorktreeRefusalMessage('submit', crossing) } : null;
 }
@@ -622,6 +619,7 @@ function collectGitSubmissionFacts(options: { slug: string; ticket: SubmittingTi
     range,
     scope,
     admissionFacts: {
+      verificationRoot: root,
       admittedScope: admittedSubmissionScope(slug, ticket),
       scope,
       baseline: submissionBaseline(range, surfaces),

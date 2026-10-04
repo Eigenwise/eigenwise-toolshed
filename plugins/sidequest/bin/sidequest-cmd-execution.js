@@ -393,22 +393,6 @@ async function cmdCommit(opts, positional) {
   console.log(`✓ ${ticket.ref} committed ${result.commit.slice(0, 12)} (${result.paths.join(", ")})${visibleWarnings.length ? `
   ${visibleWarnings.join("\n  ")}` : ""}`);
 }
-function verifyEmbedsWorktreeRoot(verify, worktreeRoot) {
-  if (typeof verify !== "string" || !verify || !worktreeRoot) return false;
-  const normalize = (value) => String(value).replace(/[\\/]+/g, "/").replace(/\/+$/, "");
-  const root = normalize(path.resolve(worktreeRoot));
-  const command = normalize(verify);
-  const caseInsensitive = /^[a-z]:\//i.test(root);
-  const comparableRoot = caseInsensitive ? root.toLowerCase() : root;
-  const comparableCommand = caseInsensitive ? command.toLowerCase() : command;
-  let offset = comparableCommand.indexOf(comparableRoot);
-  while (offset !== -1) {
-    const next = comparableCommand.charAt(offset + comparableRoot.length);
-    if (!next || next === "/" || !/[a-z0-9._-]/i.test(next)) return true;
-    offset = comparableCommand.indexOf(comparableRoot, offset + comparableRoot.length);
-  }
-  return false;
-}
 async function cmdRework(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('rework: pass a ticket ref, e.g. sidequest rework SQ-3 --by <submitter id> --review SQ-4 --reason "what needs repair"');
@@ -438,127 +422,120 @@ function sourceRevisionProjectCapabilities(opts, includeExecutionCapabilities) {
     review: !!opts.review
   };
 }
-async function cmdSubmit(opts, positional) {
-  const idOrRef = positional[0];
-  if (!idOrRef) fail("submit: pass a ticket id or ref, e.g. sidequest submit SQ-3 --by me --commit <hash>");
-  const { slug, meta } = await resolveProject(opts);
-  const by = workerId(opts);
-  if (opts.clear) {
-    const res2 = store.clearSubmission(slug, idOrRef, {
-      by,
-      status: opts.status,
-      source: opts.source || "cli"
-    });
-    if (opts.json) {
-      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res2), null, 2) + "\n");
-      if (!res2.ok) process.exitCode = 1;
-      return;
-    }
-    if (res2.ok) console.log(`✓ cleared submission on ${res2.ticket.ref}  [${res2.ticket.status}]  — ${meta.name}`);
-    else reportClaimFailure("clear submission", idOrRef, res2, meta);
-    return;
-  }
-  const body = await bodyFromOpts(opts, "submit");
+function emitSubmissionJson(slug, outcome) {
+  process.stdout.write(JSON.stringify(Object.assign({ project: slug }, outcome), null, 2) + "\n");
+  if (!outcome.ok) process.exitCode = 1;
+}
+function clearSubmissionFromCli(slug, meta, idOrRef, by, options) {
+  const outcome = store.clearSubmission(slug, idOrRef, { by, status: options.status, source: options.source || "cli" });
+  if (options.json) return emitSubmissionJson(slug, outcome);
+  if (outcome.ok) console.log(`✓ cleared submission on ${outcome.ticket.ref}  [${outcome.ticket.status}]  — ${meta.name}`);
+  else reportClaimFailure("clear submission", idOrRef, outcome, meta);
+}
+function cliSubmitOptions(options) {
+  return { verify: options.verify, force: !!options.force, source: options.source || "cli", sessionId: sessionId(options) };
+}
+async function openCliSubmission(options, slug, meta, idOrRef, by) {
+  const body = await bodyFromOpts(options, "submit");
   const ticket = store.getTicket(slug, idOrRef);
   if (!ticket) fail(`submit: no ticket "${idOrRef}" in ${meta.name}.`);
-  const sourceRevisionValue = String(opts["source-revision-value"] || "").trim();
-  if (sourceRevisionValue && opts.commit) {
-    fail("submit: pass exactly one of --commit or --source-revision-value.");
-  }
-  const retryCandidate = ticket.submissionRetry?.candidate;
-  const retryWithoutIdentity = retryCandidate && !sourceRevisionValue && !opts.commit;
-  const requestedSourceRevision = sourceRevisionValue ? {
-    source: String(opts["source-revision-source"] || "").trim(),
+  return { slug, meta, idOrRef, by, body, ticket, options, common: cliSubmitOptions(options) };
+}
+function sourceRevisionValueOption(options) {
+  const value = String(options["source-revision-value"] || "").trim();
+  if (value && options.commit) fail("submit: pass exactly one of --commit or --source-revision-value.");
+  return value;
+}
+function retriedSubmissionPlan(retry, options, sourceRevisionValue) {
+  if (retry.candidate.source !== "git") return { sourceRevision: retry.candidate, changedSurfaces: retry.changedSurfaces };
+  return sourceRevisionValue || options.commit ? null : {};
+}
+function requestedSubmissionPlan(options, sourceRevisionValue) {
+  if (!sourceRevisionValue) return null;
+  const sourceRevision = {
+    source: String(options["source-revision-source"] || "").trim(),
     value: sourceRevisionValue,
-    observedAt: String(opts["source-revision-observed-at"] || "").trim()
-  } : null;
-  const hydratedSourceRevision = retryCandidate ? retryCandidate.source === "git" ? null : retryCandidate : requestedSourceRevision;
-  if (hydratedSourceRevision || retryWithoutIdentity) {
-    const projectCapabilities = hydratedSourceRevision ? sourceRevisionProjectCapabilities(opts, Boolean(sourceRevisionValue && !retryCandidate)) : void 0;
-    const adapterFacts = hydratedSourceRevision ? store.sourceRevisionAdapterFacts(slug, hydratedSourceRevision, sourceRevisionBaseline(ticket)) : null;
-    let res2;
-    try {
-      res2 = store.submitTicket(slug, idOrRef, by, {
-        ...hydratedSourceRevision ? {
-          sourceRevision: hydratedSourceRevision,
-          changedSurfaces: retryCandidate ? ticket.submissionRetry?.changedSurfaces : opts["changed-surface"]
-        } : {},
-        ...projectCapabilities ? { projectCapabilities } : {},
-        ...adapterFacts ? { admissionFacts: adapterFacts } : {},
-        verify: opts.verify,
-        force: !!opts.force,
-        source: opts.source || "cli",
-        sessionId: sessionId(opts)
-      });
-    } catch (error) {
-      fail(`submit: ${error && error.message || error}`);
-    }
-    if (res2.ok) {
-      const comment = addBodyComment(slug, idOrRef, by, body, opts.source || "cli");
-      if (comment && !comment.ok) fail(`submit: recorded ${idOrRef}, but couldn't add evidence comment: ${comment.reason}`);
-    }
-    if (opts.json) {
-      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res2), null, 2) + "\n");
-      if (!res2.ok) process.exitCode = 1;
-      return;
-    }
-    if (!res2.ok) {
-      reportClaimFailure("submit", idOrRef, res2, meta);
-      return;
-    }
-    const submissionIdentity = res2.ticket.submission.sourceRevision ? `${res2.ticket.submission.sourceRevision.source}:${res2.ticket.submission.sourceRevision.value}` : res2.ticket.submission.commit;
-    console.log(`✓ ${res2.ticket.ref} READY_FOR_INTEGRATION (${submissionIdentity})  — ${meta.name}`);
-    return;
-  }
-  if (verifyEmbedsWorktreeRoot(opts.verify, store.nearestRepoRoot(process.cwd()))) {
-    fail(`submit: refused ${ticket.ref}; --verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
-  }
-  const gitRef = opts.gitref || opts["git-ref"] || `refs/sidequest/${ticket.ref}`;
-  const collected = collectGitSubmissionFacts({
-    slug,
-    ticket,
-    root: process.cwd(),
-    commit: opts.commit,
-    gitRef,
-    base: opts.base
-  });
-  const { target, range, scope } = collected;
-  const unscopedPaths = commitScope.unscopedWorkingPaths(process.cwd(), scope);
-  let res;
+    observedAt: String(options["source-revision-observed-at"] || "").trim()
+  };
+  return { sourceRevision, changedSurfaces: options["changed-surface"], projectCapabilities: sourceRevisionProjectCapabilities(options, true) };
+}
+function sourceRevisionSubmissionPlan(ticket, options) {
+  const sourceRevisionValue = sourceRevisionValueOption(options);
+  const retry = ticket.submissionRetry;
+  return retry && retry.candidate ? retriedSubmissionPlan(retry, options, sourceRevisionValue) : requestedSubmissionPlan(options, sourceRevisionValue);
+}
+function submitTicketOrFail(submission, submitOptions) {
   try {
-    res = store.submitTicket(slug, idOrRef, by, {
-      commit: opts.commit,
-      gitRef,
-      range: range?.ok ? Object.assign({}, range, { integrationMode: target?.mode, integrationBranch: target?.branch }) : void 0,
-      verify: opts.verify,
-      worktree: opts.worktree,
-      unscopedPaths,
-      admissionFacts: collected.admissionFacts,
-      force: !!opts.force,
-      source: opts.source || "cli",
-      sessionId: sessionId(opts)
-    });
-  } catch (e) {
-    fail(`submit: ${e && e.message || e}`);
+    return store.submitTicket(submission.slug, submission.idOrRef, submission.by, submitOptions);
+  } catch (error) {
+    return fail(`submit: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (res.ok) {
-    const comment = addBodyComment(slug, idOrRef, by, body, opts.source || "cli");
-    if (comment && !comment.ok) fail(`submit: recorded ${idOrRef}, but couldn't add evidence comment: ${comment.reason}`);
-    if (comment && comment.advisory) res.advisory = comment.advisory;
-  }
-  if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
-    if (!res.ok) process.exitCode = 1;
-    return;
-  }
-  if (res.ok) {
-    const s = res.ticket.submission;
-    console.log(`✓ ${res.ticket.ref} READY_FOR_INTEGRATION (${s.commit.slice(0, 12)} @ ${s.gitRef})  — ${meta.name}`);
-    console.log(s.integrationMode === "local" ? `  claim released; the orchestrator integrates and reverifies against local ${s.upstream}, then marks done without pushing.` : `  claim released; the orchestrator publish transaction integrates, reverifies, pushes ${s.upstream}, and marks done.`);
-    if (res.advisory) console.log(`  advisory: ${res.advisory}`);
-  } else {
-    reportClaimFailure("submit", idOrRef, res, meta);
-  }
+}
+function addSubmissionEvidence(submission, outcome) {
+  if (!outcome.ok) return null;
+  const comment = addBodyComment(submission.slug, submission.idOrRef, submission.by, submission.body, submission.common.source);
+  if (comment && !comment.ok) fail(`submit: recorded ${submission.idOrRef}, but couldn't add evidence comment: ${comment.reason}`);
+  return comment;
+}
+function reportCliSubmission(submission, outcome, describeRecorded) {
+  if (submission.options.json) return emitSubmissionJson(submission.slug, outcome);
+  if (outcome.ok) return describeRecorded(submission, outcome);
+  reportClaimFailure("submit", submission.idOrRef, outcome, submission.meta);
+}
+function describeSourceRevisionSubmission(submission, outcome) {
+  const recorded = outcome.ticket.submission;
+  const identity = recorded.sourceRevision ? `${recorded.sourceRevision.source}:${recorded.sourceRevision.value}` : recorded.commit;
+  console.log(`✓ ${outcome.ticket.ref} READY_FOR_INTEGRATION (${identity})  — ${submission.meta.name}`);
+}
+function sourceRevisionAdmission(submission, sourceRevision) {
+  const adapterFacts = sourceRevision ? store.sourceRevisionAdapterFacts(submission.slug, sourceRevision, sourceRevisionBaseline(submission.ticket)) : null;
+  return adapterFacts ? { admissionFacts: adapterFacts } : {};
+}
+function submitSourceRevisionFromCli(submission, plan) {
+  const outcome = submitTicketOrFail(submission, { ...plan, ...sourceRevisionAdmission(submission, plan.sourceRevision), ...submission.common });
+  addSubmissionEvidence(submission, outcome);
+  reportCliSubmission(submission, outcome, describeSourceRevisionSubmission);
+}
+function integrationRange(collected) {
+  const { range, target } = collected;
+  return range && range.ok ? Object.assign({}, range, { integrationMode: target?.mode, integrationBranch: target?.branch }) : void 0;
+}
+function gitSubmitOptions(submission) {
+  const { ticket, options } = submission;
+  const gitRef = options.gitref || options["git-ref"] || `refs/sidequest/${ticket.ref}`;
+  const collected = collectGitSubmissionFacts({ slug: submission.slug, ticket, root: process.cwd(), commit: options.commit, gitRef, base: options.base });
+  return {
+    commit: options.commit,
+    gitRef,
+    range: integrationRange(collected),
+    worktree: options.worktree,
+    unscopedPaths: commitScope.unscopedWorkingPaths(process.cwd(), collected.scope),
+    admissionFacts: collected.admissionFacts,
+    ...submission.common
+  };
+}
+function describeGitSubmission(submission, outcome) {
+  const recorded = outcome.ticket.submission;
+  console.log(`✓ ${outcome.ticket.ref} READY_FOR_INTEGRATION (${recorded.commit.slice(0, 12)} @ ${recorded.gitRef})  — ${submission.meta.name}`);
+  console.log(recorded.integrationMode === "local" ? `  claim released; the orchestrator integrates and reverifies against local ${recorded.upstream}, then marks done without pushing.` : `  claim released; the orchestrator publish transaction integrates, reverifies, pushes ${recorded.upstream}, and marks done.`);
+  if (outcome.advisory) console.log(`  advisory: ${outcome.advisory}`);
+}
+function submitGitCandidateFromCli(submission) {
+  const outcome = submitTicketOrFail(submission, gitSubmitOptions(submission));
+  const comment = addSubmissionEvidence(submission, outcome);
+  if (outcome.ok && comment && comment.advisory) outcome.advisory = comment.advisory;
+  reportCliSubmission(submission, outcome, describeGitSubmission);
+}
+async function cmdSubmit(options, positional) {
+  const idOrRef = positional[0] || "";
+  if (!idOrRef) fail("submit: pass a ticket id or ref, e.g. sidequest submit SQ-3 --by me --commit <hash>");
+  const { slug, meta } = await resolveProject(options);
+  const by = workerId(options);
+  if (options.clear) return clearSubmissionFromCli(slug, meta, idOrRef, by, options);
+  const submission = await openCliSubmission(options, slug, meta, idOrRef, by);
+  const plan = sourceRevisionSubmissionPlan(submission.ticket, options);
+  if (plan) return submitSourceRevisionFromCli(submission, plan);
+  submitGitCandidateFromCli(submission);
 }
 function abbreviatedSessionId(value) {
   const id = String(value || "").trim();
