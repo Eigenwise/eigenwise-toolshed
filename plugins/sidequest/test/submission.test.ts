@@ -413,6 +413,50 @@ function assertRefusedWithoutSubmission(fixture: { ticket: { ref: string } }, ou
   assert.ok(!store.getTicket(slug, fixture.ticket.ref).submission, 'a refused submit writes no submission');
 }
 
+function nonExecutableRootVerifierFixture(kind: 'legacy' | 'manual' | 'document'): RootVerifierFixture {
+  cleanBranch();
+  const checkoutRoot = git(['rev-parse', '--show-toplevel']);
+  const command = kind === 'document'
+    ? `inspection report for ${JSON.stringify(checkoutRoot)}`
+    : `manual: inspected ${JSON.stringify(checkoutRoot)}`;
+  const file = `sq3355-${kind}.js`;
+  const ticket = addTicket(`non-executable actual-root verification ${kind}`, {
+    files: [`lib/${file}`],
+    ...(kind === 'legacy' ? {} : { executorVerifyKind: kind, executorVerify: command }),
+  });
+  const by = `sq3355-${kind}-executor`;
+  const claim = store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' });
+  assert.strictEqual(claim.ok, true, claim.message);
+  const base = git(['rev-parse', 'origin/main']);
+  const candidate = createCandidateCommit(file, `${kind} candidate\n`);
+  pin(ticket, candidate);
+  return { ticket, by, command, base, candidate, file };
+}
+
+for (const surface of ['MCP', 'CLI']) {
+  for (const kind of ['legacy', 'manual', 'document'] as const) {
+    test(`${surface} completed capture exception refuses ${kind} non-executable actual-root evidence before writing`, async (): Promise<void> => {
+      const fixture = nonExecutableRootVerifierFixture(kind);
+      const before = store.getTicket(slug, fixture.ticket.ref);
+      if (surface === 'MCP') {
+        const refused = await submitRootNamingVerifier(fixture, fixture.command);
+        assertRefusedWithoutSubmission(fixture, refused, /worktree_bound_verify.*verify embeds this worktree path/);
+      } else {
+        const refused = runCli(['submit', fixture.ticket.ref, '--by', fixture.by, '--commit', fixture.candidate, '--verify', fixture.command, '--json']);
+        assert.strictEqual(refused.status, 1, 'CLI refuses non-executable actual-root evidence before submission');
+        assert.strictEqual(JSON.parse(refused.stdout).reason, 'worktree_bound_verify');
+        assert.match(refused.stdout, /verify embeds this worktree path/);
+      }
+      const after = store.getTicket(slug, fixture.ticket.ref);
+      assert.ok(!after.submission, 'root refusal writes no submission');
+      assert.deepStrictEqual(after.claim, before.claim, 'root refusal preserves the held claim');
+      assert.strictEqual(git(['rev-parse', `refs/sidequest/${fixture.ticket.ref}`]), fixture.candidate, 'root refusal preserves the pinned candidate');
+      assert.strictEqual(after.executorVerify, before.executorVerify, 'root refusal preserves the verifier contract');
+      assert.deepStrictEqual(after.comments, before.comments, 'root refusal writes no submission evidence');
+    });
+  }
+}
+
 test('MCP submit admits a root-naming pinned verifier only after its completed capture from that root', async () => {
   const fixture = rootNamingVerifierFixture('mcp-accepted');
 

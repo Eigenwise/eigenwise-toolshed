@@ -2229,10 +2229,22 @@ ${verify.outputTail}` : null
     if (requirement.command) return commandSubmissionVerification(ticket, requirement, evidence, commit, directCaptureInvocation, root);
     return evidenceSubmissionVerification(requirement.kind, evidence, evidence ? null : `required ${requirement.kind} verification evidence is missing`, "passed", `${requirement.kind}:evidence-required`);
   }
+  function nonExecutableRootSubmissionVerification(ticket, requirement, evidence, root) {
+    if (requirement.command && ["command", "suite"].includes(requirement.kind)) return null;
+    if (!(0, import_verification.verifyEmbedsWorktreeRoot)(evidence, root)) return null;
+    const message = (0, import_refusal_guidance.worktreeBoundVerifyRefusalMessage)(ticket.ref, "verify");
+    return {
+      result: { kind: requirement.kind, status: "failed_check", evidence: message, failureIdentities: ["verification:worktree-bound-evidence"] },
+      expectedEvidence: null,
+      diagnostic: { code: "worktree_bound_verify", message, retryable: true }
+    };
+  }
   function submissionVerificationResult(ticket, sourceRevision, verify, candidateCommit, directCaptureInvocation = "", root = "") {
     const requirement = pinnedVerificationRequirement(ticket);
     const evidence = String(verify || "").trim();
     if (sourceRevision) return attestedSubmissionVerification(evidence, sourceRevision.value);
+    const rootRefusal = nonExecutableRootSubmissionVerification(ticket, requirement, evidence, root);
+    if (rootRefusal) return rootRefusal;
     const specialVerification = {
       attestation: () => attestedSubmissionVerification(evidence, requirement.artifact),
       manual: () => manualSubmissionVerification(requirement, evidence)

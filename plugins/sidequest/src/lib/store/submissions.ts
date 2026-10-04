@@ -2657,10 +2657,23 @@ function declaredSubmissionVerification(ticket: VerificationTicket, requirement:
   return evidenceSubmissionVerification(requirement.kind, evidence, evidence ? null : `required ${requirement.kind} verification evidence is missing`, 'passed', `${requirement.kind}:evidence-required`);
 }
 
+function nonExecutableRootSubmissionVerification(ticket: VerificationTicket, requirement: VerificationRequirement, evidence: string, root: string): SubmissionVerification | null {
+  if (requirement.command && ['command', 'suite'].includes(requirement.kind)) return null;
+  if (!verifyEmbedsWorktreeRoot(evidence, root)) return null;
+  const message = worktreeBoundVerifyRefusalMessage(ticket.ref, 'verify');
+  return {
+    result: { kind: requirement.kind, status: 'failed_check', evidence: message, failureIdentities: ['verification:worktree-bound-evidence'] },
+    expectedEvidence: null,
+    diagnostic: { code: 'worktree_bound_verify', message, retryable: true },
+  };
+}
+
 function submissionVerificationResult(ticket: VerificationTicket, sourceRevision: SourceRevision | null, verify: unknown, candidateCommit?: string, directCaptureInvocation = '', root = ''): SubmissionVerification {
   const requirement: VerificationRequirement = pinnedVerificationRequirement(ticket);
   const evidence = String(verify || '').trim();
   if (sourceRevision) return attestedSubmissionVerification(evidence, sourceRevision.value);
+  const rootRefusal = nonExecutableRootSubmissionVerification(ticket, requirement, evidence, root);
+  if (rootRefusal) return rootRefusal;
   const specialVerification: Partial<Record<VerificationKind, () => SubmissionVerification>> = {
     attestation: (): SubmissionVerification => attestedSubmissionVerification(evidence, requirement.artifact),
     manual: (): SubmissionVerification => manualSubmissionVerification(requirement, evidence),

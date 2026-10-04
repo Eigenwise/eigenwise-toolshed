@@ -177,7 +177,8 @@ export function crossedWorktreeRefusalMessage(gate: string, crossing: CrossedWor
 
 export function worktreeBoundVerifyRefusalMessage(ref: string, flag: string): string {
   return `submit: refused ${ref}; ${flag} embeds this worktree path. Run verification from the repo root and use repo-relative paths.`
-    + ' When the pinned verifier names this checkout root, do not edit it: run the pinned verify-capture wrapper from this root over the committed candidate, then resubmit the exact pinned command. One capture from the current dispatch attempt must prove those exact bytes passed cleanly for the submitted candidate at this root. Captures from different roots or candidates cannot combine authority.';
+    + ' When the pinned verifier names this checkout root, do not edit it: run the pinned verify-capture wrapper from this root over the committed candidate, then resubmit the exact pinned command. One capture from the current dispatch attempt must prove those exact bytes passed cleanly for the submitted candidate at this root. Captures from different roots or candidates cannot combine authority.'
+    + ' Only an executable pinned command can use that capture exception. Commandless legacy, manual, attestation, and other non-executable Git verification must keep actual checkout roots out of their evidence.';
 }
 
 export function routingDisabledMessage(ref: string): string {
