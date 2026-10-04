@@ -1,3 +1,4 @@
+import type { CompletedVerificationCapture } from '../src/lib/kernel/verification.js';
 import './_temp-cleanup.js';
 import './_sidequest-install-fixture.js';
 import './_hook-runtime.js';
@@ -347,6 +348,208 @@ test('MCP submit requires a completed capture for the declared executor verifier
     fs.rmSync(capture.logPath, { force: true });
   }
 });
+
+type RootVerifierFixture = { ticket: { ref: string }; by: string; command: string; base: string; candidate: string; file: string };
+type RootSubmissionOutcome = { ok: boolean; reason?: string; message?: string };
+
+function rootNamingVerifierFixture(label: string, readsCandidate = false): RootVerifierFixture {
+  cleanBranch();
+  const checkoutRoot = git(['rev-parse', '--show-toplevel']);
+  const file = `sq3346-${label}.js`;
+  const command = readsCandidate
+    ? `node -e "console.log(require('fs').readFileSync(process.argv[1]+'/lib/'+process.argv[2],'utf8'))" ${JSON.stringify(checkoutRoot)} ${file}`
+    : `node -e "process.exit(0)" ${JSON.stringify(checkoutRoot)} focused`;
+  const ticket = addTicket(`root-naming pinned verifier ${label}`, {
+    category: 'submission.fixture',
+    executorVerifyKind: 'command',
+    executorVerify: command,
+    files: [`lib/${file}`],
+  });
+  const sessionId = `sq3346-${label}`;
+  const by = `sq3346-${label}-executor`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+  assert.strictEqual(prepared.ok, true, prepared.message);
+  assert.strictEqual(prepared.ticket.dispatch.verificationRequirement.command, command);
+  const claim = store.claimTicket(slug, ticket.ref, by, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId });
+  assert.strictEqual(claim.ok, true, claim.message);
+  const base = git(['rev-parse', 'origin/main']);
+  const candidate = createCandidateCommit(file, `${label} candidate\n`);
+  pin(ticket, candidate);
+  return { ticket, by, command, base, candidate, file };
+}
+
+async function captureRootNamingVerifier(fixture: { ticket: { ref: string }; command: string }, checkout: string): Promise<CompletedVerificationCapture & { output: string }> {
+  const capture = await runVerifyCapture(fixture.command, checkout);
+  try {
+    assert.strictEqual(capture.status, 'passed', capture.logPath);
+    const recorded = recordCapture({ project: PROJECT_DIR, ticket: fixture.ticket.ref }, capture, checkout);
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    return { ...recorded.capture, output: fs.readFileSync(capture.logPath, 'utf8') };
+  } finally {
+    fs.rmSync(capture.logPath, { force: true });
+  }
+}
+
+async function submitRootNamingVerifier(fixture: { ticket: { ref: string }; by: string; base: string; candidate: string }, verify: string): Promise<RootSubmissionOutcome> {
+  try {
+    return await callMcp('submit', {
+      project: PROJECT_DIR,
+      ref: fixture.ticket.ref,
+      by: fixture.by,
+      commit: fixture.candidate,
+      base: fixture.base,
+      worktree: PROJECT_DIR,
+      verify,
+      body: 'Root-naming pinned verifier fixture submission.',
+    });
+  } catch (error: unknown) {
+    return { ok: false, reason: 'thrown', message: String(error) };
+  }
+}
+
+function assertRefusedWithoutSubmission(fixture: { ticket: { ref: string } }, outcome: { ok: boolean; reason?: string; message?: string }, expected: RegExp) {
+  assert.strictEqual(outcome.ok, false);
+  assert.match(`${outcome.reason}: ${outcome.message}`, expected);
+  assert.ok(!store.getTicket(slug, fixture.ticket.ref).submission, 'a refused submit writes no submission');
+}
+
+test('MCP submit admits a root-naming pinned verifier only after its completed capture from that root', async () => {
+  const fixture = rootNamingVerifierFixture('mcp-accepted');
+
+  const missing = await submitRootNamingVerifier(fixture, fixture.command);
+  assertRefusedWithoutSubmission(fixture, missing, /verify embeds this worktree path/);
+  assert.match(missing.message, /do not edit it: run the pinned verify-capture wrapper from this root/);
+  assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).claim.by, fixture.by);
+
+  await captureRootNamingVerifier(fixture, PROJECT_DIR);
+  const accepted = await submitRootNamingVerifier(fixture, fixture.command);
+  assert.strictEqual(accepted.ok, true, accepted.message);
+  const submission = store.getTicket(slug, fixture.ticket.ref).submission;
+  assert.strictEqual(submission.verify, fixture.command, 'the pinned bytes are submitted unchanged');
+  assert.strictEqual(submission.commit, fixture.candidate);
+  assert.strictEqual(submission.base, fixture.base);
+});
+
+test('CLI submit admits a root-naming pinned verifier only after its completed capture from that root', async () => {
+  const fixture = rootNamingVerifierFixture('cli-accepted');
+  const submitArgs = ['submit', fixture.ticket.ref, '--by', fixture.by, '--commit', fixture.candidate, '--verify', fixture.command];
+
+  const missing = runCli(submitArgs);
+  assert.strictEqual(missing.status, 1, missing.stderr + missing.stdout);
+  assert.match(missing.stderr + missing.stdout, /verify embeds this worktree path/);
+  assert.ok(!store.getTicket(slug, fixture.ticket.ref).submission);
+
+  await captureRootNamingVerifier(fixture, PROJECT_DIR);
+  const accepted = runCli(submitArgs);
+  assert.strictEqual(accepted.status, 0, accepted.stderr + accepted.stdout);
+  assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).submission.verify, fixture.command);
+});
+
+test('a completed capture does not admit a changed root-naming verify command', async () => {
+  const fixture = rootNamingVerifierFixture('changed-command');
+  await captureRootNamingVerifier(fixture, PROJECT_DIR);
+
+  const dotted = await submitRootNamingVerifier(fixture, 'node -e "process.exit(0)" . focused');
+  assertRefusedWithoutSubmission(fixture, dotted, /executor_verify_mismatch/);
+  const extended = await submitRootNamingVerifier(fixture, `${fixture.command} --extra`);
+  assertRefusedWithoutSubmission(fixture, extended, /verify embeds this worktree path/);
+  assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).claim.by, fixture.by);
+});
+
+test('a completed capture from another checkout does not admit a verifier naming this root', async () => {
+  const fixture = rootNamingVerifierFixture('foreign-checkout');
+  const foreign = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq3346-foreign-')), 'checkout');
+  git(['worktree', 'add', '--detach', foreign, fixture.candidate]);
+  try {
+    const capture = await captureRootNamingVerifier(fixture, foreign);
+    assert.strictEqual(capture.candidate.value, fixture.candidate, 'the foreign capture proves the same candidate');
+
+    const refused = await submitRootNamingVerifier(fixture, fixture.command);
+    assertRefusedWithoutSubmission(fixture, refused, /verify embeds this worktree path/);
+    assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).claim.by, fixture.by);
+  } finally {
+    git(['worktree', 'remove', '--force', foreign]);
+  }
+});
+
+test('a completed capture of an earlier candidate does not admit a root-naming verifier', async () => {
+  const fixture = rootNamingVerifierFixture('stale-candidate');
+  await captureRootNamingVerifier(fixture, PROJECT_DIR);
+  const laterCandidate = createCandidateCommit(fixture.file, 'later candidate after the capture\n');
+  pin(fixture.ticket, laterCandidate);
+
+  const refused = await submitRootNamingVerifier({ ...fixture, candidate: laterCandidate }, fixture.command);
+  assertRefusedWithoutSubmission(fixture, refused, /verification_capture_required/);
+  assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).claim.by, fixture.by);
+});
+
+test('a completed capture does not admit a root-naming verifier once the claim is released', async () => {
+  const fixture = rootNamingVerifierFixture('released-claim');
+  await captureRootNamingVerifier(fixture, PROJECT_DIR);
+  const released = store.releaseTicket(slug, fixture.ticket.ref, fixture.by, {
+    status: 'todo',
+    source: 'test',
+    releaseKind: 'handback',
+    releaseReason: 'The released-claim fixture submits without a held claim.',
+  });
+  assert.strictEqual(released.ok, true, released.message);
+
+  const refused = await submitRootNamingVerifier(fixture, fixture.command);
+  assertRefusedWithoutSubmission(fixture, refused, /not_claimed|held claim|embeds this worktree path/);
+  assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).claim, null);
+});
+
+for (const surface of ['MCP', 'CLI']) {
+  test(`${surface} completed capture cannot combine current-root old-candidate and foreign-root current-candidate witnesses`, async (): Promise<void> => {
+    const fixture = rootNamingVerifierFixture(`cross-witness-${surface.toLowerCase()}`, true);
+    const first = await captureRootNamingVerifier(fixture, PROJECT_DIR);
+    assert.strictEqual(first.candidate.value, fixture.candidate);
+    const foreign = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sq3346-cross-witness-')), 'checkout');
+    git(['worktree', 'add', '--detach', foreign, fixture.candidate]);
+    try {
+      fs.writeFileSync(path.join(foreign, 'lib', fixture.file), 'current candidate C2\n');
+      execFileSync('git', ['add', `lib/${fixture.file}`], { cwd: foreign, windowsHide: true });
+      execFileSync('git', ['commit', '-m', 'current candidate C2'], { cwd: foreign, windowsHide: true });
+      const currentCandidate = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: foreign, encoding: 'utf8', windowsHide: true }).trim();
+      const second = await captureRootNamingVerifier(fixture, foreign);
+      assert.strictEqual(second.candidate.value, currentCandidate);
+      assert.notStrictEqual(second.worktree, first.worktree);
+      assert.match(second.output, /cross-witness-.* candidate/, 'the foreign capture executed the pinned command against root A at old C1');
+      git(['checkout', '--detach', currentCandidate]);
+      pin(fixture.ticket, currentCandidate);
+      const currentFixture = { ...fixture, candidate: currentCandidate };
+      assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).verificationCaptures.length, 2, 'both captures are genuine lifecycle records');
+      if (surface === 'MCP') {
+        const refused = await submitRootNamingVerifier(currentFixture, fixture.command);
+        assertRefusedWithoutSubmission(fixture, refused, /verification_capture_required/);
+      } else {
+        const refused = runCli(['submit', fixture.ticket.ref, '--by', fixture.by, '--commit', currentCandidate, '--verify', fixture.command]);
+        assert.strictEqual(refused.status, 1, 'CLI refuses incompatible capture witnesses before submission');
+        assert.match(refused.stderr + refused.stdout, /verification_capture_required/);
+        assert.ok(!store.getTicket(slug, fixture.ticket.ref).submission, 'a refused CLI submit writes no submission');
+      }
+      assert.strictEqual(store.getTicket(slug, fixture.ticket.ref).claim.by, fixture.by, 'the refusal preserves the held claim');
+      const sameWitness = await captureRootNamingVerifier(fixture, PROJECT_DIR);
+      assert.strictEqual(sameWitness.candidate.value, currentCandidate);
+      assert.strictEqual(sameWitness.worktree, first.worktree);
+      assert.match(sameWitness.output, /current candidate C2/);
+      if (surface === 'MCP') {
+        const accepted = await submitRootNamingVerifier(currentFixture, fixture.command);
+        assert.strictEqual(accepted.ok, true, accepted.message);
+      } else {
+        const accepted = runCli(['submit', fixture.ticket.ref, '--by', fixture.by, '--commit', currentCandidate, '--verify', fixture.command]);
+        assert.strictEqual(accepted.status, 0, accepted.stderr + accepted.stdout);
+      }
+      const submission = store.getTicket(slug, fixture.ticket.ref).submission;
+      assert.strictEqual(submission.commit, currentCandidate);
+      assert.strictEqual(submission.base, fixture.base, 'the original BASE remains the range floor');
+      assert.deepStrictEqual(submission.commits, [fixture.candidate, currentCandidate], 'the full original BASE..C2 range is admitted');
+      assert.strictEqual(submission.verify, fixture.command, 'the pinned command is unchanged');
+    } finally {
+      git(['worktree', 'remove', '--force', foreign]);
+    }
+  });
+}
 
 test('capture accepts a live verify amendment and still rejects unrelated commands', async () => {
   const pinnedCommand = 'node -e "process.exit(0)" && node -e "process.exit(1)"';

@@ -175,6 +175,11 @@ export function crossedWorktreeRefusalMessage(gate: string, crossing: CrossedWor
     + ' The orchestrator then redispatches it onto a checkout of its own and salvages any commit by hash.';
 }
 
+export function worktreeBoundVerifyRefusalMessage(ref: string, flag: string): string {
+  return `submit: refused ${ref}; ${flag} embeds this worktree path. Run verification from the repo root and use repo-relative paths.`
+    + ' When the pinned verifier names this checkout root, do not edit it: run the pinned verify-capture wrapper from this root over the committed candidate, then resubmit the exact pinned command. One capture from the current dispatch attempt must prove those exact bytes passed cleanly for the submitted candidate at this root. Captures from different roots or candidates cannot combine authority.';
+}
+
 export function routingDisabledMessage(ref: string): string {
   return `Routing is disabled on this board, so ${ref} cannot be dispatched. Run \`sidequest routing enabled\` then \`sidequest dispatch ${ref}\`; direct work is limited to the inline-safe allowlist: \`sidequest claim ${ref} --direct --reason "why this is inline-safe"\`.`;
 }

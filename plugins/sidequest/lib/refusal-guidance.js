@@ -30,6 +30,7 @@ __export(refusal_guidance_exports, {
   manualCandidateDeliveryGuidance: () => manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance: () => negativeControlRecoveryGuidance,
   routingDisabledMessage: () => routingDisabledMessage,
+  worktreeBoundVerifyRefusalMessage: () => worktreeBoundVerifyRefusalMessage,
   worktreeCreationRefusalMessage: () => worktreeCreationRefusalMessage
 });
 module.exports = __toCommonJS(refusal_guidance_exports);
@@ -124,6 +125,9 @@ function worktreeCreationRefusalMessage(reason, repository, failure) {
 function crossedWorktreeRefusalMessage(gate, crossing) {
   return `${gate}: refused ${crossing.ref}; its dispatch is bound to worktree ${crossing.boundWorktree}, but this call ran from ${crossing.actualWorktree}, and ${crossing.owner.ref} holds ${crossing.owner.worktree} under a live claim by "${crossing.owner.claimHolder}". One of these checkouts is recorded to another live executor, so this is a crossed worktree binding, not a caller mistake: do not enter the bound tree, and do not expect it to hold this ticket's work - anything the board diffs there reports ${crossing.owner.ref}'s state, test names included. Remedy: ask the orchestrator to rebind this live claim to the checkout you run in: MCP \`dispatch\` with \`ref:"${crossing.ref}"\`, \`claimHolder:"${crossing.claimHolder}"\`, \`worktree:"${crossing.actualWorktree}"\` and \`recoveryEvidence\` quoting this refusal. When both claims were launched together and hold exactly each other's checkouts with neither carrying another ticket's commits, that rebind swaps the two records onto their own checkouts at once. Otherwise commit your work there with git first, pin that commit (\`git update-ref refs/sidequest/${crossing.ref} <hash>\`) so the checkout's HEAD is this claim's own commit, and comment the hash as the crossing evidence before asking for the rebind. The board refuses that rebind while another live ticket leases the checkout, its HEAD is not this claim's own commit, and the pair is not an exact crossing, or while the checkout carries another ticket's commits. Fallback, when there is no exact crossing to swap and no commit to pin, or the rebind is refused: release this ticket with kind \`handback\`, quoting this refusal: \`sidequest release ${crossing.ref} --by "${crossing.claimHolder}" -s todo --release-kind handback --reason "crossed worktree binding: <this refusal>"\` (MCP \`release\` with \`kind:"handback"\`, \`status:"todo"\` and the same reason). The orchestrator then redispatches it onto a checkout of its own and salvages any commit by hash.`;
 }
+function worktreeBoundVerifyRefusalMessage(ref, flag) {
+  return `submit: refused ${ref}; ${flag} embeds this worktree path. Run verification from the repo root and use repo-relative paths. When the pinned verifier names this checkout root, do not edit it: run the pinned verify-capture wrapper from this root over the committed candidate, then resubmit the exact pinned command. One capture from the current dispatch attempt must prove those exact bytes passed cleanly for the submitted candidate at this root. Captures from different roots or candidates cannot combine authority.`;
+}
 function routingDisabledMessage(ref) {
   return `Routing is disabled on this board, so ${ref} cannot be dispatched. Run \`sidequest routing enabled\` then \`sidequest dispatch ${ref}\`; direct work is limited to the inline-safe allowlist: \`sidequest claim ${ref} --direct --reason "why this is inline-safe"\`.`;
 }
@@ -202,5 +206,6 @@ function filesystemSnapshotChildFailureGuidance(failure) {
   manualCandidateDeliveryGuidance,
   negativeControlRecoveryGuidance,
   routingDisabledMessage,
+  worktreeBoundVerifyRefusalMessage,
   worktreeCreationRefusalMessage
 });

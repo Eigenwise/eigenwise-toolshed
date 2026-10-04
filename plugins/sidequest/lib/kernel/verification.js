@@ -1,7 +1,9 @@
 "use strict";
+var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __export = (target, all) => {
   for (var name in all)
@@ -15,6 +17,14 @@ var __copyProps = (to, from, except, desc) => {
   }
   return to;
 };
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var verification_exports = {};
 __export(verification_exports, {
@@ -29,9 +39,12 @@ __export(verification_exports, {
   verificationFailureDiagnostic: () => verificationFailureDiagnostic,
   verificationOutcome: () => verificationOutcome,
   verificationRequirement: () => verificationRequirement,
-  verificationWaiverDiagnostic: () => verificationWaiverDiagnostic
+  verificationWaiverDiagnostic: () => verificationWaiverDiagnostic,
+  verifyEmbedsWorktreeRoot: () => verifyEmbedsWorktreeRoot
 });
 module.exports = __toCommonJS(verification_exports);
+var import_worktree = require("./worktree.js");
+var import_node_path = __toESM(require("node:path"));
 const VERIFICATION_KINDS = ["suite", "command", "document", "link", "schema", "manual", "attestation", "review", "custom"];
 const VERIFICATION_STATUSES = ["passed", "failed_suite", "toolchain_missing", "could_not_run", "timeout", "manual", "attestation", "skipped", "failed_check"];
 function nonEmpty(value) {
@@ -116,39 +129,75 @@ function missingCaptureInstruction(command, directCaptureInvocation) {
   if (!directCaptureInvocation) return `Run ${JSON.stringify(command)} through the dispatched verify-capture wrapper again after finalizing that candidate, then resubmit.`;
   return `A direct claim has no dispatch briefing: from the checkout holding that candidate, run ${directCaptureInvocation} (it loads the pinned command from the ticket and records the capture), then resubmit.`;
 }
-function commandVerificationResult(requirement, evidence, captures, ticket, candidate, dispatchNonce, directCaptureInvocation = "") {
-  const command = requirement.command || "";
-  if (evidence !== command) {
-    const message = "verification must match the declared executor verify command and the prepared command verifier; executors cannot replace the required command.";
-    return Object.freeze({
-      result: Object.freeze({ kind: requirement.kind, status: "failed_check", evidence: message, command, failureIdentities: Object.freeze(["verification:evidence-mismatch"]) }),
-      expectedEvidence: command,
-      diagnostic: Object.freeze({ code: "executor_verify_mismatch", message, retryable: true })
-    });
+function comparableVerificationPaths(verify, root) {
+  const normalize = (value) => value.replace(/[\\/]+/g, "/").replace(/\/+$/, "");
+  const checkout = normalize(import_node_path.default.resolve(root));
+  const command = normalize(verify);
+  return /^[a-z]:\//i.test(checkout) ? { command: command.toLowerCase(), root: checkout.toLowerCase() } : { command, root: checkout };
+}
+function commandNamesCheckout(command, root) {
+  let offset = command.indexOf(root);
+  while (offset !== -1) {
+    const next = command.charAt(offset + root.length);
+    if (!next || next === "/" || !/[a-z0-9._-]/i.test(next)) return true;
+    offset = command.indexOf(root, offset + root.length);
   }
-  const matchingCapture = (capture) => capture.ticket === ticket && capture.command === command && capture.status === "passed" && capture.candidate.source === candidate.source && capture.candidate.value === candidate.value && capture.dispatchNonce === dispatchNonce;
+  return false;
+}
+function verifyEmbedsWorktreeRoot(verify, root) {
+  if (typeof verify !== "string" || !verify || !root) return false;
+  const comparable = comparableVerificationPaths(verify, root);
+  return commandNamesCheckout(comparable.command, comparable.root);
+}
+function captureMatchesExecution(capture, ticket, command, dispatchNonce) {
+  return capture.ticket === ticket && capture.command === command && capture.status === "passed" && capture.dispatchNonce === dispatchNonce;
+}
+function captureMatchesRoot(capture, root) {
+  if (!root) return true;
+  return Boolean(capture.worktree) && (0, import_worktree.sameCanonicalPath)(capture.worktree || "", root);
+}
+function captureMatchesCandidate(capture, candidate, root) {
+  return capture.candidate.source === candidate.source && capture.candidate.value === candidate.value && captureMatchesRoot(capture, root);
+}
+function failedCommandVerification(requirement, command, message, identity, code, expectedEvidence) {
+  return Object.freeze({
+    result: Object.freeze({ kind: requirement.kind, status: "failed_check", evidence: message, command, failureIdentities: Object.freeze([identity]) }),
+    expectedEvidence,
+    diagnostic: Object.freeze({ code, message, retryable: true })
+  });
+}
+function missingCommandCaptureMessage(ticket, command, candidate, dispatchNonce, directCaptureInvocation, dirtyCapture) {
+  if (dirtyCapture) return `Verification capture ${dirtyCapture.id} for ${ticket}, ${captureAttemptLabel(dispatchNonce)}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)} ran over a dirty worktree. Commit or discard the changes, then run the pinned verifier again before resubmitting.`;
+  return `No completed passed verification capture exists for ${ticket}, ${captureAttemptLabel(dispatchNonce)}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)}. ${missingCaptureInstruction(command, directCaptureInvocation)}`;
+}
+function passedCommandVerification(requirement, command, capture) {
+  return Object.freeze({ result: Object.freeze({
+    kind: requirement.kind,
+    status: "passed",
+    evidence: command,
+    command,
+    logPath: capture.logPath || null,
+    exitCode: capture.exitCode ?? null
+  }), expectedEvidence: command });
+}
+function commandVerificationResult(requirement, evidence, captures, ticket, candidate, dispatchNonce, directCaptureInvocation = "", root = "") {
+  const command = requirement.command || "";
+  if (evidence !== command) return failedCommandVerification(
+    requirement,
+    command,
+    "verification must match the declared executor verify command and the prepared command verifier; executors cannot replace the required command.",
+    "verification:evidence-mismatch",
+    "executor_verify_mismatch",
+    command
+  );
+  const matchingCapture = (capture) => captureMatchesExecution(capture, ticket, command, dispatchNonce) && captureMatchesCandidate(capture, candidate, root);
   const provesCandidate = (capture) => capture.candidate.source === "working-tree" || capture.cleanWorktree === true;
   const completedCapture = captures.find((capture) => matchingCapture(capture) && provesCandidate(capture));
-  if (!completedCapture) {
-    const dirtyCapture = captures.find((capture) => matchingCapture(capture) && capture.cleanWorktree === false);
-    const message = dirtyCapture ? `Verification capture ${dirtyCapture.id} for ${ticket}, ${captureAttemptLabel(dispatchNonce)}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)} ran over a dirty worktree. Commit or discard the changes, then run the pinned verifier again before resubmitting.` : `No completed passed verification capture exists for ${ticket}, ${captureAttemptLabel(dispatchNonce)}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)}. ${missingCaptureInstruction(command, directCaptureInvocation)}`;
-    return Object.freeze({
-      result: Object.freeze({ kind: requirement.kind, status: "failed_check", evidence: message, command, failureIdentities: Object.freeze([dirtyCapture ? "verification:dirty-worktree-capture" : "verification:capture-required"]) }),
-      expectedEvidence: null,
-      diagnostic: Object.freeze({ code: dirtyCapture ? "verification_capture_dirty_worktree" : "verification_capture_required", message, retryable: true })
-    });
-  }
-  return Object.freeze({
-    result: Object.freeze({
-      kind: requirement.kind,
-      status: "passed",
-      evidence: command,
-      command,
-      logPath: completedCapture.logPath || null,
-      exitCode: completedCapture.exitCode ?? null
-    }),
-    expectedEvidence: command
-  });
+  if (completedCapture) return passedCommandVerification(requirement, command, completedCapture);
+  const dirtyCapture = captures.find((capture) => matchingCapture(capture) && capture.cleanWorktree === false);
+  const message = missingCommandCaptureMessage(ticket, command, candidate, dispatchNonce, directCaptureInvocation, dirtyCapture);
+  const failure = dirtyCapture ? { identity: "verification:dirty-worktree-capture", code: "verification_capture_dirty_worktree" } : { identity: "verification:capture-required", code: "verification_capture_required" };
+  return failedCommandVerification(requirement, command, message, failure.identity, failure.code, null);
 }
 function captureVerificationResult(requirement, capture) {
   if (capture.status === "passed") {
@@ -171,5 +220,6 @@ function captureVerificationResult(requirement, capture) {
   verificationFailureDiagnostic,
   verificationOutcome,
   verificationRequirement,
-  verificationWaiverDiagnostic
+  verificationWaiverDiagnostic,
+  verifyEmbedsWorktreeRoot
 });

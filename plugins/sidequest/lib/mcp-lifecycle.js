@@ -332,9 +332,6 @@ function commitWorktreeRefusal(slug, ticket, root) {
   return crossing ? { reason: "crossed_worktree_binding", message: crossedWorktreeRefusalMessage("commit", crossing) } : null;
 }
 function submitWorktreeRefusal(slug, ticket, root, args) {
-  if (verifyEmbedsWorktreeRoot(args.verify, root)) {
-    throw new Error(`submit: refused ${ticket.ref}; verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
-  }
   const crossing = args.worktree == null ? null : store.crossedWorktreeBinding(slug, ticket, root);
   return crossing ? { reason: "crossed_worktree_binding", message: crossedWorktreeRefusalMessage("submit", crossing) } : null;
 }
@@ -466,6 +463,7 @@ function collectGitSubmissionFacts(options) {
     range,
     scope,
     admissionFacts: {
+      verificationRoot: root,
       admittedScope: admittedSubmissionScope(slug, ticket),
       scope,
       baseline: submissionBaseline(range, surfaces),
