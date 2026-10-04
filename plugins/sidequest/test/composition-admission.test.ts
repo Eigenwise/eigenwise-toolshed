@@ -16,6 +16,9 @@ const worktrees = require('../lib/worktrees.js');
 const capture = require('../lib/verify-capture.js');
 const { canonicalPath, createCheckoutInstanceMarker } = require('../lib/kernel/worktree.js');
 
+store.setCategory({ id: 'composition.fixture', name: 'Composition fixture',
+  route: { model: 'sonnet', effort: 'high' }, fallback: null, enabled: true });
+
 let project: string;
 let rootTicket: CompositionTicket;
 let admissionInput: CompositionAdmissionInput;
@@ -107,7 +110,7 @@ function freshNativeCheckout(ref: string, by: string, role: string, probes: {
 
 function fixtureTicket(title: string, files: readonly string[]): CompositionTicket {
   return store.createTicket(project, { title, description: 'Public disposable exact composition fixture. Verify: inspect immutable range and native lifecycle.',
-    files, category: 'general', route: { model: 'sonnet', effort: 'high' } });
+    files, category: 'composition.fixture', route: { model: 'sonnet', effort: 'high' } });
 }
 
 async function submitSource(ticket: CompositionTicket, file: string, role: string): Promise<CompositionSourceRange> {
