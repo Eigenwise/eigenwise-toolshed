@@ -25,7 +25,7 @@ const RESTART_NOTICE = RELOAD_NOTICE;
 const ARTIFACT_LIFECYCLE_MARKER = "[sidequest-artifact-mode]";
 const NON_MAX_EFFORTS = ["low", "medium", "high", "xhigh"];
 const EXEC_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
-const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 100;
+const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 75;
 const EXECUTOR_CONTRADICTION_RULE = "Executor contradiction rule: An anchor is orientation, not a contract. When an anchor names the wrong file, locate the file the work actually needs. If that file is inside declared scope, correct the anchor in your handback and continue. Stop and report a contradiction only when the needed file is outside declared scope or the ticket premise is false. Scope limits writes, never reads: reading any worktree path is allowed. Before reporting, check it and include the checked path or target and result. An existing out-of-scope path or declared output is context, not a contradiction. After evidence of absence, do not redesign the ticket, reject the base, or invent a substitute.";
 function defaultAgentsDir() {
   const explicit = process.env.SIDEQUEST_AGENTS_DIR;

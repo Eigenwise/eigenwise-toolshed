@@ -53,7 +53,11 @@ npm ci
 npm test
 ```
 
-Sidequest is the exception: it has no `test` script, run `npm run test:full` instead.
+Sidequest has no `test` script. Use `npm run test:files -- <explicit test-file paths>` for
+focused iteration, then capture the pinned verifier once on the final clean committed candidate.
+The orchestrator delivers through the pinned delivery verifier and runs one combined full merged-tree
+gate per wave (`npm run test:full` for Sidequest) before versioning. A changed tree after rebase needs
+a fresh gate; assembled proof can be reused only when the runtime authorizes its exact identities.
 
 ## Quality gate
 
@@ -62,12 +66,16 @@ Every function a change adds or modifies is expected to score a CRAP below 6, wh
 coverage, not estimated. Untouched legacy functions are out of scope; a review does not
 ask you to fix debt you did not touch.
 
-The committed runner, `scripts/quality/crap.mjs` (`npm run quality:crap` from
-`plugins/sidequest`), is being aligned to that standard and does not enforce it exactly yet:
-today it flags a new function only at CRAP 8 or above, and an existing function only when its
-CRAP rises above its baseline on `develop`, rather than requiring every touched function to
-clear a strict below-6 bar. Use it to measure your change, but the number the runner prints
-and the number a review holds you to can differ until that alignment lands.
+Use the existing local quality owner with trustworthy measured per-function complexity and coverage
+against the original implementation base. Where supported, scan complexity early, then reuse fresh
+candidate-verifier coverage for the same checked bytes through that runner's supported path. Missing
+analyzer or coverage stays UNVERIFIED. The tracked Lizard/proportional-attribution runner is not quality
+authority; do not pin `quality:crap` or rerun a full suite merely to obtain already captured compatible
+coverage. CRAP 6 fails for each new or modified function, with no averaging or legacy ratchet.
+
+Keep measurement tooling, configuration, reports, and caches local and uncommitted, outside the
+repository or excluded locally through `.git/info/exclude`. Do not change tracked dependencies,
+lockfiles, CI, `.gitignore`, or project settings to install a measurement check.
 
 ## Negative controls
 
