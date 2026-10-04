@@ -83,34 +83,40 @@ This is a Desktop-side restriction, not a Model Gateway bug, and there is no sup
 
 ## Context window and cost
 
-Long context costs differently per backend. Claude charges nothing extra for its 1M window. OpenAI bills Codex input above 272k tokens at 2x, so past that point every request costs double. Model Gateway keeps one setting per backend:
+Claude keeps its native 1M window. OpenAI bills Codex input above 272k tokens at 2x. Model Gateway saves one policy per backend in `~/.claude/model-gateway/context-window.json`, shared by the orchestrator and executors. Existing installations keep their current policy until you configure a change.
 
-| Backend | Default | What it does |
+| Backend | Default window | Compaction |
 | --- | --- | --- |
-| Claude | `full` | 1M through the `[1m]` alias pins |
-| Codex | `272000` | OpenAI bills input above 272k tokens at 2x; the cap keeps every request, including compaction, under it |
-| Grok | `full` | the measured 500k backend window |
+| Claude | `full` | Native 1M window through `[1m]` aliases; native engine headroom applies |
+| Codex | `272000` | Legacy trigger 187000 unless you save a direct maximum |
+| Grok | `full` | Backend window minus 40000 unless you save a lower direct maximum |
 
-Show the current values, or change them:
+Show or set windows:
 
 ```sh
 node ~/.claude/model-gateway/model-gateway.js context-window
 node ~/.claude/model-gateway/model-gateway.js context-window --claude full --codex 272000 --grok full
 ```
 
-A value is `full` or a whole number of tokens up to 1,000,000. The setting lives in `~/.claude/model-gateway/context-window.json`. The older `CODEX_GATEWAY_CONTEXT_WINDOW` environment variable still works, but only when no Codex value is saved. `status` and `doctor` print the effective window for each backend, and Sidequest's `models` output and the dashboard's model pickers show the same numbers.
+The window flags still accept `full` or their supported whole token counts up to 1,000,000. `CODEX_GATEWAY_CONTEXT_WINDOW` applies only when no Codex window is saved. `/v1/models` advertises the window cap and keeps `[1m]` picker ids. Claude Code's discovery cache retains only model ids and names, so the gateway's synthetic-413 sentry enforces Codex and Grok compaction.
 
-The numbers are per backend, not per role. Sidequest executors run through the same Claude Code process and send the same model ids as the orchestrator, and nothing in a request tells the gateway which role sent it, so the orchestrator and every executor share these values.
+Set a direct Codex or Grok maximum before compaction:
 
-How the Codex cap holds. Claude Code never reads the gateway's advertised `max_input_tokens` for a `[1m]` row (its gateway discovery cache keeps only the id and name), so the client alone would let a Codex session grow to its 1M alias window. The gateway enforces the cap itself. After each response it records the input tokens that turn used, and when the last turn went past the trigger it answers the next request with a "prompt is too long" error, which makes Claude Code compact. The compaction request is the largest one a session sends:
+```sh
+node ~/.claude/model-gateway/model-gateway.js context-window --codex-compact-at 242000
+node ~/.claude/model-gateway/model-gateway.js context-window --grok-compact-at 400000
+node ~/.claude/model-gateway/model-gateway.js context-window --codex-compact-at cap
+```
 
-- the turn that crossed the trigger can already be one turn of growth past it (up to 40,000 tokens: a response plus its tool results),
-- the compaction request resends that turn plus one more turn of growth,
-- and adds Claude Code's compaction instructions (about 7,300 characters; budgeted at 5,000 tokens).
+These flags save positive whole token counts in `compactAt.codex` or `compactAt.grok`. `cap` removes that explicit entry and restores the legacy policy. Changing a window preserves saved maxima. The 242000 example leaves the Codex 272000 cap unchanged. Explicit maxima have no hidden 85000 subtraction: the effective trigger is limited by the requested number, the window cap when present, and the actual backend window minus 40000. `status`, `doctor`, and catalog notes report requested and effective numbers, the backend window, and the limiting source. A saved maximum overrides `CODEX_GATEWAY_COMPACT_TRIGGER`; its ignored value is reported without changing the environment.
 
-So a cap compacts past cap minus 85,000. With the 272,000 default, sessions compact past 187,000, ordinary turns stay under about 227,000, and the compaction request stays at or under 272,000. `/v1/models` advertises the cap itself, so picker ids keep their `[1m]` suffix. A capped Codex value needs at least 185,000 tokens so the trigger keeps 100,000 tokens of working room. The running gateway reads the setting when it starts, so restart it after a change (`stop`, then `ensure`).
+A direct maximum is a compaction trigger, with one-turn detection delay. The gateway records input usage after each response and sends a synthetic overflow on the next request when usage passed the trigger. The crossing turn and the compaction request can still exceed 272k and pay double, including with 242000 configured. This setting gives no per-request price guarantee.
 
-A Claude cap works differently: it is written as Claude Code's `autoCompactWindow` into every project wired at project scope (`.claude/settings.local.json`), and a project wired later picks it up at its next session start. `autoCompactWindow` is one number for the whole session, so a Claude cap also bounds Codex and Grok rows in that session. The command refuses a Claude cap when no project is wired at project scope, because writing it to your user settings would cap every project. For the same reason, a user-level `autoCompactWindow` (for example the older `325000` suggestion) keeps Claude from getting its full window; `status` names the file that sets it.
+With no explicit maximum, the legacy cap policy still subtracts 85000 (two budgeted 40000-token turns plus a 5000-token compaction prompt). Thus Codex's default trigger stays 187000. Gateway window caps keep their existing 185000 minimum; direct maxima have no 100000 floor. The actual provider capacity remains authoritative.
+
+Claude's supported separate number remains `--claude <tokens|full>`, synced through existing project-wired `autoCompactWindow` settings. A numeric value requires a project wired at project scope. Gateway-owned values are synced; unrelated user-owned values stay untouched. A lower session-wide native window can also bound gateway models. Current native engine headroom and the exact direct Claude trigger are unverified, so `--claude-compact-at` and `compactAt.claude` are refused without writing. Same-model main/subagent thresholds are unverified; this policy applies one number per backend and uses no role guessing.
+
+Configuration is read at gateway startup. After deliberately changing it, stop the gateway and run `ensure`; restart open Claude Code sessions for native-window or picker changes. Updating or installing the plugin alone never adopts the 242000 example.
 
 ## Daily use
 

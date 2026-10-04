@@ -8,6 +8,66 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.589.0 (2026-10-03)
+
+### codebase-mapper 2.15.9 → 2.15.10
+
+#### Fixes
+
+- Explain task continuity and optional donations across Toolshed (SQ-3304) [`b702891`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b702891f)
+  Make durable Sidequest tickets across context compaction and new sessions explicit in READMEs, guides and listing metadata. Clarify free MIT-licensed code, optional donations and separate provider costs in every plugin README.
+- Keep README features and costs scoped to their components (SQ-3311) [`764a7ce`](https://github.com/Eigenwise/eigenwise-toolshed/commit/764a7ce35577910ef4976d08de9756173f0512e5)
+
+### live-rules 2.11.1 → 2.11.2
+
+#### Fixes
+
+- Explain task continuity and optional donations across Toolshed (SQ-3304) [`b702891`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b702891f)
+  Make durable Sidequest tickets across context compaction and new sessions explicit in READMEs, guides and listing metadata. Clarify free MIT-licensed code, optional donations and separate provider costs in every plugin README.
+- Keep README features and costs scoped to their components (SQ-3311) [`764a7ce`](https://github.com/Eigenwise/eigenwise-toolshed/commit/764a7ce35577910ef4976d08de9756173f0512e5)
+
+### model-gateway 0.53.1 → 0.53.2
+
+#### Fixes
+
+- Explain task continuity and optional donations across Toolshed (SQ-3304) [`b702891`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b702891f)
+  Make durable Sidequest tickets across context compaction and new sessions explicit in READMEs, guides and listing metadata. Clarify free MIT-licensed code, optional donations and separate provider costs in every plugin README.
+- Keep README features and costs scoped to their components (SQ-3311) [`764a7ce`](https://github.com/Eigenwise/eigenwise-toolshed/commit/764a7ce35577910ef4976d08de9756173f0512e5)
+
+### observability 0.8.1 → 0.8.2
+
+#### Fixes
+
+- Explain task continuity and optional donations across Toolshed (SQ-3304) [`b702891`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b702891f)
+  Make durable Sidequest tickets across context compaction and new sessions explicit in READMEs, guides and listing metadata. Clarify free MIT-licensed code, optional donations and separate provider costs in every plugin README.
+- Keep README features and costs scoped to their components (SQ-3311) [`764a7ce`](https://github.com/Eigenwise/eigenwise-toolshed/commit/764a7ce35577910ef4976d08de9756173f0512e5)
+
+### quartermaster 0.11.9 → 0.11.10
+
+#### Fixes
+
+- Explain task continuity and optional donations across Toolshed (SQ-3304) [`b702891`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b702891f)
+  Make durable Sidequest tickets across context compaction and new sessions explicit in READMEs, guides and listing metadata. Clarify free MIT-licensed code, optional donations and separate provider costs in every plugin README.
+- Make directory-alias verification portable on Windows (SQ-3306) [`736c299`](https://github.com/Eigenwise/eigenwise-toolshed/commit/736c299c)
+  Use a directory junction for the Windows realpath fixture while preserving its alias-resolution assertions. The full Quartermaster suite can run without directory-symlink privilege.
+- Keep README features and costs scoped to their components (SQ-3311) [`764a7ce`](https://github.com/Eigenwise/eigenwise-toolshed/commit/764a7ce35577910ef4976d08de9756173f0512e5)
+
+### sidequest 5.6.0 → 5.6.1
+
+#### Fixes
+
+- Explain task continuity and optional donations across Toolshed (SQ-3304) [`b702891`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b702891f)
+  Make durable Sidequest tickets across context compaction and new sessions explicit in READMEs, guides and listing metadata. Clarify free MIT-licensed code, optional donations and separate provider costs in every plugin README.
+- Keep README features and costs scoped to their components (SQ-3311) [`764a7ce`](https://github.com/Eigenwise/eigenwise-toolshed/commit/764a7ce35577910ef4976d08de9756173f0512e5)
+
+## v3.588.0 (2026-10-03)
+
+### codebase-mapper 2.15.8 → 2.15.9
+
+#### Fixes
+
+- Add Codebase Mapper directory icon and data-handling disclosure (SQ-3300) [`d7b1a78`](https://github.com/Eigenwise/eigenwise-toolshed/commit/d7b1a785baa6fa7034dd30c62fdbe9f5d68609f8)
+
 ## v3.587.0 (2026-10-02)
 
 ### Repository

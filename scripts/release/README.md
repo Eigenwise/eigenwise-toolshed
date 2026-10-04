@@ -116,3 +116,7 @@ node --test scripts/release/test/*.test.mjs
 ```
 
 The release tests use throwaway repositories and local bare remotes. They do not contact a network. They cover planning, version bumps, changelogs, the separate push stages, automatic pre-push rollback, tag checks, and suite safeguards.
+
+## Support
+
+Optional donations through [Ko-fi](https://ko-fi.com/eigenwise) or [GitHub Sponsors](https://github.com/sponsors/Eigenwise) support maintenance of the release engine. Donations are never required to use the files in this directory.

@@ -466,7 +466,7 @@ test('buildCatalog publishes the v4 provider-generic model contract', () => {
   assert.deepEqual(catalog.codexReadiness, catalog.providers.codex);
   const codexWindow = {
     contextWindow: 272000,
-    contextWindowNote: 'compacts past 187000; OpenAI bills input above 272k tokens at 2x; the cap keeps every request, including compaction, under it',
+    contextWindowNote: 'compacts past 187000; OpenAI bills input above 272k tokens at 2x; the crossing turn and compaction request can still exceed 272k and pay double',
   };
   assert.deepEqual(catalog.models, [
     {
