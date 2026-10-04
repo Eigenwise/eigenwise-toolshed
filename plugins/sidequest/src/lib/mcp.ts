@@ -67,7 +67,10 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 24300 for groomClose/integrate deliveryRevision and resolvedPaths (GitHub #144), the only route
 // that closes a candidate rebased or squash-merged before it landed: +980 bytes compacted, measured on the
 // wave-3 tree with SQ-3118 and GH-222 already in, so the 2.5KB reserve still holds.
-const MCP_TOOLS_LIST_MAX_BYTES = 25400;
+// Raised from 25400 for update.admitComposition (SQ-3331): +1675 bytes compacted, all of it schema structure,
+// since compactSchema strips its descriptions and update's served description is empty. Trimming other tools
+// could not recover it without dropping callable constraints or pinned contract text, so the 2.5KB reserve holds.
+const MCP_TOOLS_LIST_MAX_BYTES = 27075;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
