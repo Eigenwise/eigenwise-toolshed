@@ -1,5 +1,5 @@
 import type { ReviewCandidate, OracleVerdictOutcome, ReviewMirror } from '../kernel/review-binding';
-import { sameReviewCandidate, reviewCandidateFromSubmission } from '../kernel/review-binding';
+import { sameReviewCandidate, reviewCandidateFromSubmission, reviewVerdictHistory } from '../kernel/review-binding';
 
 export type ReviewVerdictCorrection = Readonly<{
   from: 'accepted'; to: 'rejected'; verdictAt: string; sourceTicketId: string; sourceRef: string;
@@ -17,14 +17,16 @@ export type CorrectionTicket = {
   dispatch?: { readonly?: boolean; executor?: string; terminalAt?: string; outcome?: string };
   completion?: { purpose?: string };
   reviewTarget?: ReviewMirror;
+  reviewDecision?: ReviewDecisionHistory;
   oracle?: { verdict?: { outcome: OracleVerdictOutcome; at: string }; corrections?: ReviewVerdictCorrection[] };
   submission?: { commit?: string; sourceRevision?: ReviewCandidate; at?: string; integratedAt?: string; supersededBy?: string; review?: ReviewMirror };
   comments?: CorrectionComment[];
 };
-type Refusal = { ok: false; reason: string; message: string };
+export type ReviewDecisionHistory = { verdict?: { outcome: OracleVerdictOutcome; at: string }; corrections?: ReviewVerdictCorrection[] };
+export type Refusal = { ok: false; reason: string; message: string };
 type CorrectionResult = Refusal | { ok: true; idempotent?: true; correction: ReviewVerdictCorrection; reviewOutcome: { sourceRef: string; outcome: 'rejected' } };
 type Grant = { allowAcceptedReviewCorrection?: boolean };
-type Relation = { conflict: boolean; side: string; reviewTicket: CorrectionTicket | null };
+export type Relation = { conflict: boolean; side: string; reviewTicket: CorrectionTicket | null };
 type Dependencies = {
   getTicket: (slug: string, ref: string) => CorrectionTicket | null;
   pendingSubmission: (ticket: CorrectionTicket) => boolean;
@@ -69,12 +71,12 @@ function activeCorrectionDispatch(ticket: CorrectionTicket): boolean {
   return !ticket.dispatch.terminalAt;
 }
 
-function correctionReviewCategory(category: CorrectionTicket['category']): string | undefined {
+export function correctionReviewCategory(category: CorrectionTicket['category']): string | undefined {
   if (typeof category === 'string') return category;
   return category?.id;
 }
 
-function activeCorrectionTicket(ticket: CorrectionTicket): boolean {
+export function activeCorrectionTicket(ticket: CorrectionTicket): boolean {
   return Boolean(ticket.claim?.by) || activeCorrectionDispatch(ticket);
 }
 
@@ -88,7 +90,7 @@ function finalizedReviewRefusal(ticket: CorrectionTicket, readonlyExecutor: bool
 function finalizedReviewBindingRefusal(ticket: CorrectionTicket): Refusal | undefined {
   const target = ticket.reviewTarget;
   if (!target || !target.ticketId) return refuse('review_unbound', 'Correction requires the original source binding.');
-  if (!ticket.oracle?.verdict) return refuse('no_verdict', 'The original verdict is unavailable.');
+  if (!reviewVerdictHistory(ticket)?.verdict) return refuse('no_verdict', 'The original verdict is unavailable.');
 }
 
 function reviewFinalizationRefusal(ticket: CorrectionTicket, readonlyExecutor: boolean): Refusal | undefined {
@@ -99,7 +101,8 @@ function reviewFinalizationRefusal(ticket: CorrectionTicket, readonlyExecutor: b
 }
 
 function expectedVerdictRefusal(ticket: CorrectionTicket, expected: CorrectionInput['expected']): Refusal | undefined {
-  const { oracle = {}, reviewTarget = {} } = ticket;
+  const { reviewTarget = {} } = ticket;
+  const oracle = reviewVerdictHistory(ticket) ?? {};
   const verdict = oracle.verdict;
   if (!verdict) return refuse('no_verdict', 'The original verdict is unavailable.');
   if (verdict.outcome !== 'accepted') return refuse('not_accepted', 'Only an original accepted verdict can be corrected.');
@@ -108,10 +111,10 @@ function expectedVerdictRefusal(ticket: CorrectionTicket, expected: CorrectionIn
     reviewTarget.ref === expected.sourceRef,
     sameReviewCandidate(reviewTarget.candidate, expected.candidate),
   ];
-  if (matches.includes(false)) return refuse('stale_expected', 'Read list({ref: reviewRef}).ticket.oracle.verdict.at and the exact original source/candidate before correcting.');
+  if (matches.includes(false)) return refuse('stale_expected', 'Read list({ref: reviewRef}).ticket.reviewDecision.verdict.at (or ticket.oracle.verdict.at for an oracle) and the exact original source/candidate before correcting.');
 }
 
-function sourceCorrectionRefusal(source: CorrectionTicket, pending: boolean): Refusal | undefined {
+export function sourceCorrectionRefusal(source: CorrectionTicket, pending: boolean): Refusal | undefined {
   if (activeCorrectionTicket(source)) return refuse('source_active', 'The original source is claimed or actively dispatched.');
   return sourceSubmissionRefusal(source.submission, pending);
 }
@@ -129,7 +132,7 @@ function correctionRelationRefusal(ticket: CorrectionTicket, relation: Relation 
   if (identities.includes(false)) return refuse('binding_mismatch', 'Correction requires a nonconflicting exact two-sided original review binding.');
 }
 
-function correctionBindingRefusal(ticket: CorrectionTicket, source: CorrectionTicket, relation: Relation | null): Refusal | undefined {
+export function correctionBindingRefusal(ticket: CorrectionTicket, source: CorrectionTicket, relation: Relation | null): Refusal | undefined {
   const { reviewTarget = {} } = ticket;
   const { submission = {} } = source;
   const mirror = submission.review;
@@ -155,7 +158,8 @@ function correctionRetryRefusal(previous: ReviewVerdictCorrection, count: number
 }
 
 function duplicateCorrectionRefusal(ticket: CorrectionTicket, source: CorrectionTicket, input: CorrectionInput): Refusal | undefined {
-  const { oracle = {}, reviewTarget = {} } = ticket;
+  const { reviewTarget = {} } = ticket;
+  const oracle = reviewVerdictHistory(ticket) ?? {};
   const { corrections = [] } = oracle;
   const { submission = {} } = source;
   const { review: mirror = {} } = submission;
@@ -190,7 +194,7 @@ export function createReviewCorrections(dependencies: Dependencies) {
     if (!source) return refuse('source_unavailable', 'The original source ticket is unavailable.');
     const sourceRefusal = sourceBindingRefusal(slug, ticket, source) || duplicateCorrectionRefusal(ticket, source, input);
     if (sourceRefusal) return sourceRefusal;
-    const { oracle = {} } = ticket;
+    const oracle = reviewVerdictHistory(ticket) ?? {};
     const { corrections = [] } = oracle;
     const previous = corrections.at(-1);
     if (previous) return { ok: true, idempotent: true, correction: previous, reviewOutcome: { sourceRef: source.ref, outcome: 'rejected' } };
@@ -198,7 +202,8 @@ export function createReviewCorrections(dependencies: Dependencies) {
   }
 
   function appendCorrection(slug: string, ticket: CorrectionTicket, source: CorrectionTicket, input: CorrectionInput): CorrectionResult {
-    const { reviewTarget = {}, oracle = {}, comments = [] } = ticket;
+    const { reviewTarget = {}, comments = [] } = ticket;
+    const oracle = reviewVerdictHistory(ticket) ?? {};
     const { corrections = [] } = oracle;
     const at = new Date().toISOString();
     const comment = dependencies.createComment({ by: input.by, body: `Oracle verdict correction (accepted -> rejected): ${input.text}`, kind: 'comment', source: 'mcp' }, at);
@@ -207,7 +212,9 @@ export function createReviewCorrections(dependencies: Dependencies) {
       sourceRef: source.ref, candidate: reviewTarget.candidate ?? input.expected.candidate, text: input.text, why: input.why ?? '',
       evidence: input.evidence, by: input.by, sessionId: input.sessionId, at, commentId: comment.id,
     };
-    ticket.oracle = { ...oracle, corrections: [...corrections, correction] };
+    const history = { ...oracle, corrections: [...corrections, correction] };
+    if (ticket.reviewDecision) ticket.reviewDecision = history;
+    else ticket.oracle = history;
     ticket.comments = [...comments, comment];
     dependencies.recordBoundReviewOutcome(slug, ticket, 'rejected', { correctedAt: at });
     ticket.updatedAt = at;

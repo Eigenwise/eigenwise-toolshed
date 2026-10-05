@@ -64,6 +64,7 @@ const { createStories } = require('./store/stories.js');
 const { createComments } = require('./store/comments.js');
 const { createPlans } = require('./store/plans.js');
 const { createReviewCorrections } = require('./store/review-corrections.js');
+const { createReviewFinalization } = require('./store/review-finalization.js');
 const { createCompositionAdmissions } = require('./store/composition-admission.js');
 const { createReads } = require('./store/reads.js');
 const { createClaims } = require('./store/claims.js');
@@ -1425,6 +1426,11 @@ const { admitComposition, withCompositionDispatchPreparation, withCompositionGen
 
 const { correctAcceptedReviewVerdict } = createReviewCorrections({
   getTicket, pendingSubmission: pendingSubmissionForTickets, isReadOnlyExecutor, submissionReviewRelation,
+  withSourceTicketLock, withTicketLock, createComment, recordBoundReviewOutcome, putTicket, invalidateStoreCaches,
+});
+
+const { finalizeCompletedReview } = createReviewFinalization({
+  getTicket, pendingSubmission: pendingSubmissionForTickets, submissionReviewRelation,
   withSourceTicketLock, withTicketLock, createComment, recordBoundReviewOutcome, putTicket, invalidateStoreCaches,
 });
 
@@ -4518,6 +4524,7 @@ module.exports = {
   appendExperimentEntry,
   applyExperimentVerdict,
   correctAcceptedReviewVerdict,
+  finalizeCompletedReview,
   admitComposition,
   appendOverturnLine,
   experimentPacket,

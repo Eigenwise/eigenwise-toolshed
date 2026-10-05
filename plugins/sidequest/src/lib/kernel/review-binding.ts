@@ -233,6 +233,10 @@ export function effectiveOracleVerdictOutcome(oracle?: {
   return verdict?.outcome;
 }
 
+export function reviewVerdictHistory<History>(ticket: { reviewDecision?: History; oracle?: History }): History | undefined {
+  return ticket.reviewDecision ?? ticket.oracle;
+}
+
 export function reviewRelationOutcome(relation?: ReviewRelation | null): string {
   return String(relation?.mirror?.outcome || relation?.reviewTarget?.outcome || 'planned');
 }
