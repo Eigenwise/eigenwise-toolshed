@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { SCANNED_SOURCE, crapScore, definitionOutsideRows, parseLizardCsv, withBodySpans } = require('./crap-core.cjs');
+const { SCANNED_SOURCE, SCRIPT_SOURCE, crapScore, definitionOutsideRows, parseLizardCsv, unmeasuredDefinitionLines, withBodySpans } = require('./crap-core.cjs');
 
 const DEFAULT_MAX = 6;
 const DEFAULT_LCOV = 'coverage/lcov.info';
@@ -535,11 +535,57 @@ function functionLabel(entry) {
   return `${entry.file}:${entry.line} ${entry.function}`;
 }
 
-function assertMeasured(workDir, settings, { rows, changed, candidates }) {
-  const lizardFailures = unmeasuredLizardFiles(workDir, settings.sources, rows, changed, settings.exclude);
+const DIFF_HUNK = /^@@ -\S+ \+(\d+)(?:,(\d+))? @@/gm;
+
+/** A hunk's lines in the current file; a pure deletion marks the line it followed, where the removed code sat. */
+function hunkLines(match) {
+  const start = Number(match[1]);
+  const count = match[2] === undefined ? 1 : Number(match[2]);
+  return Array.from({ length: Math.max(count, 1) }, (_, offset) => start + offset);
+}
+
+function diffLines(workDir, base, file) {
+  const diff = git(workDir, ['diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-textconv', base, '--', file], `check that ${base} is still a commit this repository knows`);
+  return new Set(Array.from(diff.matchAll(DIFF_HUNK), hunkLines).flat());
+}
+
+function lineRanges(lines) {
+  const ranges = [];
+  for (const line of lines) {
+    const last = ranges[ranges.length - 1];
+    if (last && last[1] === line - 1) last[1] = line;
+    else ranges.push([line, line]);
+  }
+  return ranges.map(([from, to]) => (from === to ? `${from}` : `${from}-${to}`));
+}
+
+/** Without a base revision every line is new, as every function is. */
+function unplacedLines(workDir, file, rows, baseline) {
+  const text = readSource(workDir, file);
+  const lines = text === null ? [] : unmeasuredDefinitionLines(text, rowsOfFile(workDir, rows, file));
+  if (!lines.length) return [];
+  const changed = baseline ? diffLines(workDir, baseline.base, file) : null;
+  return lineRanges(changed ? lines.filter((line) => changed.has(line)) : lines).map((range) => `${file}:${range}`);
+}
+
+/**
+ * Changed lines in a JavaScript-family file that lie inside a definition the source scan reads but in no
+ * row, after every row was reconciled with its real span: lizard misread the function holding them, and
+ * passing the gate there would pass code nothing measured.
+ */
+function unplacedChangedLines(workDir, settings, { rows, changed, baseline }) {
+  const isExcluded = excludedByConfig(workDir, settings.exclude);
+  const files = [...new Set(rows.map((entry) => entry.file))].filter((file) => changed.has(file) && SCRIPT_SOURCE.test(file) && !isExcluded(file));
+  return files.flatMap((file) => unplacedLines(workDir, file, rows, baseline));
+}
+
+function assertMeasured(workDir, settings, measured) {
+  const lizardFailures = unmeasuredLizardFiles(workDir, settings.sources, measured.rows, measured.changed, settings.exclude);
   if (lizardFailures.length) throw new PrerequisiteError(`lizard reported zero functions for ${lizardFailures.join(', ')}`, 'measurement is unverified; fix the parser input before passing the gate');
-  const unmeasured = candidates.filter((entry) => entry.unmeasured);
+  const unmeasured = measured.candidates.filter((entry) => entry.unmeasured);
   if (unmeasured.length) throw new PrerequisiteError(`coverage is unverified for ${unmeasured.map(functionLabel).join(', ')}`, 'run coverage that includes every changed function before passing the gate');
+  const unplaced = unplacedChangedLines(workDir, settings, measured);
+  if (unplaced.length) throw new PrerequisiteError(`changed lines are unmeasured at ${unplaced.join(', ')}`, 'measurement is unverified; lizard misread the function holding these lines, so no row measures them. Rewrite what it cannot read (such as a template literal nested in another one) or move the code into a named function lizard reports, then run the gate again');
 }
 
 function byCrapThenPlace(left, right) {
@@ -568,7 +614,7 @@ function crapReport(options) {
   const functions = rows.map((entry) => measuredFunction(entry, coverage, workDir));
   const baseline = baselineFor(workDir, settings, functions);
   const candidates = changedFunctions(functions, baseline);
-  assertMeasured(workDir, settings, { rows, changed: changedFiles(baseline, functions), candidates });
+  assertMeasured(workDir, settings, { rows, changed: changedFiles(baseline, functions), candidates, baseline });
   return gateResult(workDir, functions, candidates, baseline, settings.usedDeprecatedRatchet);
 }
 

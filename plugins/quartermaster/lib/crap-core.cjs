@@ -62,8 +62,10 @@ function definitionOutsideRows(text, rows) {
 }
 
 const SCRIPT_SOURCE = /\.[cm]?[jt]sx?$/i;
-const OPENERS = new Set(['(', '[', '{']);
-const OPENER_FOR = new Map([[')', '('], [']', '['], ['}', '{']]);
+// A template literal is a group from its opening backtick to this token at its closing one, so the code in its `${...}` stays inside it and its last line is known.
+const TEMPLATE_CLOSE = '`end';
+const OPENERS = new Set(['(', '[', '{', '`']);
+const OPENER_FOR = new Map([[')', '('], [']', '['], ['}', '{'], [TEMPLATE_CLOSE, '`']]);
 const QUOTES = new Set(['"', "'"]);
 // A regex literal can only start where an operand is expected; `<` is left out so a JSX closing tag's `</` stays a slash.
 const REGEX_AFTER = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '&&', '||', '??', '{', ';', '=>', 'return', 'typeof', 'case']);
@@ -95,6 +97,15 @@ const NOT_A_NAME = new Set(['if', 'for', 'while', 'switch', 'catch', 'with', 're
 const CALL_PREFIX = new Set(['.', '?.', 'new', 'extends']);
 const NO_TOKEN ={ value: undefined, kind: undefined, line: 0 };
 const NESTED_BODY_END = new Map([['=>', arrowBodyEnd], ['function', functionKeywordBodyEnd]]);
+// lizard 1.24.0 loses its place at a template literal opened inside another one's `${...}` (#471).
+const NESTED_TEMPLATE = 'nested-template';
+// An arrow's parameter list after one of these opens a value. POSITION_RULES judges `=`, `(`, `[`, `,` and `:`, which also appear in types.
+const VALUE_BEFORE = new Set(['{', '=>', '?', '&&', '||', '??', '!', '...', 'return', 'yield', 'await', 'default']);
+// A paren group after one of these, or after a word, is a call's argument list.
+const CALLEE_END = new Set([')', ']', '>', '?.']);
+const LIST_GROUPS = new Set(['(', '[']);
+// lizard can end a row on the line of the first token past these after a body (`fn: () => x,` then the next property).
+const TRAILING_CLOSERS = new Set([',', ';', ')', ']', '}']);
 
 /** A regex's character class may hold an unescaped `/`, so it is stepped over whole; one left open ends the search for a close. */
 function characterClassEnd(text, index) {
@@ -126,10 +137,16 @@ function push(state, value, kind, to) {
 }
 
 function scanTemplate(state) {
-  push(state, '`', 'literal', state.index + 1);
+  push(state, '`', state.templateDepth ? NESTED_TEMPLATE : 'literal', state.index + 1);
+  state.templateDepth += 1;
+  scanTemplateText(state);
+  state.templateDepth -= 1;
+}
+
+function scanTemplateText(state) {
   while (state.index < state.text.length) {
     const pair = state.text.slice(state.index, state.index + 2);
-    if (pair[0] === '`') return advance(state, state.index + 1);
+    if (pair[0] === '`') return push(state, TEMPLATE_CLOSE, 'literal', state.index + 1);
     if (pair === '${') {
       advance(state, state.index + 2);
       scanTemplateExpression(state);
@@ -209,7 +226,7 @@ function scanToken(state) {
 }
 
 function scriptTokens(text) {
-  const state = { text, index: 0, line: 1, tokens: [] };
+  const state = { text, index: 0, line: 1, tokens: [], templateDepth: 0 };
   while (state.index < text.length) scanToken(state);
   return state.tokens;
 }
@@ -505,11 +522,11 @@ function withOrdinals(scanned, present) {
  * of the same name (or an "(anonymous)" one) starts on its line, is read from the source instead. It has no lizard complexity to
  * compare, so its own branch count stands alone. lizard is also left unable to read some plain functions
  * after it, so once a dropped function is found, every other definition in the file without a row is read
- * the same way.
+ * the same way. `lostPlace` says lizard lost its place in this file another way (#471), with the same result.
  */
-function scannedEntries(tokens, file, present) {
+function scannedEntries(tokens, file, present, lostPlace) {
   const dropped = definitionsWithoutRow(tokens, file, present, nestedParenSignature);
-  if (!dropped.length) return [];
+  if (!dropped.length && !lostPlace) return [];
   const lost = definitionsWithoutRow(tokens, file, [...present, ...dropped], functionSignature);
   return withOrdinals([...dropped, ...lost].sort((left, right) => left.start - right.start), present);
 }
@@ -523,28 +540,235 @@ function groupByFile(entries) {
   return byFile;
 }
 
+/** Every group in the file closes, and with its own kind; otherwise a literal or JSX text was misread, and no span found here can overrule lizard's. */
+function balancedGroups(tokens) {
+  const stack = [];
+  return tokens.every((token) => nesting(stack, token.value) >= 0) && !stack.length;
+}
+
+/** The index of the innermost group still open at each token, or -1 at the top level. */
+function enclosingGroups(tokens) {
+  const open = [];
+  return tokens.map((token, index) => {
+    const enclosing = open.length ? open[open.length - 1] : -1;
+    if (OPENERS.has(token.value)) open.push(index);
+    else if (OPENER_FOR.has(token.value)) open.pop();
+    return enclosing;
+  });
+}
+
+/** `type Name<T> = (...) => R` declares a function type, not a function. */
+function typeAlias(tokens, equals) {
+  return tokenAt(tokens, beforeTypeParameters(tokens, equals - 1) - 1).value === 'type';
+}
+
+function assignedValue(tokens, equals) {
+  return !typeAlias(tokens, equals);
+}
+
+/** A call's arguments are values; any other paren or bracket group is whatever its own position makes it. */
+function groupedValue(tokens, open, enclosing) {
+  const previous = tokenAt(tokens, open - 1);
+  return previous.kind === 'word' || CALLEE_END.has(previous.value) || valuePosition(tokens, open - 1, enclosing);
+}
+
+/** After `,` an arrow is an argument or an array element; in a generic's type arguments it is a function type. */
+function listedValue(tokens, comma, enclosing) {
+  const open = enclosing[comma];
+  return LIST_GROUPS.has(tokenAt(tokens, open).value) && groupedValue(tokens, open, enclosing);
+}
+
+/** After `:` an arrow is an object literal's property; in an interface, a type literal or a parameter's annotation it is a function type. */
+function propertyValue(tokens, colon, enclosing) {
+  const open = enclosing[colon];
+  return tokenAt(tokens, open).value === '{' && valuePosition(tokens, open - 1, enclosing);
+}
+
+const POSITION_RULES = new Map([['=', assignedValue], ['(', groupedValue], ['[', groupedValue], [',', listedValue], [':', propertyValue]]);
+
+/** Whether what follows `before` is a value rather than a type, so an arrow there is a function, not a function type. */
+function valuePosition(tokens, before, enclosing) {
+  const { value } = tokenAt(tokens, before);
+  const rule = POSITION_RULES.get(value);
+  return rule ? rule(tokens, before, enclosing) : VALUE_BEFORE.has(value);
+}
+
+/** The token before an arrow's parameters, past its type parameters and any `async`. */
+function arrowPrefix(tokens, first) {
+  const before = beforeTypeParameters(tokens, first - 1);
+  return tokenAt(tokens, before).value === 'async' ? before - 1 : before;
+}
+
+function arrowDefinition(tokens, open, close, arrow, enclosing) {
+  return valuePosition(tokens, arrowPrefix(tokens, open), enclosing) ? { head: open, open, close, opener: arrow, end: arrowBodyEnd(tokens, arrow) } : null;
+}
+
+/** A `function`, method or constructor whose body is a `{`, or an arrow, after the parameter list closing at `close`. */
+function definitionAfter(tokens, open, close, enclosing) {
+  const opener = bodyStart(tokens, close);
+  const kind = tokenAt(tokens, opener).value;
+  if (kind === '=>') return arrowDefinition(tokens, open, close, opener, enclosing);
+  const head = kind === '{' ? definitionHead(tokens, open) : null;
+  return head && { head: head.first, open, close, opener, end: matchingClose(tokens, opener) };
+}
+
+function parenDefinition(tokens, open, enclosing) {
+  const close = matchingClose(tokens, open);
+  return close < 0 ? null : definitionAfter(tokens, open, close, enclosing);
+}
+
+/**
+ * A definition read from the source: `head` is the token its row starts on, `open` and `close` bound its
+ * parameters, `opener` is the `{` or `=>` that opens its body, and `end` is the body's last token, or -1
+ * when the body never closes.
+ */
+function definitionAt(tokens, index, enclosing) {
+  if (tokens[index].value === '(') return parenDefinition(tokens, index, enclosing);
+  const loneParameter = tokens[index].kind === 'word' && tokenAt(tokens, index + 1).value === '=>';
+  return loneParameter ? arrowDefinition(tokens, index, index, index + 1, enclosing) : null;
+}
+
+/** One definition per body opener: a parenthesised parameter list comes first, so a return type before `=>` is never read as a lone parameter. */
+function scriptDefinitions(tokens) {
+  const enclosing = enclosingGroups(tokens);
+  const byOpener = new Map();
+  for (let index = 0; index < tokens.length; index += 1) {
+    const definition = definitionAt(tokens, index, enclosing);
+    if (definition && !byOpener.has(definition.opener)) byOpener.set(definition.opener, definition);
+  }
+  return [...byOpener.values()];
+}
+
+/**
+ * The latest line lizard can end a row on and still have read the function whole: it ends a declaration
+ * with a return type, or an arrow followed by `,`, on the line of the next token past the body's closers.
+ */
+function slackLine(tokens, end) {
+  let next = end + 1;
+  while (next < tokens.length - 1 && TRAILING_CLOSERS.has(tokens[next].value)) next += 1;
+  return Math.max(tokens[end].line, tokenAt(tokens, next).line);
+}
+
+function definitionSpan(tokens, definition) {
+  return { start: tokens[definition.head].line, end: tokens[definition.end].line, slack: slackLine(tokens, definition.end) };
+}
+
+function honestRow(tokens, definition, entry) {
+  const span = definitionSpan(tokens, definition);
+  return span.end <= entry.end && entry.end <= span.slack;
+}
+
+function latestEnding(definitions) {
+  return definitions.reduce((latest, definition) => (latest && latest.end >= definition.end ? latest : definition), null);
+}
+
+/** lizard starts an arrow whose `=>` ends a line on the body's first line instead (#477). */
+function startsBodyOn(tokens, definition, line) {
+  const arrow = tokens[definition.opener];
+  return arrow.value === '=>' && arrow.line < line && tokenAt(tokens, definition.opener + 1).line === line;
+}
+
+/**
+ * The definition a lizard row stands for: one whose head is on the row's first line, or else the arrow
+ * whose body lizard started the row on. A row that ends where some definition on its line ends is
+ * lizard's honest read; otherwise the latest-ending definition there is the one it misread.
+ */
+function rowDefinition(tokens, definitions, entry) {
+  const onLine = definitions.filter((definition) => tokens[definition.head].line === entry.start);
+  if (onLine.some((definition) => honestRow(tokens, definition, entry))) return null;
+  return latestEnding(onLine) || definitions.find((definition) => startsBodyOn(tokens, definition, entry.start)) || null;
+}
+
+function overran(span, entry) {
+  return entry.end > span.slack;
+}
+
+function bracedBody(tokens, definition) {
+  return tokens[definition.opener].value === '{' || tokenAt(tokens, definition.opener + 1).value === '{';
+}
+
+/** A row that swallowed what follows the body, starts after the body's arrow, or stops inside a `{` body. */
+function misread(tokens, definition, span, entry) {
+  return overran(span, entry) || span.start !== entry.start || (bracedBody(tokens, definition) && span.end > entry.end);
+}
+
+/**
+ * The same branch rules a source-scan row counts by. An overrun row's count holds the branches of the
+ * functions lizard swallowed (#471), so the body's own count replaces it; any other misread row's count
+ * covers part of its own body at most, so it can only be raised (#476, #477).
+ */
+function reconciledEntry(tokens, definition, entry) {
+  if (!definition) return entry;
+  const span = definitionSpan(tokens, definition);
+  if (!misread(tokens, definition, span, entry)) return entry;
+  const counted = 1 + branchCount(tokens, definition.open, definition.close) + branchCount(tokens, definition.opener + 1, definition.end);
+  return { ...entry, start: span.start, end: span.end, complexity: overran(span, entry) ? counted : Math.max(entry.complexity, counted) };
+}
+
+/**
+ * Each lizard row is checked against the definition it stands for, and given that definition's real span
+ * when lizard misread it. `clamped` says some row ran past its function's end, so lizard lost its place.
+ */
+function reconciledRows(tokens, rows) {
+  if (!balancedGroups(tokens)) return { rows, clamped: false };
+  const definitions = scriptDefinitions(tokens).filter((definition) => definition.end >= 0);
+  const pairs = rows.map((entry) => [entry, rowDefinition(tokens, definitions, entry)]);
+  return {
+    rows: pairs.map(([entry, definition]) => reconciledEntry(tokens, definition, entry)),
+    clamped: pairs.some(([entry, definition]) => definition && overran(definitionSpan(tokens, definition), entry)),
+  };
+}
+
+function fileRows(tokens, file, rows) {
+  if (!tokens) return rows;
+  const reconciled = reconciledRows(tokens, rows);
+  const lostPlace = reconciled.clamped || tokens.some((token) => token.kind === NESTED_TEMPLATE);
+  return [...reconciled.rows, ...scannedEntries(tokens, file, reconciled.rows, lostPlace)];
+}
+
 /**
  * Gives every JavaScript-family lizard row that stops inside its own parameter list the function's real
  * body and that body's branch count, so coverage, the source-text fingerprint and CRAP all read the
- * function lizard named, and adds a row for each function lizard dropped altogether. `readText` returns
- * a file's source, or null when it cannot be read; that file's rows stay as lizard gave them, so a
- * truncated one finds no coverage and is reported unverified. `extraFiles` are files lizard gave no
- * row at all, which a dropped function can leave.
+ * function lizard named, reconciles every other row with the span of the definition it stands for, and
+ * adds a row for each function lizard dropped altogether. `readText` returns a file's source, or null
+ * when it cannot be read; that file's rows stay as lizard gave them, so a truncated one finds no
+ * coverage and is reported unverified. `extraFiles` are files lizard gave no row at all, which a
+ * dropped function can leave.
  */
 function withBodySpans(entries, readText, extraFiles = []) {
   const tokensByFile = new Map();
   const tokensOf = (file) => (SCRIPT_SOURCE.test(file) ? fileTokens(tokensByFile, file, readText) : null);
-  const widened = entries.map((entry) => {
+  const rowsByFile = groupByFile(entries.map((entry) => {
     const tokens = tokensOf(entry.file);
     return tokens ? widenedEntry(tokens, entry) : entry;
-  });
-  const rowsByFile = groupByFile(entries);
-  const files = new Set([...rowsByFile.keys(), ...extraFiles]);
-  const scanned = [...files].flatMap((file) => {
-    const tokens = tokensOf(file);
-    return tokens ? scannedEntries(tokens, file, rowsByFile.get(file) ?? []) : [];
-  });
-  return [...widened, ...scanned];
+  }));
+  for (const file of extraFiles) if (!rowsByFile.has(file)) rowsByFile.set(file, []);
+  return [...rowsByFile].flatMap(([file, rows]) => fileRows(tokensOf(file), file, rows));
 }
 
-module.exports = { SCANNED_SOURCE, crapScore, definitionOutsideRows, parseLizardCsv, splitCsvRow, withBodySpans };
+function coveredLines(rows) {
+  const lines = new Set();
+  for (const row of rows) for (let line = row.start; line <= row.end; line += 1) lines.add(line);
+  return lines;
+}
+
+/** In a file whose groups do not all balance, no body's end can be trusted, so each definition runs to the end of the file. */
+function definitionRegions(tokens, lastLine) {
+  const trusted = balancedGroups(tokens);
+  return scriptDefinitions(tokens).map((definition) => [tokens[definition.head].line, trusted && definition.end >= 0 ? tokens[definition.end].line : lastLine]);
+}
+
+/**
+ * The lines inside a definition read from `text` that none of `rows` spans, in order. A changed line
+ * here is code lizard misread and no row measures, so the gate fails closed on it rather than passing.
+ */
+function unmeasuredDefinitionLines(text, rows) {
+  const covered = coveredLines(rows);
+  const lines = new Set();
+  for (const [start, end] of definitionRegions(scriptTokens(text), lineAt(text, text.length))) {
+    for (let line = start; line <= end; line += 1) if (!covered.has(line)) lines.add(line);
+  }
+  return [...lines].sort((left, right) => left - right);
+}
+
+module.exports = { SCANNED_SOURCE, SCRIPT_SOURCE, crapScore, definitionOutsideRows, parseLizardCsv, splitCsvRow, unmeasuredDefinitionLines, withBodySpans };

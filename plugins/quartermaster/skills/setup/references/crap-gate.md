@@ -80,6 +80,32 @@ keyword, a `=>`, or a `name(...) {` head) lies inside one of these rows; otherwi
 2 with "lizard reported zero functions". An arrow with a call in its parameter list keeps the row lizard
 gives it.
 
+lizard also misreads where some functions start and end, so the gate checks every JavaScript-family row
+(`.js`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.jsx`) against the definition it stands for in the source:
+
+- **Clamp.** A template literal nested in another one's `${...}` makes lizard run a row past the
+  function's end, often to the end of the file, swallowing the functions after it (GitHub issue #471).
+  The gate clamps the row to the function's real body and recounts its branches over that body alone,
+  because lizard's number includes the swallowed functions' branches.
+- **Widen.** lizard's TypeScript reader can end a JSX component inside its JSX (#476). When the
+  function's `{` body ends after lizard's row, the gate widens the row to the real end and scores the
+  larger of the two counts.
+- **Restart.** For an arrow whose `=>` ends a line, lizard starts and ends the row on the body's first
+  line (#477). The gate starts the row at the arrow and ends it with the arrow's body.
+
+A row that already spans its definition keeps lizard's span and count, including lizard's habit of
+ending a row on the line of the next token after the body. In a file that holds a nested template
+literal, or where a row was clamped, lizard has lost its place, so the gate also reads every
+definition lizard gave no row, as above (`source=source-scan`). The gate trusts its own reading only
+when every bracket and template literal in the file balances. JSX text such as an apostrophe can break
+that, and then lizard's rows stand as reported.
+
+The gate fails closed on what is left. After this reconciliation, a changed or new line that lies inside
+a function the source scan finds but inside no row exits 2 with "changed lines are unmeasured at
+`<file>:<line>`": lizard misread that function, and passing the gate would pass code nothing measured.
+Without a base revision every line counts as new. Rewrite what lizard cannot read, or move the code
+into a named function lizard reports, then run the gate again.
+
 ## React files (.tsx and .jsx)
 
 lizard 1.24.0, the current release, has a TSX reader that abandons an opening tag as soon as one of

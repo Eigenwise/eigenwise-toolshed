@@ -10,7 +10,7 @@ const { test } = require('node:test');
 const { COVERAGE_DIR_ENV, crapReport, crapScore, formatReport, PrerequisiteError, realDir, sameDir } = require('../lib/crap.js');
 
 const CLI = path.resolve(__dirname, '../bin/quartermaster.js');
-const { SCANNED_SOURCE, withBodySpans } = require('../lib/crap-core.cjs');
+const { SCANNED_SOURCE, unmeasuredDefinitionLines, withBodySpans } = require('../lib/crap-core.cjs');
 
 function fixtureProject(files) {
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-crap-'));
@@ -894,7 +894,7 @@ test('the TypeScript reader measures the real .tsx bytes under a name that only 
     fixtureProject({
       'src/sale.tsx': source,
       'src/total.ts': 'export const total = (values: number[]) => values.length;\n',
-      'coverage/lcov.info': `${lcov([[17, 1]], 'src/sale.tsx')}${lcov([[1, 1]], 'src/total.ts')}`,
+      'coverage/lcov.info': `${lcov([[17, 1], [25, 1], [28, 1]], 'src/sale.tsx')}${lcov([[1, 1]], 'src/total.ts')}`,
     }),
   );
   const copies = [];
@@ -904,7 +904,9 @@ test('the TypeScript reader measures the real .tsx bytes under a name that only 
     }
     // The scratch tree is gone by the time crapReport returns, so read it while lizard would have.
     for (const name of fs.readdirSync(cwd)) copies.push({ name, text: fs.readFileSync(path.join(cwd, name), 'utf8') });
-    return csv([{ complexity: 1, name: 'SaleField', start: 16, end: 20 }], `./${copies[0].name}`);
+    // The rows lizard 1.24.0's TypeScript reader reports for the fixture.
+    const rows = [{ complexity: 1, name: 'SaleField', start: 16, end: 20 }, { complexity: 2, name: 'packsLabel', start: 25, end: 25 }, { complexity: 3, name: 'SaleTotals', start: 27, end: 31 }];
+    return csv(rows, `./${copies[0].name}`);
   };
 
   const report = crapReport({ projectDir, runLizard });
@@ -913,7 +915,7 @@ test('the TypeScript reader measures the real .tsx bytes under a name that only 
   assert.equal(copies[0].text, source, 'the copy is the real file byte for byte');
   assert.deepEqual(
     report.functions.map((entry) => `${entry.file}:${entry.line} cc=${entry.cc} ${entry.source}`).sort(),
-    ['src/sale.tsx:16 cc=1 lizard-typescript', 'src/total.ts:1 cc=1 lizard'],
+    ['src/sale.tsx:16 cc=1 lizard-typescript', 'src/sale.tsx:25 cc=2 lizard-typescript', 'src/sale.tsx:27 cc=3 lizard-typescript', 'src/total.ts:1 cc=1 lizard'],
     'the substitute row comes back under the real .tsx path, and the .ts row is the default reader\'s own',
   );
 });
@@ -1311,4 +1313,273 @@ test('the real lizard backend does not let a default-call parameter hide an unco
 
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stdout, /^src\/load\.js:4 load cc=4 coverage=0% CRAP=20 source=source-scan$/m);
+});
+
+// GitHub issue #471: lizard 1.24.0 loses its place at a template literal nested in another one's `${...}`.
+// For this source it reports only `header@1-14` at cc 4, swallowing `later` and `evenLater`.
+const NESTED_TEMPLATE_SOURCE = [
+  'const header = (id: string, secret: string): string => {',
+  '  const value = `Basic ${btoa(`${id}:${secret}`)}`;',
+  '  if (!value) return "";',
+  '  return value;',
+  '};',
+  '',
+  'function later(a: number): number {',
+  '  if (a > 1) return 1;',
+  '  return 2;',
+  '}',
+  '',
+  'function evenLater(b: string): string {',
+  '  return b.length > 2 ? "long" : "short";',
+  '}',
+  '',
+].join('\n');
+
+function spanRows(source, rows, file = 'src/nested.ts') {
+  return withBodySpans(rows.map((row) => ({ file, ordinal: 0, ...row })), () => source, [file])
+    .map((entry) => `${entry.name}@${entry.start}-${entry.end} cc=${entry.complexity}${entry.source ? ` ${entry.source}` : ''}`);
+}
+
+test('a row lizard ran past its function\'s end is clamped to the body and recounted, and the functions it swallowed get rows', () => {
+  assert.deepEqual(spanRows(NESTED_TEMPLATE_SOURCE, [{ name: 'header', complexity: 4, start: 1, end: 14 }]), [
+    'header@1-5 cc=2',
+    'later@7-10 cc=2 source-scan',
+    'evenLater@12-14 cc=2 source-scan',
+  ]);
+  // The control without the nesting, as lizard reads it: `later` ends on the next token's line, which is no overrun.
+  const control = NESTED_TEMPLATE_SOURCE.replace('`Basic ${btoa(`${id}:${secret}`)}`', '"Basic " + btoa(id + ":" + secret)');
+  const controlRows = [{ name: 'header', complexity: 2, start: 1, end: 5 }, { name: 'later', complexity: 2, start: 7, end: 12 }, { name: 'evenLater', complexity: 2, start: 12, end: 14 }];
+  assert.deepEqual(spanRows(control, controlRows), ['header@1-5 cc=2', 'later@7-12 cc=2', 'evenLater@12-14 cc=2']);
+});
+
+/** A project on `main` holding `src/<name>` with every line uncovered, measured by the real lizard under a base config. */
+function realLizardProject(name, source) {
+  const lineCount = source.split('\n').length;
+  return fs.realpathSync.native(fixtureProject({
+    '.claude/quartermaster/crap.json': JSON.stringify({ base: 'main', sources: ['src'] }),
+    [`src/${name}`]: source,
+    'coverage/lcov.info': lcov(Array.from({ length: lineCount }, (_, index) => [index + 1, 0]), `src/${name}`),
+  }));
+}
+
+test('the real lizard backend charges an edit below a nested template literal to the function it is in', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const projectDir = realLizardProject('nested.ts', NESTED_TEMPLATE_SOURCE);
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/nested.ts'), NESTED_TEMPLATE_SOURCE.replace('"long"', '"longer"'), 'utf8');
+
+  const result = runCli([], projectDir);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, 'src/nested.ts:12 evenLater cc=2 coverage=0% CRAP=6 source=source-scan\nCRAP gate failed: 1 of 1 changed or new functions at or above 6\n');
+  const report = JSON.parse(runCli(['--json'], projectDir).stdout);
+  assert.equal(report.functions.find((entry) => entry.function === 'header').cc, 2, 'header counts its own branch and none of the functions lizard swallowed');
+});
+
+// GitHub issue #471's wrong pass: the nested template sits in the last statement, so lizard ends the row
+// near the right line but reports no function after it.
+const DROPPED_AFTER_TEMPLATE_SOURCE = [
+  'const callSql = (fn: string, names: readonly string[]): string => {',
+  '  const call = `public.${fn}(${names.map((name, i) => `${name} => $${i + 1}`).join(", ")})`;',
+  '  return `select ${call}`;',
+  '};',
+  '',
+  'export function later(a: number): number {',
+  '  if (a > 1) return 1;',
+  '  return 2;',
+  '}',
+  '',
+  'export function evenLater(b: string): string {',
+  '  return b.length > 2 ? "long" : "short";',
+  '}',
+  '',
+].join('\n');
+
+const RISKY_SOURCE = [
+  'export function risky(n: number): number {',
+  ...[1, 2, 3, 4, 5, 6].map((value) => `  if (n === ${value}) return ${value};`),
+  '  return 0;',
+  '}',
+  '',
+].join('\n');
+
+test('the real lizard backend fails a new function lizard dropped after a nested template literal instead of passing 0 of 0', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const projectDir = fs.realpathSync.native(fixtureProject({
+    '.claude/quartermaster/crap.json': JSON.stringify({ sources: ['src'], max: 6, base: 'main' }),
+    'src/sql.ts': DROPPED_AFTER_TEMPLATE_SOURCE,
+  }));
+  commitBase(projectDir);
+  gitIn(projectDir, ['checkout', '-b', 'feature']);
+  fs.appendFileSync(path.join(projectDir, 'src/sql.ts'), RISKY_SOURCE, 'utf8');
+  gitIn(projectDir, ['commit', '-am', 'add risky']);
+  const lineCount = `${DROPPED_AFTER_TEMPLATE_SOURCE}${RISKY_SOURCE}`.split('\n').length;
+  fs.writeFileSync(path.join(projectDir, 'lcov.info'), lcov(Array.from({ length: lineCount }, (_, index) => [index + 1, 0]), 'src/sql.ts'), 'utf8');
+
+  const result = runCli(['--lcov', 'lcov.info', '--coverage-command', coverageStub([]).command], projectDir);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, 'src/sql.ts:14 risky cc=7 coverage=0% CRAP=56 source=source-scan\nCRAP gate failed: 1 of 1 changed or new functions at or above 6\n');
+});
+
+// GitHub issue #476, reduced: lizard's TypeScript reader ends RootLayout at line 9, inside its JSX, at cc 3.
+const LAYOUT_SOURCE = [
+  'import { buildScript, seq } from "./script";',
+  '',
+  'export default function RootLayout({ children, guard }: { children: React.ReactNode; guard: boolean }) {',
+  '  const theme = guard ? "dark" : "light";',
+  '  return (',
+  '    <html lang="en">',
+  '      <head>',
+  '        {guard ? (',
+  '          <script dangerouslySetInnerHTML={{ __html: buildScript(seq()) }} />',
+  '        ) : null}',
+  '      </head>',
+  '      <body className={theme}>',
+  '        {children}',
+  '        {guard && <footer>end</footer>}',
+  '      </body>',
+  '    </html>',
+  '  );',
+  '}',
+  '',
+].join('\n');
+
+test('the real lizard backend scores an edit below where its TypeScript reader ends a .tsx component against the component', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const projectDir = realLizardProject('layout.tsx', LAYOUT_SOURCE);
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/layout.tsx'), LAYOUT_SOURCE.replace('<footer>end</footer>', '<footer>the end</footer>'), 'utf8');
+
+  const result = runCli([], projectDir);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, 'src/layout.tsx:3 RootLayout cc=4 coverage=0% CRAP=20 source=lizard-typescript\nCRAP gate failed: 1 of 1 changed or new functions at or above 6\n');
+});
+
+test('JSX text the source scan cannot read keeps lizard\'s short row, and an edit below it exits 2 as unmeasured', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  // The apostrophe opens a string that hides the `{`, so the scan cannot trust where any body ends.
+  const source = LAYOUT_SOURCE.replace('{guard && <footer>end</footer>}', "<p>It's {guard ? 'on' : 'off'}</p>");
+  const projectDir = realLizardProject('layout.tsx', source);
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/layout.tsx'), source.replace("'off'", "'gone'"), 'utf8');
+
+  const result = runCli([], projectDir);
+
+  assert.equal(result.status, 2, result.stdout);
+  assert.match(result.stderr, /changed lines are unmeasured at src\/layout\.tsx:14\n/);
+});
+
+// GitHub issue #477: for an arrow whose `=>` ends a line, lizard reports `(anonymous)@6-6`, the body's first line.
+const MULTI_LINE_ARROW_SOURCE = [
+  'const wrap = (name) => (fn) => fn;',
+  'const keyset = (...parts) => parts.join(",");',
+  '',
+  'export const repo = {',
+  '  listX: wrap("repo.listX")(() =>',
+  '    keyset(',
+  '      "a",',
+  '      "b",',
+  '    ),',
+  '  ),',
+  '};',
+  '',
+].join('\n');
+
+test('a row lizard starts on an arrow\'s body line restarts at the arrow and ends with its body', () => {
+  const rows = [{ name: 'wrap', complexity: 1, start: 1, end: 1 }, { name: 'keyset', complexity: 1, start: 2, end: 2 }, { name: '(anonymous)', complexity: 1, start: 6, end: 6 }];
+
+  // Line 10 closes `wrap(...)(`, not the arrow, whose V8 function range is lines 5-9.
+  assert.deepEqual(spanRows(MULTI_LINE_ARROW_SOURCE, rows, 'src/repo.mjs'), ['wrap@1-1 cc=1', 'keyset@2-2 cc=1', '(anonymous)@5-9 cc=1']);
+});
+
+test('the real lizard backend charges an edit inside a multi-line arrow to that arrow and scores it without a DA record on lizard\'s line', (t) => {
+  if (!lizardResolves()) {
+    t.skip('lizard does not resolve here');
+    return;
+  }
+  const projectDir = fs.realpathSync.native(fixtureProject({
+    '.claude/quartermaster/crap.json': JSON.stringify({ base: 'main', sources: ['src'] }),
+    'src/repo.mjs': MULTI_LINE_ARROW_SOURCE,
+    // The issue's coverage: no DA record on line 6, where lizard starts the arrow's row.
+    'coverage/lcov.info': lcov([1, 2, 4, 5, 7, 8, 9, 10].map((line) => [line, 1]), 'src/repo.mjs'),
+  }));
+  commitBase(projectDir);
+  fs.writeFileSync(path.join(projectDir, 'src/repo.mjs'), MULTI_LINE_ARROW_SOURCE.replace('"a",', '"x",').replace('"b",', '"y",'), 'utf8');
+
+  const result = runCli(['--json'], projectDir);
+
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.checked, 1, 'only the arrow changed');
+  assert.deepEqual([atLine(report, 5).function, atLine(report, 5).coverage], ['(anonymous)', 1]);
+});
+
+const UNROWED_ARROW_SOURCE = [
+  'export type Handler = (event: string) => void;',
+  'export interface Props { onPick: (id: string) => void }',
+  'export function a(x: number): number {',
+  '  return x ? 1 : 2;',
+  '}',
+  'export const b = (y: number): number => {',
+  '  if (y > 1) return 1;',
+  '  return 2;',
+  '};',
+  '',
+].join('\n');
+
+test('a changed line inside a definition no row spans exits 2 and names it, and a changed function type does not', () => {
+  const projectDir = fixtureProject({ 'src/app.ts': UNROWED_ARROW_SOURCE, 'coverage/lcov.info': lcov([[4, 1]], 'src/app.ts') });
+  commitBase(projectDir);
+  // A lizard that misread `b` so badly it gave it no row.
+  const runLizard = () => csv([{ complexity: 2, name: 'a', start: 3, end: 5 }], 'src/app.ts');
+  const typesOnly = UNROWED_ARROW_SOURCE.replace('(event: string)', '(name: string)').replace('(id: string)', '(key: string)');
+
+  fs.writeFileSync(path.join(projectDir, 'src/app.ts'), typesOnly, 'utf8');
+  assert.equal(crapReport({ projectDir, base: 'main', runLizard }).checked, 0);
+
+  fs.writeFileSync(path.join(projectDir, 'src/app.ts'), typesOnly.replace('y > 1', 'y > 2'), 'utf8');
+  assert.throws(
+    () => crapReport({ projectDir, base: 'main', runLizard }),
+    (error) => error instanceof PrerequisiteError && /^changed lines are unmeasured at src\/app\.ts:7$/.test(error.message),
+  );
+});
+
+test('the safety net reads a function type in a type alias, interface, annotation or type argument as no function', () => {
+  const source = [
+    'type Handler = (event: string) => void;',
+    'type Unwrap<T> = T extends (...args: any[]) => infer R ? R : never;',
+    'type Maybe = ((value: string) => void) | null;',
+    'interface Props { onPick?: (id: string) => void; render(row: (x: number) => string): void }',
+    'declare const table: Record<string, (key: string) => number>;',
+    'class Store { private listener: (next: number) => void; }',
+    'declare function run(options: { onProgress?: (done: number) => void }): void;',
+    'const real = (x: number) => x + 1;',
+    'register((y) => y, [(z) => z]);',
+    'export const api = { get: (id: string) => id };',
+    '',
+  ].join('\n');
+
+  assert.deepEqual(unmeasuredDefinitionLines(source, []), [8, 9, 10]);
+});
+
+test('an arrow whose template literal body runs over several lines keeps the row lizard ended on its closing line', () => {
+  const source = ['const moves = list.map((move) => `create ${move.to}', 'delete ${move.from}', 'done`);', ''].join('\n');
+  const rows = [{ name: '(anonymous)', complexity: 1, start: 1, end: 3 }];
+
+  assert.deepEqual(spanRows(source, rows, 'src/moves.js'), ['(anonymous)@1-3 cc=1']);
+  assert.deepEqual(unmeasuredDefinitionLines(source, rows), []);
 });

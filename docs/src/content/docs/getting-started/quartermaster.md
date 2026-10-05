@@ -71,7 +71,9 @@ fresh coverage exits 2 instead of scoring stale results.
 It also shows the coverage command for your stack. The gate needs
 [lizard](https://github.com/terryyin/lizard) for complexity measurement. Setup never installs it. Exit
 2 means a prerequisite or measurement input is missing, including lizard finding zero functions for a
-file that has function-like source tokens. Follow the printed hint, then run the gate again.
+file that has function-like source tokens. It also covers a changed line inside a function lizard
+misread so badly that no measured row covers it, even after the gate corrects lizard's spans from the
+source. Follow the printed hint, then run the gate again.
 
 React files get one extra step. lizard's TSX reader miscounts ordinary JSX badly enough to score a
 component for code that is not in it, so the gate measures `.tsx` and `.jsx` with lizard's TypeScript
