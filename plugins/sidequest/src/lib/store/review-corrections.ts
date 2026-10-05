@@ -1,5 +1,5 @@
 import type { ReviewCandidate, OracleVerdictOutcome, ReviewMirror } from '../kernel/review-binding';
-import { sameReviewCandidate, reviewCandidateFromSubmission, reviewVerdictHistory } from '../kernel/review-binding';
+import { sameReviewCandidate, reviewCandidateFromSubmission, reviewVerdictHistory, reviewProvenance } from '../kernel/review-binding';
 
 export type ReviewVerdictCorrection = Readonly<{
   from: 'accepted'; to: 'rejected'; verdictAt: string; sourceTicketId: string; sourceRef: string;
@@ -15,7 +15,7 @@ export type CorrectionTicket = {
   id: string; ref: string; status: string; updatedAt?: string; category?: string | { id: string };
   claim?: { by?: string }; dispatchNonce?: string;
   dispatch?: { readonly?: boolean; executor?: string; terminalAt?: string; outcome?: string };
-  completion?: { purpose?: string };
+  completion?: { purpose?: string; state?: string; key?: string; at?: string };
   reviewTarget?: ReviewMirror;
   reviewDecision?: ReviewDecisionHistory;
   oracle?: { verdict?: { outcome: OracleVerdictOutcome; at: string }; corrections?: ReviewVerdictCorrection[] };
@@ -80,7 +80,31 @@ export function activeCorrectionTicket(ticket: CorrectionTicket): boolean {
   return Boolean(ticket.claim?.by) || activeCorrectionDispatch(ticket);
 }
 
+export function completedNormalReviewRefusal(review: CorrectionTicket): Refusal | undefined {
+  if (review.oracle) return refuse('use_verdict', 'Use the separate oracle verdict lifecycle for an experimental review.');
+  if (activeCorrectionTicket(review)) return refuse('review_active', 'A claimed or actively dispatched review cannot be finalized.');
+  if (correctionReviewCategory(review.category) !== 'review-audit') return refuse('review_unbound', 'Finalization requires a bound review-audit ticket.');
+  return completionRefusal(review);
+}
+
+function completionRefusal(review: CorrectionTicket): Refusal | undefined {
+  const completion = review.completion ?? {};
+  const completed = [review.status === 'done', review.dispatch?.outcome === 'done', requiredCorrectionText(review.dispatch?.terminalAt),
+    completion.state === 'done', requiredCorrectionText(completion.key), requiredCorrectionText(completion.at)];
+  if (completed.includes(false)) return refuse('review_nonfinalized', 'Finalization requires the original terminal done review completion.');
+  if (!review.reviewTarget?.ticketId) return refuse('review_unbound', 'Finalization requires the original source binding.');
+}
+
+export function independentReviewRefusal(source: CorrectionTicket, review: CorrectionTicket): Refusal | undefined {
+  const provenance = reviewProvenance(source, review);
+  if (provenance.reason !== 'ok') return refuse(provenance.reason, 'Finalization requires distinct immutable submitted-source and completed-review runtime provenance.');
+  const current = [source.dispatch?.outcome === 'submitted', source.dispatch?.terminalAt === provenance.source?.terminalAt,
+    review.dispatch?.terminalAt === provenance.reviewer?.terminalAt];
+  if (current.includes(false)) return refuse('stale_provenance', 'Finalization requires the current original submitted-source and completed-review generations.');
+}
+
 function finalizedReviewRefusal(ticket: CorrectionTicket, readonlyExecutor: boolean): Refusal | undefined {
+  if (ticket.reviewDecision) return completedNormalReviewRefusal(ticket);
   if (ticket.status === 'awaiting-oracle') return refuse('use_verdict', 'Use ordinary verdict for an awaiting-oracle review.');
   if (activeCorrectionTicket(ticket)) return refuse('review_active', 'A claimed or actively dispatched review cannot be corrected.');
   if (correctionReviewCategory(ticket.category) !== 'review-audit') return refuse('review_unbound', 'Correction requires a bound review-audit ticket.');
@@ -186,7 +210,8 @@ export function createReviewCorrections(dependencies: Dependencies) {
 
   function sourceBindingRefusal(slug: string, ticket: CorrectionTicket, source: CorrectionTicket): Refusal | undefined {
     return sourceCorrectionRefusal(source, dependencies.pendingSubmission(source))
-      || correctionBindingRefusal(ticket, source, dependencies.submissionReviewRelation(slug, source));
+      || correctionBindingRefusal(ticket, source, dependencies.submissionReviewRelation(slug, source))
+      || (ticket.reviewDecision ? independentReviewRefusal(source, ticket) : undefined);
   }
 
   function correctSource(slug: string, ticket: CorrectionTicket, input: CorrectionInput): CorrectionResult {

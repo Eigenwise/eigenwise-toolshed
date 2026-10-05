@@ -40,6 +40,28 @@ Once this save-and-read check works, use the story workflow below when the task 
 
 When an executor hands back a clean committed checkpoint in a retained worktree, its replacement gets a Resume section first. It names the checkout, pinned commit, handback reason, and last recorded verification result and log. After claiming, the replacement confirms HEAD and runs the pinned verifier on that candidate before continuing (shared-environment checks still wait for delivery). It reads new instructions or missing evidence rather than starting over with the full thread. The complete description, contract, scope, and verifier remain in the briefing.
 
+## Completed review decisions
+
+A completed independent review can say ACCEPTED while its source submission still shows a planned review outcome. The orchestrator records that decision explicitly through the main-thread MCP `verdict` tool:
+
+```json
+{
+  "ref": "SQ-12",
+  "by": "orchestrator",
+  "outcome": "accepted",
+  "text": "The exact candidate passes the completed review.",
+  "finalize": {
+    "sourceRef": "SQ-11",
+    "commit": "<exact original reviewTarget candidate hash>",
+    "evidence": "Original terminal review report and inspected range"
+  }
+}
+```
+
+Copy the original review's source and candidate from `reviewTarget`. Finalization requires a genuinely done, unclaimed independent bound review and its exact pending source. It preserves the reviewer, original completion and evidence, and updates both review outcome records. Use `rejected` when that candidate must not ship. Exact retries write nothing; a mistaken acceptance uses the main-thread `verdict.correct` contract with the original decision timestamp and evidence. Repairs still need a fresh candidate and independent review.
+
+CLI, dashboard, report prose and generic ticket links cannot grant this decision. Experimental reviews waiting on an oracle keep their separate verdict flow. Non-Git reviews without supported immutable submitted-source provenance refuse finalization rather than inventing acceptance. Acceptance supplies no test evidence or integration waiver.
+
 ## Your first workflow
 
 1. Open the board with `/sidequest:board`, or tell Claude to show your Sidequest board.

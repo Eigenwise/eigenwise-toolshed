@@ -1014,7 +1014,7 @@ const tools: ToolDefinition[] = [
         },
         correct: {
           type: 'object',
-          description: 'Main-thread MCP only: append accepted-to-rejected correction of a finalized readonly bound review. Requires outcome rejected, nonempty by/text/evidence, actual runtime identity, and an unclaimed terminal pending source. Read original at from list({ref: reviewRef}).ticket.reviewDecision.verdict.at (or ticket.oracle.verdict.at for an oracle). Exact retry writes nothing; delivered or superseded sources refuse. Host-hook caller class is the trust boundary.',
+          description: 'Main-thread MCP only: append accepted-to-rejected correction of a finalized normal bound review or readonly oracle review. Requires outcome rejected, nonempty by/text/evidence, actual runtime identity, and an unclaimed terminal pending source. Read original at from list({ref: reviewRef}).ticket.reviewDecision.verdict.at (or ticket.oracle.verdict.at for an oracle). Exact retry writes nothing; delivered or superseded sources refuse. Host-hook caller class is the trust boundary.',
           properties: {
             expectedOutcome: { type: 'string', enum: ['accepted'] },
             expectedVerdictAt: { type: 'string' },

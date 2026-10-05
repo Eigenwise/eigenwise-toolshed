@@ -1,6 +1,6 @@
-import { reviewProvenance, reviewVerdictHistory, sameReviewCandidate } from '../kernel/review-binding';
+import { reviewVerdictHistory, sameReviewCandidate } from '../kernel/review-binding';
 import type { ReviewCandidate } from '../kernel/review-binding';
-import { activeCorrectionTicket, correctionReviewCategory, sourceCorrectionRefusal, correctionBindingRefusal } from './review-corrections';
+import { completedNormalReviewRefusal, independentReviewRefusal, sourceCorrectionRefusal, correctionBindingRefusal } from './review-corrections';
 import type { CorrectionTicket, CorrectionComment, Refusal, Relation } from './review-corrections';
 
 export type ReviewDecision = Readonly<{
@@ -53,33 +53,10 @@ function expectedSourceRefusal(expected: FinalizationInput['expected']): Refusal
   if (![expected.sourceRef, expected.candidate?.source, expected.candidate?.value].every(nonemptyText)) return refuse('invalid_finalization', 'Finalization requires the exact source and candidate.');
 }
 
-function completedNormalReviewRefusal(review: FinalizationTicket): Refusal | undefined {
-  if (review.oracle) return refuse('use_verdict', 'Use the separate oracle verdict lifecycle for an experimental review.');
-  if (activeCorrectionTicket(review)) return refuse('review_active', 'A claimed or actively dispatched review cannot be finalized.');
-  if (correctionReviewCategory(review.category) !== 'review-audit') return refuse('review_unbound', 'Finalization requires a bound review-audit ticket.');
-  return completionRefusal(review);
-}
-
-function completionRefusal(review: FinalizationTicket): Refusal | undefined {
-  const completion = review.completion ?? {};
-  const completed = [review.status === 'done', review.dispatch?.outcome === 'done', nonemptyText(review.dispatch?.terminalAt),
-    completion.state === 'done', nonemptyText(completion.key), nonemptyText(completion.at)];
-  if (completed.includes(false)) return refuse('review_nonfinalized', 'Finalization requires the original terminal done review completion.');
-  if (!review.reviewTarget?.ticketId) return refuse('review_unbound', 'Finalization requires the original source binding.');
-}
-
 function expectedBindingRefusal(review: FinalizationTicket, input: FinalizationInput): Refusal | undefined {
   const target = review.reviewTarget ?? {};
   const matching = [target.ref === input.expected.sourceRef, sameReviewCandidate(target.candidate, input.expected.candidate)];
   if (matching.includes(false)) return refuse('stale_expected', 'Read the exact original reviewTarget source/candidate before finalizing.');
-}
-
-function independentReviewRefusal(source: CorrectionTicket, review: FinalizationTicket): Refusal | undefined {
-  const provenance = reviewProvenance(source, review);
-  if (provenance.reason !== 'ok') return refuse(provenance.reason, 'Finalization requires distinct immutable submitted-source and completed-review runtime provenance.');
-  const current = [source.dispatch?.outcome === 'submitted', source.dispatch?.terminalAt === provenance.source?.terminalAt,
-    review.dispatch?.terminalAt === provenance.reviewer?.terminalAt];
-  if (current.includes(false)) return refuse('stale_provenance', 'Finalization requires the current original submitted-source and completed-review generations.');
 }
 
 function decisionRetryRefusal(review: FinalizationTicket, source: CorrectionTicket, input: FinalizationInput): Refusal | undefined {

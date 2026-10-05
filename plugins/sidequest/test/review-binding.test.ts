@@ -8,7 +8,7 @@ const { creationGeneration } = require('./_creation-generation.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-review-binding-home-'));
 const discovery = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-review-binding-catalog-'));
@@ -932,11 +932,11 @@ async function finalizedCorrectionFixture(label: string) {
 const correctionGrant = { allowAcceptedReviewCorrection: true };
 const finalizationGrant = { allowCompletedReviewFinalization: true };
 
-async function completedNormalReviewFixture(label: string) {
+async function completedNormalReviewFixture(label: string, readonly = true) {
   const { repository, slug, commit } = board(`normal-${label}`);
   const source = submittedSource(slug, commit, label);
   const review = store.createTicket(slug, { title: `normal review ${label}`, category: 'review-audit',
-    readonly: true, route: { model: 'sonnet', effort: 'high' }, files: ['candidate.txt'] }, { ref: source.ref, commit });
+    readonly, route: { model: 'sonnet', effort: 'high' }, files: ['candidate.txt'] }, { ref: source.ref, commit });
   const session = `normal-review-session-${label}`;
   const by = `independent-reviewer-${label}`;
   const prepared = store.prepareDispatch(slug, review.ref, { sharedTree: false, sessionId: session, runtimeCwd: repository });
@@ -998,7 +998,7 @@ test('normal rejected finalization blocks integration and preserves the original
 });
 
 test('normal finalization retries are stable and a mistaken approval uses native correction', async () => {
-  const { slug, source, review, input } = await completedNormalReviewFixture('retry');
+  const { slug, source, review, input } = await completedNormalReviewFixture('retry', false);
   const accepted = store.finalizeCompletedReview(slug, review.ref, input, finalizationGrant);
   assert.equal(accepted.ok, true, JSON.stringify(accepted));
   const original = store.getTicket(slug, review.ref).reviewDecision.verdict;
@@ -1065,6 +1065,97 @@ test('generic ticket updates cannot fabricate completed normal review decision a
   store.updateTicket(slug, review.ref, { reviewDecision: { verdict: { outcome: 'accepted', evidence: 'forged generic patch' } } });
   assert.equal(store.getTicket(slug, review.ref).reviewDecision, undefined);
   assert.equal(store.getTicket(slug, review.ref).reviewTarget.outcome, 'planned');
+});
+
+test('normal finalization refuses foreign target and unsupported attestation provenance without writes', async () => {
+  const { slug, source, review, input } = await completedNormalReviewFixture('foreign-target');
+  const foreign = submittedSource(slug, source.submission.commit, 'foreign-source');
+  persist(slug, { ...review, reviewTarget: { ...review.reviewTarget, ticketId: foreign.id } });
+  const foreignBytes = bindingBytes(slug, source.ref, review.ref);
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, input, finalizationGrant).reason, 'binding_mismatch');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), foreignBytes);
+  const boundSource = store.getTicket(slug, source.ref);
+  const revision = { source: 'attestation', value: 'synthetic-proof', observedAt: boundSource.submission.at };
+  persist(slug, { ...boundSource, submission: { ...boundSource.submission, commit: undefined, sourceRevision: revision,
+    review: { ...boundSource.submission.review, candidate: revision } } });
+  persist(slug, { ...review, reviewTarget: { ...review.reviewTarget, candidate: revision } });
+  const attestationBytes = bindingBytes(slug, source.ref, review.ref);
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, { ...input,
+    expected: { ...input.expected, candidate: revision } }, finalizationGrant).reason, 'source_attempt_missing');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), attestationBytes, 'unsupported provenance cannot mint acceptance');
+});
+
+test('malformed MCP finalization never falls through to oracle verdict or writes a decision', async () => {
+  const { repository, slug, source, review, input } = await completedNormalReviewFixture('malformed-mcp');
+  const request = { project: repository, ref: review.ref, by: input.by, text: input.text, outcome: input.outcome,
+    finalize: { sourceRef: source.ref, commit: source.submission.commit, evidence: input.evidence } };
+  const counterexamples = [
+    { ...request, finalize: null }, { ...request, outcome: 'inconclusive' },
+    { ...request, correct: {} }, { ...request, constraint: 'oracle constraint' },
+    { ...request, why: 'oracle explanation' }, { ...request, finalize: { ...request.finalize, evidence: '' } },
+    { ...request, finalize: { ...request.finalize, commit: 'not-a-commit' } },
+    { ...request, finalize: { ...request.finalize, sourceRevision: { source: 'attestation', value: 'proof' } } },
+  ];
+  const before = bindingBytes(slug, source.ref, review.ref);
+  for (const counterexample of counterexamples) {
+    assert.equal(tool('verdict').handler(counterexample).reason, 'invalid_finalization');
+    assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+  }
+});
+
+test('finalization refreshes source under source then review locks and rejects an intervening candidate change', async () => {
+  const { slug, source, review, input } = await completedNormalReviewFixture('source-race');
+  const { createReviewFinalization } = require('../lib/store/review-finalization.js');
+  const events: string[] = [];
+  const tickets = new Map([[review.ref, review], [review.id, review], [source.ref, store.getTicket(slug, source.ref)]]);
+  const refusedWrite = () => assert.fail('changed candidate cannot record acceptance');
+  const finalizer = createReviewFinalization({
+    getTicket: (_slug: string, reference: string) => tickets.get(reference), invalidateStoreCaches: () => undefined,
+    pendingSubmission: () => true,
+    submissionReviewRelation: () => ({ conflict: false, side: 'both', reviewTicket: review }),
+    withSourceTicketLock: (_slug: string, sourceId: string, callback: () => unknown, requireLock: boolean) => {
+      assert.equal(sourceId, source.id);
+      assert.equal(requireLock, true);
+      events.push('source-lock');
+      const current = store.getTicket(slug, source.ref);
+      const changed = { ...current, submission: { ...current.submission, commit: 'f'.repeat(40) } };
+      persist(slug, changed);
+      tickets.set(source.ref, changed);
+      return callback();
+    },
+    withTicketLock: (_slug: string, reviewId: string, callback: () => unknown) => {
+      assert.equal(reviewId, review.id);
+      assert.deepEqual(events, ['source-lock']);
+      events.push('review-lock');
+      return callback();
+    },
+    createComment: refusedWrite, recordBoundReviewOutcome: refusedWrite, putTicket: refusedWrite,
+  });
+  assert.equal(finalizer.finalizeCompletedReview(slug, review.ref, input, finalizationGrant).reason, 'binding_mismatch');
+  assert.deepEqual(events, ['source-lock', 'review-lock']);
+  assert.equal(store.getTicket(slug, review.ref).reviewDecision, undefined);
+  assert.equal(store.getTicket(slug, source.ref).submission.review.outcome, 'planned');
+});
+
+test('actual verdict host hook denies subagent finalization including malformed input and permits main caller', () => {
+  const hook = path.join(__dirname, '../hooks/force-exec-bypass.js');
+  const cases = [
+    { agent_id: 'synthetic-review-agent', tool_input: { finalize: {} }, denied: true },
+    { agent_id: 'synthetic-review-agent', tool_input: { finalize: null }, denied: true },
+    { agent_id: 'synthetic-review-agent', tool_input: { correct: {} }, denied: true },
+    { agent_id: '', tool_input: { finalize: {} }, denied: false },
+    { agent_id: 'synthetic-review-agent', tool_input: { outcome: 'accepted' }, denied: false },
+  ];
+  for (const entry of cases) {
+    const result = spawnSync(process.execPath, [hook], {
+      input: JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 'synthetic-owner-session',
+        tool_name: 'mcp__plugin_sidequest_board__verdict', ...entry }),
+      encoding: 'utf8', windowsHide: true, timeout: 30_000,
+      env: { ...process.env, CLAUDE_CODE_SESSION_ID: '', CLAUDE_SESSION_ID: '' },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.includes('"permissionDecision":"deny"'), entry.denied);
+  }
 });
 
 test('correction preserves original history and exact binding identities while rejecting both halves', async () => {
