@@ -77,6 +77,9 @@ function expectedBindingRefusal(review: FinalizationTicket, input: FinalizationI
 function independentReviewRefusal(source: CorrectionTicket, review: FinalizationTicket): Refusal | undefined {
   const provenance = reviewProvenance(source, review);
   if (provenance.reason !== 'ok') return refuse(provenance.reason, 'Finalization requires distinct immutable submitted-source and completed-review runtime provenance.');
+  const current = [source.dispatch?.outcome === 'submitted', source.dispatch?.terminalAt === provenance.source?.terminalAt,
+    review.dispatch?.terminalAt === provenance.reviewer?.terminalAt];
+  if (current.includes(false)) return refuse('stale_provenance', 'Finalization requires the current original submitted-source and completed-review generations.');
 }
 
 function decisionRetryRefusal(review: FinalizationTicket, source: CorrectionTicket, input: FinalizationInput): Refusal | undefined {
@@ -121,7 +124,7 @@ export function createReviewFinalization(dependencies: Dependencies) {
     const at = new Date().toISOString();
     const comment = dependencies.createComment({ by: input.by, body: `Completed review decision (${input.outcome}): ${input.text}`, kind: 'comment', source: 'mcp' }, at);
     const decision: ReviewDecision = { outcome: input.outcome, text: input.text, evidence: input.evidence, by: input.by,
-      sessionId: input.sessionId, sourceRef: source.ref, candidate: input.expected.candidate, at, commentId: comment.id };
+      sessionId: input.sessionId, sourceRef: source.ref, candidate: { ...review.reviewTarget!.candidate! }, at, commentId: comment.id };
     review.reviewDecision = { verdict: decision };
     review.comments = [...(review.comments ?? []), comment];
     dependencies.recordBoundReviewOutcome(slug, review, input.outcome);

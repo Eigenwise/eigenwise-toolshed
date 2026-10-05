@@ -930,6 +930,142 @@ async function finalizedCorrectionFixture(label: string) {
 }
 
 const correctionGrant = { allowAcceptedReviewCorrection: true };
+const finalizationGrant = { allowCompletedReviewFinalization: true };
+
+async function completedNormalReviewFixture(label: string) {
+  const { repository, slug, commit } = board(`normal-${label}`);
+  const source = submittedSource(slug, commit, label);
+  const review = store.createTicket(slug, { title: `normal review ${label}`, category: 'review-audit',
+    readonly: true, route: { model: 'sonnet', effort: 'high' }, files: ['candidate.txt'] }, { ref: source.ref, commit });
+  const session = `normal-review-session-${label}`;
+  const by = `independent-reviewer-${label}`;
+  const prepared = store.prepareDispatch(slug, review.ref, { sharedTree: false, sessionId: session, runtimeCwd: repository });
+  assert.equal(store.recordDispatchLaunch(slug, review.ref, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: session }).ok, true);
+  const checkout = worktrees.agentWorktreePath(repository, `normal-${label}`);
+  const bound = store.bindDispatchWorktreeCreation(slug, session, checkout);
+  assert.equal(bound.ok, true, JSON.stringify(bound));
+  fs.mkdirSync(path.dirname(checkout), { recursive: true });
+  git(repository, ['worktree', 'add', '-b', `normal-${label}`, checkout, bound.baseline]);
+  worktreeLease.createCheckoutInstanceMarker(git(checkout, ['rev-parse', '--absolute-git-dir']));
+  assert.equal(store.completeDispatchWorktreeCreation(slug, session, checkout, bound.attempt).ok, true);
+  assert.equal(store.bindDispatchAgent(session, prepared.ticket.dispatchExecutor, worktrees.agentIdFromWorktreePath(repository, checkout), by, checkout).ok, true);
+  assert.equal(store.claimTicket(slug, review.ref, by, { token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: session }).ok, true);
+  const done = await tool('done').handler({ project: repository, ref: review.ref, by,
+    body: 'ACCEPTED. Inspected the exact immutable synthetic candidate and its original range.' });
+  assert.equal(done.ok, true, JSON.stringify(done));
+  const input = { by: 'native-owner', sessionId: 'synthetic-main-finalization', text: 'Explicit candidate decision',
+    evidence: 'Original completed independent review report', outcome: 'accepted' as const,
+    expected: { sourceRef: source.ref, candidate: { source: 'git', value: commit } } };
+  return { repository, slug, commit, source, review: store.getTicket(slug, review.ref), input };
+}
+
+test('normal public done then explicit MCP acceptance mirrors outcome without restarting either terminal worker', async () => {
+  const { repository, slug, commit, source, review, input } = await completedNormalReviewFixture('accepted');
+  assert.equal(review.oracle, undefined, 'normal completion creates no experimental oracle');
+  assert.equal(store.getTicket(slug, source.ref).submission.review.outcome, 'planned', 'ACCEPTED prose carries no native outcome');
+  const previousSession = process.env.CLAUDE_CODE_SESSION_ID;
+  try {
+    process.env.CLAUDE_CODE_SESSION_ID = input.sessionId;
+    const accepted = tool('verdict').handler({ project: repository, ref: review.ref, by: input.by,
+      text: input.text, outcome: input.outcome, finalize: { sourceRef: source.ref, commit, evidence: input.evidence } });
+    assert.equal(accepted.ok, true, JSON.stringify(accepted));
+    const afterReview = store.getTicket(slug, review.ref);
+    const afterSource = store.getTicket(slug, source.ref);
+    assert.equal(afterReview.reviewTarget.outcome, 'accepted');
+    assert.equal(afterSource.submission.review.outcome, 'accepted');
+    assert.deepEqual(afterReview.completion, review.completion, 'original reviewer completion survives');
+    assert.deepEqual(afterReview.dispatch, review.dispatch, 'original reviewer identity and generation survive');
+    assert.deepEqual(afterReview.comments.slice(0, -1), review.comments, 'original review evidence survives');
+    assert.deepEqual(afterSource.dispatch, source.dispatch, 'original producer remains terminal');
+    assert.equal(afterReview.oracle, undefined);
+    assert.equal(afterReview.reviewDecision.verdict.sessionId, input.sessionId);
+    assert.deepEqual(afterReview.reviewDecision.verdict.candidate, review.reviewTarget.candidate, 'decision preserves the complete bound identity');
+    assert.equal(store.validateIntegrationSubmission(slug, source.ref, {}).ok, true, 'native integration readiness accepts the exact completed review');
+  } finally {
+    if (previousSession === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = previousSession;
+  }
+});
+
+test('normal rejected finalization blocks integration and preserves the original positive review report', async () => {
+  const { slug, source, review, input } = await completedNormalReviewFixture('rejected');
+  const rejected = store.finalizeCompletedReview(slug, review.ref, { ...input, outcome: 'rejected' }, finalizationGrant);
+  assert.equal(rejected.ok, true, JSON.stringify(rejected));
+  assert.equal(store.getTicket(slug, source.ref).submission.review.outcome, 'rejected');
+  assert.equal(store.getTicket(slug, review.ref).reviewTarget.outcome, 'rejected');
+  assert.deepEqual(store.getTicket(slug, review.ref).comments.slice(0, -1), review.comments);
+  assert.equal(store.validateIntegrationSubmission(slug, source.ref, {}).reason, 'candidate_rejected');
+});
+
+test('normal finalization retries are stable and a mistaken approval uses native correction', async () => {
+  const { slug, source, review, input } = await completedNormalReviewFixture('retry');
+  const accepted = store.finalizeCompletedReview(slug, review.ref, input, finalizationGrant);
+  assert.equal(accepted.ok, true, JSON.stringify(accepted));
+  const original = store.getTicket(slug, review.ref).reviewDecision.verdict;
+  const before = bindingBytes(slug, source.ref, review.ref);
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, { ...input, by: 'other-owner', sessionId: 'other-main' }, finalizationGrant).idempotent, true);
+  assert.equal(bindingBytes(slug, source.ref, review.ref), before, 'exact retry writes nothing');
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, { ...input, outcome: 'rejected' }, finalizationGrant).reason, 'already_finalized');
+  const corrected = store.correctAcceptedReviewVerdict(slug, review.ref, { by: input.by, sessionId: input.sessionId,
+    text: 'Original approval missed a concrete defect', evidence: 'Exact original range defect',
+    expected: { ...input.expected, outcome: 'accepted', verdictAt: original.at } }, correctionGrant);
+  assert.equal(corrected.ok, true, JSON.stringify(corrected));
+  assert.deepEqual(store.getTicket(slug, review.ref).reviewDecision.verdict, original);
+  assert.equal(store.validateIntegrationSubmission(slug, source.ref, {}).reason, 'candidate_rejected');
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, input, finalizationGrant).reason, 'already_finalized');
+});
+
+test('normal finalization rejects stale expected candidate and missing native owner grant without writes', async () => {
+  const { slug, source, review, input } = await completedNormalReviewFixture('request-guards');
+  const before = bindingBytes(slug, source.ref, review.ref);
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, input).reason, 'finalization_unauthorized');
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, { ...input, sessionId: '' }, finalizationGrant).reason, 'identity_unavailable');
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, { ...input, evidence: '' }, finalizationGrant).reason, 'evidence_required');
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, { ...input, expected: { ...input.expected, sourceRef: 'SQ-9999' } }, finalizationGrant).reason, 'stale_expected');
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, { ...input, expected: { ...input.expected, candidate: { source: 'git', value: 'f'.repeat(40) } } }, finalizationGrant).reason, 'stale_expected');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), before);
+});
+
+test('normal finalization rejects claimed and incomplete reviewers without rewriting terminal evidence', async () => {
+  const { slug, source, review, input } = await completedNormalReviewFixture('review-guards');
+  const claimed = store.getTicket(slug, review.ref);
+  claimed.claim = { by: 'foreign-worker' };
+  persist(slug, claimed);
+  const claimedBytes = bindingBytes(slug, source.ref, review.ref);
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, input, finalizationGrant).reason, 'review_active');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), claimedBytes);
+  persist(slug, { ...review, completion: undefined });
+  const incompleteBytes = bindingBytes(slug, source.ref, review.ref);
+  assert.equal(store.finalizeCompletedReview(slug, review.ref, input, finalizationGrant).reason, 'review_nonfinalized');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), incompleteBytes);
+});
+
+test('normal finalization refuses shared identity, released generations and changed candidates without writes', async () => {
+  const { slug, source, review, input } = await completedNormalReviewFixture('provenance-guards');
+  const currentSource = store.getTicket(slug, source.ref);
+  const counterexamples = [
+    { review: { ...review, dispatch: { ...review.dispatch, attempts: [] } }, source: currentSource, reason: 'review_attempt_missing' },
+    { review: { ...review, dispatch: { ...review.dispatch, outcome: 'released' } }, source: currentSource, reason: 'review_nonfinalized' },
+    { review: { ...review, dispatch: { ...review.dispatch, terminalAt: '2099-01-01T00:00:00.000Z' } }, source: currentSource, reason: 'stale_provenance' },
+    { review: { ...review, dispatch: { ...review.dispatch, attempts: [{ ...review.dispatch.attempts.at(-1), agentId: source.dispatch.agentId }] } }, source: currentSource, reason: 'shared_agent_identity' },
+    { review, source: { ...currentSource, submission: { ...currentSource.submission, commit: 'f'.repeat(40) } }, reason: 'binding_mismatch' },
+    { review, source: { ...currentSource, submission: { ...currentSource.submission, integratedAt: '2099-01-01T00:00:00.000Z' } }, reason: 'source_delivered' },
+  ];
+  for (const counterexample of counterexamples) {
+    persist(slug, counterexample.review);
+    persist(slug, counterexample.source);
+    const before = bindingBytes(slug, source.ref, review.ref);
+    assert.equal(store.finalizeCompletedReview(slug, review.ref, input, finalizationGrant).reason, counterexample.reason);
+    assert.equal(bindingBytes(slug, source.ref, review.ref), before, 'guard refusal records no native acceptance');
+  }
+});
+
+test('generic ticket updates cannot fabricate completed normal review decision authority', async () => {
+  const { slug, review } = await completedNormalReviewFixture('immutable-decision');
+  store.updateTicket(slug, review.ref, { reviewDecision: { verdict: { outcome: 'accepted', evidence: 'forged generic patch' } } });
+  assert.equal(store.getTicket(slug, review.ref).reviewDecision, undefined);
+  assert.equal(store.getTicket(slug, review.ref).reviewTarget.outcome, 'planned');
+});
 
 test('correction preserves original history and exact binding identities while rejecting both halves', async () => {
   const { slug, source, review, input } = await finalizedCorrectionFixture('history');

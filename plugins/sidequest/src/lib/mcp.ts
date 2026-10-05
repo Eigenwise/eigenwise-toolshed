@@ -117,7 +117,7 @@ const GLOBAL_MUTATION_TOOLS = new Set(['category_add', 'category_edit', 'categor
 const mutationTails = new Map<string, Promise<void>>();
 
 const CONDITIONAL_MUTATION_FIELDS: Record<string, readonly string[]> = {
-  verdict: ['correct'], new_board_profile: ['profile'], global_fallback: ['model', 'effort'],
+  verdict: ['correct', 'finalize'], new_board_profile: ['profile'], global_fallback: ['model', 'effort'],
   board_config: ['name', 'alwaysInScope', 'deniedTools', 'readOnlyDeniedTools', 'generatedPairs', 'integrationMode',
     'integrationBranch', 'worktreeIsolation', 'worktreeBase', 'notIntegratedSalvageAgeHours',
     'worktreeRecoveryRetentionAgeHours', 'autoApproveTestScope', 'autoApproveScope', 'worktreeSetup', 'worktreeDependencyPaths'],
@@ -363,8 +363,9 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
     recoveryEvidence: 'Unclaimed: preparing session retires now; others past deadline; CLI too.',
   },
   verdict: {
-    outcome: 'Candidate, not reviewer prose.',
-    correct: 'Main-thread accepted-to-rejected correction; requires rejected/by/text. expectedVerdictAt: list({ref}).ticket.oracle.verdict.at. Exactly one commit or sourceRevision.',
+    outcome: 'Explicit candidate outcome, never reviewer prose.',
+    finalize: 'Main-thread completed normal bound review decision; accepted/rejected/by/text/evidence, exact sourceRef and one commit or sourceRevision. Preserves original completion.',
+    correct: 'Main-thread accepted-to-rejected correction; rejected/by/text/evidence. expectedVerdictAt: list({ref}).ticket.reviewDecision.verdict.at (oracle.verdict.at for oracle). One commit or sourceRevision.',
   },
   scopeRequest: {
     grant: 'Grants every path this claim still has refused; pass no files. Refuses the claim holder’s own by.',
