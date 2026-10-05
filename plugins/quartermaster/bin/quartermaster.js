@@ -47,7 +47,8 @@ the candidate list, since a hook denial is not the same signal as a real approva
 crap reads .claude/quartermaster/crap.json (coverageCommand, lcov, sources, exclude, base), needs
 lizard (lizard on PATH, else uvx lizard, else pipx run lizard), and checks only changed or new functions
 at the fixed CRAP threshold ${DEFAULT_MAX}. It exits 0 pass, 1 functions at or above ${DEFAULT_MAX},
-2 unverified measurement (lizard or coverage missing, or coverage command failed).
+2 unverified measurement (lizard or coverage missing, coverage command failed, or a changed line that
+no function row measures).
 crap measures .tsx and .jsx with lizard's TypeScript reader, not its TSX one, on both sides of the base
 comparison, because the TSX reader loses brace balance on ordinary JSX and folds the functions below a
 tag into it. Every offender line for those files names its measurement (source=lizard-typescript), and
